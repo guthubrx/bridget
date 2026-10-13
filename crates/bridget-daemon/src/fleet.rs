@@ -42,7 +42,7 @@ use bridget_core::router::validate_agent_id;
 pub use bridget_transport::protocol::{ProjectReference, SpawnOwnership};
 use bridget_transport::{ResolvedAgentDefinition, protocol::ExecutionBudgetOutcome};
 use log::warn;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fmt;
@@ -232,7 +232,8 @@ pub fn resume_quota_refusal_message(agent: &str, quota: usize) -> String {
 fn suggested_fleet_quota(quota: usize) -> usize {
     quota.saturating_add(8).max(DEFAULT_FLEET_QUOTA)
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpawnOrder {
     pub posture: Option<bridget_transport::protocol::SpawnPosture>,
     pub agent_type: String,
@@ -244,6 +245,7 @@ pub struct SpawnOrder {
     pub issued_at: i64,
     pub deadline_at: i64,
     pub ownership: Option<SpawnOwnership>,
+    pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -258,6 +260,7 @@ pub struct SpawnLease {
     pub link_id: Option<String>,
     pub ownership: Option<SpawnOwnership>,
     pub agent_path: Option<String>,
+    pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -382,6 +385,7 @@ struct ActiveSpawn {
     link_id: Option<String>,
     ownership: Option<SpawnOwnership>,
     agent_path: Option<String>,
+    remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 struct FleetInner {
     idempotency: IdempotencyStore,
@@ -503,9 +507,8 @@ impl FleetSupervisor {
             .len()
     }
 
-    /// Instantané ordonné des générations en vol rattachées à `fleet.json`.
-    /// Les entrées déjà terminales ne figurent pas ici : T908 leur réserve une
-    /// nouvelle génération de reprise.
+    /// Générations persistantes locales et réservations distantes à réconcilier.
+    /// Une issue de lancement Connected ne prouve pas la fin du processus distant.
     pub fn recovery_candidates(&self) -> Vec<RecoveryCandidate> {
         let inner = self
             .inner
@@ -514,7 +517,7 @@ impl FleetSupervisor {
         let mut candidates = inner
             .active_by_command
             .values()
-            .filter(|active| active.persistent)
+            .filter(|active| active.persistent || active.remote_placement.is_some())
             .map(|active| RecoveryCandidate {
                 lease: lease_from(active),
                 agent_type: active.agent_type.clone(),
@@ -601,6 +604,7 @@ impl FleetSupervisor {
                 project: historical.project,
                 agent_link: None,
                 runtime_execution: None,
+                remote_placement: historical.remote_placement,
             },
         )?;
         self.roster.remember(
@@ -1077,6 +1081,7 @@ impl FleetSupervisor {
                     agent_path: link.as_ref().map(|link| link.agent_path.clone()),
                     resolved_definition: command.resolved_definition,
                     runtime_execution: None,
+                    remote_placement: order.remote_placement.clone(),
                 };
                 inner
                     .active_by_name
@@ -1125,7 +1130,17 @@ impl FleetSupervisor {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let active = active_for_lease(&inner, lease)?.clone();
+        if active
+            .remote_placement
+            .as_ref()
+            .is_some_and(|placement| placement.definition_digest != definition.digest)
+        {
+            return Err(FleetError::InvalidOrder("définition distante divergente"));
+        }
         if now >= active.deadline_at {
+            if active.remote_placement.is_some() {
+                return Err(FleetError::DeadlineElapsed);
+            }
             expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
             self.agent_link_changed.notify_all();
             self.terminal_changed.notify_all();
@@ -1184,7 +1199,17 @@ impl FleetSupervisor {
         if instance_id != active.instance_id {
             return Err(FleetError::StaleGeneration);
         }
+        if active.remote_placement.is_some() && active.state == SpawnCommandState::Connected {
+            return inner
+                .completed
+                .get(&active.command_id)
+                .cloned()
+                .ok_or(FleetError::StaleGeneration);
+        }
         if now >= active.deadline_at {
+            if active.remote_placement.is_some() {
+                return Err(FleetError::DeadlineElapsed);
+            }
             expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
             self.agent_link_changed.notify_all();
             self.terminal_changed.notify_all();
@@ -1216,6 +1241,7 @@ impl FleetSupervisor {
                 domain: resolved_domain(None, &active.cwd),
                 project: active.project.clone(),
                 runtime_execution,
+                remote_placement: active.remote_placement.clone(),
             },
         )?;
         self.roster.remember(
@@ -1285,11 +1311,16 @@ impl FleetSupervisor {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         if let Some(active) = inner.active_by_command.get(&lease.command_id).cloned() {
-            if active.generation != lease.generation || active.name != lease.name {
-                return Err(FleetError::StaleGeneration);
-            }
+            active_for_lease(&inner, lease)?;
             close_agent_link(&mut inner, &active, unix_now())?;
             self.persist_stopped_active(&active)?;
+            if active.remote_placement.is_some() && active.state == SpawnCommandState::Connected {
+                // La preuve terminale libère la réservation, sans réécrire l'issue du lancement.
+                release_active_locked(&mut inner, &active);
+                self.agent_link_changed.notify_all();
+                self.terminal_changed.notify_all();
+                return Ok(());
+            }
             let issue = SpawnCommandIssue::Cancelled {
                 reason: "arrêt demandé".to_string(),
             };
@@ -1398,6 +1429,7 @@ impl FleetSupervisor {
                 project: active.project.clone(),
                 agent_link: desired_agent_link(active),
                 runtime_execution,
+                remote_placement: active.remote_placement.clone(),
             },
         )?;
         self.roster.remember(
@@ -1421,6 +1453,13 @@ impl FleetSupervisor {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let active = active_for_lease(&inner, lease)?.clone();
+        if active.remote_placement.is_some() && active.state == SpawnCommandState::Connected {
+            return Err(FleetError::InvalidTransition {
+                command_id: active.command_id,
+                from: active.state,
+                expected: SpawnCommandState::Starting,
+            });
+        }
         if self.desired_entry(&active.name)?.is_some() {
             self.persist_stopped_active(&active)?;
         } else {
@@ -1450,7 +1489,8 @@ impl FleetSupervisor {
         if active.generation != generation {
             return Err(FleetError::StaleGeneration);
         }
-        if now < active.deadline_at {
+        // L'horloge du maître n'est pas une preuve d'arrêt sur la machine distante.
+        if now < active.deadline_at || active.remote_placement.is_some() {
             return Ok(false);
         }
         expire_locked(&mut inner, &self.desired, &self.roster, &active)?;
@@ -1497,6 +1537,69 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
             .max(command.generation.saturating_add(1));
         if let Some(issue) = command.issue.clone() {
             inner.completed.insert(command.command_id.clone(), issue);
+            if command.remote_placement.is_none() || command.state != SpawnCommandState::Connected {
+                continue;
+            }
+        }
+        if command.remote_placement.is_some() {
+            let equipier = desired.equipiers.get(&command.name);
+            // Une clôture durable ou une génération postérieure interdit une résurrection.
+            if equipier.is_some_and(|entry| {
+                entry.generation > command.generation
+                    || (entry.command_id == command.command_id
+                        && entry.generation == command.generation
+                        && entry.lifecycle_state != DesiredLifecycleState::Running)
+            }) {
+                continue;
+            }
+            let key = spawn_key(inner, &command.command_id)?;
+            let order = inner
+                .idempotency
+                .spawn_order(&key)?
+                .ok_or(IdempotencyError::CorruptRecord("canon distant absent"))?;
+            validate_order(&order, true)?;
+            let instance_id = command
+                .instance_id
+                .clone()
+                .ok_or(IdempotencyError::CorruptRecord("instance distante absente"))?;
+            let link = inner.idempotency.agent_link_for_child(&instance_id)?;
+            let mut ownership = order.ownership;
+            if let (Some(owner), Some(link)) = (&mut ownership, &link) {
+                owner.parent_instance_id = link.parent_instance_id.clone();
+                owner.parent_execution_id = link.parent_execution_id.clone();
+                owner.objective_id = link.objective_id.clone();
+                owner.delegation_id = link.delegation_id.clone();
+                owner.role = link.role.clone();
+            }
+            let active = ActiveSpawn {
+                command_id: command.command_id.clone(),
+                name: command.name.clone(),
+                instance_id,
+                generation: command.generation,
+                deadline_at: command.deadline_at,
+                persistent: order.persistent,
+                project: order.project,
+                agent_type: order.agent_type,
+                cwd: order.cwd,
+                state: command.state,
+                resolved_definition: command.resolved_definition,
+                runtime_execution: None,
+                link_id: link.as_ref().map(|link| link.link_id.clone()),
+                agent_path: link.as_ref().map(|link| link.agent_path.clone()),
+                ownership,
+                remote_placement: order.remote_placement,
+            };
+            if inner.active_by_name.contains_key(&active.name) {
+                return Err(FleetError::InvalidOrder(
+                    "réservations distantes de même nom",
+                ));
+            }
+            inner
+                .active_by_name
+                .insert(active.name.clone(), active.command_id.clone());
+            inner
+                .active_by_command
+                .insert(active.command_id.clone(), active);
             continue;
         }
         if let Some(equipier) = desired.equipiers.get(&command.name)
@@ -1505,6 +1608,9 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
             && equipier.persistent
             && equipier.lifecycle_state == DesiredLifecycleState::Running
         {
+            if equipier.remote_placement != command.remote_placement {
+                return Err(FleetError::InvalidOrder("placement de reprise divergent"));
+            }
             let active =
                 ActiveSpawn {
                     command_id: command.command_id.clone(),
@@ -1530,6 +1636,7 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
                     state: SpawnCommandState::Starting,
                     resolved_definition: command.resolved_definition,
                     runtime_execution: equipier.runtime_execution.clone(),
+                    remote_placement: equipier.remote_placement.clone(),
                 };
             inner
                 .active_by_name
@@ -1553,6 +1660,11 @@ fn recover_commands(inner: &mut FleetInner, desired: &DesiredFleet) -> Result<()
 }
 
 fn validate_order(order: &SpawnOrder, accept_legacy_durable_name: bool) -> Result<(), FleetError> {
+    if order.remote_placement.as_ref().is_some_and(|placement| {
+        placement.validate().is_err() || order.cwd != Path::new(&placement.execution_cwd)
+    }) {
+        return Err(FleetError::InvalidOrder("placement distant invalide"));
+    }
     if order.agent_type.trim().is_empty() {
         return Err(FleetError::InvalidOrder("type vide"));
     }
@@ -1691,6 +1803,8 @@ struct CanonicalSpawnOrder<'a> {
     deadline_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     ownership: Option<&'a SpawnOwnership>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remote_placement: Option<&'a bridget_transport::protocol::RemotePlacement>,
 }
 
 fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
@@ -1707,6 +1821,7 @@ fn canonical_order(order: &SpawnOrder) -> Result<Vec<u8>, FleetError> {
         persistent: order.persistent,
         project: order.project.as_ref(),
         ownership: order.ownership.as_ref(),
+        remote_placement: order.remote_placement.as_ref(),
         issued_at: order.issued_at,
         deadline_at: order.deadline_at,
     })
@@ -1733,6 +1848,7 @@ fn lease_from(active: &ActiveSpawn) -> SpawnLease {
         link_id: active.link_id.clone(),
         ownership: active.ownership.clone(),
         agent_path: active.agent_path.clone(),
+        remote_placement: active.remote_placement.clone(),
     }
 }
 
@@ -1744,7 +1860,10 @@ fn active_for_lease<'a>(
         .active_by_command
         .get(&lease.command_id)
         .ok_or(FleetError::StaleGeneration)?;
-    if active.generation != lease.generation || active.name != lease.name {
+    if active.generation != lease.generation
+        || active.name != lease.name
+        || active.remote_placement != lease.remote_placement
+    {
         return Err(FleetError::StaleGeneration);
     }
     Ok(active)
@@ -1780,6 +1899,17 @@ fn terminal_refusal(
 }
 
 fn complete_locked(inner: &mut FleetInner, active: &ActiveSpawn, issue: SpawnCommandIssue) {
+    if active.remote_placement.is_some() && matches!(&issue, SpawnCommandIssue::Connected { .. }) {
+        if let Some(retained) = inner.active_by_command.get_mut(&active.command_id) {
+            retained.state = SpawnCommandState::Connected;
+        }
+    } else {
+        release_active_locked(inner, active);
+    }
+    inner.completed.insert(active.command_id.clone(), issue);
+}
+
+fn release_active_locked(inner: &mut FleetInner, active: &ActiveSpawn) {
     inner.active_by_command.remove(&active.command_id);
     if inner
         .active_by_name
@@ -1788,7 +1918,6 @@ fn complete_locked(inner: &mut FleetInner, active: &ActiveSpawn, issue: SpawnCom
     {
         inner.active_by_name.remove(&active.name);
     }
-    inner.completed.insert(active.command_id.clone(), issue);
 }
 fn close_agent_link(
     inner: &mut FleetInner,
@@ -1904,6 +2033,7 @@ mod tests {
 
     fn order(command_id: &str, name: Option<&str>, persistent: bool) -> SpawnOrder {
         SpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "codex".to_string(),
             requested_name: name.map(str::to_string),
@@ -1921,6 +2051,159 @@ mod tests {
         match supervisor.request_spawn(order, NOW).unwrap() {
             SpawnSubmission::Start(lease) => lease,
             other => panic!("nouvelle commande non démarrée: {other:?}"),
+        }
+    }
+
+    fn remote_order162() -> SpawnOrder {
+        let mut order = order("remote162", Some(AGENT_ALPHA), true);
+        order.remote_placement = Some(
+            serde_json::from_value(serde_json::json!({
+                "machine_id":"cartae", "worker_id":"worker", "provisioning_revision":1,
+                "project_id":"project", "mapping_revision":1, "origin_host":"mac",
+                "origin_cwd":"/Users/moi/project", "source_root_identity":"git:project",
+                "relative_cwd":".", "execution_cwd":"/tmp", "base_commit":null,
+                "definition_digest":"a".repeat(64), "permission_digest":"b".repeat(64)
+            }))
+            .unwrap(),
+        );
+        order
+    }
+
+    #[test]
+    fn remote162_placement_fait_partie_du_canon_et_de_la_reservation() {
+        let root = test_root("remote162-reservation");
+        let supervisor = open(&root);
+        let mut order = remote_order162();
+        let lease = start(&supervisor, &order);
+        assert_eq!(lease.remote_placement, order.remote_placement);
+        let scope = supervisor.supervisor_scope();
+        let store = IdempotencyStore::open(&root.join("bridget.db")).unwrap();
+        assert_eq!(
+            store.spawn_commands(&scope).unwrap()[0].remote_placement,
+            order.remote_placement
+        );
+        assert!(matches!(
+            supervisor.request_spawn(&order, NOW).unwrap(),
+            SpawnSubmission::Await(_)
+        ));
+        order.remote_placement.as_mut().unwrap().mapping_revision = 2;
+        assert!(matches!(
+            supervisor.request_spawn(&order, NOW).unwrap(),
+            SpawnSubmission::EnvelopeMismatch
+        ));
+        let local = self::order("local162", Some(AGENT_ZETA), true);
+        let local_canon: serde_json::Value =
+            serde_json::from_slice(&canonical_order(&local).unwrap()).unwrap();
+        assert!(local_canon.get("remote_placement").is_none());
+        drop(store);
+        drop(supervisor);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote162_placement_persiste_fleet5_et_lease_divergente_refusee() {
+        let root = test_root("remote162-fleet");
+        let supervisor = open(&root);
+        let mut order = remote_order162();
+        order.persistent = false;
+        let lease = start(&supervisor, &order);
+        let mut forged = lease.clone();
+        forged.remote_placement = None;
+        assert!(matches!(
+            supervisor.mark_starting(&forged, NOW, &resolved_test_definition()),
+            Err(FleetError::StaleGeneration)
+        ));
+        assert!(
+            supervisor
+                .mark_starting(&lease, NOW, &resolved_test_definition())
+                .is_err()
+        );
+        let mut definition = resolved_test_definition();
+        definition.digest = "a".repeat(64);
+        supervisor.mark_starting(&lease, NOW, &definition).unwrap();
+        supervisor
+            .register_connected(&lease, &lease.instance_id, NOW + 1)
+            .unwrap();
+        let desired = supervisor.desired_fleet().unwrap();
+        assert_eq!(desired.schema, 5);
+        assert_eq!(
+            desired.equipiers[AGENT_ALPHA].remote_placement,
+            order.remote_placement
+        );
+        assert_eq!(supervisor.active_count(), 1);
+        drop(supervisor);
+        // La perte de la projection Desired ne prouve pas la fin distante.
+        fs::remove_file(root.join("fleet.json")).unwrap();
+        let supervisor = open(&root);
+        assert_eq!(supervisor.active_count(), 1);
+        assert_eq!(supervisor.recovery_candidates()[0].lease, lease);
+        // Une preuve terminale explicite libère le quota sans changer l'issue Connected.
+        supervisor.invalidate_for_stop(&lease).unwrap();
+        assert_eq!(supervisor.active_count(), 0);
+        assert!(matches!(
+            supervisor.request_spawn(&order, NOW + 2).unwrap(),
+            SpawnSubmission::Terminal(SpawnCommandIssue::Connected { .. })
+        ));
+        drop(supervisor);
+        let supervisor = open(&root);
+        assert_eq!(supervisor.active_count(), 0);
+        drop(supervisor);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote162_reprise_sans_desired_conserve_nom_quota_et_identite() {
+        for (persistent, starting) in [(false, false), (true, true)] {
+            let root = test_root("remote162-unknown");
+            let supervisor = open(&root);
+            let mut order = remote_order162();
+            order.persistent = persistent;
+            order.ownership = Some(SpawnOwnership {
+                parent_instance_id: "parent162".into(),
+                parent_execution_id: None,
+                objective_id: None,
+                delegation_id: None,
+                project: None,
+                role: "child".into(),
+                max_children: Some(4),
+                max_depth: Some(4),
+            });
+            let lease = start(&supervisor, &order);
+            if starting {
+                let mut definition = resolved_test_definition();
+                definition.digest = "a".repeat(64);
+                supervisor.mark_starting(&lease, NOW, &definition).unwrap();
+            }
+            assert!(supervisor.desired_entry(AGENT_ALPHA).unwrap().is_none());
+            drop(supervisor);
+            let supervisor = open(&root);
+            assert_eq!(supervisor.active_count(), 1);
+            assert_eq!(supervisor.recovery_candidates()[0].lease, lease);
+            assert!(supervisor.desired_entry(AGENT_ALPHA).unwrap().is_none());
+            assert!(matches!(
+                supervisor.request_spawn(&order, NOW).unwrap(),
+                SpawnSubmission::Await(_)
+            ));
+            assert!(
+                !supervisor
+                    .expire(&lease.command_id, lease.generation, NOW + 61)
+                    .unwrap()
+            );
+            assert_eq!(supervisor.active_count(), 1);
+            let same_name = self::order("other162", Some(AGENT_ALPHA), false);
+            assert!(matches!(supervisor.request_spawn(&same_name, NOW).unwrap(),
+                SpawnSubmission::Terminal(SpawnCommandIssue::Failed { category, .. }) if category == "name_active"));
+            let local = self::order("local162", Some(AGENT_ZETA), false);
+            start(&supervisor, &local);
+            let over_quota = self::order("over162", Some(AGENT_DOMAIN), false);
+            assert!(
+                matches!(supervisor.request_spawn(&over_quota, NOW).unwrap(),
+                SpawnSubmission::Terminal(SpawnCommandIssue::Failed { category, .. }) if category == "quota_exceeded")
+            );
+            supervisor.invalidate_for_stop(&lease).unwrap();
+            assert_eq!(supervisor.active_count(), 1);
+            drop(supervisor);
+            fs::remove_dir_all(root).unwrap();
         }
     }
 
@@ -2163,6 +2446,7 @@ mod tests {
                 .upsert(
                     name.to_string(),
                     DesiredEquipier {
+                        remote_placement: None,
                         agent_type: "codex".to_string(),
                         cwd: PathBuf::from("/tmp"),
                         command_id: command_id.to_string(),
@@ -2645,6 +2929,7 @@ mod tests {
                         other => panic!("reprise non rattachée: {other:?}"),
                     };
                     let lease = SpawnLease {
+                        remote_placement: None,
                         command_id: waiter.command_id,
                         name: AGENT_CRASH.to_string(),
                         instance_id: waiter.instance_id,

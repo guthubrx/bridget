@@ -168,6 +168,17 @@ fn run_with_args(args: Vec<String>) {
         return;
     }
 
+    // Le worker n'ouvre pas le namespace métier et ne démarre aucun daemon.
+    if cmd == "worker" {
+        let config =
+            parse_worker_args(&args[2..]).unwrap_or_else(|error| exit_argument_error(&error));
+        if let Err(error) = crate::remote_worker::run_worker(config) {
+            eprintln!("bridget worker: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if cmd == "lineage" {
         lineage::run(&args[2..]);
         return;
@@ -607,6 +618,64 @@ fn cmd_identity(args: &[String]) {
     );
 }
 
+fn parse_worker_args(args: &[String]) -> Result<crate::remote_worker::WorkerRuntimeConfig, String> {
+    let allowed = [
+        "--machine-id",
+        "--worker-id",
+        "--provisioning-revision",
+        "--credential-file",
+        "--state-root",
+        "--registry-file",
+        "--master-socket",
+    ];
+    let mut values = std::collections::BTreeMap::new();
+    if args.len() != allowed.len() * 2 {
+        return Err("worker: sept options explicites requises".into());
+    }
+    for pair in args.chunks_exact(2) {
+        if !allowed.contains(&pair[0].as_str())
+            || pair[1].is_empty()
+            || values.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+        {
+            return Err("worker: option inconnue, vide ou répétée".into());
+        }
+    }
+    let identity = bridget_transport::protocol::WorkerIdentity {
+        machine_id: values["--machine-id"].into(),
+        worker_id: values["--worker-id"].into(),
+        provisioning_revision: values["--provisioning-revision"]
+            .parse()
+            .map_err(|_| "worker: révision invalide")?,
+    };
+    identity
+        .validate()
+        .map_err(|_| "worker: identité invalide")?;
+    let path = |key: &str| -> Result<PathBuf, String> {
+        let value = values[key];
+        let path = PathBuf::from(value);
+        if !path.is_absolute()
+            || value.chars().any(bridget_core::is_disallowed_control)
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "worker: chemin absolu sans traversal requis pour {key}"
+            ));
+        }
+        Ok(path)
+    };
+    Ok(crate::remote_worker::WorkerRuntimeConfig {
+        machine_id: identity.machine_id,
+        worker_id: identity.worker_id,
+        provisioning_revision: identity.provisioning_revision,
+        credential_path: path("--credential-file")?,
+        state_root: path("--state-root")?,
+        registry_path: path("--registry-file")?,
+        master_socket: path("--master-socket")?,
+    })
+}
+
 fn cmd_managed_bootstrap(args: &[String]) {
     if let Err(error) = crate::managed_process::run_managed_bootstrap(args) {
         eprintln!("bridget managed-bootstrap: {error}");
@@ -675,6 +744,7 @@ fn print_usage() {
            gclaude [ARGS...]      Lance gclaude + connexion daemon\n  \
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
+           worker <OPTIONS>       Lance le worker distant provisionné\n  \
            daemon                 Lance le daemon\n  \
            federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
@@ -10339,6 +10409,45 @@ mod depot_tests {
 #[cfg(test)]
 mod guidance156_tests {
     use super::*;
+
+    #[test]
+    fn remote162_worker_cli_options_explicites_sans_namespace() {
+        let args: Vec<String> = [
+            "--machine-id",
+            "cartae",
+            "--worker-id",
+            "worker-cartae",
+            "--provisioning-revision",
+            "1",
+            "--credential-file",
+            "/private/credential",
+            "--state-root",
+            "/private/state",
+            "--registry-file",
+            "/private/registry.json",
+            "--master-socket",
+            "/private/master.sock",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let config = parse_worker_args(&args).unwrap();
+        assert_eq!(config.machine_id, "cartae");
+        assert_eq!(config.provisioning_revision, 1);
+        assert!(parse_worker_args(&[]).is_err());
+        for (index, value) in [
+            (0, "--unknown"),
+            (2, "--machine-id"),
+            (5, "0"),
+            (7, "relative"),
+            (9, "/private/../other"),
+        ] {
+            let mut invalid = args.clone();
+            invalid[index] = value.into();
+            assert!(parse_worker_args(&invalid).is_err(), "{index}: {value}");
+        }
+    }
+
     use std::os::unix::net::UnixListener;
     use std::process::{Command, Output, Stdio};
     use std::sync::mpsc;

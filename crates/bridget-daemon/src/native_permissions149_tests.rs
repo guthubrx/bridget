@@ -15,6 +15,363 @@ mod native_permissions155_tests;
 
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+// 162 : ces fixtures précèdent l'implémentation ; aucune exécution fournisseur.
+fn remote162_fixture(
+    label: &str,
+) -> (
+    PathBuf,
+    SourceEnvironment,
+    crate::registry::ProjectMapping,
+    Vec<PathBuf>,
+) {
+    let (root, env) = fixture_root(label);
+    let root = fs::canonicalize(root).unwrap();
+    let remote = root.join("project");
+    fs::create_dir_all(remote.join("src")).unwrap();
+    let private = root.join("worker-private");
+    fs::create_dir_all(&private).unwrap();
+    let mapping = crate::registry::ProjectMapping {
+        source_host: "origin162".into(),
+        source_root: PathBuf::from("/origin162/project"),
+        remote_root: remote,
+        expected_git_identity: "project162".into(),
+        mapping_revision: 1,
+    };
+    (root, env, mapping, vec![private])
+}
+
+#[test]
+fn remote162_codex_roots_projected_by_components_without_origin_io() {
+    let (_root, env, mapping, protected) = remote162_fixture("roots");
+    let parent = codex_fact(
+        "/origin162/project/src",
+        json!({"type":"workspaceWrite","networkAccess":false,
+        "writableRoots":["/origin162/project/src"],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),
+        "on-request",
+    );
+    let (policy, posture) = project_remote_permissions(
+        &parent,
+        &codex_definition(),
+        &mapping,
+        &mapping.remote_root.join("src"),
+        &env,
+        None,
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(
+        policy["sandbox_policy"]["writableRoots"],
+        json!([mapping.remote_root.join("src")])
+    );
+    assert_eq!(policy["sandbox_policy"]["networkAccess"], false);
+    assert_eq!(policy["approval_policy"], "on-request");
+    assert_eq!(policy["sandbox_policy"]["excludeSlashTmp"], true);
+    let subdirectory = mapping.remote_root.join("src/subdirectory");
+    std::fs::create_dir(&subdirectory).unwrap();
+    let (nested, _) = project_remote_permissions(
+        &parent,
+        &codex_definition(),
+        &mapping,
+        &subdirectory,
+        &env,
+        None,
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(
+        nested["sandbox_policy"]["writableRoots"],
+        policy["sandbox_policy"]["writableRoots"]
+    );
+}
+
+#[test]
+fn remote162_readonly_parent_never_gains_write_or_network() {
+    let (_root, env, mapping, protected) = remote162_fixture("readonly");
+    let parent = codex_fact(
+        "/origin162/project/src",
+        json!({"type":"readOnly","networkAccess":false}),
+        "never",
+    );
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root.join("src"),
+            &env,
+            Some(SpawnPosture::Development),
+            &protected
+        )
+        .is_err()
+    );
+    let (policy, posture) = project_remote_permissions(
+        &parent,
+        &codex_definition(),
+        &mapping,
+        &mapping.remote_root.join("src"),
+        &env,
+        None,
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(
+        policy["sandbox_policy"],
+        parent.provider_policy["sandbox_policy"]
+    );
+}
+
+#[test]
+fn remote162_rejects_unmapped_roots_symlinks_and_worker_overlap() {
+    let (_root, env, mapping, protected) = remote162_fixture("protected");
+    let mut parent = codex_fact(
+        "/origin162/project/src",
+        json!({"type":"workspaceWrite","writableRoots":["/origin162/project-evil"]}),
+        "never",
+    );
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root.join("src"),
+            &env,
+            None,
+            &protected
+        )
+        .is_err()
+    );
+    std::os::unix::fs::symlink(&protected[0], mapping.remote_root.join("secret")).unwrap();
+    parent.provider_policy["sandbox_policy"]["writableRoots"] =
+        json!(["/origin162/project/secret"]);
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root.join("src"),
+            &env,
+            None,
+            &protected
+        )
+        .is_err()
+    );
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &codex_definition(),
+            &mapping,
+            &mapping.remote_root.join("src"),
+            &env,
+            None,
+            &[mapping.remote_root.join("src")]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn remote162_origin_proof_rechecks_revision_absence_and_opaque_rules() {
+    let (root, env) = fixture_root("origin-proof");
+    let fact = claude_fact(
+        &root,
+        &root,
+        &env,
+        "bypassPermissions",
+        "native_wrapper",
+        "allow",
+        false,
+    );
+    let digest = prove_parent_permissions(&fact, fact.revision).unwrap();
+    assert_eq!(digest.len(), 64);
+    assert!(prove_parent_permissions(&fact, fact.revision + 1).is_err());
+    fs::write(
+        root.join("settings.json"),
+        r#"{"permissions":{"deny":["Read(secret)"]}}"#,
+    )
+    .unwrap();
+    assert!(
+        prove_parent_permissions(&fact, fact.revision).is_err(),
+        "source absente devenue présente"
+    );
+    let changed = claude_fact(
+        &root,
+        &root,
+        &env,
+        "bypassPermissions",
+        "native_wrapper",
+        "allow",
+        false,
+    );
+    assert!(
+        prove_parent_permissions(&changed, changed.revision).is_err(),
+        "règle opaque non exportable"
+    );
+}
+
+#[test]
+fn remote162_platform_managed_sources_do_not_cross_operating_systems() {
+    assert_eq!(
+        managed_settings_root("linux").unwrap(),
+        PathBuf::from("/etc/claude-code")
+    );
+    assert_eq!(
+        managed_settings_root("macos").unwrap(),
+        PathBuf::from("/Library/Application Support/ClaudeCode")
+    );
+    assert!(managed_settings_root("unknown").is_err());
+}
+
+#[test]
+fn remote162_claude_destination_uses_only_its_local_sources_and_rechecks() {
+    let (root, env, mapping, protected) = remote162_fixture("destination");
+    let parent = codex_fact(
+        "/origin162/project/src",
+        json!({"type":"dangerFullAccess"}),
+        "never",
+    );
+    let definition = claude_definition(&root, &[]);
+    let cwd = mapping.remote_root.join("src");
+    let (policy, _) =
+        project_remote_permissions(&parent, &definition, &mapping, &cwd, &env, None, &protected)
+            .unwrap();
+    assert_eq!(policy["launch_context"]["config_dir"], json!(root));
+    recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected).unwrap();
+    fs::write(root.join("settings.json"), "{}").unwrap();
+    assert!(
+        recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected).is_err()
+    );
+}
+
+#[test]
+fn remote162_claude_parent_on_other_host_preserves_explicit_tool_denies() {
+    let (root, env, mapping, protected) = remote162_fixture("claude-parent");
+    let mut parent = claude_fact(
+        &root,
+        &mapping.remote_root,
+        &env,
+        "bypassPermissions",
+        "native_wrapper",
+        "allow",
+        false,
+    );
+    prove_parent_permissions(&parent, parent.revision).unwrap();
+    // Le maître conserve les identités attestées ; cette destination ne peut
+    // pas relire les fichiers de l'autre machine. Un chemin inexistant le prouve.
+    parent.cwd = "/origin162/project/src".into();
+    parent.provider_policy["launch_context"]["cli_path"] = json!("/not-mounted-origin/claude");
+    parent.provider_policy["disallowed_tools"] = json!(["WebFetch"]);
+    let (policy, _) = project_remote_permissions(
+        &parent,
+        &claude_definition(&root, &[]),
+        &mapping,
+        &mapping.remote_root.join("src"),
+        &env,
+        None,
+        &protected,
+    )
+    .unwrap();
+    assert_eq!(policy["disallowed_tools"], json!(["WebFetch"]));
+    assert_ne!(
+        policy["launch_context"]["cli_path"],
+        parent.provider_policy["launch_context"]["cli_path"]
+    );
+    parent.provider_policy["disallowed_tools"] = json!(["Read(/origin162/private/**)"]);
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &claude_definition(&root, &[]),
+            &mapping,
+            &mapping.remote_root.join("src"),
+            &env,
+            None,
+            &protected
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn remote162_destination_settings_cannot_add_a_protected_directory() {
+    let (root, env, mapping, protected) = remote162_fixture("settings-root");
+    fs::write(
+        root.join("settings.json"),
+        serde_json::to_vec(&json!({
+            "permissions":{"additionalDirectories":[protected[0]]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let parent = codex_fact(
+        "/origin162/project/src",
+        json!({"type":"dangerFullAccess"}),
+        "never",
+    );
+    assert!(
+        project_remote_permissions(
+            &parent,
+            &claude_definition(&root, &[]),
+            &mapping,
+            &mapping.remote_root.join("src"),
+            &env,
+            None,
+            &protected
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn remote162_origin_unreadable_source_and_broken_source_refuse() {
+    let (root, env) = fixture_root("bad-source");
+    let parent = claude_fact(
+        &root,
+        &root,
+        &env,
+        "bypassPermissions",
+        "native_wrapper",
+        "allow",
+        false,
+    );
+    fs::write(root.join("settings.json"), "{broken-json").unwrap();
+    assert!(prove_parent_permissions(&parent, parent.revision).is_err());
+    fs::remove_file(root.join("settings.json")).unwrap();
+    std::os::unix::fs::symlink(root.join("missing"), root.join("settings.json")).unwrap();
+    assert!(prove_parent_permissions(&parent, parent.revision).is_err());
+}
+
+#[test]
+fn remote162_origin_fragment_revision_is_rechecked_before_release() {
+    let (root, env) = fixture_root("managed-fragment");
+    let mut parent = claude_fact(
+        &root,
+        &root,
+        &env,
+        "bypassPermissions",
+        "native_wrapper",
+        "allow",
+        false,
+    );
+    // Source administrée en fixture privée, aucune écriture /etc ou /Library.
+    let fragments = root.join("managed-settings.d");
+    fs::create_dir(&fragments).unwrap();
+    fs::write(fragments.join("10-model.json"), r#"{"model":"fixture"}"#).unwrap();
+    parent.provider_policy["launch_context"]["permission_sources"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "kind":"managed", "path":fragments, "revision":source_revision(&fragments).unwrap()
+        }));
+    prove_parent_permissions(&parent, parent.revision).unwrap();
+    fs::write(
+        fragments.join("20-permissions.json"),
+        r#"{"permissions":{"allow":["Bash"]}}"#,
+    )
+    .unwrap();
+    assert!(prove_parent_permissions(&parent, parent.revision).is_err());
+}
+
 fn fixture_root(label: &str) -> (PathBuf, SourceEnvironment) {
     let root = std::env::temp_dir().join(format!(
         "bridget-np149d-{}-{}-{}",

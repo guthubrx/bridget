@@ -99,7 +99,7 @@ fn call_state154(
     conn: &str,
     request: NativeDelegationRequest,
 ) -> Value {
-    match handle_with_fact(conn, request, None, None, state, None) {
+    match handle_with_fact(conn, request, None, None, None, state, None) {
         DaemonToWrapper::NativeDelegationResult { result } => result,
         other => panic!("réponse native attendue: {other:?}"),
     }

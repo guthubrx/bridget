@@ -13,8 +13,9 @@ use std::sync::Mutex;
 
 /// Schéma écrit par ce binaire. Les schémas 1 à 3 décrivaient uniquement des
 /// agents persistants à reprendre. Le schéma 4 devient l'inventaire durable du
-/// cycle de vie de tous les agents gérés.
-pub const FLEET_SCHEMA_VERSION: u64 = 4;
+/// cycle de vie de tous les agents gérés. Le schéma 5 conserve le placement
+/// distant ; aucun ancien binaire ne doit reprendre ce store comme local.
+pub const FLEET_SCHEMA_VERSION: u64 = 5;
 pub const FLEET_SCHEMA_MIN: u64 = 1;
 
 fn default_persistent() -> bool {
@@ -116,6 +117,8 @@ pub struct DesiredEquipier {
     /// Exécution Docker corrélée, absente pour les agents host historiques.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_execution: Option<ContainerAgentExecution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 
 /// Contenu versionné de `fleet.json`.
@@ -442,7 +445,10 @@ impl DesiredStateStore {
         let mut fleet = self.load_unlocked()?;
         let mut changed = Vec::new();
         for (name, entry) in &mut fleet.equipiers {
-            if !entry.persistent && entry.lifecycle_state == DesiredLifecycleState::Running {
+            if !entry.persistent
+                && entry.remote_placement.is_none()
+                && entry.lifecycle_state == DesiredLifecycleState::Running
+            {
                 entry.lifecycle_state = DesiredLifecycleState::Stopped;
                 changed.push(name.clone());
             }
@@ -536,7 +542,8 @@ impl DesiredStateStore {
             }
         })?;
         #[cfg(test)]
-        self.writes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 }
@@ -562,6 +569,13 @@ fn validate_fleet(path: &Path, fleet: &DesiredFleet) -> Result<(), DesiredStateE
             Some("génération nulle")
         } else if equipier.created.trim().is_empty() {
             Some("date de création vide")
+        } else if equipier.remote_placement.as_ref().is_some_and(|placement| {
+            fleet.schema < 5
+                || placement.validate().is_err()
+                || equipier.cwd != Path::new(&placement.execution_cwd)
+                || equipier.runtime_execution.is_some()
+        }) {
+            Some("placement distant invalide")
         } else if equipier.agent_link.as_ref().is_some_and(|link| {
             link.link_id.trim().is_empty()
                 || link.parent_instance_id.trim().is_empty()
@@ -606,6 +620,7 @@ mod tests {
 
     fn equipier(command_id: &str, generation: u64) -> DesiredEquipier {
         DesiredEquipier {
+            remote_placement: None,
             agent_type: "codex".to_string(),
             cwd: PathBuf::from("/tmp/projet"),
             command_id: command_id.to_string(),
@@ -721,6 +736,54 @@ mod tests {
         let signal_result = unsafe { libc::kill(process.child.id() as libc::pid_t, libc::SIGTERM) };
         assert_eq!(signal_result, 0);
         assert!(!process.child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn remote162_fleet_migre_local_refuse_downgrade_et_preserve_distant_inconnu() {
+        let root = test_root("remote162-schema");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("fleet.json");
+        let store = DesiredStateStore::at_path(&path);
+        let mut entry = equipier("command162", 1);
+        let legacy = serde_json::json!({"schema":4,"equipiers":{"agent":entry}});
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert!(
+            store.load().unwrap().equipiers["agent"]
+                .remote_placement
+                .is_none()
+        );
+        entry.remote_placement = Some(
+            serde_json::from_value(serde_json::json!({
+                "machine_id":"cartae", "worker_id":"worker", "provisioning_revision":1,
+                "project_id":"project", "mapping_revision":1, "origin_host":"mac",
+                "origin_cwd":"/Users/moi/project", "source_root_identity":"git:project",
+                "relative_cwd":".", "execution_cwd":"/tmp/projet", "base_commit":null,
+                "definition_digest":"a".repeat(64), "permission_digest":"b".repeat(64)
+            }))
+            .unwrap(),
+        );
+        entry.persistent = false;
+        store.upsert("agent".into(), entry.clone()).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.schema, 5);
+        assert_eq!(
+            loaded.equipiers["agent"].remote_placement,
+            entry.remote_placement
+        );
+        assert!(store.stop_non_persistent_running().unwrap().is_empty());
+        assert_eq!(
+            store.load().unwrap().equipiers["agent"].lifecycle_state,
+            DesiredLifecycleState::Running
+        );
+        // Un JSON v4 portant du distant n'est jamais interprété comme local.
+        let mut downgraded = serde_json::to_value(loaded).unwrap();
+        downgraded["schema"] = serde_json::json!(4);
+        fs::write(&path, serde_json::to_vec(&downgraded).unwrap()).unwrap();
+        assert!(matches!(
+            store.load(),
+            Err(DesiredStateError::InvalidEntry { .. })
+        ));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -980,12 +1043,12 @@ mod tests {
         let root = test_root("version");
         let path = root.join("fleet.json");
         fs::create_dir_all(&root).unwrap();
-        fs::write(&path, r#"{"schema":5,"equipiers":{}}"#).unwrap();
+        fs::write(&path, r#"{"schema":6,"equipiers":{}}"#).unwrap();
         let error = DesiredStateStore::at_path(&path).load().unwrap_err();
 
         assert!(matches!(
             error,
-            DesiredStateError::UnsupportedSchema { found: Some(5), .. }
+            DesiredStateError::UnsupportedSchema { found: Some(6), .. }
         ));
         assert!(error.to_string().contains(path.to_str().unwrap()));
         fs::write(&path, r#"{"equipiers":{}}"#).unwrap();

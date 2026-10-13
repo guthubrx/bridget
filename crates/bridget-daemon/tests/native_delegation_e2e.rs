@@ -1,5 +1,7 @@
 //! Session148 : vrai daemon/superviseur/wrapper, fournisseur Claude/GLM fermé.
 //! Aucun T3, secret utilisateur, réseau fournisseur ou modèle réel.
+#[path = "fixtures/remote_worker_162.rs"]
+mod remote_worker_162;
 #[allow(dead_code)]
 #[path = "support/idempotent.rs"]
 mod support;
@@ -452,6 +454,8 @@ impl Drop for Fixture {
 }
 fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        machine_id: None,
+        project_id: None,
         resume_on_limit: None,
         fallback: Vec::new(),
         request_id: key.into(),
@@ -964,6 +968,7 @@ fn native_identity_boundary152(boundary: NativeBoundary152) {
             )
             .unwrap();
             let order = SpawnOrder {
+                remote_placement: None,
                 posture: None,
                 agent_type: entry.agent_type.clone(),
                 project: entry.project.clone(),

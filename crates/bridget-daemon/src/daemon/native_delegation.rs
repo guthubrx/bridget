@@ -196,7 +196,16 @@ pub(super) fn may_resume(
     {
         return Ok(false);
     }
-    let identity = restart_identity(st, task)?;
+    let identity = if task.remote_placement.is_some() {
+        let command = remote_command_identity(st, task).map_err(|e| format!("{e:?}"))?;
+        ManagedIdentity {
+            instance_id: command.instance_id,
+            command_id: command.command_id,
+            generation: command.generation,
+        }
+    } else {
+        restart_identity(st, task)?
+    };
     // Le lien peut déjà attester une génération plus récente que le checkpoint
     // de tâche. Seul son wrapper géré courant peut reconstruire cette mission.
     if identity.instance_id != instance
@@ -217,10 +226,11 @@ pub(super) fn may_resume(
     if pause_covers(st, execution, false)? {
         return Ok(snapshot.state == "interrupted");
     }
-    Ok(matches!(
-        snapshot.state.as_str(),
-        "queued" | "starting" | "running" | "waiting_approval" | "waiting_user_input"
-    ))
+    Ok(task.remote_placement.is_none()
+        && matches!(
+            snapshot.state.as_str(),
+            "queued" | "starting" | "running" | "waiting_approval" | "waiting_user_input"
+        ))
 }
 
 /// O(log N + P) via le journal des pauses ; la date métier brute reste intacte.
@@ -658,7 +668,7 @@ pub(super) fn handle_with_peer(
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
-    handle_with_fact(conn, request, None, None, state, peer)
+    handle_with_fact(conn, request, None, None, None, state, peer)
 }
 
 pub(super) fn handle_attested(
@@ -670,7 +680,8 @@ pub(super) fn handle_attested(
 ) -> DaemonToWrapper {
     // HTTP hors verrou. La connexion, le fil et le projet sont revérifiés
     // après la réponse authentifiée, au même puits que l'admission durable.
-    let attested = crate::t3code_mcp::reattest(proof);
+    let permission_proof = proof;
+    let attested = crate::t3code_mcp::reattest(permission_proof);
     let proof = match attested {
         Ok(p) => p,
         Err(_) => {
@@ -703,6 +714,7 @@ pub(super) fn handle_attested(
         request,
         proof.permissions,
         Some(&proof.thread_id),
+        Some(permission_proof),
         state,
         peer,
     )
@@ -713,6 +725,7 @@ fn handle_with_fact(
     request: NativeDelegationRequest,
     fact: Option<bridget_transport::protocol::ProviderPermissions>,
     thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
@@ -749,8 +762,9 @@ fn handle_with_fact(
                     .ok()
                     .flatten()
                     .filter(|task| {
-                        live_connection_identity(&st, conn)
-                            .is_some_and(|(owner, _)| task.owner == owner)
+                        task.remote_placement.is_none()
+                            && live_connection_identity(&st, conn)
+                                .is_some_and(|(owner, _)| task.owner == owner)
                     })
                     .map(|task| task.cwd)
             }
@@ -768,6 +782,25 @@ fn handle_with_fact(
     } else {
         None
     };
+    if matches!(
+        &request,
+        NativeDelegationRequest::Delegate {
+            machine_id: Some(_),
+            ..
+        }
+    ) {
+        let result = delegate_remote(
+            conn,
+            &request,
+            candidate_project.as_ref(),
+            fact.as_ref(),
+            thread,
+            permission_proof,
+            state,
+        )
+        .unwrap_or_else(|code| failure(&code));
+        return DaemonToWrapper::NativeDelegationResult { result };
+    }
     if matches!(
         &request,
         NativeDelegationRequest::Delegate {
@@ -789,6 +822,54 @@ fn handle_with_fact(
         }
         return DaemonToWrapper::NativeDelegationResult { result };
     }
+    let remote_proof = (|| -> Result<Option<Task>, String> {
+        let NativeDelegationRequest::Continue {
+            task_id,
+            request_id,
+            ..
+        } = &request
+        else {
+            return Ok(None);
+        };
+        let task = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(task) = st.delegation_store.get(task_id)? else {
+                return Ok(None);
+            };
+            if task.remote_placement.is_none()
+                || task
+                    .rounds
+                    .iter()
+                    .any(|round| &round.request_id == request_id)
+            {
+                return Ok(None);
+            }
+            let (owner, instance) =
+                live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+            if !can_own_task(&st, &task, &owner, &instance)? {
+                return Err("task_unavailable".into());
+            }
+            let current = parent_fact(&st, &owner, &instance, Some(request_id), fact.as_ref())?;
+            if task
+                .permission_snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.parent)
+                != current.as_ref()
+            {
+                return Err("permission_not_inherited".into());
+            }
+            task
+        };
+        remote_dispatch_proof(state, &task).map(Some)
+    })();
+    let remote_proof = match remote_proof {
+        Ok(proof) => proof,
+        Err(code) => {
+            return DaemonToWrapper::NativeDelegationResult {
+                result: failure(&code),
+            };
+        }
+    };
     let drives = matches!(
         &request,
         NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::Cancel { .. }
@@ -817,11 +898,12 @@ fn handle_with_fact(
             NativeDelegationRequest::Continue { .. } | NativeDelegationRequest::Respond { .. }
         )
         .then(|| st.delegation_store.wait_epoch().get());
-        let result = match handle_locked_with_project(
+        let result = match handle_locked_with_remote_proof(
             conn,
             request,
             candidate_project.as_ref(),
             fact.as_ref(),
+            remote_proof.as_ref(),
             &mut st,
         ) {
             Ok(result) => result,
@@ -855,6 +937,877 @@ fn recheck_attested_thread(
         {
             return Err("permission_attestation_unavailable".into());
         }
+    }
+    Ok(())
+}
+
+fn remote_worker_identity(
+    placement: &bridget_transport::protocol::RemotePlacement,
+) -> bridget_transport::protocol::WorkerIdentity {
+    bridget_transport::protocol::WorkerIdentity {
+        machine_id: placement.machine_id.clone(),
+        worker_id: placement.worker_id.clone(),
+        provisioning_revision: placement.provisioning_revision,
+    }
+}
+
+fn remote_parent_proof(
+    state: &Arc<Mutex<DaemonState>>,
+    owner: &str,
+    parent: &bridget_transport::protocol::ProviderPermissions,
+) -> Result<String, String> {
+    use bridget_transport::protocol::*;
+    let source = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.delegation_store
+            .for_child(owner)?
+            .filter(|task| task.remote_placement.is_some())
+            .map(|task| {
+                Ok::<_, String>((
+                    remote_worker_identity(task.remote_placement.as_ref().unwrap()),
+                    remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))?,
+                ))
+            })
+            .transpose()?
+    };
+    if let Some((worker, command)) = source {
+        let response = remote_worker_roundtrip(
+            state,
+            &worker,
+            &command,
+            WorkerRequestOperation::ParentProof {
+                parent: parent.clone(),
+                expected_revision: parent.revision,
+            },
+            Instant::now() + Duration::from_secs(5),
+        )
+        .map_err(|e| format!("remote_parent_proof:{e:?}"))?;
+        let WorkerResponseOperation::ParentProof {
+            parent: proven,
+            permission_digest,
+        } = response
+        else {
+            return Err("remote_parent_proof_invalid".into());
+        };
+        let expected = format!(
+            "{:x}",
+            sha2::Sha256::digest(serde_json::to_vec(parent).map_err(|e| e.to_string())?)
+        );
+        if proven != *parent || permission_digest != expected {
+            return Err("remote_parent_proof_changed".into());
+        }
+        Ok(permission_digest)
+    } else {
+        crate::native_permissions::prove_parent_permissions(parent, parent.revision)
+    }
+}
+
+fn delegate_remote(
+    conn: &str,
+    request: &NativeDelegationRequest,
+    project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Value, String> {
+    use bridget_transport::protocol::*;
+    let NativeDelegationRequest::Delegate {
+        machine_id: Some(machine),
+        project_id: Some(project_id),
+        request_id,
+        agent_type,
+        model,
+        effort,
+        cwd,
+        posture,
+        workspace,
+        fallback,
+        ..
+    } = request
+    else {
+        return Err("remote_placement_invalid".into());
+    };
+    if !fallback.is_empty() {
+        return Err("remote_fallback_forbidden".into());
+    }
+    let canonical = serde_json::to_vec(request).map_err(|e| e.to_string())?;
+    let (owner, parent, worker, mut prepare, task_id) = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        if let Some(mut saved) = st
+            .delegation_store
+            .by_agent_request(&owner, request_id, &canonical)?
+        {
+            recover_owner(&mut st, &mut saved, &owner, &instance)?;
+            // Un rejeu ne relance jamais un bootstrap dont l'issue est inconnue.
+            return current_task_view(&st, &saved, true);
+        }
+        let parent = parent_fact(&st, &owner, &instance, Some(request_id), attested)?
+            .ok_or("permission_attestation_unavailable")?;
+        let provision = st.registry.machine(machine)?;
+        if !provision.permits_agent_type(agent_type) {
+            return Err("remote_agent_type_forbidden".into());
+        }
+        let mapping = st.registry.project_mapping(machine, project_id)?;
+        let origin_host = st
+            .delegation_store
+            .for_child(&owner)?
+            .and_then(|task| task.remote_placement)
+            .map_or_else(|| st.host.clone(), |placement| placement.machine_id);
+        if mapping.source_host != origin_host {
+            return Err("remote_origin_host_mismatch".into());
+        }
+        let source = Path::new(cwd);
+        if !source.is_absolute()
+            || source
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || !source.starts_with(&parent.cwd)
+        {
+            return Err("cwd_outside_parent_project".into());
+        }
+        let offset = source
+            .strip_prefix(&mapping.source_root)
+            .map_err(|_| "remote_mapping_mismatch")?;
+        let relative = if offset.as_os_str().is_empty() {
+            ".".into()
+        } else {
+            offset.to_string_lossy().into_owned()
+        };
+        let worker = WorkerIdentity {
+            machine_id: machine.clone(),
+            worker_id: provision.worker_id.clone(),
+            provisioning_revision: provision.provisioning_revision,
+        };
+        let prepare = WorkerPrepare {
+            machine_id: machine.clone(),
+            project_id: project_id.clone(),
+            provisioning_revision: provision.provisioning_revision,
+            mapping_revision: mapping.mapping_revision,
+            origin_host: mapping.source_host.clone(),
+            origin_cwd: cwd.clone(),
+            source_root: mapping.source_root.to_string_lossy().into_owned(),
+            remote_root: mapping.remote_root.to_string_lossy().into_owned(),
+            source_root_identity: mapping.expected_git_identity.clone(),
+            relative_cwd: relative,
+            base_commit: None,
+            agent_type: agent_type.clone(),
+            model: model.clone(),
+            effort: effort.clone(),
+            posture: *posture,
+            parent: parent.clone(),
+            workspace: None,
+        };
+        (owner, parent, worker, prepare, Uuid::new_v4().to_string())
+    };
+    let proof = remote_parent_proof(state, &owner, &parent)?;
+    let provisional = WorkerCommandIdentity {
+        command_id: task_id.clone(),
+        task_id: task_id.clone(),
+        instance_id: String::new(),
+        generation: 0,
+    };
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        &provisional,
+        WorkerRequestOperation::Prepare {
+            prepare: prepare.clone(),
+        },
+        Instant::now() + Duration::from_secs(30),
+    )
+    .map_err(|e| format!("remote_prepare:{e:?}"))?;
+    let WorkerResponseOperation::Prepared { mut prepared } = response else {
+        return Err("remote_prepare_invalid".into());
+    };
+    if remote_parent_proof(state, &owner, &parent)? != proof {
+        return Err("permission_changed".into());
+    }
+    {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        match admit_delegate(
+            conn,
+            request,
+            project,
+            attested,
+            &mut st,
+            WorkspacePass::Remote {
+                prepared: &prepared,
+                task_id: &task_id,
+            },
+        )? {
+            WorkspaceAdmission::View(view)
+                if view["task_id"].as_str() != Some(task_id.as_str()) =>
+            {
+                return Ok(view);
+            }
+            WorkspaceAdmission::View(_) => {}
+            _ => return Err("remote_admission_invalid".into()),
+        }
+    }
+    if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+        prepare.workspace = workspace.clone();
+        let response = remote_worker_roundtrip(
+            state,
+            &worker,
+            &provisional,
+            WorkerRequestOperation::Prepare { prepare },
+            Instant::now() + Duration::from_secs(30),
+        )
+        .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
+        let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
+            return Err("remote_prepare_invalid".into());
+        };
+        prepared = isolated;
+    }
+    if remote_parent_proof(state, &owner, &parent)? != proof {
+        return Err("permission_changed".into());
+    }
+    {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        let mut task = st
+            .delegation_store
+            .get(&task_id)?
+            .ok_or("task_unavailable")?;
+        if task.state != "queued" || task.child_instance.is_some() {
+            return Err("remote_admission_changed".into());
+        }
+        let current = parent_fact(
+            &st,
+            &task.owner,
+            &task.owner_instance,
+            Some(request_id),
+            attested,
+        )?;
+        if current.as_ref() != Some(&parent) {
+            return Err("permission_changed".into());
+        }
+        let mapping = st.registry.project_mapping(machine, project_id)?;
+        if mapping.mapping_revision != prepared.placement.mapping_revision
+            || !prepared.placement.matches_worker(&worker)
+            || prepared.placement.origin_cwd != *cwd
+            || prepared.placement.project_id != *project_id
+        {
+            return Err("remote_placement_changed".into());
+        }
+        let record = prepared
+            .workspace
+            .as_ref()
+            .map(|value| {
+                serde_json::from_value::<WorkspaceRecord>(value.clone())
+                    .map_err(|_| "remote_workspace_invalid")
+            })
+            .transpose()?;
+        if let Some(record) = &record {
+            let expected_branch = match workspace {
+                Some(WorkspaceRequest::Worktree { branch, .. }) => branch
+                    .clone()
+                    .unwrap_or_else(|| format!("bridget/{}", &task_id[..8])),
+                _ => return Err("remote_workspace_unexpected".into()),
+            };
+            if record.branch != expected_branch
+                || prepared.placement.base_commit.as_deref() != Some(record.base_commit.as_str())
+                || !Path::new(&prepared.placement.execution_cwd).starts_with(&record.path)
+                || !Path::new(&record.path).starts_with(&mapping.remote_root)
+                || !record.path.ends_with(&task_id[..8])
+            {
+                return Err("remote_workspace_invalid".into());
+            }
+        } else if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+            return Err("remote_workspace_missing".into());
+        }
+        task.workspace = record;
+        task.remote_placement = Some(prepared.placement.clone());
+        task.cwd = prepared.placement.execution_cwd.clone();
+        task.definition = prepared.definition.clone();
+        task.permission_snapshot = Some(crate::native_permissions::snapshot(
+            &task.owner,
+            &task.owner_instance,
+            parent.clone(),
+            prepared.child_policy.clone(),
+            Path::new(&task.cwd),
+        ));
+        task.effective_posture = Some(prepared.effective_posture);
+        task.remote_prepared = true;
+        st.delegation_store.save(&task)?;
+    }
+    start_remote_task(
+        state,
+        &task_id,
+        &prepared,
+        &parent,
+        conn,
+        thread,
+        permission_proof,
+    )?;
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    current_task_view(
+        &st,
+        &st.delegation_store
+            .get(&task_id)?
+            .ok_or("task_unavailable")?,
+        true,
+    )
+}
+
+/// Les sources sont relues sur leur hôte ; aucun chemin distant n'est ouvert ici.
+pub(super) fn remote_dispatch_proof(
+    state: &Arc<Mutex<DaemonState>>,
+    task: &Task,
+) -> Result<Task, String> {
+    use bridget_transport::protocol::*;
+    let snapshot = task
+        .permission_snapshot
+        .as_ref()
+        .ok_or("permission_attestation_unavailable")?;
+    let placement = task
+        .remote_placement
+        .as_ref()
+        .ok_or("remote_placement_missing")?;
+    remote_parent_proof(state, &task.owner, &snapshot.parent)?;
+    let command = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        remote_command_identity(&st, task).map_err(|e| format!("{e:?}"))?
+    };
+    let response = remote_worker_roundtrip(
+        state,
+        &remote_worker_identity(placement),
+        &command,
+        WorkerRequestOperation::Reconcile {},
+        Instant::now() + Duration::from_secs(5),
+    )
+    .map_err(|e| format!("remote_permissions:{e:?}"))?;
+    if !matches!(response, WorkerResponseOperation::Observation { observation }
+        if observation.phase == WorkerCommandPhase::Released && observation.native_ready
+        && observation.permission_digest.as_ref() == Some(&placement.permission_digest))
+    {
+        return Err("permission_not_inherited".into());
+    }
+    Ok(task.clone())
+}
+
+pub(super) fn recheck_remote_dispatch(
+    st: &DaemonState,
+    task: &Task,
+    proof: &Task,
+) -> Result<(), String> {
+    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+        return Err("invalid_record".into());
+    };
+    if st
+        .provider_limits
+        .quota(agent_type, unix_timestamp())
+        .is_some_and(|quota| quota.exhausted)
+    {
+        return Err("provider_quota_exhausted".into());
+    }
+    // Une mission admise survit au parent absent. Un nouveau fait de la même
+    // autorité native vivante, ou son refus explicite, ferme néanmoins la remise.
+    // Une attestation provider_turn reste l'autorité T3 ; aucun fait wrapper ne la remplace.
+    if let Some(snapshot) = task
+        .permission_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.parent.source == "native_wrapper")
+    {
+        let NativeDelegationRequest::Delegate { request_id, .. } = &task.request else {
+            return Err("invalid_record".into());
+        };
+        if parent_fact(
+            st,
+            &task.owner,
+            &task.owner_instance,
+            Some(request_id),
+            None,
+        )?
+        .is_some_and(|current| current.source == "native_wrapper" && current != snapshot.parent)
+        {
+            return Err("permission_not_inherited".into());
+        }
+    }
+    let placement = task
+        .remote_placement
+        .as_ref()
+        .ok_or("remote_placement_missing")?;
+    let provision = st.registry.machine(&placement.machine_id)?;
+    let mapping = st
+        .registry
+        .project_mapping(&placement.machine_id, &placement.project_id)?;
+    if task.task_id != proof.task_id
+        || task.mission != proof.mission
+        || task.round != proof.round
+        || task.child_instance != proof.child_instance
+        || task.remote_placement != proof.remote_placement
+        || task.definition != proof.definition
+        || task.permission_snapshot != proof.permission_snapshot
+        || !provision.permits_agent_type(agent_type)
+        || provision.worker_id != placement.worker_id
+        || provision.provisioning_revision != placement.provisioning_revision
+        || mapping.mapping_revision != placement.mapping_revision
+        || st.delegation_store.revoked_agent(&task.owner)?
+        || st
+            .delegation_store
+            .revoked_agent(&task.root_owner_agent_id)?
+        || st.delegation_store.revoked(&task.owner_instance)?
+    {
+        return Err("permission_not_inherited".into());
+    }
+    Ok(())
+}
+
+fn remote_mission_message(task: &Task) -> Result<bridget_core::BridgetMessage, String> {
+    let NativeDelegationRequest::Delegate { task: body, .. } = &task.request else {
+        return Err("invalid_record".into());
+    };
+    let mut message = bridget_core::BridgetMessage::new(
+        &task.owner,
+        &task.child,
+        task.round_body.as_deref().unwrap_or(body),
+    );
+    message.id = task.mission.clone();
+    message.reply = true;
+    message.reply_timeout =
+        u64::try_from(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS)).ok();
+    message.intent = Some(bridget_core::MessageIntent::TriggerTurn);
+    Ok(message)
+}
+
+fn reserve_remote_result_slot(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+) -> Result<Option<Task>, String> {
+    use bridget_transport::protocol::*;
+    let (worker, command, slot, original, existing) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let task = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        let placement = task
+            .remote_placement
+            .as_ref()
+            .ok_or("remote_placement_missing")?;
+        let command = remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))?;
+        let initial = remote_mission_message(&task)?;
+        let root_execution = format!("execution-{}", task.mission);
+        st.execution_store
+            .admit_starting_message_for_project(&initial, &root_execution, None, unix_timestamp())
+            .map_err(|e| e.to_string())?;
+        let snapshot = st
+            .execution_store
+            .latest_in_chain(&root_execution)
+            .map_err(|e| e.to_string())?
+            .ok_or("remote_execution_missing")?;
+        let execution_id = snapshot.execution_id.clone();
+        let message = st
+            .execution_store
+            .execution_message(&execution_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("remote_execution_payload_missing")?;
+        let identity = WorkerResultIdentity {
+            command: command.clone(),
+            mission_id: task.mission.clone(),
+            round: u32::from(task.round),
+            execution_id,
+            execution_generation: snapshot.generation,
+        };
+        let admission_digest = format!(
+            "{:x}",
+            sha2::Sha256::digest(
+                serde_json::to_vec(&(&identity, &message)).map_err(|e| e.to_string())?
+            )
+        );
+        let slot = WorkerResultSlot {
+            identity,
+            admission_digest,
+        };
+        let existing = task.remote_result_slots.contains(&slot);
+        if !existing && task.remote_result_slots.len() >= crate::delegation::MAX_REMOTE_RESULT_SLOTS
+        {
+            return Err("remote_result_slot_limit".into());
+        }
+        (
+            remote_worker_identity(placement),
+            command,
+            slot,
+            task,
+            existing,
+        )
+    };
+    let proof = if original.state == "starting" {
+        None
+    } else {
+        Some(remote_dispatch_proof(state, &original)?)
+    };
+    if existing {
+        return Ok(proof);
+    }
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() },
+        Instant::now() + Duration::from_secs(3),
+    )
+    .map_err(|e| format!("remote_result_slot:{e:?}"))?;
+    if !matches!(response, WorkerResponseOperation::ResultSlotReserved { slot:ref confirmed, .. } if confirmed == &slot)
+    {
+        return Err("remote_result_slot_mismatch".into());
+    }
+    let admitted = (|| {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut task = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        if task.terminal()
+            || task.state == "cancelling"
+            || task.mission != slot.identity.mission_id
+            || remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))? != command
+        {
+            return Err("remote_result_slot_stale".into());
+        }
+        if let Some(proof) = &proof {
+            recheck_remote_dispatch(&st, &task, proof)?;
+        }
+        if !task.remote_result_slots.contains(&slot) {
+            task.remote_result_slots.push(slot.clone());
+        }
+        st.delegation_store.save(&task)
+    })();
+    if admitted.is_err() {
+        // Aucune remise n'a pu observer ce slot absent de Task ; fermeture corrélée seulement.
+        let absent = state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .delegation_store
+            .get(task_id)
+            .is_ok_and(|task| task.is_some_and(|task| !task.remote_result_slots.contains(&slot)));
+        if absent {
+            let _ = remote_worker_roundtrip(
+                state,
+                &worker,
+                &command,
+                WorkerRequestOperation::Cancel {
+                    target: WorkerCancelScope::ResultSlot {
+                        slot,
+                        proof: WorkerSlotClosureProof::NeverDispatched,
+                    },
+                },
+                Instant::now() + Duration::from_secs(3),
+            );
+        }
+    }
+    admitted.map(|()| proof)
+}
+
+/// La reconstruction152 est déjà durable ; réserver son slot avant cette remise.
+fn dispatch_remote_pause_resume(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    proof: Option<&Task>,
+) -> Result<(), String> {
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let task = st
+        .delegation_store
+        .get(task_id)?
+        .ok_or("task_unavailable")?;
+    if task.state != "working" || task.remote_placement.is_none() {
+        return Ok(());
+    }
+    let Some(snapshot) = st
+        .execution_store
+        .latest_in_chain(&format!("execution-{}", task.mission))
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    if snapshot.state != "starting" || !pause_covers(&st, &snapshot.execution_id, true)? {
+        return Ok(());
+    }
+    let Some(continuation) = st
+        .execution_store
+        .continuation_for(&snapshot.execution_id)
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(());
+    };
+    let control =
+        crate::referent_control::read(st.store.connection()).map_err(|e| e.to_string())?;
+    if !matches!(
+        crate::referent_control::admit_autonomous_effect(
+            crate::referent_control::AutonomousEffect::NativeMissionDispatch,
+            &control
+        ),
+        crate::referent_control::Admission::Admitted
+    ) {
+        return Ok(());
+    }
+    recheck_remote_dispatch(&st, &task, proof.ok_or("remote_permission_proof_required")?)?;
+    let key = IdempotencyKey::new(
+        st.idempotency
+            .supervisor_scope()
+            .map_err(|e| e.to_string())?,
+        OperationKind::Send,
+        format!("recovery-{}", snapshot.execution_id),
+    )
+    .map_err(|e| e.to_string())?;
+    if st
+        .idempotency
+        .send_delivery_phase(&key)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let Some(conn) = st
+        .router
+        .get_agent(&task.child)
+        .map(|route| route.connection_id.clone())
+    else {
+        return Ok(());
+    };
+    let Some(instance) = task.child_instance.as_ref() else {
+        return Ok(());
+    };
+    if live_connection_identity(&st, &conn) != Some((task.child.clone(), instance.clone())) {
+        return Ok(());
+    }
+    let message = st
+        .execution_store
+        .execution_message(&snapshot.execution_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("remote_execution_payload_missing")?;
+    let reconstructed = crate::execution_store::ReconstructedExecution {
+        parent_execution_id: continuation.parent_execution_id,
+        snapshot,
+        message,
+    };
+    deliver_reconstructed(
+        &mut st,
+        &conn,
+        instance,
+        &reconstructed,
+        continuation.observed_at,
+        false,
+    )
+    .map_err(|e| e.to_string())?;
+    let controls = st
+        .pending_post_response_controls
+        .remove(&conn)
+        .unwrap_or_default();
+    drop(st);
+    let _ = execute_controls(controls);
+    Ok(())
+}
+
+fn start_remote_task(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    prepared: &bridget_transport::protocol::WorkerPrepared,
+    parent: &bridget_transport::protocol::ProviderPermissions,
+    conn: &str,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+) -> Result<(), String> {
+    use bridget_transport::protocol::*;
+    let (worker, command, start, owner) = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut task = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        if task.state != "queued"
+            || !task.remote_prepared
+            || task.remote_placement.as_ref() != Some(&prepared.placement)
+        {
+            return Err("remote_task_changed".into());
+        }
+        let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+            return Err("invalid_record".into());
+        };
+        let now = unix_timestamp();
+        task.launch_issued_at = Some(now);
+        let order = FleetSpawnOrder {
+            remote_placement: task.remote_placement.clone(),
+            posture: None,
+            agent_type: agent_type.clone(),
+            project: None,
+            requested_name: Some(task.child.clone()),
+            cwd: PathBuf::from(&task.cwd),
+            persistent: true,
+            command_id: task.task_id.clone(),
+            issued_at: now,
+            deadline_at: now + 300,
+            ownership: Some(SpawnOwnership {
+                parent_instance_id: task.origin_owner_instance.clone(),
+                parent_execution_id: task.parent_execution_id.clone(),
+                objective_id: None,
+                delegation_id: Some(task.task_id.clone()),
+                project: None,
+                role: "native_delegate".into(),
+                max_children: Some(16),
+                max_depth: Some(8),
+            }),
+        };
+        let crate::fleet::SpawnSubmission::Start(lease) = st
+            .fleet
+            .request_spawn(&order, now)
+            .map_err(|e| e.to_string())?
+        else {
+            return Err("remote_spawn_not_new".into());
+        };
+        st.fleet
+            .mark_starting(&lease, now, &prepared.definition)
+            .map_err(|e| e.to_string())?;
+        task.child_instance = Some(lease.instance_id.clone());
+        task.state = "starting".into();
+        st.delegation_store.save(&task)?;
+        let command = WorkerCommandIdentity {
+            command_id: lease.command_id.clone(),
+            task_id: task.task_id.clone(),
+            instance_id: lease.instance_id.clone(),
+            generation: lease.generation,
+        };
+        st.managed_by_instance
+            .insert(lease.instance_id.clone(), lease.command_id.clone());
+        st.managed_spawns.insert(
+            lease.command_id.clone(),
+            ManagedSpawnRecord {
+                lease: lease.clone(),
+                agent_type: agent_type.clone(),
+                requester_conns: Vec::new(),
+                wrapper_conn: None,
+                stop: Arc::new(ManagedStopControl::new()),
+            },
+        );
+        let start = WorkerStart {
+            prepared_token: prepared.token.clone(),
+            child_id: task.child.clone(),
+            mission_id: task.mission.clone(),
+            forward_child_requests: task.child_requests.as_deref() == Some("forward"),
+            placement: prepared.placement.clone(),
+            definition: prepared.definition.clone(),
+            child_policy: prepared.child_policy.clone(),
+            effective_posture: prepared.effective_posture,
+            deadline_at: lease.deadline_at,
+        };
+        (
+            remote_worker_identity(&prepared.placement),
+            command,
+            start,
+            task.owner,
+        )
+    };
+    let digest = crate::remote_worker::worker_command_digest(&worker, &command, &start)
+        .map_err(|e| e.to_string())?;
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        WorkerRequestOperation::Start { start },
+        Instant::now() + Duration::from_secs(30),
+    )
+    .map_err(|e| format!("remote_start:{e:?}"))?;
+    let WorkerResponseOperation::ReadyToRelease { ready_at } = response else {
+        return Err("remote_start_not_ready".into());
+    };
+    reserve_remote_result_slot(state, task_id)?;
+    // La preuve HTTP reste sur la pile d'admission ; aucun secret n'est persisté.
+    // Réattester après Start, hors mutex, interdit un permis fondé sur un ancien tour.
+    let fresh_attested = match (thread, permission_proof) {
+        (Some(expected_thread), Some(proof)) => {
+            let fresh = crate::t3code_mcp::reattest(proof)
+                .map_err(|_| "permission_attestation_unavailable")?;
+            if fresh.thread_id != expected_thread || fresh.permissions.as_ref() != Some(parent) {
+                return Err("permission_changed".into());
+            }
+            fresh.permissions
+        }
+        (None, None) => None,
+        _ => return Err("permission_attestation_unavailable".into()),
+    };
+    remote_parent_proof(state, &owner, parent)?;
+    let permit = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let task = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        recheck_attested_thread(&st, conn, thread)?;
+        if live_connection_identity(&st, conn)
+            != Some((task.owner.clone(), task.owner_instance.clone()))
+        {
+            return Err("permission_attestation_unavailable".into());
+        }
+        let NativeDelegationRequest::Delegate { request_id, .. } = &task.request else {
+            return Err("invalid_record".into());
+        };
+        if parent_fact(
+            &st,
+            &task.owner,
+            &task.owner_instance,
+            Some(request_id),
+            fresh_attested.as_ref(),
+        )?
+        .as_ref()
+            != Some(parent)
+        {
+            return Err("permission_changed".into());
+        }
+        let provision = st.registry.machine(&worker.machine_id)?;
+        let mapping = st
+            .registry
+            .project_mapping(&worker.machine_id, &prepared.placement.project_id)?;
+        if task.state != "starting"
+            || !task.remote_prepared
+            || task.remote_placement.as_ref() != Some(&prepared.placement)
+            || provision.provisioning_revision != worker.provisioning_revision
+            || mapping.mapping_revision != prepared.placement.mapping_revision
+            || task
+                .permission_snapshot
+                .as_ref()
+                .is_none_or(|snapshot| snapshot.parent != *parent)
+        {
+            return Err("remote_release_changed".into());
+        }
+        recheck_remote_dispatch(&st, &task, &task)?;
+        let control = crate::referent_control::read(st.store.connection())
+            .map_err(|_| "control_state_unavailable")?;
+        let halt = st
+            .delegation_store
+            .delegation_halt()
+            .map_err(|_| "control_state_unavailable")?;
+        if !matches!(
+            crate::referent_control::admit_native_delegation(&control, &halt),
+            crate::referent_control::Admission::Admitted
+        ) {
+            return Err("referent_paused".into());
+        }
+        WorkerReleasePermit {
+            permit_id: Uuid::new_v4().to_string(),
+            command_digest: digest,
+            permission_revision: parent.revision,
+            mapping_revision: mapping.mapping_revision,
+            provisioning_revision: worker.provisioning_revision,
+            issued_at: ready_at,
+            expires_at: ready_at + WORKER_RELEASE_TTL_SECS,
+        }
+    };
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        WorkerRequestOperation::Release { permit },
+        Instant::now() + Duration::from_secs(5),
+    )
+    .map_err(|e| format!("remote_release:{e:?}"))?;
+    if !matches!(response, WorkerResponseOperation::Released {}) {
+        return Err("remote_release_unconfirmed".into());
     }
     Ok(())
 }
@@ -1086,6 +2039,10 @@ fn wait_tasks(
 #[derive(Clone, Copy)]
 enum WorkspacePass<'a> {
     Shared,
+    Remote {
+        prepared: &'a bridget_transport::protocol::WorkerPrepared,
+        task_id: &'a str,
+    },
     Probe,
     Reserve {
         plan: &'a crate::workspace_git::WorkspacePreflight,
@@ -1124,7 +2081,9 @@ enum WorkspaceAdmission {
 
 fn task_id_for_pass<'a>(pass: WorkspacePass<'a>) -> &'a str {
     match pass {
-        WorkspacePass::Reserve { task_id, .. } | WorkspacePass::Commit { task_id, .. } => task_id,
+        WorkspacePass::Reserve { task_id, .. }
+        | WorkspacePass::Commit { task_id, .. }
+        | WorkspacePass::Remote { task_id, .. } => task_id,
         _ => "",
     }
 }
@@ -1357,6 +2316,8 @@ fn admit_delegate(
 ) -> Result<WorkspaceAdmission, String> {
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
     let NativeDelegationRequest::Delegate {
+        machine_id,
+        project_id,
         fallback,
         request_id,
         agent_type,
@@ -1382,6 +2343,23 @@ fn admit_delegate(
         || task.len() > 65536
     {
         return Err("invalid_request".into());
+    }
+    if machine_id.is_some() != project_id.is_some()
+        || [machine_id, project_id].iter().any(|value| {
+            value.as_ref().is_some_and(|value| {
+                value.is_empty()
+                    || value.len() > 256
+                    || value.chars().any(bridget_core::is_disallowed_control)
+            })
+        })
+    {
+        return Err("remote_placement_invalid".into());
+    }
+    if machine_id.is_some() && !matches!(pass, WorkspacePass::Remote { .. }) {
+        return Err("remote_preparation_required".into());
+    }
+    if machine_id.is_some() && !fallback.is_empty() {
+        return Err("remote_fallback_forbidden".into());
     }
     let requested_target = bridget_transport::protocol::FallbackTarget {
         agent_type: agent_type.clone(),
@@ -1485,7 +2463,19 @@ fn admit_delegate(
         {
             return Err("child_requests_reviewer_unsupported".into());
         }
-        let frozen_cwd = if let Some(fact) = &fact {
+        let frozen_cwd = if let WorkspacePass::Remote { prepared, .. } = pass {
+            let parent = fact.as_ref().ok_or("permission_attestation_unavailable")?;
+            if prepared.placement.origin_cwd != *cwd
+                || !Path::new(cwd).starts_with(&parent.cwd)
+                || prepared.placement.machine_id
+                    != *machine_id.as_ref().ok_or("remote_placement_invalid")?
+                || prepared.placement.project_id
+                    != *project_id.as_ref().ok_or("remote_placement_invalid")?
+            {
+                return Err("remote_placement_invalid".into());
+            }
+            PathBuf::from(&prepared.placement.execution_cwd)
+        } else if let Some(fact) = &fact {
             let path = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable")?;
             let root = std::fs::canonicalize(&fact.cwd).map_err(|_| "cwd_unavailable")?;
             if !path.is_dir() || !path.starts_with(&root) {
@@ -1520,6 +2510,44 @@ fn admit_delegate(
             permission_snapshot,
             resolved_posture,
         ) = match pass {
+            WorkspacePass::Remote { prepared, .. } => {
+                let parent = fact.as_ref().ok_or("permission_attestation_unavailable")?;
+                let provision = st.registry.machine(machine_id.as_ref().unwrap())?;
+                let mapping = st
+                    .registry
+                    .project_mapping(machine_id.as_ref().unwrap(), project_id.as_ref().unwrap())?;
+                if !provision.permits_agent_type(agent_type)
+                    || provision.worker_id != prepared.placement.worker_id
+                    || provision.provisioning_revision != prepared.placement.provisioning_revision
+                    || mapping.mapping_revision != prepared.placement.mapping_revision
+                {
+                    return Err("remote_placement_changed".into());
+                }
+                if st
+                    .provider_limits
+                    .quota(agent_type, unix_timestamp())
+                    .is_some_and(|quota| quota.exhausted)
+                {
+                    return Err("provider_quota_exhausted".into());
+                }
+                let scoped = AgentRegistry::from_resolved(agent_type, &prepared.definition)?;
+                let snapshot = crate::native_permissions::snapshot(
+                    &owner,
+                    &instance,
+                    parent.clone(),
+                    prepared.child_policy.clone(),
+                    &frozen_cwd,
+                );
+                (
+                    request.clone(),
+                    prepared.definition.clone(),
+                    None,
+                    scoped,
+                    Some(snapshot),
+                    prepared.effective_posture,
+                )
+            }
+
             WorkspacePass::Reserve {
                 selection: (selected, definition, substitution),
                 ..
@@ -1733,7 +2761,9 @@ fn admit_delegate(
                 }
                 (scoped, snapshot, child)
             }
-            WorkspacePass::Shared => (scoped, permission_snapshot, frozen_cwd),
+            WorkspacePass::Shared | WorkspacePass::Remote { .. } => {
+                (scoped, permission_snapshot, frozen_cwd)
+            }
             WorkspacePass::Probe => unreachable!(),
         };
         // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
@@ -1821,6 +2851,14 @@ fn admit_delegate(
             None => (owner.clone(), None),
         };
         let record = Task {
+            remote_prepared: false,
+            remote_result_slots: Vec::new(),
+            remote_result_receipts: Vec::new(),
+            remote_placement: if let WorkspacePass::Remote { prepared, .. } = pass {
+                Some(prepared.placement.clone())
+            } else {
+                None
+            },
             substitution,
             task_id: task_id.clone(),
             root_owner_agent_id,
@@ -1947,6 +2985,17 @@ fn handle_locked_with_project(
     request: NativeDelegationRequest,
     candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
     attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    st: &mut DaemonState,
+) -> Result<Value, String> {
+    handle_locked_with_remote_proof(conn, request, candidate_project, attested, None, st)
+}
+
+fn handle_locked_with_remote_proof(
+    conn: &str,
+    request: NativeDelegationRequest,
+    candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    remote_proof: Option<&Task>,
     st: &mut DaemonState,
 ) -> Result<Value, String> {
     if let NativeDelegationRequest::Grant {
@@ -2429,39 +3478,55 @@ fn handle_locked_with_project(
             if saved.round_no() >= 8 {
                 return Err("round_limit".into());
             }
-            let registry = native_launch_registry(st, &saved)?;
-            let NativeDelegationRequest::Delegate {
-                agent_type,
-                posture,
-                ..
-            } = &saved.request
-            else {
-                return Err("invalid_record".into());
-            };
-            if let Some(snapshot) = &saved.permission_snapshot {
-                let fact = fact.as_ref().ok_or("permission_attestation_unavailable")?;
-                let (policy, _) = crate::native_permissions::child_policy(
-                    fact,
-                    registry.get(agent_type)?,
-                    Path::new(&saved.cwd),
-                    &st.source_env,
-                    *posture,
+            if saved.remote_placement.is_some() {
+                recheck_remote_dispatch(
+                    st,
+                    &saved,
+                    remote_proof.ok_or("remote_permission_proof_required")?,
                 )?;
-                if policy != snapshot.child_policy {
+                if saved
+                    .permission_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.parent)
+                    != fact.as_ref()
+                {
                     return Err("permission_not_inherited".into());
                 }
             } else {
-                authorize_cwd(
-                    st,
-                    &owner,
-                    &instance,
-                    &saved.cwd,
-                    saved
-                        .effective_posture
-                        .or(*posture)
-                        .unwrap_or(SpawnPosture::Discovery),
-                    candidate_project,
-                )?;
+                let registry = native_launch_registry(st, &saved)?;
+                let NativeDelegationRequest::Delegate {
+                    agent_type,
+                    posture,
+                    ..
+                } = &saved.request
+                else {
+                    return Err("invalid_record".into());
+                };
+                if let Some(snapshot) = &saved.permission_snapshot {
+                    let fact = fact.as_ref().ok_or("permission_attestation_unavailable")?;
+                    let (policy, _) = crate::native_permissions::child_policy(
+                        fact,
+                        registry.get(agent_type)?,
+                        Path::new(&saved.cwd),
+                        &st.source_env,
+                        *posture,
+                    )?;
+                    if policy != snapshot.child_policy {
+                        return Err("permission_not_inherited".into());
+                    }
+                } else {
+                    authorize_cwd(
+                        st,
+                        &owner,
+                        &instance,
+                        &saved.cwd,
+                        saved
+                            .effective_posture
+                            .or(*posture)
+                            .unwrap_or(SpawnPosture::Discovery),
+                        candidate_project,
+                    )?;
+                }
             }
             let next = st.delegation_store.begin_round(
                 task_id,
@@ -2559,7 +3624,107 @@ pub(super) fn native_child_env(task: &Task, prepared: &mut PreparedSpawn) -> Res
     Ok(())
 }
 
+/// Projection froide162. Les faits transport seront branchés par T008/T034 ;
+/// l'existence d'un placement ne constitue jamais une preuve de contact.
+pub(super) fn remote_command_identity(
+    st: &DaemonState,
+    task: &Task,
+) -> Result<
+    bridget_transport::protocol::WorkerCommandIdentity,
+    bridget_transport::protocol::WorkerRefusal,
+> {
+    use bridget_transport::protocol::{WorkerCommandIdentity, WorkerRefusal};
+    let placement = task
+        .remote_placement
+        .as_ref()
+        .ok_or(WorkerRefusal::PlacementMismatch)?;
+    let instance = task
+        .child_instance
+        .as_deref()
+        .ok_or(WorkerRefusal::UnknownExecution)?;
+    let commands = st
+        .idempotency
+        .spawn_commands(&st.fleet.supervisor_scope())
+        .map_err(|_| WorkerRefusal::StoreUnavailable)?;
+    let command = commands
+        .iter()
+        .find(|command| {
+            command.name == task.child
+                && command.instance_id.as_deref() == Some(instance)
+                && command.remote_placement.as_ref() == Some(placement)
+        })
+        .ok_or(WorkerRefusal::CommandMismatch)?;
+    let link = st
+        .fleet
+        .agent_link_for_child(instance)
+        .map_err(|_| WorkerRefusal::StoreUnavailable)?
+        .ok_or(WorkerRefusal::CommandMismatch)?;
+    if link.delegation_id.as_deref() != Some(task.task_id.as_str())
+        || link.role != "native_delegate"
+        || (link.parent_instance_id != task.owner_instance
+            && link.parent_instance_id != task.origin_owner_instance)
+    {
+        return Err(WorkerRefusal::CommandMismatch);
+    }
+    Ok(WorkerCommandIdentity {
+        command_id: command.command_id.clone(),
+        task_id: task.task_id.clone(),
+        instance_id: instance.into(),
+        generation: command.generation,
+    })
+}
+
+pub(super) fn remote_lineage_placement(
+    st: &DaemonState,
+    task: &Task,
+) -> Option<bridget_transport::protocol::LineagePlacementV2> {
+    let placement = task.remote_placement.as_ref()?;
+    Some(bridget_transport::protocol::LineagePlacementV2 {
+        machine_id: placement.machine_id.clone(),
+        display_name: st
+            .registry
+            .machines()
+            .get(&placement.machine_id)
+            .filter(|machine| machine.worker_id == placement.worker_id)
+            .and_then(|machine| machine.display_name.clone()),
+        worker_id: placement.worker_id.clone(),
+        last_contact_at: st
+            .remote_workers
+            .get(&placement.machine_id)
+            .filter(|worker| worker.identity.worker_id == placement.worker_id)
+            .map(|worker| worker.last_contact_at),
+        contact_state: st
+            .remote_workers
+            .get(&placement.machine_id)
+            .filter(|worker| worker.identity.worker_id == placement.worker_id)
+            .map_or(
+                bridget_transport::protocol::WorkerContactState::Unknown,
+                |worker| worker.contact,
+            ),
+    })
+}
+
 fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
+    if task.remote_placement.is_some() {
+        if task.remote_prepared
+            && task.state == "starting"
+            && st.router.get_agent(&task.child).is_some_and(|route| {
+                st.conn_instances.get(&route.connection_id) == task.child_instance.as_ref()
+            })
+            && st
+                .fleet
+                .desired_entry(&task.child)
+                .map_err(|e| e.to_string())?
+                .is_some_and(|entry| {
+                    entry.remote_placement == task.remote_placement
+                        && entry.lifecycle_state == DesiredLifecycleState::Running
+                })
+        {
+            task.state = "mission_pending".into();
+            st.delegation_store.save(task)?;
+        }
+        return Ok(());
+    }
     let registry = native_launch_registry(st, task)?;
     let NativeDelegationRequest::Delegate {
         agent_type,
@@ -2575,6 +3740,7 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
     }
     let issued_at = task.launch_issued_at.unwrap_or(task.created_at);
     let order = FleetSpawnOrder {
+        remote_placement: task.remote_placement.clone(),
         // La définition héritée est déjà figée. Une nouvelle conversion de
         // posture réduirait silencieusement sa politique fournisseur.
         posture: if task.permission_snapshot.is_some() {
@@ -2815,16 +3981,31 @@ pub(super) fn capture_reply(
     conn: &str,
     message: &bridget_core::BridgetMessage,
 ) -> Result<bool, String> {
-    if conn.starts_with("native-delegation:") {
-        return Ok(false);
-    }
     let Some(correlation) = message.in_reply_to.as_deref() else {
         return Ok(false);
     };
-    let Some(mut task) = st.delegation_store.for_mission(correlation)? else {
+    // Ce refus précède identité, réparation d'enfant et absorption terminale.
+    // Même une ancienne ronde distante ne peut entrer par Send legacy.
+    let current = st.delegation_store.for_mission(correlation)?;
+    let past = if current.is_none() {
+        st.delegation_store.past_mission_task(correlation)?
+    } else {
+        None
+    };
+    if current
+        .as_ref()
+        .or(past.as_ref())
+        .is_some_and(|task| task.remote_placement.is_some())
+    {
+        return Err("remote_result_requires_worker".into());
+    }
+    if conn.starts_with("native-delegation:") {
+        return Ok(false);
+    }
+    let Some(mut task) = current else {
         // Une ancienne ronde est absorbée seulement sous l'identité courante
         // de cet enfant. Cette lecture ne répare aucun lien ni checkpoint.
-        let Some(past) = st.delegation_store.past_mission_task(correlation)? else {
+        let Some(past) = past else {
             return Ok(false);
         };
         return Ok(past.child == message.from
@@ -2861,14 +4042,259 @@ pub(super) fn capture_reply(
             return Ok(true);
         }
     }
-    if !task.terminal() && task.state != "cancelling" && task.result.is_none() {
-        task.result = Some(message.body.clone());
-        task.state = "waiting_for_children".into();
-    }
+    capture_result_body(&mut task, &message.body);
     // Un résultat est durable avant l'ACK au wrapper. Le parent sera réveillé
     // seulement quand tous les mandats descendants ont fini.
     st.delegation_store.save(&task)?;
     Ok(true)
+}
+
+/// Mutation commune : complétion, enfants, notification et wait gardent la
+/// saga existante. Les gardes d'entrée restent propres à chaque transport.
+fn capture_result_body(task: &mut Task, body: &str) {
+    if !task.terminal() && task.state != "cancelling" && task.result.is_none() {
+        task.result = Some(body.to_owned());
+        task.state = "waiting_for_children".into();
+    }
+}
+
+/// Le blob prouve la fin même si le wrapper meurt avant sa trame terminale.
+/// Au plus trois transitions FSM, sans relance fournisseur. Leur commit CAS
+/// précède celui résultat/reçu : un crash entre les deux rejoue le même blob.
+/// Il ne s'agit donc pas d'une transaction unique couvrant ces deux magasins.
+fn settle_remote_result_execution(
+    st: &DaemonState,
+    observed: &crate::execution_store::ExecutionSnapshot,
+) -> Result<bool, bridget_transport::protocol::WorkerRefusal> {
+    use bridget_transport::protocol::WorkerRefusal as E;
+    if observed.state == "completed" {
+        return Ok(true);
+    }
+    if crate::referent_control::read(st.store.connection())
+        .map_err(|_| E::StoreUnavailable)?
+        .paused
+        || pause_covers(st, &observed.execution_id, false).map_err(|_| E::StoreUnavailable)?
+    {
+        return Ok(false);
+    }
+    // Une action humaine encore incertaine prime sur la récupération. Une
+    // interruption acceptée ne devient pas une réussite par perte de sa trame.
+    let control_pending: bool = st.store.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM execution_control_commands WHERE execution_id=?1
+            AND CASE WHEN json_valid(CAST(canonical_bytes AS TEXT))
+                THEN COALESCE(json_extract(CAST(canonical_bytes AS TEXT),'$.generation')=?2,1)
+                ELSE 1 END AND (
+            state IN ('prepared','dispatched') OR (state='accepted' AND
+                CASE WHEN json_valid(CAST(canonical_bytes AS TEXT))
+                    THEN json_extract(CAST(canonical_bytes AS TEXT),'$.operation') IN ('interrupt','cancel_queued')
+                    ELSE 1 END)))",
+        rusqlite::params![observed.execution_id, observed.generation], |row| row.get(0),
+    ).map_err(|_| E::StoreUnavailable)?;
+    if control_pending {
+        return Ok(false);
+    }
+    let mut snapshot = observed.clone();
+    for _ in 0..3 {
+        let next = match snapshot.state.as_str() {
+            "queued" => "starting",
+            "starting" | "waiting_approval" | "waiting_user_input" => "running",
+            "running" => "completed",
+            "completed" => return Ok(true),
+            // Ne jamais rouvrir un état terminal ni effacer une interruption.
+            _ => return Ok(false),
+        };
+        match st
+            .execution_store
+            .transition_if_current(
+                &snapshot.execution_id,
+                &snapshot.state,
+                snapshot.revision,
+                snapshot.generation,
+                next,
+                "remote_result_recovered",
+                unix_timestamp(),
+            )
+            .map_err(|_| E::StoreUnavailable)?
+        {
+            ConditionalTransition::Applied(updated) => snapshot = updated,
+            ConditionalTransition::Rejected(_) => return Ok(false),
+            ConditionalTransition::Missing => return Err(E::UnknownExecution),
+        }
+    }
+    Ok(snapshot.state == "completed")
+}
+
+/// Le canal appelant authentifie worker et époque. Ici, seule l'admission
+/// durable autorise un résultat : aucune connexion du wrapper n'est requise.
+pub(super) fn capture_remote_result(
+    st: &mut DaemonState,
+    worker: &bridget_transport::protocol::WorkerIdentity,
+    result: &bridget_transport::protocol::RemoteResultEnvelope,
+) -> Result<
+    bridget_transport::protocol::RemoteResultDisposition,
+    bridget_transport::protocol::WorkerRefusal,
+> {
+    use bridget_transport::protocol::{
+        RemoteResultDeferredReason as Deferred, RemoteResultDiscardReason as Discard,
+        RemoteResultDisposition as D, WorkerRefusal as E,
+    };
+    worker.validate()?;
+    result.validate()?;
+    if result.worker != *worker {
+        return Err(E::Unauthorized);
+    }
+    let task = st
+        .delegation_store
+        .get(&result.identity.command.task_id)
+        .map_err(|_| E::StoreUnavailable)?
+        .ok_or(E::UnknownExecution)?;
+    let placement = task.remote_placement.as_ref().ok_or(E::PlacementMismatch)?;
+    if placement.machine_id != worker.machine_id
+        || placement.worker_id != worker.worker_id
+        || placement.provisioning_revision != worker.provisioning_revision
+    {
+        return Err(E::PlacementMismatch);
+    }
+    if !task.remote_prepared {
+        return Err(E::UnknownExecution);
+    }
+    let admitted: Vec<_> = task
+        .remote_result_slots
+        .iter()
+        .filter(|slot| slot.identity == result.identity)
+        .collect();
+    if admitted.len() != 1 {
+        return Err(E::UnknownExecution);
+    }
+    admitted[0].validate()?;
+    if task.remote_result_slots.len() > crate::delegation::MAX_REMOTE_RESULT_SLOTS
+        || task.remote_result_receipts.len() > crate::delegation::MAX_REMOTE_RESULT_SLOTS
+    {
+        return Err(E::ResourceLimit);
+    }
+
+    // Rejeu après commit/ACK perdu, y compris après changement de ronde.
+    if let Some(receipt) = task
+        .remote_result_receipts
+        .iter()
+        .find(|receipt| receipt.identity == result.identity)
+    {
+        if receipt.worker != *worker
+            || receipt.message_id != result.message_id
+            || receipt.digest != result.digest
+        {
+            let disposition = D::RejectedConflict {};
+            if !receipt.conflict_seen {
+                st.delegation_store
+                    .commit_remote_result(&task, task.clone(), result, disposition.clone())
+                    .map_err(|_| E::StoreUnavailable)?;
+            }
+            return Ok(disposition);
+        }
+        if !matches!(&receipt.disposition, D::Deferred { .. }) {
+            return Ok(receipt.disposition.clone());
+        }
+    }
+    if task.child_instance.as_deref() == Some(result.identity.command.instance_id.as_str())
+        && remote_command_identity(st, &task)? != result.identity.command
+    {
+        return Err(E::CommandMismatch);
+    }
+    let now = unix_timestamp();
+    let defer = |reason| D::Deferred {
+        reason,
+        retry_after: now.saturating_add(5),
+    };
+    let disposition = if task.state == "cancelled" {
+        D::DiscardedTerminal {
+            reason: Discard::Cancelled,
+        }
+    } else if result.identity.round < task.round_no() && result.identity.mission_id != task.mission
+    {
+        D::DiscardedTerminal {
+            reason: Discard::StaleRound,
+        }
+    } else if result.identity.round != task.round_no() || result.identity.mission_id != task.mission
+    {
+        return Err(E::UnknownExecution);
+    } else if task.quota_hold.is_some()
+        || task
+            .quota_waits
+            .last()
+            .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
+    {
+        // L'attente quota n'est jamais une preuve d'expiration ou d'abandon.
+        defer(Deferred::QuotaHold)
+    } else if task.state == "cancelling" {
+        defer(Deferred::ExecutionSettlementPending)
+    } else if task
+        .child_instance
+        .as_ref()
+        .is_some_and(|instance| instance != &result.identity.command.instance_id)
+    {
+        // Le nouveau commandement durable prouve le remplacement de l'ancien.
+        remote_command_identity(st, &task)?;
+        D::DiscardedTerminal {
+            reason: Discard::ObsoleteExecution,
+        }
+    } else {
+        let snapshot = st
+            .execution_store
+            .execution_snapshot(&result.identity.execution_id)
+            .map_err(|_| E::StoreUnavailable)?
+            .ok_or(E::UnknownExecution)?;
+        let current = st
+            .execution_store
+            .latest_in_chain(&format!("execution-{}", task.mission))
+            .map_err(|_| E::StoreUnavailable)?
+            .ok_or(E::UnknownExecution)?;
+        if snapshot.generation < result.identity.execution_generation {
+            return Err(E::UnknownExecution);
+        }
+        if snapshot.generation != result.identity.execution_generation
+            || current.execution_id != snapshot.execution_id
+            || current.generation != snapshot.generation
+        {
+            D::DiscardedTerminal {
+                reason: Discard::ObsoleteExecution,
+            }
+        } else if effective_deadline(st, &task, now)
+            .map_err(|_| E::StoreUnavailable)?
+            .is_some_and(|deadline| now >= deadline)
+        {
+            D::DiscardedTerminal {
+                reason: Discard::Expired,
+            }
+        } else if task.terminal()
+            && task.result.is_none()
+            && matches!(
+                snapshot.state.as_str(),
+                "failed" | "interrupted" | "unreachable"
+            )
+        {
+            D::DiscardedTerminal {
+                reason: Discard::ObsoleteExecution,
+            }
+        } else if task
+            .result
+            .as_deref()
+            .is_some_and(|body| body != result.body)
+        {
+            D::RejectedConflict {}
+        } else if task.terminal() || !settle_remote_result_execution(st, &snapshot)? {
+            defer(Deferred::ExecutionSettlementPending)
+        } else {
+            D::Accepted {}
+        }
+    };
+    let mut next = task.clone();
+    if disposition == (D::Accepted {}) {
+        capture_result_body(&mut next, &result.body);
+    }
+    st.delegation_store
+        .commit_remote_result(&task, next, result, disposition.clone())
+        .map_err(|_| E::StoreUnavailable)?;
+    Ok(disposition)
 }
 
 /// Complexité : O(b + log T + L(c) + log P), L(c) coût de latest_in_chain sur c maillons.
@@ -3492,6 +4918,14 @@ fn relaunch_quota_task(st: &mut DaemonState, task: &mut Task, now: i64) -> Resul
         .ok_or("native_execution_changed")?
         .resume_execution_id = Some(reconstructed.snapshot.execution_id.clone());
     st.delegation_store.save(task)?;
+    if task.remote_placement.is_some()
+        && !task.remote_result_slots.iter().any(|slot| {
+            slot.identity.execution_id == reconstructed.snapshot.execution_id
+                && slot.identity.execution_generation == reconstructed.snapshot.generation
+        })
+    {
+        return Ok(()); // prochaine tick : réserve hors verrou avant toute remise.
+    }
     match deliver_reconstructed(
         st,
         conn,
@@ -3605,6 +5039,9 @@ pub(super) fn restart_identities(
 ) -> Result<std::collections::BTreeMap<String, ManagedIdentity>, String> {
     let mut identities = std::collections::BTreeMap::new();
     for mut task in st.delegation_store.tasks()? {
+        if task.remote_placement.is_some() {
+            continue;
+        }
         let marker = match st.marker_store.load(&task.child) {
             Ok(marker) => Some(marker),
             Err(crate::managed_process::ManagedProcessError::Io(error))
@@ -3780,6 +5217,12 @@ pub(super) fn prepare_restart(st: &mut DaemonState) -> Result<HashSet<String>, S
     let mut tasks = st.delegation_store.tasks()?;
     tasks.sort_by_key(|task| task.state == "queued");
     for mut task in tasks {
+        if task.remote_placement.is_some() {
+            if !task.cleanup_done {
+                children.insert(task.child.clone());
+            }
+            continue;
+        }
         if task.guarded && (!task.guard_released || task.idle_deadline_at.is_some()) {
             task.guard_released = true;
             task.idle_deadline_at = None;
@@ -3912,6 +5355,10 @@ fn workspace_report_ready(task: &Task) -> bool {
 }
 
 struct WorkspaceReportJob {
+    remote: Option<(
+        bridget_transport::protocol::WorkerIdentity,
+        bridget_transport::protocol::WorkerCommandIdentity,
+    )>,
     task_id: String,
     mission: String,
     round: u32,
@@ -3935,7 +5382,19 @@ fn claim_workspace_report(
     if !work.reports.insert(key.clone()) {
         return None;
     }
+    let remote = if let Some(placement) = &task.remote_placement {
+        match remote_command_identity(st, task) {
+            Ok(command) => Some((remote_worker_identity(placement), command)),
+            Err(_) => {
+                work.reports.remove(&key);
+                return None;
+            }
+        }
+    } else {
+        None
+    };
     Some(WorkspaceReportJob {
+        remote,
         task_id: task.task_id.clone(),
         mission: task.mission.clone(),
         round: task.round_no(),
@@ -3998,7 +5457,38 @@ fn append_workspace_result(task: &mut Task) {
 /// Git sans verrou. CAS court par tâche/mission/ronde et premier rapport gagnant.
 /// O(B+log n), B sortie Git bornée ; la garde se libère aussi sur panique.
 fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceReportJob) {
-    let report = crate::workspace_git::report(&job.workspace);
+    let report: Result<WorkspaceRecord, String> = if let Some((worker, command)) = &job.remote {
+        use bridget_transport::protocol::WorkerResponseOperation;
+        remote_worker_roundtrip(
+            state,
+            worker,
+            command,
+            bridget_transport::protocol::WorkerRequestOperation::Reconcile {},
+            Instant::now() + Duration::from_secs(5),
+        )
+        .map_err(|error| format!("{error:?}"))
+        .and_then(|response| match response {
+            WorkerResponseOperation::Observation { observation } => observation
+                .workspace
+                .ok_or_else(|| "remote_workspace_unavailable".into()),
+            _ => Err("remote_workspace_unavailable".into()),
+        })
+        .and_then(|value| {
+            serde_json::from_value::<WorkspaceRecord>(value).map_err(|error| error.to_string())
+        })
+        .and_then(|record| {
+            if record.path == job.workspace.path
+                && record.branch == job.workspace.branch
+                && record.base_commit == job.workspace.base_commit
+            {
+                Ok(record)
+            } else {
+                Err("remote_workspace_changed".into())
+            }
+        })
+    } else {
+        crate::workspace_git::report(&job.workspace).map_err(|error| error.to_string())
+    };
     if let Err(error) = &report {
         warn!(
             "rapport worktree indisponible : tâche={}, mission={}, ronde={}, erreur={}",
@@ -4066,6 +5556,157 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
 }
 
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
+    // Une sonde par cadence existante (1 s), sans attendre sa réponse réseau.
+    // L'observation revient par le handler worker corrélé, même après reprise maître.
+    // Filtrage O(n), n tâches renvoyées par pending(), déjà triées par task_id en SQL.
+    // Un seul candidat subit les E/S : canon spawn O(c) et chargement Fleet complet
+    // (f entrées, désérialisation BTreeMap O(f log f)), plus le lien SQL indexé.
+    // Hors décodage des payloads, aucun facteur n ne multiplie ces lectures ; au plus
+    // un envoi par cadence, même si le candidat choisi est invalide ou injoignable.
+    let start_probe = {
+        use bridget_transport::protocol::*;
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let due = st
+            .remote_start_reconcile_last
+            .as_ref()
+            .is_none_or(|(_, at)| at.elapsed() >= CANCEL_NOTIFICATION_BUDGET);
+        let mut candidates = if due {
+            st.delegation_store.pending().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        candidates.retain(|task| {
+            task.remote_placement.is_some()
+                && task.state == "starting"
+                && task.child_instance.is_some()
+                && task.mission_issued_at.is_none()
+        });
+        let candidate = if candidates.is_empty() {
+            None
+        } else {
+            let offset = st
+                .remote_start_reconcile_last
+                .as_ref()
+                .map_or(0, |(previous, _)| {
+                    candidates.partition_point(|task| task.task_id <= *previous)
+                });
+            let index = if offset == candidates.len() {
+                0
+            } else {
+                offset
+            };
+            Some(candidates.swap_remove(index))
+        };
+        if let Some(task) = &candidate {
+            st.remote_start_reconcile_last = Some((task.task_id.clone(), Instant::now()));
+        }
+        candidate.and_then(|task| {
+            let command = remote_command_identity(&st, &task).ok()?;
+            let stopped = st
+                .fleet
+                .desired_entry(&task.child)
+                .ok()
+                .flatten()
+                .is_some_and(|entry| {
+                    entry.command_id == command.command_id
+                        && entry.generation == command.generation
+                        && entry.remote_placement == task.remote_placement
+                        && entry.lifecycle_state == DesiredLifecycleState::Stopped
+                });
+            if stopped {
+                return None;
+            }
+            let placement = task.remote_placement.as_ref()?;
+            let provision = st.registry.machines().get(&placement.machine_id)?;
+            if provision.worker_id != placement.worker_id
+                || provision.provisioning_revision != placement.provisioning_revision
+            {
+                return None;
+            }
+            let worker = st.remote_workers.get(&placement.machine_id)?;
+            if !placement.matches_worker(&worker.identity)
+                || worker.contact != WorkerContactState::Connected
+                || worker.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
+            {
+                return None;
+            }
+            let writer = st.connections.get(&worker.conn_id)?.clone();
+            let request = WorkerRequest {
+                version: REMOTE_WORKER_VERSION,
+                correlation_id: Uuid::new_v4().to_string(),
+                connection_epoch: worker.epoch.clone(),
+                worker: worker.identity.clone(),
+                command,
+                request: WorkerRequestOperation::Reconcile {},
+            };
+            request.validate().ok()?;
+            Some((
+                task.task_id,
+                writer,
+                DaemonToWrapper::WorkerRequest { request },
+            ))
+        })
+    };
+    if let Some((_, writer, message)) = start_probe {
+        let _ = push_control_message_until(
+            &writer,
+            &message,
+            Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+        );
+    }
+    // Réservation réseau hors verrou, avant toute remise initiale, ronde ou reprise quota.
+    let remote_pending = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.delegation_store
+            .pending()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|task| {
+                if task.remote_placement.is_none()
+                    || !task.remote_prepared
+                    || task.child_instance.is_none()
+                {
+                    return false;
+                }
+                if task.state == "mission_pending" {
+                    return true;
+                }
+                if task.state != "working" {
+                    return false;
+                }
+                let quota = task.quota_waits.last().is_some_and(|wait| {
+                    wait.phase != QuotaWaitPhase::Done && wait.resume_execution_id.is_some()
+                });
+                quota
+                    || st
+                        .execution_store
+                        .latest_in_chain(&format!("execution-{}", task.mission))
+                        .ok()
+                        .flatten()
+                        .is_some_and(|execution| {
+                            execution.state == "starting"
+                                && pause_covers(&st, &execution.execution_id, true).unwrap_or(false)
+                        })
+            })
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>()
+    };
+    let mut remote_proofs = HashMap::new();
+    for task_id in remote_pending {
+        let proof = match reserve_remote_result_slot(state, &task_id) {
+            Ok(proof) => proof,
+            Err(error) => {
+                warn!("réservation résultat distant différée: {error}");
+                continue;
+            }
+        };
+        if let Err(error) = dispatch_remote_pause_resume(state, &task_id, proof.as_ref()) {
+            warn!("reprise de pause distante différée: {error}");
+        }
+        if let Some(proof) = proof {
+            remote_proofs.insert(task_id, proof);
+        }
+    }
     // Les demandes sont fermées AVANT le skip de pause et les arrêts de flotte.
     super::native_child_requests::tick(state);
     let mut controls = Vec::new();
@@ -4103,6 +5744,39 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     Err(error) => warn!("racine d'annulation illisible: {error}"),
                 }
                 continue;
+            }
+            // Une fin de bootstrap attestée survit au maître dans Desired Stopped.
+            // Une perte de contact ou un reçu incomplet ne suffit jamais.
+            if task.remote_placement.is_some()
+                && task.state == "starting"
+                && task.mission_issued_at.is_none()
+            {
+                let stopped = remote_command_identity(&st, &task)
+                    .ok()
+                    .is_some_and(|command| {
+                        st.fleet
+                            .desired_entry(&task.child)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|entry| {
+                                entry.command_id == command.command_id
+                                    && entry.generation == command.generation
+                                    && entry.remote_placement == task.remote_placement
+                                    && entry.lifecycle_state == DesiredLifecycleState::Stopped
+                            })
+                    });
+                if stopped {
+                    if let Err(error) = close_lost_execution(&st, &task, "remote_start_failed") {
+                        warn!("clôture du démarrage distant différée: {error}");
+                        continue;
+                    }
+                    task.state = "failed".into();
+                    task.error = Some("remote_start_failed".into());
+                    if let Err(error) = st.delegation_store.save(&task) {
+                        warn!("échec du démarrage distant non persisté: {error}");
+                        continue;
+                    }
+                }
             }
             if quota_enabled(&task) && task.state == "working" && task.quota_hold.is_some() {
                 let hold = task.quota_hold.clone().unwrap();
@@ -4265,6 +5939,17 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     .last()
                     .is_some_and(|wait| wait.phase != QuotaWaitPhase::Done)
             {
+                if task.remote_placement.is_some()
+                    && task
+                        .quota_waits
+                        .last()
+                        .is_some_and(|wait| wait.resume_execution_id.is_some())
+                    && remote_proofs
+                        .get(&task.task_id)
+                        .is_none_or(|proof| recheck_remote_dispatch(&st, &task, proof).is_err())
+                {
+                    continue;
+                }
                 let outcome = relaunch_quota_task(&mut st, &mut task, unix_timestamp());
                 if let Some(conn) = st
                     .router
@@ -4413,7 +6098,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     }
                 }
             }
-            if !parent_live {
+            if !parent_live
+                && (task.remote_placement.is_none()
+                    || !matches!(
+                        task.state.as_str(),
+                        "queued" | "starting" | "mission_pending"
+                    ))
+            {
                 if task.state == "result_available" && !task.result_sent {
                     task.error = Some("native_result_owner_offline".into());
                     let _ = st.delegation_store.save(&task);
@@ -4435,6 +6126,23 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = st.delegation_store.save(&task);
             }
             if task.state == "mission_pending" {
+                if task.remote_placement.is_some()
+                    && remote_proofs
+                        .get(&task.task_id)
+                        .is_none_or(|proof| recheck_remote_dispatch(&st, &task, proof).is_err())
+                {
+                    continue;
+                }
+                if task.remote_placement.is_some()
+                    && !task.remote_result_slots.iter().any(|slot| {
+                        slot.identity.mission_id == task.mission
+                            && slot.identity.round == u32::from(task.round)
+                            && Some(slot.identity.command.instance_id.as_str())
+                                == task.child_instance.as_deref()
+                    })
+                {
+                    continue;
+                }
                 if !matches!(
                     crate::referent_control::admit_autonomous_effect(
                         crate::referent_control::AutonomousEffect::NativeMissionDispatch,
@@ -4856,6 +6564,108 @@ fn cancellation_root(st: &DaemonState, task: &Task) -> Result<bool, String> {
 /// La sauvegarde après chaque arrêt sérialise la liste croissante : O(n²)
 /// octets cumulés, requis par la reprise durable. n <= 4096 membres,
 /// m lancements, f flotte, p présences.
+pub(super) fn cancel_remote_task(
+    state: &Arc<Mutex<DaemonState>>,
+    task: &Task,
+) -> bridget_transport::protocol::StopOutcome {
+    use bridget_transport::protocol::*;
+    let failed = || StopOutcome::Timeout {
+        state: "worker arrêt non attesté".into(),
+    };
+    let (worker, command) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(Some(current)) = st.delegation_store.get(&task.task_id) else {
+            return failed();
+        };
+        let Some(placement) = current.remote_placement.as_ref() else {
+            return failed();
+        };
+        if current.child_instance.is_none() && current.launch_issued_at.is_none() {
+            return StopOutcome::Stopped;
+        }
+        let Ok(command) = remote_command_identity(&st, &current) else {
+            return failed();
+        };
+        if st
+            .fleet
+            .desired_entry(&current.child)
+            .ok()
+            .flatten()
+            .is_some_and(|entry| {
+                entry.command_id == command.command_id
+                    && entry.generation == command.generation
+                    && entry.remote_placement == current.remote_placement
+                    && entry.lifecycle_state == DesiredLifecycleState::Stopped
+            })
+        {
+            return StopOutcome::Stopped;
+        }
+        (remote_worker_identity(placement), command)
+    };
+    let result = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        WorkerRequestOperation::Cancel {
+            target: WorkerCancelScope::Command {},
+        },
+        Instant::now() + Duration::from_secs(10),
+    );
+    if !matches!(
+        result,
+        Ok(WorkerResponseOperation::Observation {
+            observation: WorkerObservation {
+                phase: WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused,
+                ..
+            }
+        })
+    ) {
+        return failed();
+    }
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    if remote_command_identity(&st, task).ok().as_ref() != Some(&command) {
+        return failed();
+    }
+    let lease = st
+        .managed_spawns
+        .get(&command.command_id)
+        .map(|record| record.lease.clone())
+        .or_else(|| {
+            st.fleet
+                .recovery_candidates()
+                .into_iter()
+                .find(|candidate| {
+                    candidate.lease.command_id == command.command_id
+                        && candidate.lease.instance_id == command.instance_id
+                        && candidate.lease.generation == command.generation
+                })
+                .map(|candidate| candidate.lease)
+        });
+    let Some(lease) = lease else {
+        return if st
+            .fleet
+            .desired_entry(&task.child)
+            .ok()
+            .flatten()
+            .is_some_and(|entry| {
+                entry.command_id == command.command_id
+                    && entry.generation == command.generation
+                    && entry.lifecycle_state == DesiredLifecycleState::Stopped
+            }) {
+            StopOutcome::Stopped
+        } else {
+            failed()
+        };
+    };
+    if st.fleet.invalidate_for_stop(&lease).is_err() {
+        return failed();
+    }
+    st.managed_spawns.remove(&command.command_id);
+    st.managed_by_instance.remove(&command.instance_id);
+    st.managed_terminal_instances.insert(command.instance_id);
+    StopOutcome::Stopped
+}
+
 fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
     let (root_id, members, task_ids) = {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
@@ -4944,7 +6754,11 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         let members: Vec<_> = ordered
             .into_iter()
             .map(|(name, _)| {
-                let kind = if stopped.contains(name.as_str()) {
+                let remote = tasks
+                    .iter()
+                    .find(|task| task.child == name && task.remote_placement.is_some())
+                    .cloned();
+                let kind = if remote.is_some() || stopped.contains(name.as_str()) {
                     StopKind::Immediate(StopOutcome::Stopped)
                 } else {
                     classify_stop(
@@ -4954,10 +6768,10 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
                         fleet.equipiers.get(&name),
                     )
                 };
-                (name, kind)
+                (name, kind, remote)
             })
             .collect();
-        if let Some((name, _)) = members.iter().find(|(_, kind)| {
+        if let Some((name, _, _)) = members.iter().find(|(_, kind, _)| {
             matches!(
                 kind,
                 StopKind::Immediate(StopOutcome::NotManaged | StopOutcome::Timeout { .. })
@@ -4997,12 +6811,16 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         )
     };
     let mut success = true;
-    for (name, kind) in members {
-        let target = {
-            let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
-            prepare_classified_stop(&mut st, &name, kind)
+    for (name, kind, remote) in members {
+        let outcome = if let Some(remote) = remote {
+            cancel_remote_task(state, &remote)
+        } else {
+            let target = {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                prepare_classified_stop(&mut st, &name, kind)
+            };
+            await_managed_stop(target, &name)
         };
-        let outcome = await_managed_stop(target, &name);
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
         let Ok(Some(mut root)) = st.delegation_store.get(&root_id) else {
             return;
@@ -12157,6 +13975,8 @@ mod tests {
     }
     fn request(key: &str) -> NativeDelegationRequest {
         NativeDelegationRequest::Delegate {
+            machine_id: None,
+            project_id: None,
             fallback: Vec::new(),
             resume_on_limit: None,
             request_id: key.into(),
@@ -12173,6 +13993,705 @@ mod tests {
             workspace: None,
         }
     }
+    fn remote162_capture_fixture() -> (
+        DaemonState,
+        DaemonConfig,
+        Task,
+        bridget_transport::protocol::RemoteResultEnvelope,
+    ) {
+        use bridget_transport::protocol::{
+            RemotePlacement, RemoteResultEnvelope, WorkerIdentity, WorkerResultIdentity,
+            WorkerResultSlot,
+        };
+        let (mut st, config, _rx, _reader) = fixture("r162");
+        let mut task = tache_151(&mut st, "result162");
+        task.remote_prepared = true;
+        task.remote_placement = Some(RemotePlacement {
+            machine_id: "cartae".into(),
+            worker_id: "worker-cartae".into(),
+            provisioning_revision: 1,
+            project_id: "project".into(),
+            mapping_revision: 1,
+            origin_host: "mac".into(),
+            origin_cwd: task.cwd.clone(),
+            source_root_identity: "git:fixture162".into(),
+            relative_cwd: ".".into(),
+            execution_cwd: "/tmp".into(),
+            base_commit: None,
+            definition_digest: "a".repeat(64),
+            permission_digest: "b".repeat(64),
+        });
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder {
+            posture: None,
+            agent_type: "native-test".into(),
+            project: None,
+            requested_name: Some(task.child.clone()),
+            cwd: PathBuf::from("/tmp"),
+            persistent: false,
+            command_id: Uuid::new_v4().to_string(),
+            issued_at: now,
+            deadline_at: now + 120,
+            ownership: Some(SpawnOwnership {
+                parent_instance_id: task.owner_instance.clone(),
+                parent_execution_id: None,
+                objective_id: None,
+                delegation_id: Some(task.task_id.clone()),
+                project: None,
+                role: "native_delegate".into(),
+                max_children: None,
+                max_depth: None,
+            }),
+            remote_placement: task.remote_placement.clone(),
+        };
+        let crate::fleet::SpawnSubmission::Start(lease) =
+            st.fleet.request_spawn(&order, now).unwrap()
+        else {
+            panic!("réservation distante attendue");
+        };
+        task.child_instance = Some(lease.instance_id);
+        task.state = "working".into();
+        task.mission_deadline_at = Some(now + 120);
+        let execution_id = format!("execution-{}", task.mission);
+        st.execution_store
+            .admit_starting(&task.mission, &execution_id, &task.child, now)
+            .unwrap();
+        let identity = WorkerResultIdentity {
+            command: remote_command_identity(&st, &task).unwrap(),
+            mission_id: task.mission.clone(),
+            round: task.round_no(),
+            execution_id,
+            execution_generation: 1,
+        };
+        task.remote_result_slots.push(WorkerResultSlot {
+            identity: identity.clone(),
+            admission_digest: "c".repeat(64),
+        });
+        st.delegation_store.save(&task).unwrap();
+        let task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let mut result = RemoteResultEnvelope {
+            worker: WorkerIdentity {
+                machine_id: "cartae".into(),
+                worker_id: "worker-cartae".into(),
+                provisioning_revision: 1,
+            },
+            identity,
+            message_id: "result162".into(),
+            body: "résultat après mort du wrapper".into(),
+            digest: String::new(),
+        };
+        result.digest = result.canonical_digest().unwrap();
+        (st, config, task, result)
+    }
+
+    #[test]
+    fn remote162_resultat_canonique_notifie_parent_sans_recapture_legacy() {
+        use bridget_transport::protocol::RemoteResultDisposition;
+        let (mut st, config, task, result) = remote162_capture_fixture();
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(RemoteResultDisposition::Accepted {})
+        );
+        let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        saved.state = "result_available".into();
+        st.delegation_store.save(&saved).unwrap();
+        let mut message =
+            bridget_core::BridgetMessage::new(&saved.child, &saved.owner, &result.body);
+        message.id = saved.result_message_id();
+        message.in_reply_to = Some(saved.mission.clone());
+        let mut controls = Vec::new();
+        let reply = send_as_with_result_authority(
+            &mut st,
+            &saved.child,
+            saved.child_instance.as_deref().unwrap(),
+            &saved.task_id,
+            message,
+            saved.created_at,
+            &mut controls,
+            Some(&RetainedResultAuthority {
+                task_id: saved.task_id.clone(),
+            }),
+        );
+        assert!(
+            matches!(
+                reply,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::Accepted { .. }
+                        | IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{reply:?}"
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_result_receipts
+                .len(),
+            1
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote162_callers_send_refus_legacy_exact_sans_ack() {
+        let (mut st, config, task, _) = remote162_capture_fixture();
+        let mut message =
+            bridget_core::BridgetMessage::new(&task.owner, &task.owner, "résultat legacy");
+        message.in_reply_to = Some(task.mission.clone());
+        let mut controls = Vec::new();
+        let response = send_as(
+            &mut st,
+            &task.owner,
+            &task.owner_instance,
+            &task.task_id,
+            message.clone(),
+            unix_timestamp(),
+            &mut controls,
+        );
+        assert!(
+            matches!(response, DaemonToWrapper::Nack { reason, .. } if reason == "remote_result_requires_worker")
+        );
+        assert!(controls.is_empty());
+        let shared = Arc::new(Mutex::new(st));
+        let response = handle_wrapper_message("conn-1", WrapperToDaemon::Send(message), &shared);
+        assert!(
+            matches!(response, Some(DaemonToWrapper::Nack { reason, .. }) if reason == "remote_result_requires_worker")
+        );
+        assert!(
+            shared
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .result
+                .is_none()
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote162_pause_reconstruction_unique_attend_slot_et_refuse_reconnexion_active() {
+        let (mut st, config, task, result) = remote162_capture_fixture();
+        let command = result.identity.command.clone();
+        st.managed_by_instance
+            .insert(command.instance_id.clone(), command.command_id.clone());
+        let execution = result.identity.execution_id.clone();
+        let message = remote_mission_message(&task).unwrap();
+        st.store
+            .connection()
+            .execute(
+                "UPDATE work_submissions SET message_json=?2 WHERE submission_id=?1",
+                rusqlite::params![task.mission, serde_json::to_string(&message).unwrap()],
+            )
+            .unwrap();
+        assert!(
+            !may_resume(&st, &task, &execution, &command.instance_id).unwrap(),
+            "une reconnexion ne prouve aucun arrêt fournisseur"
+        );
+        st.execution_store
+            .record_pause_interruption(&execution, &task.child, 1, unix_timestamp())
+            .unwrap();
+        for phase in ["running", "interrupting", "interrupted"] {
+            let snapshot = st
+                .execution_store
+                .execution_snapshot(&execution)
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                st.execution_store
+                    .transition_if_current(
+                        &execution,
+                        &snapshot.state,
+                        snapshot.revision,
+                        snapshot.generation,
+                        phase,
+                        "control_pause",
+                        unix_timestamp()
+                    )
+                    .unwrap(),
+                crate::execution_store::ConditionalTransition::Applied(_)
+            ));
+        }
+        assert!(may_resume(&st, &task, &execution, &command.instance_id).unwrap());
+        schedule_execution_recovery(
+            &mut st,
+            "child162",
+            &command.instance_id,
+            &task.child,
+            false,
+        );
+        let resumed = st
+            .execution_store
+            .latest_in_chain(&execution)
+            .unwrap()
+            .unwrap();
+        assert_ne!(resumed.execution_id, execution);
+        assert_eq!(resumed.generation, 2);
+        assert!(
+            st.pending_post_response_controls.is_empty(),
+            "pas de remise avant réserve distante"
+        );
+        schedule_execution_recovery(
+            &mut st,
+            "child162",
+            &command.instance_id,
+            &task.child,
+            false,
+        );
+        assert_eq!(
+            st.execution_store
+                .latest_in_chain(&execution)
+                .unwrap()
+                .unwrap()
+                .execution_id,
+            resumed.execution_id
+        );
+        let continuation = st
+            .execution_store
+            .continuation_for(&resumed.execution_id)
+            .unwrap()
+            .unwrap();
+        let reconstructed = crate::execution_store::ReconstructedExecution {
+            parent_execution_id: execution,
+            message: st
+                .execution_store
+                .execution_message(&resumed.execution_id)
+                .unwrap()
+                .unwrap(),
+            snapshot: resumed,
+        };
+        assert!(
+            matches!(deliver_reconstructed(&mut st, "child162", &command.instance_id, &reconstructed,
+            continuation.observed_at, false), Err(ReconstructedDeliveryError::NonReprenable(reason))
+            if reason == "remote_result_slot_pending")
+        );
+        assert!(st.pending_post_response_controls.is_empty());
+        let stable_id = reconstructed.snapshot.execution_id.clone();
+        for _ in 0..2 {
+            assert!(
+                matches!(deliver_reconstructed(&mut st,"child162",&command.instance_id,&reconstructed,
+                continuation.observed_at,true),Err(ReconstructedDeliveryError::NonReprenable(reason))
+                if reason=="remote_result_slot_pending"),
+                "quota refuse avant dispatch et réservation idempotente"
+            );
+            assert_eq!(
+                st.execution_store
+                    .latest_in_chain(&reconstructed.parent_execution_id)
+                    .unwrap()
+                    .unwrap()
+                    .execution_id,
+                stable_id
+            );
+        }
+        let key = IdempotencyKey::new(
+            st.idempotency.supervisor_scope().unwrap(),
+            OperationKind::Send,
+            format!("recovery-{stable_id}"),
+        )
+        .unwrap();
+        assert!(st.idempotency.send_delivery_phase(&key).unwrap().is_none());
+        let mut next = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        next.round += 1;
+        next.mission = Uuid::new_v4().to_string();
+        st.delegation_store.save(&next).unwrap();
+        let message = remote_mission_message(&next).unwrap();
+        let execution_id = format!("execution-{}", next.mission);
+        st.execution_store
+            .admit_starting_message_for_project(&message, &execution_id, None, unix_timestamp())
+            .unwrap();
+        let next_execution = crate::execution_store::ReconstructedExecution {
+            parent_execution_id: execution_id.clone(),
+            message,
+            snapshot: st
+                .execution_store
+                .execution_snapshot(&execution_id)
+                .unwrap()
+                .unwrap(),
+        };
+        assert!(
+            matches!(deliver_reconstructed(&mut st,"child162",&command.instance_id,&next_execution,
+            unix_timestamp(),false),Err(ReconstructedDeliveryError::NonReprenable(reason))
+            if reason=="remote_result_slot_pending"),
+            "la réserve de ronde précédente ne vaut pas pour la suivante"
+        );
+        assert!(st.pending_post_response_controls.is_empty());
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote162_reprise_managed_conserve_slots_sans_preflight_local() {
+        let (mut st, config, task, _) = remote162_capture_fixture();
+        let before = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let prepared = reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap();
+        assert!(prepared.is_empty());
+        let command = remote_command_identity(&st, &task).unwrap();
+        assert_eq!(
+            st.managed_by_instance.get(&command.instance_id),
+            Some(&command.command_id)
+        );
+        assert_eq!(
+            st.managed_spawns[&command.command_id]
+                .lease
+                .remote_placement,
+            task.remote_placement
+        );
+        let infos = st.agent_infos();
+        let info = infos
+            .iter()
+            .find(|info| info.agent_id == task.child)
+            .unwrap();
+        assert_eq!(info.host, "cartae");
+        assert_eq!(info.os, "unknown");
+        assert_eq!(info.state, "unreachable", "aucune présence déduite du bail");
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            serde_json::to_value(before).unwrap()
+        );
+        cleanup(&config);
+    }
+
+    fn remote162_complete_execution(st: &DaemonState, execution: &str) {
+        for next in ["running", "completed"] {
+            let snapshot = st
+                .execution_store
+                .execution_snapshot(execution)
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                st.execution_store
+                    .transition_if_current(
+                        execution,
+                        &snapshot.state,
+                        snapshot.revision,
+                        snapshot.generation,
+                        next,
+                        "fixture162",
+                        unix_timestamp()
+                    )
+                    .unwrap(),
+                crate::execution_store::ConditionalTransition::Applied(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn remote162_capture_commit_rejeu_parent_et_wrapper_absents() {
+        use bridget_transport::protocol::RemoteResultDisposition as D;
+        let (mut st, config, task, result) = remote162_capture_fixture();
+        // Le producteur publie puis disparaît AVANT toute trame terminale.
+        let private = st.fixture_root.as_ref().unwrap().0.join("worker162-owner");
+        crate::environment::ensure_private_directory(&private).unwrap();
+        let root = private.join("store");
+        let store = crate::remote_worker::WorkerStore::open(&root, result.worker.clone()).unwrap();
+        let now = unix_timestamp();
+        store
+            .reserve_command(
+                &result.identity.command,
+                &"d".repeat(64),
+                task.remote_placement.as_ref().unwrap(),
+                now + 120,
+                now,
+            )
+            .unwrap();
+        let slot = store
+            .reserve_result_slot(&task.remote_result_slots[0], now)
+            .unwrap();
+        crate::remote_worker::publish_result_blob(&slot, &result).unwrap();
+        drop(store);
+        let store = crate::remote_worker::WorkerStore::open(&root, result.worker.clone()).unwrap();
+        let result = store.read_result(&result.identity).unwrap().unwrap();
+        drop(store);
+        assert_eq!(
+            st.execution_store
+                .execution_snapshot(&result.identity.execution_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "starting"
+        );
+        st.conn_instances.insert(
+            "dead-wrapper162".into(),
+            task.child_instance.clone().unwrap(),
+        );
+        st.mark_unreachable("dead-wrapper162");
+        st.connections.clear();
+        st.conn_instances.clear();
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Accepted {})
+        );
+        let recovered = st
+            .execution_store
+            .execution_snapshot(&result.identity.execution_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.state, "completed");
+        assert_eq!(
+            recovered.revision, 2,
+            "starting→running→completed, aucun fait terminal réseau"
+        );
+        let first = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(first.state, "waiting_for_children");
+        assert_eq!(first.result.as_deref(), Some(result.body.as_str()));
+        assert!(
+            !first.result_sent,
+            "la notification reste au chemin existant"
+        );
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Accepted {})
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_result_receipts
+                .len(),
+            1
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote162_capture_differe_quota_puis_settlement_et_accepte() {
+        use bridget_transport::protocol::{
+            RemoteResultDeferredReason as R, RemoteResultDisposition as D,
+        };
+        let (mut st, config, mut task, result) = remote162_capture_fixture();
+        task.quota_hold = Some(QuotaHold {
+            since: unix_timestamp(),
+            error: "quota".into(),
+            execution_id: result.identity.execution_id.clone(),
+        });
+        task.mission_deadline_at = Some(unix_timestamp() - 1);
+        st.delegation_store.save(&task).unwrap();
+        assert!(matches!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Deferred {
+                reason: R::QuotaHold,
+                ..
+            })
+        ));
+        let mut task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        task.quota_hold = None;
+        task.mission_deadline_at = Some(unix_timestamp() + 120);
+        st.delegation_store.save(&task).unwrap();
+        pauser_150(&st, true);
+        assert!(matches!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Deferred {
+                reason: R::ExecutionSettlementPending,
+                ..
+            })
+        ));
+        assert_eq!(
+            st.execution_store
+                .execution_snapshot(&result.identity.execution_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "starting"
+        );
+        pauser_150(&st, false);
+        let now = unix_timestamp();
+        let command = bridget_transport::protocol::ExecutionControlCommand {
+            version: 1,
+            command_id: "interrupt162".into(),
+            execution_id: result.identity.execution_id.clone(),
+            generation: 1,
+            revision: 0,
+            operation: bridget_transport::protocol::ExecutionControlOperation::Interrupt,
+            message: None,
+        };
+        st.execution_store
+            .reserve_control_command(
+                "human162",
+                &command.command_id,
+                &command.execution_id,
+                &serde_json::to_vec(&command).unwrap(),
+                now,
+                now + 120,
+            )
+            .unwrap();
+        assert!(matches!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Deferred {
+                reason: R::ExecutionSettlementPending,
+                ..
+            })
+        ));
+        assert_eq!(
+            st.execution_store
+                .execution_snapshot(&result.identity.execution_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "starting"
+        );
+        st.execution_store
+            .refuse_control_command("human162", &command.command_id, "not_applied", now)
+            .unwrap();
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Accepted {})
+        );
+        assert_eq!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_result_receipts
+                .len(),
+            1
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote162_capture_refus_identites_et_conflits_premier_preserve() {
+        use bridget_transport::protocol::{RemoteResultDisposition as D, WorkerRefusal as E};
+        let (mut st, config, task, result) = remote162_capture_fixture();
+        let mut forged = result.clone();
+        forged.identity.command.instance_id = "foreign".into();
+        forged.digest = forged.canonical_digest().unwrap();
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &forged),
+            Err(E::UnknownExecution)
+        );
+        forged = result.clone();
+        forged.worker.worker_id = "foreign".into();
+        forged.digest = forged.canonical_digest().unwrap();
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &forged),
+            Err(E::Unauthorized)
+        );
+        assert!(
+            st.delegation_store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_result_receipts
+                .is_empty()
+        );
+        remote162_complete_execution(&st, &result.identity.execution_id);
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(D::Accepted {})
+        );
+        for n in 0..3 {
+            let mut conflict = result.clone();
+            conflict.body = format!("divergence{n}");
+            conflict.digest = conflict.canonical_digest().unwrap();
+            assert_eq!(
+                capture_remote_result(&mut st, &result.worker, &conflict),
+                Ok(D::RejectedConflict {})
+            );
+        }
+        let saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.result, Some(result.body));
+        assert_eq!(saved.remote_result_receipts.len(), 1);
+        assert!(saved.remote_result_receipts[0].conflict_seen);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote162_capture_dispositions_terminales_prouvees() {
+        use bridget_transport::protocol::{
+            RemoteResultDiscardReason as R, RemoteResultDisposition as D,
+        };
+        for reason in [
+            R::Cancelled,
+            R::StaleRound,
+            R::ObsoleteExecution,
+            R::Expired,
+        ] {
+            let (mut st, config, mut task, result) = remote162_capture_fixture();
+            match reason {
+                R::Cancelled => task.state = "cancelled".into(),
+                R::StaleRound => {
+                    task.round = 2;
+                    task.mission = Uuid::new_v4().to_string();
+                }
+                R::Expired => task.mission_deadline_at = Some(unix_timestamp() - 1),
+                R::ObsoleteExecution => {
+                    let now = unix_timestamp();
+                    st.execution_store
+                        .admit_starting("next-mission162", "next-execution162", &task.child, now)
+                        .unwrap();
+                    assert_eq!(
+                        st.execution_store
+                            .record_continuation(
+                                "next-execution162",
+                                1,
+                                &result.identity.execution_id,
+                                crate::execution_store::ContinuationMode::Reconstructed,
+                                Some("fixture162"),
+                                now
+                            )
+                            .unwrap(),
+                        crate::execution_store::ContinuationOutcome::Applied
+                    );
+                }
+            }
+            st.delegation_store.save(&task).unwrap();
+            assert_eq!(
+                capture_remote_result(&mut st, &result.worker, &result),
+                Ok(D::DiscardedTerminal { reason })
+            );
+            assert!(
+                st.delegation_store
+                    .get(&task.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .result
+                    .is_none()
+            );
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn remote162_send_legacy_refuse_mission_courante_et_passee_avant_identite() {
+        let (mut st, config, mut task, result) = remote162_capture_fixture();
+        let mut message = bridget_core::BridgetMessage::new("foreign", "foreign", "résultat");
+        message.in_reply_to = Some(task.mission.clone());
+        for conn in ["foreign", "native-delegation:synthetic"] {
+            assert_eq!(
+                capture_reply(&mut st, conn, &message),
+                Err("remote_result_requires_worker".into())
+            );
+        }
+        st.store
+            .connection()
+            .execute(
+                "INSERT INTO native_delegation_past_missions(mission,task_id) VALUES(?1,?2)",
+                rusqlite::params![task.mission, task.task_id],
+            )
+            .unwrap();
+        task.round = 2;
+        task.mission = Uuid::new_v4().to_string();
+        st.delegation_store.save(&task).unwrap();
+        assert_eq!(
+            capture_reply(&mut st, "foreign", &message),
+            Err("remote_result_requires_worker".into())
+        );
+        assert!(
+            st.delegation_store
+                .get(&result.identity.command.task_id)
+                .unwrap()
+                .unwrap()
+                .result
+                .is_none()
+        );
+        cleanup(&config);
+    }
+
     fn cleanup(config: &DaemonConfig) {
         let _ = std::fs::remove_file(&config.db_path);
     }
@@ -13085,6 +15604,8 @@ mod tests {
             "permission_attestation_unavailable"
         );
         let job = NativeDelegationRequest::Delegate {
+            machine_id: None,
+            project_id: None,
             fallback: Vec::new(),
             resume_on_limit: None,
             request_id: "glm".into(),
@@ -13464,6 +15985,7 @@ mod tests {
     fn ordre_lancement_150(child: &str, command_id: &str) -> FleetSpawnOrder {
         let now = unix_timestamp();
         FleetSpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "native-test".into(),
             requested_name: Some(child.into()),

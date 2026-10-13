@@ -262,6 +262,7 @@ pub struct SpawnCommand {
     pub expires_at: i64,
     pub issue: Option<SpawnCommandIssue>,
     pub resolved_definition: Option<ResolvedAgentDefinition>,
+    pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 
 /// Preuve durable minimale permettant d'adopter explicitement un agent
@@ -276,6 +277,7 @@ pub struct HistoricalManagedSpawn {
     pub persistent: bool,
     pub project: Option<ProjectReference>,
     pub resolved_definition: ResolvedAgentDefinition,
+    pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -286,6 +288,8 @@ struct HistoricalCanonicalSpawnOrder {
     persistent: bool,
     #[serde(default)]
     project: Option<ProjectReference>,
+    #[serde(default)]
+    remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
 }
 
 /// Résultat atomique de la réservation socle + saga.

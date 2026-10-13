@@ -40,6 +40,10 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
 fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::Task {
     crate::delegation::Task {
         substitution: None,
+        remote_placement: None,
+        remote_prepared: false,
+        remote_result_slots: Vec::new(),
+        remote_result_receipts: Vec::new(),
         task_id: task_id.into(),
         root_owner_agent_id: String::new(),
         parent_task_id: None,
@@ -51,6 +55,8 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         origin_owner_instance: format!("inst-{owner}"),
         parent_execution_id: None,
         request: bridget_transport::protocol::NativeDelegationRequest::Delegate {
+            machine_id: None,
+            project_id: None,
             resume_on_limit: None,
             fallback: Vec::new(),
             request_id: format!("req-{task_id}"),
@@ -203,7 +209,7 @@ fn native149_validate_ferme_les_formes_ouvertes() {
     assert!(validate(&parse(base.clone())).is_ok());
 
     let mut version = base.clone();
-    version["version"] = json!(2);
+    version["version"] = json!(3);
     assert!(matches!(
         validate(&parse(version)),
         Err(E::UnsupportedVersion)
@@ -1209,4 +1215,484 @@ fn native150_pause_annulation_humaine_disponible() {
         json!({"action":"cancel","task_id":task_id,"request_id":"50000000-0000-4000-8000-00000000000c"}),
     );
     assert_eq!(rejoue, cancel);
+}
+
+#[test]
+fn native162_lineage_list_show_v2_gardent_capacite_v1_et_contact_inconnu() {
+    use bridget_transport::protocol::RemotePlacement;
+    let (state, root, _peer) = fixture("l162-view", "human_lineage_view_v1");
+    let distant_id = "16200000-0000-4000-8000-000000000011";
+    let local_id = "16200000-0000-4000-8000-000000000012";
+    let mut distant = lineage_task(distant_id, &owner_agent(), "queued");
+    distant.remote_placement = Some(RemotePlacement {
+        machine_id: "cartae".into(),
+        worker_id: "worker-cartae".into(),
+        provisioning_revision: 1,
+        project_id: "projet".into(),
+        mapping_revision: 1,
+        origin_host: "mac".into(),
+        origin_cwd: "/source".into(),
+        source_root_identity: "fixture".into(),
+        relative_cwd: String::new(),
+        execution_cwd: "/remote".into(),
+        base_commit: None,
+        definition_digest: "definition".into(),
+        permission_digest: "permissions".into(),
+    });
+    {
+        let st = state.lock().unwrap();
+        assert_eq!(st.client_negotiations["human"].version, 1);
+        assert_eq!(
+            st.client_negotiations["human"].capabilities,
+            vec![bridget_transport::protocol::ClientCapability::HumanLineageViewV1]
+        );
+        st.delegation_store
+            .insert(&distant, "remote162", b"remote")
+            .unwrap();
+        st.delegation_store
+            .insert(
+                &lineage_task(local_id, &owner_agent(), "queued"),
+                "local162",
+                b"local",
+            )
+            .unwrap();
+    }
+    let call_v2 = |project: &str, action: Value| {
+        let mut request = lineage_request(project, action);
+        let WrapperToDaemon::HumanLineage { request: body } = &mut request else {
+            unreachable!()
+        };
+        body.version = 2;
+        let response = handle_wrapper_message("human", request, &state).unwrap();
+        serde_json::to_value(response).unwrap()["result"].clone()
+    };
+    let v1 = call(&state, &root, json!({"action":"list","limit":10}));
+    assert_eq!(v1["version"], 1);
+    assert!(
+        v1["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t.get("placement").is_none())
+    );
+    let v2 = call_v2(&root, json!({"action":"list","limit":10}));
+    assert_eq!(v2["version"], 2);
+    assert_eq!(v2["status"], "ok");
+    assert_eq!(v2["tasks"].as_array().unwrap().len(), 2);
+    let expected = json!({"machine_id":"cartae","display_name":null,"worker_id":"worker-cartae",
+        "last_contact_at":null,"contact_state":"unknown"});
+    for id in [distant_id, local_id] {
+        let entry = v2["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["task_id"] == id)
+            .unwrap();
+        let placement = if id == distant_id {
+            expected.clone()
+        } else {
+            Value::Null
+        };
+        assert_eq!(entry.get("placement"), Some(&placement));
+        let action = json!({"action":"show","task_id":id,"offset":0,"limit":100});
+        let show1 = call(&state, &root, action.clone());
+        assert!(show1["task"].get("placement").is_none());
+        let mut show2 = call_v2(&root, action);
+        assert_eq!(show2["version"], 2);
+        assert_eq!(show2["task"].get("placement"), Some(&placement));
+        show2["version"] = json!(1);
+        show2["task"].as_object_mut().unwrap().remove("placement");
+        assert_eq!(show2, show1);
+    }
+    let absent = call_v2(
+        &root,
+        json!({"action":"show","task_id":"16200000-0000-4000-8000-000000000099","offset":0,"limit":100}),
+    );
+    assert_eq!(absent["version"], 1);
+    assert_eq!(absent["code"], "task_unavailable");
+    let mismatch = call_v2("/autre-projet162", json!({"action":"list","limit":10}));
+    assert_eq!(mismatch["version"], 1);
+    assert_eq!(mismatch["code"], "project_mismatch");
+    state
+        .lock()
+        .unwrap()
+        .client_negotiations
+        .get_mut("human")
+        .unwrap()
+        .capabilities
+        .clear();
+    let refused = call_v2(&root, json!({"action":"list","limit":10}));
+    assert_eq!(refused["version"], 1);
+    assert_eq!(refused["code"], "unsupported_version");
+    {
+        let mut st = state.lock().unwrap();
+        st.client_negotiations
+            .get_mut("human")
+            .unwrap()
+            .capabilities = vec![bridget_transport::protocol::ClientCapability::HumanLineageViewV1];
+        st.connection_roles.remove("human");
+    }
+    for action in [
+        json!({"action":"list","limit":10}),
+        json!({"action":"show","task_id":distant_id,"offset":0,"limit":100}),
+    ] {
+        let refused = call_v2(&root, action);
+        assert_eq!(refused["version"], 1);
+        assert_eq!(refused["code"], "binding_unavailable");
+    }
+}
+
+#[test]
+fn native162_lineage_autres_actions_v2_refusees_avec_erreurs_v1() {
+    let (state, root, _peer) = fixture("l162-refus", "human_lineage_view_v1");
+    let task_id = "16200000-0000-4000-8000-000000000021";
+    for action in [
+        json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":10,"follow":false}),
+        json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":10,"follow":true}),
+        json!({"action":"watch"}),
+        json!({"action":"cancel","task_id":task_id,"request_id":"16200000-0000-4000-8000-000000000022"}),
+    ] {
+        let mut request = lineage_request(&root, action.clone());
+        let WrapperToDaemon::HumanLineage { request: body } = &mut request else {
+            unreachable!()
+        };
+        body.version = 2;
+        let response =
+            serde_json::to_value(handle_wrapper_message("human", request, &state).unwrap())
+                .unwrap();
+        let result = if action["action"] == "watch" {
+            &response["event"]
+        } else {
+            &response["result"]
+        };
+        assert_eq!(result["version"], 1, "{response}");
+        assert_eq!(result["status"], "error", "{response}");
+        assert_eq!(result["code"], "unsupported_version", "{response}");
+    }
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .tasks()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// T029/T032 : lecture froide authentifiée, sans présence du fournisseur ni
+/// réplication locale. La socket permet de modifier les gardes pendant le RPC.
+#[test]
+fn native162_journal_distant_froid_gap_perte_et_gardes_sans_repli_local() {
+    use crate::fleet::{SpawnOrder, SpawnSubmission};
+    use bridget_transport::protocol::{
+        ClientCapability, IdentityCredential, RemotePlacement, SpawnOwnership, WorkerHello,
+        WorkerIdentity, WorkerJournalFragment, WorkerRequestOperation, WorkerResponse,
+        WorkerResponseOperation,
+    };
+    use sha2::{Digest, Sha256};
+
+    for case in ["cold", "gap", "lost", "placement", "permissions", "human"] {
+        let (state, root, _t3_peer) = fixture(&format!("l162-j-{case}"), "human_lineage_view_v1");
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let mut task = lineage_task(&task_id, &owner_agent(), "working");
+        task.remote_prepared = true;
+        task.remote_placement = Some(RemotePlacement {
+            machine_id: "cartae".into(),
+            worker_id: "worker-cartae".into(),
+            provisioning_revision: 1,
+            project_id: "project".into(),
+            mapping_revision: 1,
+            origin_host: "mac".into(),
+            origin_cwd: root.clone(),
+            source_root_identity: "git:fixture162".into(),
+            relative_cwd: ".".into(),
+            execution_cwd: "/tmp".into(),
+            base_commit: None,
+            definition_digest: "a".repeat(64),
+            permission_digest: "b".repeat(64),
+        });
+        let worker_peer =
+            {
+                let mut st = state.lock().unwrap();
+                st.registry = AgentRegistry::from_json(&json!({"machines":{"cartae":{
+                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":format!("{:x}", Sha256::digest(b"lineage162-secret")),
+                "allowed_agent_types":["fixture"],"mappings":{}
+            }}}).to_string(), "/tmp/lineage162-agents.json").unwrap();
+                let now = unix_now_secs();
+                let order = SpawnOrder {
+                    posture: None,
+                    agent_type: "fixture".into(),
+                    project: None,
+                    requested_name: Some(task.child.clone()),
+                    cwd: PathBuf::from("/tmp"),
+                    persistent: false,
+                    command_id: uuid::Uuid::new_v4().to_string(),
+                    issued_at: now,
+                    deadline_at: now + 60,
+                    ownership: Some(SpawnOwnership {
+                        parent_instance_id: task.owner_instance.clone(),
+                        parent_execution_id: None,
+                        objective_id: None,
+                        delegation_id: Some(task_id.clone()),
+                        project: None,
+                        role: "native_delegate".into(),
+                        max_children: None,
+                        max_depth: None,
+                    }),
+                    remote_placement: task.remote_placement.clone(),
+                };
+                let SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap()
+                else {
+                    panic!("réservation distante attendue, cas {case}");
+                };
+                task.child_instance = Some(lease.instance_id);
+                st.delegation_store
+                    .insert(&task, &format!("journal162-{case}"), b"remote-journal162")
+                    .unwrap();
+                assert!(
+                    st.router.get_agent(&task.child).is_none(),
+                    "aucun fournisseur local"
+                );
+                native_delegation::remote_command_identity(&st, &task).unwrap();
+                let peer = spec094_live_test_connection(&mut st, "worker162-journal");
+                st.connection_roles
+                    .insert("worker162-journal".into(), ConnectionRole::Worker);
+                st.peer_uids
+                    .insert("worker162-journal".into(), unsafe { libc::geteuid() });
+                peer
+            };
+        let hello = WorkerHello {
+            version: 1,
+            identity: WorkerIdentity {
+                machine_id: "cartae".into(),
+                worker_id: "worker-cartae".into(),
+                provisioning_revision: 1,
+            },
+            credential: IdentityCredential::new("lineage162-secret".into()),
+            build: "fixture162".into(),
+            capability: ClientCapability::RemoteWorkerV1,
+        };
+        assert!(matches!(
+            handle_worker_message(
+                &state,
+                "worker162-journal",
+                WrapperToDaemon::WorkerHello { hello }
+            ),
+            Some(DaemonToWrapper::WorkerAccepted { .. })
+        ));
+
+        // Un vrai journal local lisible détecte un repli accidentel vers le maître.
+        let directory = journal_directory(&state.lock().unwrap(), &task.child).unwrap();
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        write_events(
+            &directory,
+            &[json!({"v":1,"seq":1,"event":"note",
+            "payload":{"text":"LOCAL_SENTINEL_162"}})],
+        );
+        assert_eq!(
+            crate::attach::lineage_journal_page(&directory, &task_id, 0, 2).unwrap()["events"][0]["payload"]
+                ["text"],
+            "LOCAL_SENTINEL_162"
+        );
+        let action =
+            json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":2,"follow":false});
+        worker_peer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut reader = BufReader::new(worker_peer);
+        let result = if case == "lost" {
+            state.lock().unwrap().remote_workers.remove("cartae");
+            let result = call(&state, &root, action);
+            reader
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(50)))
+                .unwrap();
+            let error = reader.read_line(&mut String::new()).unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ));
+            result
+        } else {
+            let rpc_state = Arc::clone(&state);
+            let rpc_root = root.clone();
+            let rpc = thread::spawn(move || call(&rpc_state, &rpc_root, action));
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let DaemonToWrapper::WorkerRequest { request } = serde_json::from_str(&line).unwrap()
+            else {
+                panic!("lecture froide worker attendue : {line}");
+            };
+            assert_eq!(
+                request.request,
+                WorkerRequestOperation::JournalPage {
+                    after_seq: 0,
+                    limit: 2
+                }
+            );
+            assert_eq!(request.command.task_id, task_id);
+            assert_eq!(
+                request.command.instance_id,
+                task.child_instance.clone().unwrap()
+            );
+            assert_eq!(request.worker.machine_id, "cartae");
+            let WrapperToDaemon::HumanLineage {
+                request: live_request,
+            } = lineage_request(
+                &root,
+                json!({"action":"journal","task_id":task_id,"after_seq":0,"limit":2,"follow":true}),
+            )
+            else {
+                unreachable!()
+            };
+            let live_context = authorize(&state, "human", &live_request).unwrap();
+            {
+                let mut st = state.lock().unwrap();
+                let (notify, invalidated) = mpsc::sync_channel(1);
+                let (shutdown, mut live_peer) = UnixStream::pair().unwrap();
+                live_peer
+                    .set_read_timeout(Some(Duration::from_millis(100)))
+                    .unwrap();
+                guard_journal_snapshot(&st, "human", &live_context, &task, Some(&request.command))
+                    .unwrap();
+                st.lineage_journals.insert(
+                    "human".into(),
+                    Journal {
+                        context: live_context.clone(),
+                        task: task.clone(),
+                        command: Some(request.command.clone()),
+                        shutdown: Some(shutdown),
+                        notify,
+                    },
+                );
+                if matches!(case, "placement" | "permissions") {
+                    let mut current = st.delegation_store.get(&task_id).unwrap().unwrap();
+                    let placement = current.remote_placement.as_mut().unwrap();
+                    if case == "placement" {
+                        placement.mapping_revision += 1;
+                    } else {
+                        placement.permission_digest = "c".repeat(64);
+                    }
+                    st.delegation_store.save(&current).unwrap();
+                } else if case == "human" {
+                    st.client_negotiations
+                        .get_mut("human")
+                        .unwrap()
+                        .capabilities
+                        .clear();
+                }
+                invalidate(&mut st);
+                if matches!(case, "placement" | "permissions" | "human") {
+                    assert!(
+                        invalidated.try_recv().is_ok(),
+                        "abonnement live invalidé : {case}"
+                    );
+                    let mut byte = [0u8; 1];
+                    assert_eq!(
+                        std::io::Read::read(&mut live_peer, &mut byte).unwrap(),
+                        0,
+                        "socket live fermée avant publication : {case}"
+                    );
+                    assert!(
+                        guard_journal_snapshot(
+                            &st,
+                            "human",
+                            &live_context,
+                            &task,
+                            Some(&request.command)
+                        )
+                        .is_err()
+                    );
+                } else {
+                    assert!(matches!(
+                        invalidated.try_recv(),
+                        Err(mpsc::TryRecvError::Empty)
+                    ));
+                }
+                st.lineage_journals.remove("human");
+            }
+            let response = WorkerResponse {
+                version: request.version,
+                correlation_id: request.correlation_id,
+                connection_epoch: request.connection_epoch,
+                worker: request.worker,
+                command: request.command,
+                response: WorkerResponseOperation::JournalPage {
+                    fragments: vec![WorkerJournalFragment {
+                        seq: 1,
+                        offset: 0,
+                        final_fragment: true,
+                        bytes: serde_json::to_vec(&json!({"v":1,"seq":1,"event":"note",
+                            "payload":{"text":"REMOTE_COLD_162"}}))
+                        .unwrap(),
+                    }],
+                    through_seq: Some(if case == "gap" { 3 } else { 1 }),
+                    more: case == "gap",
+                },
+            };
+            assert!(
+                handle_worker_message(
+                    &state,
+                    "worker162-journal",
+                    WrapperToDaemon::WorkerResponse { response }
+                )
+                .is_none()
+            );
+            rpc.join().unwrap()
+        };
+        assert!(
+            !result.to_string().contains("LOCAL_SENTINEL_162"),
+            "{case}: {result}"
+        );
+        if matches!(case, "cold" | "gap") {
+            assert_eq!(result["status"], "ok", "{case}: {result}");
+            assert_eq!(result["events"].as_array().unwrap().len(), 1);
+            assert_eq!(result["events"][0]["payload"]["text"], "REMOTE_COLD_162");
+            assert_eq!(result["next_seq"], if case == "gap" { 3 } else { 1 });
+            assert_eq!(result["caught_up"], case == "cold");
+            assert_eq!(
+                result["gap"],
+                if case == "gap" {
+                    json!({"from_seq":2,"to_seq":3,"reason":"journal_gap"})
+                } else {
+                    Value::Null
+                }
+            );
+        } else {
+            assert_eq!(result["status"], "error", "{case}: {result}");
+            assert_eq!(
+                result["code"],
+                if case == "human" {
+                    "unsupported_version"
+                } else {
+                    "journal_unavailable"
+                },
+                "{case}: {result}"
+            );
+            assert!(
+                result.get("events").is_none(),
+                "réponse refusée sans contenu distant"
+            );
+        }
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "working"
+        );
+        assert!(state.lock().unwrap().pending_worker_responses.is_empty());
+        std::fs::remove_file(journal_file(&directory)).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 }

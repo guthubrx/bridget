@@ -157,10 +157,12 @@ pub struct MarkedManagedChild {
     marker: ManagedMarkerHandle,
 }
 
-/// Wrapper exécuté et supervisable par T904/T906.
+/// Groupe supervisable après RELEASE ou après une tentative de RELEASE incertaine.
 pub struct RunningManagedChild {
     inner: ProcessChannels,
     marker: ManagedMarkerHandle,
+    // État transitoire du canal, distinct d'un EOF valide après démarrage.
+    status_failed: bool,
 }
 
 impl ManagedChild {
@@ -216,6 +218,41 @@ impl ManagedChild {
         cancelled: impl Fn() -> bool,
         poll_interval: Duration,
     ) -> Result<Option<ReadyManagedChild>, ManagedProcessError> {
+        let ready = self.read_ready_or_cancel(cancelled, poll_interval)?;
+        Ok(ready.map(|ready| ReadyManagedChild {
+            inner: self.inner,
+            ready,
+        }))
+    }
+
+    /// Conserve l'autorité sur le PID en cas d'échec. L'appelant doit attendre
+    /// `try_wait` avant de déduire un arrêt ; EOF n'est jamais cette preuve.
+    pub(crate) fn wait_ready_or_cancel_retained(
+        mut self,
+        cancelled: impl Fn() -> bool,
+        poll_interval: Duration,
+    ) -> Result<Option<ReadyManagedChild>, (ManagedProcessError, Child)> {
+        match self.read_ready_or_cancel(cancelled, poll_interval) {
+            Ok(ready) => Ok(ready.map(|ready| ReadyManagedChild {
+                inner: self.inner,
+                ready,
+            })),
+            Err(error) => {
+                self.inner.release.take();
+                self.inner.status.take();
+                // Le résultat de cet arrêt ne remplace pas la preuve portée
+                // par Child : même un timeout conserve le handle supervisable.
+                let _ = terminate_bootstrap(&mut self.inner.child, poll_interval);
+                Err((error, self.inner.child))
+            }
+        }
+    }
+
+    fn read_ready_or_cancel(
+        &mut self,
+        cancelled: impl Fn() -> bool,
+        poll_interval: Duration,
+    ) -> Result<Option<BootstrapReady>, ManagedProcessError> {
         self.inner
             .status
             .as_mut()
@@ -254,10 +291,7 @@ impl ManagedChild {
                             return Err(ManagedProcessError::InvalidStatus(error.to_string()));
                         }
                     };
-                    return Ok(Some(ReadyManagedChild {
-                        inner: self.inner,
-                        ready,
-                    }));
+                    return Ok(Some(ready));
                 }
                 Err(error)
                     if matches!(
@@ -277,10 +311,26 @@ impl ReadyManagedChild {
 
     /// Écrit durablement le marqueur avant de rendre RELEASE accessible.
     pub fn persist_marker(
-        mut self,
+        self,
         store: &ManagedMarkerStore,
         name: &str,
     ) -> Result<MarkedManagedChild, ManagedProcessError> {
+        match self.persist_marker_retained(store, name) {
+            Ok(marked) => Ok(marked),
+            Err((error, mut child)) => {
+                let _ = child.wait();
+                Err(error)
+            }
+        }
+    }
+
+    /// Variante worker : l'échec du store conserve le bootstrap abandonné
+    /// pour superviser sa fin au lieu de perdre l'autorité sur le PID.
+    pub(crate) fn persist_marker_retained(
+        mut self,
+        store: &ManagedMarkerStore,
+        name: &str,
+    ) -> Result<MarkedManagedChild, (ManagedProcessError, Child)> {
         match store.persist(name, &self.ready) {
             Ok(marker) => Ok(MarkedManagedChild {
                 inner: self.inner,
@@ -288,8 +338,8 @@ impl ReadyManagedChild {
             }),
             Err(error) => {
                 self.inner.release.take();
-                let _ = self.inner.child.wait();
-                Err(error)
+                self.inner.status.take();
+                Err((error, self.inner.child))
             }
         }
     }
@@ -305,17 +355,35 @@ impl ReadyManagedChild {
 impl MarkedManagedChild {
     /// Libère exactement une fois le bootstrap, après la preuve durable portée
     /// par le type. Aucun appelant ne peut obtenir ce type sans écriture.
-    pub fn release(mut self) -> Result<RunningManagedChild, ManagedProcessError> {
-        let mut release = self.inner.release.take().ok_or_else(|| {
-            ManagedProcessError::InvalidArgument("RELEASE déjà envoyé".to_string())
-        })?;
-        release.write_all(&[RELEASE_BYTE])?;
-        release.flush()?;
-        drop(release);
-        Ok(RunningManagedChild {
+    pub fn release(self) -> Result<RunningManagedChild, ManagedProcessError> {
+        self.release_retained().map_err(|(error, _child)| error)
+    }
+
+    /// Une erreur d'écriture peut suivre l'envoi effectif de RELEASE. Conserver
+    /// le processus et son marqueur sans assimiler EPIPE à une preuve d'arrêt.
+    pub(crate) fn release_retained(
+        mut self,
+    ) -> Result<RunningManagedChild, (ManagedProcessError, RunningManagedChild)> {
+        let result = (|| {
+            let mut release = self.inner.release.take().ok_or_else(|| {
+                ManagedProcessError::InvalidArgument("RELEASE déjà envoyé".to_string())
+            })?;
+            release.write_all(&[RELEASE_BYTE])?;
+            release.flush()?;
+            Ok::<(), ManagedProcessError>(())
+        })();
+        let mut child = RunningManagedChild {
             inner: self.inner,
             marker: self.marker,
-        })
+            status_failed: false,
+        };
+        match result {
+            Ok(()) => Ok(child),
+            Err(error) => {
+                child.fail_status();
+                Err((error, child))
+            }
+        }
     }
 
     pub fn marker(&self) -> &ManagedMarkerHandle {
@@ -361,18 +429,33 @@ impl RunningManagedChild {
     }
 
     pub fn set_status_nonblocking(&mut self) -> io::Result<()> {
-        self.inner
+        let result = self
+            .inner
             .status
             .as_mut()
             .expect("canal de statut déjà fermé")
             .get_mut()
-            .set_nonblocking(true)
+            .set_nonblocking(true);
+        if result.is_err() {
+            self.fail_status();
+        }
+        result
+    }
+
+    fn fail_status(&mut self) {
+        self.status_failed = true;
+        self.inner.status.take();
     }
 
     /// Lit au plus un statut. Les messages sont des lignes JSON atomiques et
     /// petites ; `WouldBlock` signifie simplement qu'aucun événement n'est
     /// disponible à ce tick.
     pub fn try_status(&mut self) -> Result<Option<ManagedStatus>, ManagedProcessError> {
+        if self.status_failed {
+            return Err(ManagedProcessError::InvalidStatus(
+                "canal de démarrage définitivement refusé".to_string(),
+            ));
+        }
         let Some(reader) = self.inner.status.as_mut() else {
             return Ok(None);
         };
@@ -1188,7 +1271,12 @@ impl ManagedMarkerStore {
         timeout: Duration,
         poll_interval: Duration,
     ) -> Result<Vec<String>, ManagedProcessError> {
-        self.reconcile_stale_groups_with_native(timeout, poll_interval, &BTreeMap::new(), Duration::ZERO)
+        self.reconcile_stale_groups_with_native(
+            timeout,
+            poll_interval,
+            &BTreeMap::new(),
+            Duration::ZERO,
+        )
     }
 
     /// Seule la réconciliation du daemon fournit ces identités depuis la saga
@@ -1284,8 +1372,12 @@ impl ManagedMarkerStore {
             match process_birth(marker.pgid) {
                 Ok(birth) if birth == marker.birth => signal_group(marker.pgid, libc::SIGTERM)?,
                 Ok(_) => continue,
-                Err(error) if error.kind() == io::ErrorKind::NotFound
-                    || error.raw_os_error() == Some(libc::ESRCH) => continue,
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    continue;
+                }
                 Err(error) => return Err(error.into()),
             }
         }
@@ -1294,8 +1386,12 @@ impl ManagedMarkerStore {
             // a été recyclé pendant le traitement des marqueurs précédents.
             let same_birth = match process_birth(marker.pgid) {
                 Ok(birth) => birth == marker.birth,
-                Err(error) if error.kind() == io::ErrorKind::NotFound
-                    || error.raw_os_error() == Some(libc::ESRCH) => false,
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    false
+                }
                 Err(error) => return Err(error.into()),
             };
             if !same_birth || !group_exists(marker.pgid)? {
@@ -1325,14 +1421,24 @@ impl ManagedMarkerStore {
         for (name, marker) in native_groups {
             let same_birth = match process_birth(marker.pgid) {
                 Ok(birth) => birth == marker.birth,
-                Err(error) if error.kind() == io::ErrorKind::NotFound
-                    || error.raw_os_error() == Some(libc::ESRCH) => false,
+                Err(error)
+                    if error.kind() == io::ErrorKind::NotFound
+                        || error.raw_os_error() == Some(libc::ESRCH) =>
+                {
+                    false
+                }
                 Err(error) => return Err(error.into()),
             };
-            if same_birth && !wait_group_gone(marker.pgid,
-                native_deadline.saturating_duration_since(Instant::now()), poll_interval)? {
+            if same_birth
+                && !wait_group_gone(
+                    marker.pgid,
+                    native_deadline.saturating_duration_since(Instant::now()),
+                    poll_interval,
+                )?
+            {
                 return Err(ManagedProcessError::InvalidStatus(format!(
-                    "arrêt coopératif natif incomplet pour {name} (pgid {})", marker.pgid
+                    "arrêt coopératif natif incomplet pour {name} (pgid {})",
+                    marker.pgid
                 )));
             }
             self.remove(&name)?;
@@ -1547,6 +1653,111 @@ pub(crate) mod tests {
         let mut line = String::new();
         child.status_reader().read_line(&mut line).unwrap();
         serde_json::from_str(line.trim_end()).unwrap()
+    }
+
+    #[test]
+    #[ignore]
+    fn bootstrap_error_child() {
+        let Ok(mode) = std::env::var("BRIDGET_TEST_BOOTSTRAP_ERROR162") else {
+            return;
+        };
+        if mode == "failed" {
+            write_status_line(&ManagedStatus::StartupFailed {
+                kind: "fixture".into(),
+                reason: "avant ready".into(),
+                instance_id: identity().instance_id,
+                command_id: identity().command_id,
+                generation: identity().generation,
+            })
+            .unwrap();
+        } else {
+            assert_eq!(mode, "eof");
+            unsafe {
+                libc::close(STATUS_FD);
+            }
+        }
+        // Le statut ne prouve pas la mort : ce processus attend encore EOF
+        // du contrôleur sur RELEASE avant de terminer.
+        let mut byte = [0_u8; 1];
+        let _ = read_one(RELEASE_FD, &mut byte);
+    }
+
+    #[test]
+    fn worker162_bootstrap_erreur_garde_handle_jusqua_arret() {
+        for mode in ["eof", "failed"] {
+            let mut command = helper_command("managed_process::tests::bootstrap_error_child");
+            command.env("BRIDGET_TEST_BOOTSTRAP_ERROR162", mode);
+            let bootstrap = spawn_bootstrap_command(command, Stdio::null()).unwrap();
+            let pid = bootstrap.inner.child.id();
+            let (error, mut child) = match bootstrap
+                .wait_ready_or_cancel_retained(|| false, Duration::from_millis(10))
+            {
+                Err(error) => error,
+                Ok(_) => panic!("aucune ready attendue"),
+            };
+            assert!(matches!(error, ManagedProcessError::InvalidStatus(_)));
+            assert_eq!(child.id(), pid);
+            assert!(
+                child.try_wait().unwrap().is_some(),
+                "arrêt réel, pas seule trame de statut"
+            );
+        }
+    }
+
+    #[test]
+    fn worker162_marqueur_refuse_conserve_bootstrap_abandonne() {
+        let root = test_root("retained-marker");
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let ready = spawn_test_bootstrap().wait_ready().unwrap();
+        let pid = ready.ready().pid;
+        let (error, mut child) = match ready.persist_marker_retained(&store, "../invalide") {
+            Err(error) => error,
+            Ok(_) => panic!("nom marqueur invalide accepté"),
+        };
+        assert!(matches!(error, ManagedProcessError::InvalidArgument(_)));
+        assert_eq!(child.id(), pid);
+        assert_eq!(child.wait().unwrap().code(), Some(ABANDONED_EXIT_CODE));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn worker162_release_erreur_conserve_processus_et_marqueur_jusqua_recolte() {
+        let root = test_root("release-retained");
+        let store = ManagedMarkerStore::at_directory(root.join("managed"));
+        let marked = spawn_test_bootstrap()
+            .wait_ready()
+            .unwrap()
+            .persist_marker(&store, "worker162")
+            .unwrap();
+        let pid = marked.inner.child.id();
+        let marker = marked.marker().marker().clone();
+        let marker_path = marked.marker().path().to_path_buf();
+        // EOF déclenche l'abandon après READY et ferme l'écriture RELEASE.
+        // Aucune mort n'est présumée ni récoltée avant le retour du handle.
+        marked
+            .inner
+            .release
+            .as_ref()
+            .unwrap()
+            .shutdown(std::net::Shutdown::Write)
+            .unwrap();
+        let (error, mut retained) = match marked.release_retained() {
+            Err(error) => error,
+            Ok(_) => panic!("RELEASE sur un canal fermé ne doit pas réussir"),
+        };
+        assert!(matches!(error, ManagedProcessError::Io(_)));
+        assert_eq!(retained.child_mut().id(), pid);
+        assert_eq!(retained.marker().marker(), &marker);
+        assert!(marker_path.exists());
+        assert!(retained.try_status().is_err());
+        assert!(!retained.status_is_open());
+        assert_eq!(
+            retained.child_mut().wait().unwrap().code(),
+            Some(ABANDONED_EXIT_CODE)
+        );
+        assert!(retained.reap_terminated_group().unwrap());
+        assert!(!marker_path.exists());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -104,23 +104,35 @@ pub(crate) fn launch_preflight(
     agent_type: &str,
     source: &SourceEnvironment,
 ) -> Result<(), SpawnRefusal> {
-    let definition = registry.get(agent_type).map_err(|_| SpawnRefusal::UnknownType {
-        requested_type: agent_type.to_string(),
-        known_types: registry.known_types(),
-        registry: registry.source().display().to_string(),
-    })?;
+    let definition = registry
+        .get(agent_type)
+        .map_err(|_| SpawnRefusal::UnknownType {
+            requested_type: agent_type.to_string(),
+            known_types: registry.known_types(),
+            registry: registry.source().display().to_string(),
+        })?;
     validate_launch_capabilities(agent_type, definition)?;
     validate_provider_observation(agent_type, definition)?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
-        allow_api_key_value(source.get("BRIDGET_ALLOW_API_KEY").and_then(|value| value.to_str())),
+        allow_api_key_value(
+            source
+                .get("BRIDGET_ALLOW_API_KEY")
+                .and_then(|value| value.to_str()),
+        ),
         |variable| source.contains_key(variable),
     ) {
         return Err(SpawnRefusal::BillingGuard { variable });
     }
-    if !matches!(definition.protocol.as_str(), "acp" | "claude_stream_json" | "codex_app_server") {
+    if !matches!(
+        definition.protocol.as_str(),
+        "acp" | "claude_stream_json" | "codex_app_server"
+    ) {
         return Err(SpawnRefusal::NegotiationFailed {
-            detail: format!("le protocole '{}' n'utilise pas une session gérée", definition.protocol),
+            detail: format!(
+                "le protocole '{}' n'utilise pas une session gérée",
+                definition.protocol
+            ),
         });
     }
     let env = build_environment(definition, source)?;
@@ -199,6 +211,11 @@ fn submit_spawn_with_policy(
     relaunch: bool,
     recovery: bool,
 ) -> Result<SpawnDecision, FleetError> {
+    if order.remote_placement.is_some() {
+        return Ok(SpawnDecision::Rejected(SpawnRefusal::NegotiationFailed {
+            detail: "remote_placement_requires_worker".into(),
+        }));
+    }
     // Le refus précède toute réservation NEUVE. Une clé connue conserve son
     // canon et son issue durable : relire une réussite passée ne relance rien.
     if !supervisor.knows_command(&order.command_id)
@@ -335,6 +352,11 @@ pub fn prepare_recovery(
     source: &SourceEnvironment,
     candidate: RecoveryCandidate,
 ) -> Result<PreparedSpawn, SpawnRefusal> {
+    if candidate.lease.remote_placement.is_some() {
+        return Err(SpawnRefusal::NegotiationFailed {
+            detail: "remote_placement_requires_worker".into(),
+        });
+    }
     reject_removed_project(candidate.lease.project.as_ref())?;
     if let Some(execution) = candidate.runtime_execution.as_ref() {
         return Err(SpawnRefusal::DockerRuntimeUnavailable {
@@ -359,7 +381,7 @@ pub fn prepare_recovery(
     )
 }
 
-fn prepare_spawn_parts(
+pub(crate) fn prepare_spawn_parts(
     registry: &AgentRegistry,
     source: &SourceEnvironment,
     agent_type: &str,
@@ -755,6 +777,7 @@ mod tests {
             deadline_at: NOW + 10,
             ownership: None,
             project: None,
+            remote_placement: None,
         }
     }
 
@@ -774,11 +797,31 @@ mod tests {
         let env = source(&root);
         let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
         assert_eq!(refusal_record(&refusal).0, "command_missing");
-        assert!(matches!(refusal, SpawnRefusal::CommandMissing { ref command, .. } if command.ends_with("binaire-absent157")));
-        let request = order(&root, "native157-missing", "89000000-0000-4000-8000-000000000701");
-        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert!(
+            matches!(refusal, SpawnRefusal::CommandMissing { ref command, .. } if command.ends_with("binaire-absent157"))
+        );
+        let request = order(
+            &root,
+            "native157-missing",
+            "89000000-0000-4000-8000-000000000701",
+        );
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &env,
+                &request,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
         assert_eq!(refusal_record(&refusal).0, "command_missing");
-        assert!(!supervisor.knows_command(&request.command_id), "refus avant réservation");
+        assert!(
+            !supervisor.knows_command(&request.command_id),
+            "refus avant réservation"
+        );
         assert_eq!(supervisor.active_count(), 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -789,15 +832,41 @@ mod tests {
         let supervisor = supervisor(&root, 1);
         let registry = registry("/bin/sh", "acp", &["OPENAI_API_KEY"]);
         let mut env = source(&root);
-        env.insert("OPENAI_API_KEY".into(), OsString::from("fixture-interdite157"));
-        assert!(command_exists("/bin/sh", &env), "binaire réellement présent");
+        env.insert(
+            "OPENAI_API_KEY".into(),
+            OsString::from("fixture-interdite157"),
+        );
+        assert!(
+            command_exists("/bin/sh", &env),
+            "binaire réellement présent"
+        );
         let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
         assert_eq!(refusal_record(&refusal).0, "billing_guard");
-        assert!(matches!(refusal, SpawnRefusal::BillingGuard { ref variable } if variable == "OPENAI_API_KEY"));
-        let request = order(&root, "native157-billing", "89000000-0000-4000-8000-000000000702");
-        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert!(
+            matches!(refusal, SpawnRefusal::BillingGuard { ref variable } if variable == "OPENAI_API_KEY")
+        );
+        let request = order(
+            &root,
+            "native157-billing",
+            "89000000-0000-4000-8000-000000000702",
+        );
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &env,
+                &request,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
         assert_eq!(refusal_record(&refusal).0, "billing_guard");
-        assert!(!supervisor.knows_command(&request.command_id), "refus avant réservation");
+        assert!(
+            !supervisor.knows_command(&request.command_id),
+            "refus avant réservation"
+        );
         assert_eq!(supervisor.active_count(), 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -807,15 +876,39 @@ mod tests {
         let root = root("native157-home");
         let supervisor = supervisor(&root, 1);
         let registry = registry("/bin/sh", "acp", &[]);
-        let mut env = source(&root); env.remove("HOME");
-        assert!(command_exists("/bin/sh", &env), "binaire réellement présent sans HOME");
+        let mut env = source(&root);
+        env.remove("HOME");
+        assert!(
+            command_exists("/bin/sh", &env),
+            "binaire réellement présent sans HOME"
+        );
         let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
         assert_eq!(refusal_record(&refusal).0, "env_unfit");
-        assert!(matches!(refusal, SpawnRefusal::EnvUnfit { ref detail } if detail.contains("HOME absent")));
-        let request = order(&root, "native157-home", "89000000-0000-4000-8000-000000000703");
-        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert!(
+            matches!(refusal, SpawnRefusal::EnvUnfit { ref detail } if detail.contains("HOME absent"))
+        );
+        let request = order(
+            &root,
+            "native157-home",
+            "89000000-0000-4000-8000-000000000703",
+        );
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &env,
+                &request,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
         assert_eq!(refusal_record(&refusal).0, "env_unfit");
-        assert!(!supervisor.knows_command(&request.command_id), "erreur environnement propagée avant réservation");
+        assert!(
+            !supervisor.knows_command(&request.command_id),
+            "erreur environnement propagée avant réservation"
+        );
         assert_eq!(supervisor.active_count(), 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -825,17 +918,39 @@ mod tests {
         let root = root("native157-protocol");
         let supervisor = supervisor(&root, 1);
         // Capacité déclarée valide : le refus vise le protocole non géré, pas sa capacité absente.
-        let registry = AgentRegistry::from_json(&serde_json::json!({"agents":{"fixture":{
-            "command":"/bin/sh", "protocol":"tmux", "forbidden_env":[],
-            "capabilities":{"execution_paths":["tmux"]}
-        }}}).to_string(), "/tmp/native157-protocol.json").unwrap();
+        let registry = AgentRegistry::from_json(
+            &serde_json::json!({"agents":{"fixture":{
+                "command":"/bin/sh", "protocol":"tmux", "forbidden_env":[],
+                "capabilities":{"execution_paths":["tmux"]}
+            }}})
+            .to_string(),
+            "/tmp/native157-protocol.json",
+        )
+        .unwrap();
         assert!(validate_launch_capabilities("fixture", registry.get("fixture").unwrap()).is_ok());
         let env = source(&root);
         let refusal = launch_preflight(&registry, "fixture", &env).unwrap_err();
         assert_eq!(refusal_record(&refusal).0, "negotiation_failed");
-        assert!(matches!(refusal, SpawnRefusal::NegotiationFailed { ref detail } if detail.contains("tmux")));
-        let request = order(&root, "native157-protocol", "89000000-0000-4000-8000-000000000704");
-        let refusal = rejection(submit_spawn(&supervisor, &registry, &env, &request, NOW, false, &hosts_fixture()).unwrap());
+        assert!(
+            matches!(refusal, SpawnRefusal::NegotiationFailed { ref detail } if detail.contains("tmux"))
+        );
+        let request = order(
+            &root,
+            "native157-protocol",
+            "89000000-0000-4000-8000-000000000704",
+        );
+        let refusal = rejection(
+            submit_spawn(
+                &supervisor,
+                &registry,
+                &env,
+                &request,
+                NOW,
+                false,
+                &hosts_fixture(),
+            )
+            .unwrap(),
+        );
         assert_eq!(refusal_record(&refusal).0, "negotiation_failed");
         assert!(!supervisor.knows_command(&request.command_id));
         assert_eq!(supervisor.active_count(), 0);
@@ -852,18 +967,42 @@ mod tests {
         let changed = registry("/commande-mutante-absente157", "acp", &[]);
         let env = source(&root);
         assert!(launch_preflight(&pinned, "fixture", &env).is_ok());
-        assert_eq!(refusal_record(&launch_preflight(&changed, "fixture", &env).unwrap_err()).0, "command_missing");
-        let request = order(&root, "native157-pinned", "89000000-0000-4000-8000-000000000705");
-        let prepared = match submit_spawn(&supervisor, &pinned, &env, &request, NOW, false, &hosts_fixture()).unwrap() {
+        assert_eq!(
+            refusal_record(&launch_preflight(&changed, "fixture", &env).unwrap_err()).0,
+            "command_missing"
+        );
+        let request = order(
+            &root,
+            "native157-pinned",
+            "89000000-0000-4000-8000-000000000705",
+        );
+        let prepared = match submit_spawn(
+            &supervisor,
+            &pinned,
+            &env,
+            &request,
+            NOW,
+            false,
+            &hosts_fixture(),
+        )
+        .unwrap()
+        {
             SpawnDecision::Ready(prepared) => prepared,
             other => panic!("définition figée lançable attendue : {other:?}"),
         };
         assert_eq!(prepared.command, "/bin/sh");
         assert_eq!(*prepared.resolved_definition, resolved);
-        let recovered = prepare_recovery(&env, RecoveryCandidate {
-            lease: prepared.lease, agent_type: prepared.agent_type, cwd: prepared.cwd,
-            resolved_definition: Some(*prepared.resolved_definition), runtime_execution: None,
-        }).unwrap();
+        let recovered = prepare_recovery(
+            &env,
+            RecoveryCandidate {
+                lease: prepared.lease,
+                agent_type: prepared.agent_type,
+                cwd: prepared.cwd,
+                resolved_definition: Some(*prepared.resolved_definition),
+                runtime_execution: None,
+            },
+        )
+        .unwrap();
         assert_eq!(recovered.command, "/bin/sh");
         assert_eq!(*recovered.resolved_definition, resolved);
         let _ = fs::remove_dir_all(root);
@@ -1099,6 +1238,7 @@ mod tests {
                 link_id: None,
                 ownership: None,
                 agent_path: None,
+                remote_placement: None,
             },
             agent_type: "fixture".to_string(),
             cwd: root.clone(),
@@ -1497,6 +1637,7 @@ mod tests {
                 link_id: None,
                 ownership: None,
                 agent_path: None,
+                remote_placement: None,
             },
             agent_type: "fixture".to_string(),
             cwd: root.clone(),

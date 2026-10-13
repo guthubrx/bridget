@@ -137,7 +137,7 @@ pub(crate) fn lineage_journal_page(
     Ok(lineage_journal_result(task_id, events, next, true, gap))
 }
 
-fn lineage_journal_result(
+pub(crate) fn lineage_journal_result(
     task_id: &str,
     events: Vec<serde_json::Value>,
     next: u64,
@@ -234,6 +234,12 @@ pub(crate) fn lineage_journal_follow(
                     to_seq,
                     reason,
                 } => {
+                    // Le wrapper recharge cette plage depuis son journal froid.
+                    // Ne pas avancer le curseur avant les fragments rejoués.
+                    if reason.as_deref() == Some("live_feed_overrun") {
+                        caught_up = false;
+                        continue;
+                    }
                     next = next.max(to_seq);
                     emit(lineage_journal_result(
                         task_id,
@@ -6048,6 +6054,163 @@ mod tests {
         assert_eq!(window.entries.len(), 200);
         assert_eq!(window.next_seq, Some(211));
         assert!(window.shared_body().len() < 64 * 1024);
+    }
+
+    #[test]
+    fn native162_lineage_live_rejoue_overrun_et_conserve_gap_irrecuperable() {
+        use bridget_transport::protocol::HumanLineageError as E;
+        // Même échange Unix/RoleHandshake/Subscribe que la fixture de gap100.
+        let root = std::env::temp_dir().join(format!("bg162-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&root).unwrap();
+        let socket = root.join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (stop_tx, stop_rx) = mpsc::sync_channel(1);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for response in [
+                DaemonToWrapper::RoleAccepted {
+                    role: ConnectionRole::Attach,
+                },
+                DaemonToWrapper::Subscribed {
+                    subscription_id: "s".into(),
+                },
+            ] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request = decode::<WrapperToDaemon>(line.trim()).unwrap();
+                match &response {
+                    DaemonToWrapper::RoleAccepted { .. } => assert!(matches!(
+                        request,
+                        WrapperToDaemon::RoleHandshake {
+                            role: ConnectionRole::Attach
+                        }
+                    )),
+                    _ => assert!(matches!(
+                        request,
+                        WrapperToDaemon::Subscribe {
+                            window: AttachWindow::Seq(2),
+                            ..
+                        }
+                    )),
+                }
+                writeln!(stream, "{}", encode(&response).unwrap()).unwrap();
+            }
+            for response in [
+                DaemonToWrapper::SnapshotCaughtUp {
+                    subscription_id: "s".into(),
+                    through_seq: Some(1),
+                },
+                DaemonToWrapper::Gap {
+                    subscription_id: "s".into(),
+                    from_seq: 2,
+                    to_seq: 3,
+                    reason: Some("live_feed_overrun".into()),
+                },
+                fragment(
+                    "s",
+                    2,
+                    0,
+                    true,
+                    serde_json::to_vec(&json!({"seq":2,"text":"récupéré 2"})).unwrap(),
+                ),
+                fragment(
+                    "s",
+                    3,
+                    0,
+                    true,
+                    serde_json::to_vec(&json!({"seq":3,"text":"récupéré 3"})).unwrap(),
+                ),
+                DaemonToWrapper::SnapshotCaughtUp {
+                    subscription_id: "s".into(),
+                    through_seq: Some(3),
+                },
+                DaemonToWrapper::Gap {
+                    subscription_id: "s".into(),
+                    from_seq: 4,
+                    to_seq: 5,
+                    reason: Some("retention".into()),
+                },
+                fragment(
+                    "s",
+                    6,
+                    0,
+                    true,
+                    serde_json::to_vec(&json!({"seq":6})).unwrap(),
+                ),
+                DaemonToWrapper::SnapshotCaughtUp {
+                    subscription_id: "s".into(),
+                    through_seq: Some(6),
+                },
+            ] {
+                writeln!(stream, "{}", encode(&response).unwrap()).unwrap();
+            }
+            // Un abonnement live reste ouvert jusqu'à l'arrêt du lecteur.
+            // La fermeture anticipée exercerait le chemin EOF, pas le rejeu.
+            stop_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        });
+        let mut pages = Vec::new();
+        let result = lineage_journal_follow(
+            &socket,
+            "child",
+            "task",
+            1,
+            10,
+            |stream| {
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .map_err(|_| E::JournalUnavailable)
+            },
+            |page| {
+                let finished = page["caught_up"] == true
+                    && page["next_seq"] == 6
+                    && page["events"] == json!([]);
+                pages.push(page);
+                if finished {
+                    Err(E::BindingUnavailable)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        stop_tx.send(()).unwrap();
+        server.join().unwrap();
+        assert_eq!(
+            result,
+            Err(E::BindingUnavailable),
+            "pages reçues : {pages:?}"
+        );
+        let sequences: Vec<_> = pages
+            .iter()
+            .flat_map(|page| page["events"].as_array().unwrap())
+            .map(|event| event["seq"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            sequences,
+            vec![2, 3, 6],
+            "les entrées rechargées restent visibles une seule fois"
+        );
+        let gaps: Vec<_> = pages
+            .iter()
+            .filter_map(|page| (!page["gap"].is_null()).then_some(&page["gap"]))
+            .collect();
+        assert_eq!(
+            gaps,
+            vec![&json!({"from_seq":4,"to_seq":5,"reason":"retention"})]
+        );
+        for page in pages.iter().filter(|page| {
+            page["events"]
+                .as_array()
+                .is_some_and(|events| !events.is_empty())
+                && page["next_seq"].as_u64().unwrap() <= 3
+        }) {
+            assert_eq!(page["caught_up"], false, "reprise froide en cours");
+        }
+        std::fs::remove_file(socket).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 
     #[test]

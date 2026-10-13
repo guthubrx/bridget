@@ -407,6 +407,120 @@ pub(crate) struct NativeMissionBootstrap {
     pub mission_id: String,
 }
 
+/// Métadonnées d'infrastructure du wrapper, jamais une permission fournisseur.
+pub(crate) const REMOTE_RESULT_CONTEXT_ENV: &str = "BRIDGET_REMOTE_RESULT_CONTEXT";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerResultContext {
+    pub worker: bridget_transport::protocol::WorkerIdentity,
+    pub command: bridget_transport::protocol::WorkerCommandIdentity,
+    pub store_root: PathBuf,
+}
+
+impl WorkerResultContext {
+    fn validate_for_instance(&self, instance: &str) -> Result<(), String> {
+        self.worker
+            .validate()
+            .map_err(|_| "remote_result_context_invalid")?;
+        self.command
+            .validate()
+            .map_err(|_| "remote_result_context_invalid")?;
+        let mut components = Path::new(&self.command.instance_id).components();
+        if self.command.instance_id != instance
+            || !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+            || !self.store_root.is_absolute()
+            || self.store_root.parent().is_none()
+        {
+            return Err("remote_result_context_invalid".into());
+        }
+        Ok(())
+    }
+
+    fn journal_root(&self) -> PathBuf {
+        self.store_root
+            .parent()
+            .expect("validated worker root")
+            .join("journals")
+            .join(format!(
+                "{}-g{}",
+                self.command.instance_id, self.command.generation
+            ))
+    }
+}
+
+/// Une remise de mission distante doit trouver son budget durable avant tout
+/// appel fournisseur. Les événements système gardent leur chemin habituel.
+fn remote_result_for_delivery(
+    context: Option<&WorkerResultContext>,
+    message: &bridget_core::BridgetMessage,
+    execution: Option<(&str, u64)>,
+    bindings: &HashMap<String, ManagedExecutionBinding>,
+) -> Result<Option<crate::remote_worker::WorkerResultReservation>, String> {
+    let Some(context) = context else {
+        return Ok(None);
+    };
+    if !message.reply || message.origin == Some(bridget_core::MessageOrigin::System) {
+        return Ok(None);
+    }
+    let (execution_id, generation) = execution.ok_or("remote_result_slot_required")?;
+    if bindings.get(&message.id).is_some_and(|binding| {
+        (binding.execution_id != execution_id || binding.generation != generation)
+            && !matches!(
+                binding.state.as_str(),
+                "completed" | "failed" | "interrupted" | "unreachable"
+            )
+    }) {
+        return Err("remote_result_execution_conflict".into());
+    }
+    crate::remote_worker::find_result_reservation(
+        &context.store_root,
+        &context.worker,
+        &context.command,
+        &message.id,
+        execution_id,
+        generation,
+    )
+    .map(Some)
+    .map_err(|_| "remote_result_slot_unavailable".into())
+}
+
+/// L'identité du message résultat dépend du slot, pas d'un essai de publication.
+/// Aucun ACK ni connexion au maître n'est nécessaire après le fsync du blob.
+fn publish_remote_final(
+    binding: Option<&ManagedExecutionBinding>,
+    message: &bridget_core::BridgetMessage,
+    body: &str,
+) -> Result<bool, String> {
+    let Some(binding) = binding else {
+        return Ok(false);
+    };
+    let Some(reservation) = &binding.remote_result else {
+        return Ok(false);
+    };
+    let identity = &reservation.slot.identity;
+    if identity.mission_id != message.id
+        || identity.execution_id != binding.execution_id
+        || identity.execution_generation != binding.generation
+    {
+        return Err("remote_result_execution_conflict".into());
+    }
+    let mut result = bridget_transport::protocol::RemoteResultEnvelope {
+        worker: reservation.worker.clone(),
+        identity: identity.clone(),
+        message_id: format!("worker-result-{}", reservation.slot_id),
+        body: body.to_owned(),
+        digest: String::new(),
+    };
+    result.digest = result
+        .canonical_digest()
+        .map_err(|_| "remote_result_invalid")?;
+    crate::remote_worker::publish_result_blob(reservation, &result)
+        .map_err(|error| format!("remote_result_publication_failed: {error}"))?;
+    Ok(true)
+}
+
 // Seulement pour une mission native liée à l'instance de ce wrapper. Le
 // gestionnaire du signal ne fait qu'écrire un booléen ; le thread principal
 // ferme ensuite le transport qu'il possède, sans rechercher de PID externe.
@@ -1996,7 +2110,9 @@ fn send_disk_space_fact(writer: &mut BufWriter<UnixStream>) {
 }
 
 fn display_name_for_agent_id(agent_id: &str) -> String {
-    let profile_path = socket_path().with_extension("db");
+    let Some(profile_path) = profile_ledger_path(&socket_path()) else {
+        return "Agent".to_string();
+    };
     let Ok(mut profiles) = crate::agent_profile::AgentProfileStore::open(&profile_path) else {
         return "Agent".to_string();
     };
@@ -3644,8 +3760,12 @@ fn emit_one_live_fragment(emit: &RelayEmitter, fanout: &mut LiveFanout) -> bool 
     true
 }
 
-fn profile_ledger_path(socket: &Path) -> PathBuf {
-    socket.with_extension("db")
+fn profile_ledger_path(socket: &Path) -> Option<PathBuf> {
+    // Le worker conserve reçus et journal, jamais une base métier du maître.
+    // La politique reçue du maître et les messages IPC restent inchangés.
+    std::env::var_os(REMOTE_RESULT_CONTEXT_ENV)
+        .is_none()
+        .then(|| socket.with_extension("db"))
 }
 
 fn apply_pending_profile_instructions(
@@ -3654,7 +3774,10 @@ fn apply_pending_profile_instructions(
     recipient: &str,
     provider_spawn_id: &str,
 ) {
-    let mut store = match AgentProfileStore::open(&profile_ledger_path(socket)) {
+    let Some(profile_path) = profile_ledger_path(socket) else {
+        return;
+    };
+    let mut store = match AgentProfileStore::open(&profile_path) {
         Ok(store) => store,
         Err(error) => {
             warn!("profil agent indisponible avant démarrage fournisseur: {error}");
@@ -4002,7 +4125,7 @@ fn launch_session_with_status(
     }
     let state_root = session_namespace.root;
     crate::environment::ensure_private_directory(&state_root)?;
-    let journal_root = state_root.join("sessions");
+    let mut journal_root = state_root.join("sessions");
     if !agent_args.is_empty() {
         return Err("le mode --equipier n'accepte pas d'arguments d'agent".into());
     }
@@ -4074,6 +4197,28 @@ fn launch_session_with_status(
     } else {
         None
     };
+    let remote_result_context = match std::env::var(REMOTE_RESULT_CONTEXT_ENV) {
+        Ok(raw) => Some(
+            serde_json::from_str::<WorkerResultContext>(&raw)
+                .map_err(|_| "remote_result_context_invalid")?,
+        ),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(_) => return Err("remote_result_context_invalid".into()),
+    };
+    if let Some(context) = &remote_result_context {
+        context.validate_for_instance(&instance_id)?;
+        if native_bootstrap.is_none()
+            || interactive.is_some()
+            || !matches!(
+                definition.protocol.as_str(),
+                "codex_app_server" | "claude_stream_json"
+            )
+        {
+            return Err("remote_result_context_invalid".into());
+        }
+        journal_root = context.journal_root();
+        crate::environment::ensure_private_directory(&journal_root)?;
+    }
     let native_bootstrap_for_signal = native_bootstrap.as_ref();
     // Fixture de crash : SIGTERM doit terminer le wrapper bloqué sur la FIFO.
     // Comme les handlers daemon cfg(test), aucun handler coopératif n'est installé.
@@ -4466,7 +4611,7 @@ fn launch_session_with_status(
             &mut idempotent_deliveries,
             &mut execution_bindings,
             &mut redaction_lease,
-            Some(&profile_ledger_path(socket)),
+            profile_ledger_path(socket).as_deref(),
             interactive.is_none(),
             Some(&child_requests),
             Some(transport.is_busy()),
@@ -4533,6 +4678,18 @@ fn launch_session_with_status(
             }
             Ok(_) => match decode(line.trim()) {
                 Ok(DaemonToWrapper::Deliver { message, .. }) => {
+                    if let Err(reason) = remote_result_for_delivery(
+                        remote_result_context.as_ref(),
+                        &message,
+                        None,
+                        &execution_bindings,
+                    ) {
+                        send_wrapper_message(
+                            &writer,
+                            bound_delivery_rejection(&execution_bindings, message.id, reason),
+                        );
+                        continue;
+                    }
                     idempotent_deliveries.record_historic(&message.id);
                     if let Err(error) = deliver_provider_message(
                         transport.as_mut(),
@@ -4557,6 +4714,26 @@ fn launch_session_with_status(
                     revision,
                 }) => {
                     let message_id = message.id.clone();
+                    let remote_result = match remote_result_for_delivery(
+                        remote_result_context.as_ref(),
+                        &message,
+                        Some((&execution_id, generation)),
+                        &execution_bindings,
+                    ) {
+                        Ok(reservation) => reservation,
+                        Err(reason) => {
+                            send_wrapper_message(
+                                &writer,
+                                WrapperToDaemon::DeliveryRejected {
+                                    id: message_id,
+                                    execution_id: Some(execution_id),
+                                    generation: Some(generation),
+                                    reason,
+                                },
+                            );
+                            continue;
+                        }
+                    };
                     execution_bindings.insert(
                         message_id.clone(),
                         ManagedExecutionBinding {
@@ -4568,6 +4745,7 @@ fn launch_session_with_status(
                             revision,
                             approval_requests: 0,
                             last_approval_request: None,
+                            remote_result,
                         },
                     );
                     if let Some(identity) = transport.provider_identity() {
@@ -4604,6 +4782,50 @@ fn launch_session_with_status(
                     ..
                 }) => {
                     let message_id = message.id.clone();
+                    let remote_result = match remote_result_for_delivery(
+                        remote_result_context.as_ref(),
+                        &message,
+                        execution
+                            .as_ref()
+                            .map(|context| (context.execution_id.as_str(), context.generation)),
+                        &execution_bindings,
+                    ) {
+                        Ok(reservation) => reservation,
+                        Err(reason) => {
+                            let rejection = match &execution {
+                                Some(context) => WrapperToDaemon::DeliveryRejected {
+                                    id: message_id,
+                                    execution_id: Some(context.execution_id.clone()),
+                                    generation: Some(context.generation),
+                                    reason,
+                                },
+                                None => bound_delivery_rejection(
+                                    &execution_bindings,
+                                    message_id,
+                                    reason,
+                                ),
+                            };
+                            send_wrapper_message(&writer, rejection);
+                            continue;
+                        }
+                    };
+                    if remote_result.is_some()
+                        && execution_bindings.get(&message_id).is_some_and(|binding| {
+                            matches!(
+                                binding.state.as_str(),
+                                "completed" | "failed" | "interrupted" | "unreachable"
+                            )
+                        })
+                    {
+                        if execution.as_ref().is_some_and(|next| {
+                            execution_bindings.get(&message_id).is_some_and(|old| {
+                                old.execution_id != next.execution_id
+                                    || old.generation != next.generation
+                            })
+                        }) {
+                            execution_bindings.remove(&message_id);
+                        }
+                    }
                     if bind_idempotent_delivery_execution(
                         &mut execution_bindings,
                         &message_id,
@@ -4613,6 +4835,11 @@ fn launch_session_with_status(
                     ) && let Some(identity) = transport.provider_identity()
                     {
                         publish_provider_context(&writer, &execution_bindings, &identity);
+                    }
+                    if let Some(binding) = execution_bindings.get_mut(&message_id) {
+                        if remote_result.is_some() {
+                            binding.remote_result = remote_result;
+                        }
                     }
                     match idempotent_deliveries.receive(
                         delivery_id,
@@ -4800,7 +5027,7 @@ fn launch_session_with_status(
                 &mut idempotent_deliveries,
                 &mut execution_bindings,
                 &mut redaction_lease,
-                Some(&profile_ledger_path(socket)),
+                profile_ledger_path(socket).as_deref(),
                 interactive.is_none(),
                 Some(&child_requests),
                 Some(transport.is_busy()),
@@ -4982,7 +5209,7 @@ fn launch_session_with_status(
         &mut idempotent_deliveries,
         &mut execution_bindings,
         &mut redaction_lease,
-        Some(&profile_ledger_path(socket)),
+        profile_ledger_path(socket).as_deref(),
         interactive.is_none(),
         Some(&child_requests),
         Some(transport.is_busy()),
@@ -5876,6 +6103,7 @@ struct ManagedExecutionBinding {
     revision: u64,
     approval_requests: u8,
     last_approval_request: Option<String>,
+    remote_result: Option<crate::remote_worker::WorkerResultReservation>,
 }
 
 fn bind_idempotent_delivery_execution(
@@ -5899,6 +6127,7 @@ fn bind_idempotent_delivery_execution(
             revision: execution.revision,
             approval_requests: 0,
             last_approval_request: None,
+            remote_result: None,
         });
     true
 }
@@ -5997,7 +6226,10 @@ fn publish_execution_transition(
     if matches!(
         next_state,
         "interrupted" | "completed" | "failed" | "unreachable"
-    ) {
+    ) && binding.remote_result.is_none()
+    {
+        // Garder la réservation terminée empêche un événement tardif de
+        // devenir une réponse Send locale, même après arrêt du tour.
         bindings.remove(message_id);
     }
 }
@@ -6619,6 +6851,25 @@ fn forward_managed_events_with_redaction(
                         redact_managed_text(redaction, "provider_error", std::mem::take(detail));
                 }
                 let message_id = message.id.clone();
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                    warn!("terminal fournisseur ignoré: message hors exécution active");
+                    continue;
+                }
+                let remote_published = if matches!(&terminal, ManagedTerminal::Completed)
+                    && automatic_reply
+                    && message.reply
+                    && !response.is_empty()
+                {
+                    match publish_remote_final(bindings.get(&message_id), &message, &response) {
+                        Ok(published) => published,
+                        Err(error) => {
+                            warn!("{error}");
+                            return true;
+                        }
+                    }
+                } else {
+                    false
+                };
                 if let Some(requests) = child_requests {
                     let mut requests = requests.lock().unwrap_or_else(|e| e.into_inner());
                     let mut closed = Vec::new();
@@ -6719,7 +6970,10 @@ fn forward_managed_events_with_redaction(
                 publish_execution_transition(writer, bindings, &message_id, next_state, reason);
                 match terminal {
                     ManagedTerminal::Completed
-                        if automatic_reply && message.reply && !response.is_empty() =>
+                        if automatic_reply
+                            && message.reply
+                            && !response.is_empty()
+                            && !remote_published =>
                     {
                         let mut reply =
                             bridget_core::BridgetMessage::new(my_name, &message.from, response);
@@ -7940,6 +8194,7 @@ mod delegated_runtime_tests {
                 execution_path: "codex_app_server".to_string(),
                 approval_requests: 0,
                 last_approval_request: None,
+                remote_result: None,
             },
         );
         let reference = format!("sha256:{}", "b".repeat(64));
@@ -7991,6 +8246,7 @@ mod delegated_runtime_tests {
                 execution_path: "codex_app_server".to_string(),
                 approval_requests: 0,
                 last_approval_request: None,
+                remote_result: None,
             },
         );
         let mut message = bridget_core::BridgetMessage::new("humain", "child-2", "travaille");
@@ -11101,6 +11357,7 @@ mod reconnect_tests {
                 state: "starting".to_string(),
                 approval_requests: 0,
                 last_approval_request: None,
+                remote_result: None,
                 revision: 0,
             },
         );
@@ -11202,6 +11459,7 @@ mod reconnect_tests {
                 state: "running".to_string(),
                 approval_requests: 0,
                 last_approval_request: None,
+                remote_result: None,
                 revision: 1,
             },
         )]);
@@ -11251,6 +11509,7 @@ mod reconnect_tests {
                 revision: 1,
                 approval_requests: 0,
                 last_approval_request: None,
+                remote_result: None,
             },
         )]);
 
@@ -11523,6 +11782,7 @@ mod native_child_requests155_tests {
                 state: "waiting_user_input".into(),
                 approval_requests: 0,
                 last_approval_request: None,
+                remote_result: None,
             },
         );
         (
@@ -12095,5 +12355,249 @@ mod native_child_requests155_tests {
             assert_eq!(requests.lock().unwrap().settled.len(), 1);
             assert!(requests.lock().unwrap().waiting.is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod remote162_result_tests {
+    use super::*;
+    use crate::remote_worker::{WorkerResultReservation, WorkerStore};
+    use bridget_transport::protocol::{
+        RemotePlacement, WorkerCommandIdentity, WorkerIdentity, WorkerResultIdentity,
+        WorkerResultSlot,
+    };
+
+    struct Fixture {
+        root: PathBuf,
+        context: WorkerResultContext,
+        reservation: WorkerResultReservation,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root =
+                std::env::temp_dir().join(format!("bridget-wrapper162-{}", uuid::Uuid::new_v4()));
+            crate::environment::ensure_private_directory(&root).unwrap();
+            let context = WorkerResultContext {
+                worker: WorkerIdentity {
+                    machine_id: "cartae".into(),
+                    worker_id: "worker-cartae".into(),
+                    provisioning_revision: 1,
+                },
+                command: WorkerCommandIdentity {
+                    command_id: "command162".into(),
+                    task_id: "task162".into(),
+                    instance_id: "instance162".into(),
+                    generation: 1,
+                },
+                store_root: root.join("worker"),
+            };
+            let store = WorkerStore::open(&context.store_root, context.worker.clone()).unwrap();
+            let placement = RemotePlacement {
+                machine_id: "cartae".into(),
+                worker_id: "worker-cartae".into(),
+                provisioning_revision: 1,
+                project_id: "project162".into(),
+                mapping_revision: 1,
+                origin_host: "mac".into(),
+                origin_cwd: "/project".into(),
+                source_root_identity: "repo".into(),
+                relative_cwd: ".".into(),
+                execution_cwd: "/project".into(),
+                base_commit: None,
+                definition_digest: "a".repeat(64),
+                permission_digest: "b".repeat(64),
+            };
+            store
+                .reserve_command(&context.command, &"c".repeat(64), &placement, 1000, 100)
+                .unwrap();
+            let slot = WorkerResultSlot {
+                identity: WorkerResultIdentity {
+                    command: context.command.clone(),
+                    mission_id: "mission162".into(),
+                    round: 0,
+                    execution_id: "execution162".into(),
+                    execution_generation: 1,
+                },
+                admission_digest: "d".repeat(64),
+            };
+            let reservation = store.reserve_result_slot(&slot, 101).unwrap();
+            Self {
+                root,
+                context,
+                reservation,
+            }
+        }
+        fn message(&self) -> bridget_core::BridgetMessage {
+            let mut message = bridget_core::BridgetMessage::new("parent", "child", "mission");
+            message.id = "mission162".into();
+            message.reply = true;
+            message
+        }
+        fn binding(&self) -> ManagedExecutionBinding {
+            ManagedExecutionBinding {
+                execution_id: "execution162".into(),
+                provider_kind: "codex".into(),
+                execution_path: "codex_app_server".into(),
+                generation: 1,
+                state: "running".into(),
+                revision: 1,
+                approval_requests: 0,
+                last_approval_request: None,
+                remote_result: Some(self.reservation.clone()),
+            }
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn remote162_wrapper_slot_absent_refuse_avant_injection() {
+        let fixture = Fixture::new();
+        let mut message = fixture.message();
+        assert!(
+            remote_result_for_delivery(
+                Some(&fixture.context),
+                &message,
+                Some(("execution162", 1)),
+                &HashMap::new()
+            )
+            .unwrap()
+            .is_some()
+        );
+        message.id = "mission-non-reservee".into();
+        assert!(
+            remote_result_for_delivery(
+                Some(&fixture.context),
+                &message,
+                Some(("execution162", 1)),
+                &HashMap::new()
+            )
+            .is_err()
+        );
+        assert!(
+            remote_result_for_delivery(
+                Some(&fixture.context),
+                &fixture.message(),
+                None,
+                &HashMap::new()
+            )
+            .is_err()
+        );
+        message.origin = Some(bridget_core::MessageOrigin::System);
+        assert!(
+            remote_result_for_delivery(Some(&fixture.context), &message, None, &HashMap::new())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn remote162_wrapper_blob_sans_send_apres_arret_worker() {
+        let fixture = Fixture::new(); // WorkerStore déjà fermé, wrapper reste producteur.
+        let (stream, peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        let mut tracker =
+            IdempotentDeliveryTracker::open_at(&fixture.root.join("receipts"), "instance162")
+                .unwrap();
+        let mut bindings = HashMap::from([("mission162".into(), fixture.binding())]);
+        let event = ManagedEvent::internal(
+            bridget_transport::ManagedEventSource::CodexAppServer,
+            vec![],
+            ManagedEventKind::TurnFinished {
+                message: fixture.message(),
+                response: "résultat durable".into(),
+                terminal: ManagedTerminal::Completed,
+            },
+        );
+        assert!(!forward_managed_events(
+            &writer,
+            "child",
+            vec![event],
+            &mut tracker,
+            &mut bindings
+        ));
+        let repeated = ManagedEvent::internal(
+            bridget_transport::ManagedEventSource::CodexAppServer,
+            vec![],
+            ManagedEventKind::TurnFinished {
+                message: fixture.message(),
+                response: "résultat durable".into(),
+                terminal: ManagedTerminal::Completed,
+            },
+        );
+        assert!(!forward_managed_events(
+            &writer,
+            "child",
+            vec![repeated],
+            &mut tracker,
+            &mut bindings
+        ));
+        drop(writer);
+        let frames: Vec<WrapperToDaemon> = BufReader::new(peer)
+            .lines()
+            .map(|line| decode(&line.unwrap()).unwrap())
+            .collect();
+        assert!(!frames.iter().any(|frame| matches!(
+            frame,
+            WrapperToDaemon::Send(_) | WrapperToDaemon::SendIdempotent { .. }
+        )));
+        let store =
+            WorkerStore::open(&fixture.context.store_root, fixture.context.worker.clone()).unwrap();
+        let result = store
+            .read_result(&fixture.reservation.slot.identity)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.body, "résultat durable");
+        assert_eq!(result.identity, fixture.reservation.slot.identity);
+        result.validate().unwrap();
+    }
+
+    #[test]
+    fn remote162_wrapper_rejeu_stable_et_divergence_sans_remplacement() {
+        let fixture = Fixture::new();
+        let binding = fixture.binding();
+        assert!(publish_remote_final(Some(&binding), &fixture.message(), "un résultat").unwrap());
+        let first = std::fs::read(&fixture.reservation.blob_path).unwrap();
+        assert!(publish_remote_final(Some(&binding), &fixture.message(), "un résultat").unwrap());
+        assert_eq!(
+            first,
+            std::fs::read(&fixture.reservation.blob_path).unwrap()
+        );
+        assert!(publish_remote_final(Some(&binding), &fixture.message(), "divergence").is_err());
+        assert_eq!(
+            first,
+            std::fs::read(&fixture.reservation.blob_path).unwrap()
+        );
+        assert!(!publish_remote_final(None, &fixture.message(), "local").unwrap());
+    }
+
+    #[test]
+    fn remote162_wrapper_contexte_et_generation_etrangers_refuses() {
+        let fixture = Fixture::new();
+        assert!(
+            fixture
+                .context
+                .validate_for_instance("autre-instance")
+                .is_err()
+        );
+        let mut forged = fixture.context.clone();
+        forged.command.instance_id = "../escape".into();
+        assert!(forged.validate_for_instance("../escape").is_err());
+        let mut binding = fixture.binding();
+        binding.generation = 2;
+        assert!(publish_remote_final(Some(&binding), &fixture.message(), "résultat").is_err());
+        let bindings = HashMap::from([("mission162".into(), binding)]);
+        assert!(
+            remote_result_for_delivery(
+                Some(&fixture.context),
+                &fixture.message(),
+                Some(("execution162", 1)),
+                &bindings
+            )
+            .is_err()
+        );
     }
 }

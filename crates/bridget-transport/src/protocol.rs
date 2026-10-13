@@ -35,6 +35,7 @@ pub enum ConnectionRole {
     Attach,
     Client,
     Service,
+    Worker,
 }
 
 /// Changement de présentation uniquement : l'identité vient de la connexion.
@@ -192,6 +193,7 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    RemoteWorkerV1,
     HumanLineageViewV1,
     HumanLineageWatchV1,
     HumanLineageCancelV1,
@@ -2157,6 +2159,18 @@ pub enum NativeDelegationRequest {
     /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil.
     CallerScope {},
     Delegate {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        machine_id: Option<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_present_optional"
+        )]
+        project_id: Option<String>,
         request_id: String,
         agent_type: String,
         model: String,
@@ -2370,6 +2384,838 @@ impl IdentityCredential {
 impl std::fmt::Debug for IdentityCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("IdentityCredential([REDACTED])")
+    }
+}
+
+/// Contrat technique distant162. Le framing JSONL existant reste la frontière
+/// de lecture ; ses consommateurs appliquent cette borne plus basse au worker.
+pub const REMOTE_WORKER_VERSION: u16 = 1;
+pub const MAX_WORKER_FRAME_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_WORKER_RESULT_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_WORKER_RESULT_BODY_BYTES: usize = 262_144;
+pub const MAX_WORKER_STORE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_WORKER_STORE_ENTRIES: usize = 4096;
+pub const WORKER_PREPARE_TTL_SECS: i64 = 30;
+pub const WORKER_RELEASE_TTL_SECS: i64 = 5;
+pub const WORKER_HEARTBEAT_SECS: u64 = 10;
+pub const WORKER_STALE_SECS: i64 = 30;
+pub const WORKER_RECEIPT_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+const MAX_WORKER_ATOM_BYTES: usize = 256;
+const MAX_WORKER_PATH_BYTES: usize = 4096;
+const MAX_WORKER_JOURNAL_FRAGMENTS: usize = 200;
+/// Type externe, nom du champ et LF ; ces deux enveloppes restent sous 64 octets.
+const WORKER_FRAME_ENVELOPE_RESERVE: usize = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerRefusal {
+    UnsupportedVersion,
+    InvalidEnvelope,
+    CapabilityRequired,
+    Unauthorized,
+    StaleConnection,
+    PlacementMismatch,
+    CommandMismatch,
+    DefinitionChanged,
+    PermissionsChanged,
+    PrepareExpired,
+    ReleaseExpired,
+    ResourceLimit,
+    StoreUnavailable,
+    WorkerUnavailable,
+    JournalUnavailable,
+    ResultConflict,
+    UnknownExecution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerIdentity {
+    pub machine_id: String,
+    pub worker_id: String,
+    pub provisioning_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerHello {
+    pub version: u16,
+    pub identity: WorkerIdentity,
+    pub credential: IdentityCredential,
+    pub build: String,
+    pub capability: ClientCapability,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerAccepted {
+    pub version: u16,
+    pub identity: WorkerIdentity,
+    /// Attribuée uniquement par le maître après authentification.
+    pub connection_epoch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemotePlacement {
+    pub machine_id: String,
+    pub worker_id: String,
+    pub provisioning_revision: u64,
+    pub project_id: String,
+    pub mapping_revision: u64,
+    pub origin_host: String,
+    pub origin_cwd: String,
+    pub source_root_identity: String,
+    pub relative_cwd: String,
+    pub execution_cwd: String,
+    pub base_commit: Option<String>,
+    pub definition_digest: String,
+    pub permission_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerCommandIdentity {
+    pub command_id: String,
+    pub task_id: String,
+    pub instance_id: String,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResultIdentity {
+    pub command: WorkerCommandIdentity,
+    pub mission_id: String,
+    pub round: u32,
+    pub execution_id: String,
+    pub execution_generation: u64,
+}
+
+/// Préparation avant réservation Fleet : aucune empreinte enfant inventée.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerPrepare {
+    pub machine_id: String,
+    pub project_id: String,
+    pub provisioning_revision: u64,
+    pub mapping_revision: u64,
+    pub origin_host: String,
+    pub origin_cwd: String,
+    pub source_root: String,
+    pub remote_root: String,
+    pub source_root_identity: String,
+    pub relative_cwd: String,
+    pub base_commit: Option<String>,
+    pub agent_type: String,
+    pub model: String,
+    pub effort: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
+    pub posture: Option<SpawnPosture>,
+    pub parent: ProviderPermissions,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
+    pub workspace: Option<WorkspaceRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerPrepared {
+    pub placement: RemotePlacement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<serde_json::Value>,
+    pub token: String,
+    pub definition: ResolvedAgentDefinition,
+    /// Politique projetée existante ; pas un fait fournisseur avant spawn.
+    pub child_policy: serde_json::Value,
+    pub effective_posture: SpawnPosture,
+    pub prepared_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerStart {
+    pub prepared_token: String,
+    pub child_id: String,
+    pub mission_id: String,
+    pub forward_child_requests: bool,
+    pub placement: RemotePlacement,
+    pub definition: ResolvedAgentDefinition,
+    /// Politique projetée existante ; pas un fait fournisseur avant spawn.
+    pub child_policy: serde_json::Value,
+    pub effective_posture: SpawnPosture,
+    pub deadline_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerReleasePermit {
+    pub permit_id: String,
+    pub command_digest: String,
+    pub permission_revision: u64,
+    pub mapping_revision: u64,
+    pub provisioning_revision: u64,
+    pub issued_at: i64,
+    pub expires_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResultSlot {
+    pub identity: WorkerResultIdentity,
+    /// Empreinte de l'admission, jamais celle d'un résultat encore inconnu.
+    pub admission_digest: String,
+}
+
+/// Blob immuable écrit par le seul wrapper ; aucune preuve ne dépend de la
+/// survie de sa connexion après publication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteResultEnvelope {
+    pub worker: WorkerIdentity,
+    pub identity: WorkerResultIdentity,
+    pub message_id: String,
+    pub body: String,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteResultDiscardReason {
+    Cancelled,
+    StaleRound,
+    ObsoleteExecution,
+    Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteResultDeferredReason {
+    QuotaHold,
+    ExecutionSettlementPending,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RemoteResultDisposition {
+    Accepted {},
+    DiscardedTerminal {
+        reason: RemoteResultDiscardReason,
+    },
+    RejectedConflict {},
+    Deferred {
+        reason: RemoteResultDeferredReason,
+        retry_after: i64,
+    },
+}
+
+impl RemoteResultDisposition {
+    pub fn is_final(&self) -> bool {
+        !matches!(self, Self::Deferred { .. })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResultDisposition {
+    pub identity: WorkerResultIdentity,
+    pub result_digest: String,
+    pub disposition: RemoteResultDisposition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerCommandPhase {
+    Reserved,
+    Marked,
+    ReleaseAuthorized,
+    Released,
+    Terminal,
+    Refused,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerObservation {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
+    pub workspace: Option<serde_json::Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_optional"
+    )]
+    pub permission_digest: Option<String>,
+    pub phase: WorkerCommandPhase,
+    #[serde(default)]
+    pub native_ready: bool,
+    pub exit_code: Option<i32>,
+    pub observed_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerJournalFragment {
+    pub seq: u64,
+    pub offset: u64,
+    #[serde(rename = "final")]
+    pub final_fragment: bool,
+    #[serde(with = "base64_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerSlotClosureProof {
+    NeverDispatched,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkerCancelScope {
+    Command {},
+    /// La fermeture d'un slot ne tue jamais le wrapper réutilisé.
+    ResultSlot {
+        slot: WorkerResultSlot,
+        proof: WorkerSlotClosureProof,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkerRequestOperation {
+    Prepare {
+        prepare: WorkerPrepare,
+    },
+    ParentProof {
+        parent: ProviderPermissions,
+        expected_revision: u64,
+    },
+    Start {
+        start: WorkerStart,
+    },
+    ReserveResultSlot {
+        slot: WorkerResultSlot,
+    },
+    Release {
+        permit: WorkerReleasePermit,
+    },
+    Reconcile {},
+    Cancel {
+        target: WorkerCancelScope,
+    },
+    JournalPage {
+        after_seq: u64,
+        limit: u32,
+    },
+    ResultDisposition {
+        result: WorkerResultDisposition,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WorkerResponseOperation {
+    Prepared {
+        prepared: WorkerPrepared,
+    },
+    ParentProof {
+        parent: ProviderPermissions,
+        permission_digest: String,
+    },
+    ReadyToRelease {
+        ready_at: i64,
+    },
+    ResultSlotReserved {
+        slot: WorkerResultSlot,
+        slot_id: String,
+    },
+    Released {},
+    Observation {
+        observation: WorkerObservation,
+    },
+    JournalPage {
+        fragments: Vec<WorkerJournalFragment>,
+        through_seq: Option<u64>,
+        more: bool,
+    },
+    FinalResult {
+        result: RemoteResultEnvelope,
+    },
+    DispositionRecorded {
+        result: WorkerResultDisposition,
+    },
+    Rejected {
+        reason: WorkerRefusal,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRequest {
+    pub version: u16,
+    pub correlation_id: String,
+    pub connection_epoch: String,
+    pub worker: WorkerIdentity,
+    pub command: WorkerCommandIdentity,
+    pub request: WorkerRequestOperation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerResponse {
+    pub version: u16,
+    pub correlation_id: String,
+    pub connection_epoch: String,
+    pub worker: WorkerIdentity,
+    pub command: WorkerCommandIdentity,
+    pub response: WorkerResponseOperation,
+}
+
+fn worker_atom(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && !value.chars().any(bridget_core::is_disallowed_control)
+}
+
+fn worker_revision(value: u64) -> bool {
+    value > 0 && value <= HUMAN_LINEAGE_MAX_SEQ
+}
+
+fn worker_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn worker_absolute_path(value: &str) -> bool {
+    worker_atom(value, MAX_WORKER_PATH_BYTES)
+        && std::path::Path::new(value).is_absolute()
+        && !std::path::Path::new(value)
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
+fn worker_relative_path(value: &str) -> bool {
+    // "." désigne la racine ; aucun composant parent ni préfixe absolu.
+    worker_atom(value, MAX_WORKER_PATH_BYTES)
+        && !std::path::Path::new(value).is_absolute()
+        && std::path::Path::new(value).components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
+fn worker_base_commit(value: Option<&str>) -> bool {
+    value.is_none_or(|s| {
+        matches!(s.len(), 40 | 64)
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
+}
+
+fn worker_require(valid: bool) -> Result<(), WorkerRefusal> {
+    valid.then_some(()).ok_or(WorkerRefusal::InvalidEnvelope)
+}
+
+fn worker_serialized_size<T: Serialize>(value: &T, max: usize) -> Result<(), WorkerRefusal> {
+    let size = serde_json::to_vec(value)
+        .map_err(|_| WorkerRefusal::InvalidEnvelope)?
+        .len();
+    if size > max {
+        Err(WorkerRefusal::ResourceLimit)
+    } else {
+        Ok(())
+    }
+}
+
+impl WorkerIdentity {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            worker_atom(&self.machine_id, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.worker_id, MAX_WORKER_ATOM_BYTES)
+                && worker_revision(self.provisioning_revision),
+        )
+    }
+}
+
+impl WorkerHello {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        if self.version != REMOTE_WORKER_VERSION {
+            return Err(WorkerRefusal::UnsupportedVersion);
+        }
+        if self.capability != ClientCapability::RemoteWorkerV1 {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        self.identity.validate()?;
+        worker_require(
+            worker_atom(&self.build, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(
+                    self.credential.expose_for_attestation(),
+                    MAX_WORKER_PATH_BYTES,
+                ),
+        )
+    }
+}
+
+impl WorkerAccepted {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        if self.version != REMOTE_WORKER_VERSION {
+            return Err(WorkerRefusal::UnsupportedVersion);
+        }
+        self.identity.validate()?;
+        worker_require(worker_atom(&self.connection_epoch, MAX_WORKER_ATOM_BYTES))
+    }
+}
+
+impl RemotePlacement {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            [
+                &self.machine_id,
+                &self.worker_id,
+                &self.project_id,
+                &self.origin_host,
+                &self.source_root_identity,
+            ]
+            .iter()
+            .all(|s| worker_atom(s, MAX_WORKER_ATOM_BYTES))
+                && worker_revision(self.provisioning_revision)
+                && worker_revision(self.mapping_revision)
+                && worker_absolute_path(&self.origin_cwd)
+                && worker_absolute_path(&self.execution_cwd)
+                && worker_relative_path(&self.relative_cwd)
+                && worker_base_commit(self.base_commit.as_deref())
+                && worker_digest(&self.definition_digest)
+                && worker_digest(&self.permission_digest),
+        )
+    }
+
+    pub fn matches_worker(&self, worker: &WorkerIdentity) -> bool {
+        self.machine_id == worker.machine_id
+            && self.worker_id == worker.worker_id
+            && self.provisioning_revision == worker.provisioning_revision
+    }
+}
+
+impl WorkerCommandIdentity {
+    /// Prepare précède Fleet : aucune identité de processus n'est encore réservée.
+    pub fn validate_preparation(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            worker_atom(&self.command_id, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.task_id, MAX_WORKER_ATOM_BYTES)
+                && self.instance_id.is_empty()
+                && self.generation == 0,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            [&self.command_id, &self.task_id, &self.instance_id]
+                .iter()
+                .all(|s| worker_atom(s, MAX_WORKER_ATOM_BYTES))
+                && worker_revision(self.generation),
+        )
+    }
+}
+
+impl WorkerResultIdentity {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        self.command.validate()?;
+        worker_require(
+            worker_atom(&self.mission_id, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.execution_id, MAX_WORKER_ATOM_BYTES)
+                && self.round <= 8
+                && worker_revision(self.execution_generation),
+        )
+    }
+}
+
+impl WorkerResultSlot {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        self.identity.validate()?;
+        worker_require(worker_digest(&self.admission_digest))
+    }
+}
+
+impl RemoteResultEnvelope {
+    /// Empreinte de tous les champs immuables, sauf l'empreinte elle-même.
+    pub fn canonical_digest(&self) -> Result<String, serde_json::Error> {
+        use sha2::{Digest, Sha256};
+        let bytes =
+            serde_json::to_vec(&(&self.worker, &self.identity, &self.message_id, &self.body))?;
+        Ok(format!("{:x}", Sha256::digest(bytes)))
+    }
+
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        self.worker.validate()?;
+        self.identity.validate()?;
+        worker_require(
+            worker_atom(&self.message_id, MAX_WORKER_ATOM_BYTES)
+                && !self.body.trim().is_empty()
+                && self.body.len() <= MAX_WORKER_RESULT_BODY_BYTES
+                && worker_digest(&self.digest),
+        )?;
+        worker_serialized_size(self, MAX_WORKER_RESULT_ENVELOPE_BYTES)?;
+        worker_require(
+            self.canonical_digest()
+                .map_err(|_| WorkerRefusal::InvalidEnvelope)?
+                == self.digest,
+        )
+    }
+}
+
+impl WorkerResultDisposition {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        self.identity.validate()?;
+        worker_require(
+            worker_digest(&self.result_digest)
+                && !matches!(self.disposition, RemoteResultDisposition::Deferred { retry_after, .. } if retry_after < 0),
+        )
+    }
+}
+
+impl WorkerPrepare {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            [
+                &self.machine_id,
+                &self.project_id,
+                &self.origin_host,
+                &self.source_root_identity,
+                &self.agent_type,
+                &self.model,
+            ]
+            .iter()
+            .all(|s| worker_atom(s, MAX_WORKER_ATOM_BYTES))
+                && self
+                    .effort
+                    .as_ref()
+                    .is_none_or(|s| worker_atom(s, MAX_WORKER_ATOM_BYTES))
+                && worker_revision(self.provisioning_revision)
+                && worker_revision(self.mapping_revision)
+                && [&self.origin_cwd, &self.source_root, &self.remote_root]
+                    .iter()
+                    .all(|s| worker_absolute_path(s))
+                && worker_relative_path(&self.relative_cwd)
+                && worker_base_commit(self.base_commit.as_deref())
+                && std::path::Path::new(&self.origin_cwd).starts_with(&self.parent.cwd),
+        )?;
+        if let Some(WorkspaceRequest::Worktree { base_ref, branch }) = &self.workspace {
+            worker_require([base_ref, branch].iter().all(|value| {
+                value
+                    .as_ref()
+                    .is_none_or(|s| worker_atom(s, MAX_WORKER_ATOM_BYTES))
+            }))?;
+        }
+        validate_permissions(&self.parent, self.parent.source == "provider_turn")
+            .map_err(|_| WorkerRefusal::PermissionsChanged)
+    }
+}
+
+impl WorkerStart {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        self.placement.validate()?;
+        worker_require(
+            worker_atom(&self.prepared_token, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.child_id, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.mission_id, MAX_WORKER_ATOM_BYTES)
+                && self.deadline_at >= 0
+                && self.definition.digest == self.placement.definition_digest
+                && self.child_policy.is_object(),
+        )?;
+        worker_serialized_size(&self.child_policy, 64 * 1024)
+    }
+}
+
+impl WorkerReleasePermit {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(
+            worker_atom(&self.permit_id, MAX_WORKER_ATOM_BYTES)
+                && worker_digest(&self.command_digest)
+                && worker_revision(self.permission_revision)
+                && worker_revision(self.mapping_revision)
+                && worker_revision(self.provisioning_revision)
+                && self.issued_at >= 0
+                && self.expires_at > self.issued_at
+                && self.expires_at.saturating_sub(self.issued_at) <= WORKER_RELEASE_TTL_SECS,
+        )
+    }
+}
+
+impl WorkerRequest {
+    /// Valide le contrat, pas l'autorité : le maître/worker doit encore comparer
+    /// connexion, canon durable, permissions et délais avec ses propres faits.
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        if self.version != REMOTE_WORKER_VERSION {
+            return Err(WorkerRefusal::UnsupportedVersion);
+        }
+        self.worker.validate()?;
+        if matches!(&self.request, WorkerRequestOperation::Prepare { .. }) {
+            self.command.validate_preparation()?;
+        } else {
+            self.command.validate()?;
+        }
+        worker_require(
+            worker_atom(&self.correlation_id, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.connection_epoch, MAX_WORKER_ATOM_BYTES),
+        )?;
+        worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
+        match &self.request {
+            WorkerRequestOperation::Prepare { prepare } => {
+                prepare.validate()?;
+                worker_require(
+                    prepare.machine_id == self.worker.machine_id
+                        && prepare.provisioning_revision == self.worker.provisioning_revision,
+                )
+            }
+            WorkerRequestOperation::ParentProof {
+                parent,
+                expected_revision,
+            } => {
+                worker_require(parent.revision == *expected_revision)?;
+                validate_permissions(parent, parent.source == "provider_turn")
+                    .map_err(|_| WorkerRefusal::PermissionsChanged)
+            }
+            WorkerRequestOperation::Start { start } => {
+                start.validate()?;
+                worker_require(start.placement.matches_worker(&self.worker))
+            }
+            WorkerRequestOperation::ReserveResultSlot { slot } => {
+                slot.validate()?;
+                worker_require(slot.identity.command == self.command)
+            }
+            WorkerRequestOperation::Release { permit } => {
+                permit.validate()?;
+                worker_require(permit.provisioning_revision == self.worker.provisioning_revision)
+            }
+            WorkerRequestOperation::Cancel {
+                target: WorkerCancelScope::ResultSlot { slot, .. },
+            } => {
+                slot.validate()?;
+                worker_require(slot.identity.command == self.command)
+            }
+            WorkerRequestOperation::JournalPage { after_seq, limit } => worker_require(
+                *after_seq <= HUMAN_LINEAGE_MAX_SEQ
+                    && *limit > 0
+                    && *limit as usize <= MAX_WORKER_JOURNAL_FRAGMENTS,
+            ),
+            WorkerRequestOperation::ResultDisposition { result } => {
+                result.validate()?;
+                worker_require(result.identity.command == self.command)
+            }
+            WorkerRequestOperation::Reconcile {} | WorkerRequestOperation::Cancel { .. } => Ok(()),
+        }
+    }
+}
+
+impl WorkerResponse {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        if self.version != REMOTE_WORKER_VERSION {
+            return Err(WorkerRefusal::UnsupportedVersion);
+        }
+        self.worker.validate()?;
+        if matches!(&self.response, WorkerResponseOperation::Prepared { .. })
+            || (matches!(&self.response, WorkerResponseOperation::Rejected { .. })
+                && self.command.instance_id.is_empty()
+                && self.command.generation == 0)
+        {
+            self.command.validate_preparation()?;
+        } else {
+            self.command.validate()?;
+        }
+        worker_require(
+            worker_atom(&self.correlation_id, MAX_WORKER_ATOM_BYTES)
+                && worker_atom(&self.connection_epoch, MAX_WORKER_ATOM_BYTES),
+        )?;
+        worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
+        match &self.response {
+            WorkerResponseOperation::Prepared { prepared } => {
+                prepared.placement.validate()?;
+                worker_require(
+                    prepared.placement.matches_worker(&self.worker)
+                        && worker_atom(&prepared.token, MAX_WORKER_ATOM_BYTES)
+                        && prepared.prepared_at >= 0
+                        && prepared.definition.digest == prepared.placement.definition_digest
+                        && prepared.child_policy.is_object(),
+                )?;
+                worker_serialized_size(&prepared.workspace, 64 * 1024)?;
+                worker_serialized_size(&prepared.child_policy, 64 * 1024)
+            }
+            WorkerResponseOperation::ParentProof {
+                parent,
+                permission_digest,
+            } => {
+                worker_require(worker_digest(permission_digest))?;
+                validate_permissions(parent, parent.source == "provider_turn")
+                    .map_err(|_| WorkerRefusal::PermissionsChanged)
+            }
+            WorkerResponseOperation::ReadyToRelease { ready_at } => worker_require(*ready_at >= 0),
+            WorkerResponseOperation::ResultSlotReserved { slot, slot_id } => {
+                slot.validate()?;
+                worker_require(
+                    slot.identity.command == self.command
+                        && worker_atom(slot_id, MAX_WORKER_ATOM_BYTES),
+                )
+            }
+            WorkerResponseOperation::Observation { observation } => {
+                worker_serialized_size(&observation.workspace, 64 * 1024)?;
+                worker_require(
+                    observation.observed_at >= 0
+                        && observation
+                            .workspace
+                            .as_ref()
+                            .is_none_or(serde_json::Value::is_object)
+                        && observation
+                            .permission_digest
+                            .as_ref()
+                            .is_none_or(|digest| worker_digest(digest))
+                        && (observation.exit_code.is_none()
+                            || observation.phase == WorkerCommandPhase::Terminal),
+                )
+            }
+            WorkerResponseOperation::JournalPage {
+                fragments,
+                through_seq,
+                ..
+            } => worker_require(
+                fragments.len() <= MAX_WORKER_JOURNAL_FRAGMENTS
+                    && through_seq.is_none_or(|s| s <= HUMAN_LINEAGE_MAX_SEQ)
+                    && fragments.iter().all(|f| {
+                        f.seq <= HUMAN_LINEAGE_MAX_SEQ
+                            && f.offset <= HUMAN_LINEAGE_MAX_SEQ
+                            && f.bytes.len() <= MAX_ATTACH_FRAGMENT_BYTES
+                    }),
+            ),
+            WorkerResponseOperation::FinalResult { result } => {
+                result.validate()?;
+                worker_require(
+                    result.worker == self.worker && result.identity.command == self.command,
+                )
+            }
+            WorkerResponseOperation::DispositionRecorded { result } => {
+                result.validate()?;
+                worker_require(result.identity.command == self.command)
+            }
+            WorkerResponseOperation::Released {} | WorkerResponseOperation::Rejected { .. } => {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -3104,6 +3950,13 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    /// Authentification worker distincte du rôle Service et du Register agent.
+    WorkerHello {
+        hello: WorkerHello,
+    },
+    WorkerResponse {
+        response: WorkerResponse,
+    },
     WakeRequest {
         request: WakeRequest,
     },
@@ -4106,6 +4959,15 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    WorkerAccepted {
+        accepted: WorkerAccepted,
+    },
+    WorkerRejected {
+        reason: WorkerRefusal,
+    },
+    WorkerRequest {
+        request: WorkerRequest,
+    },
     WakeResult {
         result: WakeResult,
     },
@@ -5337,6 +6199,297 @@ pub struct RequestInfo {
 
 #[cfg(test)]
 mod tests {
+    fn worker162_identity() -> WorkerIdentity {
+        WorkerIdentity {
+            machine_id: "cartae".into(),
+            worker_id: "worker-cartae".into(),
+            provisioning_revision: 1,
+        }
+    }
+
+    fn worker162_command() -> WorkerCommandIdentity {
+        WorkerCommandIdentity {
+            command_id: "command".into(),
+            task_id: "task".into(),
+            instance_id: "instance".into(),
+            generation: 1,
+        }
+    }
+
+    fn worker162_result_identity() -> WorkerResultIdentity {
+        WorkerResultIdentity {
+            command: worker162_command(),
+            mission_id: "mission".into(),
+            round: 0,
+            execution_id: "execution-mission".into(),
+            execution_generation: 1,
+        }
+    }
+
+    #[test]
+    fn remote162_handshake_role_distinct_capacite_et_secret_masque() {
+        let hello = WorkerHello {
+            version: 1,
+            identity: worker162_identity(),
+            credential: IdentityCredential::new("secret-worker-prive".into()),
+            build: "build162".into(),
+            capability: ClientCapability::RemoteWorkerV1,
+        };
+        assert_eq!(hello.validate(), Ok(()));
+        let wire = encode(&WrapperToDaemon::WorkerHello {
+            hello: hello.clone(),
+        })
+        .unwrap();
+        let decoded: WrapperToDaemon = decode(&wire).unwrap();
+        assert!(matches!(decoded, WrapperToDaemon::WorkerHello { .. }));
+        assert!(!format!("{decoded:?}").contains("secret-worker-prive"));
+        assert_eq!(encode(&ConnectionRole::Worker).unwrap(), "\"worker\"");
+        assert_eq!(
+            encode(&ClientCapability::RemoteWorkerV1).unwrap(),
+            "\"remote_worker_v1\""
+        );
+        let mut wrong = hello.clone();
+        wrong.version = 2;
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::UnsupportedVersion));
+        wrong = hello;
+        wrong.capability = ClientCapability::SendIdempotent;
+        assert_eq!(wrong.validate(), Err(WorkerRefusal::CapabilityRequired));
+        // Les négociations locales existantes ne gagnent aucun champ implicite.
+        let local = r#"{"type":"RoleHandshake","role":"service"}"#;
+        assert_eq!(
+            encode(&decode::<WrapperToDaemon>(local).unwrap()).unwrap(),
+            local
+        );
+    }
+
+    #[test]
+    fn remote162_contrat_ferme_et_slot_correlations_avant_dispatch() {
+        let slot = WorkerResultSlot {
+            identity: worker162_result_identity(),
+            admission_digest: "a".repeat(64),
+        };
+        let mut request = WorkerRequest {
+            version: 1,
+            correlation_id: "correlation".into(),
+            connection_epoch: "epoch".into(),
+            worker: worker162_identity(),
+            command: worker162_command(),
+            request: WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() },
+        };
+        assert_eq!(request.validate(), Ok(()));
+        let wire = encode(&request).unwrap();
+        assert_eq!(decode::<WorkerRequest>(&wire).unwrap(), request);
+        let mut extra = serde_json::to_value(&request).unwrap();
+        extra["request"]["local_fallback"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<WorkerRequest>(extra).is_err());
+        let mut unknown = serde_json::to_value(&request).unwrap();
+        unknown["request"]["operation"] = serde_json::json!("spawn_without_receipt");
+        assert!(serde_json::from_value::<WorkerRequest>(unknown).is_err());
+        request.command.generation = 2;
+        assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        request.command = worker162_command();
+        request.request = WorkerRequestOperation::Cancel {
+            target: WorkerCancelScope::ResultSlot {
+                slot,
+                proof: WorkerSlotClosureProof::NeverDispatched,
+            },
+        };
+        assert_eq!(request.validate(), Ok(()));
+        request.connection_epoch.clear();
+        assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+    }
+
+    #[test]
+    fn remote162_resultat_borne_digest_canon_et_execution_quota() {
+        let mut result = RemoteResultEnvelope {
+            worker: worker162_identity(),
+            identity: worker162_result_identity(),
+            message_id: "result-message".into(),
+            body: "résultat".into(),
+            digest: String::new(),
+        };
+        result.digest = result.canonical_digest().unwrap();
+        assert_eq!(result.validate(), Ok(()));
+        let first = result.clone();
+        result.identity.execution_id = "execution-quota-reprise".into();
+        assert_eq!(result.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        result = first;
+        result.body = "x".repeat(MAX_WORKER_RESULT_BODY_BYTES);
+        result.digest = result.canonical_digest().unwrap();
+        assert_eq!(result.validate(), Ok(()));
+        result.body.push('x');
+        result.digest = result.canonical_digest().unwrap();
+        assert_eq!(result.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        // Le budget compte l'encodage JSON réel, y compris les échappements.
+        result.body = "\u{0001}".repeat(MAX_WORKER_RESULT_BODY_BYTES);
+        result.digest = result.canonical_digest().unwrap();
+        assert!(encode(&result).unwrap().len() > MAX_WORKER_RESULT_BODY_BYTES * 5);
+        assert_eq!(result.validate(), Ok(()));
+        assert!(encode(&result).unwrap().len() <= MAX_WORKER_RESULT_ENVELOPE_BYTES);
+    }
+
+    #[test]
+    fn remote162_dispositions_fermees_sans_faux_succes_quota() {
+        let final_states = [
+            RemoteResultDisposition::Accepted {},
+            RemoteResultDisposition::DiscardedTerminal {
+                reason: RemoteResultDiscardReason::Cancelled,
+            },
+            RemoteResultDisposition::RejectedConflict {},
+        ];
+        for disposition in final_states {
+            assert!(disposition.is_final());
+            let wire = encode(&disposition).unwrap();
+            assert_eq!(
+                decode::<RemoteResultDisposition>(&wire).unwrap(),
+                disposition
+            );
+        }
+        let deferred = RemoteResultDisposition::Deferred {
+            reason: RemoteResultDeferredReason::QuotaHold,
+            retry_after: 123,
+        };
+        assert!(!deferred.is_final());
+        assert!(
+            decode::<RemoteResultDisposition>(
+                r#"{"status":"discarded_terminal","reason":"quota_hold"}"#
+            )
+            .is_err()
+        );
+        assert!(
+            decode::<RemoteResultDisposition>(r#"{"status":"accepted","ignored":true}"#).is_err()
+        );
+        assert!(
+            decode::<RemoteResultDisposition>(r#"{"status":"rejected_conflict","ignored":true}"#)
+                .is_err()
+        );
+        assert!(
+            decode::<WorkerRequestOperation>(r#"{"operation":"reconcile","ignored":true}"#)
+                .is_err()
+        );
+        assert!(
+            decode::<WorkerResponseOperation>(r#"{"operation":"released","ignored":true}"#)
+                .is_err()
+        );
+        assert!(decode::<WorkerCancelScope>(r#"{"scope":"command","ignored":true}"#).is_err());
+    }
+
+    #[test]
+    fn remote162_placement_chemins_revisions_et_permis_bornes() {
+        let mut placement = RemotePlacement {
+            machine_id: "cartae".into(),
+            worker_id: "worker-cartae".into(),
+            provisioning_revision: 1,
+            project_id: "project".into(),
+            mapping_revision: 1,
+            origin_host: "mac".into(),
+            origin_cwd: "/Users/moi/project".into(),
+            source_root_identity: "git:project".into(),
+            relative_cwd: ".".into(),
+            execution_cwd: "/home/moi/project".into(),
+            base_commit: Some("a".repeat(40)),
+            definition_digest: "b".repeat(64),
+            permission_digest: "c".repeat(64),
+        };
+        assert_eq!(placement.validate(), Ok(()));
+        assert!(placement.matches_worker(&worker162_identity()));
+        placement.relative_cwd = "src/../../outside".into();
+        assert_eq!(placement.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        placement.relative_cwd = ".".into();
+        placement.mapping_revision = HUMAN_LINEAGE_MAX_SEQ + 1;
+        assert_eq!(placement.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        let mut permit = WorkerReleasePermit {
+            permit_id: "permit".into(),
+            command_digest: "a".repeat(64),
+            permission_revision: 1,
+            mapping_revision: 1,
+            provisioning_revision: 1,
+            issued_at: 100,
+            expires_at: 105,
+        };
+        assert_eq!(permit.validate(), Ok(()));
+        permit.expires_at = 106;
+        assert_eq!(permit.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        permit.issued_at = i64::MAX;
+        permit.expires_at = i64::MIN;
+        assert_eq!(permit.validate(), Err(WorkerRefusal::InvalidEnvelope));
+    }
+
+    #[test]
+    fn remote162_journal_et_reponse_bornes_sans_chemin_fourni() {
+        let request = WorkerRequest {
+            version: 1,
+            correlation_id: "journal".into(),
+            connection_epoch: "epoch".into(),
+            worker: worker162_identity(),
+            command: worker162_command(),
+            request: WorkerRequestOperation::JournalPage {
+                after_seq: 0,
+                limit: 200,
+            },
+        };
+        assert_eq!(request.validate(), Ok(()));
+        let mut value = serde_json::to_value(&request).unwrap();
+        value["request"]["path"] = serde_json::json!("/other-agent/journal");
+        assert!(serde_json::from_value::<WorkerRequest>(value).is_err());
+        let mut response = WorkerResponse {
+            version: 1,
+            correlation_id: "journal".into(),
+            connection_epoch: "epoch".into(),
+            worker: worker162_identity(),
+            command: worker162_command(),
+            response: WorkerResponseOperation::JournalPage {
+                fragments: vec![WorkerJournalFragment {
+                    seq: 1,
+                    offset: 0,
+                    final_fragment: true,
+                    bytes: vec![b'x'],
+                }],
+                through_seq: Some(1),
+                more: false,
+            },
+        };
+        assert_eq!(response.validate(), Ok(()));
+        if let WorkerResponseOperation::JournalPage { fragments, .. } = &mut response.response {
+            fragments[0].bytes = vec![b'x'; MAX_ATTACH_FRAGMENT_BYTES + 1];
+        }
+        assert_eq!(response.validate(), Err(WorkerRefusal::InvalidEnvelope));
+    }
+
+    #[test]
+    fn remote162_observation_recontrole_borne_et_refus_prepare() {
+        let mut response = WorkerResponse {
+            version: 1,
+            correlation_id: "reconcile".into(),
+            connection_epoch: "epoch".into(),
+            worker: worker162_identity(),
+            command: worker162_command(),
+            response: WorkerResponseOperation::Observation {
+                observation: WorkerObservation {
+                    phase: WorkerCommandPhase::Released,
+                    native_ready: true,
+                    exit_code: None,
+                    observed_at: 100,
+                    workspace: Some(serde_json::json!({"path":"/workspace"})),
+                    permission_digest: Some("a".repeat(64)),
+                },
+            },
+        };
+        assert_eq!(response.validate(), Ok(()));
+        if let WorkerResponseOperation::Observation { observation } = &mut response.response {
+            observation.workspace = Some(serde_json::json!({"path":"x".repeat(65536)}));
+        }
+        assert_eq!(response.validate(), Err(WorkerRefusal::ResourceLimit));
+        response.response = WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::PermissionsChanged,
+        };
+        response.command.instance_id.clear();
+        response.command.generation = 0;
+        assert_eq!(response.validate(), Ok(()));
+        response.response = WorkerResponseOperation::Released {};
+        assert_eq!(response.validate(), Err(WorkerRefusal::InvalidEnvelope));
+    }
+
     #[test]
     fn spec099_credential_optionnel_compatible_et_masque_dans_debug() {
         use super::{DaemonToWrapper, IdentityCredential, WrapperToDaemon};
@@ -8488,6 +9641,8 @@ mod spec104_search_contract_tests {
     fn native150_delai_requete_sans_champ_garde_les_octets_149() {
         // Sans `reply_timeout`, la requête sérialise exactement comme en 149.
         let request = NativeDelegationRequest::Delegate {
+            machine_id: None,
+            project_id: None,
             request_id: "k".to_string(),
             agent_type: "a".to_string(),
             model: "m".to_string(),

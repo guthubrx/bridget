@@ -83,6 +83,7 @@ fn migration_reindexe_la_flotte_et_sauvegarde_les_sources() {
         .upsert(
             "agent-declare".to_string(),
             DesiredEquipier {
+                remote_placement: None,
                 agent_type: "codex".to_string(),
                 cwd: root.clone(),
                 command_id: "migration-command".to_string(),

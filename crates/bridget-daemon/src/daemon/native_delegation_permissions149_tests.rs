@@ -212,6 +212,8 @@ pub(super) fn delegate_request(
     posture: Option<SpawnPosture>,
 ) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        machine_id: None,
+        project_id: None,
         resume_on_limit: None,
         fallback: Vec::new(),
         request_id: request_id.into(),
@@ -1073,6 +1075,10 @@ fn tache_enregistree(
     definition: bridget_transport::protocol::ResolvedAgentDefinition,
 ) -> crate::delegation::Task {
     crate::delegation::Task {
+        remote_placement: None,
+        remote_prepared: false,
+        remote_result_slots: Vec::new(),
+        remote_result_receipts: Vec::new(),
         substitution: None,
         task_id: Uuid::new_v4().to_string(),
         root_owner_agent_id: "racine-149".into(),
@@ -1646,6 +1652,7 @@ fn equipier_ordinaire(st: &DaemonState) -> String {
     let nom = Uuid::new_v4().to_string();
     let now = unix_timestamp();
     let ordre = FleetSpawnOrder {
+        remote_placement: None,
         posture: None,
         agent_type: "native-test".into(),
         project: None,
@@ -2272,6 +2279,7 @@ fn lier_descendant(
     let definition = st.registry.resolved_definition("native-test").unwrap();
     let now = unix_timestamp();
     let ordre = FleetSpawnOrder {
+        remote_placement: None,
         posture: None,
         agent_type: "native-test".into(),
         project: None,

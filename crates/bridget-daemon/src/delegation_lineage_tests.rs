@@ -33,6 +33,8 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
 
 fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
+        machine_id: None,
+        project_id: None,
         resume_on_limit: None,
         fallback: Vec::new(),
         request_id: request_id.into(),
@@ -63,6 +65,10 @@ fn task(
 ) -> Task {
     Task {
         substitution: None,
+        remote_placement: None,
+        remote_prepared: false,
+        remote_result_slots: Vec::new(),
+        remote_result_receipts: Vec::new(),
         task_id: task_id.into(),
         root_owner_agent_id: String::new(),
         parent_task_id: None,
@@ -2724,6 +2730,204 @@ fn native153_limites_purge_supprime_missions_passees() {
             .past_mission_task("previous-retained")
             .unwrap()
             .is_some()
+    );
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn native162_lineage_versions_contact_et_fraicheur_sans_mutation_metier() {
+    use bridget_transport::protocol::{RemotePlacement, WorkerContactState};
+    let dir = temp_dir("projection162");
+    let store = open_store(&dir.join("store.sqlite"));
+    let distant_id = "16200000-0000-4000-8000-000000000001";
+    let local_id = "16200000-0000-4000-8000-000000000002";
+    let mut distant = task(
+        distant_id,
+        "humain",
+        "inst",
+        "inst",
+        "enfant-distant",
+        None,
+        "working",
+        100,
+    );
+    distant.remote_placement = Some(RemotePlacement {
+        machine_id: "cartae".into(),
+        worker_id: "worker-cartae".into(),
+        provisioning_revision: 1,
+        project_id: "projet".into(),
+        mapping_revision: 1,
+        origin_host: "mac".into(),
+        origin_cwd: "/source".into(),
+        source_root_identity: "fixture".into(),
+        relative_cwd: String::new(),
+        execution_cwd: "/remote".into(),
+        base_commit: None,
+        definition_digest: "definition".into(),
+        permission_digest: "permissions".into(),
+    });
+    let local = task(
+        local_id,
+        "humain",
+        "inst",
+        "inst",
+        "enfant-local",
+        None,
+        "queued",
+        200,
+    );
+    store.insert(&distant, "distant", b"distant").unwrap();
+    store.insert(&local, "local", b"local").unwrap();
+    let facts = |task: &Task, at, contact_state| {
+        (
+            false,
+            task.remote_placement.as_ref().map(|p| LineagePlacementV2 {
+                machine_id: p.machine_id.clone(),
+                display_name: None,
+                worker_id: p.worker_id.clone(),
+                last_contact_at: at,
+                contact_state,
+            }),
+        )
+    };
+    let before = meta(&store);
+    let _ = store.take_changes();
+    let payloads_before: Vec<_> = [distant_id, local_id]
+        .into_iter()
+        .map(|id| serde_json::to_value(store.get(id).unwrap().unwrap()).unwrap())
+        .collect();
+
+    let legacy = store.lineage_page("humain", 100, None, |_| false).unwrap();
+    let explicit_v1 = store
+        .lineage_page_versioned("humain", 100, None, 1, |t| {
+            facts(t, Some(123), WorkerContactState::Stale)
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_vec(&legacy).unwrap(),
+        serde_json::to_vec(&explicit_v1).unwrap()
+    );
+    for entry in legacy["tasks"].as_array().unwrap() {
+        assert_eq!(
+            entry_keys_sorted(entry),
+            ENTRY_KEYS
+                .iter()
+                .map(|k| (*k).to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert!(entry.get("placement").is_none());
+    }
+    let v2 = store
+        .lineage_page_versioned("humain", 100, None, 2, |t| {
+            facts(t, None, WorkerContactState::Unknown)
+        })
+        .unwrap();
+    assert_eq!(v2["version"], 2);
+    assert_eq!(
+        v2["tasks"][0]["placement"],
+        json!({
+            "machine_id":"cartae","display_name":null,"worker_id":"worker-cartae",
+            "last_contact_at":null,"contact_state":"unknown"
+        })
+    );
+    assert!(v2["tasks"][1].get("placement").unwrap().is_null());
+    let mut legacy_from_v2 = v2.clone();
+    legacy_from_v2["version"] = json!(1);
+    for entry in legacy_from_v2["tasks"].as_array_mut().unwrap() {
+        entry.as_object_mut().unwrap().remove("placement");
+    }
+    assert_eq!(legacy_from_v2, legacy);
+    for id in [distant_id, local_id] {
+        let show1 = store.lineage_show("humain", id, 0, 100, false).unwrap();
+        let show_explicit1 = store
+            .lineage_show_versioned("humain", id, 0, 100, 1, |t| {
+                facts(t, Some(123), WorkerContactState::Stale)
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&show1).unwrap(),
+            serde_json::to_vec(&show_explicit1).unwrap()
+        );
+        assert!(show1["task"].get("placement").is_none());
+        let mut show2 = store
+            .lineage_show_versioned("humain", id, 0, 100, 2, |t| {
+                facts(t, None, WorkerContactState::Unknown)
+            })
+            .unwrap();
+        assert_eq!(show2["version"], 2);
+        let index = usize::from(id == local_id);
+        assert_eq!(show2["task"]["placement"], v2["tasks"][index]["placement"]);
+        show2["version"] = json!(1);
+        show2["task"].as_object_mut().unwrap().remove("placement");
+        assert_eq!(show2, show1);
+    }
+
+    // Le timestamp est une observation fournie à chaque page, pas une mutation.
+    let page1 = store
+        .lineage_page_versioned("humain", 1, None, 2, |t| {
+            facts(t, Some(123), WorkerContactState::Stale)
+        })
+        .unwrap();
+    let later = store
+        .lineage_page_versioned("humain", 1, None, 2, |t| {
+            facts(t, Some(456), WorkerContactState::Stale)
+        })
+        .unwrap();
+    assert_eq!(page1["tasks"][0]["placement"]["last_contact_at"], 123);
+    assert_eq!(later["tasks"][0]["placement"]["last_contact_at"], 456);
+    assert_eq!(page1["seq"], later["seq"]);
+    assert_eq!(page1["next_cursor"], later["next_cursor"]);
+    let cursor = page1["next_cursor"].as_str().unwrap();
+    let page2 = store
+        .lineage_page_versioned("humain", 1, Some(cursor), 2, |t| {
+            facts(t, Some(456), WorkerContactState::Stale)
+        })
+        .unwrap();
+    assert_eq!(page2["tasks"][0]["task_id"], local_id);
+    assert_eq!(meta(&store).seq, before.seq);
+    assert!(store.take_changes().is_empty());
+    store
+        .remote_contact_changed("absente", "worker-cartae")
+        .unwrap();
+    assert_eq!(meta(&store).seq, before.seq);
+    assert!(store.take_changes().is_empty());
+
+    // Seule la transition de contact signalée invalide le curseur précédent.
+    store
+        .remote_contact_changed("cartae", "worker-cartae")
+        .unwrap();
+    assert_eq!(meta(&store).seq, before.seq + 1);
+    assert_eq!(meta(&store).generation, before.generation);
+    let changes = store.take_changes();
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes["humain"].seq, before.seq + 1);
+    let refreshed = store
+        .lineage_page_versioned("humain", 1, None, 2, |t| {
+            facts(t, None, WorkerContactState::Unknown)
+        })
+        .unwrap();
+    assert_eq!(
+        refreshed["tasks"][0]["placement"]["contact_state"],
+        "unknown"
+    );
+    assert!(refreshed["tasks"][0]["placement"]["last_contact_at"].is_null());
+    assert_eq!(refreshed["tasks"][0]["status"], "working");
+    assert!(matches!(
+        store.lineage_page_versioned("humain", 1, Some(cursor), 2, |t| facts(
+            t,
+            None,
+            WorkerContactState::Unknown
+        )),
+        Err(E::SnapshotChanged)
+    ));
+    let payloads_after: Vec<_> = [distant_id, local_id]
+        .into_iter()
+        .map(|id| serde_json::to_value(store.get(id).unwrap().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        payloads_after, payloads_before,
+        "aucun état métier modifié par le contact"
     );
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();

@@ -1,7 +1,7 @@
 //! Projection des faits de la saga dans le même magasin transactionnel.
 use super::{DelegationStore, RoundRecord, Task};
 use bridget_transport::protocol::{
-    HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, NativeDelegationRequest,
+    HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, LineagePlacementV2, NativeDelegationRequest,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -40,6 +40,12 @@ fn tree_settled(tree: &[Task]) -> bool {
             && t.cleanup_done
             && t.idle_deadline_at.is_none()
             && t.unacked_rounds.is_empty()
+            && !t.remote_result_receipts.iter().any(|receipt| {
+                matches!(
+                    &receipt.disposition,
+                    bridget_transport::protocol::RemoteResultDisposition::Deferred { .. }
+                )
+            })
             && (t.state == "cancelled" || t.delivery_acked)
     })
 }
@@ -118,6 +124,8 @@ pub(crate) fn task_entry(task: &Task, journal_available: bool) -> Result<Value, 
 fn visible_changed(old: &Task, new: &Task) -> bool {
     old.state != new.state
         || old.child_instance != new.child_instance
+        || old.cwd != new.cwd
+        || old.remote_placement != new.remote_placement
         || old.projected_error() != new.projected_error()
         || (new.state == "result_available" && old.result != new.result)
 }
@@ -471,6 +479,30 @@ impl DelegationStore {
         }
         // Seule acknowledge_tasks pose ce fait ; une copie stale ne le remplace pas.
         task.acknowledged_at = old.acknowledged_at;
+        // Les preuves162 sont append-only ; seul commit_remote_result les règle.
+        if task.remote_result_receipts != old.remote_result_receipts {
+            return Err("remote_result_receipt_stale".into());
+        }
+        task.remote_result_receipts = old.remote_result_receipts.clone();
+        task.remote_prepared |= old.remote_prepared;
+        if task.remote_result_slots.len() > super::MAX_REMOTE_RESULT_SLOTS
+            || !old
+                .remote_result_slots
+                .iter()
+                .all(|slot| task.remote_result_slots.contains(slot))
+        {
+            return Err("remote_result_slots_stale".into());
+        }
+        for (index, slot) in task.remote_result_slots.iter().enumerate() {
+            slot.validate().map_err(|_| "remote_result_slot_invalid")?;
+            if slot.identity.command.task_id != task.task_id
+                || task.remote_result_slots[..index]
+                    .iter()
+                    .any(|previous| previous.identity == slot.identity)
+            {
+                return Err("remote_result_slot_invalid".into());
+            }
+        }
         let changed = visible_changed(&old, &task)
             || old.started_at != task.started_at
             || old.completed_at != task.completed_at;
@@ -493,6 +525,93 @@ impl DelegationStore {
         self.wait_epoch.bump();
         if let Some(mutation) = mutation {
             self.committed(task.root_owner(), mutation)
+        }
+        Ok(())
+    }
+
+    /// Le canon, sa disposition et la projection partagent le même commit.
+    /// Un CAS raté ne confirme rien ; un conflit n'ajoute jamais de reçu.
+    pub(crate) fn commit_remote_result(
+        &self,
+        expected: &Task,
+        mut next: Task,
+        result: &bridget_transport::protocol::RemoteResultEnvelope,
+        disposition: bridget_transport::protocol::RemoteResultDisposition,
+    ) -> Result<(), String> {
+        use bridget_transport::protocol::RemoteResultDisposition as D;
+        result.validate().map_err(|_| "remote_result_invalid")?;
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let payload: String = tx
+            .query_row(
+                "SELECT payload FROM native_delegations WHERE task_id=?1",
+                [&expected.task_id],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        let old: Task = serde_json::from_str(&payload).map_err(|error| error.to_string())?;
+        if serde_json::to_vec(&old).map_err(|error| error.to_string())?
+            != serde_json::to_vec(expected).map_err(|error| error.to_string())?
+            || next.task_id != old.task_id
+            || !old
+                .remote_result_slots
+                .iter()
+                .any(|slot| slot.identity == result.identity)
+        {
+            return Err("remote_result_stale".into());
+        }
+        next.remote_result_receipts = old.remote_result_receipts.clone();
+        if let Some(receipt) = next
+            .remote_result_receipts
+            .iter_mut()
+            .find(|receipt| receipt.identity == result.identity)
+        {
+            let equal = receipt.worker == result.worker
+                && receipt.message_id == result.message_id
+                && receipt.digest == result.digest;
+            if !equal {
+                if disposition != (D::RejectedConflict {}) {
+                    return Err("remote_result_conflict".into());
+                }
+                receipt.conflict_seen = true;
+            } else if matches!(&receipt.disposition, D::Deferred { .. }) {
+                receipt.disposition = disposition;
+            } else if receipt.disposition != disposition {
+                return Err("remote_result_final".into());
+            }
+        } else {
+            if next.remote_result_receipts.len() >= super::MAX_REMOTE_RESULT_SLOTS {
+                return Err("remote_result_capacity".into());
+            }
+            next.remote_result_receipts
+                .push(super::RemoteResultReceipt {
+                    worker: result.worker.clone(),
+                    identity: result.identity.clone(),
+                    message_id: result.message_id.clone(),
+                    digest: result.digest.clone(),
+                    disposition,
+                    conflict_seen: false,
+                });
+        }
+        let next = stamp(next, Some(&old));
+        let changed = visible_changed(&old, &next)
+            || old.started_at != next.started_at
+            || old.completed_at != next.completed_at;
+        let payload = serde_json::to_string(&next).map_err(|error| error.to_string())?;
+        tx.execute(
+            "UPDATE native_delegations SET payload=?2 WHERE task_id=?1",
+            params![next.task_id, payload],
+        )
+        .map_err(|error| error.to_string())?;
+        let mutation = if changed {
+            Some(increment(&tx).map_err(|error| error.to_string())?)
+        } else {
+            None
+        };
+        tx.commit().map_err(|error| error.to_string())?;
+        self.wait_epoch.bump();
+        if let Some(mutation) = mutation {
+            self.committed(next.root_owner(), mutation);
         }
         Ok(())
     }
@@ -605,6 +724,20 @@ impl DelegationStore {
         cursor: Option<&str>,
         mut journal: impl FnMut(&Task) -> bool,
     ) -> Result<Value, E> {
+        self.lineage_page_versioned(root, limit, cursor, 1, |task| (journal(task), None))
+    }
+
+    pub fn lineage_page_versioned(
+        &self,
+        root: &str,
+        limit: u32,
+        cursor: Option<&str>,
+        version: u16,
+        mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
+    ) -> Result<Value, E> {
+        if !matches!(version, 1 | 2) {
+            return Err(E::UnsupportedVersion);
+        }
         if !(1..=100).contains(&limit) {
             return Err(E::InvalidRequest);
         }
@@ -650,7 +783,12 @@ impl DelegationStore {
         for row in rows {
             let task: Task = serde_json::from_str(&row.map_err(|_| E::StoreUnavailable)?)
                 .map_err(|_| E::StoreUnavailable)?;
-            let entry = task_entry(&task, journal(&task))?;
+            let (journal, placement) = facts(&task);
+            let mut entry = task_entry(&task, journal)?;
+            if version == 2 {
+                entry["placement"] =
+                    serde_json::to_value(placement).map_err(|_| E::StoreUnavailable)?;
+            }
             let size = serde_json::to_vec(&entry)
                 .map_err(|_| E::StoreUnavailable)?
                 .len();
@@ -680,7 +818,7 @@ impl DelegationStore {
         drop(stmt);
         tx.commit().map_err(|_| E::StoreUnavailable)?;
         Ok(
-            json!({"version":1,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"tasks":entries,"next_cursor":next_cursor}),
+            json!({"version":version,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"tasks":entries,"next_cursor":next_cursor}),
         )
     }
 
@@ -692,6 +830,23 @@ impl DelegationStore {
         limit: u32,
         journal_available: bool,
     ) -> Result<Value, E> {
+        self.lineage_show_versioned(root, task_id, offset, limit, 1, |_| {
+            (journal_available, None)
+        })
+    }
+
+    pub fn lineage_show_versioned(
+        &self,
+        root: &str,
+        task_id: &str,
+        offset: u32,
+        limit: u32,
+        version: u16,
+        mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
+    ) -> Result<Value, E> {
+        if !matches!(version, 1 | 2) {
+            return Err(E::UnsupportedVersion);
+        }
         if !(1..=16384).contains(&limit) {
             return Err(E::InvalidRequest);
         }
@@ -730,10 +885,43 @@ impl DelegationStore {
         if end == start && start < total {
             return Err(E::ResultOffsetInvalid);
         }
-        let entry = task_entry(&task, journal_available)?;
-        let response = json!({"version":1,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"task":entry,"result":result.map(|s|&s[start..end]),"result_offset":offset,"result_next_offset":if end<total {Some(end)}else{None},"result_total_bytes":total});
+        let (journal_available, placement) = facts(&task);
+        let mut entry = task_entry(&task, journal_available)?;
+        if version == 2 {
+            entry["placement"] =
+                serde_json::to_value(placement).map_err(|_| E::StoreUnavailable)?;
+        }
+        let response = json!({"version":version,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"task":entry,"result":result.map(|s|&s[start..end]),"result_offset":offset,"result_next_offset":if end<total {Some(end)}else{None},"result_total_bytes":total});
         tx.commit().map_err(|_| E::StoreUnavailable)?;
         Ok(response)
+    }
+
+    /// Une transition de contact invalide les pages sans changer l'état métier.
+    /// Le maître appelle cette méthode sous son verrou, seulement si l'état change.
+    pub fn remote_contact_changed(&self, machine_id: &str, worker_id: &str) -> Result<(), String> {
+        let roots: HashSet<String> = self
+            .tasks()?
+            .into_iter()
+            .filter(|task| {
+                task.remote_placement.as_ref().is_some_and(|placement| {
+                    placement.machine_id == machine_id && placement.worker_id == worker_id
+                })
+            })
+            .map(|task| task.root_owner().to_owned())
+            .collect();
+        if roots.is_empty() {
+            return Ok(());
+        }
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        let mutation = increment(&tx).map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        for root in roots {
+            self.committed(&root, mutation.clone());
+        }
+        Ok(())
     }
 
     pub fn human_cancel(

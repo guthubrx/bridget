@@ -209,6 +209,23 @@ pub(crate) struct QuotaHold {
     pub execution_id: String,
 }
 
+/// Huit rondes × trois exécutions quota + deux reprises processus sur toute
+/// la tâche = 26. Les autres reprises consomment aussi la borne64 ; saturation
+/// refuse avant dispatch, sans supprimer une réservation ou preuve active.
+pub(crate) const MAX_REMOTE_RESULT_SLOTS: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RemoteResultReceipt {
+    pub worker: bridget_transport::protocol::WorkerIdentity,
+    pub identity: bridget_transport::protocol::WorkerResultIdentity,
+    pub message_id: String,
+    pub digest: String,
+    pub disposition: bridget_transport::protocol::RemoteResultDisposition,
+    #[serde(default)]
+    pub conflict_seen: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
@@ -238,6 +255,15 @@ pub(crate) struct Task {
     pub effective_posture: Option<SpawnPosture>,
     pub definition: ResolvedAgentDefinition,
     pub cwd: String,
+    /// Placement figé162 ; l'absence est locale pour ce lecteur seulement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
+    #[serde(default)]
+    pub remote_prepared: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_result_slots: Vec<bridget_transport::protocol::WorkerResultSlot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_result_receipts: Vec<RemoteResultReceipt>,
     #[serde(default)]
     pub workspace: Option<WorkspaceRecord>,
     /// Mission dont le rapport est rangé, y compris si Git était indisponible.
@@ -1171,6 +1197,121 @@ CREATE TABLE IF NOT EXISTS native_delegation_halt_commands(
 mod tests {
     use super::*;
 
+    fn remote162_receipt_fixture() -> (
+        DelegationStore,
+        Task,
+        bridget_transport::protocol::RemoteResultEnvelope,
+    ) {
+        use bridget_transport::protocol::*;
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let mut task = legacy_task151();
+        let result = RemoteResultEnvelope {
+            worker: WorkerIdentity {
+                machine_id: "cartae".into(),
+                worker_id: "worker".into(),
+                provisioning_revision: 1,
+            },
+            identity: WorkerResultIdentity {
+                command: WorkerCommandIdentity {
+                    command_id: "command".into(),
+                    task_id: task.task_id.clone(),
+                    instance_id: "instance".into(),
+                    generation: 1,
+                },
+                mission_id: task.mission.clone(),
+                round: 1,
+                execution_id: "execution".into(),
+                execution_generation: 1,
+            },
+            message_id: "result".into(),
+            body: "résultat durable".into(),
+            digest: String::new(),
+        };
+        let mut result = result;
+        result.digest = result.canonical_digest().unwrap();
+        task.remote_result_slots.push(WorkerResultSlot {
+            identity: result.identity.clone(),
+            admission_digest: "a".repeat(64),
+        });
+        store.insert(&task, "request", b"canonical").unwrap();
+        let task = store.get(&task.task_id).unwrap().unwrap();
+        (store, task, result)
+    }
+
+    #[test]
+    fn remote162_result_commit_atomique_et_echec_avant_commit() {
+        use bridget_transport::protocol::RemoteResultDisposition as D;
+        let (store, task, result) = remote162_receipt_fixture();
+        let mut next = task.clone();
+        next.result = Some(result.body.clone());
+        next.state = "waiting_for_children".into();
+        store.conn.execute_batch("CREATE TRIGGER refuse_remote_result BEFORE UPDATE ON native_delegations BEGIN SELECT RAISE(ABORT,'fixture rollback'); END;").unwrap();
+        assert!(
+            store
+                .commit_remote_result(&task, next.clone(), &result, D::Accepted {})
+                .is_err()
+        );
+        let untouched = store.get(&task.task_id).unwrap().unwrap();
+        assert!(untouched.result.is_none() && untouched.remote_result_receipts.is_empty());
+        store
+            .conn
+            .execute_batch("DROP TRIGGER refuse_remote_result;")
+            .unwrap();
+        store
+            .commit_remote_result(&task, next, &result, D::Accepted {})
+            .unwrap();
+        let committed = store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(committed.result.as_deref(), Some(result.body.as_str()));
+        assert_eq!(
+            committed.remote_result_receipts[0].disposition,
+            D::Accepted {}
+        );
+        // Une sauvegarde métier ancienne ne peut retirer la preuve du résultat.
+        assert!(store.save(&task).is_err());
+        store.save(&committed).unwrap();
+        assert_eq!(
+            store
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_result_receipts
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn remote162_conflits_bornes_et_cas_stale_sans_ecrasement() {
+        use bridget_transport::protocol::RemoteResultDisposition as D;
+        let (store, task, result) = remote162_receipt_fixture();
+        let mut next = task.clone();
+        next.result = Some(result.body.clone());
+        next.state = "waiting_for_children".into();
+        store
+            .commit_remote_result(&task, next, &result, D::Accepted {})
+            .unwrap();
+        assert!(
+            store
+                .commit_remote_result(&task, task.clone(), &result, D::Accepted {})
+                .is_err()
+        );
+        for index in 0..3 {
+            let current = store.get(&task.task_id).unwrap().unwrap();
+            let mut conflict = result.clone();
+            conflict.body = format!("autre {index}");
+            conflict.digest = conflict.canonical_digest().unwrap();
+            store
+                .commit_remote_result(&current, current.clone(), &conflict, D::RejectedConflict {})
+                .unwrap();
+        }
+        let saved = store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.result, Some(result.body));
+        assert_eq!(saved.remote_result_receipts.len(), 1);
+        assert!(saved.remote_result_receipts[0].conflict_seen);
+        assert_eq!(saved.remote_result_receipts[0].digest, result.digest);
+        assert_eq!(saved.remote_result_receipts[0].disposition, D::Accepted {});
+    }
+
     fn legacy_task151() -> Task {
         let task_id = uuid::Uuid::new_v4().to_string();
         let payload = serde_json::json!({
@@ -1227,6 +1368,46 @@ mod tests {
         // La fixture relit le JSON150 original, sans champ substitution.
         let task = legacy_task151();
         assert!(task.substitution.is_none());
+    }
+
+    #[test]
+    fn remote162_task_ancienne_locale_et_placement_durable() {
+        let mut task = legacy_task151();
+        assert!(task.remote_placement.is_none());
+        assert!(
+            serde_json::to_value(&task)
+                .unwrap()
+                .get("remote_placement")
+                .is_none()
+        );
+        task.remote_placement = Some(
+            serde_json::from_value(serde_json::json!({
+                "machine_id":"cartae", "worker_id":"worker", "provisioning_revision":1,
+                "project_id":"project", "mapping_revision":1, "origin_host":"mac",
+                "origin_cwd":"/Users/moi/project", "source_root_identity":"git:project",
+                "relative_cwd":".", "execution_cwd":"/tmp", "base_commit":null,
+                "definition_digest":"a".repeat(64), "permission_digest":"b".repeat(64)
+            }))
+            .unwrap(),
+        );
+        let root =
+            std::env::temp_dir().join(format!("bridget-remote162-task-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("bridget.db");
+        let store = DelegationStore::open(&path).unwrap();
+        store.insert(&task, "request-152", b"canonical").unwrap();
+        drop(store);
+        let reopened = DelegationStore::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .get(&task.task_id)
+                .unwrap()
+                .unwrap()
+                .remote_placement,
+            task.remote_placement
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

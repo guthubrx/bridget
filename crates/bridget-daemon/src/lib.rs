@@ -51,6 +51,7 @@ pub mod receipt_store;
 pub mod recovery_trace;
 pub mod referent_control;
 pub mod registry;
+pub mod remote_worker;
 pub mod reprise;
 pub mod runtime;
 mod service_limits;

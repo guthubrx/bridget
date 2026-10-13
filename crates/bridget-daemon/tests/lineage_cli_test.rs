@@ -56,6 +56,155 @@ fn run_cli(root: &std::path::Path, args: &[&str]) -> (Option<i32>, Value) {
     (output.status.code(), value)
 }
 
+/// Même échange JSONL borné que spec145_human_cli::negotiated_cli, avec le
+/// support isolé existant. Ce faux maître ne projette pas de données métier.
+fn negotiated_lineage162(action: &str, reply: Value) -> (Option<i32>, Value) {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixListener;
+
+    let root = support::test_root("l162-cli-negociation");
+    let socket = support::socket(&root);
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server_listener = listener.try_clone().unwrap();
+    let server = std::thread::spawn(move || {
+        let mut fd = libc::pollfd {
+            fd: server_listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert!(
+            unsafe { libc::poll(&mut fd, 1, 6_000) } > 0,
+            "connexion CLI lineage absente"
+        );
+        let (stream, _) = server_listener.accept().unwrap();
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut seen = Vec::new();
+        for response in [
+            serde_json::json!({"type":"RoleAccepted","role":"client"}),
+            serde_json::json!({
+                "type":"ClientWelcome","version":1,"build_id":"fixture",
+                "horizon_secs":60,"issued_at_tolerance_secs":5,
+                "capabilities":["human_lineage_view_v1"]
+            }),
+            serde_json::json!({"type":"HumanLineageResult","result":reply}),
+        ] {
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            seen.push(serde_json::from_str::<Value>(&line).unwrap());
+            writeln!(writer, "{response}").unwrap();
+            writer.flush().unwrap();
+        }
+        let mut extra = String::new();
+        assert_eq!(
+            reader.read_line(&mut extra).unwrap(),
+            0,
+            "aucun repli sur la connexion existante : {extra}"
+        );
+        seen
+    });
+    let mut args = vec![
+        "lineage",
+        "inspect",
+        "--json",
+        "--t3-thread",
+        T3,
+        "--project-root",
+        "/fixture",
+        "--action",
+        action,
+        "--response-version",
+        "2",
+    ];
+    if action == "show" {
+        args.extend_from_slice(&["--task", TASK]);
+    }
+    let output = support::run_isolated(&root, &args, false);
+    let seen = server.join().unwrap();
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "aucune seconde connexion ou tentative de repli CLI"
+    );
+    assert_eq!(seen.len(), 3);
+    assert_eq!(
+        seen[0],
+        serde_json::json!({"type":"RoleHandshake","role":"client"})
+    );
+    assert_eq!(seen[1]["type"], "ClientHello");
+    assert_eq!(seen[1]["contract_version"], 1);
+    assert_eq!(
+        seen[1]["capabilities"],
+        serde_json::json!(["human_lineage_view_v1"])
+    );
+    assert_eq!(seen[2]["type"], "HumanLineage");
+    assert_eq!(seen[2]["request"]["version"], 2);
+    assert_eq!(seen[2]["request"]["t3_thread_id"], T3);
+    assert_eq!(seen[2]["request"]["project_root"], "/fixture");
+    assert_eq!(seen[2]["request"]["request"]["action"], action);
+    if action == "show" {
+        assert_eq!(seen[2]["request"]["request"]["task_id"], TASK);
+    }
+    let value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "sortie CLI JSON invalide : {error}; {}",
+            support::output_text(&output)
+        )
+    });
+    drop(listener);
+    std::fs::remove_dir_all(&root).unwrap();
+    (output.status.code(), value)
+}
+
+#[test]
+fn native162_lineage_cli_accepts_requested_v2_success() {
+    for action in ["list", "show"] {
+        let reply = serde_json::json!({"version":2,"status":"ok","seq":0});
+        let (code, value) = negotiated_lineage162(action, reply.clone());
+        assert_eq!(code, Some(0), "{action}: {value}");
+        assert_eq!(value, reply, "{action}");
+    }
+}
+
+#[test]
+fn native162_lineage_cli_preserves_v1_error_for_v2_request() {
+    use bridget_transport::protocol::HumanLineageError;
+    for action in ["list", "show"] {
+        for error in [
+            HumanLineageError::UnsupportedVersion,
+            HumanLineageError::InvalidRequest,
+        ] {
+            let reply = error.result();
+            let (code, value) = negotiated_lineage162(action, reply.clone());
+            assert_eq!(code, Some(2), "{action}: {value}");
+            assert_eq!(value, reply, "{action}");
+        }
+    }
+}
+
+#[test]
+fn native162_lineage_cli_rejects_v1_success_for_v2_request() {
+    for action in ["list", "show"] {
+        let reply = serde_json::json!({"version":1,"status":"ok","seq":0});
+        let (code, value) = negotiated_lineage162(action, reply);
+        assert_eq!(code, Some(3), "{action}: {value}");
+        assert_eq!(
+            value,
+            bridget_transport::protocol::HumanLineageError::BindingUnavailable.result(),
+            "{action}"
+        );
+    }
+}
+
 fn definition() -> Value {
     serde_json::json!({
         "command": "npx",

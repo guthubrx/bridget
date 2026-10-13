@@ -143,7 +143,12 @@ pub(super) fn valid_delivery(
     if !parent_available(st, task) {
         return Err("revoked");
     }
-    native_delegation::native_launch_registry(st, task).map_err(|_| "revoked")?;
+    if task.remote_placement.is_some() {
+        // Les lectures de sources sur destination sont réservées à emit, hors mutex.
+        native_delegation::recheck_remote_dispatch(st, task, task).map_err(|_| "revoked")?;
+    } else {
+        native_delegation::native_launch_registry(st, task).map_err(|_| "revoked")?;
+    }
     Ok(conn)
 }
 
@@ -920,6 +925,37 @@ fn emit(
     receipt: bool,
 ) {
     let answer = matches!(frame, DaemonToWrapper::ChildRequestAnswer { .. });
+    let remote = if answer {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let Ok(Some(row)) = st.delegation_store.get_child_request(id) else {
+            return;
+        };
+        let Ok(Some(task)) = st.delegation_store.get(&row.task_id) else {
+            return;
+        };
+        if let Some(placement) = &task.remote_placement {
+            let Some(worker) = st.remote_workers.get(&placement.machine_id) else {
+                return;
+            };
+            Some((task.clone(), worker.epoch.clone()))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    // Réponse parent, réponse humaine et rejeu de reçu empruntent ce seul puits.
+    // Une indisponibilité ne vaut jamais une autorisation et garde le suivi borné155.
+    let remote_proof = match remote {
+        Some((task, epoch)) => match native_delegation::remote_dispatch_proof(state, &task) {
+            Ok(proof) => Some((proof, epoch)),
+            Err(error) => {
+                warn!("preuve distante155 indisponible: {error}");
+                return;
+            }
+        },
+        None => None,
+    };
     // Le callback n'attend pas state sous writer ; après acquisition, le
     // verrou métier reste détenu jusqu'au write pour figer pause/révocation.
     let mut permit = None;
@@ -954,6 +990,23 @@ fn emit(
                 return Err(fail("request_closed".into()));
             }
             if answer {
+                if let Some(placement) = &task.remote_placement {
+                    let Some((proof, epoch)) = &remote_proof else {
+                        return Err(fail("remote_permission_proof_required".into()));
+                    };
+                    if st
+                        .remote_workers
+                        .get(&placement.machine_id)
+                        .is_none_or(|worker| {
+                            &worker.epoch != epoch
+                                || worker.contact
+                                    != bridget_transport::protocol::WorkerContactState::Connected
+                        })
+                    {
+                        return Err(fail("worker_epoch_changed".into()));
+                    }
+                    native_delegation::recheck_remote_dispatch(&st, &task, proof).map_err(fail)?;
+                }
                 if !(row.delivery_state == "sent"
                     || receipt && row.delivery_state == "delivered" && row.sent_at.is_some())
                 {

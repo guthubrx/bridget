@@ -729,6 +729,8 @@ fn bootstrap159(
     let created = f.request(
         &mut parent,
         NativeDelegationRequest::Delegate {
+            machine_id: None,
+            project_id: None,
             resume_on_limit: None,
             fallback: Vec::new(),
             request_id: "latence159-bootstrap".into(),

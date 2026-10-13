@@ -1,5 +1,6 @@
 //! Registre déclaratif des types d'agents lancés par Bridget.
 
+use bridget_transport::protocol::IdentityCredential;
 use bridget_transport::{
     AdapterCapabilities, ModelCapabilities, ResolvedAgentDefinition, ResolvedMcpDefinition,
     SpawnRefusal,
@@ -22,6 +23,9 @@ const NATIVE_CODEX_COMMAND: &str = "/opt/homebrew/bin/codex";
 const MAX_PASS_ENV_ENTRIES: usize = 64;
 const MAX_ENV_NAME_BYTES: usize = 128;
 const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
+const MAX_MACHINES: usize = 16;
+const MAX_MACHINE_MAPPINGS: usize = 64;
+const MAX_MACHINE_REVISION: u64 = (1 << 53) - 1;
 /// Les coordinateurs de découverte ne réemploient jamais une définition
 /// d'agent ordinaire telle quelle : celle-ci peut volontairement avoir des
 /// permissions larges pour un autre usage. Le préfixe rend la génération
@@ -85,11 +89,62 @@ pub struct AgentDefinition {
 pub struct AgentRegistryFile {
     #[serde(default)]
     pub agents: BTreeMap<String, AgentDefinition>,
+    #[serde(default)]
+    pub machines: BTreeMap<String, MachineProvision>,
+}
+
+/// Autorité machine locale au maître, jamais dans une définition fournisseur figée.
+/// Les clés de `machines` et `mappings` portent machine_id et project_id.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MachineProvision {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    pub worker_id: String,
+    pub provisioning_revision: u64,
+    pub credential_fingerprint: String,
+    #[serde(default)]
+    pub allowed_agent_types: Vec<String>,
+    #[serde(default)]
+    pub mappings: BTreeMap<String, ProjectMapping>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectMapping {
+    pub source_host: String,
+    pub source_root: PathBuf,
+    pub remote_root: PathBuf,
+    pub expected_git_identity: String,
+    pub mapping_revision: u64,
+}
+
+impl MachineProvision {
+    pub fn permits_agent_type(&self, agent_type: &str) -> bool {
+        self.enabled
+            && self
+                .allowed_agent_types
+                .iter()
+                .any(|value| value == agent_type)
+    }
+
+    /// Authentification seule : enabled contrôle les nouvelles admissions.
+    /// Les commandes existantes restent contrôlables après désactivation.
+    pub fn matches_credential(&self, credential: &IdentityCredential) -> bool {
+        if credential.expose_for_attestation().is_empty() {
+            return false;
+        }
+        let digest = Sha256::digest(credential.expose_for_attestation().as_bytes());
+        self.credential_fingerprint == format!("{digest:x}")
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentRegistry {
     agents: BTreeMap<String, AgentDefinition>,
+    machines: BTreeMap<String, MachineProvision>,
     source: PathBuf,
 }
 
@@ -121,8 +176,9 @@ impl AgentRegistry {
         Self::load_from_path(config_path()?)
     }
 
-    fn load_from_path(source: PathBuf) -> Result<Self, String> {
+    pub(crate) fn load_from_path(source: PathBuf) -> Result<Self, String> {
         let mut agents = default_agents()?;
+        let mut machines = BTreeMap::new();
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
@@ -132,7 +188,12 @@ impl AgentRegistry {
                 let user: AgentRegistryFile = serde_json::from_str(&content)
                     .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
                 validate_registry(&user.agents, &source)?;
+                validate_machines(&user.machines)?;
+                if !user.machines.is_empty() {
+                    validate_private_machine_registry_parent(&source)?;
+                }
                 agents.extend(user.agents);
+                machines = user.machines;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -143,7 +204,11 @@ impl AgentRegistry {
             }
         }
         add_project_discovery_definitions(&mut agents);
-        Ok(Self { agents, source })
+        Ok(Self {
+            agents,
+            machines,
+            source,
+        })
     }
 
     pub fn from_json(content: &str, source: impl Into<PathBuf>) -> Result<Self, String> {
@@ -151,10 +216,40 @@ impl AgentRegistry {
         let user: AgentRegistryFile = serde_json::from_str(content)
             .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
         validate_registry(&user.agents, &source)?;
+        validate_machines(&user.machines)?;
         let mut agents = default_agents()?;
         agents.extend(user.agents);
         add_project_discovery_definitions(&mut agents);
-        Ok(Self { agents, source })
+        Ok(Self {
+            agents,
+            machines: user.machines,
+            source,
+        })
+    }
+
+    /// Les octets de from_json sont fournis par l'appelant ; seule load vérifie
+    /// les permissions du fichier. Aucun loader fournisseur ne copie ce registre.
+    pub fn machines(&self) -> &BTreeMap<String, MachineProvision> {
+        &self.machines
+    }
+
+    pub fn machine(&self, machine_id: &str) -> Result<&MachineProvision, String> {
+        let machine = self.machines.get(machine_id).ok_or("machine_unknown")?;
+        if !machine.enabled {
+            return Err("machine_disabled".into());
+        }
+        Ok(machine)
+    }
+
+    pub fn project_mapping(
+        &self,
+        machine_id: &str,
+        project_id: &str,
+    ) -> Result<&ProjectMapping, String> {
+        self.machine(machine_id)?
+            .mappings
+            .get(project_id)
+            .ok_or_else(|| "project_mapping_unknown".into())
     }
 
     pub fn get(&self, agent_type: &str) -> Result<&AgentDefinition, String> {
@@ -259,6 +354,7 @@ impl AgentRegistry {
         };
         Ok(Self {
             agents: BTreeMap::from([(agent_type.to_string(), definition)]),
+            machines: BTreeMap::new(),
             source: self.source.clone(),
         })
     }
@@ -306,7 +402,11 @@ impl AgentRegistry {
         let source = PathBuf::from("<définition-figée>");
         let agents = BTreeMap::from([(agent_type.to_string(), definition)]);
         validate_registry(&agents, &source)?;
-        Ok(Self { agents, source })
+        Ok(Self {
+            agents,
+            machines: BTreeMap::new(),
+            source,
+        })
     }
 
     pub fn source(&self) -> &Path {
@@ -361,6 +461,7 @@ impl AgentRegistry {
         )?;
         Self {
             agents: BTreeMap::from([(agent_type.into(), definition)]),
+            machines: BTreeMap::new(),
             source: self.source.clone(),
         }
         .pin_delegation_model(agent_type, model, effort)
@@ -374,6 +475,7 @@ impl AgentRegistry {
         model: &str,
         effort: Option<&str>,
     ) -> Result<Self, String> {
+        self.machines.clear();
         let definition = self
             .agents
             .get_mut(agent_type)
@@ -960,6 +1062,114 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
 fn config_path() -> Result<PathBuf, String> {
     crate::environment::Namespace::from_environment()
         .map(|namespace| namespace.root.join("agents.json"))
+}
+
+fn machine_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn mapping_root(path: &Path) -> bool {
+    // Validation lexicale seulement : la racine Linux ne se résout pas sur le Mac.
+    path.to_str()
+        .is_some_and(|value| value.len() <= 4096 && !value.chars().any(char::is_control))
+        && path.is_absolute()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Normal(_)
+            )
+        })
+}
+
+fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -> Result<(), String> {
+    if machines.len() > MAX_MACHINES {
+        return Err("machine_registry_limit".into());
+    }
+    let mut workers = std::collections::BTreeSet::new();
+    for (machine_id, machine) in machines {
+        if !machine_label(machine_id)
+            || !machine_label(&machine.worker_id)
+            || machine
+                .display_name
+                .as_deref()
+                .is_some_and(|name| !machine_label(name))
+            || !workers.insert(&machine.worker_id)
+            || !(1..=MAX_MACHINE_REVISION).contains(&machine.provisioning_revision)
+            || machine.credential_fingerprint.len() != 64
+            || !machine
+                .credential_fingerprint
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("machine_provision_invalid".into());
+        }
+        if machine.mappings.len() > MAX_MACHINE_MAPPINGS
+            || machine.allowed_agent_types.len() > MAX_MACHINE_MAPPINGS
+        {
+            return Err("machine_mapping_limit".into());
+        }
+        let mut types = std::collections::BTreeSet::new();
+        if machine
+            .allowed_agent_types
+            .iter()
+            .any(|value| !machine_label(value) || !types.insert(value))
+        {
+            return Err("machine_agent_types_invalid".into());
+        }
+        for (project_id, mapping) in &machine.mappings {
+            if !machine_label(project_id)
+                || !machine_label(&mapping.source_host)
+                || !mapping_root(&mapping.source_root)
+                || !mapping_root(&mapping.remote_root)
+                || mapping.expected_git_identity.is_empty()
+                || mapping.expected_git_identity.len() > 2048
+                || mapping.expected_git_identity.chars().any(char::is_control)
+                || !(1..=MAX_MACHINE_REVISION).contains(&mapping.mapping_revision)
+            {
+                return Err("project_mapping_invalid".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_machine_registry_parent(source: &Path) -> Result<(), String> {
+    let parent = source.parent().ok_or("machine_registry_parent_invalid")?;
+    let metadata =
+        std::fs::symlink_metadata(parent).map_err(|_| "machine_registry_parent_unavailable")?;
+    if !metadata.is_dir()
+        || metadata.file_type().is_symlink()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err("machine_registry_parent_not_private".into());
+    }
+    Ok(())
+}
+
+/// À appeler sur l'hôte qui possède ces chemins, à Prepare puis avant RELEASE.
+/// Les droits globaux d'un même UID restent hors de cette garde de mapping.
+pub(crate) fn validate_unprotected_local_path(
+    candidate: &Path,
+    protected: &[PathBuf],
+) -> Result<PathBuf, String> {
+    if !mapping_root(candidate) || protected.is_empty() {
+        return Err("machine_path_unverifiable".into());
+    }
+    let candidate = std::fs::canonicalize(candidate).map_err(|_| "machine_path_unverifiable")?;
+    for path in protected {
+        if !mapping_root(path) {
+            return Err("machine_path_unverifiable".into());
+        }
+        let protected = std::fs::canonicalize(path).map_err(|_| "machine_path_unverifiable")?;
+        if candidate.starts_with(&protected) || protected.starts_with(&candidate) {
+            return Err("machine_path_protected".into());
+        }
+    }
+    Ok(candidate)
 }
 
 fn validate_registry(
@@ -1554,6 +1764,209 @@ mod tests {
     fn write_registry(path: &Path, mode: u32) {
         std::fs::write(path, "{\"agents\":{}}").unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn remote162_registry_value() -> serde_json::Value {
+        serde_json::json!({"machines":{"cartae":{
+            "worker_id":"worker-cartae", "provisioning_revision":1,
+            "credential_fingerprint":format!("{:x}", Sha256::digest(b"private-worker-credential")),
+            "allowed_agent_types":["codex"],
+            "mappings":{"cartae":{
+                "source_host":"mac", "source_root":"/Users/moi/projects/cartae",
+                "remote_root":"/home/moi/20.cartae", "expected_git_identity":"guthubrx/cartae",
+                "mapping_revision":1
+            }}
+        }}})
+    }
+
+    #[test]
+    fn remote162_absence_et_defaut_desactive_ne_creent_aucune_route() {
+        let old = AgentRegistry::from_json("{}", "/tmp/agents.json").unwrap();
+        assert!(old.machines().is_empty());
+        assert_eq!(old.machine("cartae").unwrap_err(), "machine_unknown");
+        let value = remote162_registry_value();
+        let registry = AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").unwrap();
+        assert_eq!(registry.machine("cartae").unwrap_err(), "machine_disabled");
+        let machine = &registry.machines()["cartae"];
+        assert!(!machine.permits_agent_type("codex"));
+        assert!(
+            machine
+                .matches_credential(&IdentityCredential::new("private-worker-credential".into()))
+        );
+        assert!(!machine.matches_credential(&IdentityCredential::new("another-credential".into())));
+        assert!(registry.project_mapping("cartae", "cartae").is_err());
+    }
+
+    #[test]
+    fn remote162_route_explicitement_activee_authentifie_sans_secret_dans_registre() {
+        let mut value = remote162_registry_value();
+        value["machines"]["cartae"]["enabled"] = true.into();
+        value["machines"]["cartae"]["display_name"] = "Serveur Cartae".into();
+        let registry = AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").unwrap();
+        let machine = registry.machine("cartae").unwrap();
+        assert_eq!(machine.display_name.as_deref(), Some("Serveur Cartae"));
+        assert!(machine.permits_agent_type("codex"));
+        assert!(!machine.permits_agent_type("claude"));
+        assert!(
+            machine
+                .matches_credential(&IdentityCredential::new("private-worker-credential".into()))
+        );
+        assert!(!machine.matches_credential(&IdentityCredential::new("another-credential".into())));
+        assert!(!format!("{registry:?}").contains("private-worker-credential"));
+        assert_eq!(
+            registry
+                .project_mapping("cartae", "cartae")
+                .unwrap()
+                .remote_root,
+            Path::new("/home/moi/20.cartae")
+        );
+        assert_eq!(
+            registry.project_mapping("cartae", "missing").unwrap_err(),
+            "project_mapping_unknown"
+        );
+        // Aucune résolution de la racine Linux n'est tentée sur le maître.
+    }
+
+    #[test]
+    fn remote162_definitions_fournisseur_figees_excluent_autorite_machine() {
+        let mut value = remote162_registry_value();
+        value["machines"]["cartae"]["enabled"] = true.into();
+        let registry = AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").unwrap();
+        let resolved = registry.resolved_definition("codex").unwrap();
+        assert!(
+            AgentRegistry::from_resolved("codex", &resolved)
+                .unwrap()
+                .machines()
+                .is_empty()
+        );
+        assert!(
+            registry
+                .for_spawn_posture(
+                    "codex",
+                    bridget_transport::protocol::SpawnPosture::Development
+                )
+                .unwrap()
+                .machines()
+                .is_empty()
+        );
+        assert!(registry.machine("cartae").is_ok());
+    }
+
+    #[test]
+    fn remote162_configuration_invalide_refusee_atomiquement() {
+        for (field, bad) in [
+            ("provisioning_revision", serde_json::json!(0)),
+            (
+                "provisioning_revision",
+                serde_json::json!(MAX_MACHINE_REVISION + 1),
+            ),
+            ("credential_fingerprint", serde_json::json!("not-a-digest")),
+            ("worker_id", serde_json::json!("worker\nforged")),
+            ("display_name", serde_json::json!("machine\nforged")),
+            ("allowed_agent_types", serde_json::json!(["codex", "codex"])),
+            ("credential", serde_json::json!("must-not-be-stored")),
+        ] {
+            let mut value = remote162_registry_value();
+            value["machines"]["cartae"][field] = bad;
+            assert!(
+                AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_err(),
+                "{field}"
+            );
+        }
+        for root in ["relative", "/home/moi/../private", "/home/moi/\u{0}"] {
+            let mut value = remote162_registry_value();
+            value["machines"]["cartae"]["mappings"]["cartae"]["remote_root"] = root.into();
+            assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_err());
+        }
+        assert!(AgentRegistry::from_json("{invalid", "/tmp/agents.json").is_err());
+    }
+
+    #[test]
+    fn remote162_plafonds_et_identite_worker_unique() {
+        let mut value = remote162_registry_value();
+        let machine = value["machines"]["cartae"].clone();
+        value["machines"]["duplicate"] = machine.clone();
+        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_err());
+        value["machines"] = serde_json::json!({});
+        for index in 0..MAX_MACHINES {
+            let mut item = machine.clone();
+            item["worker_id"] = format!("worker-{index}").into();
+            value["machines"][format!("machine-{index}")] = item;
+        }
+        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_ok());
+        value["machines"]["extra"] = machine;
+        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_err());
+        let mut value = remote162_registry_value();
+        let mapping = value["machines"]["cartae"]["mappings"]["cartae"].clone();
+        value["machines"]["cartae"]["mappings"] = serde_json::json!({});
+        for index in 0..MAX_MACHINE_MAPPINGS {
+            value["machines"]["cartae"]["mappings"][format!("project-{index}")] = mapping.clone();
+        }
+        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_ok());
+        value["machines"]["cartae"]["mappings"]["extra"] = mapping;
+        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_err());
+    }
+
+    #[test]
+    fn remote162_registre_sur_disque_exige_fichier_et_parent_prives() {
+        let root = test_root("remote162-private");
+        let path = root.join("agents.json");
+        std::fs::write(&path, remote162_registry_value().to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            AgentRegistry::load_from_path(path.clone()).unwrap_err(),
+            "machine_registry_parent_not_private"
+        );
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            AgentRegistry::load_from_path(path.clone())
+                .unwrap()
+                .machines()
+                .len(),
+            1
+        );
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(AgentRegistry::load_from_path(path.clone()).is_err());
+        let link = root.join("link.json");
+        symlink(&path, &link).unwrap();
+        assert!(AgentRegistry::load_from_path(link).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let parent_link = root.join("parent-link");
+        symlink(&root, &parent_link).unwrap();
+        assert_eq!(
+            AgentRegistry::load_from_path(parent_link.join("agents.json")).unwrap_err(),
+            "machine_registry_parent_not_private"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote162_chemins_proteges_resolus_sur_hote_refusent_tout_chevauchement() {
+        let root = test_root("remote162-paths");
+        let private = root.join("worker");
+        let project = root.join("project");
+        std::fs::create_dir_all(private.join("slot")).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        let protected = vec![private.clone()];
+        for path in [&root, &private, &private.join("slot")] {
+            assert_eq!(
+                validate_unprotected_local_path(path, &protected).unwrap_err(),
+                "machine_path_protected"
+            );
+        }
+        let link = root.join("disguised-project");
+        symlink(&private, &link).unwrap();
+        assert_eq!(
+            validate_unprotected_local_path(&link, &protected).unwrap_err(),
+            "machine_path_protected"
+        );
+        assert!(validate_unprotected_local_path(&project, &protected).is_ok());
+        assert!(validate_unprotected_local_path(&root.join("absent"), &protected).is_err());
+        assert!(
+            validate_unprotected_local_path(&project, &[root.join("unknown-private")]).is_err()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

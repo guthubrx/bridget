@@ -370,6 +370,7 @@ impl CodexAppServerTransport {
             .envs(environment.iter().cloned())
             .env_remove("BRIDGET_NATIVE_CHILD_POLICY")
             .env_remove("BRIDGET_NATIVE_PERMISSION_SOURCES")
+            .env_remove("BRIDGET_REMOTE_RESULT_CONTEXT")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(if inherit_stderr {

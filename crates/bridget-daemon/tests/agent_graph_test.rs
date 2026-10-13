@@ -55,6 +55,7 @@ fn order(command_id: &str, name: &str, ownership: Option<SpawnOwnership>) -> Spa
         hash.finish() & 0xffffffffffff
     );
     SpawnOrder {
+        remote_placement: None,
         posture: None,
         agent_type: "fixture".to_string(),
         project: None,

@@ -1094,6 +1094,12 @@ struct DaemonState {
     /// Les clients attach négocient ce rôle explicite ; l'absence d'entrée
     /// reste un wrapper pour préserver les agents 007 déjà connectés.
     connection_roles: HashMap<String, ConnectionRole>,
+    remote_workers: HashMap<String, RemoteWorkerConnection>,
+    remote_native_ready: HashSet<String>,
+    /// Curseur de sondage uniquement ; aucune preuve d'arrêt ni permis durable.
+    remote_start_reconcile_last: Option<(String, Instant)>,
+    worker_probe_connections: HashSet<String>,
+    pending_worker_responses: HashMap<String, PendingWorkerResponse>,
     terminal_sessions: HashSet<String>,
     /// Une négociation appartient à la connexion, tandis que le scope peut
     /// volontairement être partagé par plusieurs retries coopératifs.
@@ -1126,6 +1132,23 @@ struct DaemonState {
     /// Remises idempotentes à écrire juste après la réponse `Registered`.
     /// L'ordre rend le réenregistrement observable avant toute redélivrance.
     pending_post_response_controls: HashMap<String, Vec<DeferredControl>>,
+}
+
+struct RemoteWorkerConnection {
+    identity: bridget_transport::protocol::WorkerIdentity,
+    conn_id: String,
+    epoch: String,
+    last_contact: Instant,
+    last_contact_at: i64,
+    contact: bridget_transport::protocol::WorkerContactState,
+}
+
+struct PendingWorkerResponse {
+    conn_id: String,
+    epoch: String,
+    worker: bridget_transport::protocol::WorkerIdentity,
+    command: bridget_transport::protocol::WorkerCommandIdentity,
+    reply: mpsc::SyncSender<bridget_transport::protocol::WorkerResponseOperation>,
 }
 
 struct ManagedSpawnRecord {
@@ -4960,6 +4983,11 @@ impl DaemonState {
             auxiliary_connections: HashSet::new(),
             identity_credentials: HashMap::new(),
             connection_roles: HashMap::new(),
+            remote_workers: HashMap::new(),
+            remote_native_ready: HashSet::new(),
+            remote_start_reconcile_last: None,
+            worker_probe_connections: HashSet::new(),
+            pending_worker_responses: HashMap::new(),
             terminal_sessions: HashSet::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
@@ -5535,7 +5563,8 @@ impl DaemonState {
         let live_names: std::collections::HashSet<String> =
             agents.iter().map(|agent| agent.agent_id.clone()).collect();
         for record in self.managed_spawns.values().filter(|record| {
-            (self.recovery_commands.contains(&record.lease.command_id)
+            (record.lease.remote_placement.is_some()
+                || self.recovery_commands.contains(&record.lease.command_id)
                 || self
                     .relaunch_requesters
                     .contains_key(&record.lease.command_id))
@@ -5555,7 +5584,9 @@ impl DaemonState {
                 .as_ref()
                 .map(definition_presence_fields)
                 .unwrap_or_else(|| ("unknown".to_string(), None));
-            let lifecycle_state = if self.recovery_commands.contains(&record.lease.command_id) {
+            let lifecycle_state = if record.lease.remote_placement.is_some() {
+                "unreachable"
+            } else if self.recovery_commands.contains(&record.lease.command_id) {
                 "recovering"
             } else {
                 "relaunching"
@@ -5565,13 +5596,21 @@ impl DaemonState {
                 display_name: display_name(&record.lease.name),
                 agent_type: record.agent_type.clone(),
                 connection_id: String::new(),
-                host: "local".to_string(),
+                host: record.lease.remote_placement.as_ref().map_or_else(
+                    || "local".to_string(),
+                    |placement| placement.machine_id.clone(),
+                ),
                 transport,
                 channel: None,
                 mode,
                 location: None,
                 execution: execution_projection(&record.lease.name),
-                os: std::env::consts::OS.to_string(),
+                os: if record.lease.remote_placement.is_some() {
+                    "unknown"
+                } else {
+                    std::env::consts::OS
+                }
+                .to_string(),
                 agent_link: agent_link_projection(&record.lease.instance_id),
                 state: lifecycle_state.to_string(),
                 last_seen_secs: 0,
@@ -5790,6 +5829,23 @@ fn reserve_managed_recoveries(
     }
 
     for candidate in candidates {
+        if candidate.lease.remote_placement.is_some() {
+            state.managed_by_instance.insert(
+                candidate.lease.instance_id.clone(),
+                candidate.lease.command_id.clone(),
+            );
+            state.managed_spawns.insert(
+                candidate.lease.command_id.clone(),
+                ManagedSpawnRecord {
+                    lease: candidate.lease,
+                    agent_type: candidate.agent_type,
+                    requester_conns: Vec::new(),
+                    wrapper_conn: None,
+                    stop: Arc::new(ManagedStopControl::new()),
+                },
+            );
+            continue;
+        }
         if native_children.contains(&candidate.lease.name) {
             continue;
         }
@@ -5832,6 +5888,10 @@ fn reserve_managed_recoveries(
             continue;
         }
         if in_flight_names.contains(&name) {
+            continue;
+        }
+        if equipier.remote_placement.is_some() {
+            // Sans reçu SQL réhydratable, aucun nouveau lancement ni PID local déduit.
             continue;
         }
         if equipier.lifecycle_state != DesiredLifecycleState::Running || !equipier.persistent {
@@ -5877,6 +5937,7 @@ fn reserve_managed_recoveries(
             continue;
         };
         let order = FleetSpawnOrder {
+            remote_placement: equipier.remote_placement.clone(),
             posture: None,
             agent_type: equipier.agent_type,
             requested_name: Some(name.clone()),
@@ -6433,6 +6494,15 @@ fn schedule_execution_recovery(
         }
     };
 
+    if state
+        .delegation_store
+        .for_child(agent_name)
+        .is_ok_and(|task| task.is_some_and(|task| task.remote_placement.is_some()))
+    {
+        // La prochaine tick réserve le slot distant hors verrou, puis remet
+        // cette même reconstruction durable. Aucun second UUID ni fournisseur.
+        return;
+    }
     if let Err(error) =
         deliver_reconstructed(state, conn_id, instance_id, &reconstructed, now, false)
     {
@@ -6481,6 +6551,24 @@ pub(super) fn deliver_reconstructed(
     quota_relaunch: bool,
 ) -> Result<&'static str, ReconstructedDeliveryError> {
     use ReconstructedDeliveryError::{NonReprenable, Storage};
+    if let Some(task) = state
+        .delegation_store
+        .for_mission(&reconstructed.message.id)
+        .map_err(Storage)?
+        && task.remote_placement.is_some()
+    {
+        let command = native_delegation::remote_command_identity(state, &task)
+            .map_err(|error| NonReprenable(format!("remote_identity:{error:?}")))?;
+        if !task.remote_result_slots.iter().any(|slot| {
+            slot.identity.command == command
+                && slot.identity.mission_id == task.mission
+                && slot.identity.round == task.round_no()
+                && slot.identity.execution_id == reconstructed.snapshot.execution_id
+                && slot.identity.execution_generation == reconstructed.snapshot.generation
+        }) {
+            return Err(NonReprenable("remote_result_slot_pending".into()));
+        }
+    }
     // Ordinary conserve exactement son ancien now. Quota relit l’horloge réelle
     // pour l’expiration, sans l’introduire dans le canonique de la continuation.
     let now = if quota_relaunch {
@@ -6838,6 +6926,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             }
             let now = std::time::Instant::now();
 
+            remote_worker_contact_tick(&st_reminder);
             native_delegation::tick(&st_reminder);
             let wake_clock = Instant::now();
             let wake_now = unix_now_secs();
@@ -7188,6 +7277,16 @@ fn handle_connection(
                 Err(error) => return Err(error.into()),
             };
             let wire_len = frame.len();
+            if wire_len > bridget_transport::protocol::MAX_WORKER_FRAME_BYTES
+                && state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .connection_roles
+                    .get(&conn_id)
+                    == Some(&ConnectionRole::Worker)
+            {
+                return Err("worker frame exceeds bound".into());
+            }
             let raw = std::str::from_utf8(&frame)?;
             let line = raw
                 .strip_suffix('\n')
@@ -7350,9 +7449,23 @@ fn handle_connection(
                         event: bridget_transport::protocol::HumanThreadWatchEvent::Error { .. }
                     }
                 );
-                let json = encode(&dtw)?;
-                writeln!(my_writer, "{}", json)?;
-                my_writer.flush()?;
+                let worker_writer = {
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    (st.connection_roles.get(&conn_id) == Some(&ConnectionRole::Worker))
+                        .then(|| st.connections.get(&conn_id).cloned())
+                        .flatten()
+                };
+                if let Some(writer) = worker_writer {
+                    push_control_message_until(
+                        &writer,
+                        &dtw,
+                        Instant::now() + CANCEL_NOTIFICATION_BUDGET,
+                    )?;
+                } else {
+                    let json = encode(&dtw)?;
+                    writeln!(my_writer, "{}", json)?;
+                    my_writer.flush()?;
+                }
                 if watch_terminal {
                     break;
                 }
@@ -7411,6 +7524,8 @@ fn handle_connection(
         st.communication_projects.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
+        remote_worker_disconnected(&mut st, &conn_id);
+        st.worker_probe_connections.remove(&conn_id);
         st.terminal_sessions.remove(&conn_id);
         st.client_negotiations.remove(&conn_id);
         st.human_thread_watches.remove(&conn_id);
@@ -11965,13 +12080,24 @@ fn handle_idempotent_send_with_result_authority(
             return issue_response(&key, IdempotencyIssue::IdempotencyExpired);
         }
     };
-    let captured = match native_delegation::capture_reply(st, conn_id, &message) {
+    // L'autorité de résultat a déjà été vérifiée ci-dessus. Sa notification
+    // est une sortie du store canonique, jamais un nouvel ingress du wrapper.
+    let capture = if authority.is_some() {
+        Ok(false)
+    } else {
+        native_delegation::capture_reply(st, conn_id, &message)
+    };
+    let captured = match capture {
         Ok(captured) => captured,
         Err(error) => {
             error!("capture native non persistée: {error}");
             return DaemonToWrapper::Nack {
                 id: message.id.clone(),
-                reason: "native_result_not_persisted".into(),
+                reason: if error == "remote_result_requires_worker" {
+                    error
+                } else {
+                    "native_result_not_persisted".into()
+                },
             };
         }
     };
@@ -12791,6 +12917,20 @@ fn handle_execution_control(
 }
 
 fn prepare_managed_stop(state: &Arc<Mutex<DaemonState>>, name: &str) -> ManagedStopTarget {
+    let remote = state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .delegation_store
+        .for_child(name);
+    match remote {
+        Ok(Some(task)) if task.remote_placement.is_some() => {
+            return ManagedStopTarget::Immediate(native_delegation::cancel_remote_task(
+                state, &task,
+            ));
+        }
+        Err(error) => return ManagedStopTarget::Immediate(StopOutcome::Timeout { state: error }),
+        _ => {}
+    }
     let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
     let record = st
         .managed_spawns
@@ -12822,6 +12962,11 @@ fn classify_stop(
     desired: Option<&crate::desired_state::DesiredEquipier>,
 ) -> StopKind {
     match record {
+        Some(record) if record.lease.remote_placement.is_some() => {
+            StopKind::Immediate(StopOutcome::Timeout {
+                state: "arrêt distant exige une preuve worker".into(),
+            })
+        }
         Some(record) => StopKind::Supervised {
             lease: record.lease.clone(),
             completion: Arc::clone(&record.stop),
@@ -18032,6 +18177,435 @@ fn handle_human_thread_watch(
     None
 }
 
+fn complete_remote_registration(st: &mut DaemonState, command_id: &str) {
+    if !st.remote_native_ready.contains(command_id) {
+        return;
+    }
+    let Some(record) = st.managed_spawns.get(command_id) else {
+        return;
+    };
+    if record.lease.remote_placement.is_none() {
+        return;
+    }
+    let Some(conn) = record.wrapper_conn.as_ref() else {
+        return;
+    };
+    if st.conn_instances.get(conn) != Some(&record.lease.instance_id)
+        || st.conn_names.get(conn) != Some(&record.lease.name)
+    {
+        return;
+    }
+    if st
+        .fleet
+        .desired_entry(&record.lease.name)
+        .ok()
+        .flatten()
+        .is_some_and(|entry| {
+            entry.command_id == record.lease.command_id
+                && entry.generation == record.lease.generation
+                && entry.lifecycle_state == crate::desired_state::DesiredLifecycleState::Running
+        })
+    {
+        return;
+    }
+    if let Err(error) =
+        st.fleet
+            .register_connected(&record.lease, &record.lease.instance_id, unix_timestamp())
+    {
+        warn!("connexion worker natif non publiée: {error}");
+    }
+}
+
+fn remote_worker_has_command(
+    st: &DaemonState,
+    worker: &bridget_transport::protocol::WorkerIdentity,
+    command: Option<&bridget_transport::protocol::WorkerCommandIdentity>,
+) -> bool {
+    st.idempotency
+        .spawn_commands(&st.fleet.supervisor_scope())
+        .is_ok_and(|commands| {
+            commands.iter().any(|known| {
+                known
+                    .remote_placement
+                    .as_ref()
+                    .is_some_and(|placement| placement.matches_worker(worker))
+                    && command.is_none_or(|command| {
+                        known.command_id == command.command_id
+                            && known.generation == command.generation
+                            && known.instance_id.as_deref() == Some(command.instance_id.as_str())
+                    })
+            })
+        })
+}
+
+fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
+    use bridget_transport::protocol::WorkerContactState;
+    for worker in st
+        .remote_workers
+        .values_mut()
+        .filter(|w| w.conn_id == conn_id && w.contact != WorkerContactState::Stale)
+    {
+        worker.contact = WorkerContactState::Stale;
+        if let Err(error) = st
+            .delegation_store
+            .remote_contact_changed(&worker.identity.machine_id, &worker.identity.worker_id)
+        {
+            warn!("worker contact invalidation failed: {error}");
+        }
+    }
+    st.pending_worker_responses
+        .retain(|_, pending| pending.conn_id != conn_id);
+}
+
+fn remote_worker_contact_tick(state: &Arc<Mutex<DaemonState>>) {
+    use bridget_transport::protocol::{WORKER_STALE_SECS, WorkerContactState};
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let stale: Vec<_> = st
+        .remote_workers
+        .values()
+        .filter(|worker| {
+            worker.contact == WorkerContactState::Connected
+                && worker.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
+        })
+        .map(|worker| worker.conn_id.clone())
+        .collect();
+    for conn_id in stale {
+        remote_worker_disconnected(&mut st, &conn_id);
+    }
+}
+
+fn handle_worker_message(
+    state: &Arc<Mutex<DaemonState>>,
+    conn_id: &str,
+    message: WrapperToDaemon,
+) -> Option<DaemonToWrapper> {
+    use bridget_transport::protocol::*;
+    let refused = |reason| Some(DaemonToWrapper::WorkerRejected { reason });
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    if let WrapperToDaemon::WorkerHello { hello } = message {
+        if let Err(reason) = hello.validate() {
+            return refused(reason);
+        }
+        if st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() }) {
+            return refused(WorkerRefusal::Unauthorized);
+        }
+        let Some(provision) = st.registry.machines().get(&hello.identity.machine_id) else {
+            return refused(WorkerRefusal::Unauthorized);
+        };
+        if !provision.enabled && !remote_worker_has_command(&st, &hello.identity, None) {
+            return refused(WorkerRefusal::Unauthorized);
+        }
+        if provision.worker_id != hello.identity.worker_id
+            || provision.provisioning_revision != hello.identity.provisioning_revision
+            || !provision.matches_credential(&hello.credential)
+        {
+            return refused(WorkerRefusal::Unauthorized);
+        }
+        if st
+            .remote_workers
+            .values()
+            .any(|worker| worker.conn_id == conn_id)
+        {
+            return refused(WorkerRefusal::StaleConnection);
+        }
+        let old = st.remote_workers.get(&hello.identity.machine_id);
+        if old.is_some_and(|worker| worker.identity != hello.identity) {
+            return refused(WorkerRefusal::PlacementMismatch);
+        }
+        let previous_conn = old.map(|worker| worker.conn_id.clone());
+        let previous_epoch = old.map(|worker| worker.epoch.clone());
+        if old.is_none_or(|worker| worker.contact != WorkerContactState::Connected)
+            && st
+                .delegation_store
+                .remote_contact_changed(&hello.identity.machine_id, &hello.identity.worker_id)
+                .is_err()
+        {
+            return refused(WorkerRefusal::StoreUnavailable);
+        }
+        st.connection_roles
+            .insert(conn_id.into(), ConnectionRole::Worker);
+        st.worker_probe_connections.remove(conn_id);
+        let epoch = uuid::Uuid::new_v4().to_string();
+        st.remote_workers.insert(
+            hello.identity.machine_id.clone(),
+            RemoteWorkerConnection {
+                identity: hello.identity.clone(),
+                conn_id: conn_id.into(),
+                epoch: epoch.clone(),
+                last_contact: Instant::now(),
+                last_contact_at: unix_now_secs(),
+                contact: WorkerContactState::Connected,
+            },
+        );
+        let old_writer = previous_conn
+            .as_ref()
+            .and_then(|id| st.connections.get(id).cloned());
+        if let Some(previous) = &previous_conn {
+            st.pending_worker_responses
+                .retain(|_, pending| &pending.conn_id != previous);
+        }
+        drop(st);
+        if let Some(previous_epoch) = previous_epoch {
+            info!(
+                "worker_connection_replaced machine_id={} worker_id={} previous_epoch={} connection_epoch={}",
+                hello.identity.machine_id, hello.identity.worker_id, previous_epoch, epoch
+            );
+        }
+        // Le remplacement est déjà publié ; fermer le socket hors verrou global.
+        if let Some(writer) = old_writer {
+            let _ = writer
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_ref()
+                .shutdown(std::net::Shutdown::Both);
+        }
+        return Some(DaemonToWrapper::WorkerAccepted {
+            accepted: WorkerAccepted {
+                version: REMOTE_WORKER_VERSION,
+                identity: hello.identity,
+                connection_epoch: epoch,
+            },
+        });
+    }
+    let Some(machine) = st
+        .remote_workers
+        .values()
+        .find(|worker| worker.conn_id == conn_id)
+        .map(|worker| worker.identity.machine_id.clone())
+    else {
+        return refused(WorkerRefusal::Unauthorized);
+    };
+    match message {
+        WrapperToDaemon::Heartbeat => {
+            let worker = &st.remote_workers[&machine];
+            if worker.contact != WorkerContactState::Connected
+                && st
+                    .delegation_store
+                    .remote_contact_changed(&machine, &worker.identity.worker_id)
+                    .is_err()
+            {
+                return refused(WorkerRefusal::StoreUnavailable);
+            }
+            let worker = st.remote_workers.get_mut(&machine).unwrap();
+            worker.contact = WorkerContactState::Connected;
+            worker.last_contact = Instant::now();
+            worker.last_contact_at = unix_now_secs();
+            None
+        }
+        WrapperToDaemon::WorkerResponse { response } => {
+            if let Err(reason) = response.validate() {
+                return refused(reason);
+            }
+            let worker = &st.remote_workers[&machine];
+            if response.connection_epoch != worker.epoch || response.worker != worker.identity {
+                return refused(WorkerRefusal::StaleConnection);
+            }
+            if let WorkerResponseOperation::FinalResult { result } = &response.response {
+                match native_delegation::capture_remote_result(&mut st, &response.worker, result) {
+                    Ok(disposition) => {
+                        return Some(DaemonToWrapper::WorkerRequest {
+                            request: WorkerRequest {
+                                version: REMOTE_WORKER_VERSION,
+                                correlation_id: response.correlation_id,
+                                connection_epoch: response.connection_epoch,
+                                worker: response.worker,
+                                command: response.command,
+                                request: WorkerRequestOperation::ResultDisposition {
+                                    result: WorkerResultDisposition {
+                                        identity: result.identity.clone(),
+                                        result_digest: result.digest.clone(),
+                                        disposition,
+                                    },
+                                },
+                            },
+                        });
+                    }
+                    Err(reason) => return refused(reason),
+                }
+            }
+            if let WorkerResponseOperation::Observation { observation } = &response.response {
+                if !remote_worker_has_command(&st, &response.worker, Some(&response.command))
+                    || !st
+                        .delegation_store
+                        .get(&response.command.task_id)
+                        .is_ok_and(|task| {
+                            task.is_some_and(|task| {
+                                native_delegation::remote_command_identity(&st, &task)
+                                    .is_ok_and(|identity| identity == response.command)
+                            })
+                        })
+                {
+                    return refused(WorkerRefusal::CommandMismatch);
+                }
+                if matches!(
+                    observation.phase,
+                    WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
+                ) {
+                    if let Some(lease) = st
+                        .managed_spawns
+                        .get(&response.command.command_id)
+                        .map(|record| record.lease.clone())
+                    {
+                        if lease.instance_id != response.command.instance_id
+                            || lease.generation != response.command.generation
+                        {
+                            return refused(WorkerRefusal::CommandMismatch);
+                        }
+                        if st.fleet.invalidate_for_stop(&lease).is_err() {
+                            return refused(WorkerRefusal::StoreUnavailable);
+                        }
+                        st.managed_spawns.remove(&lease.command_id);
+                        st.managed_by_instance.remove(&lease.instance_id);
+                        st.remote_native_ready.remove(&lease.command_id);
+                        st.managed_terminal_instances.insert(lease.instance_id);
+                    }
+                }
+                if observation.native_ready && observation.phase == WorkerCommandPhase::Released {
+                    st.remote_native_ready
+                        .insert(response.command.command_id.clone());
+                    complete_remote_registration(&mut st, &response.command.command_id);
+                }
+            }
+            let Some(pending) = st.pending_worker_responses.get(&response.correlation_id) else {
+                if matches!(
+                    &response.response,
+                    WorkerResponseOperation::Observation { .. }
+                        | WorkerResponseOperation::DispositionRecorded { .. }
+                ) && remote_worker_has_command(&st, &response.worker, Some(&response.command))
+                {
+                    return None;
+                }
+
+                // Les résultats spontanés seront raccordés à l'ingress durable T023.
+                return refused(WorkerRefusal::CommandMismatch);
+            };
+            if pending.conn_id != conn_id
+                || pending.epoch != response.connection_epoch
+                || pending.worker != response.worker
+                || pending.command != response.command
+            {
+                return refused(WorkerRefusal::CommandMismatch);
+            }
+            let pending = st
+                .pending_worker_responses
+                .remove(&response.correlation_id)
+                .unwrap();
+            let _ = pending.reply.try_send(response.response);
+            None
+        }
+        _ => refused(WorkerRefusal::Unauthorized),
+    }
+}
+
+fn remote_worker_roundtrip(
+    state: &Arc<Mutex<DaemonState>>,
+    worker: &bridget_transport::protocol::WorkerIdentity,
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+    operation: bridget_transport::protocol::WorkerRequestOperation,
+    deadline: Instant,
+) -> Result<
+    bridget_transport::protocol::WorkerResponseOperation,
+    bridget_transport::protocol::WorkerRefusal,
+> {
+    use bridget_transport::protocol::*;
+    let correlation_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = mpsc::sync_channel(1);
+    let (writer, request, conn_id) = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let provision = st
+            .registry
+            .machines()
+            .get(&worker.machine_id)
+            .ok_or(WorkerRefusal::Unauthorized)?;
+        if !provision.enabled
+            && matches!(
+                &operation,
+                WorkerRequestOperation::Prepare { .. }
+                    | WorkerRequestOperation::Start { .. }
+                    | WorkerRequestOperation::Release { .. }
+                    | WorkerRequestOperation::ReserveResultSlot { .. }
+            )
+        {
+            return Err(WorkerRefusal::Unauthorized);
+        }
+        if !provision.enabled && !remote_worker_has_command(&st, worker, Some(command)) {
+            return Err(WorkerRefusal::CommandMismatch);
+        }
+        if provision.worker_id != worker.worker_id
+            || provision.provisioning_revision != worker.provisioning_revision
+        {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let session = st
+            .remote_workers
+            .get(&worker.machine_id)
+            .ok_or(WorkerRefusal::WorkerUnavailable)?;
+        if session.identity != *worker
+            || session.contact != WorkerContactState::Connected
+            || session.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
+        {
+            return Err(WorkerRefusal::WorkerUnavailable);
+        }
+        let writer = st
+            .connections
+            .get(&session.conn_id)
+            .cloned()
+            .ok_or(WorkerRefusal::WorkerUnavailable)?;
+        let conn_id = session.conn_id.clone();
+        let request = WorkerRequest {
+            version: REMOTE_WORKER_VERSION,
+            correlation_id: correlation_id.clone(),
+            connection_epoch: session.epoch.clone(),
+            worker: worker.clone(),
+            command: command.clone(),
+            request: operation,
+        };
+        request.validate()?;
+        if st.pending_worker_responses.len() >= MAX_WORKER_STORE_ENTRIES {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        st.pending_worker_responses.insert(
+            correlation_id.clone(),
+            PendingWorkerResponse {
+                conn_id: conn_id.clone(),
+                epoch: request.connection_epoch.clone(),
+                worker: worker.clone(),
+                command: command.clone(),
+                reply: tx,
+            },
+        );
+        (writer, request, conn_id)
+    };
+    let epoch = request.connection_epoch.clone();
+    let written = push_control_message_until(
+        &writer,
+        &DaemonToWrapper::WorkerRequest { request },
+        deadline,
+    )
+    .is_ok();
+    let response = if written {
+        rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()
+    } else {
+        None
+    };
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    st.pending_worker_responses.remove(&correlation_id);
+    if !st
+        .remote_workers
+        .get(&worker.machine_id)
+        .is_some_and(|current| {
+            current.conn_id == conn_id && current.epoch == epoch && current.identity == *worker
+        })
+    {
+        return Err(WorkerRefusal::StaleConnection);
+    }
+    match response.ok_or(WorkerRefusal::WorkerUnavailable)? {
+        WorkerResponseOperation::Rejected { reason } => Err(reason),
+        response => Ok(response),
+    }
+}
+
 #[cfg(test)]
 fn handle_wrapper_message(
     conn_id: &str,
@@ -18104,6 +18678,36 @@ fn handle_wrapper_message_with_peer(
             view.close_and_join();
         }
     }
+    // Sonde seule : aucun principal n'est acquis par l'identité publique du daemon.
+    if matches!(&msg, WrapperToDaemon::DaemonIdentityRequest) {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if !st.connection_roles.contains_key(conn_id) {
+            st.worker_probe_connections.insert(conn_id.into());
+        }
+    } else if matches!(&msg, WrapperToDaemon::WorkerHello { .. }) {
+        let allowed = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            matches!(
+                st.connection_roles.get(conn_id),
+                None | Some(ConnectionRole::Worker)
+            ) || (st.worker_probe_connections.contains(conn_id)
+                && st.connection_roles.get(conn_id) == Some(&ConnectionRole::Wrapper)
+                && !st.conn_names.contains_key(conn_id)
+                && !st.identity_credentials.contains_key(conn_id)
+                && !st.client_negotiations.contains_key(conn_id)
+                && !st.service_negotiations.contains_key(conn_id))
+        };
+        if allowed {
+            return handle_worker_message(state, conn_id, msg);
+        }
+    } else {
+        state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .worker_probe_connections
+            .remove(conn_id);
+    }
+
     if !state
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -18143,6 +18747,11 @@ fn handle_wrapper_message_with_peer(
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if st.connection_roles.contains_key(conn_id) {
             match role {
+                ConnectionRole::Worker => {
+                    return Some(DaemonToWrapper::WorkerRejected {
+                        reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
+                    });
+                }
                 ConnectionRole::Client => {
                     return Some(DaemonToWrapper::ClientRejected {
                         reason: ClientRefusal::ClientRoleRequired,
@@ -18164,6 +18773,16 @@ fn handle_wrapper_message_with_peer(
         }
         st.connection_roles.insert(conn_id.to_string(), *role);
         return Some(DaemonToWrapper::RoleAccepted { role: *role });
+    }
+
+    if state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .connection_roles
+        .get(conn_id)
+        == Some(&ConnectionRole::Worker)
+    {
+        return handle_worker_message(state, conn_id, msg);
     }
 
     let attach_refusal = {
@@ -18225,6 +18844,8 @@ fn handle_wrapper_message_with_peer(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
+                WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerResponse { .. } =>
+                    Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::HumanInboxDeposit { .. }
                 | WrapperToDaemon::ControlFocusPublish { .. }
@@ -18498,6 +19119,8 @@ fn handle_wrapper_message_with_peer(
                 Some(ClientRefusal::CapabilityNotNegotiated)
             }
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerResponse { .. } =>
+                    Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueEditV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
                 WrapperToDaemon::QueueEditRequest { .. } => None,
@@ -18774,6 +19397,13 @@ fn handle_wrapper_message_with_peer(
     }
 
     match msg {
+        // Le contrat est disponible ; T008 ajoute son admission authentifiée.
+        // Aucune trame distante ne rejoint entre-temps la voie locale.
+        WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerResponse { .. } => {
+            Some(DaemonToWrapper::WorkerRejected {
+                reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
+            })
+        }
         WrapperToDaemon::WakeRequest { request } => Some(handle_wake_request(
             conn_id,
             request,
@@ -20702,6 +21332,7 @@ fn handle_wrapper_message_with_peer(
         } => {
             let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
             let order = FleetSpawnOrder {
+                remote_placement: None,
                 posture,
                 agent_type,
                 requested_name: agent_id,
@@ -20982,6 +21613,7 @@ fn handle_wrapper_message_with_peer(
             };
             let now = unix_timestamp();
             let order = FleetSpawnOrder {
+                remote_placement: entry.remote_placement.clone(),
                 posture: None,
                 agent_type: entry.agent_type.clone(),
                 requested_name: Some(name.clone()),
@@ -21621,6 +22253,18 @@ fn handle_wrapper_message_with_peer(
                     reason: "génération gérée déjà terminale".to_string(),
                 });
             }
+            if st.managed_spawns.values().any(|record| {
+                record.lease.remote_placement.is_some()
+                    && (agent_id == record.lease.name
+                        || instance_id.as_ref() == Some(&record.lease.instance_id))
+                    && (agent_id != record.lease.name
+                        || instance_id.as_ref() != Some(&record.lease.instance_id))
+            }) {
+                return Some(DaemonToWrapper::Nack {
+                    id: "register".into(),
+                    reason: "remote_registration_mismatch".into(),
+                });
+            }
             let managed_instance = instance_id.clone();
             let response = handle_register_with_channel(
                 conn_id,
@@ -21658,6 +22302,10 @@ fn handle_wrapper_message_with_peer(
                 && let Some(record) = st.managed_spawns.get_mut(&command_id)
             {
                 record.wrapper_conn = Some(conn_id.to_string());
+                if record.lease.remote_placement.is_some() {
+                    complete_remote_registration(&mut st, &command_id);
+                    return Some(response);
+                }
                 let _ = st.managed_tx.send(ManagedSupervisorCommand::Registered {
                     instance_id,
                     conn_id: conn_id.to_string(),
@@ -21824,7 +22472,11 @@ fn handle_wrapper_message_with_peer(
                     error!("capture native non persistée: {error}");
                     return Some(DaemonToWrapper::Nack {
                         id: bridge_msg.id.clone(),
-                        reason: "native_result_not_persisted".into(),
+                        reason: if error == "remote_result_requires_worker" {
+                            error
+                        } else {
+                            "native_result_not_persisted".into()
+                        },
                     });
                 }
             };
@@ -22245,7 +22897,7 @@ fn handle_wrapper_message_with_peer(
                 host: st.host.clone(),
                 db_path: st.db_path.display().to_string(),
                 instance_id: st.instance_id.clone(),
-                features: vec!["wait_v1".to_string()],
+                features: vec!["wait_v1".to_string(), "remote_worker_v1".to_string()],
             })
         }
 
@@ -23061,6 +23713,7 @@ mod matrice_roles_tests {
                 .conn_instances
                 .insert("wrapper-parent".to_string(), parent_instance_id.clone());
             let order = FleetSpawnOrder {
+                remote_placement: None,
                 posture: None,
                 agent_type: "fixture".to_string(),
                 requested_name: Some("6b0c0eb7-f494-4f4a-a280-6a5f0d13c410".to_string()),
@@ -27146,8 +27799,11 @@ mod presence_tests {
         }
     }
 
-    pub(super) fn state_with_registered_agent(label: &str) -> (DaemonState, DaemonConfig) {
-        let base = std::env::temp_dir().join(format!("bridget-{}-{}", label, std::process::id()));
+    pub(super) fn state_with_registered_agent(_label: &str) -> (DaemonState, DaemonConfig) {
+        let base = std::env::temp_dir().join(format!(
+            "brt-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..12]
+        ));
         let registry_home = base.join("home");
         let fixture_root = FixtureRoot(registry_home.clone());
         std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();
@@ -29891,6 +30547,7 @@ mod presence_tests {
         definition: &bridget_transport::ResolvedAgentDefinition,
     ) -> SpawnLease {
         let order = FleetSpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some(name.to_string()),
@@ -30127,6 +30784,7 @@ mod presence_tests {
             fleet.equipiers.insert(
                 format!("agent-{index:02}"),
                 crate::desired_state::DesiredEquipier {
+                    remote_placement: None,
                     agent_type: if index == 0 { "inconnu" } else { "fixture" }.to_string(),
                     cwd: PathBuf::from("/tmp"),
                     command_id: format!("ancien-{index}"),
@@ -30231,6 +30889,7 @@ mod presence_tests {
             fleet.equipiers.insert(
                 format!("agent-{index:02}"),
                 crate::desired_state::DesiredEquipier {
+                    remote_placement: None,
                     agent_type: if index == 0 { "inconnu" } else { "fixture" }.to_string(),
                     cwd: PathBuf::from("/tmp"),
                     command_id: format!("ancien-{index}"),
@@ -30301,6 +30960,7 @@ mod presence_tests {
         fleet.equipiers.insert(
             "agent-ok".to_string(),
             crate::desired_state::DesiredEquipier {
+                remote_placement: None,
                 agent_type: "fixture".to_string(),
                 cwd: PathBuf::from("/tmp"),
                 command_id: "ancien-ok".to_string(),
@@ -30352,6 +31012,7 @@ mod presence_tests {
         fleet.equipiers.insert(
             "agent-ok".to_string(),
             crate::desired_state::DesiredEquipier {
+                remote_placement: None,
                 agent_type: "fixture".to_string(),
                 cwd: PathBuf::from("/tmp"),
                 command_id: "ancien-ok".to_string(),
@@ -30429,6 +31090,7 @@ mod presence_tests {
             fleet.equipiers.insert(
                 format!("agent-{index:02}"),
                 crate::desired_state::DesiredEquipier {
+                    remote_placement: None,
                     agent_type: "fixture".to_string(),
                     cwd: PathBuf::from("/tmp"),
                     command_id: format!("ancien-{index}"),
@@ -30480,6 +31142,7 @@ mod presence_tests {
         fleet.equipiers.insert(
             "89000000-0000-4000-8000-000000000116".to_string(),
             crate::desired_state::DesiredEquipier {
+                remote_placement: None,
                 agent_type: "fixture".to_string(),
                 cwd: PathBuf::from("/tmp"),
                 command_id: "ancien-alpha".to_string(),
@@ -30609,6 +31272,7 @@ mod presence_tests {
             fleet.equipiers.insert(
                 name.to_string(),
                 crate::desired_state::DesiredEquipier {
+                    remote_placement: None,
                     agent_type: "fixture".to_string(),
                     cwd: PathBuf::from("/tmp"),
                     command_id: format!("ancien-{name}"),
@@ -40576,6 +41240,130 @@ mod presence_tests {
     /// frais et who / bridget-idle le comptent LIBRE. busy doit rester busy ;
     /// `capacity_seen` (capacité) ne bouge pas sous heartbeat seul.
     #[test]
+    fn remote162_worker_auth_epoch_et_contact_sans_presence_fournisseur() {
+        use bridget_transport::protocol::*;
+        use sha2::{Digest, Sha256};
+        let (mut state, config) = state_with_registered_agent("worker162-auth");
+        let fingerprint = format!("{:x}", Sha256::digest(b"worker-secret"));
+        state.registry = AgentRegistry::from_json(
+            &serde_json::json!({"machines":{"cartae":{
+                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":fingerprint,"allowed_agent_types":["codex"],"mappings":{}
+            }}})
+            .to_string(),
+            "/tmp/worker162-agents.json",
+        )
+        .unwrap();
+        for conn in ["worker-a", "worker-b"] {
+            state
+                .connection_roles
+                .insert(conn.into(), ConnectionRole::Worker);
+            state
+                .peer_uids
+                .insert(conn.into(), unsafe { libc::geteuid() });
+        }
+        let shared = Arc::new(Mutex::new(state));
+        let mut hello = WorkerHello {
+            version: 1,
+            identity: WorkerIdentity {
+                machine_id: "cartae".into(),
+                worker_id: "worker-cartae".into(),
+                provisioning_revision: 1,
+            },
+            credential: IdentityCredential::new("bad-secret".into()),
+            build: "test".into(),
+            capability: ClientCapability::RemoteWorkerV1,
+        };
+        assert!(matches!(
+            handle_worker_message(
+                &shared,
+                "worker-a",
+                WrapperToDaemon::WorkerHello {
+                    hello: hello.clone()
+                }
+            ),
+            Some(DaemonToWrapper::WorkerRejected {
+                reason: WorkerRefusal::Unauthorized
+            })
+        ));
+        hello.credential = IdentityCredential::new("worker-secret".into());
+        let Some(DaemonToWrapper::WorkerAccepted { accepted: first }) = handle_worker_message(
+            &shared,
+            "worker-a",
+            WrapperToDaemon::WorkerHello {
+                hello: hello.clone(),
+            },
+        ) else {
+            panic!("first hello refused")
+        };
+        let Some(DaemonToWrapper::WorkerAccepted { accepted: second }) =
+            handle_worker_message(&shared, "worker-b", WrapperToDaemon::WorkerHello { hello })
+        else {
+            panic!("replacement refused")
+        };
+        assert_ne!(first.connection_epoch, second.connection_epoch);
+        assert!(matches!(
+            handle_worker_message(&shared, "worker-a", WrapperToDaemon::Heartbeat),
+            Some(DaemonToWrapper::WorkerRejected { .. })
+        ));
+        assert!(handle_worker_message(&shared, "worker-b", WrapperToDaemon::Heartbeat).is_none());
+        {
+            let mut st = shared.lock().unwrap();
+            assert!(!st.conn_names.contains_key("worker-b"));
+            st.remote_workers.get_mut("cartae").unwrap().last_contact =
+                Instant::now() - Duration::from_secs(31);
+        }
+        remote_worker_contact_tick(&shared);
+        assert_eq!(
+            shared.lock().unwrap().remote_workers["cartae"].contact,
+            WorkerContactState::Stale
+        );
+        handle_worker_message(&shared, "worker-b", WrapperToDaemon::Heartbeat);
+        assert_eq!(
+            shared.lock().unwrap().remote_workers["cartae"].contact,
+            WorkerContactState::Connected
+        );
+        let hello = WorkerHello {
+            version: 1,
+            identity: second.identity,
+            credential: IdentityCredential::new("worker-secret".into()),
+            build: "test".into(),
+            capability: ClientCapability::RemoteWorkerV1,
+        };
+        shared
+            .lock()
+            .unwrap()
+            .peer_uids
+            .insert("worker-probe".into(), unsafe { libc::geteuid() });
+        assert!(matches!(
+            handle_wrapper_message(
+                "worker-probe",
+                WrapperToDaemon::DaemonIdentityRequest,
+                &shared
+            ),
+            Some(DaemonToWrapper::DaemonIdentityReport { .. })
+        ));
+        assert!(matches!(
+            handle_wrapper_message(
+                "worker-probe",
+                WrapperToDaemon::WorkerHello {
+                    hello: hello.clone()
+                },
+                &shared
+            ),
+            Some(DaemonToWrapper::WorkerAccepted { .. })
+        ));
+        assert!(
+            !matches!(
+                handle_wrapper_message("conn-1", WrapperToDaemon::WorkerHello { hello }, &shared),
+                Some(DaemonToWrapper::WorkerAccepted { .. })
+            ),
+            "une identité wrapper ne devient pas worker"
+        );
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
     fn heartbeat_preserve_etat_metier() {
         let (mut state, config) = state_with_registered_agent("heartbeat-busy");
         state.set_turn_state("conn-1", true).unwrap();
@@ -41405,6 +42193,7 @@ mod presence_tests {
         let definition = state.registry.resolved_definition("codex-terra").unwrap();
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "codex-terra".to_string(),
             requested_name: Some("89000000-0000-4000-8000-000000000110".to_string()),
@@ -41480,6 +42269,7 @@ mod presence_tests {
         let definition = state.registry.resolved_definition("cursor").unwrap();
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "cursor".to_string(),
             requested_name: Some("89000000-0000-4000-8000-000000000111".to_string()),
@@ -45376,6 +46166,7 @@ mod presence_tests {
             )
             .unwrap();
         let order = FleetSpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some(agent_id.to_string()),
@@ -45843,6 +46634,7 @@ mod presence_tests {
 
     fn managed_test_lease(command_id: &str) -> SpawnLease {
         SpawnLease {
+            remote_placement: None,
             command_id: command_id.to_string(),
             name: "89000000-0000-4000-8000-000000000102".to_string(),
             instance_id: "instance-1".to_string(),
@@ -45863,6 +46655,7 @@ mod presence_tests {
     ) -> (SpawnLease, Arc<ManagedStopControl>) {
         let now = unix_timestamp();
         let order = FleetSpawnOrder {
+            remote_placement: None,
             posture: None,
             agent_type: "fixture".to_string(),
             requested_name: Some("89000000-0000-4000-8000-000000000102".to_string()),

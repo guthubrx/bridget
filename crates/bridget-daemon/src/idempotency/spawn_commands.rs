@@ -37,6 +37,7 @@ impl IdempotencyStore {
             return Err(IdempotencyError::InvalidSpawnCommand);
         }
         validate_canonical_bytes(canonical_bytes)?;
+        let remote_placement = remote_placement_from_canonical(canonical_bytes)?;
         if issued_at > now.saturating_add(issued_at_tolerance_secs.max(0)) {
             return Err(IdempotencyError::InvalidIssuedAt);
         }
@@ -126,6 +127,7 @@ impl IdempotencyStore {
             expires_at,
             issue: None,
             resolved_definition: None,
+            remote_placement,
         }))
     }
 
@@ -316,14 +318,61 @@ impl IdempotencyStore {
     ) -> Result<Vec<SpawnCommand>, IdempotencyError> {
         validate_issuer_scope(issuer_scope)?;
         let mut statement = self.conn.prepare(
-            "SELECT command_id, name, generation, persistent, state,
-                    instance_id, deadline_at, expires_at,
-                    issue_kind, issue_category, issue_reason, resolved_definition_json
-             FROM spawn_commands WHERE issuer_scope = ?1 AND operation_kind = 'spawn'
-             ORDER BY generation, command_id",
+            "SELECT sc.command_id, sc.name, sc.generation, sc.persistent, sc.state,
+                    sc.instance_id, sc.deadline_at, sc.expires_at,
+                    sc.issue_kind, sc.issue_category, sc.issue_reason, sc.resolved_definition_json,
+                    ir.canonical_bytes
+             FROM spawn_commands sc LEFT JOIN idempotency_records ir
+               ON ir.issuer_scope=sc.issuer_scope AND ir.operation_kind=sc.operation_kind
+              AND ir.idempotency_key=sc.command_id
+             WHERE sc.issuer_scope = ?1 AND sc.operation_kind = 'spawn'
+             ORDER BY sc.generation, sc.command_id",
         )?;
         let rows = statement.query_map(params![issuer_scope], spawn_command_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// Relit l'ordre original pour réserver la même génération après reprise.
+    /// Aucune nouvelle clé, transition, définition ni identité n'est produite.
+    pub(crate) fn spawn_order(
+        &self,
+        key: &IdempotencyKey,
+    ) -> Result<Option<crate::fleet::SpawnOrder>, IdempotencyError> {
+        if key.operation_kind != OperationKind::Spawn {
+            return Err(IdempotencyError::InvalidSpawnCommand);
+        }
+        validate_issuer_scope(&key.issuer_scope)?;
+        let bytes: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT canonical_bytes FROM idempotency_records
+             WHERE issuer_scope=?1 AND operation_kind='spawn' AND idempotency_key=?2",
+                params![key.issuer_scope, key.idempotency_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(bytes) = bytes else {
+            return Ok(None);
+        };
+        let order: crate::fleet::SpawnOrder = serde_json::from_slice(&bytes)
+            .map_err(|_| IdempotencyError::CorruptRecord("canon de reprise spawn invalide"))?;
+        let command = load_spawn_command_from(&self.conn, key)?.ok_or(
+            IdempotencyError::CorruptRecord("saga de reprise spawn absente"),
+        )?;
+        if order.command_id != command.command_id
+            || order.persistent != command.persistent
+            || order.deadline_at != command.deadline_at
+            || order.remote_placement != command.remote_placement
+            || order
+                .requested_name
+                .as_ref()
+                .is_some_and(|name| name != &command.name)
+        {
+            return Err(IdempotencyError::CorruptRecord(
+                "canon de reprise spawn incohérent",
+            ));
+        }
+        Ok(Some(order))
     }
 
     /// Retrouve la dernière génération réellement connectée pour un nom,
@@ -389,6 +438,7 @@ impl IdempotencyStore {
             persistent: command.persistent,
             project: canonical.project,
             resolved_definition,
+            remote_placement: canonical.remote_placement,
         }))
     }
 }
@@ -398,11 +448,14 @@ fn load_spawn_command_from(
     key: &IdempotencyKey,
 ) -> Result<Option<SpawnCommand>, IdempotencyError> {
     conn.query_row(
-        "SELECT command_id, name, generation, persistent, state,
-                instance_id, deadline_at, expires_at,
-                issue_kind, issue_category, issue_reason, resolved_definition_json
-         FROM spawn_commands
-         WHERE issuer_scope = ?1 AND operation_kind = 'spawn' AND command_id = ?2",
+        "SELECT sc.command_id, sc.name, sc.generation, sc.persistent, sc.state,
+                sc.instance_id, sc.deadline_at, sc.expires_at,
+                sc.issue_kind, sc.issue_category, sc.issue_reason, sc.resolved_definition_json,
+                ir.canonical_bytes
+         FROM spawn_commands sc LEFT JOIN idempotency_records ir
+           ON ir.issuer_scope=sc.issuer_scope AND ir.operation_kind=sc.operation_kind
+          AND ir.idempotency_key=sc.command_id
+         WHERE sc.issuer_scope = ?1 AND sc.operation_kind = 'spawn' AND sc.command_id = ?2",
         params![key.issuer_scope, key.idempotency_key],
         spawn_command_from_row,
     )
@@ -421,6 +474,8 @@ fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnComm
     let issue_kind: Option<String> = row.get(8)?;
     let issue_category: Option<String> = row.get(9)?;
     let issue_reason: Option<String> = row.get(10)?;
+    let remote_placement =
+        remote_placement_from_canonical(&row.get::<_, Vec<u8>>(12)?).map_err(to_sql_error)?;
     let resolved_definition = row
         .get::<_, Option<String>>(11)?
         .map(|json| {
@@ -479,5 +534,27 @@ fn spawn_command_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SpawnComm
         expires_at,
         issue,
         resolved_definition,
+        remote_placement,
     })
+}
+
+/// L'API historique acceptait aussi des canons opaques. Un canon JSON avec
+/// placement doit en revanche être relu strictement ; jamais de repli local
+/// après une erreur sur ce champ. Les octets restent dans le socle existant.
+fn remote_placement_from_canonical(
+    canonical: &[u8],
+) -> Result<Option<bridget_transport::protocol::RemotePlacement>, IdempotencyError> {
+    let first = canonical.iter().find(|byte| !byte.is_ascii_whitespace());
+    if first != Some(&b'{') {
+        return Ok(None);
+    }
+    let invalid = || IdempotencyError::CorruptRecord("placement canonique du spawn invalide");
+    let value: serde_json::Value = serde_json::from_slice(canonical).map_err(|_| invalid())?;
+    let Some(placement) = value.get("remote_placement") else {
+        return Ok(None);
+    };
+    let placement: bridget_transport::protocol::RemotePlacement =
+        serde_json::from_value(placement.clone()).map_err(|_| invalid())?;
+    placement.validate().map_err(|_| invalid())?;
+    Ok(Some(placement))
 }

@@ -21,6 +21,14 @@ struct RequestFixture155 {
 
 impl RequestFixture155 {
     fn new(label: &str) -> Self {
+        Self::with_remote(label, false)
+    }
+
+    fn with_remote(label: &str, remote: bool) -> Self {
+        Self::with_remote_start(label, remote, true)
+    }
+
+    fn with_remote_start(label: &str, remote: bool, started: bool) -> Self {
         let (mut st, config, rx, parent_reader) = fixture_with_reader(label);
         let cwd = st
             .fixture_root
@@ -54,9 +62,105 @@ impl RequestFixture155 {
             .get(view["task_id"].as_str().unwrap())
             .unwrap()
             .unwrap();
-        spawn_task(&mut st, &mut task).unwrap();
-        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
-            panic!("Start préparé attendu, sans processus")
+        let (lease, definition) = if remote {
+            use bridget_transport::protocol::RemotePlacement;
+            use sha2::Digest;
+            let placement = RemotePlacement {
+                machine_id: "cartae155".into(),
+                worker_id: "worker155".into(),
+                provisioning_revision: 1,
+                project_id: "project155".into(),
+                mapping_revision: 1,
+                origin_host: st.host.clone(),
+                origin_cwd: task.cwd.clone(),
+                source_root_identity: "git155".into(),
+                relative_cwd: ".".into(),
+                execution_cwd: "/remote155-only/project".into(),
+                base_commit: None,
+                definition_digest: task.definition.digest.clone(),
+                permission_digest: format!(
+                    "{:x}",
+                    sha2::Sha256::digest(
+                        serde_json::to_vec(
+                            &task.permission_snapshot.as_ref().unwrap().child_policy
+                        )
+                        .unwrap()
+                    )
+                ),
+            };
+            st.registry = AgentRegistry::from_json(&json!({"machines":{"cartae155":{
+                "enabled":true,"worker_id":"worker155","provisioning_revision":1,
+                "credential_fingerprint":"a".repeat(64),"allowed_agent_types":["native-test"],
+                "mappings":{"project155":{"source_host":st.host,"source_root":cwd,"remote_root":"/remote155-only/project",
+                    "expected_git_identity":"git155","mapping_revision":1}}
+            }}}).to_string(), "/tmp/remote155-registry.json").unwrap();
+            task.cwd = placement.execution_cwd.clone();
+            task.remote_placement = Some(placement);
+            task.remote_prepared = true;
+            if !started {
+                st.delegation_store.save(&task).unwrap();
+                let (_writer, child_reader) =
+                    crate::daemon::presence_tests::control_socket("rq155");
+                return Self {
+                    state: Arc::new(Mutex::new(st)),
+                    task,
+                    parent_reader,
+                    child_reader,
+                    _config: config,
+                    _managed: rx,
+                };
+            }
+            let now = unix_timestamp();
+            let order = crate::fleet::SpawnOrder {
+                remote_placement: task.remote_placement.clone(),
+                posture: None,
+                agent_type: "native-test".into(),
+                project: None,
+                requested_name: Some(task.child.clone()),
+                cwd: PathBuf::from(&task.cwd),
+                persistent: true,
+                command_id: task.task_id.clone(),
+                issued_at: now,
+                deadline_at: now + 300,
+                ownership: Some(crate::fleet::SpawnOwnership {
+                    parent_instance_id: task.owner_instance.clone(),
+                    parent_execution_id: task.parent_execution_id.clone(),
+                    objective_id: None,
+                    delegation_id: Some(task.task_id.clone()),
+                    project: None,
+                    role: "native_delegate".into(),
+                    max_children: Some(16),
+                    max_depth: Some(8),
+                }),
+            };
+            let crate::fleet::SpawnSubmission::Start(lease) =
+                st.fleet.request_spawn(&order, now).unwrap()
+            else {
+                panic!("lease remote155")
+            };
+            st.fleet
+                .mark_starting(&lease, now, &task.definition)
+                .unwrap();
+            task.child_instance = Some(lease.instance_id.clone());
+            st.managed_by_instance
+                .insert(lease.instance_id.clone(), lease.command_id.clone());
+            st.managed_spawns.insert(
+                lease.command_id.clone(),
+                ManagedSpawnRecord {
+                    lease: lease.clone(),
+                    agent_type: "native-test".into(),
+                    requester_conns: Vec::new(),
+                    wrapper_conn: None,
+                    stop: Arc::new(ManagedStopControl::new()),
+                },
+            );
+            (lease, task.definition.clone())
+        } else {
+            spawn_task(&mut st, &mut task).unwrap();
+            let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+                panic!("Start préparé attendu, sans processus")
+            };
+            (prepared.lease, *prepared.resolved_definition)
         };
         let (writer, child_reader) = crate::daemon::presence_tests::control_socket("rq155");
         let host = st.host.clone();
@@ -64,15 +168,15 @@ impl RequestFixture155 {
             handle_register_with_channel(
                 "child155",
                 2,
-                prepared.agent_type.clone(),
-                prepared.lease.name.clone(),
+                "native-test".into(),
+                lease.name.clone(),
                 Some(host),
-                Some(prepared.resolved_definition.protocol.clone()),
+                Some(definition.protocol.clone()),
                 ChannelReport::Known("unix".into()),
                 Some(PresenceMode::Acp),
                 None,
                 Some("macOS".into()),
-                Some(prepared.lease.instance_id.clone()),
+                Some(lease.instance_id.clone()),
                 None,
                 false,
                 Some(true),
@@ -83,11 +187,7 @@ impl RequestFixture155 {
         ));
         st.connections.insert("child155".into(), writer);
         st.fleet
-            .register_connected(
-                &prepared.lease,
-                &prepared.lease.instance_id,
-                unix_timestamp(),
-            )
+            .register_connected(&lease, &lease.instance_id, unix_timestamp())
             .unwrap();
         st.managed_spawns
             .get_mut(&task.task_id)
@@ -227,6 +327,653 @@ impl RequestFixture155 {
             )
             .unwrap();
     }
+}
+
+#[test]
+fn remote162_demande155_recontrole_worker_hors_verrou_et_epoch_avant_reponse() {
+    use bridget_transport::protocol::*;
+    for replace_epoch in [false, true] {
+        let mut fixture = RequestFixture155::with_remote(
+            if replace_epoch {
+                "r155-epoch"
+            } else {
+                "r155-ok"
+            },
+            true,
+        );
+        let request = fixture.question(1);
+        fixture.receive(request.clone());
+        let row = fixture.row(&request);
+        assert_eq!(row.verdict, "parent");
+        fixture.decide(&row);
+        let (writer, mut reader) = crate::daemon::presence_tests::control_socket("rw155");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let placement = fixture.task.remote_placement.clone().unwrap();
+        {
+            let mut st = fixture.state.lock().unwrap();
+            st.connections.insert("worker155".into(), writer);
+            st.remote_workers.insert(
+                placement.machine_id.clone(),
+                RemoteWorkerConnection {
+                    identity: WorkerIdentity {
+                        machine_id: placement.machine_id.clone(),
+                        worker_id: placement.worker_id.clone(),
+                        provisioning_revision: 1,
+                    },
+                    conn_id: "worker155".into(),
+                    epoch: "epoch155".into(),
+                    last_contact: Instant::now(),
+                    last_contact_at: unix_timestamp(),
+                    contact: WorkerContactState::Connected,
+                },
+            );
+        }
+        let child_writer = fixture.state.lock().unwrap().connections["child155"].clone();
+        let child_gate = child_writer.lock().unwrap();
+        let shared = fixture.state.clone();
+        let worker = std::thread::spawn(move || {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let DaemonToWrapper::WorkerRequest { request } = decode(line.trim()).unwrap() else {
+                panic!("Reconcile attendu")
+            };
+            assert!(matches!(
+                request.request,
+                WorkerRequestOperation::Reconcile {}
+            ));
+            assert!(shared.try_lock().is_ok(), "RPC émis sans verrou métier");
+            let response = WorkerResponse {
+                version: 1,
+                correlation_id: request.correlation_id,
+                connection_epoch: request.connection_epoch,
+                worker: request.worker,
+                command: request.command,
+                response: WorkerResponseOperation::Observation {
+                    observation: WorkerObservation {
+                        phase: WorkerCommandPhase::Released,
+                        native_ready: true,
+                        exit_code: None,
+                        observed_at: unix_timestamp(),
+                        workspace: None,
+                        permission_digest: Some(placement.permission_digest),
+                    },
+                },
+            };
+            handle_worker_message(
+                &shared,
+                "worker155",
+                WrapperToDaemon::WorkerResponse { response },
+            );
+            if replace_epoch {
+                shared
+                    .lock()
+                    .unwrap()
+                    .remote_workers
+                    .get_mut("cartae155")
+                    .unwrap()
+                    .epoch = "replaced155".into();
+            }
+        });
+        let tick_state = fixture.state.clone();
+        let tick = std::thread::spawn(move || native_child_requests::tick(&tick_state));
+        worker.join().unwrap();
+        drop(child_gate);
+        tick.join().unwrap();
+        let answers = fixture
+            .frames()
+            .into_iter()
+            .filter(|frame| matches!(frame, DaemonToWrapper::ChildRequestAnswer { .. }))
+            .count();
+        assert_eq!(answers, usize::from(!replace_epoch));
+        assert_eq!(fixture.row(&request).delivery_state, "sent");
+        {
+            let mut st = fixture.state.lock().unwrap();
+            remote_worker_disconnected(&mut st, "worker155");
+            let seq = || {
+                st.delegation_store
+                    .test_connection()
+                    .query_row(
+                        "SELECT seq FROM native_delegation_projection_meta WHERE singleton=1",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap()
+            };
+            let first = seq();
+            remote_worker_disconnected(&mut st, "worker155");
+            let second = st
+                .delegation_store
+                .test_connection()
+                .query_row(
+                    "SELECT seq FROM native_delegation_projection_meta WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap();
+            assert_eq!(
+                first, second,
+                "une seconde fermeture stale ne change pas seq"
+            );
+        }
+        let approval = fixture.approval(2);
+        fixture.receive(approval.clone());
+        let human = fixture.row(&approval);
+        assert_eq!(human.verdict, "human");
+        let denied = handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Respond {
+                task_id: fixture.task.task_id.clone(),
+                request_id: human.request_id,
+                decision: ChildRequestDecision::Accept,
+                answer: None,
+            },
+            &mut fixture.state.lock().unwrap(),
+        );
+        assert_eq!(denied.unwrap_err(), "parent_cannot_approve");
+    }
+}
+
+#[test]
+fn remote162_release_relit_droits_parent_apres_start_et_refuse_preuve_t3_indisponible() {
+    use bridget_transport::protocol::*;
+    for change in ["readonly", "unavailable", "t3_unavailable"] {
+        let fixture = RequestFixture155::with_remote_start("r155-fresh", true, false);
+        let parent = fixture
+            .task
+            .permission_snapshot
+            .as_ref()
+            .unwrap()
+            .parent
+            .clone();
+        let prepared = WorkerPrepared {
+            placement: fixture.task.remote_placement.clone().unwrap(),
+            workspace: None,
+            token: "prepared162".into(),
+            definition: fixture.task.definition.clone(),
+            child_policy: fixture
+                .task
+                .permission_snapshot
+                .as_ref()
+                .unwrap()
+                .child_policy
+                .clone(),
+            effective_posture: fixture.task.effective_posture.unwrap(),
+            prepared_at: unix_timestamp(),
+        };
+        let (writer, mut reader) = crate::daemon::presence_tests::control_socket("wf162");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let worker = remote_worker_identity(&prepared.placement);
+        {
+            let mut st = fixture.state.lock().unwrap();
+            st.connections.insert("worker155".into(), writer);
+            st.remote_workers.insert(
+                worker.machine_id.clone(),
+                RemoteWorkerConnection {
+                    identity: worker,
+                    conn_id: "worker155".into(),
+                    epoch: "epoch155".into(),
+                    last_contact: Instant::now(),
+                    last_contact_at: unix_timestamp(),
+                    contact: WorkerContactState::Connected,
+                },
+            );
+        }
+        let shared = fixture.state.clone();
+        let server = std::thread::spawn(move || {
+            for step in 0..2 {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let DaemonToWrapper::WorkerRequest { request } = decode(line.trim()).unwrap()
+                else {
+                    panic!("requête worker")
+                };
+                let response = match request.request {
+                    WorkerRequestOperation::Start { .. } if step == 0 => {
+                        let mut st = shared.lock().unwrap();
+                        if change == "readonly" {
+                            let (fact, _) = st.native_permission_facts.get_mut("conn-1").unwrap();
+                            fact.revision += 1;
+                            fact.provider_policy["sandbox_policy"] = json!({"type":"readOnly"});
+                            fact.runtime_mode = "read-only".into();
+                        } else if change == "unavailable" {
+                            st.native_permission_facts.remove("conn-1");
+                            st.native_permission_refusals
+                                .insert("conn-1".into(), "permission_source_unavailable".into());
+                        }
+                        WorkerResponseOperation::ReadyToRelease {
+                            ready_at: unix_timestamp(),
+                        }
+                    }
+                    WorkerRequestOperation::ReserveResultSlot { slot } if step == 1 => {
+                        WorkerResponseOperation::ResultSlotReserved {
+                            slot,
+                            slot_id: "slot162".into(),
+                        }
+                    }
+                    other => panic!("aucun Release autorisé : {other:?}"),
+                };
+                assert!(
+                    handle_worker_message(
+                        &shared,
+                        "worker155",
+                        WrapperToDaemon::WorkerResponse {
+                            response: WorkerResponse {
+                                version: 1,
+                                correlation_id: request.correlation_id,
+                                connection_epoch: request.connection_epoch,
+                                worker: request.worker,
+                                command: request.command,
+                                response
+                            }
+                        }
+                    )
+                    .is_none()
+                );
+            }
+            reader
+        });
+        let proof = NativePermissionProof {
+            endpoint: "http://invalid.example/mcp".into(),
+            authorization: IdentityCredential::new("untrusted-fixture".into()),
+        };
+        let result = start_remote_task(
+            &fixture.state,
+            &fixture.task.task_id,
+            &prepared,
+            &parent,
+            "conn-1",
+            (change == "t3_unavailable").then_some("thread162"),
+            (change == "t3_unavailable").then_some(&proof),
+        );
+        let reason = result.unwrap_err();
+        assert!(
+            matches!(
+                reason.as_str(),
+                "permission_changed"
+                    | "permission_source_unavailable"
+                    | "permission_attestation_unavailable"
+            ),
+            "{reason}"
+        );
+        let mut reader = server.join().unwrap();
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        let mut line = String::new();
+        assert!(
+            reader.read_line(&mut line).is_err(),
+            "pas de permis après modification des droits"
+        );
+        assert_eq!(
+            fixture
+                .state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .get(&fixture.task.task_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "starting"
+        );
+    }
+}
+
+#[test]
+fn remote162_remise_refuse_fait_natif_change_sans_exiger_parent_absent_ou_t3() {
+    let fixture = RequestFixture155::with_remote("r155-live", true);
+    let mut st = fixture.state.lock().unwrap();
+    assert!(recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok());
+    st.native_permission_facts
+        .get_mut("conn-1")
+        .unwrap()
+        .0
+        .revision += 1;
+    assert_eq!(
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).unwrap_err(),
+        "permission_not_inherited"
+    );
+    let instance = st.conn_instances.remove("conn-1").unwrap();
+    assert!(
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok(),
+        "parent absent : autorité admise conservée"
+    );
+    st.conn_instances.insert("conn-1".into(), instance);
+    st.native_permission_facts.remove("conn-1");
+    st.native_permission_refusals
+        .insert("conn-1".into(), "permission_source_unavailable".into());
+    assert_eq!(
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).unwrap_err(),
+        "permission_source_unavailable"
+    );
+    let mut t3 = fixture.task.clone();
+    t3.permission_snapshot.as_mut().unwrap().parent.source = "provider_turn".into();
+    assert!(
+        recheck_remote_dispatch(&st, &t3, &t3).is_ok(),
+        "un refus wrapper ne remplace pas l'autorité T3 déjà admise"
+    );
+}
+
+#[test]
+fn remote162_prepare_posture_omise_conserve_heritage_et_refuse_null() {
+    use bridget_transport::protocol::WorkerPrepare;
+    let fixture = RequestFixture155::with_remote_start("r155-posture", true, false);
+    let task = &fixture.task;
+    let placement = task.remote_placement.as_ref().unwrap();
+    let prepare = WorkerPrepare {
+        machine_id: placement.machine_id.clone(),
+        project_id: placement.project_id.clone(),
+        provisioning_revision: 1,
+        mapping_revision: 1,
+        origin_host: placement.origin_host.clone(),
+        origin_cwd: placement.origin_cwd.clone(),
+        source_root: placement.origin_cwd.clone(),
+        remote_root: placement.execution_cwd.clone(),
+        source_root_identity: placement.source_root_identity.clone(),
+        relative_cwd: ".".into(),
+        base_commit: None,
+        agent_type: "native-test".into(),
+        model: "custom/model".into(),
+        effort: None,
+        posture: None,
+        parent: task.permission_snapshot.as_ref().unwrap().parent.clone(),
+        workspace: None,
+    };
+    let mut json = serde_json::to_value(&prepare).unwrap();
+    assert!(json.get("posture").is_none());
+    assert_eq!(
+        serde_json::from_value::<WorkerPrepare>(json.clone())
+            .unwrap()
+            .posture,
+        None
+    );
+    json["posture"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<WorkerPrepare>(json.clone()).is_err());
+    json["posture"] = serde_json::json!(SpawnPosture::Discovery);
+    assert_eq!(
+        serde_json::from_value::<WorkerPrepare>(json)
+            .unwrap()
+            .posture,
+        Some(SpawnPosture::Discovery)
+    );
+}
+
+#[test]
+fn remote162_arret_atteste_avant_connected_cloture_demarrage_apres_reprise() {
+    use bridget_transport::protocol::*;
+    for phase in [WorkerCommandPhase::Terminal, WorkerCommandPhase::Refused] {
+        let fixture = RequestFixture155::with_remote("r155-stop", true);
+        let execution = format!("execution-{}", fixture.task.mission);
+        let (lease, commands_before) = {
+            let st = fixture.state.lock().unwrap();
+            let mut task = st
+                .delegation_store
+                .get(&fixture.task.task_id)
+                .unwrap()
+                .unwrap();
+            task.state = "starting".into();
+            task.mission_issued_at = None;
+            st.delegation_store.save(&task).unwrap();
+            st.execution_store
+                .admit_starting(&task.mission, &execution, &task.child, unix_timestamp())
+                .unwrap();
+            (
+                st.managed_spawns[&task.task_id].lease.clone(),
+                st.idempotency
+                    .spawn_commands(&st.fleet.supervisor_scope())
+                    .unwrap()
+                    .len(),
+            )
+        };
+        // Une connexion absente ne prouve pas l'arrêt, même si le wrapper avait été connu.
+        fixture
+            .state
+            .lock()
+            .unwrap()
+            .conn_instances
+            .remove("child155");
+        let (writer, mut reader) = crate::daemon::presence_tests::control_socket("rs162");
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let placement = fixture.task.remote_placement.as_ref().unwrap();
+        {
+            let mut st = fixture.state.lock().unwrap();
+            st.connections.insert("worker155".into(), writer);
+            st.remote_workers.insert(
+                placement.machine_id.clone(),
+                RemoteWorkerConnection {
+                    identity: remote_worker_identity(placement),
+                    conn_id: "worker155".into(),
+                    epoch: "epoch155".into(),
+                    last_contact: Instant::now(),
+                    last_contact_at: unix_timestamp(),
+                    contact: WorkerContactState::Connected,
+                },
+            );
+        }
+        tick(&fixture.state); // Rend la main sans attendre une réponse du worker.
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let DaemonToWrapper::WorkerRequest { request } = decode(line.trim()).unwrap() else {
+            panic!("sonde Reconcile attendue")
+        };
+        assert!(matches!(
+            request.request,
+            WorkerRequestOperation::Reconcile {}
+        ));
+        let response = WorkerResponse {
+            version: 1,
+            correlation_id: request.correlation_id,
+            connection_epoch: request.connection_epoch,
+            worker: request.worker,
+            command: request.command,
+            response: WorkerResponseOperation::Observation {
+                observation: WorkerObservation {
+                    phase: WorkerCommandPhase::Unknown,
+                    native_ready: false,
+                    exit_code: None,
+                    observed_at: unix_timestamp(),
+                    workspace: None,
+                    permission_digest: None,
+                },
+            },
+        };
+        assert!(
+            handle_worker_message(
+                &fixture.state,
+                "worker155",
+                WrapperToDaemon::WorkerResponse {
+                    response: response.clone()
+                }
+            )
+            .is_none()
+        );
+        {
+            let mut st = fixture.state.lock().unwrap();
+            assert_eq!(
+                st.delegation_store
+                    .get(&fixture.task.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "starting"
+            );
+            assert!(
+                st.fleet
+                    .recovery_candidates()
+                    .iter()
+                    .any(|candidate| candidate.lease == lease)
+            );
+            st.managed_spawns.clear();
+            st.managed_by_instance.clear();
+            assert!(
+                reserve_managed_recoveries(&mut st, unix_timestamp())
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(st.managed_spawns.contains_key(&lease.command_id));
+        }
+        let mut stopped = response.clone();
+        if let WorkerResponseOperation::Observation { observation } = &mut stopped.response {
+            observation.phase = phase;
+        }
+        let mut stale = stopped.clone();
+        stale.connection_epoch = "obsolete".into();
+        assert!(matches!(
+            handle_worker_message(
+                &fixture.state,
+                "worker155",
+                WrapperToDaemon::WorkerResponse { response: stale }
+            ),
+            Some(DaemonToWrapper::WorkerRejected {
+                reason: WorkerRefusal::StaleConnection
+            })
+        ));
+        let mut wrong = stopped.clone();
+        wrong.command.generation += 1;
+        assert!(matches!(
+            handle_worker_message(
+                &fixture.state,
+                "worker155",
+                WrapperToDaemon::WorkerResponse { response: wrong }
+            ),
+            Some(DaemonToWrapper::WorkerRejected {
+                reason: WorkerRefusal::CommandMismatch
+            })
+        ));
+        let mut wrong_task = stopped.clone();
+        wrong_task.command.task_id = Uuid::new_v4().to_string();
+        assert!(matches!(
+            handle_worker_message(
+                &fixture.state,
+                "worker155",
+                WrapperToDaemon::WorkerResponse {
+                    response: wrong_task
+                }
+            ),
+            Some(DaemonToWrapper::WorkerRejected {
+                reason: WorkerRefusal::CommandMismatch
+            })
+        ));
+        assert!(
+            handle_worker_message(
+                &fixture.state,
+                "worker155",
+                WrapperToDaemon::WorkerResponse { response: stopped }
+            )
+            .is_none()
+        );
+        {
+            let mut st = fixture.state.lock().unwrap();
+            assert_eq!(
+                st.fleet
+                    .desired_entry(&fixture.task.child)
+                    .unwrap()
+                    .unwrap()
+                    .lifecycle_state,
+                DesiredLifecycleState::Stopped
+            );
+            // Simulation de reprise : la décision ne doit pas dépendre de ces caches.
+            st.managed_spawns.clear();
+            st.managed_by_instance.clear();
+            st.managed_terminal_instances.clear();
+            st.remote_workers.clear();
+        }
+        tick(&fixture.state);
+        {
+            let st = fixture.state.lock().unwrap();
+            let task = st
+                .delegation_store
+                .get(&fixture.task.task_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(task.state, "failed");
+            assert_eq!(task.error.as_deref(), Some("remote_start_failed"));
+            assert_eq!(
+                st.execution_store
+                    .execution_snapshot(&execution)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "unreachable"
+            );
+            assert!(
+                task.cleanup_done,
+                "la preuve Stopped durable suffit sans nouveau RPC"
+            );
+            assert_eq!(
+                st.idempotency
+                    .spawn_commands(&st.fleet.supervisor_scope())
+                    .unwrap()
+                    .len(),
+                commands_before
+            );
+        }
+        let result = wait_tasks(
+            "conn-1",
+            &[fixture.task.task_id.clone()],
+            Some(1),
+            None,
+            &fixture.state,
+            None,
+            Duration::from_millis(1),
+        )
+        .unwrap();
+        assert_eq!(result["ready"][0]["task_id"], fixture.task.task_id);
+        assert_eq!(result["timed_out"], false);
+    }
+}
+
+#[test]
+fn remote162_quota157_partagee_par_agent_type_avant_reprise_distante() {
+    use bridget_transport::protocol::{RateLimitFact, RateLimitSource};
+    let fixture = RequestFixture155::with_remote("r155-quota", true);
+    let mut st = fixture.state.lock().unwrap();
+    assert!(recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok());
+    let now = unix_timestamp();
+    let fact = RateLimitFact {
+        window: "five_hour".into(),
+        status: "rate_limit_reached".into(),
+        resets_at: Some(now + 600),
+        used_percent: Some(100),
+    };
+    st.provider_limits.record(
+        "autre-moteur",
+        fact.clone(),
+        RateLimitSource::CodexAppServer,
+        now,
+    );
+    assert!(
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok(),
+        "autre type indépendant"
+    );
+    st.provider_limits
+        .record("native-test", fact, RateLimitSource::CodexAppServer, now);
+    assert_eq!(
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).unwrap_err(),
+        "provider_quota_exhausted"
+    );
+    let mut same_type_other_machine = fixture.task.clone();
+    same_type_other_machine
+        .remote_placement
+        .as_mut()
+        .unwrap()
+        .machine_id = "seconde-machine".into();
+    assert_eq!(
+        recheck_remote_dispatch(&st, &same_type_other_machine, &same_type_other_machine)
+            .unwrap_err(),
+        "provider_quota_exhausted",
+        "changer de machine ne contourne pas le quota du moteur"
+    );
 }
 
 #[test]
