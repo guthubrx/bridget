@@ -38,6 +38,24 @@ if os.path.exists(os.path.join(os.path.dirname(evidence), "fail-init162")):
     with open(evidence, "a", encoding="utf-8") as output:
         output.write(json.dumps(dict(event="failed-init162", instance_id=instance, exit_code=23)) + "\n")
     sys.exit(23)
+if os.path.exists(os.path.join(os.path.dirname(evidence), "detached162")):
+    import signal
+    if os.fork() == 0:
+        os.setsid()
+        if os.fork() != 0:
+            os._exit(0)
+        os.setsid()
+        mode = open(os.path.join(os.path.dirname(evidence), "detached162")).read()
+        signal.signal(signal.SIGTERM, signal.SIG_DFL if mode == "normal" else signal.SIG_IGN)
+        with open(evidence, "a", encoding="utf-8") as output:
+            output.write(json.dumps(dict(event="detached162", instance_id=instance, pid=os.getpid(), pgid=os.getpgrp())) + "\n")
+        # stdout hérité reste ouvert : le reader du transport attendrait EOF.
+        deadline = time.monotonic() + 30
+        while not os.path.exists(os.path.join(os.path.dirname(evidence), "release-detached162")):
+            if time.monotonic() >= deadline:
+                os._exit(24)
+            time.sleep(.02)
+        os._exit(0)
 def emit(frame):
     print(json.dumps(frame), flush=True)
 selected_model = None
@@ -484,6 +502,42 @@ impl RemoteFixture {
     fn new() -> Self {
         let fixture = Fixture::new_with_provider(60, false, Some(PROVIDER), false);
         let root = &fixture.root;
+        // Épingler uniquement Git depuis le runner, sans hériter tout son PATH.
+        // Le worker garde son environnement privé et la garde réelle >= 2.44.
+        let runner_path = std::env::var_os("PATH").expect("fixture162: PATH du runner absent");
+        let git = std::env::split_paths(&runner_path)
+            .map(|directory| directory.join("git"))
+            .find(|path| {
+                path.metadata().is_ok_and(|metadata| {
+                    metadata.is_file()
+                        && std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o111
+                            != 0
+                })
+            })
+            .expect("fixture162: Git exécutable absent du PATH du runner")
+            .canonicalize()
+            .expect("fixture162: chemin Git non résolu");
+        let version = Command::new(&git)
+            .arg("--version")
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .expect("fixture162: Git inaccessible");
+        let output = String::from_utf8_lossy(&version.stdout);
+        let numbers = output
+            .strip_prefix("git version ")
+            .unwrap_or("")
+            .split('.')
+            .take(2)
+            .map(str::parse::<u32>)
+            .collect::<Result<Vec<_>, _>>();
+        assert!(
+            version.status.success()
+                && numbers.is_ok_and(|v| v.len() == 2 && (v[0], v[1]) >= (2, 44)),
+            "fixture162: Git >= 2.44 requis dans PATH du runner, chemin={}, version={output:?}",
+            git.display()
+        );
+        std::os::unix::fs::symlink(&git, root.join("bin/git")).unwrap();
         let project = root.join("project");
         let worker_state = root.join("worker-private");
         let secrets = root.join("secrets");
@@ -1086,6 +1140,68 @@ fn remote162_e2e_permis_expire_et_coupure_avant_release_sans_fournisseur() {
             WorkerResponseOperation::Observation { observation } if observation.phase == WorkerCommandPhase::Terminal)
         );
         assert_eq!(f.starts(&command.instance_id), 0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn remote162_e2e_cancel_descendant_setsid_pipe_herite_ignore_term_restart() {
+    for mode in ["normal", "ignore"] {
+        let mut f = RemoteFixture::new();
+        support::private_write(&f.fixture.root.join("detached162"), mode.as_bytes()).unwrap();
+        let mut control = f.start_worker();
+        let (command, start, ready_at, marker) = f.prepare_start(&mut control, "drain");
+        f.reserve_and_release(&mut control, &command, &start, ready_at);
+        f.await_started(&command.instance_id);
+        control.await_native_ready(&command);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let pid = loop {
+            if let Some(event) = f
+                .fixture
+                .evidence()
+                .iter()
+                .find(|event| event["event"] == "detached162")
+            {
+                break event["pid"].as_u64().unwrap() as u32;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(20));
+        };
+        let birth = process_birth(pid).unwrap();
+        assert_ne!(pid, marker.pgid);
+        let proof = f.worker_state.join("store/markers").join(format!(
+            "{:x}.drained",
+            Sha256::digest(command.command_id.as_bytes())
+        ));
+        assert!(matches!(
+            control.request(
+                &command,
+                WorkerRequestOperation::Cancel {
+                    target: WorkerCancelScope::Command {}
+                }
+            ),
+            WorkerResponseOperation::Observation { .. }
+        ));
+        if mode == "ignore" {
+            thread::sleep(Duration::from_millis(500));
+            assert_ne!(control.phase(&command), WorkerCommandPhase::Terminal);
+            assert_eq!(process_birth(pid).unwrap(), birth);
+            assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
+            assert!(!proof.exists());
+            f.stop_worker();
+            control.disconnect();
+            control = f.start_worker();
+            assert_ne!(control.phase(&command), WorkerCommandPhase::Terminal);
+            // Une sortie coopérative, jamais SIGKILL, débloque le pipe puis le drainage.
+            support::private_write(&f.fixture.root.join("release-detached162"), b"go").unwrap();
+        }
+        control.await_phase(&command, WorkerCommandPhase::Terminal);
+        assert!(process_birth(pid).is_err());
+        assert!(process_birth(marker.pgid).is_err());
+        let evidence: Value = serde_json::from_slice(&fs::read(proof).unwrap()).unwrap();
+        assert_eq!(evidence["pgid"], marker.pgid);
+        assert_eq!(evidence["birth"], marker.birth);
+        assert_eq!(f.starts(&command.instance_id), 1);
     }
 }
 

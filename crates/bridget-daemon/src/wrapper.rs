@@ -550,6 +550,102 @@ impl Drop for NativeTerminationSignal {
     }
 }
 
+/// Déclarée AVANT le transport : son Drop vient après le dernier Child::wait.
+#[cfg(target_os = "linux")]
+struct RemoteDrainGuard {
+    root: PathBuf,
+    command: bridget_transport::protocol::WorkerCommandIdentity,
+    proof: crate::remote_worker::WorkerDrainProof,
+    signaler: Mutex<Option<(Arc<AtomicBool>, thread::JoinHandle<()>)>>,
+}
+
+#[cfg(target_os = "linux")]
+impl RemoteDrainGuard {
+    fn new(context: &WorkerResultContext) -> Result<Self, Box<dyn std::error::Error>> {
+        let proof = crate::remote_worker::prepare_drain_proof(
+            &context.store_root,
+            &context.worker,
+            &context.command,
+        )?;
+        crate::managed_process::remote_drain::arm()?;
+        Ok(Self {
+            root: context.store_root.clone(),
+            command: context.command.clone(),
+            proof,
+            signaler: Mutex::new(None),
+        })
+    }
+
+    fn begin_stop(&self) {
+        let mut signaler = self.signaler.lock().unwrap_or_else(|e| e.into_inner());
+        if signaler.is_some() {
+            return;
+        }
+        let stopped = Arc::new(AtomicBool::new(false));
+        loop {
+            let flag = stopped.clone();
+            match thread::Builder::new()
+                .name("remote-drain-term".into())
+                .spawn(move || {
+                    while !flag.load(Ordering::SeqCst) {
+                        // Ne récolter AUCUN statut pendant Child::wait du transport.
+                        let _ = crate::managed_process::remote_drain::signal_pass();
+                        thread::sleep(crate::managed_process::remote_drain::CADENCE);
+                    }
+                }) {
+                Ok(handle) => {
+                    *signaler = Some((stopped, handle));
+                    return;
+                }
+                Err(_) => thread::sleep(crate::managed_process::remote_drain::CADENCE),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RemoteDrainGuard {
+    fn drop(&mut self) {
+        if let Some((stopped, handle)) = self
+            .signaler
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            stopped.store(true, Ordering::SeqCst);
+            let _ = handle.join();
+        }
+        // Les deux transports natifs ont attendu leur Child et joint leurs
+        // threads dans Drop. Aucun TUI distant ni autre producteur n'est admis.
+        loop {
+            let signalled = crate::managed_process::remote_drain::signal_pass();
+            if signalled.is_ok()
+                && matches!(
+                    crate::managed_process::remote_drain::reap_pass_after_owners(),
+                    Ok(true)
+                )
+                && crate::remote_worker::publish_drain_proof(&self.root, &self.command, &self.proof)
+                    .is_ok()
+            {
+                break;
+            }
+            thread::sleep(crate::managed_process::remote_drain::CADENCE);
+        }
+    }
+}
+
+/// Déclarée APRÈS le transport : démarre TERM avant son Drop, même sur Err.
+#[cfg(target_os = "linux")]
+struct RemoteDrainStop<'a>(Option<&'a RemoteDrainGuard>);
+#[cfg(target_os = "linux")]
+impl Drop for RemoteDrainStop<'_> {
+    fn drop(&mut self) {
+        if let Some(guard) = self.0 {
+            guard.begin_stop();
+        }
+    }
+}
+
 // Codex publie --listen comme un alias vers son socket physique. Cet endpoint
 // fournisseur éphémère ne fait donc pas partie de l'état durable de Bridget.
 // Le wrapper conserve seul ce dossier, jusqu'à l'arrêt de SON serveur/TUI.
@@ -4230,6 +4326,11 @@ fn launch_session_with_status(
     let native_termination = native_bootstrap_for_signal
         .map(|_| NativeTerminationSignal::new())
         .transpose()?;
+    #[cfg(target_os = "linux")]
+    let remote_drain = remote_result_context
+        .as_ref()
+        .map(RemoteDrainGuard::new)
+        .transpose()?;
     let name_state_path = instance_name_state_path(socket, &instance_id);
     if let Some(parent) = name_state_path.parent() {
         crate::environment::ensure_private_directory(parent)?;
@@ -4367,6 +4468,8 @@ fn launch_session_with_status(
             socket,
         )?
     };
+    #[cfg(target_os = "linux")]
+    let _remote_drain_stop = RemoteDrainStop(remote_drain.as_ref());
     if native_launch_context.as_ref().is_some_and(|context| {
         crate::native_permissions::recheck_context_with_env(
             context,
@@ -4397,6 +4500,10 @@ fn launch_session_with_status(
     ) {
         Ok(connection) => connection,
         Err(error) => {
+            #[cfg(target_os = "linux")]
+            if let Some(guard) = &remote_drain {
+                guard.begin_stop();
+            }
             transport.stop();
             return Err(error.into());
         }
@@ -4416,6 +4523,10 @@ fn launch_session_with_status(
                     bridget_transport::protocol::DisplayNameOutcome::Applied { display_name, .. },
             }) => Some(display_name),
             result => {
+                #[cfg(target_os = "linux")]
+                if let Some(guard) = &remote_drain {
+                    guard.begin_stop();
+                }
                 transport.stop();
                 return Err(format!("--name : changement de nom refusé : {result:?}").into());
             }
@@ -5043,6 +5154,10 @@ fn launch_session_with_status(
             if !persistent_relaunch {
                 break;
             }
+            #[cfg(target_os = "linux")]
+            if let Some(guard) = &remote_drain {
+                guard.begin_stop();
+            }
             transport.stop();
             let max_relaunch: u32 = std::env::var("BRIDGET_PROVIDER_RELAUNCH_MAX")
                 .ok()
@@ -5189,6 +5304,10 @@ fn launch_session_with_status(
     // Le fournisseur natif ne doit pas rester actif pendant le drain du
     // relais, ni se reconnecter à un daemon qui a déjà déclaré sa mission perdue.
     if let Some(bootstrap) = native_bootstrap.as_ref() {
+        #[cfg(target_os = "linux")]
+        if let Some(guard) = &remote_drain {
+            guard.begin_stop();
+        }
         transport.stop_native_mission(&bootstrap.mission_id);
     }
     relay.shutdown();
@@ -5198,6 +5317,10 @@ fn launch_session_with_status(
     // Fermer le client natif avant le drain du serveur : une élicitation
     // ouverte appartient à cette connexion, pas au worker Bridget.
     let tui_stopped = native_tui.as_mut().map(|tui| tui.close());
+    #[cfg(target_os = "linux")]
+    if let Some(guard) = &remote_drain {
+        guard.begin_stop();
+    }
     transport.stop();
     // L'EOF peut fermer le transport entre deux itérations : vider une dernière
     // fois les événements terminaux avant Unregister afin que le daemon voie

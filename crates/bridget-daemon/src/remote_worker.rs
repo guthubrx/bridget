@@ -22,6 +22,8 @@ use std::sync::Mutex;
 
 const MAX_METADATA_BYTES: usize = 64 * 1024;
 const STORE_VERSION: u16 = 1;
+const DRAIN_PROOF_RESERVATION: u64 = 4096;
+const MAX_DRAIN_PROOF_BYTES: usize = 2048;
 
 #[derive(Debug)]
 pub enum WorkerStoreError {
@@ -87,6 +89,97 @@ pub struct WorkerCommandReceipt {
     preparation: Option<(WorkerPrepare, WorkerPrepared)>,
     pub created_at: i64,
     pub updated_at: i64,
+}
+
+/// Attestation compacte : les digests lient les identités complètes sans secrets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerDrainProof {
+    version: u16,
+    worker_digest: String,
+    command_digest: String,
+    marker_digest: String,
+    pgid: u32,
+    birth: u64,
+}
+
+impl WorkerDrainProof {
+    fn expected(receipt: &WorkerCommandReceipt) -> Result<Self, WorkerStoreError> {
+        let marker = receipt.marker.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        Ok(Self {
+            version: STORE_VERSION,
+            worker_digest: json_digest(&receipt.worker)?,
+            command_digest: json_digest(&receipt.identity)?,
+            marker_digest: json_digest(marker)?,
+            pgid: marker.pgid,
+            birth: marker.birth,
+        })
+    }
+}
+
+fn drain_proof_path(root: &Path, command: &WorkerCommandIdentity) -> PathBuf {
+    root.join("markers")
+        .join(format!("{}.drained", marker_key(command)))
+}
+
+/// Lecture seule par le wrapper, avant fournisseur. Le bootstrap fait exec ;
+/// vérifier néanmoins le marqueur exact au lieu de supposer PID == PGID.
+#[cfg(target_os = "linux")]
+pub(crate) fn prepare_drain_proof(
+    root: &Path,
+    worker: &WorkerIdentity,
+    command: &WorkerCommandIdentity,
+) -> Result<WorkerDrainProof, WorkerStoreError> {
+    check_private(root, true)?;
+    let path = root
+        .join("commands")
+        .join(format!("{}.json", marker_key(command)));
+    let receipt: WorkerCommandReceipt =
+        read_optional(&path, MAX_METADATA_BYTES)?.ok_or(WorkerStoreError::Unknown)?;
+    let marker: ManagedMarker = read_optional(
+        &root
+            .join("markers")
+            .join(format!("{}.json", marker_key(command))),
+        MAX_METADATA_BYTES,
+    )?
+    .ok_or(WorkerStoreError::Unknown)?;
+    if receipt.worker != *worker
+        || receipt.identity != *command
+        || receipt.marker.as_ref() != Some(&marker)
+        || marker.instance_id != command.instance_id
+        || marker.command_id != command.command_id
+        || marker.generation != command.generation
+        || marker.pgid != std::process::id()
+        || crate::managed_process::process_birth(marker.pgid)? != marker.birth
+        || receipt.release_epoch.is_none()
+        || receipt.permit.is_none()
+    {
+        return Err(WorkerStoreError::Conflict);
+    }
+    WorkerDrainProof::expected(&receipt)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn publish_drain_proof(
+    root: &Path,
+    command: &WorkerCommandIdentity,
+    proof: &WorkerDrainProof,
+) -> Result<(), WorkerStoreError> {
+    let path = drain_proof_path(root, command);
+    if let Some(existing) = read_optional::<WorkerDrainProof>(&path, MAX_DRAIN_PROOF_BYTES)? {
+        return if existing == *proof {
+            Ok(())
+        } else {
+            Err(WorkerStoreError::Conflict)
+        };
+    }
+    let bytes = serde_json::to_vec(proof).map_err(|_| WorkerStoreError::Quarantined)?;
+    if bytes.len() > MAX_DRAIN_PROOF_BYTES {
+        return Err(WorkerStoreError::Quota);
+    }
+    check_private(path.parent().ok_or(WorkerStoreError::Unknown)?, true)?;
+    write_private_file_atomic(&path, &bytes)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,7 +336,7 @@ impl WorkerStore {
             }
             return Ok(CommandReservation::Existing(receipt));
         }
-        self.admit(MAX_METADATA_BYTES as u64 * 2, 1)?;
+        self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
         let receipt = WorkerCommandReceipt {
             version: STORE_VERSION,
             worker: self.worker.clone(),
@@ -751,11 +844,45 @@ impl WorkerStore {
                     .iter()
                     .any(|slot| slot.slot.identity.command == command.identity)
             {
+                let proof = drain_proof_path(&self.root, &command.identity);
+                match fs::remove_file(&proof) {
+                    Ok(()) => File::open(self.root.join("markers"))?.sync_all()?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
                 fs::remove_file(self.command_path(&command.identity))?;
                 File::open(self.root.join("commands"))?.sync_all()?;
             }
         }
         Ok(removed)
+    }
+
+    fn drainage_proven(&self, receipt: &WorkerCommandReceipt) -> Result<bool, WorkerStoreError> {
+        // Sur les autres hôtes ce correctif ne change pas le superviseur local.
+        if !cfg!(target_os = "linux") {
+            return Ok(true);
+        }
+        // Pas de RELEASE possible : la récolte du bootstrap demeure suffisante.
+        if receipt.permit.is_none()
+            && receipt.release_epoch.is_none()
+            && !receipt.native_ready
+            && !receipt.startup_failed
+            && matches!(
+                receipt.phase,
+                WorkerCommandPhase::Reserved
+                    | WorkerCommandPhase::Marked
+                    | WorkerCommandPhase::Unknown
+            )
+        {
+            return Ok(true);
+        }
+        let expected = WorkerDrainProof::expected(receipt)?;
+        Ok(read_optional::<WorkerDrainProof>(
+            &drain_proof_path(&self.root, &receipt.identity),
+            MAX_DRAIN_PROOF_BYTES,
+        )?
+        .as_ref()
+            == Some(&expected))
     }
 
     fn command_path(&self, identity: &WorkerCommandIdentity) -> PathBuf {
@@ -934,7 +1061,7 @@ impl WorkerStore {
                 return Err(WorkerStoreError::Quarantined);
             }
             self.read_command(&command.identity)?;
-            used = used.saturating_add(MAX_METADATA_BYTES as u64);
+            used = used.saturating_add(MAX_METADATA_BYTES as u64 + DRAIN_PROOF_RESERVATION);
             commands.push(command);
         }
         for entry in fs::read_dir(self.root.join("slots"))? {
@@ -2248,6 +2375,13 @@ impl WorkerRuntime {
         }
         if let Some(child) = self.running.get_mut(&command.command_id) {
             let exit = child.try_wait().map_err(refuse)?;
+            // Lire la preuve après la fin : le wrapper la publie avant sa sortie.
+            if exit.is_some() && !self.store.drainage_proven(&receipt).unwrap_or(false) {
+                self.store
+                    .set_phase(command, WorkerCommandPhase::Unknown, worker_now())
+                    .map_err(refuse)?;
+                return Ok(Self::observation(WorkerCommandPhase::Unknown, None));
+            }
             if exit.is_some() && child.reap_terminated_group().map_err(refuse)? {
                 self.running.remove(&command.command_id);
                 self.finish_command(command)?;
@@ -2279,6 +2413,12 @@ impl WorkerRuntime {
         }
         if let Some(child) = self.abandoned.get_mut(&command.command_id) {
             if child.try_wait().map_err(refuse)?.is_some() {
+                if !self.store.drainage_proven(&receipt).unwrap_or(false) {
+                    self.store
+                        .set_phase(command, WorkerCommandPhase::Unknown, worker_now())
+                        .map_err(refuse)?;
+                    return Ok(Self::observation(WorkerCommandPhase::Unknown, None));
+                }
                 // Garder la preuve récoltée tant que sa clôture durable échoue.
                 self.finish_command(command)?;
                 self.abandoned.remove(&command.command_id);
@@ -2290,7 +2430,7 @@ impl WorkerRuntime {
                 None,
             ));
         }
-        let Some(marker) = receipt.marker else {
+        let Some(marker) = receipt.marker.as_ref() else {
             self.store
                 .set_phase(command, WorkerCommandPhase::Unknown, worker_now())
                 .map_err(refuse)?;
@@ -2298,6 +2438,12 @@ impl WorkerRuntime {
         };
         let live = crate::managed_process::group_exists(marker.pgid).map_err(refuse)?;
         if !live {
+            if !self.store.drainage_proven(&receipt).unwrap_or(false) {
+                self.store
+                    .set_phase(command, WorkerCommandPhase::Unknown, worker_now())
+                    .map_err(refuse)?;
+                return Ok(Self::observation(WorkerCommandPhase::Unknown, None));
+            }
             self.finish_command(command)?;
             return Ok(Self::observation(WorkerCommandPhase::Terminal, None));
         }
@@ -3807,6 +3953,49 @@ mod tests {
             );
             drop(process.stdin.take());
             assert!(process.wait().unwrap().success());
+            #[cfg(target_os = "linux")]
+            if matches!(
+                phase,
+                WorkerCommandPhase::ReleaseAuthorized | WorkerCommandPhase::Released
+            ) {
+                // Wrapper disparu après RELEASE : ni la reprise ni l'ancien reçu
+                // ne prouvent le drainage. La capacité doit rester retenue.
+                let observed = recovered.reconcile(&command()).unwrap();
+                assert!(
+                    matches!(observed, WorkerResponseOperation::Observation { observation }
+                    if observation.phase == WorkerCommandPhase::Unknown)
+                );
+                // Même refus pour la branche abandoned après RELEASE possible.
+                let mut reaped = Command::new("/bin/true").spawn().unwrap();
+                reaped.wait().unwrap();
+                recovered.abandoned.insert(command().command_id, reaped);
+                assert!(matches!(recovered.reconcile(&command()).unwrap(),
+                    WorkerResponseOperation::Observation { observation }
+                    if observation.phase == WorkerCommandPhase::Unknown));
+                assert!(recovered.abandoned.remove(&command().command_id).is_some());
+                let receipt = recovered.store.command(&command()).unwrap();
+                let path = drain_proof_path(&recovered.store.root, &command());
+                write_private_file_atomic(&path, b"not-json").unwrap();
+                assert!(recovered.store.drainage_proven(&receipt).is_err());
+                assert!(matches!(recovered.reconcile(&command()).unwrap(),
+                    WorkerResponseOperation::Observation { observation }
+                    if observation.phase == WorkerCommandPhase::Unknown));
+                let mut proof = WorkerDrainProof::expected(&receipt).unwrap();
+                proof.birth += 1;
+                write_json(&path, &proof).unwrap();
+                assert!(!recovered.store.drainage_proven(&receipt).unwrap());
+                proof.birth -= 1;
+                write_json(&path, &proof).unwrap();
+                assert!(recovered.store.drainage_proven(&receipt).unwrap());
+                assert!(matches!(recovered.reconcile(&command()).unwrap(),
+                    WorkerResponseOperation::Observation { observation }
+                    if observation.phase == WorkerCommandPhase::Terminal));
+                fs::remove_file(path).unwrap();
+                // Les reçus déjà terminaux restent historiques.
+                assert!(matches!(recovered.reconcile(&command()).unwrap(),
+                    WorkerResponseOperation::Observation { observation }
+                    if observation.phase == WorkerCommandPhase::Terminal));
+            }
         }
     }
 

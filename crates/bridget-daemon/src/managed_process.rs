@@ -25,6 +25,163 @@ pub const MANAGED_INSTANCE_ID_ENV: &str = "BRIDGET_MANAGED_INSTANCE_ID";
 pub const MANAGED_COMMAND_ID_ENV: &str = "BRIDGET_MANAGED_COMMAND_ID";
 pub const MANAGED_GENERATION_ENV: &str = "BRIDGET_MANAGED_GENERATION";
 
+// Le drainage distant ne récolte qu'après destruction des propriétaires Child.
+#[cfg(target_os = "linux")]
+pub(crate) mod remote_drain {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::fs::MetadataExt;
+
+    pub const CADENCE: Duration = Duration::from_millis(100);
+    const MAX_CHILDREN: usize = 1024;
+
+    pub fn arm() -> io::Result<()> {
+        if unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // Refuser avant fournisseur les noyaux dépourvus de pidfd.
+        let fd = pidfd(std::process::id())?;
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PIDFD,
+                fd.as_raw_fd() as u32,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result != 0 && io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
+            return Ok(());
+        }
+        Err(io::Error::other("remote_drain_pidfd_unavailable"))
+    }
+
+    fn pidfd(pid: u32) -> io::Result<OwnedFd> {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { OwnedFd::from_raw_fd(fd as i32) })
+    }
+
+    fn children() -> io::Result<BTreeSet<u32>> {
+        let mut children = BTreeSet::new();
+        for task in fs::read_dir("/proc/self/task")? {
+            let path = task?.path().join("children");
+            let text = match fs::read_to_string(path) {
+                Ok(text) => text,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            for raw in text.split_whitespace() {
+                let pid = raw
+                    .parse()
+                    .map_err(|_| io::Error::other("invalid_child_pid"))?;
+                children.insert(pid);
+                if children.len() >= MAX_CHILDREN {
+                    return Ok(children);
+                }
+            }
+        }
+        Ok(children)
+    }
+
+    pub(super) fn checked_pidfd(pid: u32) -> io::Result<OwnedFd> {
+        let birth = process_birth(pid)?;
+        let fd = pidfd(pid)?;
+        let directory = format!("/proc/{pid}");
+        let status = fs::read_to_string(format!("{directory}/status"))?;
+        let parent = status
+            .lines()
+            .find_map(|line| line.strip_prefix("PPid:"))
+            .and_then(|raw| raw.trim().parse::<u32>().ok());
+        if parent != Some(std::process::id())
+            || process_birth(pid)? != birth
+            || fs::metadata(directory)?.uid() != unsafe { libc::geteuid() }
+        {
+            return Err(io::Error::other("remote_drain_identity_changed"));
+        }
+        Ok(fd)
+    }
+
+    /// Aucun wait : le transport peut encore être propriétaire de ces Child.
+    pub fn signal_pass() -> io::Result<()> {
+        let mut failure = None;
+        for pid in children()? {
+            let fd = match checked_pidfd(pid) {
+                Ok(fd) => fd,
+                Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH)) => {
+                    continue;
+                }
+                Err(error) => {
+                    failure = Some(error);
+                    continue;
+                }
+            };
+            let result = unsafe {
+                libc::syscall(
+                    libc::SYS_pidfd_send_signal,
+                    fd.as_raw_fd(),
+                    libc::SIGTERM,
+                    std::ptr::null::<libc::siginfo_t>(),
+                    0,
+                )
+            };
+            if result != 0 && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
+                failure = Some(io::Error::last_os_error());
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Appeler seulement après la barrière de destruction des propriétaires Child.
+    pub fn reap_pass_after_owners() -> io::Result<bool> {
+        for pid in children()? {
+            let fd = match checked_pidfd(pid) {
+                Ok(fd) => fd,
+                Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH)) => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PIDFD,
+                    fd.as_raw_fd() as u32,
+                    &mut info,
+                    libc::WEXITED | libc::WNOHANG,
+                )
+            };
+            if rc != 0 && io::Error::last_os_error().raw_os_error() != Some(libc::ECHILD) {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        let mut info = unsafe { std::mem::zeroed::<libc::siginfo_t>() };
+        let rc = unsafe {
+            libc::waitid(
+                libc::P_ALL,
+                0,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if rc == 0 {
+            return Ok(false);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ECHILD) {
+            Ok(true)
+        } else {
+            Err(error)
+        }
+    }
+}
+
 /// Identité immuable d'une génération supervisée.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1511,6 +1668,113 @@ pub(crate) mod tests {
     use std::process::ExitStatus;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn remote162_drain_pidfd_pipe_herite_et_barriere_child_wait() {
+        const CHILD_MODE: &str = "BRIDGET_REMOTE162_DRAIN_CHILD";
+        if std::env::var_os(CHILD_MODE).is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "managed_process::tests::remote162_drain_pidfd_pipe_herite_et_barriere_child_wait", "--nocapture"])
+                .env(CHILD_MODE, "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        use std::io::Read;
+        remote_drain::arm().unwrap();
+        assert!(remote_drain::checked_pidfd(std::process::id()).is_err());
+        let root = std::env::temp_dir().join(format!("drain162-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let script = r#"import os,signal,sys,time
+root=sys.argv[1]
+def late_fork(signum, frame):
+ if os.fork()==0:
+  signal.signal(signal.SIGTERM,signal.SIG_IGN)
+  os.setsid()
+  if os.fork()!=0: os._exit(0)
+  os.setsid()
+  open(root+'/late.tmp','w').write(str(os.getpid()))
+  os.replace(root+'/late.tmp',root+'/late')
+  while not os.path.exists(root+'/release'): time.sleep(.02)
+  os._exit(0)
+ os._exit(0)
+signal.signal(signal.SIGTERM,late_fork)
+if os.fork()==0:
+ os.setsid()
+ if os.fork()!=0: os._exit(0)
+ os.setsid()
+ signal.signal(signal.SIGTERM,signal.SIG_IGN)
+ open(root+'/ready.tmp','w').write(str(os.getpid()))
+ os.replace(root+'/ready.tmp',root+'/ready')
+ while not os.path.exists(root+'/release'): time.sleep(.02)
+ os._exit(0)
+while True: time.sleep(.02)
+"#;
+        let mut child = Command::new("/usr/bin/python3")
+            .args(["-c", script])
+            .arg(&root)
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !root.join("ready").exists() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        let descendant: u32 = fs::read_to_string(root.join("ready"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let birth = process_birth(descendant).unwrap();
+        let mut pipe = child.stdout.take().unwrap();
+        let (done, received) = std::sync::mpsc::channel();
+        let owner = thread::spawn(move || {
+            let status = child.wait().unwrap();
+            done.send(status).unwrap();
+            let mut text = String::new();
+            pipe.read_to_string(&mut text).unwrap();
+        });
+        // Signalisation uniquement : Child::wait reste l'unique récolteur ici.
+        remote_drain::signal_pass().unwrap();
+        received.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Le nouveau double-fork est déclenché PAR TERM, pendant l'arrêt.
+        while !root.join("late").exists() {
+            assert!(Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(10));
+        }
+        let late: u32 = fs::read_to_string(root.join("late"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let late_birth = process_birth(late).unwrap();
+        while remote_drain::checked_pidfd(late).is_err() {
+            assert!(
+                Instant::now() < deadline,
+                "enfant tardif non adopté par le subreaper"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        remote_drain::signal_pass().unwrap();
+        assert_eq!(process_birth(late).unwrap(), late_birth);
+        assert_eq!(process_birth(descendant).unwrap(), birth);
+        assert!(
+            !owner.is_finished(),
+            "le pipe hérité doit retenir le lecteur"
+        );
+        fs::write(root.join("release"), []).unwrap();
+        owner.join().unwrap(); // barrière réelle, aucune récolte ciblée avant elle
+        loop {
+            remote_drain::signal_pass().unwrap();
+            if remote_drain::reap_pass_after_owners().unwrap() {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            thread::sleep(remote_drain::CADENCE);
+        }
+        assert!(process_birth(descendant).is_err());
+        assert!(process_birth(late).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     const BOOTSTRAP_CHILD_ENV: &str = "BRIDGET_T903_BOOTSTRAP_CHILD";
     const BOOTSTRAP_REQUEST_ENV: &str = "BRIDGET_T903_BOOTSTRAP_REQUEST";
