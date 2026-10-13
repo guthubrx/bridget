@@ -3,8 +3,8 @@
 **Statut :** Implemented
 **Priorité :** P1
 **Périmètre :** Bridget maître, exécuteur distant et Lineage T3
-**Branche :** session-162-execution-distante
-**Tâches :** 46/46 — développement/préparation ; G8 validé, G9 ouvert
+**Branche :** main ; branche session-162-execution-distante intégrée puis retirée
+**Tâches :** 46/46 — livré ; G8 et G9 validés, conservations justifiées dans le reçu
 **Date :** 2026-10-13
 
 ## Problème

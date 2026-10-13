@@ -1,6 +1,6 @@
 # Journal d’implémentation 162
 
-Les 46 tâches sont validées. Le correctif est installé et la recette réelle T046 clôt le gate G8. Statut Implemented ; le nettoyage G9 reste ouvert. Les checkpoints ci-dessous conservent leur chronologie.
+Les 46 tâches sont validées. Le correctif est installé et la recette réelle T046 clôt le gate G8. Statut Implemented ; livraison et nettoyage G9 validés avec conservations justifiées. Les checkpoints ci-dessous conservent leur chronologie.
 
 ## T001 — Préflight validé
 
@@ -307,3 +307,25 @@ Le maître n’a plus de tâche active et les admissions sont ouvertes : /Users/
 L’activation est attestée par /Users/moi/.cache/bridget-delivery162-20261013/rollback611bfa-20261013-cancel-1dc0c602-r3/progress.json : phase activate réussie ; daemon Mac 71469 né à 17:53:53 CEST, pont 71567 né à 17:53:55 ; worker Linux 471321, naissance 142199350, exécutable du préfixe /home/moi/.local/lib/bridget-communication/162-1dc0c6022e8d. Les SHA des binaires actifs sont d9e09a78a0d0ff2a70b152f78e42ac994aea53094202f23f8ceb91f6b6bedc44 sur Mac et 2131f9a1f2f1b33e39096d3618e012fb7bb2465966f8cef9b6fb7832c4e71352 sur Linux. DB quick_check ok, zéro erreur de clé étrangère, schémas 7/12 et Fleet 5. T3 704/969 et le tunnel 1384 restent inchangés par rapport au préflight après le redémarrage externe.
 
 T046 est cochée : 46/46, statut Implemented, G8 validé. Les deux tests de bibliothèque et cinq E2E Linux, la contre-revue R2 APPROVE et l’annexe d’audit sans constat critique ou élevé restent les preuves ciblées du correctif. ROOT a relu le rapprochement code/documents/tests sans nouvel écart retenu. Ce checkpoint ne remplace ni la FULL historique ni l’audit global ; aucun GREEN global n’est revendiqué. G9 reste ouvert jusqu’au nettoyage final exécuté par ROOT.
+
+
+## Clôture de livraison et de nettoyage — 13 octobre 2026
+
+La session 162 est livrée : 46/46 tâches, G8 et G9 validés. Le code actif reste 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437. Les documents précédents ont été intégrés et poussés au commit 4cf50b68688b2d28872f67ae32e129f989d22449. Le présent checkpoint documentaire doit encore être committé et poussé par ROOT ; aucun SHA futur n’est présumé.
+
+Le worktree Bridget 162 et sa branche ont été retirés sans force. Le worktree et la branche T3 du lot avaient déjà été retirés. Les 45 fichiers ignorés inventoriés possèdent chacun une copie durable byte-identique. Preuve de retrait : /Users/moi/.cache/bridget-delivery162-20261013/cleanup162-cancel-worktree-result.json. Les chemins de worktrees dans la chronologie sont désormais historiques ; aucun worktree n’a été recréé.
+
+Les intermédiaires du stage Mac ont été retirés par la commande existante build.py installed : 0,31 Gio logiques, binaire source conservé. Le retrait antérieur du stage T3 représente 840 737 986 octets logiques et son archive de 59 preuves reste vérifiée. Aucun gain physique de volume n’est déduit de ces tailles.
+
+Conservations décidées après inventaire :
+
+- Cache debug Mac de 44,96 Gio, utile pour 163, budget temporaire de rétention 46 Gio ; cache Cargo Linux utile également conservé.
+- Stage Git distant d’environ 3,45 Go et préfixes de validation d’environ 276 Mo : garde d’usage lsof incomplète, y compris avec root, à cause du montage /run/user/1002/doc. Aucun retrait forcé ni masquage de cette limite.
+- Git 2.56 installé, profil /etc/apparmor.d/bwrap-userns-restrict, sauvegardes de rollback, bases, preuves et cache source T3 contenant cache.db : nécessaires au fonctionnement, au retour arrière ou à 163.
+
+L’inventaire et la qualification sont conservés dans /Users/moi/.cache/bridget-delivery162-20261013/cleanup162-cancel-inventory.md et /Users/moi/.cache/bridget-delivery162-20261013/cleanup162-cancel-priority-inventory.json. L’inventaire initial était en lecture seule ; les retraits réellement effectués sont distingués ici des conservations. Les 17 worktrees T3 étrangers restent hors périmètre.
+
+Le lien client /home/moi/.local/bin/bridget a été basculé après comparaison de sa cible 611bfa vers /home/moi/.local/lib/bridget-communication/162-1dc0c6022e8d/bin/bridget. SHA effectif : 2131f9a1f2f1b33e39096d3618e012fb7bb2465966f8cef9b6fb7832c4e71352. Le parent Opus de recette est arrêté et décommissionné, historique conservé.
+
+La lecture finale ciblée ROOT des preuves, du code et des correspondances documentaires ne retient aucun nouvel écart. tasks.md reste inchangé, SHA-256 44d552e8cf891ef1789b26ab3c85f8a670ea88e617220222aae7849d609adb06. Son en-tête G9 ouvert décrit le gel avant nettoyage ; ce reçu clôt le gate opérationnel sans modifier ce fichier figé. La FULL et l’audit global historiques conservent leurs limites ; aucun GREEN global ou nouvel audit global n’est annoncé.
+
