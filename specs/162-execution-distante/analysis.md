@@ -120,3 +120,17 @@ Le runtime SpecKit absent reste celui constaté plus haut ; aucun outil n’a é
 Seconde lecture : T044 reste liée aux FR-009/012/014/015 et SC-004/005/007. Réconciliation maître hors mutex, retained Child jusqu’à arrêt attesté, slots vides clos, Deferred conservé et inventaire worker groupé sont décrits avec leurs preuves R4/R5. Les deux scénarios ajoutés enrichissent quatre fonctions E2E existantes ; aucun compte gonflé. Le retard six secondes ne revendique pas un essai 30 secondes. Le mapping 30 FR/12 SC/5 US reste inchangé. Les tâches totalisent 44 cochées et zéro ouverte ; G8/G9, revue et Converge3 ne sont pas déduits de ce compteur. Zéro incohérence active trouvée dans cette relecture ciblée ; aucune nouvelle campagne de tests.
 
 SHA-256 final gelé de tasks.md : 746adf1b544e476ffe21e79131cb9ec2ad0b89c6bd90c0870475ecd242e800ea. Ne plus modifier les tâches pendant Converge3.
+
+
+## Checkpoint ciblé T045/T046 — 13 octobre 2026
+
+Le fallback manuel précédent reste applicable. ROOT a relu le diff produit final, les 30 FR, les 12 SC et les artefacts. Aucun besoin nouveau ni extension de périmètre n’a été identifié. La revue T045, deux tests de bibliothèque et cinq E2E Linux permettent de valider le correctif source sans nouvel écart retenu. Le contrôle UID divergent reste une preuve de lecture, pas un test runtime réussi.
+
+Le compteur 45/46 est cohérent : T045 est cochée ; T046 reste ouverte pour la recette réelle après installation. Cette séparation évite d’exiger la recette du binaire installé avant son commit et son installation. Le statut reste In Progress. G8 et G9 restent ouverts ; aucun nouveau passage global de convergence ou de tests n’est revendiqué. Le fichier tasks.md est figé après cochage, SHA-256 c35f2d559f151575d953e31a348e4a1739b8fd65773c88e93b8089699a976196.
+
+
+## Checkpoint ciblé après recette T046
+
+La preuve réelle d’annulation complète les sept essais Linux ciblés. T046 et G8 sont validés ; 46/46 tâches cochées, statut Implemented. ROOT a relu les correspondances code, documents et tests sans nouvel écart. Le contrôle UID divergent reste une preuve de lecture, sans prétention de test runtime. Le nettoyage G9 reste ouvert. Aucun nouvel audit global ou passage FULL n’est déduit.
+
+Le fichier tasks.md est figé après cochage de T046 : SHA-256 44d552e8cf891ef1789b26ab3c85f8a670ea88e617220222aae7849d609adb06.

@@ -281,3 +281,13 @@ La variante release_retained étend la primitive managed_process existante. Elle
 ### Réattestation ciblée D1 close
 
 R7 exact passe (1 PASS, RC0) après correction de native_status en ReleaseAuthorized. La relecture indépendante confirme failed=true avec marqueur sans promotion de phase, et le refus de failed=false. R6 conserve la preuve des primitives retained et des quatre E2E avant cette garde finale. Worker final SHA 3ee35d1a54376f40891c2b8d9f4eb763d1d1a2726076ca936471d584721fb2d6 ; managed_process SHA 1d4937145011edc55ff9875a83f25998dd4a000d7a962b526237d1116d040c83. Aucun nouveau store ni protocole ; D1 clos, sans nouveau verdict d’audit global anticipé.
+
+### Correction G8 — arrêt des descendants Linux, arbitrage de réemploi
+
+Le groupe wrapper ne suffit pas à arrêter les groupes détachés par la sandbox : la recette réelle maintenait deux descendants après Terminal. Selon l’exploration ciblée du correctif, les primitives PR_SET_CHILD_SUBREAPER et pidfd nécessaires ne sont pas déjà disponibles dans le chemin d’arrêt existant. Leur ajout est justifié par une frontière de sécurité prouvée, pas par un nouveau service de supervision.
+
+Réemplois : managed_process et process_birth/lectures /proc ; contexte WorkerResultContext validé ; marqueur de naissance ; namespace markers privé, publication atomique/fsync et budget du store ; gardes de rétention et transitions worker. Un fichier .drained fermé et corrélé par commande porte l’attestation, réserve maximale4Kio temporaire compris. Il n’est pas une seconde base métier ni un nouveau protocole réseau. L’extension distincte évite une lecture comme ManagedMarker.
+
+Choix minimal : subreaper uniquement pour le wrapper distant natif Linux. L’inventaire couvre les children de tous les TID. Pidfd puis relecture naissance/UID/PPID précèdent SIGTERM individuel. Un thread temporaire signale sans récolter pendant stop/Drop afin de libérer les pipes ; après la barrière, waitid(P_PIDFD) récolte les seuls enfants validés et P_ALL/WNOWAIT sonde la fin sans récolte globale. Aucun waitpid(-1), SIGKILL nouveau, cgroup, store SQL, registre global ou commande d’effacement forcé. Les trois branches Terminal (running, abandoned, marker) doivent exiger la preuve dès que RELEASE est possible.
+
+Le plan final et son arbitrage sont autorisés ; l’implémentation et les essais T045/T046 ne sont pas encore validés. Unknown conserve capacité et preuves si le wrapper meurt sans attestation. Le subreaper ne constitue pas un confinement kernel persistant après sa mort. Cette limite est conservée, sans prétendre qu’une procédure opérateur existante saurait toujours la résoudre.

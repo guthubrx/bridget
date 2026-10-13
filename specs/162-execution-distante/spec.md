@@ -4,7 +4,7 @@
 **Priorité :** P1
 **Périmètre :** Bridget maître, exécuteur distant et Lineage T3
 **Branche :** session-162-execution-distante
-**Tâches :** 44/44 — développement/préparation ; gates G8/G9 ouverts
+**Tâches :** 46/46 — développement/préparation ; G8 validé, G9 ouvert
 **Date :** 2026-10-13
 
 ## Problème

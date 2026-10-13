@@ -1,6 +1,6 @@
 # Plan SPEC-162 — Exécution distante explicite
 
-**Statut :** Implemented (44/44 développement/préparation ; correction T044 validée, G8/G9 ouverts). **Branche :** session-162-execution-distante. **Date :** 2026-10-13.
+**Statut :** Implemented (46/46 ; activation et recette G8 validées, nettoyage G9 ouvert). **Branche :** session-162-execution-distante. **Date :** 2026-10-13.
 **Estimation annoncée :** 665–1 210 minutes à 09:16 CEST, borne haute le 14 octobre à 05:26. Elle inclut les tests prévus, les revues, la livraison et le nettoyage. Recalibrer après la génération des tâches.
 
 ## Architecture retenue

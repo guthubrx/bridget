@@ -1,6 +1,16 @@
 # Quickstart 162 — recettes après implémentation
 
-Ce document décrit les validations à réaliser. Il ne prouve aucun lancement, test ou déploiement 162 déjà exécuté.
+Ce document conserve le plan de validation et ses checkpoints historiques. Le complément ci-dessous consigne les prérequis Linux vérifiés pendant G8 ; le statut de livraison reste dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/162-execution-distante/validation/livraison162.md.
+
+## Prérequis Linux vérifiés pendant G8 — 13 octobre 2026
+
+Avant une mission distante isolée, vérifier le Git effectivement résolu dans le PATH du worker. Le Git système 2.43 échouait à la garde existante de l’isolation 154, qui exige Git ≥ 2.44. Le Git privé 2.56.0 installé sous /home/moi/.local/lib/bridget-tools/git-2.56.0/bin est placé en tête du PATH du worker. Le Git système reste intact. La validation des versions, identités Git et HEAD des trois projets figure dans /Users/moi/.cache/bridget-delivery162-20261013/git162-validation.json. Ce reçu précède le changement du PATH ; il ne prouve pas, seul, l’environnement du service après relance.
+
+Pour la sandbox Codex sous Ubuntu 24.04, bubblewrap doit aussi pouvoir créer son espace utilisateur. Le profil Ubuntu ciblé /etc/apparmor.d/bwrap-userns-restrict a été installé et chargé ; les profils bwrap et unpriv_bwrap sont en mode enforce. Le réglage kernel.apparmor_restrict_unprivileged_userns reste à 1. Ne pas désactiver cette restriction globale pour faire passer la recette. Ce choix suit les [prérequis OpenAI pour la sandbox](https://learn.chatgpt.com/docs/sandboxing#prerequisites).
+
+Les preuves sont /Users/moi/.cache/bridget-delivery162-20261013/sandbox162-profile-installed.json et /Users/moi/.cache/bridget-delivery162-20261013/sandbox162-probes-r3-result.json. La sonde R3 a réussi : lecture autorisée, écriture refusée avec EROFS et réseau refusé avec EPERM, profil bwrap//&unpriv_bwrap actif. Elle valide ces restrictions dans ce contexte ; elle ne vaut ni appel de modèle ni validation globale des missions.
+
+Retour arrière ciblé AppArmor : fermer les nouvelles admissions et attendre l’arrêt attesté des sandboxes concernées. Vérifier que /etc/apparmor.d/bwrap-userns-restrict porte encore le SHA256 11d39094f044f0cda0febb3ad517b830301da6b2ce929664af09ee9e4dd264f9. Le fichier était absent avant 162. Décharger uniquement ses profils avec /sbin/apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict, puis retirer uniquement ce fichier si son empreinte est inchangée. Si le fichier a changé, conserver l’état et réexaminer le retour arrière. Ne pas décharger tous les profils AppArmor, modifier les sysctl ou supprimer les reçus worker. Le retrait rend de nouveau indisponible le prérequis sandbox ; garder la route fermée tant qu’il manque. Ces opérations de retour arrière ne sont pas exécutées par cette documentation.
 
 ## Préflight
 

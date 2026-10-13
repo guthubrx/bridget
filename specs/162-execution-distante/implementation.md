@@ -1,6 +1,6 @@
 # Journal d’implémentation 162
 
-Le développement et la préparation sont validés à 44/44 après T044. Les checkpoints ci-dessous conservent leur chronologie. Converge3 est terminé. Les gates de revue restantes, Git, déploiement et nettoyage restent à effectuer.
+Les 46 tâches sont validées. Le correctif est installé et la recette réelle T046 clôt le gate G8. Statut Implemented ; le nettoyage G9 reste ouvert. Les checkpoints ci-dessous conservent leur chronologie.
 
 ## T001 — Préflight validé
 
@@ -240,3 +240,70 @@ La couverture de lecture est de **7 898 lignes uniques sur 186 764 lignes du pé
 Reçu relu : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/audits/2026-10-13/session-2026-10-13-spec-162-01/validation-final.json. SHA-256 : 85884560f21e2c4029d98ad6bfeab479df676ca843b9d7ec8432ae51e6f00170. Le reçu date de 2026-10-13T12:56:07.662381+00:00. Les empreintes de grade.json et coverage.json ont été vérifiées conformes à ce reçu : e68398193480b829418ab9349adb8192ec8ef7bc5875c50c9156afd87e851bad et df5fa5b02f4822f5ab449f2f4769004dccbf7ce17878cb487ed7273bcb570694.
 
 **Le gate d’audit est clos ; G8/G9 restent ouverts.** Le reçu indique explicitement runtime_delivery_approved=false. Git, installation, activation et nettoyage relèvent encore de ROOT. Les 44/44 tâches planifiées restent figées ; aucune livraison n’est déduite du score ni du validateur.
+
+## Réouverture après recette G8 — arrêt incomplet, 44/46
+
+La recette d’annulation réelle a révélé un défaut sur la tâche **9fb66659-3ae0-481d-9b0a-335261a000f4** : cancelled/cleanup_done et reçu worker Terminal alors que codex PID355934 et sleep PID355935 restaient vivants, naissance141506025 et PGID355934. Le wrapper PID354553 avait disparu. Les descendants étaient encore observés après environ158 secondes puis ont fini naturellement ; aucun signal correctif n’a été envoyé par l’observateur. UID/SID/namespace de ces processus n’ont pas été capturés. Le statut métier n’atteste donc pas ici l’arrêt complet.
+
+Preuve : /Users/moi/.cache/bridget-delivery162-20261013/recipe162-cancel-observer-failure.json, SHA d77ad9ca5de6111cb462cb019757dee720291e701bedcfb415d5378e4921edea. Cause retenue : le suivi du groupe du wrapper ne couvre pas les groupes distincts créés par la sandbox. Le correctif garde le wrapper Linux comme subreaper jusqu’à récolte de ses descendants et publication d’une preuve durable de drainage ; le worker exige cette preuve avant Terminal après RELEASE possible.
+
+Le plan /Users/moi/.cache/bridget-delivery162-20261013/cancel162-fix-plan.md est relu, SHA c5f9e91687bf84713807523e984789ad63826a836502727a78de53aee91e9d3b. La revue /Users/moi/.cache/bridget-delivery162-20261013/cancel162-plan-review-r1.md porte APPROVE_WITH_CHANGES. Les quatre points ont une réponse dans le plan final : pas de récolte concurrente des Child ; inventaire de tous les TID et prérequis Linux ; garde des trois branches Terminal ; preuve corrélée au marqueur exact (bootstrap exec du wrapper). ROOT a arbitré un unique thread temporaire de signalisation sans récolte pendant stop/Drop, puis récolte après retour des propriétaires de Child. Ces réponses sont des décisions de plan autorisées, pas une preuve de correction ou de test réussi.
+
+Prérequis réels : Linux6.8.0-142-generic, /usr/bin/bwrap0755 uid0 sans setuid/setgid, workerUID1002. Preuve /Users/moi/.cache/bridget-delivery162-20261013/cancel162-host-prerequisites.json, SHA ca34e067dd50a2d43c0fb935385d23ef62a65b7ae09f7ef1518c57e4fed45597. Le correctif doit refuser avant fournisseur si les primitives requises manquent.
+
+T045 corrige ; T046 porte les oracles Linux, la recette réelle et la revue ciblée. **44 tâches validées conservées, deux tâches ouvertes, In Progress 44/46.** Aucun résultat de ces tâches anticipé. Si le wrapper meurt après RELEASE sans preuve, Unknown et la capacité peuvent rester retenus sans limite ; aucun outil force-clear ni arrêt prouvé inventé. Les trois routes nominales réussies restent acquises, mais **G8 demeure ouvert sur l’annulation, G9 reste ouvert**. Les convergences et audits antérieurs restent historiques sur leurs sources.
+
+## Correctif G8 — revue approuvée, préparation de convergence ciblée
+
+La contre-revue de code annulation R2 est APPROVE sans défaut bloquant identifié en lecture. Les constats M1/L2/L3 sont corrigés dans le code selon cette revue ; L4 et les limites de publication restent nommés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/adversarial-review-claude.md. Le runner Linux R1 a refusé avant compilation ; R2 compile, aucun PASS encore attesté. T045/T046 restent ouvertes,44/46.
+
+| Contrôle de convergence ciblée à effectuer | Rattachement | État actuel |
+|---|---|---|
+| Subreaper avant fournisseur ; identité pidfd relue ; signalisation sans vol de Child ; barrière de récolte et ECHILD | T045, FR-009/012/015, SC-004/005 | Code relu R2 ; exécution Linux attendue. |
+| Preuve .drained corrélée, réserve4Kio, trois branches Terminal et exception stricte avant RELEASE | T045, FR-013/014/017, SC-004/006/010 | Code relu R2 ; tests de preuve et reprise attendus. |
+| Descendants normal/ignore, double-fork, attente Child, témoin étranger, worker repris et wrapper mort sans preuve | T046, FR-012/015/017, SC-004/005/006 | Scénarios préparés ; résultats Linux attendus. |
+| Recette réelle ayant échoué : plus aucun descendant vivant avant clôture, capacité rendue une fois | T046, FR-015, SC-005 | Recette future, aucune réparation rétroactive du premier essai. |
+| L4 Unknown après armement échoué avec RELEASE possible ; publication/fsync/Conflict conservateurs | T045/T046, FR-012/013, SC-004/010 | Limites documentées ; aucune garantie renforcée inventée. |
+
+Cette matrice prépare une lecture ciblée après preuves ; elle ne déclare pas CONVERGED. Les trois routes nominales réussies restent distinctes du gate d’annulation. ROOT a arrêté proprement le parent Opus2D à16:45, commande f1e09965-7238-47ce-a882-8b497604ca5c ; son enregistrement est conservé pour une relance de recette. Aucune relance future ni issue de recette anticipée.
+
+
+## Checkpoint T045 — validation Linux, 13 octobre 2026
+
+T045 est validée ; le compteur passe à 45/46, statut In Progress. T046 reste ouverte pour la recette réelle après installation. Les essais suivants n’ont installé aucun binaire et n’ont modifié aucun service. Le binaire actif est resté identique.
+
+- R2 : deux tests de bibliothèque PASS. La compilation a réussi en 224,200 s. Le premier E2E a ensuite échoué avant le fournisseur, car la fixture sélectionnait Git 2.43. Le RC global 1 reste historique. Reçu : /Users/moi/.cache/bridget-delivery162-20261013/validation162-linux-subreaper-r2/remote/validation-receipt.json ; SHA-256 ad75b4f6450924574a30acd187bd0d043c665deb7a33e178b00f06aa81c09693.
+- R3 : fixture Git corrigée, cinq E2E exacts PASS, RC0. Compilation 27,394 s ; somme des essais 45,749 s ; durée totale 73,293 s. Sources inchangées pendant cette exécution. Reçu : /Users/moi/.cache/bridget-delivery162-20261013/validation162-linux-subreaper-r3/remote/validation-receipt.json ; SHA-256 236f61e5905ae777e9207d7d422db8e26470a816d45fd00c32e5a89a7bba4184.
+
+Ces sept succès couvrent la primitive pidfd et la barrière Child::wait, la reprise aux frontières durables, l’arrêt avec descendant setsid et pipe hérité, les permis expirés, le contrôle de naissance avant signal, la reprise sans second fournisseur et l’admission réelle avec résultat unique. Le contrôle UID divergent est attesté par lecture du code ; aucun PASS runtime de ce cas n’est revendiqué. Les manifestes contiennent 3 310 fichiers : R2 1a7b79b98358f05e53588814ad06d19c47dcad64943c1f63ee0d94bd8bd095d0 ; R3 30f6bc27167c4c9c1cecddbcc78585dfdc2e8b2314dedbe017c7798d88f4615d. Le Build ID 611bfa7557b9-dirty identifie le snapshot de validation, pas un commit de livraison.
+
+La contre-revue ciblée R2 est APPROVE. L’annexe d’audit conserve 0 critique, 0 élevé et 1 faible ; elle ne recalcule pas la note globale historique. Son validateur d’artefacts est RC0, sans erreur ni warning. Le complément Git confirme une correction de fixture seulement, sans abaisser la garde produit. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/audits/2026-10-13/session-2026-10-13-spec-162-01/annexe-cancel-T045-T046/artifact-validation.json et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/audits/2026-10-13/session-2026-10-13-spec-162-01/annexe-cancel-T045-T046/addendum-fixture-git.json.
+
+Les limites conservatrices restent applicables : un échec d’armement après RELEASE possible conserve Unknown et la capacité ; la fenêtre d’échec fsync après rename reste documentée ; un conflit permanent peut maintenir le wrapper vivant. Aucun nouveau test global, succès de recette installée ou nettoyage final n’est déduit.
+
+
+## Préparation opérationnelle du correctif — après builds Mac/Linux
+
+ROOT a confirmé les builds RC0 : Mac 169,694 s et Linux 70,866 s, source 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437 intégrée et poussée. Aucun succès d’activation n’est déduit. Après un redémarrage externe du Mac, le préflight R3 a réussi puis le gel a arrêté worker, daemon et pont. La sauvegarde Linux est acquise ; la garde Mac a détecté le lecteur SQLite encore ouvert du contrôle de quiescence. Le diagnostic reproduit justifie une fermeture explicite dans le script privé. La reprise est en préparation, sans nouveau test produit ni rebuild.
+
+Le détail des binaires, des PID observés, de la sauvegarde et de la preuve du diagnostic figure dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/livraison162.md. Statut maintenu : In Progress, 45/46 ; T046 et G8/G9 ouverts. tasks.md reste byte-identique.
+
+
+## Checkpoint final T046 et G8 — 13 octobre 2026
+
+ROOT et l’observateur ont validé l’annulation réelle après installation du correctif 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437. La tâche e2a5d605-063b-4103-b88b-a9c6b247240a est cancelled, résultat null, cleanup_done=true et error=null. Les huit PID observés sont tous absents à 15:58:36,355475 UTC (17:58:36,355475 CEST), avant la fin naturelle prévue du sleep à 15:59:17 UTC. La commande unique avait commencé à 15:56:17 UTC ; la fermeture est intervenue à 15:57:45 UTC. Cette observation solde le défaut réel de descendants survivants.
+
+Les preuves corrélées transmises par ROOT sont conservées avec leurs empreintes :
+
+| Preuve | SHA-256 et résultat |
+|---|---|
+| .drained exact | f005b5dfae73a0d1da3bb9cc60cc3b75a8d440bc5a7f0266d12ff3fe41e06a99 ; preuve de fin du drainage corrélée à l’exécution. |
+| Reçu terminal | c83d05cd282f9cdbd46422979ef10832d19e39011356c1cc4fdb440c8abbae40. |
+| Slot résultat | 50f41beea096f645d3606095e9ba555f751080b4fcac2afb84c9ac0664960b5c ; producer_terminal=true, clôturé pour cancelled, disposition=null, finalisé à 15:57:46 UTC. |
+| Journal | a7a69bb0b630d75d9a668a3cde0e158a230d5271efdad0aea80bfa67e509a142 ; 19 événements, marqueur de recette non émis. |
+
+Le maître n’a plus de tâche active et les admissions sont ouvertes : /Users/moi/.cache/bridget-delivery162-20261013/cancel162-rerun-active-after.json porte total_active=0, items=[], halted=false. Le parent Opus de recette a été arrêté proprement par la commande e27086a3-3a46-45da-aaca-7862f4e61a66, puis décommissionné par 13c264d9-7bc1-428f-9476-896fcd037d3f ; son historique reste conservé.
+
+L’activation est attestée par /Users/moi/.cache/bridget-delivery162-20261013/rollback611bfa-20261013-cancel-1dc0c602-r3/progress.json : phase activate réussie ; daemon Mac 71469 né à 17:53:53 CEST, pont 71567 né à 17:53:55 ; worker Linux 471321, naissance 142199350, exécutable du préfixe /home/moi/.local/lib/bridget-communication/162-1dc0c6022e8d. Les SHA des binaires actifs sont d9e09a78a0d0ff2a70b152f78e42ac994aea53094202f23f8ceb91f6b6bedc44 sur Mac et 2131f9a1f2f1b33e39096d3618e012fb7bb2465966f8cef9b6fb7832c4e71352 sur Linux. DB quick_check ok, zéro erreur de clé étrangère, schémas 7/12 et Fleet 5. T3 704/969 et le tunnel 1384 restent inchangés par rapport au préflight après le redémarrage externe.
+
+T046 est cochée : 46/46, statut Implemented, G8 validé. Les deux tests de bibliothèque et cinq E2E Linux, la contre-revue R2 APPROVE et l’annexe d’audit sans constat critique ou élevé restent les preuves ciblées du correctif. ROOT a relu le rapprochement code/documents/tests sans nouvel écart retenu. Ce checkpoint ne remplace ni la FULL historique ni l’audit global ; aucun GREEN global n’est revendiqué. G9 reste ouvert jusqu’au nettoyage final exécuté par ROOT.

@@ -142,3 +142,36 @@ L’oracle exact est remote_worker::tests::worker162_marqueur_et_permis_preceden
 La relecture indépendante ciblée confirme D1 résolu : le handle est conservé ; failed=true est admis en ReleaseAuthorized avec marqueur, sans promouvoir la phase. failed=false reste interdit dans cette situation. ROOT rapporte également diffcheck RC0. R6 reste la preuve des primitives et des quatre E2E sur les sources avant la garde finale ; R7 complète cette preuve pour la transition corrigée. Aucun nouveau passage complet ni Converge4 n’a eu lieu.
 
 Les gates de test et de revue propres à D1 sont clos. Le verdict R2 APPROVE_WITH_CHANGES est conservé avec cette réponse ciblée, sans le renommer APPROVE. **44/44 tâches planifiées, SHA tasks inchangé 746adf1b544e476ffe21e79131cb9ec2ad0b89c6bd90c0870475ecd242e800ea.** Le scoring et le validateur d’audit sont encore en finalisation : aucun grade anticipé. G8/G9 restent ouverts, aucun succès global ni livraison déduit. La limite L1 reste applicable.
+
+## Réouverture après recette G8 — arrêt incomplet, 44/46
+
+La recette d’annulation réelle a révélé un défaut sur la tâche **9fb66659-3ae0-481d-9b0a-335261a000f4** : cancelled/cleanup_done et reçu worker Terminal alors que codex PID355934 et sleep PID355935 restaient vivants, naissance141506025 et PGID355934. Le wrapper PID354553 avait disparu. Les descendants étaient encore observés après environ158 secondes puis ont fini naturellement ; aucun signal correctif n’a été envoyé par l’observateur. UID/SID/namespace de ces processus n’ont pas été capturés. Le statut métier n’atteste donc pas ici l’arrêt complet.
+
+Preuve : /Users/moi/.cache/bridget-delivery162-20261013/recipe162-cancel-observer-failure.json, SHA d77ad9ca5de6111cb462cb019757dee720291e701bedcfb415d5378e4921edea. Cause retenue : le suivi du groupe du wrapper ne couvre pas les groupes distincts créés par la sandbox. Le correctif garde le wrapper Linux comme subreaper jusqu’à récolte de ses descendants et publication d’une preuve durable de drainage ; le worker exige cette preuve avant Terminal après RELEASE possible.
+
+Le plan /Users/moi/.cache/bridget-delivery162-20261013/cancel162-fix-plan.md est relu, SHA c5f9e91687bf84713807523e984789ad63826a836502727a78de53aee91e9d3b. La revue /Users/moi/.cache/bridget-delivery162-20261013/cancel162-plan-review-r1.md porte APPROVE_WITH_CHANGES. Les quatre points ont une réponse dans le plan final : pas de récolte concurrente des Child ; inventaire de tous les TID et prérequis Linux ; garde des trois branches Terminal ; preuve corrélée au marqueur exact (bootstrap exec du wrapper). ROOT a arbitré un unique thread temporaire de signalisation sans récolte pendant stop/Drop, puis récolte après retour des propriétaires de Child. Ces réponses sont des décisions de plan autorisées, pas une preuve de correction ou de test réussi.
+
+Prérequis réels : Linux6.8.0-142-generic, /usr/bin/bwrap0755 uid0 sans setuid/setgid, workerUID1002. Preuve /Users/moi/.cache/bridget-delivery162-20261013/cancel162-host-prerequisites.json, SHA ca34e067dd50a2d43c0fb935385d23ef62a65b7ae09f7ef1518c57e4fed45597. Le correctif doit refuser avant fournisseur si les primitives requises manquent.
+
+T045 corrige ; T046 porte les oracles Linux, la recette réelle et la revue ciblée. **44 tâches validées conservées, deux tâches ouvertes, In Progress 44/46.** Aucun résultat de ces tâches anticipé. Si le wrapper meurt après RELEASE sans preuve, Unknown et la capacité peuvent rester retenus sans limite ; aucun outil force-clear ni arrêt prouvé inventé. Les trois routes nominales réussies restent acquises, mais **G8 demeure ouvert sur l’annulation, G9 reste ouvert**. Les convergences et audits antérieurs restent historiques sur leurs sources.
+
+## Correctif annulation G8 — contre-revue de code R2 APPROVE, essais en attente
+
+Revues relues : /Users/moi/.cache/bridget-delivery162-20261013/cancel162-code-review-r1.md (APPROVE_WITH_CHANGES, SHA52f4a98e0fcf2cd27d9ee8f2dd3b34b36193e828d89f62a224179a2b7ca7f093) et /Users/moi/.cache/bridget-delivery162-20261013/cancel162-code-review-r2.md (**APPROVE**, SHAd76da11c9d179f68e4815d9c2126af7ef82513bfe31242ef019c4ac8b62ee6e4). Le reviewer n’a exécuté aucun test, build ou service. Le verdict porte sur une relecture ciblée des quatre fichiers et du delta après R1, pas sur toute la base de code.
+
+| Objection R1 | Réponse constatée par lecture R2 | Preuve d’exécution |
+|---|---|---|
+| M1 — descendant sensible à TERM non testé | Fixture enrichie normal/ignore ; normal doit atteindre Terminal sans libération manuelle, ignore conserve naissances et absence de .drained jusqu’à sortie coopérative. Primitive avec double-fork pendant le drain et barrière owner.join. | En attente des essais Linux. |
+| L2 — enfant douteux arrête la passe | Erreur conservée, passage aux autres enfants puis retour Err ; inventaire illisible reste un refus conservateur. | En attente. |
+| L3 — preuve lue avant sortie | Lecture .drained après sortie dans les trois branches running/abandoned/marqueur ; Unknown peut être réconcilié ensuite sans bypass de preuve après RELEASE. | En attente. |
+| L4 — échec d’armement avant fournisseur | Limite conservée, explicitée ci-dessous. Aucun refus propre inventé. | Pas de succès opérationnel déduit. |
+
+**L4 exacte :** l’armement subreaper/pidfd peut échouer avant création du fournisseur alors que RELEASE est déjà possible. Dans ce cas, l’absence de preuve mène à **Unknown avec quota conservé**, pas à un refus propre. Ne pas assimiler « avant fournisseur » à « avant RELEASE ».
+
+Autres limites non bloquantes conservées de R2 :
+
+- Si la synchronisation du répertoire échoue après rename, le retry identique peut retrouver la preuve et retourner Ok sans refaire cette synchronisation. La durabilité du renommage lors d’un crash dans cette fenêtre n’est donc pas garantie. Une preuve perdue laisse une issue conservatrice, sans nouvel écrivain ni succès d’arrêt inventé.
+- Un Conflict persistant lors de publication maintient RemoteDrainGuard en boucle, le wrapper vivant et la capacité retenue. La revue relève l’absence de signal dédié. Ce point reste une limite, sans élargissement du correctif.
+- Une sortie du processus ou un abort contournant Drop ne publie pas la preuve : Unknown. La recherche ciblée du reviewer ne prouve pas l’absence de toutes les voies de sortie dans l’ensemble du programme.
+
+Le premier runner Linux R1 s’est arrêté avant compilation sur la garde du binaire. Le runner R2 compile actuellement. **Aucun test Linux réussi n’est encore attesté à ce checkpoint.** R2 APPROVE ne coche ni T045 ni T046. État courant In Progress44/46 ; G8/G9 ouverts, aucun verdict de convergence supplémentaire.
