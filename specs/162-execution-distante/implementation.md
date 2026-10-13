@@ -328,4 +328,3 @@ L’inventaire et la qualification sont conservés dans /Users/moi/.cache/bridge
 Le lien client /home/moi/.local/bin/bridget a été basculé après comparaison de sa cible 611bfa vers /home/moi/.local/lib/bridget-communication/162-1dc0c6022e8d/bin/bridget. SHA effectif : 2131f9a1f2f1b33e39096d3618e012fb7bb2465966f8cef9b6fb7832c4e71352. Le parent Opus de recette est arrêté et décommissionné, historique conservé.
 
 La lecture finale ciblée ROOT des preuves, du code et des correspondances documentaires ne retient aucun nouvel écart. tasks.md reste inchangé, SHA-256 44d552e8cf891ef1789b26ab3c85f8a670ea88e617220222aae7849d609adb06. Son en-tête G9 ouvert décrit le gel avant nettoyage ; ce reçu clôt le gate opérationnel sans modifier ce fichier figé. La FULL et l’audit global historiques conservent leurs limites ; aucun GREEN global ou nouvel audit global n’est annoncé.
-
