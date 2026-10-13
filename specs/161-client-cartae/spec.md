@@ -1,10 +1,10 @@
 # SPEC-161 — Client Bridget à jour sur Cartae
 
-**Statut :** Implemented — développement14/14 ; pipeline In Progress  
-**Priorité :** P1  
-**Périmètre :** livraison du client distant Cartae  
-**Tâches :** 14/14 — développement et préparation ; livraison8/9 obligatoire distincte  
-**Date :** 2026-10-13  
+**Statut :** Implemented — développement14/14 ; pipeline In Progress
+**Priorité :** P1
+**Périmètre :** livraison du client distant Cartae
+**Tâches :** 14/14 — développement et préparation ; livraison8/9 obligatoire distincte
+**Date :** 2026-10-13
 **Branche :** session-161-client-cartae
 
 ## Problème

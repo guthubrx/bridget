@@ -1,8 +1,8 @@
 # Plan SPEC-161 — Client Bridget à jour sur Cartae
 
-**Statut :** Implemented pour le développement14/14 ; pipeline In Progress. Réemploi PASS et contre-revue de plan traitée. Converge P1 puis P2 terminés sur le développement et les procédures ; contre-revue code et audit en cours, gates réelsG8/G9 ouverts, sans livraison annoncée.  
-**Date :** 2026-10-13  
-**Spec :** specs/161-client-cartae/spec.md  
+**Statut :** Implemented pour le développement14/14 ; pipeline In Progress. Réemploi PASS et contre-revue de plan traitée. Converge P1 puis P2 terminés sur le développement et les procédures ; contre-revue code approuvée avec corrections documentaires traitées et audit final validé, gates réelsG8/G9 ouverts, sans livraison annoncée.
+**Date :** 2026-10-13
+**Spec :** specs/161-client-cartae/spec.md
 **Estimation :** 2–4 heures, tests ciblés, revue, livraison, push vérifié et nettoyage inclus. Dépend principalement du cache Cargo Linux et du temps de compilation. L'attente d'un approvisionnement non autorisé est hors ETA.
 
 ## Résumé
