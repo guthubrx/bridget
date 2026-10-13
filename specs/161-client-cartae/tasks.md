@@ -1,8 +1,8 @@
 # Tasks SPEC-161 — Client Bridget à jour sur Cartae
 
-**Statut :** Implemented. **Progression :** 14/14. **Pipeline :** In Progress. **Date :** 2026-10-13. **Branche :** session-161-client-cartae.
+**Statut :** Implemented. **Progression :** 14/14. **Pipeline :** livraison opérationnelle achevée ; clôture Git documentaire In Progress. **Date :** 2026-10-13. **Branche :** session-161-client-cartae.
 
-Réemploi PASS lu avant génération ; contre-revueClaude APPROVE_WITH_CHANGES traitée. Templates et check-prerequisites absents : tentative RC127, protocole Tasks appliqué manuellement sans créer un toolkit. Chemins ci-dessous relatifs au worktree /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/161-client-cartae.
+Réemploi PASS lu avant génération ; contre-revueClaude APPROVE_WITH_CHANGES traitée. Templates et check-prerequisites absents : tentative RC127, protocole Tasks appliqué manuellement sans créer un toolkit. Chemins ci-dessous relatifs au checkout durable /Users/moi/Nextcloud/10.Scripts/64.bridget. Le worktree de développement161 a été retiré ; ses mentions historiques restent des preuves de déroulement.
 
 ## Phase1 — Préparation commune
 
@@ -80,3 +80,7 @@ Les14cases décrivent développement et préparation vérifiables avantcommit. L
 ## ETA après Tasks
 
 14tâches, dont majorité de contrôles courts sur deux fichiers existants. Développement/préparation45–90min ; revue/convergence/audit15–30min ; livraison/build/réseau45–90min ; nettoyage/métadonnées15–30min. Total120–240min. Cacheincomplet ou blocageSSH peut dépasser cette borne et impose recalibrage immédiat ; attente d'autorisation d'approvisionnement horsETA.
+
+## État après livraison opérationnelle
+
+14/14 inchangé. Lesgates ci-dessus restent lecontrat initial ; leur exécution réelleest attestée dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/validation/livraison161.md. Runner intégré/poussé vérifié, clientactivé etrecettesréussies, nettoyage décidéavecconservationsjustifiées. Les deuxConvergeavaient conservé tasks.md octetidentique ; la présente modificationest la clôture documentairepostérieure, pasuneécriture pendantConverge. Seulcommit/pushdesmétadonnéesfinales reste àROOT ; pasdenouvelletâchecode ni caseouverte.

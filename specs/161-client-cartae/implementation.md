@@ -1,6 +1,6 @@
 # Implémentation SPEC-161
 
-**Branche :** session-161-client-cartae. **Statut :** Implemented. **Progression :** 14/14. **Pipeline :** In Progress. **Livraison :** non exécutée.
+**Branche :** session-161-client-cartae. **Statut :** Implemented. **Progression :** 14/14. **Pipeline :** In Progress. **Livraison opérationnelle :** achevée ; commit/push des métadonnées finales encore à faire parROOT.
 
 ## T001 — Préflight et propriété
 
@@ -55,3 +55,9 @@ Verdict APPROVE_WITH_CHANGES sans blocagecode ; F1/F2 retenus et vérifiés parR
 ## Gate G6/G7 clos avant intégration
 
 Converge P1/P2, contre-revue Claude R1 et corrections documentaires relues. Audit modefix cycle1 + scoring final : A100 sur sept fichiers ciblés, 0C/0H/0M/0L restants, validateur RC0 (0 erreur, 0 warning). Rapport : audits/2026-10-13/session-2026-10-13-spec-161-01/scoring.md. GradeSHA504a9334fc0c4174bb77116e1c2fb6d16c2088aaf8364a97539791b4e8cbfd69 ; agrégatfinalSHA4583774717a0a596900a609a3039fa9b682cdaa5089ddbe7fb26211d609e27c3. Preuves de tests distinctes, aucune validation Rust ou runtime global déduite. G8/G9 restent à exécuter.
+
+## Livraison réelle et nettoyage —13octobre2026
+
+Les sections antérieures décrivent leur état historique. Le reçu canonique actuel est /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/validation/livraison161.md. Runner10f1e11cf04deb38b3220ce3ec1a5afae403fcef intégré/poussé et vérifié, sourcecompilée160e6812e3e7b2d051d630192857cc3f440180d51fa. BuildLinux108.004sRC0, activation08:59:38CEST, status/whoRC0, roundtripPython2agents/2messagesRC0, cinqprocessusprotégés inchangés, aucunprocessusBridgetCartae. Cespreuves viennent aprèsConvergeP1/P2.
+
+Fixturepackage, deuxworktrees etbranchesession retirés sansforce. Cachetarget conservé carlsofincomplet :deuxdryrunRC1, aucunegardecontournée ; sourceetrollback096 conservés avecraisons.26preuvesaudit copiées/réattestées, auditA100 limité à7fichiers/1169lignes, remarquesdocumentairesClaude résolues. Aucun gainphysique revendiqué. Développement14/14 ; clôtureopérationnelle réalisée. Derniercommit/pushdocumentaire confié àROOT, preuvefuture git-final161.json nonencoreacquise. Ne pasréutiliserlescheminsWT historiques commecheckoutactif.

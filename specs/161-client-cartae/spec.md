@@ -1,6 +1,6 @@
 # SPEC-161 — Client Bridget à jour sur Cartae
 
-**Statut :** Implemented — développement14/14 ; pipeline In Progress
+**Statut :** Implemented — développement14/14 ; livraison opérationnelle achevée, clôture Git documentaire en cours
 **Priorité :** P1
 **Périmètre :** livraison du client distant Cartae
 **Tâches :** 14/14 — développement et préparation ; livraison8/9 obligatoire distincte
@@ -97,3 +97,7 @@ Exécuteur distant, sélection de machine, choix de moteur, serveur de décision
 ## État après développement
 
 Les14tâches de développement et préparation sont vérifiées. SC006 dispose des preuves ciblées dans validation/tests161.md : harness unique30PASS/1FAIL historique, correctiondiagnostiquée puis8rejeuxaffectésPASS, sans nouveauFULL. SC001–SC005 restent ouverts aux preuves réellesG8/G9 ; aucune activation ou livraison déduite du statutImplemented. Converge sera exécuté parROOT après figement des tâches.
+
+## Livraison opérationnelle attestée
+
+Le13octobre2026, client161 activé surCartae depuis08:59:38CEST, mêmesourcedebinaire160 quelemaître, sansrestart. LespreuvesréellesG8 et décisionsG9 sont dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/validation/livraison161.md. La période décrite plushaut comme «SC001–SC005 ouverts» esthistorique ; leurs observations sont désormais consignées. Restent àcommitter/pousser les présentesmétadonnées ; aucune preuvefuture git-final161.json n'est présumée.
