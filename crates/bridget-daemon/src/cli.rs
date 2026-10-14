@@ -5626,6 +5626,7 @@ fn send_rate_limits_to_daemon(
 
     for fact in facts {
         let message = WrapperToDaemon::RateLimit {
+            credits: None,
             agent: agent.to_string(),
             window: fact.window.clone(),
             status: STATUSLINE_LIMIT_STATUS.to_string(),
@@ -9329,6 +9330,7 @@ mod hook_tests {
             rate_limits: facts
                 .iter()
                 .map(|fact| bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: fact.window.clone(),
                     status: STATUSLINE_LIMIT_STATUS.to_string(),
                     resets_at: fact.resets_at,
@@ -10407,6 +10409,7 @@ pub(crate) mod idempotency_projection_tests {
             model: Some("claude-opus-5".to_string()),
             effort: None,
             rate_limits: vec![bridget_transport::protocol::RateLimitFact {
+                credits: None,
                 window: "five_hour".to_string(),
                 status: "allowed".to_string(),
                 resets_at: Some(1_787_572_200),
@@ -10426,6 +10429,7 @@ pub(crate) mod idempotency_projection_tests {
         agent
             .rate_limits
             .push(bridget_transport::protocol::RateLimitFact {
+                credits: None,
                 window: "seven_day".to_string(),
                 status: "allowed".to_string(),
                 resets_at: Some(1_787_700_000),
@@ -10437,6 +10441,7 @@ pub(crate) mod idempotency_projection_tests {
         assert!(both.contains("7d 61% rst "), "{both}");
 
         agent.rate_limits = vec![bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "five_hour".to_string(),
             status: "rejected".to_string(),
             resets_at: None,

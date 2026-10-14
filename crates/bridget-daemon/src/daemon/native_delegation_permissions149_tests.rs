@@ -4860,6 +4860,7 @@ fn native157_quota_catalogue_epuise() {
     st.provider_limits.record(
         "native-test",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "five_hour".into(),
             status: "rate_limit_reached".into(),
             resets_at: Some(resets_at),
@@ -4922,6 +4923,7 @@ fn native157_quota_admission_refuse_avec_resets_at() {
     st.provider_limits.record(
         "native-test",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "five_hour".into(),
             status: "rate_limit_reached".into(),
             resets_at: Some(resets_at),
@@ -4958,6 +4960,7 @@ fn native157_quota_admission_refuse_avec_resets_at() {
     st.provider_limits.record(
         "native-test",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "five_hour".into(),
             status: "available".into(),
             resets_at: Some(resets_at),
@@ -4999,6 +5002,7 @@ fn native157_quota_perime_ignore() {
     st.provider_limits.record(
         "native-test",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "five_hour".into(),
             status: "rate_limit_reached".into(),
             resets_at: Some(now - 1),
@@ -5092,6 +5096,7 @@ fn native157_quota_survit_fin_presence() {
         "rate_limit_reached".into(),
         Some(now + 3600),
         Some(100),
+        None,
         bridget_transport::protocol::RateLimitSource::CodexAppServer,
         &mut st,
     );
@@ -5142,6 +5147,7 @@ fn native157_quota_nom_enregistre_par_les_trois_sources() {
             status.into(),
             Some(now + 3600),
             Some(100),
+            None,
             source,
             &mut st,
         );
@@ -5407,6 +5413,7 @@ fn native157_fallback_premier_puis_second_candidat_valide() {
             st.provider_limits.record(
                 "fallback157-first",
                 bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: "primary/300m".into(),
                     status: "rejected".into(),
                     resets_at: Some(unix_timestamp() + 3600),
@@ -5455,6 +5462,7 @@ fn native157_fallback_premier_puis_second_candidat_valide() {
             st.provider_limits.record(
                 "fallback157-first",
                 bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: "primary/300m".into(),
                     status: "rejected".into(),
                     resets_at: Some(unix_timestamp() + 3600),
@@ -5545,6 +5553,7 @@ fn native157_fallback_motifs_remplacables_fr013() {
             "provider_quota_exhausted" => st.provider_limits.record(
                 "fallback157-target",
                 bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: "primary/300m".into(),
                     status: "rejected".into(),
                     resets_at: Some(unix_timestamp() + 3600),
@@ -5617,6 +5626,7 @@ fn native157_fallback_modele_effort_type_avant_indisponibilite() {
             st.provider_limits.record(
                 "fallback157-target",
                 bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: "primary/300m".into(),
                     status: "rejected".into(),
                     resets_at: Some(unix_timestamp() + 3600),
@@ -5978,6 +5988,7 @@ fn native157_fallback_epuise_liste_les_essais() {
     st.provider_limits.record(
         "fallback157-second",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "primary/300m".into(),
             status: "rejected".into(),
             resets_at: Some(unix_timestamp() + 3600),
@@ -6025,6 +6036,7 @@ fn native157_fallback_epuise_sans_tache_cle_libre() {
     st.provider_limits.record(
         "fallback157-second",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "primary/300m".into(),
             status: "rejected".into(),
             resets_at: Some(unix_timestamp() + 3600),
@@ -6070,6 +6082,7 @@ fn native157_fallback_rejeu_meme_substitution() {
     st.provider_limits.record(
         "fallback157-first",
         bridget_transport::protocol::RateLimitFact {
+            credits: None,
             window: "primary/300m".into(),
             status: "rejected".into(),
             resets_at: Some(unix_timestamp() + 3600),

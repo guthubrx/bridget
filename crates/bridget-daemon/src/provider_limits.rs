@@ -1,9 +1,9 @@
-//! Mémoire157 volatile par nom du registre, indépendante des présences.
+//! Mémoire157 volatile par profil, avec faits de compte liés à leur instance.
 use bridget_transport::protocol::{RateLimitFact, RateLimitSource};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Seen {
     fact: RateLimitFact,
     source: RateLimitSource,
@@ -13,12 +13,18 @@ struct Seen {
 #[derive(Debug, Default)]
 pub(crate) struct ProviderLimits {
     by_agent_type: BTreeMap<String, BTreeMap<String, Seen>>,
+    // Au plus 4096 instances ; aucune capacité payante ne traverse cette clé.
+    by_instance: BTreeMap<(String, String), ProviderLimits>,
+    codex_credits: BTreeMap<String, (Option<bridget_transport::protocol::CodexCredits>, i64)>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Quota {
     pub windows: Vec<serde_json::Value>,
     pub exhausted: bool,
+    pub launch_blocked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credits: Option<bridget_transport::protocol::CodexCredits>,
     pub limit_reached: bool,
     pub resets_at: Option<i64>,
     pub observed_at: i64,
@@ -34,6 +40,13 @@ impl ProviderLimits {
         source: RateLimitSource,
         observed_at: i64,
     ) {
+        if source == RateLimitSource::CodexAppServer {
+            self.codex_credits
+                .insert(agent_type.to_owned(), (fact.credits.clone(), observed_at));
+            if fact.window == "account/credits" {
+                return;
+            }
+        }
         let windows = self.by_agent_type.entry(agent_type.to_owned()).or_default();
         windows.retain(|_, seen| seen.fact.resets_at.is_none_or(|at| at > observed_at));
         if fact.resets_at.is_some_and(|at| at <= observed_at) {
@@ -63,6 +76,61 @@ impl ProviderLimits {
         }
     }
 
+    /// O(log I + F), I<=4096, F<=8 ; éviction O(I) seulement à saturation.
+    pub(crate) fn record_scoped(
+        &mut self,
+        agent_type: &str,
+        instance: &str,
+        fact: RateLimitFact,
+        source: RateLimitSource,
+        observed_at: i64,
+    ) {
+        self.record(agent_type, fact.clone(), source, observed_at);
+        let key = (agent_type.to_owned(), instance.to_owned());
+        if !self.by_instance.contains_key(&key) && self.by_instance.len() >= 4096 {
+            let oldest = self
+                .by_instance
+                .iter()
+                .min_by_key(|(_, limits)| {
+                    limits
+                        .by_agent_type
+                        .values()
+                        .flat_map(|w| w.values())
+                        .map(|seen| seen.observed_at)
+                        .chain(limits.codex_credits.values().map(|(_, at)| *at))
+                        .max()
+                        .unwrap_or(0)
+                })
+                .map(|(key, _)| key.clone());
+            if let Some(key) = oldest {
+                self.by_instance.remove(&key);
+            }
+        }
+        self.by_instance
+            .entry(key)
+            .or_default()
+            .record(agent_type, fact, source, observed_at);
+    }
+
+    pub(crate) fn scoped_quota(&self, agent_type: &str, instance: &str, now: i64) -> Option<Quota> {
+        self.by_instance
+            .get(&(agent_type.to_owned(), instance.to_owned()))?
+            .quota_with_credits(agent_type, now, true)
+    }
+
+    pub(crate) fn scoped_exhausted_since(
+        &self,
+        agent_type: &str,
+        instance: &str,
+        since: i64,
+        now: i64,
+        past_since: Option<i64>,
+    ) -> Option<(i64, i64)> {
+        self.by_instance
+            .get(&(agent_type.to_owned(), instance.to_owned()))?
+            .attested_exhausted_since(agent_type, since, now, past_since)
+    }
+
     /// O(K log p + F), K octets de clé, p types, F au plus8 fenêtres ; espace O(1).
     /// Lecture160 : chaque fenêtre est filtrée avant les deux maxima indépendants.
     /// `past_since` est le début du hold résolu ; aucun fait ni état n'est créé.
@@ -88,12 +156,19 @@ impl ProviderLimits {
             if reset <= now && !past_since.is_some_and(|at| seen.observed_at >= at) {
                 continue;
             }
-            // Prédicat157 identique : petit doublon assumé pour ne pas extraire
-            // un helper ni modifier quota(), dont l'admission reste inchangée.
+            // La fenêtre reste épuisée ; seuls les crédits attestés dans cette
+            // même instance retirent le blocage effectif du hold160.
             let exhausted = (seen.source == RateLimitSource::ClaudeStreamJson
                 && seen.fact.status == "rejected")
                 || seen.fact.used_percent.is_some_and(|percent| percent >= 100);
-            if !exhausted {
+            if !exhausted
+                || (seen.source == RateLimitSource::CodexAppServer
+                    && self
+                        .codex_credits
+                        .get(agent_type)
+                        .and_then(|(credits, _)| credits.as_ref())
+                        .is_some_and(|credits| credits.usable()))
+            {
                 continue;
             }
             resets_at = resets_at.max(Some(reset));
@@ -105,13 +180,21 @@ impl ProviderLimits {
     /// O(log p+B), au plus8 fenêtres et B octets de projection ; lecture seule.
     /// Le statut Codex est global ; seul un retour futur atteste une fenêtre épuisée.
     pub(crate) fn quota(&self, agent_type: &str, now: i64) -> Option<Quota> {
-        let known = self.by_agent_type.get(agent_type)?;
+        self.quota_with_credits(agent_type, now, false)
+    }
+
+    fn quota_with_credits(&self, agent_type: &str, now: i64, scoped: bool) -> Option<Quota> {
+        let known = self.by_agent_type.get(agent_type);
+        let current_credits = self.codex_credits.get(agent_type).filter(|_| scoped);
         let mut windows = Vec::new();
         let mut exhausted = false;
+        let mut launch_blocked = current_credits
+            .and_then(|(credits, _)| credits.as_ref())
+            .is_some_and(|credits| credits.spend_control_reached);
         let mut limit_reached = false;
         let mut resets_at = None;
-        let mut observed_at = None;
-        for seen in known.values() {
+        let mut observed_at = current_credits.map(|(_, at)| *at);
+        for seen in known.into_iter().flat_map(|windows| windows.values()) {
             let fact = &seen.fact;
             if fact.resets_at.is_some_and(|at| at <= now) {
                 continue;
@@ -121,6 +204,13 @@ impl ProviderLimits {
                     && fact.status == "rejected")
                     || fact.used_percent.is_some_and(|percent| percent >= 100));
             exhausted |= window_exhausted;
+            let credits = self
+                .codex_credits
+                .get(agent_type)
+                .and_then(|(credits, _)| credits.as_ref())
+                .filter(|_| scoped && seen.source == RateLimitSource::CodexAppServer);
+            launch_blocked |= credits.is_some_and(|credit| credit.spend_control_reached)
+                || (window_exhausted && !credits.is_some_and(|credit| credit.usable()));
             limit_reached |= window_exhausted
                 || (seen.source == RateLimitSource::CodexAppServer && fact.status != "available");
             if window_exhausted {
@@ -137,6 +227,8 @@ impl ProviderLimits {
         Some(Quota {
             windows,
             exhausted,
+            launch_blocked,
+            credits: current_credits.and_then(|(credits, _)| credits.clone()),
             limit_reached,
             resets_at,
             observed_at: observed_at?,
@@ -147,6 +239,170 @@ impl ProviderLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native157_credits_portee_retrait_et_plafond_instances() {
+        use bridget_transport::protocol::CodexCredits;
+        let mut limits = ProviderLimits::default();
+        let mut fact = RateLimitFact {
+            window: "weekly".into(),
+            status: "rate_limit_reached".into(),
+            resets_at: Some(500),
+            used_percent: Some(100),
+            credits: None,
+        };
+        for (has, unlimited, spend, blocked) in [
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, false, true),
+            (true, false, true, true),
+        ] {
+            fact.credits = Some(CodexCredits {
+                has_credits: Some(has),
+                unlimited: Some(unlimited),
+                spend_control_reached: spend,
+            });
+            limits.record_scoped(
+                "codex",
+                "cartae",
+                fact.clone(),
+                RateLimitSource::CodexAppServer,
+                90,
+            );
+            let quota = limits.scoped_quota("codex", "cartae", 100).unwrap();
+            assert!(quota.exhausted);
+            assert_eq!(quota.windows[0]["used_percent"], 100);
+            assert_eq!(quota.launch_blocked, blocked);
+            assert_eq!(
+                limits
+                    .scoped_exhausted_since("codex", "cartae", 80, 100, None)
+                    .is_some(),
+                blocked
+            );
+            assert!(
+                limits
+                    .scoped_quota("codex", "another-account", 100)
+                    .is_none()
+            );
+            assert!(limits.scoped_quota("codex-pro", "cartae", 100).is_none());
+            assert!(limits.quota("codex", 100).unwrap().launch_blocked);
+        }
+        fact.credits = Some(CodexCredits {
+            has_credits: Some(true),
+            unlimited: Some(false),
+            spend_control_reached: false,
+        });
+        limits.record_scoped(
+            "codex",
+            "cartae",
+            fact.clone(),
+            RateLimitSource::CodexAppServer,
+            91,
+        );
+        limits.record_scoped(
+            "codex",
+            "other",
+            RateLimitFact {
+                credits: None,
+                ..fact.clone()
+            },
+            RateLimitSource::CodexAppServer,
+            92,
+        );
+        assert!(
+            !limits
+                .scoped_quota("codex", "cartae", 100)
+                .unwrap()
+                .launch_blocked
+        );
+        assert!(
+            limits
+                .scoped_quota("codex", "other", 100)
+                .unwrap()
+                .launch_blocked
+        );
+        // Mise à jour sparse : ancienne fenêtre préservée, crédit retiré immédiatement.
+        limits.record_scoped(
+            "codex",
+            "cartae",
+            RateLimitFact {
+                window: "account/credits".into(),
+                status: "observed".into(),
+                resets_at: None,
+                used_percent: None,
+                credits: None,
+            },
+            RateLimitSource::CodexAppServer,
+            93,
+        );
+        let quota = limits.scoped_quota("codex", "cartae", 100).unwrap();
+        assert!(quota.launch_blocked);
+        assert_eq!(quota.windows.len(), 1);
+        assert!(
+            limits
+                .scoped_exhausted_since("codex", "cartae", 80, 100, None)
+                .is_some()
+        );
+        limits.record_scoped(
+            "claude",
+            "cartae",
+            fact.clone(),
+            RateLimitSource::ClaudeStreamJson,
+            94,
+        );
+        assert!(
+            limits
+                .scoped_quota("claude", "cartae", 100)
+                .unwrap()
+                .launch_blocked
+        );
+        // Le contrôle de dépenses prime aussi sans fenêtre ou après son reset.
+        let spend = RateLimitFact {
+            window: "account/credits".into(),
+            status: "observed".into(),
+            resets_at: None,
+            used_percent: None,
+            credits: Some(CodexCredits {
+                has_credits: Some(true),
+                unlimited: Some(true),
+                spend_control_reached: true,
+            }),
+        };
+        limits.record_scoped(
+            "codex",
+            "spend-only",
+            spend.clone(),
+            RateLimitSource::CodexAppServer,
+            95,
+        );
+        let quota = limits.scoped_quota("codex", "spend-only", 100).unwrap();
+        assert!(quota.launch_blocked);
+        assert!(quota.windows.is_empty());
+        limits.record_scoped(
+            "codex",
+            "cartae",
+            spend,
+            RateLimitSource::CodexAppServer,
+            96,
+        );
+        assert!(
+            limits
+                .scoped_quota("codex", "cartae", 600)
+                .unwrap()
+                .launch_blocked
+        );
+        for instance in 0..4097 {
+            limits.record_scoped(
+                "codex",
+                &format!("instance-{instance}"),
+                fact.clone(),
+                RateLimitSource::CodexAppServer,
+                100 + instance,
+            );
+        }
+        assert_eq!(limits.by_instance.len(), 4096);
+        assert!(limits.scoped_quota("codex", "cartae", 100).is_none());
+    }
 
     #[test]
     fn native157_limits_regle_epuisement() {
@@ -227,6 +483,7 @@ mod tests {
             limits.record(
                 "registry-provider",
                 RateLimitFact {
+                    credits: None,
                     window: "five_hour".into(),
                     status: status.into(),
                     resets_at: reset,
@@ -268,6 +525,7 @@ mod tests {
             limits.record(
                 "codex-pro",
                 RateLimitFact {
+                    credits: None,
                     window: window.into(),
                     status: "limit_reached".into(),
                     resets_at: Some(reset),
@@ -287,6 +545,7 @@ mod tests {
         limits.record(
             "codex-pro",
             RateLimitFact {
+                credits: None,
                 window: "primary/300m".into(),
                 status: "limit_reached".into(),
                 resets_at: Some(500),
@@ -308,6 +567,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rejected".into(),
                 resets_at: Some(100),
@@ -331,6 +591,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "unknown".into(),
                 status: "unknown".into(),
                 resets_at: None,
@@ -344,6 +605,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "already-past".into(),
                 status: "rejected".into(),
                 resets_at: Some(100),
@@ -362,6 +624,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rejected".into(),
                 resets_at: Some(500),
@@ -373,6 +636,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rejected".into(),
                 resets_at: Some(95),
@@ -397,6 +661,7 @@ mod tests {
             limits.record(
                 "claude",
                 RateLimitFact {
+                    credits: None,
                     window: window.into(),
                     status: "rejected".into(),
                     resets_at: Some(reset),
@@ -416,6 +681,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "seven_day".into(),
                 status: "unknown".into(),
                 resets_at: Some(6000),
@@ -456,6 +722,7 @@ mod tests {
             limits.record(
                 agent_type,
                 RateLimitFact {
+                    credits: None,
                     window: "shared-window".into(),
                     status: "unknown".into(),
                     resets_at: Some(500),
@@ -481,6 +748,7 @@ mod tests {
             limits.record(
                 "claude",
                 RateLimitFact {
+                    credits: None,
                     window: format!("w{index}"),
                     status: "unknown".into(),
                     resets_at: None,
@@ -493,6 +761,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "w0".into(),
                 status: "unknown".into(),
                 resets_at: None,
@@ -505,6 +774,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "w8".into(),
                 status: "unknown".into(),
                 resets_at: None,
@@ -526,6 +796,7 @@ mod tests {
             tied.record(
                 "claude",
                 RateLimitFact {
+                    credits: None,
                     window: window.into(),
                     status: "unknown".into(),
                     resets_at: None,
@@ -548,6 +819,7 @@ mod tests {
             purged.record(
                 "claude",
                 RateLimitFact {
+                    credits: None,
                     window: format!("w{index}"),
                     status: "unknown".into(),
                     resets_at: Some(if matches!(index, 1 | 2) { 95 } else { 500 }),
@@ -560,6 +832,7 @@ mod tests {
         purged.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "w8".into(),
                 status: "unknown".into(),
                 resets_at: Some(500),
@@ -580,6 +853,7 @@ mod tests {
             limits.record(
                 "claude-child",
                 RateLimitFact {
+                    credits: None,
                     window: "five_hour".into(),
                     status: "rejected".into(),
                     resets_at: Some(500),
@@ -605,6 +879,7 @@ mod tests {
         limits.record(
             "codex-pro",
             RateLimitFact {
+                credits: None,
                 window: "secondary".into(),
                 status: "limit_reached".into(),
                 resets_at: Some(600_000),
@@ -622,6 +897,7 @@ mod tests {
         limits.record(
             "codex-pro",
             RateLimitFact {
+                credits: None,
                 window: "primary".into(),
                 status: "limit_reached".into(),
                 resets_at: Some(500),
@@ -643,6 +919,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rejected".into(),
                 resets_at: Some(99),
@@ -673,6 +950,7 @@ mod tests {
         limits.record(
             "claude",
             RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rejected".into(),
                 resets_at: Some(103),
@@ -707,6 +985,7 @@ mod tests {
             limits.record(
                 "claude",
                 RateLimitFact {
+                    credits: None,
                     window: window.into(),
                     status: "unknown".into(),
                     resets_at: Some(reset),
@@ -727,6 +1006,7 @@ mod tests {
             limits.record(
                 "claude",
                 RateLimitFact {
+                    credits: None,
                     window: window.into(),
                     status: "unknown".into(),
                     resets_at: Some(reset),

@@ -8966,6 +8966,7 @@ fn handle_rate_limit(
     status: String,
     resets_at: Option<i64>,
     used_percent: Option<u8>,
+    credits: Option<bridget_transport::protocol::CodexCredits>,
     source: bridget_transport::protocol::RateLimitSource,
     state: &mut DaemonState,
 ) -> DaemonToWrapper {
@@ -8993,6 +8994,11 @@ fn handle_rate_limit(
             reason: "pourcentage de limite invalide".to_string(),
         };
     }
+    let instance = state
+        .router
+        .get_agent(agent)
+        .and_then(|found| state.conn_instances.get(&found.connection_id))
+        .cloned();
     let Some(presence) = presence_of_agent(state, agent) else {
         return DaemonToWrapper::Nack {
             id: "rate-limit".to_string(),
@@ -9006,14 +9012,18 @@ fn handle_rate_limit(
         status,
         resets_at,
         used_percent,
+        credits: credits
+            .filter(|_| source == bridget_transport::protocol::RateLimitSource::CodexAppServer),
     };
     presence.rate_limits.insert(window, fact.clone());
     presence.touch_capacity();
     log::debug!("limite de '{}' mise à jour par {}", presence.name, source);
     // Dernier usage de presence ci-dessus : la mémoire partagée ne garde pas son emprunt.
-    state
-        .provider_limits
-        .record(&agent_type, fact, source, unix_timestamp());
+    if let Some(instance) = instance {
+        state
+            .provider_limits
+            .record_scoped(&agent_type, &instance, fact, source, unix_timestamp());
+    }
     DaemonToWrapper::Ack {
         project_warnings: Vec::new(),
         id: "rate-limit".to_string(),
@@ -23271,6 +23281,7 @@ fn handle_wrapper_message_with_peer(
             status,
             resets_at,
             used_percent,
+            credits,
             source,
         } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -23280,6 +23291,7 @@ fn handle_wrapper_message_with_peer(
                 status,
                 resets_at,
                 used_percent,
+                credits,
                 source,
                 &mut st,
             ))
@@ -43484,6 +43496,7 @@ mod presence_tests {
             "rejected".to_string(),
             Some(1_787_572_200),
             None,
+            None,
             RateLimitSource::ClaudeStreamJson,
             &mut state,
         );
@@ -43509,6 +43522,7 @@ mod presence_tests {
             "allowed".to_string(),
             Some(1_787_700_000),
             Some(61),
+            None,
             RateLimitSource::ClaudeStreamJson,
             &mut state,
         );
@@ -43519,6 +43533,7 @@ mod presence_tests {
             "allowed".to_string(),
             Some(1_787_572_200),
             Some(19),
+            None,
             RateLimitSource::ClaudeStreamJson,
             &mut state,
         );

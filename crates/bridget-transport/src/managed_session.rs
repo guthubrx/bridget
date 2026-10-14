@@ -185,6 +185,7 @@ pub enum ManagedEventKind {
         resets_at: Option<i64>,
         /// Pourcentage consommé si le fournisseur l'atteste ; sinon absent.
         used_percent: Option<u8>,
+        credits: Option<crate::protocol::CodexCredits>,
     },
     /// Modèle réellement annoncé par le flux natif. L'absence de cet événement
     /// n'autorise aucun verdict : un flux muet reste sans écart.

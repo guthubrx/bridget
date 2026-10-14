@@ -33,6 +33,16 @@ utilisé par fenêtre. Le statut Codex global peut être atteint sans fenêtre
 Sans fait : null. Mémoire de huit fenêtres/type, survivant à la présence mais
 volatile au redémarrage. Les horaires passés n’interdisent pas l’admission.
 
+Pour Codex, ne conclure jamais « lancement impossible » depuis 100 % seul.
+Lire `launch_blocked` et les crédits attestés dans la même instance : disponibles
+ou illimités, avec contrôle de dépenses ouvert, ils permettent de poursuivre.
+Une valeur absente ou invalide n'autorise rien ; une limite de dépenses bloque.
+Les crédits d'un autre compte, profil ou serveur ne sont jamais transposés.
+Avant initialisation distante, le budget cible est inconnu ; le wrapper l'atteste
+avant la remise de mission. Le hold160 emploie ces mêmes faits du compte enfant.
+Le catalogue local conserve son contrôle historique sans attestation scoped.
+Ne changer ni moteur ni authentification sur le seul épuisement du quota inclus.
+
 Fournir fallback seulement pour autoriser explicitement 1 à 3 alternatives
 {agent_type,model,effort?}, sans doublon/cible identique/entrée vide. La première
 valide est choisie sans gain de droits. Modèle/effort, droits du parent,

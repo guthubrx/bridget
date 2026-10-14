@@ -1463,6 +1463,7 @@ fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
         return None;
     }
     Some(ManagedEventKind::RateLimitObserved {
+        credits: None,
         window: window.to_string(),
         status: status.to_string(),
         resets_at: info.get("resetsAt").and_then(Value::as_i64),
@@ -2446,6 +2447,7 @@ mod tests {
                 ref status,
                 resets_at: Some(1_787_572_200),
                 used_percent: None,
+                credits: None,
             }) if window == "five_hour" && status == "rejected"
         ));
 

@@ -7195,6 +7195,7 @@ fn forward_managed_events_with_redaction(
                 mut status,
                 resets_at,
                 used_percent,
+                credits,
             } => {
                 window = redact_managed_text(redaction, "provider_rate_limit_window", window);
                 status = redact_managed_text(redaction, "provider_rate_limit_status", status);
@@ -7208,6 +7209,7 @@ fn forward_managed_events_with_redaction(
                                 status,
                                 resets_at,
                                 used_percent,
+                                credits: None,
                                 source:
                                     bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
                             },
@@ -7221,6 +7223,7 @@ fn forward_managed_events_with_redaction(
                             status,
                             resets_at,
                             used_percent,
+                            credits,
                             source: bridget_transport::protocol::RateLimitSource::CodexAppServer,
                         },
                     ),
@@ -8698,6 +8701,7 @@ mod reconnect_tests {
             bridget_transport::ManagedEventSource::ClaudeStreamJson,
             br#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1787572200,"rateLimitType":"five_hour"}}"#.to_vec(),
             ManagedEventKind::RateLimitObserved {
+                credits: None,
                 window: "five_hour".to_string(),
                 status: "rejected".to_string(),
                 resets_at: Some(1_787_572_200),
@@ -8722,6 +8726,7 @@ mod reconnect_tests {
                 status,
                 resets_at: Some(1_787_572_200),
                 used_percent: None,
+                credits: None,
                 source: bridget_transport::protocol::RateLimitSource::ClaudeStreamJson,
             } if agent == "claude-1" && window == "five_hour" && status == "rejected"
         ));

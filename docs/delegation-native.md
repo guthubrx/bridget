@@ -68,6 +68,26 @@ Les faits passés sont ignorés ; la mémoire garde huit fenêtres par agent_typ
 survit à la disparition de sa présence, mais pas au redémarrage du daemon.
 Des fournisseurs du même compte n’ont pas de quota partagé dans cette projection.
 
+Pour Codex, `exhausted` décrit le quota inclus ; `launch_blocked` décrit le blocage
+réel. `credits` expose les indicateurs attestés, sans interpréter un solde.
+À 100 %, des crédits disponibles ou illimités permettent de poursuivre si le
+contrôle de dépenses est explicitement ouvert. Une donnée absente ou invalide
+n'autorise aucun crédit. Un contrôle de dépenses atteint bloque même sans fenêtre.
+Les réponses initiales et `account/rateLimits/updated` conservent l'ordre source ;
+une mise à jour partielle peut retirer immédiatement une ancienne autorisation.
+
+Ces faits de compte sont liés au profil et à l'instance du wrapper. Un autre
+compte ou une autre machine ne transmet aucun droit de consommer ses crédits.
+Avant création distante, ce compte reste inconnu : le wrapper peut être admis,
+puis la remise de mission vérifie son propre budget. Les refus d'authentification
+et les autres gardes restent applicables. Le catalogue local utilise le fait
+scoped du même profil/instance ; sans ce fait, le contrôle historique du profil
+reste conservateur. Cette admission locale suppose le même environnement de
+lancement déclaré dans le registre ; elle ne constitue pas une attestation d'un
+nouveau compte. La mémoire scoped conserve au plus 4096 instances et huit fenêtres
+par instance ; elle disparaît au redémarrage. Le hold160 utilise le compte enfant,
+et ne qualifie pas une fenêtre épuisée lorsque ses crédits restent utilisables.
+
 Fallback est facultatif : 1 à 3 objets fermés {agent_type,model,effort?}, ordonnés,
 sans entrée vide, doublon ou cible identique à la demande. Le parent choisit
 les alternatives ; Bridget ne crée ni droit ni accord humain supplémentaire.

@@ -2414,8 +2414,12 @@ pub(super) fn recheck_remote_dispatch(
     };
     if st
         .provider_limits
-        .quota(agent_type, unix_timestamp())
-        .is_some_and(|quota| quota.exhausted)
+        .scoped_quota(
+            agent_type,
+            task.child_instance.as_deref().unwrap_or(""),
+            unix_timestamp(),
+        )
+        .is_some_and(|quota| quota.launch_blocked)
     {
         return Err("provider_quota_exhausted".into());
     }
@@ -3423,8 +3427,10 @@ fn target_resolver<'a>(
         if child_requests == Some("forward") && target.protocol != "codex_app_server" {
             return Err("child_requests_unsupported".into());
         }
-        if let Some(quota) = limits.quota(agent_type, unix_timestamp())
-            && quota.exhausted
+        if let Some(quota) = limits
+            .scoped_quota(agent_type, instance, unix_timestamp())
+            .or_else(|| limits.quota(agent_type, unix_timestamp()))
+            && quota.launch_blocked
         {
             return Err(format!(
                 "provider_quota_exhausted:{}",
@@ -3677,13 +3683,8 @@ fn admit_delegate(
                 {
                     return Err("remote_placement_changed".into());
                 }
-                if st
-                    .provider_limits
-                    .quota(agent_type, unix_timestamp())
-                    .is_some_and(|quota| quota.exhausted)
-                {
-                    return Err("provider_quota_exhausted".into());
-                }
+                // Le compte distant n'est attesté qu'après initialisation du wrapper.
+                // Un quota d'une autre machine ne constitue pas un refus de cette cible.
                 let scoped = AgentRegistry::from_resolved(agent_type, &prepared.definition)?;
                 let snapshot = crate::native_permissions::snapshot(
                     &owner,
@@ -4292,7 +4293,8 @@ fn handle_locked_with_remote_proof(
                     let inherited = verdict(None);
                     let development = verdict(Some(SpawnPosture::Development));
                     let can_run = discovery.is_ok() || inherited.is_ok() || development.is_ok();
-                    let quota = st.provider_limits.quota(&name, unix_timestamp());
+                    let quota = st.provider_limits.scoped_quota(&name, &instance, unix_timestamp())
+                        .or_else(|| st.provider_limits.quota(&name, unix_timestamp()));
                     let constraints: Vec<Value> = if can_run {
                         if quota.as_ref().is_some_and(|quota| quota.limit_reached && !quota.exhausted) {
                             vec![json!({"code":"provider_limit_reached_window_unknown",
@@ -5658,8 +5660,9 @@ fn qualify_quota(
         .last()
         .and_then(|wait| wait.until)
         .map_or(emission, |until| emission.max(until));
-    let Some((reset_at, _)) = limits.attested_exhausted_since(
+    let Some((reset_at, _)) = limits.scoped_exhausted_since(
         agent_type,
+        task.child_instance.as_deref().unwrap_or(""),
         since,
         now,
         task.quota_hold.as_ref().map(|hold| hold.since),
@@ -10329,6 +10332,7 @@ mod tests {
                 "rate_limit_reached".into(),
                 Some(reset_at),
                 Some(100),
+                None,
                 bridget_transport::protocol::RateLimitSource::CodexAppServer,
                 &mut st,
             ),
@@ -10628,6 +10632,7 @@ mod tests {
                     st.provider_limits.record(
                         agent_type,
                         bridget_transport::protocol::RateLimitFact {
+                            credits: None,
                             window: "five_hour".into(),
                             status: "rate_limit_reached".into(),
                             resets_at: Some(now - 1),
@@ -20974,6 +20979,8 @@ mod tests {
             "before_mission",
             "before_last_wait",
             "codex_global",
+            "credits_available",
+            "different_instance",
         ] {
             let mut task = original.clone();
             task.reply_timeout = Some(120);
@@ -21018,9 +21025,21 @@ mod tests {
                 }
             }
             let mut limits = crate::provider_limits::ProviderLimits::default();
-            limits.record(
+            limits.record_scoped(
                 agent_type,
+                if case == "different_instance" {
+                    "other-instance"
+                } else {
+                    task.child_instance.as_deref().unwrap()
+                },
                 bridget_transport::protocol::RateLimitFact {
+                    credits: (case == "credits_available").then_some(
+                        bridget_transport::protocol::CodexCredits {
+                            has_credits: Some(true),
+                            unlimited: Some(false),
+                            spend_control_reached: false,
+                        },
+                    ),
                     window: "five_hour".into(),
                     status: "rate_limit_reached".into(),
                     resets_at: Some(reset),
@@ -21041,6 +21060,28 @@ mod tests {
                 _ => Qualification::NoFact,
             };
             assert_eq!(qualify_quota(&task, now, &limits), expected, "{case}");
+            // Le véritable recheck distant utilise le compte de l'enfant,
+            // même si un autre compte du même profil a publié une fenêtre100.
+            let mut probe = task.clone();
+            probe.permission_snapshot = None;
+            probe.remote_placement = None;
+            let mut st = state.lock().unwrap();
+            st.provider_limits = limits;
+            let blocked = !matches!(
+                case,
+                "past_hold" | "codex_global" | "credits_available" | "different_instance"
+            );
+            assert_eq!(
+                recheck_remote_dispatch(&st, &probe, &probe)
+                    .err()
+                    .as_deref(),
+                Some(if blocked {
+                    "provider_quota_exhausted"
+                } else {
+                    "remote_placement_missing"
+                }),
+                "{case}"
+            );
         }
         drop(state);
         cleanup(&config);
@@ -22006,9 +22047,11 @@ mod tests {
         };
         let mut clock = unix_timestamp() + 1;
         let reset = clock + 1;
-        state.lock().unwrap().provider_limits.record(
+        state.lock().unwrap().provider_limits.record_scoped(
             agent_type,
+            task.child_instance.as_deref().unwrap(),
             bridget_transport::protocol::RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rate_limit_reached".into(),
                 resets_at: Some(reset),
@@ -22214,9 +22257,11 @@ mod tests {
         let mut clock = unix_timestamp() + 1;
         for round in 1..=2 {
             let reset = clock + 1;
-            state.lock().unwrap().provider_limits.record(
+            state.lock().unwrap().provider_limits.record_scoped(
                 agent_type,
+                task.child_instance.as_deref().unwrap(),
                 bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: "five_hour".into(),
                     status: "rate_limit_reached".into(),
                     resets_at: Some(reset),
@@ -22350,9 +22395,11 @@ mod tests {
         }
         // Troisième fait frais après le dernier until : RoundsDone, pas Past.
         let reset = clock + 10;
-        state.lock().unwrap().provider_limits.record(
+        state.lock().unwrap().provider_limits.record_scoped(
             agent_type,
+            task.child_instance.as_deref().unwrap(),
             bridget_transport::protocol::RateLimitFact {
+                credits: None,
                 window: "five_hour".into(),
                 status: "rate_limit_reached".into(),
                 resets_at: Some(reset),
@@ -22396,9 +22443,11 @@ mod tests {
         let mut clock = unix_timestamp() + 1;
         for round in 1..=2 {
             let reset = clock + 1;
-            state.lock().unwrap().provider_limits.record(
+            state.lock().unwrap().provider_limits.record_scoped(
                 agent_type,
+                task.child_instance.as_deref().unwrap(),
                 bridget_transport::protocol::RateLimitFact {
+                    credits: None,
                     window: "five_hour".into(),
                     status: "rate_limit_reached".into(),
                     resets_at: Some(reset),

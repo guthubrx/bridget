@@ -4781,6 +4781,8 @@ pub enum WrapperToDaemon {
         /// Pourcentage de volume consommé dans la fenêtre, absent si non attesté.
         #[serde(default)]
         used_percent: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        credits: Option<CodexCredits>,
         source: RateLimitSource,
     },
     /// Rapporter une consommation de tour attestée par le pilote.
@@ -6375,6 +6377,27 @@ pub struct RateLimitFact {
     pub resets_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub used_percent: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<CodexCredits>,
+}
+
+/// Capacité payante attestée. Le solde opaque ne décide jamais une admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodexCredits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_credits: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unlimited: Option<bool>,
+    pub spend_control_reached: bool,
+}
+
+impl CodexCredits {
+    pub fn usable(&self) -> bool {
+        !self.spend_control_reached
+            && self.has_credits.is_some()
+            && self.unlimited.is_some()
+            && (self.has_credits == Some(true) || self.unlimited == Some(true))
+    }
 }
 
 /// Écart attesté entre le modèle demandé et le modèle réellement servi.
@@ -7438,6 +7461,7 @@ mod tests {
     #[test]
     fn test_encode_decode_rate_limit_et_absence_de_retour() {
         let message = WrapperToDaemon::RateLimit {
+            credits: None,
             agent: "claude-1".to_string(),
             window: "five_hour".to_string(),
             status: "rejected".to_string(),
@@ -7449,9 +7473,30 @@ mod tests {
         assert!(encoded.contains("\"type\":\"RateLimit\""));
         assert!(encoded.contains("\"source\":\"claude-stream-json\""));
         assert!(encoded.contains("\"used_percent\":100"));
+        assert!(
+            !encoded.contains("\"credits\""),
+            "les messages legacy gardent leurs octets"
+        );
+        let credited = WrapperToDaemon::RateLimit {
+            agent: "codex".into(),
+            window: "weekly".into(),
+            status: "rate_limit_reached".into(),
+            resets_at: Some(500),
+            used_percent: Some(100),
+            source: RateLimitSource::CodexAppServer,
+            credits: Some(CodexCredits {
+                has_credits: Some(true),
+                unlimited: Some(false),
+                spend_control_reached: false,
+            }),
+        };
+        assert!(
+            matches!(decode(&encode(&credited).unwrap()).unwrap(), WrapperToDaemon::RateLimit { credits:Some(credits),.. } if credits.usable())
+        );
         assert!(matches!(
             decode(&encoded).unwrap(),
             WrapperToDaemon::RateLimit {
+                credits: None,
                 agent,
                 window,
                 status,

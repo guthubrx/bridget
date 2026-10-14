@@ -606,29 +606,15 @@ impl CodexAppServerTransport {
                     ManagedEventKind::RuntimeObserved { model, effort },
                 );
             }
-            if let Ok(rate_limits) = request_with_timeout(
+            // Le lecteur publie la réponse dans l'ordre STDIO, avant les notifications.
+            let _ = request_with_timeout(
                 &writer,
                 &waiters,
                 &next_id,
                 "account/rateLimits/read",
                 Value::Null,
                 RATE_LIMIT_READ_TIMEOUT,
-            ) {
-                for (window, status, resets_at, used_percent) in
-                    rate_limits_from_snapshot(rate_limits.value.get("rateLimits"))
-                {
-                    push_source(
-                        &observations,
-                        rate_limits.raw.clone(),
-                        ManagedEventKind::RateLimitObserved {
-                            window,
-                            status,
-                            resets_at,
-                            used_percent,
-                        },
-                    );
-                }
-            }
+            );
             let thread_id = thread
                 .value
                 .pointer("/thread/id")
@@ -3227,7 +3213,13 @@ fn runtime_from_thread_start(value: &Value) -> Option<(String, Option<String>)> 
 /// projection honnête du schéma Codex.
 fn rate_limits_from_snapshot(
     snapshot: Option<&Value>,
-) -> Vec<(String, String, Option<i64>, Option<u8>)> {
+) -> Vec<(
+    String,
+    String,
+    Option<i64>,
+    Option<u8>,
+    Option<crate::protocol::CodexCredits>,
+)> {
     let Some(snapshot) = snapshot else {
         return Vec::new();
     };
@@ -3236,13 +3228,67 @@ fn rate_limits_from_snapshot(
         .and_then(Value::as_str)
         .unwrap_or("available")
         .to_string();
+    let credits = codex_credits(snapshot);
     let mut facts = Vec::new();
     for key in ["primary", "secondary"] {
         if let Some(fact) = window_fact_from_codex(snapshot.get(key), key, &status) {
-            facts.push(fact);
+            facts.push((fact.0, fact.1, fact.2, fact.3, credits.clone()));
         }
     }
+    if snapshot.get("credits").is_some() || snapshot.get("spendControlReached").is_some() {
+        facts.push((
+            "account/credits".into(),
+            "observed".into(),
+            None,
+            None,
+            credits,
+        ));
+    }
     facts
+}
+
+/// Les mises à jour sparse retirent aussi une ancienne autorisation payante.
+/// Ce fait administratif n'invente aucune fenêtre de consommation.
+fn rate_limit_update_facts(
+    snapshot: Option<&Value>,
+) -> Vec<(
+    String,
+    String,
+    Option<i64>,
+    Option<u8>,
+    Option<crate::protocol::CodexCredits>,
+)> {
+    let mut facts = rate_limits_from_snapshot(snapshot);
+    if let Some(snapshot) = snapshot.filter(|value| value.is_object())
+        && !facts.iter().any(|fact| fact.0 == "account/credits")
+    {
+        facts.push((
+            "account/credits".into(),
+            "observed".into(),
+            None,
+            None,
+            codex_credits(snapshot),
+        ));
+    }
+    facts
+}
+
+fn codex_credits(snapshot: &Value) -> Option<crate::protocol::CodexCredits> {
+    let spend_control_reached = snapshot.get("spendControlReached")?.as_bool()?;
+    let has_credits = snapshot
+        .pointer("/credits/hasCredits")
+        .and_then(Value::as_bool);
+    let unlimited = snapshot
+        .pointer("/credits/unlimited")
+        .and_then(Value::as_bool);
+    if !spend_control_reached && (has_credits.is_none() || unlimited.is_none()) {
+        return None;
+    }
+    Some(crate::protocol::CodexCredits {
+        has_credits,
+        unlimited,
+        spend_control_reached,
+    })
 }
 
 fn window_fact_from_codex(
@@ -3419,6 +3465,25 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                         .map(|active| active.message_id.clone());
                     if let Some(message_id) = message_id {
                         set_active_turn_id(&active_detail, &message_id, turn_id);
+                    }
+                }
+                // Publier le snapshot initial avant de rendre le waiter : aucun
+                // ancien crédit positif ne peut dépasser une notification de retrait.
+                if let Some(snapshot) = value.pointer("/result/rateLimits") {
+                    for (window, status, resets_at, used_percent, credits) in
+                        rate_limits_from_snapshot(Some(snapshot))
+                    {
+                        push_source(
+                            &observations,
+                            raw.clone(),
+                            ManagedEventKind::RateLimitObserved {
+                                window,
+                                status,
+                                resets_at,
+                                used_percent,
+                                credits,
+                            },
+                        );
                     }
                 }
                 let result = value
@@ -3635,6 +3700,23 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 continue;
             }
             match method {
+                Some("account/rateLimits/updated") => {
+                    for (window, status, resets_at, used_percent, credits) in
+                        rate_limit_update_facts(value.pointer("/params/rateLimits"))
+                    {
+                        push_source(
+                            &observations,
+                            raw.clone(),
+                            ManagedEventKind::RateLimitObserved {
+                                window,
+                                status,
+                                resets_at,
+                                used_percent,
+                                credits,
+                            },
+                        );
+                    }
+                }
                 Some("serverRequest/resolved") if forward_child_requests => {
                     let thread_id = value.pointer("/params/threadId").and_then(Value::as_str);
                     let request_id = value.pointer("/params/requestId").and_then(|value| {
@@ -5686,7 +5768,13 @@ for line in sys.stdin:
                         *'"method":"initialize"'*) if [ -n "${BRIDGET_CODEX_CHILD_PID:-}" ]; then sleep 60 & printf '%s' "$!" > "$BRIDGET_CODEX_CHILD_PID"; fi; printf '%s\n' '{"id":1,"result":{"userAgent":"fake","codexHome":"/tmp","platformFamily":"unix","platformOs":"macos"}}' ;;
                         *'"method":"initialized"'*) started=1 ;;
                         *'"method":"thread/start"'*) printf '%s\n' '{"id":2,"result":{"thread":{"id":"thread-native"},"model":"gpt-5.6-terra","reasoningEffort":"high"}}' ;;
-                        *'"method":"account/rateLimits/read"'*) printf '%s\n' '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1787572200},"rateLimitReachedType":null}}}' ;;
+                        *'"method":"account/rateLimits/read"'*)
+                            printf '%s\n' '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":42,"windowDurationMins":300,"resetsAt":1787572200},"rateLimitReachedType":null}}}'
+                            if [ "$BRIDGET_CODEX_CREDIT_UPDATES" = "1" ]; then
+                                printf '%s\n' '{"method":"account/rateLimits/updated","params":{"rateLimits":{"primary":{"usedPercent":100,"windowDurationMins":10080,"resetsAt":1787572200},"credits":{"hasCredits":true,"unlimited":false},"spendControlReached":false,"rateLimitReachedType":"rate_limit_reached"}}}'
+                                printf '%s\n' '{"method":"account/rateLimits/updated","params":{"rateLimits":{"credits":null}}}'
+                            fi
+                            ;;
                         *'"method":"turn/start"'*)
                             if [ "$started" != 1 ]; then printf '%s\n' '{"id":4,"error":{"code":-32099,"message":"initialized absent"}}'
                             elif [ "$saturated" = 0 ]; then saturated=1; printf '%s\n' '{"id":4,"error":{"code":-32001,"message":"saturated"}}'
@@ -8473,10 +8561,13 @@ for line in sys.stdin:
         let trace = root.join("trace.jsonl");
         let mut transport = CodexAppServerTransport::spawn_with_environment(
             fake_options(&trace),
-            &[(
-                "BRIDGET_CODEX_TRACE".to_string(),
-                trace.to_string_lossy().into_owned(),
-            )],
+            &[
+                (
+                    "BRIDGET_CODEX_TRACE".to_string(),
+                    trace.to_string_lossy().into_owned(),
+                ),
+                ("BRIDGET_CODEX_CREDIT_UPDATES".to_string(), "1".into()),
+            ],
             false,
         )
         .expect("session native");
@@ -8518,8 +8609,27 @@ for line in sys.stdin:
                 ref status,
                 resets_at: Some(1_787_572_200),
                 used_percent: Some(42),
+                credits: None,
             } if window == "primary/300m" && status == "available"
         )));
+        assert!(events.iter().any(|event| matches!(&event.kind,
+            ManagedEventKind::RateLimitObserved { used_percent:Some(100),credits:Some(credits),.. }
+                if credits.usable())));
+        let administrative: Vec<_> = events
+            .iter()
+            .filter_map(|event| match &event.kind {
+                ManagedEventKind::RateLimitObserved {
+                    window, credits, ..
+                } if window == "account/credits" => Some(credits),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(administrative.len(), 2);
+        assert!(administrative[0].as_ref().unwrap().usable());
+        assert!(
+            administrative[1].is_none(),
+            "la notification sparse révoque les crédits"
+        );
         let raw = events.iter().find(|event| {
             matches!(event.kind, ManagedEventKind::Update { .. })
                 && event
@@ -8629,7 +8739,8 @@ for line in sys.stdin:
                 "primary/300m".to_string(),
                 "available".to_string(),
                 Some(1_787_572_200),
-                Some(19)
+                Some(19),
+                None
             )
         );
         assert_eq!(
@@ -8638,7 +8749,8 @@ for line in sys.stdin:
                 "secondary/10080m".to_string(),
                 "available".to_string(),
                 Some(1_787_700_000),
-                Some(61)
+                Some(61),
+                None
             )
         );
     }
@@ -8663,6 +8775,45 @@ for line in sys.stdin:
         assert_eq!(facts[0].1, "available");
         assert_eq!(facts[0].2, Some(1_787_572_200));
         assert_eq!(facts[0].3, None, "% omis, pas fenêtre effacée");
+        let mut snapshot = json!({"primary":{"usedPercent":100,"resetsAt":500},
+            "credits":{"hasCredits":true,"unlimited":false,"balance":"opaque"},
+            "spendControlReached":false,"rateLimitReachedType":"rate_limit_reached"});
+        for (has, unlimited, spend, usable) in [
+            (true, false, false, true),
+            (false, true, false, true),
+            (false, false, false, false),
+            (true, false, true, false),
+        ] {
+            snapshot["credits"]["hasCredits"] = json!(has);
+            snapshot["credits"]["unlimited"] = json!(unlimited);
+            snapshot["spendControlReached"] = json!(spend);
+            let facts = rate_limits_from_snapshot(Some(&snapshot));
+            assert_eq!(facts[0].3, Some(100));
+            assert_eq!(facts[0].1, "rate_limit_reached");
+            assert_eq!(facts[0].4.as_ref().unwrap().usable(), usable);
+        }
+        snapshot["spendControlReached"] = json!(false);
+        snapshot["credits"]["hasCredits"] = json!("true");
+        assert!(rate_limits_from_snapshot(Some(&snapshot))[0].4.is_none());
+        assert!(
+            rate_limit_update_facts(Some(&json!({"credits":null})))[0]
+                .4
+                .is_none()
+        );
+        assert_eq!(
+            rate_limit_update_facts(Some(&json!({})))[0].0,
+            "account/credits"
+        );
+        assert!(rate_limit_update_facts(None).is_empty());
+        let spend = rate_limits_from_snapshot(Some(&json!({"spendControlReached":true})));
+        assert_eq!(spend.len(), 1);
+        assert!(spend[0].4.as_ref().unwrap().spend_control_reached);
+        assert!(!spend[0].4.as_ref().unwrap().usable());
+        let spent_malformed =
+            codex_credits(&json!({"credits":{"hasCredits":"bad"},"spendControlReached":true}))
+                .unwrap();
+        assert_eq!(spent_malformed.has_credits, None);
+        assert!(!spent_malformed.usable());
     }
 
     #[test]

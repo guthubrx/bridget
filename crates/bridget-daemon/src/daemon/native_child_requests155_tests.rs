@@ -937,13 +937,14 @@ fn remote162_arret_atteste_avant_connected_cloture_demarrage_apres_reprise() {
 }
 
 #[test]
-fn remote162_quota157_partagee_par_agent_type_avant_reprise_distante() {
+fn remote162_quota157_portee_instance_avant_reprise_distante() {
     use bridget_transport::protocol::{RateLimitFact, RateLimitSource};
     let fixture = RequestFixture155::with_remote("r155-quota", true);
     let mut st = fixture.state.lock().unwrap();
     assert!(recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok());
     let now = unix_timestamp();
     let fact = RateLimitFact {
+        credits: None,
         window: "five_hour".into(),
         status: "rate_limit_reached".into(),
         resets_at: Some(now + 600),
@@ -959,23 +960,70 @@ fn remote162_quota157_partagee_par_agent_type_avant_reprise_distante() {
         recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok(),
         "autre type indépendant"
     );
-    st.provider_limits
-        .record("native-test", fact, RateLimitSource::CodexAppServer, now);
+    // Un autre compte du même profil ne bloque ni n'autorise cet enfant.
+    st.provider_limits.record_scoped(
+        "native-test",
+        "other-account",
+        fact.clone(),
+        RateLimitSource::CodexAppServer,
+        now,
+    );
+    assert!(recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok());
+    let child_instance = fixture.task.child_instance.as_deref().unwrap();
+    st.provider_limits.record_scoped(
+        "native-test",
+        child_instance,
+        fact.clone(),
+        RateLimitSource::CodexAppServer,
+        now,
+    );
     assert_eq!(
         recheck_remote_dispatch(&st, &fixture.task, &fixture.task).unwrap_err(),
         "provider_quota_exhausted"
     );
-    let mut same_type_other_machine = fixture.task.clone();
-    same_type_other_machine
-        .remote_placement
-        .as_mut()
-        .unwrap()
-        .machine_id = "seconde-machine".into();
+    let credited = RateLimitFact {
+        credits: Some(bridget_transport::protocol::CodexCredits {
+            has_credits: Some(true),
+            unlimited: Some(false),
+            spend_control_reached: false,
+        }),
+        ..fact.clone()
+    };
+    st.provider_limits.record_scoped(
+        "native-test",
+        "other-account",
+        credited.clone(),
+        RateLimitSource::CodexAppServer,
+        now,
+    );
     assert_eq!(
-        recheck_remote_dispatch(&st, &same_type_other_machine, &same_type_other_machine)
-            .unwrap_err(),
-        "provider_quota_exhausted",
-        "changer de machine ne contourne pas le quota du moteur"
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).unwrap_err(),
+        "provider_quota_exhausted"
+    );
+    st.provider_limits.record_scoped(
+        "native-test",
+        child_instance,
+        credited,
+        RateLimitSource::CodexAppServer,
+        now,
+    );
+    assert!(recheck_remote_dispatch(&st, &fixture.task, &fixture.task).is_ok());
+    st.provider_limits.record_scoped(
+        "native-test",
+        child_instance,
+        RateLimitFact {
+            window: "account/credits".into(),
+            status: "observed".into(),
+            resets_at: None,
+            used_percent: None,
+            credits: None,
+        },
+        RateLimitSource::CodexAppServer,
+        now + 1,
+    );
+    assert_eq!(
+        recheck_remote_dispatch(&st, &fixture.task, &fixture.task).unwrap_err(),
+        "provider_quota_exhausted"
     );
 }
 
