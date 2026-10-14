@@ -1,0 +1,65 @@
+{
+  "scope": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/specs/164-conversation-t3-distante",
+  "files": {
+    "analyse.md": "5b5e2fb652606f7bbf5b4d2373e1cdc8aba580dd72b0527e329c116aa464d401",
+    "checklists/requirements.md": "80eb89ec35a61ec9be09f480d4b4f81d7d7ddbbf5f8a753ca6b73f8bb3a2066e",
+    "contracts/presentation.md": "b009057c06d133130cf7b0b555923473572aedcbcc1d9ba7b2a7022428c79e7b",
+    "plan.md": "5da953eca4309b0d8aa4a33cdaa70b1ac8f930f51b9c856dbea1e0459f9810f5",
+    "requirements-matrix.md": "78c27814b6c0845d97ae214d03b4f9ae92ed3392a230191e7e67f6ce48788878",
+    "reuse-audit.md": "4d2d39aa9dc1ec13b924158ed4b7a5b46a8d8ab987da0560ba41706527ebf47b",
+    "spec.md": "912404ceab57031a1de152b5b2a6d762b8fd6978104071bb86c869e32717c35e",
+    "tasks.md": "4e2d88149deaad7e25211d94cf364c9dffae88ff396a2380b50077e0f76ff212",
+    "validation/artefact-check164.json": "94e7e63db7b63c5ad9674ed87fc7f26fb211cb672743d19e1765153d8308044c",
+    "validation/plan-review164-r1.md": "8c20bb1c7c923fa7d9acd06fe038acf2c318e935d8972763aa9b26620f7edd50",
+    "validation/tests164.md": "bf68269ed5809cefb44fc135c868ff272e7f81863ed8217171cf48263a46fdb0"
+  },
+  "tasks": 20,
+  "checked_tasks": 0,
+  "analysis": "PASS documentaire, deux lectures",
+  "code_status": "non implémenté",
+  "checkpoints": [
+    {
+      "recorded_at_utc": "2026-10-13T21:55:39.973823+00:00",
+      "name": "GO préparatoire et séquencement source/produit",
+      "task_id": "3182cc37-7204-4769-9439-644b813a23c1",
+      "child_id": "a9a25c7b-b021-41d7-a200-46006d257dcc",
+      "task_ids": 20,
+      "task_checkboxes": 20,
+      "checked_preparatory_tasks": [
+        "T001",
+        "T002"
+      ],
+      "code_tests_pass": 0,
+      "code_tests_executed": false,
+      "source_or_git_or_services_modified": false,
+      "root_go_receipts": {
+        "/Users/moi/.cache/bridget-delivery164-20261013/ROOT-go164.json": "73a6a86454baf11fa3f6d58af6f22487812c8b01871dc88558176c28265d4167",
+        "/Users/moi/.cache/bridget-delivery164-20261013/delegation-cartae164-code-fresh.json": "be75d810ed2473372a891b80bba64aaac0966534bd982bbe489b541f87d76844",
+        "/Users/moi/.cache/bridget-delivery164-20261013/toolchain164-preparation.json": "173c8046e4cd30909cb5accb2dc3aa477d027b9ecd4fb955ecf2b532b97b19a6"
+      },
+      "frozen_analysis_files_unchanged": {
+        "analyse.md": "5b5e2fb652606f7bbf5b4d2373e1cdc8aba580dd72b0527e329c116aa464d401",
+        "reuse-audit.md": "4d2d39aa9dc1ec13b924158ed4b7a5b46a8d8ab987da0560ba41706527ebf47b",
+        "contracts/presentation.md": "b009057c06d133130cf7b0b555923473572aedcbcc1d9ba7b2a7022428c79e7b",
+        "validation/artefact-check164.json": "94e7e63db7b63c5ad9674ed87fc7f26fb211cb672743d19e1765153d8308044c"
+      },
+      "current_files": {
+        "spec.md": "c89d2762e9fb7d8ddbf57048f3519ad52092ce9d09e8f4a4c7c59f3cf9516960",
+        "plan.md": "6d744c60359e3e0f9f1859364f27116f79ef35a36185179912acce8600cea9cb",
+        "tasks.md": "3cfd71dc3d3288603bfa7445973942350d702db2f5722c0c6e2547026cb1318e",
+        "checklists/requirements.md": "6b3e8a675c8a3c59fc4108eb402e70721c30a7fbf7f1112d7b2eafc994ca124b",
+        "validation/implementation164.md": "8e7b3b47acb6f8904451843edc3326e6007986af2f4f8bbc17ffd7909bd6285c"
+      },
+      "documentary_delta": {
+        "plan.md": {
+          "before": "5da953eca4309b0d8aa4a33cdaa70b1ac8f930f51b9c856dbea1e0459f9810f5",
+          "after": "6d744c60359e3e0f9f1859364f27116f79ef35a36185179912acce8600cea9cb"
+        },
+        "tasks.md": {
+          "before": "155d2da50a7dd20a10a57777a144df0b12297ad7d1cd9a61f6abd385321be311",
+          "after": "3cfd71dc3d3288603bfa7445973942350d702db2f5722c0c6e2547026cb1318e"
+        }
+      }
+    }
+  ]
+}
