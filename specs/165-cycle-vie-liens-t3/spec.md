@@ -7,7 +7,7 @@ Spec: 165-cycle-vie-liens-t3
 Titre: Cycle de vie des liens T3
 Statut: In Progress
 Priorité: P1
-Tâches: 15/18 (83,33%)
+Tâches: 17/18 (94,44%)
 Tests: 13/13 (100%)
 
 Résumé:
