@@ -5,9 +5,9 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
-## Non publié — 2026-10-06
+## [0.2.0] - 2026-10-14
 
-### Ajouté et modifié
+### Ajouté
 
 - Sous-agents internes T3 attestés : annuaire et envoi par MCP seulement, provenance visible,
   réponses routées au parent. Aucun agent enfant durable ni droit d'administration ajouté (133).
@@ -16,15 +16,27 @@ format AAAA-MM-JJ.
   décision de suite. Une file vide ou une fin de tour n'est pas une clôture de mission (135).
 - Fils partagés : preuves `kind:history` silencieuses, consignes courtes et remplacement explicite
   `supersedes_seq`, sans effacer ni rejouer l'histoire (136).
-- Le code et l'aperçu T3 des en-têtes discrets sont validés séparément ; cette note ne prouve pas
-  leur installation dans une application T3 déjà ouverte (137).
 - Annuaire du même projet par défaut, `who/agents --global` volontaire et motif interprojets
   `--cross-project-reason` / `cross_project_reason`. Les projets inconnus restent explicitement
   inconnus ; les envois legacy avertis restent compatibles. Les rappels Loop des UUID/rôles déjà
   mandatés restent actifs, sans recrutement extérieur automatique (138).
+- Délégation native sous autorité unique, admission contrôlée, suivi durable des tâches et reprise
+  par rondes ; le moteur et la machine sont choisis par le maître, sans bascule implicite.
+- File de messages au repos, réveils et faits manqués, édition contrôlée, catalogue de capacités
+  et prise en compte des crédits Codex du compte cible.
 
-Voir la référence de communication et le guide d'installation. Aucun nouveau numéro de version
-ni déploiement n'est annoncé par cette section ; toutes les entrées publiées restent conservées.
+### Corrigé
+
+- Le calcul de quota intègre les crédits Codex du compte cible (5872f48e).
+
+### Limites de validation
+
+- Le connecteur T3 reste un composant indépendant ; son symbole visuel est livré séparément et
+  cette release ne prouve pas le rechargement d'une application T3 déjà ouverte.
+- Les validations associées sont ciblées. Aucun résultat GREEN global du workspace n'est revendiqué.
+
+Voir la référence de communication et le guide d'installation. Toutes les entrées publiées restent
+conservées.
 
 ## [0.1.3] - 2026-10-02
 
