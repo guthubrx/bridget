@@ -5,9 +5,9 @@
 
 Spec: 165-cycle-vie-liens-t3
 Titre: Cycle de vie des liens T3
-Statut: In Progress
+Statut: Implemented
 Priorité: P1
-Tâches: 17/18 (94,44%)
+Tâches: 18/18 (100%)
 Tests: 13/13 (100%)
 
 Résumé:
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-165-cycle-vie-liens-t3`  
 **Created**: 2026-10-14  
-**Status**: In Progress  
+**Status**: Implemented
 **Priority**: P1  
 **Dependencies**: SPEC-149, SPEC-164
 

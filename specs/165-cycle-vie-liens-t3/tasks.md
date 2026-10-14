@@ -1,8 +1,8 @@
 # Tâches — SPEC-165 Cycle de vie des liens T3
 
-**Statut :** In Progress  
-**Progression :** 17/18
-**Pipeline :** Source poussée et runtime validé. Nettoyage final en cours.
+**Statut :** Implemented
+**Progression :** 18/18
+**Pipeline :** Livré.
 
 Chaque tâche reste ouverte jusqu'à sa preuve. Les tests qui définissent le comportement précèdent le code correspondant.
 
@@ -49,7 +49,7 @@ Chaque tâche reste ouverte jusqu'à sa preuve. Les tests qui définissent le co
 - [x] T015 Relire le diff complet, supprimer le code sans effet utile et fermer la contre-revue code dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/165-cycle-vie-liens-t3/specs/165-cycle-vie-liens-t3/validation/code-review.md`
 - [x] T016 Intégrer et pousser la source validée avec un message Git conforme, puis vérifier la référence distante et la propreté du dépôt
 - [x] T017 Construire le binaire signé, préparer le rollback, l'installer, retirer l'override local à 16 384, relancer seulement le pont après contrôle du PID et prouver la limite normale de 4 096 dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/165-cycle-vie-liens-t3/specs/165-cycle-vie-liens-t3/validation/runtime-after.md`
-- [ ] T018 Finaliser le reçu, cocher uniquement les preuves acquises et retirer sans force le worktree et la branche de session devenus inutiles dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/165-cycle-vie-liens-t3/validation/livraison165.md`
+- [x] T018 Finaliser le reçu, cocher uniquement les preuves acquises et retirer sans force le worktree et la branche de session devenus inutiles dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/165-cycle-vie-liens-t3/validation/livraison165.md`
 
 ## Dépendances
 
