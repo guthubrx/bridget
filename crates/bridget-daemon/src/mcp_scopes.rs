@@ -39,6 +39,12 @@ pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
         own_state_actions: &[],
     },
     ToolScope {
+        tool: "bridget_auto_delegate",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
         tool: "bridget_delegate",
         base: Scope::Delegates,
         read_actions: &[],
@@ -267,6 +273,7 @@ mod tests {
         for tool in tools {
             assert!(scope_of(tool["name"].as_str().unwrap(), &Map::new()).is_some());
         }
+        assert_eq!(scope_of("bridget_auto_delegate", &Map::new()), Some(Scope::Delegates));
         assert_eq!(scope_of("bridget_queue", &Map::new()), Some(Scope::Reads));
         assert_eq!(
             scope_of(

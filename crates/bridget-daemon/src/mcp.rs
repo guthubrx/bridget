@@ -752,6 +752,7 @@ fn execute_tool_at_with_identity(
     match name {
         "bridget_capabilities"
         | "bridget_delegate"
+        | "bridget_auto_delegate"
         | "bridget_task_continue"
         | "bridget_task_respond"
         | "bridget_task_status"
@@ -3415,12 +3416,12 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_task_ack")
             .expect("outil ACK informatif publié");
-        assert_eq!(catalogue.len(), 31);
+        assert_eq!(catalogue.len(), 32);
         let brief_schema = &catalogue
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
-        assert_eq!(crate::delegation_mcp::tools(brief_schema).len(), 8);
+        assert_eq!(crate::delegation_mcp::tools(brief_schema).len(), 9);
         let schema = &ack["inputSchema"];
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["task_ids"]));
@@ -5033,6 +5034,7 @@ mod tests {
         let expected = [
             "bridget_capabilities",
             "bridget_delegate",
+            "bridget_auto_delegate",
             "bridget_task_continue",
             "bridget_task_respond",
             "bridget_task_status",
@@ -5884,6 +5886,7 @@ mod tests {
     fn mcp158_plafond_enfant_discovery_refuse_ecriture() {
         let cases = [
             ("bridget_delegate", json!({})),
+            ("bridget_auto_delegate", json!({})),
             ("bridget_send", json!({"to":"parent","body":"écrit"})),
             ("bridget_task_respond", json!({})),
         ];
@@ -6112,6 +6115,45 @@ mod tests {
             ),
             Err(ToolError::InvalidParams(_))
         ));
+
+        // Appel public : le nom annoncé atteint le transport natif existant.
+        std::fs::remove_file(&socket).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            use std::os::fd::AsRawFd;
+            let mut ready = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            assert!(unsafe { libc::poll(&mut ready, 1, 3000) } > 0);
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            assert!(unsafe { libc::poll(&mut ready, 1, 3000) } > 0);
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::RegisterAuxiliary { .. }));
+            writeln!(stream,"{}",json!({"type":"Registered","agent_id":"parent158","credential":null})).unwrap();
+            assert!(matches!(read_command(&mut reader), WrapperToDaemon::DaemonIdentityRequest));
+            writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["auto_delegate_v1"]})).unwrap();
+            let request = read_command(&mut reader);
+            assert!(matches!(&request, WrapperToDaemon::NativeDelegation {
+                request: bridget_transport::protocol::NativeDelegationRequest::AutoDelegate(config)
+            } if config.request_id == "auto-public-163" && config.task == "mission" && config.cwd == "/tmp"));
+            writeln!(stream,"{}",json!({"type":"NativeDelegationResult","result":{"status":"refused","code":"auto_candidate_unavailable"}})).unwrap();
+            request
+        });
+        let identity = || Ok(crate::mcp_identity::ResolvedIdentity {
+            name:"parent158".into(),instance_id:"instance158".into(),delegated_origin:None
+        });
+        let execute = |identity: &crate::mcp_identity::ResolvedIdentity, name: &str, args: &Value| {
+            execute_tool_at_with_identity(identity,name,args.as_object().unwrap(),&socket)
+        };
+        let mut session = Session { initialize_seen:true,initialized:true };
+        let response = dispatch_with_executor(&json!({"jsonrpc":"2.0","id":163,"method":"tools/call",
+            "params":{"name":"bridget_auto_delegate","arguments":{"request_id":"auto-public-163","task":"mission","cwd":"/tmp"}}}),
+            &mut session,&identity,&execute).unwrap();
+        server.join().unwrap();
+        assert!(response.get("error").is_none(),"aucun -32602 outil inconnu : {response}");
+        assert_eq!(response["result"]["code"],"native_delegation_refused");
+        assert_eq!(response["result"]["content"][0]["text"],"auto_candidate_unavailable");
+        std::fs::remove_file(&socket).unwrap();
     }
 
     #[test]

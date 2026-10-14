@@ -201,3 +201,23 @@ Rapport : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversatio
 Audit incrémental de six sources,309lignes lues : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/audits/2026-10-14/session-2026-10-14-spec-164-delta-r6-01`. GradeA100 ciblé,0finding actif ; validateur canonique RC0,0erreur/0warning. AuditR5b, P1/P2 et tasks conservés byte-identiques. Aucun nouveau test ni contrôle source relancé. Les28PASS et trois TypeScript RC0 proviennent du manifeste finalR6, pas de la lecture documentaire.
 
 ROOT reste responsable de l'acceptation des cases. Progression documentaire2/22 inchangée. T015–T020, recette UI/native, Git/paquet/installation/cleanup/G8/G9 restent futurs. Aucun succès produit ou runtime présumé.
+
+## Recette intégrée S164-12 acceptée — T017, 2026-10-14
+
+ROOT accepte la recette du serveur et du client web réellement construits sur source511190beb307. Le daemon est remplacé par la fixture CLI synthétique existante. Le serveur isolé utilise son propre dossier de données ; aucune base active T3 ni session utilisateur n'est modifiée. Le reçu final ci-dessous complète l'observation historique de la page suivante ; cette première observation incomplète reste conservée.
+
+| Observation réelle | Preuve et limite |
+|---|---|
+| Texte/Markdown lisibles ; frontières normales sans faux extrait | Capture web sur paquet final ; activité initialement repliée. |
+| Commande achevée et détail inconnu | Sortie/exit/statut visibles ; enveloppe inconnue seq12 entière ; HTML littéral, aucune image ni script exécuté ; aucun composeur. |
+| Deux lacunes successives |126–127 reprise128, puis129–130 reprise131 ; alertes conservées, retour au suivi/reconnexion131. |
+| Historique paginé |125événements initiaux ; première page100 ; pages suivantes101–128 puis131 observées dans le supplément final. hasNext est un comportement de fixture, pas une preuve de tout l'historique. |
+| Résultat durable |28070octets totaux ; fenêtre initiale partielle puis suite ; paragraphes27999/36caractères et fin exacte « Fin du resultat durable synthetique » ; plus d'indication partielle ni bouton Suite. |
+| Présentation sur deux tailles |1280×900 et390×844 ; capture web responsive seulement. Pas de pixels React Native ni redémarrage Electron. |
+| Fermeture de la recette | Serveur privé68778 identifié puis SIGTERM unique, absent après3s ; deux sessions privées révoquées, zéro restante. Pas de terminaison étrangère. |
+
+Reçu final : `/Users/moi/.cache/bridget-delivery164-20261013/ui-recipe/t017164-final.json`, SHA-256 `fcf03a0e7f86ca30b13497df82a0fd9b512232e5db516eb0bd11f22fb9d47f6f`. Sept captures privées byte-identiques et archive66membres rouverts/hash vérifiés : `/Users/moi/.cache/bridget-delivery164-20261013/ui-recipe/ui-recipe164-evidence.tar.gz`, SHA-256 `ef4fa8ed527f20ccbc1ba89d467bf02096b67112eae258c1ccd1173786c6cd99`. Archive exclut credentials et DB privés. Les erreurs initiales RPC400 et erreurs d'observation sont conservées ; correction limitée aux scripts de recette privés. Aucun source de production modifié pour cette recette.
+
+Les28PASS de sourceR6 restent une campagne distincte. Contrôles du paquet : R1 historique2574PASS/2FAIL ZIP ; correction de réarchivage seulement ; R2 exactement2oracles ZIP PASS. Aucun nouveau build, suiteFULL, dépendance ou modèle pendant S164-12. Aucun succès global2576 déduit.
+
+Progression actuelle19/22. T018/G8, T019/G9 et T020 restent non attestées. Signature/installées sur disque ne valent pas code activé dans PID704/969.

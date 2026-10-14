@@ -1,7 +1,7 @@
 # Tasks SPEC-164 — Conversations T3 des tâches Bridget distantes
 
 **Statut :** In Progress
-**Progression :** 16/22
+**Progression :** 19/22
 **Propriétaires :** DOC164 documents ; DEV_CARTAE164 code T3 isolé ; ROOT gates, Git, recette, paquet, installation et nettoyage.
 
 Les tâches ouvertes restent non cochées jusqu’à l’acceptation de leur preuve par ROOT. Une preuve historique ou une approbation de plan ne prouve aucun code. Aucun test, install ou build ne démarre avant le permis ROOT applicable. Le développement reprend dans une ronde native durable après les gates, pas par message ordinaire hors mission.
@@ -119,7 +119,7 @@ Sources/zone autorisées : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktree
 - Fermer chaque objection sur preuve fraîche ; conserver limites de couverture. Une correction retourne à son test affecté et au contrôle nécessaire, pas à une suite globale inchangée.
 
 
-- [ ] T015 — Intégrer après 163 et figer la source de livraison (ROOT, dépend de T014 et source T3 de163 validée/intégrée/poussée)
+- [x] T015 — Intégrer après 163 et figer la source de livraison (ROOT, dépend de T014 et source T3 de163 validée/intégrée/poussée)
 
 Couverture : US4 ; FR-017 ; SC-006.
 Sources/zone autorisées : `/Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante`.
@@ -127,7 +127,7 @@ Sources/zone autorisées : `/Users/moi/11.Repositories/t3code-local/.worktrees/1
 - Commit source validée, merge et push vers le fork T3 ; vérifier références locales/distantes, tree et propreté. Aucun upstream, PR non demandée ou signature IA.
 
 
-- [ ] T016 — Préparer le paquet signé (ROOT, dépend de T015)
+- [x] T016 — Préparer le paquet signé (ROOT, dépend de T015)
 
 Couverture : US4 ; FR-017 ; SC-006.
 Sources/zone autorisées : `/Users/moi/.cache/bridget-delivery164-20261013`.
@@ -135,7 +135,7 @@ Sources/zone autorisées : `/Users/moi/.cache/bridget-delivery164-20261013`.
 - Vérifier signatures, sources et validations de paquet existantes. Garder le rollback valide ; aucun remplacement installé tant que les gates requises ne sont pas satisfaites.
 
 
-- [ ] T017 — Vérifier la présentation intégrée (ROOT, dépend de T015/T016)
+- [x] T017 — Vérifier la présentation intégrée (ROOT, dépend de T015/T016)
 
 Couverture : US1–US4 ; FR-001/002/006/014/015 ; SC-004/006.
 Sources/zone autorisées : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/specs/164-conversation-t3-distante/validation/tests164.md`.
@@ -216,3 +216,15 @@ ROOT a accepté les preuves P3 CONVERGED, revue indépendante R2 APPROVE, audit 
 Les reçus restent historiques et byte-identiques : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/specs/164-conversation-t3-distante/validation/converge164-p3.md` décrit le compteur2/22 au moment de sa lecture ; il ne sert pas de compteur courant. Preuves de source finale : `/Users/moi/.cache/bridget-delivery164-20261013/tests/validation164-r6-final.json` et `/Users/moi/.cache/bridget-delivery164-20261013/remote-code/source-transfer164-r6-final.json`. Contre-revue : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/specs/164-conversation-t3-distante/validation/code-review164-r2.md`. Audit : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/audits/2026-10-14/session-2026-10-14-spec-164-delta-r6-01/validator-receipt.json`.
 
 Cette acceptation ne relance ni ne réatteste les tests. T015–T020 restent non cochées : intégration Git, paquet, recette UI, installation, nettoyage et reçu final. Aucun succès de livraison ou runtime n'est déduit.
+
+## Acceptation ROOT — T015/T016/T017, 2026-10-14
+
+**In Progress,19/22.** ROOT accepte les trois preuves réelles : intégration/push source T3, paquet signé et recette S164-12 du client isolé. T015/T016/T017 sont cochées. T018 attend la preuve G8 indépendante de ROOT ; T019/G9 et T020 restent ouverts. L'installation sur disque ne prouve pas l'activation du code dans les processus T3.
+
+Source T3 intégrée/poussée : `511190beb307e0952066fe1a4b511cb9dd7adb18`, commit source164 `966f296ac70c3134bc6e91a722cfe86e726f50e3`, fork `refs/heads/local/main-20261009`. Reçu : `/Users/moi/.cache/bridget-delivery164-20261013/git-t3-source164-pushed.json`, SHA-256 `e7685a463e56580b511caa1afb76eb1fa6d7c53612025122506088be677c0259`.
+
+Paquet commun163/164 version0.0.45-local.164 signé, une compilation native. Reçu : `/Users/moi/.cache/bridget-delivery164-20261013/t3-package164-result.json`, SHA-256 `2fb1b8f95140f09676d107f2429be07322c7ff77ff094993f1a82f95dff18984`. R1 conserve2574PASS/2FAIL des oracles ZIP ; R2 rejoue seulement les deux oracles affectés,2PASS/0FAIL. Aucun nouveau succès global2576 annoncé.
+
+Recette S164-12 : `/Users/moi/.cache/bridget-delivery164-20261013/ui-recipe/t017164-final.json`, SHA-256 `fcf03a0e7f86ca30b13497df82a0fd9b512232e5db516eb0bd11f22fb9d47f6f`. Web réel issu du paquet final, données synthétiques, sept captures. Archive66membres vérifiés : `/Users/moi/.cache/bridget-delivery164-20261013/ui-recipe/ui-recipe164-evidence.tar.gz`, SHA-256 `ef4fa8ed527f20ccbc1ba89d467bf02096b67112eae258c1ccd1173786c6cd99`. Viewports1280×900 et390×844 ; le second reste un rendu web mobile, pas une recette React Native. Aucun redémarrage Electron/T3, modèle ou agent réel utilisé dans la recette.
+
+Installation signée sur disque : `/Users/moi/.cache/bridget-delivery163-20261013/t3-backup163164/T3-install-receipt.json`, SHA-256 `b73ddc5019a644fc9964372816089f95cfffdd276b319ad0bbef5196429fa2f0`. Application `/Applications/T3 Code (Local).app` en0.0.45-local.164 ; app.asar SHA-256 `6eb2fbdfed44a603d0a66d81d92fadd6d3486ff1ff43a880fe788c7d39fc923f`. PID704/969 et dates de naissance inchangés. Le code162 reste chargé selon le checkpoint ROOT. Pas d'activation différée ni de faux handshake G8.

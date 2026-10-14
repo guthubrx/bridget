@@ -1,6 +1,6 @@
 # Analyse croisée SPEC-163
 
-**État courant au 14 octobre 2026 :** In Progress, 49/57 tâches cochées sur GO ROOT après audit final conformant ; 22 FR et neuf SC, cinq US. T038–T045 restent ouvertes. Couverture documentaire distincte des preuves ciblées et de la livraison.
+**Statut courant au 14 octobre 2026 :** In Progress, 53/58 ; T039/T043/T044/T045/T058 ouvertes. G8 révèle la façade MCP non raccordée ; source510 installée et T3app511/version164 inchangée, preuves antérieures conservées. Correctif, revue/audit ciblés, nouveaux builds/redelivery puis G8 attendus, aucune livraison finale revendiquée.
 
 ## Analyse initiale du 13 octobre 2026 — historique conservé
 
@@ -248,3 +248,41 @@ Audit final readonly : grade A/99,047619 ; 0 CRITICAL, 0 HIGH, 3 MEDIUM, 2 LOW ;
 ### Analyze après acceptation — deux lectures
 
 Passe 1 : introductions courantes49/57 synchronisées, checkpoints4/57 historiques conservés ; limites CODE R4 et faible couverture audit maintenues. Passe 2 : 57 IDs uniques, exactement49 cases autorisées, T038–T045 seules ouvertes ; 22 FR/neuf SC et cinq US inchangés, table45 conservée. L’acceptation ROOT de T036 ne réécrit pas P3 en CONVERGED : exception de poursuite corrective explicitée. Aucun CRITICAL documentaire actif restant identifié, aucune livraison future revendiquée.
+
+## Checkpoint installation et provenance — 53/57, 14 octobre 2026
+
+ROOT accepte T038/T040/T041/T042 sur leurs preuves réelles. Bridget source 5105378bf4f03376e9bc93e52065cb022f81dee5 installé : Mac SHA-256 6c8f89203c85c76e7add2a4d06bb86eedd6cdb3f74470eac11920cc0f6068063, Linux SHA-256 6e5d9717d6054511326f84c684d65c3f3bc1a5086cb514b2d6b64a03ad9b97e0. Maître 44553 né 04:55:03 CEST et pont 44667 né 04:55:05 utilisent /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget ; worker 1411115, naissance 146166371 utilise /home/moi/.local/lib/bridget-communication/163-5105378bf4f0/bin/bridget.
+
+T3 /Applications/T3 Code (Local).app remplacée atomiquement en 0.0.45-local.164/source 511190beb307e0952066fe1a4b511cb9dd7adb18, signature stricte/deep RC0 et entitlements préservés. PID 704/969 et naissances 17:31:27/33 du 13 octobre restent inchangés : aucun redémarrage, ancien code encore chargé. Aucun réveil différé programmé.
+
+Sauvegarde retry : phase_complete/activate, projection173→174 de même génération et 33 autres tables exactes, schéma/count inchangés ; halt humain complet préservé. Migration additive reçusauto, quick_check ok/FK0, schémas 7/12/Fleet5. Sauvegarde jointe vérifiée ; après activation, toute rétrogradation exige une nouvelle sauvegarde jointe sans perte. La sauvegarde préactivation ne couvre pas les nouveaux reçus. L’incident171→172 et les anciens PID 86807/86830/1403968 restent uniquement historiques.
+
+Le reçu d’installation conserve handshake_and_cancel_recipe_not_proven=true : poignée de main et annulation opérationnelles restent à vérifier pour G8.
+
+T039 : /Users/moi/.cache/bridget-core/agents.json est appliquée au SHA 5dead7198c0220477d88229d1b0ab0f4b3fe5858a0391bde1cfb687c3265c93b ; fixed/fallback local-codex-pro, agents/machines inchangés. auto_engine=false, auto_placement=false, service_enabled=false. L’application off est réelle, mais l’activation des axes/service et les preuves G8 restent ouvertes : T039 non cochée, comme T043/T044/T045.
+
+Ordre réel : sources committées/intégrées/poussées avant laboratoire T040, pour obtenir un checkpoint déterministe compilé identique sur Mac/Linux ; validation T040 exécutée avant activation. Ce commit de source préalable n’est pas une clôture de livraison ni un hash futur inventé. ROOT accepte T040 sur observations R4 et supplément corrigé 54056f…8d49 ; RC1/course F historique conservé, aucun nouveau RC0 ou POST ajouté. P3 NONCONVERGED historique/exception utilisateur phase5 conservés, aucun P4 formel.
+
+Reçus :
+
+- /Users/moi/.cache/bridget-delivery163-20261013/joint-backup-20261014-163164-retry-projection/progress.json ; SHA-256 b6da23d355fbb396b50fab7c946dd5693dd6ced27aafe5ae3ac2aaffaf7cef16
+- /Users/moi/.cache/bridget-delivery163-20261013/t3-backup163164/T3-install-receipt.json ; SHA-256 b73ddc5019a644fc9964372816089f95cfffdd276b319ad0bbef5196429fa2f0
+- /Users/moi/.cache/bridget-delivery163-20261013/g8-registry-off-applied.json ; SHA-256 ed358ea42dc927adf19d4c4e7cca2ecdd0de76e2aa2a213116f6b15049b26aae
+
+### Analyze après installation — deux lectures documentaires
+
+Passe 1 : introductions 53/57 et quatre cochages autorisés synchronisés ; application off réelle séparée des futurs axes/G8/G9. Ordre Git avant T040 expliqué par checkpoint déterministe préactivation. Passe 2 : 57 ID uniques, exactement53 cases ; seules T039/T043/T044/T045 ouvertes, FR/SC inchangés et table45 conservée. RC1 T040 et captures de production historiques qualifiées ; T3 installé sur disque distinct de l’ancien code chargé. Aucun source Git/AGENTS/runtime/test modifié par le rédacteur.
+
+## Correctif G8 — façade MCP T058, 14 octobre 2026
+
+Le MCP propre à la nouvelle commande annonce bridget_auto_delegate dans tools/list, mais tools/call renvoie JSON-RPC -32602, message outil inconnu, request_id g8-spec163-a73f9432-53d5-46b5-94b9-e8f0ee3cfe7e. Les attestations officielles immédiatement avant appel portent version2 et permissions_present=true ; provider codex-pro déclaré disponible et capacité maître contrôlée. Aucun reçu auto/Task sous cette clé selon la vérification durable ROOT. La cause confirmée ROOT est le dispatcher de /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/mcp.rs:753–760 : routage auto omis malgré l’annonce. Scope/hook/wrapper doivent être raccordés à la voie native existante. Ce refus ne démontre pas un problème de quota ou d’authentification et ne nécessite pas de redémarrage T3.
+
+T058 reste dans la session163 autorisée : correctif minimal sur Cartae, oracles MCP existants affectés, contre-revue/delta d’audit ciblés, build et livraison du correctif avant reprise G8. Aucun nouveau framework, banc de confort ou FULL. Le prochain commit source sera différent de5105378bf4f03376e9bc93e52065cb022f81dee5 ; aucun hash futur fixé. T038/T042 demeurent cochées pour les builds/installations réellement prouvés du510, pas pour le futur correctif. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18/version164 est déjà installée et inchangée. Aucun résultat antérieur effacé, aucun livré final ou G8/G9 déduit.
+
+Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brute est conservée : /Users/moi/.cache/bridget-delivery163-20261013/g8-mcp-off-error-observation.log ; SHA-256 03e823bb6a993a7f1b8b546edc53f6aeded6e163bcd9ed507b22a68dc28f2f47. P3 NONCONVERGED historique et poursuite corrective sous mandat utilisateur restent explicites ; aucun P4 formel inventé.
+
+### Analyze après T058 — deux lectures
+
+Passe1 : l’annonce tools/list ne prouve pas l’aiguillage tools/call ; le défaut réel de façade est nommé avec sa réponse et l’absence durable de création rapportée ROOT. Une tâche corrective rattache les gardes/admission/compatibilité/livraison aux exigences existantes, sans nouvelle FR/SC. Les preuves510 et T3app511 restent distinctes du prochain commit/build.
+
+Passe2 :58 IDs uniques,53 cochées inchangées, seulesT039/T043/T044/T045/T058 ouvertes ;22FR/neufSC/cinqUS inchangés. MappingT058 vers FR005/013/014/015/019/020/022 et SC003/005/007/009 complète la couverture31/31 documentaire. Le défaut de code reste ouvert ; aucune Analyze ne le ferme, aucun quota/auth ou redémarrageT3 supposé. Revue/audit/build/redelivery/G8 ciblés futurs, pas de FULL ou succès anticipé.

@@ -243,14 +243,14 @@ fn native149_cycle_de_vie_fichiers_prives_et_nettoyage_raii() {
         vus.iter()
             .any(|name| name.starts_with("no-") && name.ends_with(".json"))
     );
-    // La composition vise Delegate, Continue et Capabilities, et rien d'autre.
+    // La composition vise Delegate, AutoDelegate, Continue et Capabilities, et rien d'autre.
     let settings: Value = serde_json::from_slice(&fs::read(observer.overlay()).unwrap()).unwrap();
     let matcher = settings["hooks"]["PreToolUse"][0]["matcher"]
         .as_str()
         .unwrap();
     assert_eq!(
         matcher,
-        "mcp__bridget__bridget_delegate|mcp__bridget__bridget_task_continue|mcp__bridget__bridget_capabilities"
+        "mcp__bridget__bridget_delegate|mcp__bridget__bridget_auto_delegate|mcp__bridget__bridget_task_continue|mcp__bridget__bridget_capabilities"
     );
     // Aucun droit de la session ne traverse l'overlay.
     let overlay = fs::read_to_string(observer.overlay()).unwrap();
@@ -270,6 +270,7 @@ fn native149_cycle_de_vie_fichiers_prives_et_nettoyage_raii() {
 fn native149_fait_publie_acquitte_le_hook_avant_sa_reprise() {
     for (tool, scope) in [
         ("mcp__bridget__bridget_delegate", "req-149"),
+        ("mcp__bridget__bridget_auto_delegate", "req-auto-163"),
         ("mcp__bridget__bridget_task_continue", "req-153-r2"),
     ] {
         let root = fixture_root("ack");

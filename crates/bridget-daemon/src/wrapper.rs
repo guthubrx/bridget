@@ -5617,7 +5617,7 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 25] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 26] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
@@ -5636,6 +5636,7 @@ const BRIDGET_SAFE_MCP_TOOLS: [&str; 25] = [
     "bridget_control_status",
     "bridget_capabilities",
     "bridget_delegate",
+    "bridget_auto_delegate",
     "bridget_task_status",
     "bridget_task_cancel",
     "bridget_task_wait",
@@ -9318,6 +9319,7 @@ mod reconnect_tests {
                 "bridget_control_status={approval_mode=\"approve\"},",
                 "bridget_capabilities={approval_mode=\"approve\"},",
                 "bridget_delegate={approval_mode=\"approve\"},",
+                "bridget_auto_delegate={approval_mode=\"approve\"},",
                 "bridget_task_status={approval_mode=\"approve\"},",
                 "bridget_task_cancel={approval_mode=\"approve\"},",
                 "bridget_task_wait={approval_mode=\"approve\"},",
@@ -9380,6 +9382,7 @@ mod reconnect_tests {
             "bridget_control_status",
             "bridget_capabilities",
             "bridget_delegate",
+            "bridget_auto_delegate",
             "bridget_task_status",
             "bridget_task_cancel",
             "bridget_task_wait",
@@ -9403,10 +9406,11 @@ mod reconnect_tests {
         append_claude_allowed_tools(&mut args);
         assert_eq!(args[0], "--allowedTools");
         let permitted: Vec<_> = args[1].split(',').collect();
-        assert_eq!(permitted.len(), 25);
+        assert_eq!(permitted.len(), 26);
         for tool in [
             "bridget_capabilities",
             "bridget_delegate",
+            "bridget_auto_delegate",
             "bridget_task_status",
             "bridget_task_cancel",
             "bridget_task_wait",
