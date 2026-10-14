@@ -1,0 +1,18 @@
+{
+  "checked_at": "2026-10-13T21:47:22.148621+00:00",
+  "scope": "artefacts uniquement, aucun test/build/source/service164",
+  "lecture1": "PASS comptage et références",
+  "lecture2": "PASS relecture sémantique et recomptage après corrections",
+  "FR": 17,
+  "SC": 6,
+  "US": 4,
+  "audit_items": 16,
+  "task_ids": 20,
+  "task_checkboxes": 20,
+  "completed_task_checkboxes": 0,
+  "matrix_requirements": 23,
+  "dangling_task_refs": 0,
+  "plan_review_r1_objections": 9,
+  "implementation_tests_executed": false,
+  "source_edits": false
+}
