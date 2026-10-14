@@ -1,5 +1,6 @@
-# Livraison SPEC-163 — 53/58, correctif façade MCP et G8/G9 ouverts
+# Livraison SPEC-163 — 57/58, G8/G9 validés, clôture documentaire en cours
 
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
 
 ## Checkpoint installation et provenance — 53/57, 14 octobre 2026
 
@@ -64,3 +65,42 @@ L’audit T058 readonly conclut A/100 sur le delta lu, avec 0C/0H/0M/0L actif. S
 Limite conservée : le refus du hook AutoDelegate sans request_id est vérifié par lecture de la garde, sans oracle négatif auto spécifique. L’oracle public tools/call prouve le raccord du wire sur un daemon simulé ; il ne prouve pas une Task durable ni un processus fournisseur réel.
 
 T058 reste ouverte. Reconstruction, réinstallation du correctif et recette G8 réelle restent à faire. Compteurs inchangés : SPEC163 53/58, SPEC164 19/22. La source5105378bf4f03376e9bc93e52065cb022f81dee5 reste chargée au dernier checkpoint de runtime ; aucun nouveau commit, binaire ou succès G8/G9 n’est anticipé. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18 reste inchangée. P3 NONCONVERGED historique et poursuite corrective autorisée sont conservés.
+
+
+## Livraison opérationnelle T058 et recette G8 — 14 octobre 2026
+
+La source Bridget 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 est intégrée et poussée sur github/main. Le build Mac donne RC0 en 148,075920 s ; signature ad hoc vérifiée strict RC0, binaire SHA-256 cfb1ff4f91e1b59fbbfd403607d4f6dd08f24229724822f3d8eee9b6eb1a381c. Le build Linux donne RC0 en 73,638388 s, ELF x86-64 SHA-256 dfc9c3c78f7c8e16a394bc57f77d06488acde6495be45093674025be4209af97. Les deux builds portent le même commit de source. Le maître Mac 31298 et le pont 31420 sont nés à 05:32:24/26 CEST ; le worker Cartae 1454489 a pour naissance 146390445 et utilise /home/moi/.local/lib/bridget-communication/163-3efa3ef5a88a/bin/bridget. Ces identités remplacent les anciens checkpoints510.
+
+G8 est prouvée par une admission native réelle, avec les automatismes désactivés. Le fournisseur codex-pro/model gpt-6.1-sol retourne exactement RECETTE163_G8_OK pour Task 8aaba836-5451-4497-bfcc-a90d9614ac59. Le résultat est disponible et transmis (result_sent=true), cleanup_done=true. Le workspace Shared/discovery n’a acquis aucune garde : guarded=false et guard_released=false ne sont pas présentés comme une libération de garde.
+
+La configuration effective /Users/moi/.cache/bridget-core/agents.json porte SHA-256 36c7d13c571f97e49f4caaa59c272597c87735fbfd44667068da77f883399cf4 : auto_engine=true, auto_placement=true et serveur de décision activé, protocole laya_systemone_v1/model typed-decisions. L’endpoint est http://127.0.0.1:8792/v1/systemone ; machine de décision laya-lan, santé/reprise 30 s. Les quatre profils restent configurés ; fixed/fallback local-codex-pro. Seul codex-pro est nouvellement prouvé disponible par G8 ; aucune nouvelle validation de quota/auth des autres profils n’est déduite.
+
+Le rejeu de la même clé après activation ON conserve le même Task, le résultat et le reçu auto entier, avec un seul reçu. Cet état durable prouve l’absence de nouvelle décision et de nouvelle Task sur ce rejeu. Aucune capture réseau n’a été effectuée. La recette HTTP réelle reste T040 R4, avec ses qualifications et son RC1 historique conservés : deux POST réels au total dans R3/R4, aucun nouvel appel de décision ajouté pour G8.
+
+T3 /Applications/T3 Code (Local).app est installée en 0.0.45-local.164/source 511190beb307e0952066fe1a4b511cb9dd7adb18. Ses processus 704/969 restent en version 162, sans redémarrage. Le catalogue d’outils de l’hôte conserve sa version précédente jusqu’à rechargement autorisé ; G8 utilise le MCP propre à la commande. Aucune nouvelle recette runtime T3 n’est revendiquée.
+
+ROOT accepte T039/T043/T044/T058 ; progression 57/58 In Progress, T045 seule ouverte pour la clôture documentaire/Git. Le commit source poussé ne prouve pas encore le push de ces métadonnées finales. P3 NONCONVERGED historique et la poursuite corrective autorisée par l’utilisateur en phase 5 restent tracés ; aucun P4 formel inventé.
+
+Reçu G8 : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-final.json ; SHA-256 5b1c00923f2f307136b5831cc8d3328227b7284deacf44c793d71542e3ceb52c. Archive opérationnelle : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-evidence.tgz ; SHA-256 9c1e6c33f936fab753f2fbfaa7fe6196a504c87b44a59d9f77e938cea5521eb8.
+
+
+## Nettoyage G9 accepté ROOT — 14 octobre 2026
+
+Les onze ressources éligibles retirées comprennent trois worktrees Mac, leurs trois branches fusionnées, deux stages de build Mac et six namespaces TMP du lot. Aucun retrait forcé, gain physique de disque ni mutation des bases de production n’est revendiqué. Les premiers refus de nettoyage restent historiques.
+
+Le dernier scan du worktree T3 163 a été complet : 282 139 fichiers dans la fenêtre 180 s. L’inventaire a ensuite changé après l’archive, donc la garde de stabilité a échoué. Le worktree /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission et sa branche sont conservés. Cette cause remplace le seul constat historique du scan 60 s incomplet ; aucune cause d’inode ou mutation de contenu n’est inventée. Reçu : /Users/moi/.cache/bridget-delivery163-20261013/g9-t3wt163-complete-retirement.json ; SHA-256 7e2388b90e22f0b33bb3f6140851c7dedc1a398a5b5d10957a490153d4e13d29.
+
+Sur Cartae, sudo lsof retourne RC0 mais signale fuse.portal et une visibilité incomplète. Le worktree /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission, sa branche, son .connector164, le cache Cargo partagé et les TMP de tests164 restent conservés. Les sources suivies du worktree/main sont alignées sur 3efa et propres. Le refus de la garde d’usage n’est pas contourné.
+
+Les stages de paquet /Users/moi/.cache/t3-final162.2nosz6zd et /Users/moi/.cache/t3-final163.zsb7fmfu contiennent chacun une base persistante de cache SQLite de 20 480 octets ; ils restent protégés, sans prétexte de futur build163. L’ancienne application /Applications/.T3 Code (Local).app.new-163 reste chargée par les processus T3 protégés. Sauvegardes, preuves, retours arrière, bases et caches partagés sont conservés.
+
+G9 est accepté sur ces retraits et conservations nommées. Reçu final : /Users/moi/.cache/bridget-delivery163-20261013/g9-t058-cleanup-final.json ; SHA-256 08091fc94791644308b258f2eb912ee375145d66004ef9f9c5e0d822a34fb5c3. Les preuves d’exécution e397 et de retrait T3 164 b066 restent rattachées au reçu final. Aucun fichier de production ou service n’est touché par cet ajout documentaire.
+
+
+## Limites conservées à la clôture
+
+L’audit 163 reste A/99,047619 partiel : 0C/0H/3M/2L, couverture 4,655325 % du snapshot et 0,355837 % du contexte global. Le delta T058 reste A/100 partiel 6,749687 %, 0 finding actif, validateur RC0/0 erreur/0 avertissement. Le delta T3 R6 conserve 0 finding actif sur son seul périmètre. Ces audits ne deviennent pas des audits globaux du produit.
+
+Les suites FULL antérieures avec échecs restent historiques et ne sont pas réécrites GREEN. Les campagnes ciblées réussies restent rattachées à leurs sources. Aucun FULL répété, benchmark nouveau, nouveau test du hook auto sans request_id ou nouveau processus fournisseur issu du test de dispatch n’est inventé. Les douze exacts T058 restent 11 lib + 1 intégration ; le zéro-filtre initial reste exclu.
+
+L’ETA initiale du plan 300–540 min et celle après Tasks 360–600 min sont historiques. La dernière fenêtre recalibrée 05:30–06:00 CEST n’est pas une mesure CPU. ROOT situe approximativement le début du planning au 13 octobre 2026 à 19:52:55 CEST. Le reçu G8 du 14 octobre vers 05:38:41 CEST intervient près de 9 h 46 plus tard ; ce temps écoulé approximatif inclut attente, incidents, revues, tests, builds et maintenance, sans attribution de temps processeur.

@@ -1,4 +1,14 @@
 <!-- SPECKIT START -->
+Session 163 installée et G8/G9 validés le 14 octobre 2026 avec conservations justifiées ; 57/58 In Progress, T045 seule ouverte pour clôture documentaire/Git ROOT.
+Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée et poussée github/main ; Mac SHA-256 cfb1ff4f91e1b59fbbfd403607d4f6dd08f24229724822f3d8eee9b6eb1a381c, Linux SHA-256 dfc9c3c78f7c8e16a394bc57f77d06488acde6495be45093674025be4209af97.
+Maître 31298/pont 31420 nés 05:32:24/26 CEST ; worker Cartae 1454489, naissance 146390445. Configuration ON réelle SHA 36c7d13c571f97e49f4caaa59c272597c87735fbfd44667068da77f883399cf4.
+G8 : admission OFF native codex-pro/gpt-6.1-sol, résultat exact RECETTE163_G8_OK transmis et cleanup_done=true. Workspace Shared sans garde acquise. Rejeu ON même clé : Task/résultat/reçu entier inchangés, aucune nouvelle décision durable, pas de capture réseau. T040 R4 qualifiée/RC1 historique conservés, aucun POST supplémentaire.
+T3 app164 installée ; processus 704/969 restent162 sans redémarrage. Trois worktrees et branches Mac, deux stages et six TMP retirés sans force. Worktree T3 163/branche conservés : scan 180 s complet 282139 fichiers, inventaire changé après archive. Cartae WT/branche/connecteur/caches/TMP conservés : sudo lsof RC0 mais fuse.portal incomplet. Cache SQLite persistant/ancienne app T3 chargée/rollback/preuves/DB protégés, aucun contournement.
+Audit 163 historique A99,047619 partiel 3M/2L conservé ; delta T058 A100 partiel 6,749687 % 0 finding/validateur RC0 et delta T3 R6 sans finding. Anciennes FULL non GREEN conservées ; P3 NONCONVERGED historique et poursuite corrective utilisateur phase 5, pas de P4 formel.
+Reçu canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md.
+Sources actives et futures métadonnées de clôture restent distinctes ; documents finaux encore à committer/pousser par ROOT, aucun hash futur. Les checkpoints suivants sont historiques, pas une preuve du runtime courant.
+
+
 Session 162 livrée et nettoyée le 13 octobre 2026 : 46/46, G8/G9 validés avec conservations justifiées.
 Source active 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437 intégrée et poussée ; documents 4cf50b68688b2d28872f67ae32e129f989d22449 intégrés et poussés.
 Daemon Mac 71469 et pont 71567 actifs depuis 17:53:53/55 CEST ; worker Cartae 471321, naissance 142199350. T3 704/969 et tunnel 1384 inchangés depuis le préflight après redémarrage externe.

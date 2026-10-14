@@ -1,6 +1,8 @@
 # Recherche SPEC-163 — préparation ciblée après 162
 
-**Statut :** Draft. Les lectures initiales ci-dessous portaient sur 611bfa7557b97587614687f6c6379d5961101fa6. Le socle canonique est désormais la source livrée 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437, checkout dcfd9bc29140457b1fa016c276f5a48933415a5c. Les numéros de ligne initiaux restent historiques et seront réattestés par l’audit ciblé. Aucun test, build, modèle ou service exécuté pour ce document.
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+
+**Préparation initiale — historique :** Draft. Les lectures initiales ci-dessous portaient sur 611bfa7557b97587614687f6c6379d5961101fa6. Le socle canonique est désormais la source livrée 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437, checkout dcfd9bc29140457b1fa016c276f5a48933415a5c. Les numéros de ligne initiaux restent historiques et seront réattestés par l’audit ciblé. Aucun test, build, modèle ou service exécuté pour ce document.
 
 ## Preuves du socle
 

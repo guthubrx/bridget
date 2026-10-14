@@ -7,8 +7,8 @@ Spec: 163-decision-admission
 Titre: Choix configurable du moteur et de la machine
 Statut: In Progress
 Priorité: P1
-Tâches: 53/58 (91,38%)
-Tests: preuves ciblées et audit final readonly acceptés ROOT ; recette/livraison T038–T045 ouvertes
+Tâches: 57/58 (98,28%)
+Tests: preuves ciblées, audits partiels, recette G8 et nettoyage G9 acceptés ROOT ; T045 seule ouverte pour commit/push documentaire
 
 Résumé:
 - Contexte: Le placement explicite 162 est livré.
@@ -18,13 +18,13 @@ Résumé:
 Fichiers:
 - spec.md: ✓
 - plan.md: ✓
-- tasks.md: ✓ — 45 tâches initiales, 11 corrections de convergence et une correction de contre-revue ; Analyze initial effectué, preuves de développement acceptées ROOT, livraison ouverte.
+- tasks.md: ✓ — 58 tâches ; 57 acceptées, T045 seule ouverte pour clôture documentaire/Git.
 <!-- SPEC-FORMALISM:END -->
 
-**Statut :** In Progress — 53/58 ; correctif façade MCP T058 ouvert après refus G8 -32602. Installation510 et configuration off prouvées ; livraison finale/axes/G8/G9 encore ouverts.
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
 **Priorité :** P1
 **Périmètre :** choix initial d’une mission Bridget ; configuration et explication du choix
-**Tâches :** 53/58 — T039/T043/T044/T045/T058 ouvertes ; T038/T042 restent preuves historiques, nouveaux builds/redelivery T058 attendus
+**Tâches :** 57/58 — T045 seule ouverte pour clôture documentaire ; T058, G8 et G9 validés sur leurs reçus réels.
 **Date :** 2026-10-13
 **Branche :** session-163-decision-admission
 **Emplacement :** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission

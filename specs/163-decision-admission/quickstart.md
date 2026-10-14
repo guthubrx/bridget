@@ -1,4 +1,8 @@
-# Validation proposée SPEC-163 — NON EXÉCUTÉE
+# Validation SPEC-163 — procédure initiale et résultats qualifiés
+
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+
+La procédure ci-dessous est le plan initial historique. Ses résultats réels, limites et G8/G9 sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md.
 
 1. Canonisation effectuée sur le socle 162 livré et nettoyé, source 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437, checkout dcfd9bc29140457b1fa016c276f5a48933415a5c. Réattester les dépendances utiles avant implémentation.
 2. Valider les propositions de contrat et de réemploi ; contre-revue puis génération Tasks/Analyze. Tasks/Analyze sont désormais préparés après GO ROOT, sans exécution de développement.

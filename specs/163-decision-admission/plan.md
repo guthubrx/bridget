@@ -1,6 +1,6 @@
 # Plan SPEC-163 — Décision initiale configurable
 
-**Statut courant au 14 octobre 2026 :** In Progress, 53/58 ; T039/T043/T044/T045/T058 ouvertes. G8 révèle la façade MCP non raccordée ; source510 installée et T3app511/version164 inchangée, preuves antérieures conservées. Correctif, revue/audit ciblés, nouveaux builds/redelivery puis G8 attendus, aucune livraison finale revendiquée.
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
 **Source de référence :** Bridget 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437 ; checkout initial dcfd9bc29140457b1fa016c276f5a48933415a5c. Session 162 livrée, 46/46, G8/G9 validés avec conservations justifiées.
 **Estimation initiale du 13 octobre 2026, historique :** 300–540 minutes (5–9 heures), jusqu’à livraison et nettoyage. Recalibrage après Tasks. La première estimation privée de 12–24 heures est historique et remplacée. Le découpage initial après audit/contre-revue compte 45 tâches ; ETA de réalisation recommandée 360–600 minutes après Tasks, à confirmer par ROOT, hors quotas/indisponibilité.
 
@@ -220,3 +220,23 @@ Le MCP propre à la nouvelle commande annonce bridget_auto_delegate dans tools/l
 T058 reste dans la session163 autorisée : correctif minimal sur Cartae, oracles MCP existants affectés, contre-revue/delta d’audit ciblés, build et livraison du correctif avant reprise G8. Aucun nouveau framework, banc de confort ou FULL. Le prochain commit source sera différent de5105378bf4f03376e9bc93e52065cb022f81dee5 ; aucun hash futur fixé. T038/T042 demeurent cochées pour les builds/installations réellement prouvés du510, pas pour le futur correctif. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18/version164 est déjà installée et inchangée. Aucun résultat antérieur effacé, aucun livré final ou G8/G9 déduit.
 
 Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brute est conservée : /Users/moi/.cache/bridget-delivery163-20261013/g8-mcp-off-error-observation.log ; SHA-256 03e823bb6a993a7f1b8b546edc53f6aeded6e163bcd9ed507b22a68dc28f2f47. P3 NONCONVERGED historique et poursuite corrective sous mandat utilisateur restent explicites ; aucun P4 formel inventé.
+
+
+## Limites conservées à la clôture
+
+L’audit 163 reste A/99,047619 partiel : 0C/0H/3M/2L, couverture 4,655325 % du snapshot et 0,355837 % du contexte global. Le delta T058 reste A/100 partiel 6,749687 %, 0 finding actif, validateur RC0/0 erreur/0 avertissement. Le delta T3 R6 conserve 0 finding actif sur son seul périmètre. Ces audits ne deviennent pas des audits globaux du produit.
+
+Les suites FULL antérieures avec échecs restent historiques et ne sont pas réécrites GREEN. Les campagnes ciblées réussies restent rattachées à leurs sources. Aucun FULL répété, benchmark nouveau, nouveau test du hook auto sans request_id ou nouveau processus fournisseur issu du test de dispatch n’est inventé. Les douze exacts T058 restent 11 lib + 1 intégration ; le zéro-filtre initial reste exclu.
+
+L’ETA initiale du plan 300–540 min et celle après Tasks 360–600 min sont historiques. La dernière fenêtre recalibrée 05:30–06:00 CEST n’est pas une mesure CPU. ROOT situe approximativement le début du planning au 13 octobre 2026 à 19:52:55 CEST. Le reçu G8 du 14 octobre vers 05:38:41 CEST intervient près de 9 h 46 plus tard ; ce temps écoulé approximatif inclut attente, incidents, revues, tests, builds et maintenance, sans attribution de temps processeur.
+
+
+
+
+## Acceptation opérationnelle ROOT — 57/58, 14 octobre 2026
+
+ROOT accepte T039/T043/T044/T058 sur les preuves de configuration effective, de recette G8 et de nettoyage G9. T045 reste seule ouverte pour la clôture documentaire, le commit et le push finaux. La source active est 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 ; les métadonnées de clôture ultérieures auront leur propre commit. Le correctif T058 est fermé par son code, douze oracles exacts, la revue R5 avec F1 aligné, le delta d’audit et G8 réelle.
+
+Reçus : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-final.json ; SHA-256 5b1c00923f2f307136b5831cc8d3328227b7284deacf44c793d71542e3ceb52c. /Users/moi/.cache/bridget-delivery163-20261013/g9-t058-cleanup-final.json ; SHA-256 08091fc94791644308b258f2eb912ee375145d66004ef9f9c5e0d822a34fb5c3. Les faits et limites sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md. Les anciens chemins de worktrees Mac retirés désignent des lieux historiques, sans nouvelle copie de travail active.
+
+P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 restent conservés, sans P4 formel inventé. Les anciennes FULL avec échecs, l’audit163 partiel 3M/2L, le delta T058 partiel sans finding et le delta T3 R6 sans finding restent distincts ; aucun GREEN global déduit.

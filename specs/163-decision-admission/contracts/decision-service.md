@@ -1,6 +1,8 @@
 # Contrat proposé — serveur de décision 163
 
-**Statut :** réalisation In Progress, SPEC163 à 4/57 tâches prouvées ; aucune compatibilité réelle nouvelle attestée par ce contrat.
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+
+Contrat de réalisation conservé ; protocole laya_systemone_v1 validé dans T040 qualifiée, aucune compatibilité Jev inventée.
 
 ## Politique et transport
 

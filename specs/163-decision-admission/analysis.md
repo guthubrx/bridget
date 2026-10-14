@@ -1,6 +1,6 @@
 # Analyse croisée SPEC-163
 
-**Statut courant au 14 octobre 2026 :** In Progress, 53/58 ; T039/T043/T044/T045/T058 ouvertes. G8 révèle la façade MCP non raccordée ; source510 installée et T3app511/version164 inchangée, preuves antérieures conservées. Correctif, revue/audit ciblés, nouveaux builds/redelivery puis G8 attendus, aucune livraison finale revendiquée.
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
 
 ## Analyse initiale du 13 octobre 2026 — historique conservé
 
@@ -286,3 +286,17 @@ Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brut
 Passe1 : l’annonce tools/list ne prouve pas l’aiguillage tools/call ; le défaut réel de façade est nommé avec sa réponse et l’absence durable de création rapportée ROOT. Une tâche corrective rattache les gardes/admission/compatibilité/livraison aux exigences existantes, sans nouvelle FR/SC. Les preuves510 et T3app511 restent distinctes du prochain commit/build.
 
 Passe2 :58 IDs uniques,53 cochées inchangées, seulesT039/T043/T044/T045/T058 ouvertes ;22FR/neufSC/cinqUS inchangés. MappingT058 vers FR005/013/014/015/019/020/022 et SC003/005/007/009 complète la couverture31/31 documentaire. Le défaut de code reste ouvert ; aucune Analyze ne le ferme, aucun quota/auth ou redémarrageT3 supposé. Revue/audit/build/redelivery/G8 ciblés futurs, pas de FULL ou succès anticipé.
+
+
+## Acceptation opérationnelle ROOT — 57/58, 14 octobre 2026
+
+ROOT accepte T039/T043/T044/T058 sur les preuves de configuration effective, de recette G8 et de nettoyage G9. T045 reste seule ouverte pour la clôture documentaire, le commit et le push finaux. La source active est 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 ; les métadonnées de clôture ultérieures auront leur propre commit. Le correctif T058 est fermé par son code, douze oracles exacts, la revue R5 avec F1 aligné, le delta d’audit et G8 réelle.
+
+Reçus : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-final.json ; SHA-256 5b1c00923f2f307136b5831cc8d3328227b7284deacf44c793d71542e3ceb52c. /Users/moi/.cache/bridget-delivery163-20261013/g9-t058-cleanup-final.json ; SHA-256 08091fc94791644308b258f2eb912ee375145d66004ef9f9c5e0d822a34fb5c3. Les faits et limites sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md. Les anciens chemins de worktrees Mac retirés désignent des lieux historiques, sans nouvelle copie de travail active.
+
+P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 restent conservés, sans P4 formel inventé. Les anciennes FULL avec échecs, l’audit163 partiel 3M/2L, le delta T058 partiel sans finding et le delta T3 R6 sans finding restent distincts ; aucun GREEN global déduit.
+
+
+## Rapprochement de clôture avant Git ROOT
+
+58 identifiants de tâche conservés ; 57 cochés sur GO ROOT, seule T045 ouverte. Les 22 FR/9 SC et cinq US conservent leur mapping documentaire. Les preuves de la phase corrective clôturent T058, sans convertir le P3 historique en CONVERGED ou inventer une passe P4. Aucun nouveau test ou audit exécuté par ce rapprochement ; les limites des reçus G8/G9 restent explicites.

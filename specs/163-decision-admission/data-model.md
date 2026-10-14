@@ -1,6 +1,8 @@
 # Modèle SPEC-163 — proposition à auditer
 
-**Statut :** Draft. Données proposées, aucune migration exécutée.
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+
+Le modèle décrit la réalisation163. Migration additive et installation sont prouvées par les reçus de livraison ; les anciennes propositions restent historiques.
 
 | Entité | Champs et règles | Durée / autorité |
 |---|---|---|

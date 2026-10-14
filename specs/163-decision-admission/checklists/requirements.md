@@ -1,7 +1,9 @@
 # Checklist de qualité SPEC-163
 
-**Date initiale :** 2026-10-13 ; relecture le 2026-10-14. **État courant :** SPEC163 In Progress, 4/57 tâches prouvées. **Portée :** qualité documentaire ; cette checklist ne valide ni code, ni réseau, ni production.
-**Spec :** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/spec.md
+**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+
+**Date initiale :** 2026-10-13 ; qualité documentaire initiale, résultats de clôture distingués dans les reçus.
+**Spec courante :** /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/spec.md
 
 ## Qualité de la spécification
 
