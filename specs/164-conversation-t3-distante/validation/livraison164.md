@@ -51,3 +51,11 @@ Les caches `/Users/moi/.cache/t3-final162.2nosz6zd` et `/Users/moi/.cache/t3-fin
 Le build actif Bridget est toujours source `3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5` ; le commit de métadonnéesc57 est distinct et ne prétend pas une nouvelle compilation. Source T3 `511190beb307e0952066fe1a4b511cb9dd7adb18` poussée au fork/local/main-20261009, application164 signée sur disque. T3PID704/969 reste chargé en162, sans redémarrage ni activation différée.
 
 La recette S164-12 prouve le client web construit avec données synthétiques, en taille desktop et mobileCSS ; elle ne vaut pas Electron actif ni React Native natif. Les tests et les audits ciblés restent qualifiés par leur provenance et couverture partielle. Aucun nouveau Converge, audit, test, build ou succès global GREEN n'est créé par cette clôture. Bridget reste indépendant de T3.
+
+## Complément visuel Lineage — 2026-10-14
+
+Symbole Bridget avant le fournisseur, dans la ligne et la carte de survol. Couleur bleue uniquement pour `placement=null` (local connu). Masque monochrome pour le distant ; localisation inconnue neutre. Les sous-agents fournisseurs seuls ne reçoivent pas le symbole Bridget. Aucun changement Bridget, RPC ou mobile.
+
+Développement et contrôles sur Cartae : fichier Bridget 7 PASS ; autres fichiers Lineage 4 et 6 PASS, avec un échec de libellé de compte reproduit exactement sur la source précédente. Typecheck web RC0, lint ciblé 0 erreur/0 warning, format et diff conformes. Aucun test global ni recette visuelle Electron revendiqué.
+
+Source T3 `3ea39f11095debbba6ca6a73f99f44fbe308cd60` intégrée et poussée vers fork/local/main-20261009. Application `/Applications/T3 Code (Local).app` installée et signée, version `0.0.45-local.164`, ASAR SHA-256 `dc5623d70f45c85909703274ba59d216295b9e84b1e50ab8685b75aabe73f942`. Aucun redémarrage : processus courants conservés. Reçu `/Users/moi/.cache/t3-lineage-icons-164-backup/T3-install-receipt.json` ; preuves `/Users/moi/.cache/t3-lineage-icons-164-proofs`.
