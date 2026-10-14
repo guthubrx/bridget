@@ -109,7 +109,7 @@ fn send_frame(stream: &mut UnixStream, frame: &impl serde::Serialize) -> io::Res
     stream.write_all(b"\n")
 }
 
-type WorkerConnection = (BufReader<UnixStream>, WorkerHello);
+type WorkerConnection = (BufReader<UnixStream>, WorkerHello, bool);
 
 // Relais privé de cette seule recette. Les connexions déjà classées passent
 // ensuite octet pour octet ; aucune réécriture des faits de permission natifs.
@@ -123,9 +123,23 @@ struct Relay {
 
 impl Relay {
     fn new(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_ready_delay(front, daemon, Duration::ZERO)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, false)
     }
     fn with_ready_delay(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
+        Self::with_worker_capability(front, daemon, ready_delay, false)
+    }
+    /// Force l'annonce de capacité sur ce relais de recette, sans modifier le
+    /// daemon réel ni son build. Le worker doit négocier l'enveloppe distincte avant
+    /// de recevoir le probe.
+    fn with_candidate_probe(front: &Path, daemon: PathBuf) -> Self {
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true)
+    }
+    fn with_worker_capability(
+        front: &Path,
+        daemon: PathBuf,
+        ready_delay: Duration,
+        candidate_probe_feature: bool,
+    ) -> Self {
         let listener = UnixListener::bind(front).unwrap();
         fs::set_permissions(front, fs::Permissions::from_mode(0o600)).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -197,7 +211,19 @@ impl Relay {
                                     backend_reader.read_line(&mut report)?;
                                     eprintln!("relais162 identity response bytes={}", report.len());
                                     stage = "write identity client";
-                                    reader.get_mut().write_all(report.as_bytes())?;
+                                    if candidate_probe_feature {
+                                        let mut identity = serde_json::from_str::<DaemonToWrapper>(&report)
+                                            .map_err(io::Error::other)?;
+                                        let DaemonToWrapper::DaemonIdentityReport { features, .. } = &mut identity else {
+                                            return Err(io::Error::other("identité maître inattendue"));
+                                        };
+                                        if !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
+                                            features.push("worker_candidate_probe_v1".into());
+                                        }
+                                        send_frame(reader.get_mut(), &identity)?;
+                                    } else {
+                                        reader.get_mut().write_all(report.as_bytes())?;
+                                    }
                                     first.clear();
                                     stage = "read second client frame";
                                     if reader.read_line(&mut first)? == 0 {
@@ -212,13 +238,21 @@ impl Relay {
                                         )
                                     );
                                 }
-                                let worker_connection = matches!(serde_json::from_str::<WrapperToDaemon>(&first), Ok(WrapperToDaemon::WorkerHello { .. }));
-                                if let Ok(WrapperToDaemon::WorkerHello { hello }) =
-                                    serde_json::from_str(&first)
+                                let worker = match serde_json::from_str::<WrapperToDaemon>(&first) {
+                                    Ok(WrapperToDaemon::WorkerHello { hello }) => Some((hello, false)),
+                                    Ok(WrapperToDaemon::WorkerHelloWithCapabilities { hello })
+                                        if hello.capabilities == vec![WorkerCapability::CandidateProbeV1] =>
+                                    {
+                                        Some((hello.hello, true))
+                                    }
+                                    _ => None,
+                                };
+                                let worker_connection = worker.is_some();
+                                if let Some((hello, candidate_probe)) = worker
                                     && ready_delay.is_zero()
                                 {
                                     sender
-                                        .send((reader, hello))
+                                        .send((reader, hello, candidate_probe))
                                         .map_err(|_| io::Error::other("maître de recette fermé"))?;
                                     return Ok(());
                                 }
@@ -289,7 +323,7 @@ impl Relay {
     }
 
     fn connect(&self) -> Control {
-        let (mut reader, hello) = self
+        let (mut reader, hello, candidate_probe) = self
             .workers
             .recv_timeout(Duration::from_secs(12))
             .expect("WorkerHello réel absent");
@@ -297,18 +331,27 @@ impl Relay {
         assert_eq!(hello.credential.expose_for_attestation(), SECRET);
         hello.validate().unwrap();
         let epoch = uuid::Uuid::new_v4().to_string();
-        send_frame(
-            reader.get_mut(),
-            &DaemonToWrapper::WorkerAccepted {
-                accepted: WorkerAccepted {
-                    version: REMOTE_WORKER_VERSION,
-                    identity: identity(),
-                    connection_epoch: epoch.clone(),
+        let accepted = WorkerAccepted {
+            version: REMOTE_WORKER_VERSION,
+            identity: identity(),
+            connection_epoch: epoch.clone(),
+        };
+        let response = if candidate_probe {
+            DaemonToWrapper::WorkerAcceptedWithCapabilities {
+                accepted: WorkerAcceptedWithCapabilities {
+                    accepted,
+                    capabilities: vec![WorkerCapability::CandidateProbeV1],
                 },
-            },
-        )
-        .unwrap();
-        Control { reader, epoch }
+            }
+        } else {
+            DaemonToWrapper::WorkerAccepted { accepted }
+        };
+        send_frame(reader.get_mut(), &response).unwrap();
+        Control {
+            reader,
+            epoch,
+            candidate_probe,
+        }
     }
 }
 
@@ -327,6 +370,7 @@ impl Drop for Relay {
 struct Control {
     reader: BufReader<UnixStream>,
     epoch: String,
+    candidate_probe: bool,
 }
 impl Control {
     fn request(
@@ -374,6 +418,48 @@ impl Control {
                     }
                 }
                 other => panic!("trame worker162 inattendue: {other:?}"),
+            }
+        }
+    }
+    fn candidate_probe(&mut self, probe: CandidateProbe) -> CandidateProbeResult {
+        assert!(
+            self.candidate_probe,
+            "capacité candidate_probe non négociée"
+        );
+        assert_eq!(probe.connection_epoch, self.epoch);
+        assert_eq!(probe.worker, identity());
+        probe.validate_shape().unwrap();
+        send_frame(
+            self.reader.get_mut(),
+            &DaemonToWrapper::CandidateProbe {
+                probe: probe.clone(),
+            },
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(12);
+        loop {
+            assert!(Instant::now() < deadline, "résultat probe163 absent");
+            self.reader
+                .get_mut()
+                .set_read_timeout(Some(deadline.saturating_duration_since(Instant::now())))
+                .unwrap();
+            let mut line = String::new();
+            assert!(
+                self.reader.read_line(&mut line).unwrap() > 0,
+                "worker163 a fermé sa connexion pendant probe"
+            );
+            match serde_json::from_str::<WrapperToDaemon>(&line).unwrap() {
+                WrapperToDaemon::Heartbeat => {}
+                WrapperToDaemon::CandidateProbeResult { result }
+                    if result.correlation_id == probe.correlation_id =>
+                {
+                    assert_eq!(result.connection_epoch, self.epoch);
+                    assert_eq!(result.worker, identity());
+                    assert_eq!(result.admission_id, probe.admission_id);
+                    assert_eq!(result.policy_revision, probe.policy_revision);
+                    return result;
+                }
+                other => panic!("trame probe163 inattendue: {other:?}"),
             }
         }
     }
@@ -500,6 +586,12 @@ struct RemoteFixture {
 
 impl RemoteFixture {
     fn new() -> Self {
+        Self::with_candidate_probe(false)
+    }
+    fn new_with_candidate_probe() -> Self {
+        Self::with_candidate_probe(true)
+    }
+    fn with_candidate_probe(candidate_probe: bool) -> Self {
         let fixture = Fixture::new_with_provider(60, false, Some(PROVIDER), false);
         let root = &fixture.root;
         // Épingler uniquement Git depuis le runner, sans hériter tout son PATH.
@@ -577,7 +669,11 @@ impl RemoteFixture {
         }});
         support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
         let front = root.join("state/worker.sock");
-        let relay = Relay::new(&front, support::socket(root));
+        let relay = if candidate_probe {
+            Relay::with_candidate_probe(&front, support::socket(root))
+        } else {
+            Relay::new(&front, support::socket(root))
+        };
         Self {
             worker: None,
             relay: Some(relay),
@@ -901,6 +997,346 @@ impl Drop for RemoteFixture {
         self.fixture.stop_native_groups();
         self.relay.take();
     }
+}
+
+#[test]
+fn worker163_probe_groupe_huit_profils_sans_prepare_ni_lancement() {
+    let mut f = RemoteFixture::new_with_candidate_probe();
+    let project = f.fixture.root.join("project");
+    support::private_write(&project.join(".gitignore"), b".worktrees/\n").unwrap();
+    let add = Command::new("/usr/bin/git")
+        .args(["add", ".gitignore"])
+        .current_dir(&project)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(add.status.success(), "Git privé163: {:?}", add.stderr);
+    let commit = Command::new("/usr/bin/git")
+        .args([
+            "-c",
+            "user.name=fixture162",
+            "-c",
+            "user.email=fixture162@invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "probe163",
+        ])
+        .current_dir(&project)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(commit.status.success(), "Git privé163: {:?}", commit.stderr);
+    let base_commit = Command::new("/usr/bin/git")
+        .args(["rev-parse", "--verify", "HEAD^{commit}"])
+        .current_dir(&project)
+        .env_clear()
+        .env("HOME", f.fixture.root.join("provider"))
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        base_commit.status.success(),
+        "Git base163: {:?}",
+        base_commit.stderr
+    );
+    let base_commit = String::from_utf8(base_commit.stdout)
+        .unwrap()
+        .trim()
+        .to_owned();
+    let branch = Command::new("/usr/bin/git")
+        .args(["branch", "probe163-base", &base_commit])
+        .current_dir(&project)
+        .env_clear()
+        .env("HOME", f.fixture.root.join("provider"))
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        branch.status.success(),
+        "Git branche163: {:?}",
+        branch.stderr
+    );
+    support::private_write(&project.join("probe163-head"), b"head suivant\n").unwrap();
+    let add_head = Command::new("/usr/bin/git")
+        .args(["add", "probe163-head"])
+        .current_dir(&project)
+        .env_clear()
+        .env("HOME", f.fixture.root.join("provider"))
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        add_head.status.success(),
+        "Git ajout tête163: {:?}",
+        add_head.stderr
+    );
+    let commit_head = Command::new("/usr/bin/git")
+        .args([
+            "-c",
+            "user.name=fixture162",
+            "-c",
+            "user.email=fixture162@invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "probe163-head",
+        ])
+        .current_dir(&project)
+        .env_clear()
+        .env("HOME", f.fixture.root.join("provider"))
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        commit_head.status.success(),
+        "Git tête163: {:?}",
+        commit_head.stderr
+    );
+    let mut control = f.start_worker();
+    assert!(control.candidate_probe);
+    let candidate = CandidateProbeCandidate {
+        candidate_id: "c01".into(),
+        project_id: "project162".into(),
+        origin_host: "origin162".into(),
+        origin_cwd: ORIGIN.into(),
+        source_root: ORIGIN.into(),
+        remote_root: f
+            .fixture
+            .root
+            .join("project")
+            .to_string_lossy()
+            .into_owned(),
+        source_root_identity: REPOSITORY.into(),
+        relative_cwd: ".".into(),
+        base_commit: Some(base_commit.clone()),
+        agent_type: "fake-codex".into(),
+        model: "gpt-5.6-terra".into(),
+        effort: Some("high".into()),
+        posture: Some(SpawnPosture::Discovery),
+        workspace: Some(WorkspaceRequest::Worktree {
+            base_ref: Some("probe163-base".into()),
+            branch: None,
+        }),
+    };
+    let pinned_candidate = candidate.clone();
+    let candidates = (1..=8)
+        .map(|index| {
+            let mut candidate = candidate.clone();
+            candidate.candidate_id = format!("c0{index}");
+            candidate
+        })
+        .collect();
+    let parent = ProviderPermissions {
+        version: 1,
+        source: "native_wrapper".into(),
+        run_id: "probe163".into(),
+        provider_session_id: "session163".into(),
+        provider_instance_id: "parent163".into(),
+        revision: 1,
+        driver: "codex_app_server".into(),
+        cwd: ORIGIN.into(),
+        runtime_mode: "full-access".into(),
+        interaction_mode: "default".into(),
+        provider_policy: json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+    };
+    let result = control.candidate_probe(CandidateProbe {
+        version: WORKER_CANDIDATE_PROBE_VERSION,
+        correlation_id: "probe163-eight".into(),
+        connection_epoch: control.epoch.clone(),
+        worker: identity(),
+        admission_id: "admission163".into(),
+        policy_revision: 1,
+        parent: parent.clone(),
+        candidates,
+    });
+    assert_eq!(result.verdicts.len(), 8);
+    assert!(
+        result
+            .verdicts
+            .iter()
+            .all(|verdict| matches!(verdict, CandidateProbeVerdict::Eligible { .. }))
+    );
+    for directory in ["commands", "slots", "workspaces", "markers"] {
+        assert_eq!(
+            fs::read_dir(f.worker_state.join("store").join(directory))
+                .unwrap()
+                .count(),
+            0,
+            "le probe ne doit rien écrire dans {directory}"
+        );
+    }
+    assert!(
+        f.fixture
+            .evidence()
+            .iter()
+            .all(|event| event["event"] != "started162")
+    );
+
+    // Une reconnexion change l'époque : le verdict précédent n'est pas un
+    // permis réutilisable, le nouveau probe est relu intégralement.
+    let old_epoch = control.epoch.clone();
+    control.disconnect();
+    f.stop_worker();
+    let mut control = f.start_worker();
+    assert_ne!(control.epoch, old_epoch);
+    let reprobed = control.candidate_probe(CandidateProbe {
+        version: WORKER_CANDIDATE_PROBE_VERSION,
+        correlation_id: "probe163-reconnect".into(),
+        connection_epoch: control.epoch.clone(),
+        worker: identity(),
+        admission_id: "admission163".into(),
+        policy_revision: 1,
+        parent: parent.clone(),
+        candidates: vec![candidate.clone()],
+    });
+    assert!(matches!(
+        reprobed.verdicts.as_slice(),
+        [CandidateProbeVerdict::Eligible { candidate_id, .. }] if candidate_id == "c01"
+    ));
+
+    // Une révocation est lue par la prochaine sonde ; elle ne réemploie aucun
+    // fait positif précédent et ne transforme pas le refus en lancement.
+    let registry_path = f.fixture.root.join("state/agents.json");
+    let mut registry: Value = serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+    registry["machines"]["cartae162"]["allowed_agent_types"] = json!([]);
+    support::private_write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    let revoked = control.candidate_probe(CandidateProbe {
+        version: WORKER_CANDIDATE_PROBE_VERSION,
+        correlation_id: "probe163-revoked".into(),
+        connection_epoch: control.epoch.clone(),
+        worker: identity(),
+        admission_id: "admission163".into(),
+        policy_revision: 2,
+        parent: parent.clone(),
+        candidates: vec![candidate.clone()],
+    });
+    assert!(
+        revoked
+            .verdicts
+            .iter()
+            .all(|verdict| matches!(verdict, CandidateProbeVerdict::Ineligible { .. }))
+    );
+    // Le même candidat qui était Eligible avant la révocation ne peut pas
+    // traverser Prepare : la vérification de droits précède désormais toute
+    // création de worktree, slot ou fournisseur.
+    let command = WorkerCommandIdentity {
+        command_id: "command163-revoked".into(),
+        task_id: "00000000-0000-4000-8000-000000000163".into(),
+        instance_id: String::new(),
+        generation: 0,
+    };
+    let prepare = WorkerPrepare {
+        machine_id: identity().machine_id,
+        project_id: "project162".into(),
+        provisioning_revision: 1,
+        mapping_revision: 1,
+        origin_host: "origin162".into(),
+        origin_cwd: ORIGIN.into(),
+        source_root: ORIGIN.into(),
+        remote_root: project.to_string_lossy().into_owned(),
+        source_root_identity: REPOSITORY.into(),
+        relative_cwd: ".".into(),
+        base_commit: pinned_candidate.base_commit.clone(),
+        agent_type: "fake-codex".into(),
+        model: "gpt-5.6-terra".into(),
+        effort: Some("high".into()),
+        posture: Some(SpawnPosture::Discovery),
+        workspace: Some(WorkspaceRequest::Worktree {
+            base_ref: Some("probe163-base".into()),
+            branch: None,
+        }),
+        parent: parent.clone(),
+    };
+    assert_eq!(
+        control.request(&command, WorkerRequestOperation::Prepare { prepare }),
+        WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::Unauthorized
+        }
+    );
+    for directory in ["commands", "slots", "workspaces", "markers"] {
+        assert_eq!(
+            fs::read_dir(f.worker_state.join("store").join(directory))
+                .unwrap()
+                .count(),
+            0,
+            "la révocation ne doit rien écrire dans {directory}"
+        );
+    }
+
+    // Le HEAD du dépôt est plus récent que `probe163-base`. Après restauration
+    // des droits, Prepare doit donc accepter la base future explicitement
+    // épinglée, créer son worktree, mais ne jamais lancer le fournisseur.
+    registry["machines"]["cartae162"]["allowed_agent_types"] = json!(["fake-codex"]);
+    support::private_write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    let pinned_command = WorkerCommandIdentity {
+        command_id: "command163-pinned-base".into(),
+        task_id: "00000000-0000-4000-8000-000000000164".into(),
+        instance_id: String::new(),
+        generation: 0,
+    };
+    let pinned_prepare = WorkerPrepare {
+        machine_id: identity().machine_id,
+        project_id: pinned_candidate.project_id.clone(),
+        provisioning_revision: 1,
+        mapping_revision: 1,
+        origin_host: pinned_candidate.origin_host.clone(),
+        origin_cwd: pinned_candidate.origin_cwd.clone(),
+        source_root: pinned_candidate.source_root.clone(),
+        remote_root: pinned_candidate.remote_root.clone(),
+        source_root_identity: pinned_candidate.source_root_identity.clone(),
+        relative_cwd: pinned_candidate.relative_cwd.clone(),
+        base_commit: pinned_candidate.base_commit.clone(),
+        agent_type: pinned_candidate.agent_type.clone(),
+        model: pinned_candidate.model.clone(),
+        effort: pinned_candidate.effort.clone(),
+        posture: pinned_candidate.posture,
+        workspace: pinned_candidate.workspace.clone(),
+        parent,
+    };
+    let prepared = match control.request(
+        &pinned_command,
+        WorkerRequestOperation::Prepare {
+            prepare: pinned_prepare,
+        },
+    ) {
+        WorkerResponseOperation::Prepared { prepared } => prepared,
+        other => panic!("Prepare base épinglée163 refusé: {other:?}"),
+    };
+    assert_eq!(
+        prepared.placement.base_commit.as_deref(),
+        Some(base_commit.as_str())
+    );
+    for directory in ["commands", "slots", "markers"] {
+        assert_eq!(
+            fs::read_dir(f.worker_state.join("store").join(directory))
+                .unwrap()
+                .count(),
+            0,
+            "Prepare épinglé ne doit rien lancer dans {directory}"
+        );
+    }
+    assert_eq!(
+        fs::read_dir(f.worker_state.join("store/workspaces"))
+            .unwrap()
+            .count(),
+        1,
+        "le seul effet autorisé est le worktree préparé"
+    );
+    assert!(
+        f.fixture
+            .evidence()
+            .iter()
+            .all(|event| event["event"] != "started162")
+    );
 }
 
 #[test]

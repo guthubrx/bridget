@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const HUMAN_LINEAGE_VERSION: u16 = 1;
 pub const HUMAN_LINEAGE_PLACEMENT_VERSION: u16 = 2;
+pub const HUMAN_LINEAGE_DECISION_VERSION: u16 = 3;
 pub const HUMAN_LINEAGE_MAX_SEQ: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,9 +23,9 @@ impl HumanLineageRequest {
         match (self.version, &self.request) {
             (HUMAN_LINEAGE_VERSION, _) => Ok(HUMAN_LINEAGE_VERSION),
             (
-                HUMAN_LINEAGE_PLACEMENT_VERSION,
+                version @ (HUMAN_LINEAGE_PLACEMENT_VERSION | HUMAN_LINEAGE_DECISION_VERSION),
                 HumanLineageAction::List { .. } | HumanLineageAction::Show { .. },
-            ) => Ok(HUMAN_LINEAGE_PLACEMENT_VERSION),
+            ) => Ok(version),
             _ => Err(HumanLineageError::UnsupportedVersion),
         }
     }
@@ -49,6 +50,84 @@ pub struct LineagePlacementV2 {
     /// Observation du maître à la lecture de cette page, pas un snapshot gelé.
     pub last_contact_at: Option<i64>,
     pub contact_state: WorkerContactState,
+}
+
+/// Mode conservé avec l'admission, sans autorité supplémentaire pour le lecteur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineageDecisionModeV3 {
+    Explicit,
+    Automatic,
+    Fallback,
+}
+
+/// Présent seulement dans les réponses list/show v3. `None` signifie que la
+/// tâche historique ne possède pas de reçu de décision, pas un mode inventé.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LineageDecisionV3 {
+    pub mode: LineageDecisionModeV3,
+    #[serde(
+        deserialize_with = "deserialize_auto_candidate_id",
+        serialize_with = "serialize_auto_candidate_id"
+    )]
+    pub candidate_id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_auto_admission_reason",
+        serialize_with = "serialize_auto_admission_reason"
+    )]
+    pub reason: Option<String>,
+}
+
+fn deserialize_auto_candidate_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    if super::is_auto_candidate_id(&value) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom("candidate_id_invalid"))
+    }
+}
+
+fn serialize_auto_candidate_id<S>(value: &String, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if super::is_auto_candidate_id(value) {
+        serializer.serialize_str(value)
+    } else {
+        Err(serde::ser::Error::custom("candidate_id_invalid"))
+    }
+}
+
+fn deserialize_auto_admission_reason<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    if value.as_deref().is_none_or(super::is_auto_admission_reason) {
+        Ok(value)
+    } else {
+        Err(serde::de::Error::custom("decision_reason_invalid"))
+    }
+}
+
+fn serialize_auto_admission_reason<S>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if value.as_deref().is_none_or(super::is_auto_admission_reason) {
+        value.serialize(serializer)
+    } else {
+        Err(serde::ser::Error::custom("decision_reason_invalid"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +245,16 @@ mod tests {
         );
         request.version = 1;
         assert_eq!(request.validate_response_version(), Ok(1));
-        request.version = 3;
+        request.request = HumanLineageAction::List {
+            limit: 20,
+            cursor: None,
+        };
+        request.version = HUMAN_LINEAGE_DECISION_VERSION;
+        assert_eq!(
+            request.validate_response_version(),
+            Ok(HUMAN_LINEAGE_DECISION_VERSION)
+        );
+        request.request = HumanLineageAction::Watch;
         assert_eq!(
             request.validate_response_version(),
             Err(HumanLineageError::UnsupportedVersion)
@@ -186,5 +274,38 @@ mod tests {
         let mut unknown = placement;
         unknown["credential"] = serde_json::json!("forbidden");
         assert!(serde_json::from_value::<LineagePlacementV2>(unknown).is_err());
+    }
+
+    #[test]
+    fn spec163_lineage_v3_decision_est_ferme_et_v1_v2_restent_distincts() {
+        let summary = serde_json::json!({
+            "mode":"automatic", "candidate_id":"c01", "reason":"profil adapté"
+        });
+        let decoded: LineageDecisionV3 = serde_json::from_value(summary.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), summary);
+        let mut unknown = summary;
+        unknown["endpoint"] = serde_json::json!("forbidden");
+        assert!(serde_json::from_value::<LineageDecisionV3>(unknown).is_err());
+        assert!(
+            serde_json::from_value::<LineageDecisionV3>(serde_json::json!({
+                "mode":"automatic", "candidate_id":"profile-secret"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<LineageDecisionV3>(serde_json::json!({
+                "mode":"automatic", "candidate_id":"c08", "reason":"x".repeat(257)
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            serde_json::to_value(LineageDecisionV3 {
+                mode: LineageDecisionModeV3::Fallback,
+                candidate_id: "c08".into(),
+                reason: None,
+            })
+            .unwrap(),
+            serde_json::json!({"mode":"fallback","candidate_id":"c08"})
+        );
     }
 }

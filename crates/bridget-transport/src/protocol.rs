@@ -216,6 +216,8 @@ pub enum ClientCapability {
     /// Lecture et mutation de l'état de contrôle du référent, lecture et
     /// résolution de la boîte de réception. La façade MCP ne la demande jamais.
     ControlStateV1,
+    /// Admission automatique163, distincte de Delegate explicite.
+    AutoDelegateV1,
 }
 
 /// Édition finale de file159B ; aucune phase intermédiaire n'est publique.
@@ -2158,6 +2160,9 @@ pub enum NativeDelegationRequest {
     Catalogue,
     /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil.
     CallerScope {},
+    /// Admission configurée, séparée du parcours explicite pour que ses
+    /// contraintes facultatives ne deviennent jamais des valeurs par défaut.
+    AutoDelegate(AutoDelegateV1),
     Delegate {
         #[serde(
             default,
@@ -2254,6 +2259,43 @@ pub enum NativeDelegationRequest {
         #[serde(default)]
         revoke: bool,
     },
+}
+
+/// Charge v1 de l'opération native `auto_delegate`. Elle reste séparée de
+/// `NativeDelegationRequest::Delegate` : les defaults du parcours explicite
+/// ne doivent jamais devenir des choix automatiques implicites.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoDelegateV1 {
+    pub request_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    pub task: String,
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<SpawnPosture>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_timeout: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_alive_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_requests: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urgent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deliverable: Option<String>,
 }
 
 /// Événement cursé de la descendance d'un wrapper. Le parent est déduit de la
@@ -2400,11 +2442,30 @@ pub const WORKER_RELEASE_TTL_SECS: i64 = 5;
 pub const WORKER_HEARTBEAT_SECS: u64 = 10;
 pub const WORKER_STALE_SECS: i64 = 30;
 pub const WORKER_RECEIPT_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+pub const WORKER_CANDIDATE_PROBE_VERSION: u16 = 1;
+pub const MAX_CANDIDATE_PROBE_CANDIDATES: usize = 8;
+pub const MAX_AUTO_ADMISSION_REASON_BYTES: usize = 256;
 const MAX_WORKER_ATOM_BYTES: usize = 256;
 const MAX_WORKER_PATH_BYTES: usize = 4096;
 const MAX_WORKER_JOURNAL_FRAGMENTS: usize = 200;
 /// Type externe, nom du champ et LF ; ces deux enveloppes restent sous 64 octets.
 const WORKER_FRAME_ENVELOPE_RESERVE: usize = 64;
+
+/// Identifiant opaque, stable uniquement pendant une admission. La borne
+/// empêche un pair ou un lecteur de projeter un identifiant de profil, chemin
+/// ou fournisseur dans les interfaces de décision.
+pub fn is_auto_candidate_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 3 && bytes[0] == b'c' && bytes[1] == b'0' && (b'1'..=b'8').contains(&bytes[2])
+}
+
+/// Texte affichable, facultatif au contrat : aucune raison ne doit devenir un
+/// canal de données de configuration ou de secret.
+pub fn is_auto_admission_reason(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_AUTO_ADMISSION_REASON_BYTES
+        && !value.chars().any(bridget_core::is_disallowed_control)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2453,6 +2514,150 @@ pub struct WorkerAccepted {
     pub identity: WorkerIdentity,
     /// Attribuée uniquement par le maître après authentification.
     pub connection_epoch: String,
+}
+
+/// Capacité additionnelle : jamais intégrée dans Hello v1 afin que les pairs
+/// 162 conservent exactement leur trame historique.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerCapability {
+    CandidateProbeV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerHelloWithCapabilities {
+    pub hello: WorkerHello,
+    pub capabilities: Vec<WorkerCapability>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerAcceptedWithCapabilities {
+    pub accepted: WorkerAccepted,
+    /// Sous-ensemble confirmé par le maître, lié à connection_epoch.
+    pub capabilities: Vec<WorkerCapability>,
+}
+
+/// Tuple étudié sans Prepare, création de worktree, fournisseur ou slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateProbeCandidate {
+    pub candidate_id: String,
+    pub project_id: String,
+    pub origin_host: String,
+    pub origin_cwd: String,
+    pub source_root: String,
+    pub remote_root: String,
+    pub source_root_identity: String,
+    pub relative_cwd: String,
+    pub base_commit: Option<String>,
+    pub agent_type: String,
+    pub model: String,
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub posture: Option<SpawnPosture>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceRequest>,
+}
+
+/// Une sonde groupée est corrélée à une admission et à une époque, mais à
+/// aucune Task ou réservation de capacité.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateProbe {
+    pub version: u16,
+    pub correlation_id: String,
+    pub connection_epoch: String,
+    pub worker: WorkerIdentity,
+    pub admission_id: String,
+    pub policy_revision: u64,
+    pub parent: ProviderPermissions,
+    pub candidates: Vec<CandidateProbeCandidate>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateProbeRefusal {
+    InvalidRequest,
+    MappingUnavailable,
+    DefinitionUnavailable,
+    PermissionsChanged,
+    WorkspaceUnavailable,
+    CapabilityUnavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CandidateProbeVerdict {
+    Eligible {
+        candidate_id: String,
+        mapping_revision: u64,
+        definition_digest: String,
+        permission_digest: String,
+        observed_at: i64,
+    },
+    Ineligible {
+        candidate_id: String,
+        reason: CandidateProbeRefusal,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateProbeResult {
+    pub version: u16,
+    pub correlation_id: String,
+    pub connection_epoch: String,
+    pub worker: WorkerIdentity,
+    pub admission_id: String,
+    pub policy_revision: u64,
+    pub verdicts: Vec<CandidateProbeVerdict>,
+}
+
+impl CandidateProbe {
+    /// Les appels T013 vérifient aussi l'époque et la capacité négociée. Cette
+    /// garde de forme reste pure : elle n'ouvre aucun worker et ne réserve rien.
+    pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
+        if self.version != WORKER_CANDIDATE_PROBE_VERSION
+            || self.candidates.is_empty()
+            || self.candidates.len() > MAX_CANDIDATE_PROBE_CANDIDATES
+        {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        if self.candidates.iter().any(|candidate| {
+            !is_auto_candidate_id(&candidate.candidate_id) || !ids.insert(&candidate.candidate_id)
+        }) {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
+        Ok(())
+    }
+}
+
+impl CandidateProbeResult {
+    /// Forme fermée du retour worker : chaque candidat de la sonde groupée
+    /// reçoit exactement un verdict. Le rapprochement avec l'admission et
+    /// l'époque reste fait par le maître, détenteur de ces deux faits.
+    pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
+        if self.version != WORKER_CANDIDATE_PROBE_VERSION
+            || self.verdicts.is_empty()
+            || self.verdicts.len() > MAX_CANDIDATE_PROBE_CANDIDATES
+        {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        if self.verdicts.iter().any(|verdict| {
+            let candidate_id = match verdict {
+                CandidateProbeVerdict::Eligible { candidate_id, .. }
+                | CandidateProbeVerdict::Ineligible { candidate_id, .. } => candidate_id,
+            };
+            !is_auto_candidate_id(candidate_id) || !ids.insert(candidate_id)
+        }) {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3954,8 +4159,16 @@ pub enum WrapperToDaemon {
     WorkerHello {
         hello: WorkerHello,
     },
+    /// Extension négociée163 : Hello v1 reste inchangé pour les pairs anciens.
+    WorkerHelloWithCapabilities {
+        hello: WorkerHelloWithCapabilities,
+    },
     WorkerResponse {
         response: WorkerResponse,
+    },
+    /// Verdicts groupés, lecture seule et liés à l'époque négociée du worker.
+    CandidateProbeResult {
+        result: CandidateProbeResult,
     },
     WakeRequest {
         request: WakeRequest,
@@ -4962,8 +5175,16 @@ pub enum DaemonToWrapper {
     WorkerAccepted {
         accepted: WorkerAccepted,
     },
+    /// Extension négociée163 : le sous-ensemble est borné et lié à l'époque.
+    WorkerAcceptedWithCapabilities {
+        accepted: WorkerAcceptedWithCapabilities,
+    },
     WorkerRejected {
         reason: WorkerRefusal,
+    },
+    /// Sonde de candidats sans Prepare, fournisseur, slot ou worktree.
+    CandidateProbe {
+        probe: CandidateProbe,
     },
     WorkerRequest {
         request: WorkerRequest,
@@ -9847,6 +10068,64 @@ mod spec104_search_contract_tests {
                 .unwrap()
                 .get("resume_on_limit")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn spec163_auto_delegate_et_probe_restent_des_contrats_fermes() {
+        let auto = serde_json::json!({
+            "request_id":"request-163", "task":"auditer", "cwd":"/project",
+            "urgent":true, "deliverable":"rapport"
+        });
+        let request: AutoDelegateV1 = serde_json::from_value(auto.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), auto);
+        let mut native = auto.clone();
+        native["operation"] = serde_json::json!("auto_delegate");
+        let decoded: NativeDelegationRequest = serde_json::from_value(native.clone()).unwrap();
+        assert!(matches!(decoded, NativeDelegationRequest::AutoDelegate(_)));
+        assert_eq!(serde_json::to_value(decoded).unwrap(), native);
+        let mut forged = auto;
+        forged["owner"] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<AutoDelegateV1>(forged).is_err());
+
+        let hello = WorkerHelloWithCapabilities {
+            hello: WorkerHello {
+                version: REMOTE_WORKER_VERSION,
+                identity: WorkerIdentity {
+                    machine_id: "machine-163".into(),
+                    worker_id: "worker-163".into(),
+                    provisioning_revision: 1,
+                },
+                credential: IdentityCredential::new("credential".into()),
+                build: "build-163".into(),
+                capability: ClientCapability::RemoteWorkerV1,
+            },
+            capabilities: vec![WorkerCapability::CandidateProbeV1],
+        };
+        assert_eq!(hello.hello.validate(), Ok(()));
+        let encoded = serde_json::to_value(&hello).unwrap();
+        assert_eq!(
+            serde_json::from_value::<WorkerHelloWithCapabilities>(encoded).unwrap(),
+            hello
+        );
+        let legacy = WorkerHello {
+            version: REMOTE_WORKER_VERSION,
+            identity: WorkerIdentity {
+                machine_id: "machine-163".into(),
+                worker_id: "worker-163".into(),
+                provisioning_revision: 1,
+            },
+            credential: IdentityCredential::new("credential".into()),
+            build: "build-163".into(),
+            capability: ClientCapability::RemoteWorkerV1,
+        };
+        assert!(
+            serde_json::from_value::<WorkerHello>(serde_json::json!({
+                "version":legacy.version, "identity":legacy.identity,
+                "credential":"credential", "build":legacy.build,
+                "capability":"remote_worker_v1", "capabilities":["candidate_probe_v1"]
+            }))
+            .is_err()
         );
     }
 

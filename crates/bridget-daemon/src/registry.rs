@@ -26,6 +26,13 @@ const MAX_CAPABILITY_VALUE_CHARS: usize = 100;
 const MAX_MACHINES: usize = 16;
 const MAX_MACHINE_MAPPINGS: usize = 64;
 const MAX_MACHINE_REVISION: u64 = (1 << 53) - 1;
+const MAX_ADMISSION_PROFILES: usize = 8;
+const MAX_ADMISSION_PREFERENCES: usize = 8;
+const MAX_DECISION_ENDPOINT_BYTES: usize = 2048;
+const MAX_PROFILE_DESCRIPTION_BYTES: usize = 32;
+const MAX_PROFILE_VALUE_BYTES: usize = 256;
+const DEFAULT_DECISION_HEALTH_SECONDS: u64 = 30;
+const MAX_DECISION_HEALTH_SECONDS: u64 = 300;
 /// Les coordinateurs de découverte ne réemploient jamais une définition
 /// d'agent ordinaire telle quelle : celle-ci peut volontairement avoir des
 /// permissions larges pour un autre usage. Le préfixe rend la génération
@@ -91,6 +98,69 @@ pub struct AgentRegistryFile {
     pub agents: BTreeMap<String, AgentDefinition>,
     #[serde(default)]
     pub machines: BTreeMap<String, MachineProvision>,
+    /// La racine reste volontairement tolérante pour les clés historiques.
+    /// Ces deux nouvelles sections, elles, ont un schéma fermé.
+    #[serde(default)]
+    pub decision_services: BTreeMap<String, DecisionService>,
+    #[serde(default)]
+    pub admission_policy: Option<AdmissionPolicy>,
+}
+
+/// Endpoint de décision explicitement administré. Son hébergement ne choisit
+/// jamais une machine d'exécution et une mission ne peut pas le remplacer.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionService {
+    #[serde(default)]
+    pub enabled: bool,
+    pub machine_id: String,
+    pub protocol: String,
+    /// Checkpoint de décision attendu. Il est envoyé au service et la réponse
+    /// doit le réattester dans `routing.model`; le modèle racine est seulement
+    /// informatif et n'autorise aucun choix.
+    pub model: String,
+    pub endpoint: String,
+    #[serde(default = "default_decision_health_seconds")]
+    pub health_ttl_seconds: u64,
+    #[serde(default = "default_decision_health_seconds")]
+    pub retry_after_seconds: u64,
+}
+
+/// Un profil borne le catalogue avant toute lecture de disponibilité : il ne
+/// représente donc ni une autorisation ni un candidat déjà admis.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateProfile {
+    pub id: String,
+    /// "local" ou l'identifiant d'une machine provisionnée. Cette référence
+    /// est vérifiée au moment de l'admission, car le registre peut évoluer.
+    pub machine_id: String,
+    pub agent_type: String,
+    pub model: String,
+    #[serde(default)]
+    pub effort: Option<String>,
+    pub description: String,
+}
+
+/// Politique d'admission automatique, rechargée pour une nouvelle admission
+/// puis figée dans son reçu. Absente, elle désactive tout automatisme.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdmissionPolicy {
+    pub revision: u64,
+    #[serde(default)]
+    pub auto_engine: bool,
+    #[serde(default)]
+    pub auto_placement: bool,
+    #[serde(default)]
+    pub service_id: Option<String>,
+    pub profiles: Vec<CandidateProfile>,
+    #[serde(default)]
+    pub fixed_profile: Option<String>,
+    #[serde(default)]
+    pub fallback_profile: Option<String>,
+    #[serde(default)]
+    pub preferences: Vec<String>,
 }
 
 /// Autorité machine locale au maître, jamais dans une définition fournisseur figée.
@@ -145,6 +215,8 @@ impl MachineProvision {
 pub struct AgentRegistry {
     agents: BTreeMap<String, AgentDefinition>,
     machines: BTreeMap<String, MachineProvision>,
+    decision_services: BTreeMap<String, DecisionService>,
+    admission_policy: Option<AdmissionPolicy>,
     source: PathBuf,
 }
 
@@ -163,6 +235,9 @@ fn default_notify_timeout_secs() -> u64 {
 fn default_interactive_mcp() -> String {
     "none".to_string()
 }
+fn default_decision_health_seconds() -> u64 {
+    DEFAULT_DECISION_HEALTH_SECONDS
+}
 
 fn default_capabilities() -> AdapterCapabilities {
     // Compatibilité des registres historiques : ACP était déjà le seul chemin
@@ -179,6 +254,8 @@ impl AgentRegistry {
     pub(crate) fn load_from_path(source: PathBuf) -> Result<Self, String> {
         let mut agents = default_agents()?;
         let mut machines = BTreeMap::new();
+        let mut decision_services = BTreeMap::new();
+        let mut admission_policy = None;
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
@@ -189,11 +266,17 @@ impl AgentRegistry {
                     .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
                 validate_registry(&user.agents, &source)?;
                 validate_machines(&user.machines)?;
-                if !user.machines.is_empty() {
+                validate_admission_config(&user.decision_services, user.admission_policy.as_ref())?;
+                if !user.machines.is_empty()
+                    || !user.decision_services.is_empty()
+                    || user.admission_policy.is_some()
+                {
                     validate_private_machine_registry_parent(&source)?;
                 }
                 agents.extend(user.agents);
                 machines = user.machines;
+                decision_services = user.decision_services;
+                admission_policy = user.admission_policy;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -207,6 +290,8 @@ impl AgentRegistry {
         Ok(Self {
             agents,
             machines,
+            decision_services,
+            admission_policy,
             source,
         })
     }
@@ -217,12 +302,15 @@ impl AgentRegistry {
             .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
         validate_registry(&user.agents, &source)?;
         validate_machines(&user.machines)?;
+        validate_admission_config(&user.decision_services, user.admission_policy.as_ref())?;
         let mut agents = default_agents()?;
         agents.extend(user.agents);
         add_project_discovery_definitions(&mut agents);
         Ok(Self {
             agents,
             machines: user.machines,
+            decision_services: user.decision_services,
+            admission_policy: user.admission_policy,
             source,
         })
     }
@@ -231,6 +319,25 @@ impl AgentRegistry {
     /// les permissions du fichier. Aucun loader fournisseur ne copie ce registre.
     pub fn machines(&self) -> &BTreeMap<String, MachineProvision> {
         &self.machines
+    }
+
+    pub fn decision_services(&self) -> &BTreeMap<String, DecisionService> {
+        &self.decision_services
+    }
+
+    pub fn decision_service(&self, service_id: &str) -> Result<&DecisionService, String> {
+        let service = self
+            .decision_services
+            .get(service_id)
+            .ok_or("decision_service_unknown")?;
+        if !service.enabled {
+            return Err("decision_service_disabled".into());
+        }
+        Ok(service)
+    }
+
+    pub fn admission_policy(&self) -> Option<&AdmissionPolicy> {
+        self.admission_policy.as_ref()
     }
 
     pub fn machine(&self, machine_id: &str) -> Result<&MachineProvision, String> {
@@ -355,6 +462,8 @@ impl AgentRegistry {
         Ok(Self {
             agents: BTreeMap::from([(agent_type.to_string(), definition)]),
             machines: BTreeMap::new(),
+            decision_services: BTreeMap::new(),
+            admission_policy: None,
             source: self.source.clone(),
         })
     }
@@ -405,6 +514,8 @@ impl AgentRegistry {
         Ok(Self {
             agents,
             machines: BTreeMap::new(),
+            decision_services: BTreeMap::new(),
+            admission_policy: None,
             source,
         })
     }
@@ -462,6 +573,8 @@ impl AgentRegistry {
         Self {
             agents: BTreeMap::from([(agent_type.into(), definition)]),
             machines: BTreeMap::new(),
+            decision_services: BTreeMap::new(),
+            admission_policy: None,
             source: self.source.clone(),
         }
         .pin_delegation_model(agent_type, model, effort)
@@ -476,6 +589,8 @@ impl AgentRegistry {
         effort: Option<&str>,
     ) -> Result<Self, String> {
         self.machines.clear();
+        self.decision_services.clear();
+        self.admission_policy = None;
         let definition = self
             .agents
             .get_mut(agent_type)
@@ -1136,6 +1251,104 @@ fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -> Result<()
     Ok(())
 }
 
+fn decision_endpoint(value: &str) -> bool {
+    let lexical = value.len() <= MAX_DECISION_ENDPOINT_BYTES
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+        && !value.contains('@')
+        && !value.contains('#');
+    if !lexical {
+        return false;
+    }
+    if let Some(rest) = value.strip_prefix("https://") {
+        return rest
+            .split(['/', '?'])
+            .next()
+            .is_some_and(|authority| !authority.is_empty());
+    }
+    let Some(rest) = value.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    matches!(authority, "localhost" | "127.0.0.1" | "[::1]")
+        || authority
+            .strip_prefix("localhost:")
+            .or_else(|| authority.strip_prefix("127.0.0.1:"))
+            .or_else(|| authority.strip_prefix("[::1]:"))
+            .is_some_and(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
+}
+
+fn profile_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_PROFILE_VALUE_BYTES
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn validate_admission_config(
+    services: &BTreeMap<String, DecisionService>,
+    policy: Option<&AdmissionPolicy>,
+) -> Result<(), String> {
+    for (service_id, service) in services {
+        if !machine_label(service_id)
+            || !machine_label(&service.machine_id)
+            || service.protocol != "laya_systemone_v1"
+            || !profile_value(&service.model)
+            || !decision_endpoint(&service.endpoint)
+            || !(1..=MAX_DECISION_HEALTH_SECONDS).contains(&service.health_ttl_seconds)
+            || !(1..=MAX_DECISION_HEALTH_SECONDS).contains(&service.retry_after_seconds)
+        {
+            return Err("decision_service_invalid".into());
+        }
+    }
+
+    let Some(policy) = policy else {
+        return Ok(());
+    };
+    if policy.revision == 0
+        || !(1..=MAX_ADMISSION_PROFILES).contains(&policy.profiles.len())
+        || policy.preferences.len() > MAX_ADMISSION_PREFERENCES
+    {
+        return Err("admission_policy_invalid".into());
+    }
+    if policy
+        .service_id
+        .as_deref()
+        .is_some_and(|service_id| !services.contains_key(service_id))
+    {
+        return Err("admission_policy_service_unknown".into());
+    }
+
+    let mut profile_ids = std::collections::BTreeSet::new();
+    for profile in &policy.profiles {
+        if !machine_label(&profile.id)
+            || !machine_label(&profile.machine_id)
+            || !profile_value(&profile.agent_type)
+            || !profile_value(&profile.model)
+            || profile
+                .effort
+                .as_deref()
+                .is_some_and(|effort| !profile_value(effort))
+            || profile.description.as_bytes().len() > MAX_PROFILE_DESCRIPTION_BYTES
+            || profile.description.chars().any(char::is_control)
+            || !profile_ids.insert(&profile.id)
+        {
+            return Err("admission_profile_invalid".into());
+        }
+    }
+    for reference in policy
+        .fixed_profile
+        .iter()
+        .chain(policy.fallback_profile.iter())
+        .chain(policy.preferences.iter())
+    {
+        if !profile_ids.contains(reference) {
+            return Err("admission_profile_reference_unknown".into());
+        }
+    }
+    Ok(())
+}
+
 fn validate_private_machine_registry_parent(source: &Path) -> Result<(), String> {
     let parent = source.parent().ok_or("machine_registry_parent_invalid")?;
     let metadata =
@@ -1777,6 +1990,63 @@ mod tests {
                 "mapping_revision":1
             }}
         }}})
+    }
+
+    fn admission163_registry_value() -> serde_json::Value {
+        serde_json::json!({
+            "historical_future_key": {"preserved": true},
+            "decision_services": {
+                "laya": {
+                    "machine_id": "decision-host",
+                    "protocol": "laya_systemone_v1",
+                    "model": "typed-decisions",
+                    "endpoint": "https://decision.internal/v1",
+                }
+            },
+            "admission_policy": {
+                "revision": 1,
+                "profiles": [{
+                    "id": "local-codex",
+                    "machine_id": "local",
+                    "agent_type": "codex",
+                    "model": "gpt-5.6",
+                    "effort": "high",
+                    "description": "Revue locale"
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn spec163_configuration_admission_est_stricte_et_desactivee_par_defaut() {
+        let value = admission163_registry_value();
+        let registry = AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").unwrap();
+        let policy = registry.admission_policy().unwrap();
+        assert!(!policy.auto_engine);
+        assert!(!policy.auto_placement);
+        assert_eq!(policy.profiles.len(), 1);
+        assert_eq!(
+            registry.decision_service("laya").unwrap_err(),
+            "decision_service_disabled"
+        );
+        assert_eq!(registry.decision_services()["laya"].health_ttl_seconds, 30);
+
+        let mut unknown = value.clone();
+        unknown["decision_services"]["laya"]["secret_ref"] = "forbidden".into();
+        assert!(AgentRegistry::from_json(&unknown.to_string(), "/tmp/agents.json").is_err());
+
+        let mut profile_limit = value.clone();
+        let profile = profile_limit["admission_policy"]["profiles"][0].clone();
+        profile_limit["admission_policy"]["profiles"] =
+            serde_json::Value::Array(vec![profile; MAX_ADMISSION_PROFILES + 1]);
+        assert!(AgentRegistry::from_json(&profile_limit.to_string(), "/tmp/agents.json").is_err());
+
+        let mut reference = value;
+        reference["admission_policy"]["fixed_profile"] = "missing".into();
+        assert_eq!(
+            AgentRegistry::from_json(&reference.to_string(), "/tmp/agents.json").unwrap_err(),
+            "admission_profile_reference_unknown"
+        );
     }
 
     #[test]

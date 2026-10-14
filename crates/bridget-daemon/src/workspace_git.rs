@@ -52,6 +52,46 @@ pub(crate) struct WorkspacePreflight {
     pub listed_paths: Vec<PathBuf>,
 }
 
+// Le contrat historique de `preflight` reste une `String` pour ses appelants
+// existants. Le puits auto doit cependant distinguer une base définitivement
+// absente d'une E/S Git (délai, troncature ou lancement impossible) afin de ne
+// pas transformer une panne technique en refus durable.
+#[derive(Debug)]
+pub(crate) enum WorkspacePreflightError {
+    Refused(String),
+    Technical(String),
+}
+
+impl WorkspacePreflightError {
+    pub(crate) fn into_legacy(self) -> String {
+        match self {
+            Self::Refused(error) | Self::Technical(error) => error,
+        }
+    }
+
+    // La classe doit survivre au transport String du seul puits auto.
+    pub(crate) fn into_admission(self, automatic: bool) -> String {
+        match self {
+            Self::Technical(error) if automatic => {
+                format!("workspace_preflight_technical: {error}")
+            }
+            error => error.into_legacy(),
+        }
+    }
+}
+
+impl From<String> for WorkspacePreflightError {
+    fn from(error: String) -> Self {
+        Self::Technical(error)
+    }
+}
+
+impl From<&'static str> for WorkspacePreflightError {
+    fn from(error: &'static str) -> Self {
+        Self::Technical(error.into())
+    }
+}
+
 /// O(L), L longueur du nom ; contrôle syntaxique sans accès disque.
 pub(crate) fn validate_branch(branch: &str) -> Result<(), String> {
     if branch.is_empty()
@@ -386,6 +426,16 @@ pub(crate) fn preflight(
     base_ref: Option<&str>,
     branch: Option<&str>,
 ) -> Result<WorkspacePreflight, String> {
+    preflight_classified(cwd, base_ref, branch).map_err(WorkspacePreflightError::into_legacy)
+}
+
+/// Variante interne : seul le puits d'admission auto consulte la classe de
+/// l'échec. Les autres appelants gardent la chaîne historique via `preflight`.
+pub(crate) fn preflight_classified(
+    cwd: &Path,
+    base_ref: Option<&str>,
+    branch: Option<&str>,
+) -> Result<WorkspacePreflight, WorkspacePreflightError> {
     run_git(cwd, &["--version"], READ_TIMEOUT)?.complete()?;
     let cwd = cwd
         .canonicalize()
@@ -398,7 +448,9 @@ pub(crate) fn preflight(
         .map_err(|error| format!("workspace_not_git: {error}"))?;
     let offset = cwd
         .strip_prefix(&toplevel)
-        .map_err(|_| "workspace_path_unsafe: dossier hors dépôt")?
+        .map_err(|_| {
+            WorkspacePreflightError::Refused("workspace_path_unsafe: dossier hors dépôt".into())
+        })?
         .to_path_buf();
     if executable_configuration(&cwd)
         .map_err(|error| format!("workspace_repo_unsupported: {error}"))?
@@ -408,17 +460,38 @@ pub(crate) fn preflight(
         );
     }
     let base = base_ref.unwrap_or("HEAD");
-    validate_base_ref(base)?;
+    validate_base_ref(base).map_err(WorkspacePreflightError::Refused)?;
     let base = format!("{base}^{{commit}}");
-    let base_commit = run_git(
+    let base_output = run_git(
         &cwd,
         &["rev-parse", "--verify", "--end-of-options", &base],
         READ_TIMEOUT,
     )
-    .and_then(GitOutput::complete)
-    .map_err(|error| format!("workspace_base_unavailable: {error}"))?;
+    .map_err(|error| {
+        WorkspacePreflightError::Technical(format!("workspace_base_unavailable: {error}"))
+    })?;
+    if base_output.truncated {
+        return Err(WorkspacePreflightError::Technical(
+            "workspace_base_unavailable: sortie Git tronquée à 1 Mio".into(),
+        ));
+    }
+    if base_output.code == Some(128) {
+        return Err(WorkspacePreflightError::Refused(
+            "workspace_base_unavailable: référence de base inconnue".into(),
+        ));
+    }
+    if !base_output.success() {
+        return Err(WorkspacePreflightError::Technical(format!(
+            "workspace_base_unavailable: Git {:?} : {}",
+            base_output.code,
+            base_output.stderr.trim()
+        )));
+    }
+    let base_commit = base_output.stdout.trim_end().to_string();
     if !sha(&base_commit) {
-        return Err("workspace_base_unavailable: commit de base non SHA-1".into());
+        return Err(WorkspacePreflightError::Technical(
+            "workspace_base_unavailable: commit de base non SHA-1".into(),
+        ));
     }
     if let Some(branch) = branch {
         validate_branch(branch)?;
@@ -448,11 +521,13 @@ pub(crate) fn preflight(
     let worktree_dir = cwd.join(".worktrees");
     match fs::symlink_metadata(&worktree_dir) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err("workspace_path_unsafe: .worktrees doit être un vrai dossier".into());
+            return Err(WorkspacePreflightError::Refused(
+                "workspace_path_unsafe: .worktrees doit être un vrai dossier".into(),
+            ));
         }
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("workspace_path_unsafe: {error}")),
+        Err(error) => return Err(format!("workspace_path_unsafe: {error}").into()),
     }
     let ignored = run_git(
         &cwd,

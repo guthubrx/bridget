@@ -8,9 +8,11 @@ use bridget_transport::protocol::{
     CommunicationProjectSource, DaemonToWrapper, PresenceMode, WrapperToDaemon,
 };
 use serde_json::Value;
-use std::io::{BufRead, BufReader};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use sha2::{Digest, Sha256};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
+use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -165,6 +167,205 @@ fn negotiated_lineage162(action: &str, reply: Value) -> (Option<i32>, Value) {
     (output.status.code(), value)
 }
 
+/// La réponse explicite du maître est relayée telle quelle par la CLI. Ce
+/// maître contrôlé exerce le client réel, pas le parseur interne seul.
+fn negotiated_lineage163(
+    action: &str,
+    replies: Vec<Value>,
+) -> (Option<i32>, Value, Vec<Vec<Value>>) {
+    let root = support::test_root("l163-cli-negociation");
+    let socket = support::socket(&root);
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let server_listener = listener.try_clone().unwrap();
+    let server = std::thread::spawn(move || {
+        replies
+            .into_iter()
+            .map(|reply| {
+                let mut fd = libc::pollfd {
+                    fd: server_listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                assert!(
+                    unsafe { libc::poll(&mut fd, 1, 6_000) } > 0,
+                    "connexion CLI Lineage v3 absente"
+                );
+                let (stream, _) = server_listener.accept().unwrap();
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut writer = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut seen = Vec::new();
+                for response in [
+                    serde_json::json!({"type":"RoleAccepted","role":"client"}),
+                    serde_json::json!({
+                        "type":"ClientWelcome","version":1,"build_id":"fixture",
+                        "horizon_secs":60,"issued_at_tolerance_secs":5,
+                        "capabilities":["human_lineage_view_v1"]
+                    }),
+                    serde_json::json!({"type":"HumanLineageResult","result":reply}),
+                ] {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    seen.push(serde_json::from_str::<Value>(&line).unwrap());
+                    writeln!(writer, "{response}").unwrap();
+                    writer.flush().unwrap();
+                }
+                seen
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut args = vec![
+        "lineage",
+        "inspect",
+        "--json",
+        "--t3-thread",
+        T3,
+        "--project-root",
+        "/fixture",
+        "--action",
+        action,
+        "--response-version",
+        "3",
+    ];
+    if action == "show" {
+        args.extend_from_slice(&["--task", TASK]);
+    }
+    let output = support::run_isolated(&root, &args, false);
+    let seen = server.join().unwrap();
+    assert!(
+        matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+        "aucun repli supplémentaire ne doit être tenté"
+    );
+    let value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "sortie CLI JSON invalide : {error}; {}",
+            support::output_text(&output)
+        )
+    });
+    drop(listener);
+    std::fs::remove_dir_all(&root).unwrap();
+    (output.status.code(), value, seen)
+}
+
+/// Prépare l'identité privée déjà exigée par la CLI auxiliaire. Le serveur
+/// contrôlé vérifie ensuite que la commande réemploie bien le handler MCP.
+fn auto_cli_identity(root: &std::path::Path) -> (String, String) {
+    let agent_id = support::ACTOR.to_string();
+    let instance_id = "auto-cli-163".to_string();
+    let state = root.join("state");
+    let name = state.join("auto-cli-name");
+    support::private_write(&name, &agent_id).unwrap();
+    let proofs = state.join("agent-names");
+    support::private_dir(&proofs).unwrap();
+    let proof = proofs.join(format!(
+        "proof-{:x}.json",
+        Sha256::digest(instance_id.as_bytes())
+    ));
+    support::private_write(
+        &proof,
+        serde_json::to_vec(&serde_json::json!({
+            "agent_id": agent_id,
+            "instance_id": instance_id,
+            "credential": "credential-auto-cli-163"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    (name.to_string_lossy().into_owned(), instance_id)
+}
+
+/// Même harnais socket que le MCP : l'oracle ne laisse aucun maître ancien
+/// recevoir une NativeDelegation auto, et inspecte le wire du maître capable.
+fn negotiated_auto_delegate163(features: &[&str]) -> (std::process::Output, Vec<Value>) {
+    let root = support::test_root("auto-cli-163");
+    let socket = support::socket(&root);
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let advertised: Vec<String> = features.iter().map(|value| (*value).to_owned()).collect();
+    let supports_auto = features.contains(&"auto_delegate_v1");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut seen = Vec::new();
+        let mut line = String::new();
+        assert!(reader.read_line(&mut line).unwrap() > 0);
+        seen.push(serde_json::from_str::<Value>(&line).unwrap());
+        writeln!(
+            stream,
+            "{}",
+            serde_json::json!({"type":"Registered","agent_id":support::ACTOR,"credential":null})
+        )
+        .unwrap();
+        line.clear();
+        assert!(reader.read_line(&mut line).unwrap() > 0);
+        seen.push(serde_json::from_str::<Value>(&line).unwrap());
+        writeln!(
+            stream,
+            "{}",
+            serde_json::json!({
+                "type":"DaemonIdentityReport","host":"fixture","db_path":"fixture",
+                "instance_id":"fixture","features":advertised
+            })
+        )
+        .unwrap();
+        if supports_auto {
+            line.clear();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            seen.push(serde_json::from_str::<Value>(&line).unwrap());
+            writeln!(
+                stream,
+                "{}",
+                serde_json::json!({
+                    "type":"NativeDelegationResult",
+                    "result":{"status":"admitted","task_id":"task-auto-cli-163"}
+                })
+            )
+            .unwrap();
+        } else {
+            line.clear();
+            assert_eq!(
+                reader.read_line(&mut line).unwrap(),
+                0,
+                "un maître sans feature ne reçoit aucune admission auto"
+            );
+        }
+        seen
+    });
+    let (name, instance_id) = auto_cli_identity(&root);
+    let mut command = support::isolated_command(&root);
+    command
+        .env("BRIDGET_AGENT_ID_FILE", name)
+        .env("BRIDGET_AGENT_INSTANCE_ID", instance_id)
+        .args([
+            "auto-delegate",
+            "--request-id",
+            "auto-cli-163",
+            "--task",
+            "mission CLI auto",
+            "--cwd",
+            "/tmp",
+            "--urgent",
+            "true",
+            "--deliverable",
+            "preuve",
+        ]);
+    let output = support::run_command(command);
+    let seen = server.join().unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+    (output, seen)
+}
+
 #[test]
 fn native162_lineage_cli_accepts_requested_v2_success() {
     for action in ["list", "show"] {
@@ -203,6 +404,94 @@ fn native162_lineage_cli_rejects_v1_success_for_v2_request() {
             "{action}"
         );
     }
+}
+
+#[test]
+fn spec163_lineage_cli_version_explicite_est_stricte_et_v3_garde_placement() {
+    for action in ["list", "show"] {
+        let mut direct_v3 = serde_json::json!({
+            "version":3,"status":"ok","seq":0,
+            "placement":{"machine_id":"cartae","display_name":null,"worker_id":"worker","last_contact_at":null,"contact_state":"unknown"},
+            "decision":null
+        });
+        if action == "list" {
+            let task = serde_json::json!({"task_id":TASK,"placement":direct_v3["placement"].clone(),"decision":null});
+            direct_v3.as_object_mut().unwrap().remove("placement");
+            direct_v3.as_object_mut().unwrap().remove("decision");
+            direct_v3["tasks"] = serde_json::json!([task]);
+        } else {
+            let task = serde_json::json!({"task_id":TASK,"placement":direct_v3["placement"].clone(),"decision":null});
+            direct_v3.as_object_mut().unwrap().remove("placement");
+            direct_v3.as_object_mut().unwrap().remove("decision");
+            direct_v3["task"] = task;
+        }
+        let (code, value, seen) = negotiated_lineage163(action, vec![direct_v3.clone()]);
+        assert_eq!(code, Some(0), "{action}: {value}");
+        assert_eq!(value, direct_v3, "{action}");
+        assert_eq!(seen.len(), 1, "{action}");
+        assert_eq!(seen[0][2]["request"]["version"], 3, "{action}");
+
+        let refusal = bridget_transport::protocol::HumanLineageError::UnsupportedVersion.result();
+        let (code, value, seen) = negotiated_lineage163(action, vec![refusal.clone()]);
+        assert_eq!(code, Some(2), "{action}: {value}");
+        assert_eq!(value, refusal, "le refus v3 reste brut : {action}");
+        assert_eq!(seen.len(), 1, "aucun downgrade CLI : {action}");
+        assert_eq!(seen[0][2]["request"]["version"], 3, "{action}");
+
+        let direct_v2 = serde_json::json!({"version":2,"status":"ok","seq":0});
+        let (code, value) = negotiated_lineage162(action, direct_v2.clone());
+        assert_eq!(code, Some(0), "v2 explicite permis : {action}: {value}");
+        assert_eq!(value, direct_v2, "v2 explicite permis : {action}");
+    }
+}
+
+#[test]
+fn spec163_lineage_cli_v3_invalid_request_ne_declenche_pas_de_repli() {
+    let refusal = bridget_transport::protocol::HumanLineageError::InvalidRequest.result();
+    let (code, value, seen) = negotiated_lineage163("show", vec![refusal.clone()]);
+    assert_eq!(code, Some(2), "{value}");
+    assert_eq!(value, refusal);
+    assert_eq!(seen.len(), 1, "un refus v3 invalide est terminal");
+    assert_eq!(seen[0][2]["request"]["version"], 3);
+}
+
+#[test]
+fn spec163_auto_delegate_cli_negocie_le_feature_et_ne_masque_pas_les_erreurs() {
+    let (output, seen) = negotiated_auto_delegate163(&["auto_delegate_v1"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        support::output_text(&output)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        serde_json::json!({"status":"admitted","task_id":"task-auto-cli-163"})
+    );
+    assert_eq!(seen.len(), 3);
+    assert_eq!(seen[0]["type"], "RegisterAuxiliary");
+    assert_eq!(seen[1]["type"], "DaemonIdentityRequest");
+    assert_eq!(seen[2]["type"], "NativeDelegation");
+    assert_eq!(seen[2]["request"]["operation"], "auto_delegate");
+    assert_eq!(seen[2]["request"]["request_id"], "auto-cli-163");
+    assert_eq!(seen[2]["request"]["task"], "mission CLI auto");
+    assert_eq!(seen[2]["request"]["urgent"], true);
+    assert!(seen[2]["request"].get("fallback").is_none());
+
+    let (output, seen) = negotiated_auto_delegate163(&[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        support::output_text(&output)
+    );
+    assert!(output.stdout.is_empty(), "aucun succès synthétique");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("auto_delegate_unsupported"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(seen.len(), 2, "aucune NativeDelegation sans feature");
 }
 
 fn definition() -> Value {

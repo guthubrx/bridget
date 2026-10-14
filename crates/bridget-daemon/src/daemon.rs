@@ -1055,10 +1055,17 @@ struct DaemonState {
     /// Valeur éphémère créée une fois pour ce démarrage. Elle rend observable
     /// le remplacement d'un daemon même quand hôte, base et build sont égaux.
     instance_id: String,
+    /// Époque monotone au sens d'une incarnation : tous les reçus créés par ce
+    /// daemon portent la même valeur. Elle ne dépend donc jamais de l'instant
+    /// d'admission et permet à l'entretien de ne reprendre qu'après restart.
+    coordinator_epoch: i64,
     router: Router,
     circuit_breaker: CircuitBreaker,
     execution_store: ExecutionStore,
     delegation_store: crate::delegation::DelegationStore,
+    /// Permis HTTP 163 partagé par l'instance, conservé même si le demandeur
+    /// atteint sa deadline pendant qu'un DNS/TLS distant reste bloqué.
+    decision_service: crate::decision_service::DecisionServiceClient,
     active_waits: Arc<std::sync::atomic::AtomicUsize>,
     deduplicator: Deduplicator,
     envelope_guard: EnvelopeGuard,
@@ -1100,6 +1107,7 @@ struct DaemonState {
     remote_start_reconcile_last: Option<(String, Instant)>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
+    pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
     terminal_sessions: HashSet<String>,
     /// Une négociation appartient à la connexion, tandis que le scope peut
     /// volontairement être partagé par plusieurs retries coopératifs.
@@ -1138,6 +1146,9 @@ struct RemoteWorkerConnection {
     identity: bridget_transport::protocol::WorkerIdentity,
     conn_id: String,
     epoch: String,
+    /// Négociées à l'ouverture seulement : reconnexion ou remplacement les
+    /// efface avec l'ancienne époque, sans déduire une capacité du build.
+    capabilities: Vec<bridget_transport::protocol::WorkerCapability>,
     last_contact: Instant,
     last_contact_at: i64,
     contact: bridget_transport::protocol::WorkerContactState,
@@ -1149,6 +1160,19 @@ struct PendingWorkerResponse {
     worker: bridget_transport::protocol::WorkerIdentity,
     command: bridget_transport::protocol::WorkerCommandIdentity,
     reply: mpsc::SyncSender<bridget_transport::protocol::WorkerResponseOperation>,
+}
+
+/// Attente éphémère d'une sonde163. Elle ne contient ni Task, ni réservation,
+/// ni autorité ; son unique rôle est de corréler une lecture worker à l'époque
+/// négociée qui l'a autorisée.
+struct PendingCandidateProbe {
+    conn_id: String,
+    epoch: String,
+    worker: bridget_transport::protocol::WorkerIdentity,
+    admission_id: String,
+    policy_revision: u64,
+    candidate_ids: std::collections::BTreeSet<String>,
+    reply: mpsc::SyncSender<bridget_transport::protocol::CandidateProbeResult>,
 }
 
 struct ManagedSpawnRecord {
@@ -4887,6 +4911,9 @@ impl DaemonState {
         let execution_store = ExecutionStore::open(&config.db_path)?;
         let delegation_store = crate::delegation::DelegationStore::open(&config.db_path)?;
         let registry = AgentRegistry::load()?;
+        if let Some(diagnostic) = crate::decision_service::startup_diagnostic() {
+            warn!("{diagnostic}");
+        }
         let (view_closed_tx, view_closed_rx) = mpsc::channel();
         let (observation_tx, observation_lost) = observation_output();
         let (observation_result_tx, observation_result_rx) = mpsc::sync_channel(64);
@@ -4917,6 +4944,10 @@ impl DaemonState {
             }
             ids
         };
+        let instance_uuid = Uuid::new_v4();
+        // Allocation durable monotone : un timestamp d'admission ou un UUID
+        // aléatoire ne permettrait pas le prédicat SQL « époque antérieure ».
+        let coordinator_epoch = delegation_store.next_auto_coordinator_epoch()?;
         Ok(DaemonState {
             provider_limits: Default::default(),
             held_ids,
@@ -4944,7 +4975,8 @@ impl DaemonState {
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
             artifact_root,
-            instance_id: Uuid::new_v4().to_string(),
+            instance_id: instance_uuid.to_string(),
+            coordinator_epoch,
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
                 config.circuit_breaker_window,
@@ -4955,6 +4987,7 @@ impl DaemonState {
             store,
             execution_store,
             delegation_store,
+            decision_service: crate::decision_service::DecisionServiceClient::new(),
             active_waits: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             idempotency,
             fleet,
@@ -4988,6 +5021,7 @@ impl DaemonState {
             remote_start_reconcile_last: None,
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
+            pending_candidate_probes: HashMap::new(),
             terminal_sessions: HashSet::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
@@ -18255,6 +18289,8 @@ fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
     }
     st.pending_worker_responses
         .retain(|_, pending| pending.conn_id != conn_id);
+    st.pending_candidate_probes
+        .retain(|_, pending| pending.conn_id != conn_id);
 }
 
 fn remote_worker_contact_tick(state: &Arc<Mutex<DaemonState>>) {
@@ -18282,7 +18318,23 @@ fn handle_worker_message(
     use bridget_transport::protocol::*;
     let refused = |reason| Some(DaemonToWrapper::WorkerRejected { reason });
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-    if let WrapperToDaemon::WorkerHello { hello } = message {
+    let hello_capabilities = match &message {
+        WrapperToDaemon::WorkerHello { hello } => Some((hello.clone(), Vec::new())),
+        WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
+            let capabilities = hello.capabilities.clone();
+            (capabilities.len() == 1 && capabilities[0] == WorkerCapability::CandidateProbeV1)
+                .then(|| (hello.hello.clone(), capabilities))
+        }
+        _ => None,
+    };
+    if matches!(
+        &message,
+        WrapperToDaemon::WorkerHelloWithCapabilities { .. }
+    ) && hello_capabilities.is_none()
+    {
+        return refused(WorkerRefusal::InvalidEnvelope);
+    }
+    if let Some((hello, capabilities)) = hello_capabilities {
         if let Err(reason) = hello.validate() {
             return refused(reason);
         }
@@ -18332,6 +18384,7 @@ fn handle_worker_message(
                 identity: hello.identity.clone(),
                 conn_id: conn_id.into(),
                 epoch: epoch.clone(),
+                capabilities: capabilities.clone(),
                 last_contact: Instant::now(),
                 last_contact_at: unix_now_secs(),
                 contact: WorkerContactState::Connected,
@@ -18359,12 +18412,20 @@ fn handle_worker_message(
                 .get_ref()
                 .shutdown(std::net::Shutdown::Both);
         }
-        return Some(DaemonToWrapper::WorkerAccepted {
-            accepted: WorkerAccepted {
-                version: REMOTE_WORKER_VERSION,
-                identity: hello.identity,
-                connection_epoch: epoch,
-            },
+        let accepted = WorkerAccepted {
+            version: REMOTE_WORKER_VERSION,
+            identity: hello.identity,
+            connection_epoch: epoch,
+        };
+        return Some(if capabilities.is_empty() {
+            DaemonToWrapper::WorkerAccepted { accepted }
+        } else {
+            DaemonToWrapper::WorkerAcceptedWithCapabilities {
+                accepted: WorkerAcceptedWithCapabilities {
+                    accepted,
+                    capabilities,
+                },
+            }
         });
     }
     let Some(machine) = st
@@ -18493,6 +18554,48 @@ fn handle_worker_message(
             let _ = pending.reply.try_send(response.response);
             None
         }
+        WrapperToDaemon::CandidateProbeResult { result } => {
+            let worker = &st.remote_workers[&machine];
+            if !worker
+                .capabilities
+                .contains(&WorkerCapability::CandidateProbeV1)
+                || result.connection_epoch != worker.epoch
+                || result.worker != worker.identity
+                || result.validate_shape().is_err()
+            {
+                return refused(WorkerRefusal::StaleConnection);
+            }
+            let Some(pending) = st.pending_candidate_probes.get(&result.correlation_id) else {
+                return refused(WorkerRefusal::CommandMismatch);
+            };
+            let result_ids = result
+                .verdicts
+                .iter()
+                .map(|verdict| match verdict {
+                    CandidateProbeVerdict::Eligible { candidate_id, .. }
+                    | CandidateProbeVerdict::Ineligible { candidate_id, .. } => candidate_id,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            if pending.conn_id != conn_id
+                || pending.epoch != result.connection_epoch
+                || pending.worker != result.worker
+                || pending.admission_id != result.admission_id
+                || pending.policy_revision != result.policy_revision
+                || pending.candidate_ids.len() != result_ids.len()
+                || !pending
+                    .candidate_ids
+                    .iter()
+                    .all(|candidate_id| result_ids.contains(candidate_id))
+            {
+                return refused(WorkerRefusal::CommandMismatch);
+            }
+            let pending = st
+                .pending_candidate_probes
+                .remove(&result.correlation_id)
+                .expect("la sonde vient d'être trouvée");
+            let _ = pending.reply.try_send(result);
+            None
+        }
         _ => refused(WorkerRefusal::Unauthorized),
     }
 }
@@ -18606,6 +18709,110 @@ fn remote_worker_roundtrip(
     }
 }
 
+/// Une lecture groupée163 attend un seul résultat corrélé. Elle n'emprunte ni
+/// `WorkerPrepare` ni le canal de commandes : aucun worktree, fournisseur,
+/// slot ou Task ne peut donc être créé avant la décision durable.
+pub(super) fn remote_candidate_probe(
+    state: &Arc<Mutex<DaemonState>>,
+    mut probe: bridget_transport::protocol::CandidateProbe,
+    deadline: Instant,
+) -> Result<
+    bridget_transport::protocol::CandidateProbeResult,
+    bridget_transport::protocol::WorkerRefusal,
+> {
+    use bridget_transport::protocol::{
+        MAX_WORKER_STORE_ENTRIES, WORKER_STALE_SECS, WorkerCapability, WorkerContactState,
+        WorkerRefusal,
+    };
+    probe.validate_shape()?;
+    let correlation_id = probe.correlation_id.clone();
+    let machine_id = probe.worker.machine_id.clone();
+    let candidate_ids = probe
+        .candidates
+        .iter()
+        .map(|candidate| candidate.candidate_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let (tx, rx) = mpsc::sync_channel(1);
+    let (writer, conn_id, epoch) = {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let provision = st
+            .registry
+            .machines()
+            .get(&probe.worker.machine_id)
+            .ok_or(WorkerRefusal::Unauthorized)?;
+        if !provision.enabled
+            || provision.worker_id != probe.worker.worker_id
+            || provision.provisioning_revision != probe.worker.provisioning_revision
+        {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let session = st
+            .remote_workers
+            .get(&probe.worker.machine_id)
+            .ok_or(WorkerRefusal::WorkerUnavailable)?;
+        if session.identity != probe.worker
+            || session.contact != WorkerContactState::Connected
+            || session.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
+        {
+            return Err(WorkerRefusal::WorkerUnavailable);
+        }
+        if !session
+            .capabilities
+            .contains(&WorkerCapability::CandidateProbeV1)
+        {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if st.pending_candidate_probes.len() >= MAX_WORKER_STORE_ENTRIES
+            || st.pending_candidate_probes.contains_key(&correlation_id)
+        {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        let writer = st
+            .connections
+            .get(&session.conn_id)
+            .cloned()
+            .ok_or(WorkerRefusal::WorkerUnavailable)?;
+        let conn_id = session.conn_id.clone();
+        let epoch = session.epoch.clone();
+        probe.connection_epoch = epoch.clone();
+        st.pending_candidate_probes.insert(
+            correlation_id.clone(),
+            PendingCandidateProbe {
+                conn_id: conn_id.clone(),
+                epoch: epoch.clone(),
+                worker: probe.worker.clone(),
+                admission_id: probe.admission_id.clone(),
+                policy_revision: probe.policy_revision,
+                candidate_ids,
+                reply: tx,
+            },
+        );
+        (writer, conn_id, epoch)
+    };
+    let written = push_control_message_until(
+        &writer,
+        &DaemonToWrapper::CandidateProbe { probe },
+        deadline,
+    )
+    .is_ok();
+    let result = if written {
+        rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()
+    } else {
+        None
+    };
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    st.pending_candidate_probes.remove(&correlation_id);
+    if !st
+        .remote_workers
+        .get(&machine_id)
+        .is_some_and(|current| current.conn_id == conn_id && current.epoch == epoch)
+    {
+        return Err(WorkerRefusal::StaleConnection);
+    }
+    result.ok_or(WorkerRefusal::WorkerUnavailable)
+}
+
 #[cfg(test)]
 fn handle_wrapper_message(
     conn_id: &str,
@@ -18684,7 +18891,10 @@ fn handle_wrapper_message_with_peer(
         if !st.connection_roles.contains_key(conn_id) {
             st.worker_probe_connections.insert(conn_id.into());
         }
-    } else if matches!(&msg, WrapperToDaemon::WorkerHello { .. }) {
+    } else if matches!(
+        &msg,
+        WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
+    ) {
         let allowed = {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             matches!(
@@ -18844,7 +19054,10 @@ fn handle_wrapper_message_with_peer(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
-                WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerResponse { .. } =>
+                WrapperToDaemon::WorkerHello { .. }
+                | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
+                | WrapperToDaemon::WorkerResponse { .. }
+                | WrapperToDaemon::CandidateProbeResult { .. } =>
                     Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::HumanInboxDeposit { .. }
@@ -19119,7 +19332,10 @@ fn handle_wrapper_message_with_peer(
                 Some(ClientRefusal::CapabilityNotNegotiated)
             }
             Some(ConnectionRole::Client) => match &msg {
-                WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerResponse { .. } =>
+                WrapperToDaemon::WorkerHello { .. }
+                | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
+                | WrapperToDaemon::WorkerResponse { .. }
+                | WrapperToDaemon::CandidateProbeResult { .. } =>
                     Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueEditV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
@@ -19399,11 +19615,12 @@ fn handle_wrapper_message_with_peer(
     match msg {
         // Le contrat est disponible ; T008 ajoute son admission authentifiée.
         // Aucune trame distante ne rejoint entre-temps la voie locale.
-        WrapperToDaemon::WorkerHello { .. } | WrapperToDaemon::WorkerResponse { .. } => {
-            Some(DaemonToWrapper::WorkerRejected {
-                reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
-            })
-        }
+        WrapperToDaemon::WorkerHello { .. }
+        | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
+        | WrapperToDaemon::WorkerResponse { .. }
+        | WrapperToDaemon::CandidateProbeResult { .. } => Some(DaemonToWrapper::WorkerRejected {
+            reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
+        }),
         WrapperToDaemon::WakeRequest { request } => Some(handle_wake_request(
             conn_id,
             request,
@@ -22897,7 +23114,12 @@ fn handle_wrapper_message_with_peer(
                 host: st.host.clone(),
                 db_path: st.db_path.display().to_string(),
                 instance_id: st.instance_id.clone(),
-                features: vec!["wait_v1".to_string(), "remote_worker_v1".to_string()],
+                features: vec![
+                    "wait_v1".to_string(),
+                    "remote_worker_v1".to_string(),
+                    "worker_candidate_probe_v1".to_string(),
+                    "auto_delegate_v1".to_string(),
+                ],
             })
         }
 

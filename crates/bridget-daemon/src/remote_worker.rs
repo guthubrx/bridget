@@ -1509,10 +1509,13 @@ use crate::managed_process::{
 };
 use crate::registry::{AgentRegistry, ProjectMapping};
 use bridget_transport::protocol::{
-    ClientCapability, DaemonToWrapper, IdentityCredential, MAX_WORKER_FRAME_BYTES,
-    REMOTE_WORKER_VERSION, WorkerCancelScope, WorkerHello, WorkerJournalFragment,
-    WorkerObservation, WorkerPrepare, WorkerPrepared, WorkerRequest, WorkerRequestOperation,
-    WorkerResponse, WorkerResponseOperation, WorkerStart, WrapperToDaemon,
+    CandidateProbe, CandidateProbeCandidate, CandidateProbeRefusal, CandidateProbeResult,
+    CandidateProbeVerdict, ClientCapability, DaemonToWrapper, IdentityCredential,
+    MAX_WORKER_FRAME_BYTES, REMOTE_WORKER_VERSION, ResolvedAgentDefinition, SpawnPosture,
+    WORKER_CANDIDATE_PROBE_VERSION, WorkerCancelScope, WorkerCapability, WorkerHello,
+    WorkerHelloWithCapabilities, WorkerJournalFragment, WorkerObservation, WorkerPrepare,
+    WorkerPrepared, WorkerRequest, WorkerRequestOperation, WorkerResponse, WorkerResponseOperation,
+    WorkerStart, WrapperToDaemon,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -1582,6 +1585,21 @@ struct PreparedRuntime {
     prepared: WorkerPrepared,
     expires: Instant,
 }
+
+/// Faits de lecture communs à `Prepare` et au probe163. Cette structure ne
+/// contient ni token, ni reçu, ni état de processus : elle ne permet donc pas
+/// de transformer une sonde en admission.
+struct CandidateReadiness {
+    definition: ResolvedAgentDefinition,
+    child_policy: serde_json::Value,
+    effective_posture: SpawnPosture,
+}
+
+enum WorkerInbound {
+    Request(WorkerRequest),
+    CandidateProbe(CandidateProbe),
+}
+
 struct HeldRuntime {
     prepared: PreparedRuntime,
     mission_id: String,
@@ -1777,6 +1795,266 @@ impl WorkerRuntime {
         Ok((mapping, cwd))
     }
 
+    /// Contrôle Git de lecture, également utilisé pour le cwd partagé et la
+    /// base d'un worktree déjà créé par `Prepare`.
+    fn verify_base_commit(cwd: &Path, base_commit: Option<&str>) -> Result<(), WorkerRefusal> {
+        let Some(base_commit) = base_commit else {
+            return Ok(());
+        };
+        let actual = crate::workspace_git::run_git(
+            cwd,
+            &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+            crate::workspace_git::READ_TIMEOUT,
+        )
+        .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+        if !actual.success() || actual.truncated || actual.stdout.trim() != base_commit {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        Ok(())
+    }
+
+    /// Partie strictement lecture de `Prepare`. Elle vérifie le binaire, le
+    /// couple modèle/effort et les droits projetés, mais ne crée ni worktree,
+    /// ni token Prepared, ni slot ou processus fournisseur.
+    fn inspect_candidate(
+        &self,
+        registry: &AgentRegistry,
+        request: &WorkerPrepare,
+        mapping: &ProjectMapping,
+        cwd: &Path,
+    ) -> Result<CandidateReadiness, WorkerRefusal> {
+        let pinned = registry
+            .clone()
+            .pin_delegation_model(
+                &request.agent_type,
+                &request.model,
+                request.effort.as_deref(),
+            )
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
+        crate::lifecycle::launch_preflight(&pinned, &request.agent_type, &self.source)
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
+        let (mut policy, effective_posture) =
+            crate::native_permissions::project_remote_permissions(
+                &request.parent,
+                pinned
+                    .get(&request.agent_type)
+                    .map_err(|_| WorkerRefusal::DefinitionChanged)?,
+                mapping,
+                cwd,
+                &self.source,
+                request.posture,
+                &self.protected(),
+            )
+            .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        let scoped = pinned
+            .for_inherited_delegation(
+                &request.agent_type,
+                &request.model,
+                request.effort.as_deref(),
+                &policy,
+            )
+            .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        let definition = scoped
+            .get(&request.agent_type)
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
+        // Les arguments effectivement contrôlés sont capturés avant le digest
+        // de droits. La capture reste une lecture de configuration locale.
+        if definition.protocol == "claude_stream_json" {
+            policy["launch_context"] =
+                crate::native_permissions::capture_context(definition, cwd, &self.source)
+                    .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        }
+        crate::native_permissions::recheck_remote_child_permissions(
+            &policy,
+            definition,
+            cwd,
+            &self.source,
+            &self.protected(),
+        )
+        .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        let definition = scoped
+            .resolved_definition(&request.agent_type)
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
+        Ok(CandidateReadiness {
+            definition,
+            child_policy: policy,
+            effective_posture,
+        })
+    }
+
+    /// Convertit un tuple opaque de probe en la même demande de lecture que
+    /// `Prepare`. Les champs de machine restent attestés par l'identité active,
+    /// jamais proposés par le décideur.
+    fn candidate_prepare(
+        &self,
+        probe: &CandidateProbe,
+        candidate: &CandidateProbeCandidate,
+        mapping_revision: u64,
+    ) -> WorkerPrepare {
+        WorkerPrepare {
+            machine_id: self.identity.machine_id.clone(),
+            project_id: candidate.project_id.clone(),
+            provisioning_revision: self.identity.provisioning_revision,
+            // La révision n'est jamais fournie par le décideur. Elle provient
+            // de la lecture fraîche du registre worker et est renvoyée dans le
+            // verdict afin que le maître fige le fait réellement observé.
+            mapping_revision,
+            origin_host: candidate.origin_host.clone(),
+            origin_cwd: candidate.origin_cwd.clone(),
+            source_root: candidate.source_root.clone(),
+            remote_root: candidate.remote_root.clone(),
+            source_root_identity: candidate.source_root_identity.clone(),
+            relative_cwd: candidate.relative_cwd.clone(),
+            base_commit: candidate.base_commit.clone(),
+            agent_type: candidate.agent_type.clone(),
+            model: candidate.model.clone(),
+            effort: candidate.effort.clone(),
+            posture: candidate.posture,
+            parent: probe.parent.clone(),
+            workspace: candidate.workspace.clone(),
+        }
+    }
+
+    /// Préconditions d'un worktree futur : Git reste strictement en lecture.
+    /// La création et le cwd réel restent réservés à `prepare_workspace` du
+    /// seul élu après admission.
+    fn probe_workspace_preconditions(
+        request: &WorkerPrepare,
+        mapping: &ProjectMapping,
+        cwd: &Path,
+    ) -> Result<(), CandidateProbeRefusal> {
+        if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
+            &request.workspace
+        {
+            let preflight = crate::workspace_git::preflight(
+                &mapping.remote_root,
+                base_ref.as_deref(),
+                branch.as_deref(),
+            )
+            .map_err(|_| CandidateProbeRefusal::WorkspaceUnavailable)?;
+            if request
+                .base_commit
+                .as_ref()
+                .is_some_and(|expected| expected != &preflight.base_commit)
+            {
+                return Err(CandidateProbeRefusal::WorkspaceUnavailable);
+            }
+            return Ok(());
+        }
+        Self::verify_base_commit(cwd, request.base_commit.as_deref())
+            .map_err(|_| CandidateProbeRefusal::WorkspaceUnavailable)
+    }
+
+    fn probe_one_candidate(
+        &self,
+        probe: &CandidateProbe,
+        candidate: &CandidateProbeCandidate,
+        registry: &AgentRegistry,
+    ) -> CandidateProbeVerdict {
+        let mapping_revision =
+            match registry.project_mapping(&self.identity.machine_id, &candidate.project_id) {
+                Ok(mapping) => mapping.mapping_revision,
+                Err(_) => {
+                    return CandidateProbeVerdict::Ineligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        reason: CandidateProbeRefusal::MappingUnavailable,
+                    };
+                }
+            };
+        let request = self.candidate_prepare(probe, candidate, mapping_revision);
+        if request.validate().is_err() {
+            return CandidateProbeVerdict::Ineligible {
+                candidate_id: candidate.candidate_id.clone(),
+                reason: CandidateProbeRefusal::InvalidRequest,
+            };
+        }
+        let (mapping, cwd) = match self.mapping(&request, registry) {
+            Ok(values) => values,
+            Err(_) => {
+                return CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason: CandidateProbeRefusal::MappingUnavailable,
+                };
+            }
+        };
+        if let Err(reason) = Self::probe_workspace_preconditions(&request, &mapping, &cwd) {
+            return CandidateProbeVerdict::Ineligible {
+                candidate_id: candidate.candidate_id.clone(),
+                reason,
+            };
+        }
+        let readiness = match self.inspect_candidate(registry, &request, &mapping, &cwd) {
+            Ok(readiness) => readiness,
+            Err(WorkerRefusal::DefinitionChanged) => {
+                return CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason: CandidateProbeRefusal::DefinitionUnavailable,
+                };
+            }
+            Err(WorkerRefusal::PermissionsChanged) => {
+                return CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason: CandidateProbeRefusal::PermissionsChanged,
+                };
+            }
+            Err(_) => {
+                return CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason: CandidateProbeRefusal::CapabilityUnavailable,
+                };
+            }
+        };
+        let permission_digest = match json_digest(&readiness.child_policy) {
+            Ok(digest) => digest,
+            Err(_) => {
+                return CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason: CandidateProbeRefusal::CapabilityUnavailable,
+                };
+            }
+        };
+        CandidateProbeVerdict::Eligible {
+            candidate_id: candidate.candidate_id.clone(),
+            mapping_revision: mapping.mapping_revision,
+            definition_digest: readiness.definition.digest,
+            permission_digest,
+            observed_at: worker_now(),
+        }
+    }
+
+    /// Sonde groupée corrélée à une seule admission. Elle ne touche jamais le
+    /// store, `prepared`, `held`, un worktree, un slot ou un fournisseur.
+    fn candidate_probe(
+        &self,
+        probe: &CandidateProbe,
+    ) -> Result<CandidateProbeResult, WorkerRefusal> {
+        probe.validate_shape()?;
+        if probe.worker != self.identity {
+            return Err(WorkerRefusal::StaleConnection);
+        }
+        let registry = self.registry();
+        let verdicts = probe
+            .candidates
+            .iter()
+            .map(|candidate| match &registry {
+                Ok(registry) => self.probe_one_candidate(probe, candidate, registry),
+                Err(_) => CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason: CandidateProbeRefusal::CapabilityUnavailable,
+                },
+            })
+            .collect();
+        Ok(CandidateProbeResult {
+            version: WORKER_CANDIDATE_PROBE_VERSION,
+            correlation_id: probe.correlation_id.clone(),
+            connection_epoch: probe.connection_epoch.clone(),
+            worker: self.identity.clone(),
+            admission_id: probe.admission_id.clone(),
+            policy_revision: probe.policy_revision,
+            verdicts,
+        })
+    }
+
     fn prepare(
         &mut self,
         command: &WorkerCommandIdentity,
@@ -1792,6 +2070,33 @@ impl WorkerRuntime {
         let expires = Instant::now() + Duration::from_secs(30);
         let registry = self.registry()?;
         let (mut mapping, mut cwd) = self.mapping(request, &registry)?;
+        // Les droits et la définition sont revalidés avant toute création de
+        // worktree. Une révocation entre Probe et Prepare reste donc sans
+        // slot, répertoire ni lancement fournisseur.
+        if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
+            &request.workspace
+        {
+            // Pour un worktree, `base_commit` qualifie la base future choisie
+            // par `base_ref`, pas le HEAD courant du dépôt source. Ce même
+            // préflight est relu avant toute écriture, puis le cwd créé est
+            // contrôlé une seconde fois ci-dessous.
+            let preflight = crate::workspace_git::preflight(
+                &mapping.remote_root,
+                base_ref.as_deref(),
+                branch.as_deref(),
+            )
+            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+            if request
+                .base_commit
+                .as_ref()
+                .is_some_and(|expected| expected != &preflight.base_commit)
+            {
+                return Err(WorkerRefusal::PlacementMismatch);
+            }
+        } else {
+            Self::verify_base_commit(&cwd, request.base_commit.as_deref())?;
+        }
+        self.inspect_candidate(&registry, request, &mapping, &cwd)?;
         let mut worktree_base = None;
         let mut workspace = None;
         if matches!(
@@ -1818,67 +2123,10 @@ impl WorkerRuntime {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
         }
-        if let Some(base) = request.base_commit.as_deref() {
-            let actual = crate::workspace_git::run_git(
-                &cwd,
-                &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
-                crate::workspace_git::READ_TIMEOUT,
-            )
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            if !actual.success() || actual.truncated || actual.stdout.trim() != base {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
-        }
-        let pinned = registry
-            .clone()
-            .pin_delegation_model(
-                &request.agent_type,
-                &request.model,
-                request.effort.as_deref(),
-            )
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        crate::lifecycle::launch_preflight(&pinned, &request.agent_type, &self.source)
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        let (mut policy, effective) = crate::native_permissions::project_remote_permissions(
-            &request.parent,
-            pinned
-                .get(&request.agent_type)
-                .map_err(|_| WorkerRefusal::DefinitionChanged)?,
-            &mapping,
-            &cwd,
-            &self.source,
-            request.posture,
-            &self.protected(),
-        )
-        .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-        let scoped = pinned
-            .for_inherited_delegation(
-                &request.agent_type,
-                &request.model,
-                request.effort.as_deref(),
-                &policy,
-            )
-            .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-        let definition = scoped
-            .get(&request.agent_type)
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        // Les arguments finaux sont ceux réellement capturés et revérifiés.
-        if definition.protocol == "claude_stream_json" {
-            policy["launch_context"] =
-                crate::native_permissions::capture_context(definition, &cwd, &self.source)
-                    .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-        }
-        crate::native_permissions::recheck_remote_child_permissions(
-            &policy,
-            definition,
-            &cwd,
-            &self.source,
-            &self.protected(),
-        )
-        .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-        let definition = scoped
-            .resolved_definition(&request.agent_type)
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
+        Self::verify_base_commit(&cwd, request.base_commit.as_deref())?;
+        // Le second contrôle conserve le verdict exact du cwd de worktree
+        // choisi, après que le premier a fermé toute création sur révocation.
+        let readiness = self.inspect_candidate(&registry, request, &mapping, &cwd)?;
         if Instant::now() >= expires {
             return Err(WorkerRefusal::PrepareExpired);
         }
@@ -1896,13 +2144,13 @@ impl WorkerRuntime {
                 relative_cwd: request.relative_cwd.clone(),
                 execution_cwd: cwd.to_string_lossy().into_owned(),
                 base_commit: worktree_base.or_else(|| request.base_commit.clone()),
-                definition_digest: definition.digest.clone(),
-                permission_digest: json_digest(&policy).map_err(refuse)?,
+                definition_digest: readiness.definition.digest.clone(),
+                permission_digest: json_digest(&readiness.child_policy).map_err(refuse)?,
             },
             token: uuid::Uuid::new_v4().to_string(),
-            definition,
-            child_policy: policy,
-            effective_posture: effective,
+            definition: readiness.definition,
+            child_policy: readiness.child_policy,
+            effective_posture: readiness.effective_posture,
             prepared_at: worker_now(),
         };
         self.prepared.insert(
@@ -2822,10 +3070,12 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
 }
 
 /// Sonde historique sur la même connexion, avant toute variante ou secret162.
+/// Le drapeau retourné est une attestation du maître pour proposer la nouvelle
+/// enveloppe de capacités ; il ne dépend jamais du build du pair.
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -2838,7 +3088,9 @@ fn probe_worker_capability(
         Ok(DaemonToWrapper::DaemonIdentityReport { features, .. })
             if features.iter().any(|feature| feature == "remote_worker_v1") =>
         {
-            Ok(())
+            Ok(features
+                .iter()
+                .any(|feature| feature == "worker_candidate_probe_v1"))
         }
         _ => Err("worker_capability_required".into()),
     }
@@ -2869,15 +3121,26 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        probe_worker_capability(&writer, &mut reader)?;
-        let hello = WrapperToDaemon::WorkerHello {
-            hello: WorkerHello {
-                version: REMOTE_WORKER_VERSION,
-                identity: runtime.identity.clone(),
-                credential: runtime.credential.clone(),
-                build: crate::build_info::BUILD_ID.to_owned(),
-                capability: ClientCapability::RemoteWorkerV1,
-            },
+        let master_supports_candidate_probe = probe_worker_capability(&writer, &mut reader)?;
+        let worker_hello = WorkerHello {
+            version: REMOTE_WORKER_VERSION,
+            identity: runtime.identity.clone(),
+            credential: runtime.credential.clone(),
+            build: crate::build_info::BUILD_ID.to_owned(),
+            capability: ClientCapability::RemoteWorkerV1,
+        };
+        let hello = if master_supports_candidate_probe {
+            WrapperToDaemon::WorkerHelloWithCapabilities {
+                hello: WorkerHelloWithCapabilities {
+                    hello: worker_hello,
+                    capabilities: vec![WorkerCapability::CandidateProbeV1],
+                },
+            }
+        } else {
+            // Le wire162 reste octet pour octet identique pour le maître ancien.
+            WrapperToDaemon::WorkerHello {
+                hello: worker_hello,
+            }
         };
         if send_worker_frame(&writer, &hello).is_err() {
             std::thread::sleep(Duration::from_secs(1));
@@ -2896,19 +3159,38 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 continue;
             }
         };
-        let epoch = match serde_json::from_slice::<DaemonToWrapper>(&line) {
-            Ok(DaemonToWrapper::WorkerAccepted { accepted })
-                if accepted.validate().is_ok() && accepted.identity == runtime.identity =>
-            {
-                accepted.connection_epoch
-            }
-            Ok(DaemonToWrapper::WorkerRejected { .. }) => {
-                return Err("worker_registration_refused".into());
-            }
-            _ => return Err("worker_handshake_invalid".into()),
-        };
+        let (epoch, candidate_probe_negotiated) =
+            match serde_json::from_slice::<DaemonToWrapper>(&line) {
+                Ok(DaemonToWrapper::WorkerAccepted { accepted })
+                    if !master_supports_candidate_probe
+                        && accepted.validate().is_ok()
+                        && accepted.identity == runtime.identity =>
+                {
+                    (accepted.connection_epoch, false)
+                }
+                Ok(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
+                    if master_supports_candidate_probe
+                        && accepted.accepted.validate().is_ok()
+                        && accepted.accepted.identity == runtime.identity
+                        && (accepted.capabilities.is_empty()
+                            || accepted.capabilities
+                                == vec![WorkerCapability::CandidateProbeV1]) =>
+                {
+                    let candidate_probe_negotiated = accepted
+                        .capabilities
+                        .contains(&WorkerCapability::CandidateProbeV1);
+                    (
+                        accepted.accepted.connection_epoch,
+                        candidate_probe_negotiated,
+                    )
+                }
+                Ok(DaemonToWrapper::WorkerRejected { .. }) => {
+                    return Err("worker_registration_refused".into());
+                }
+                _ => return Err("worker_handshake_invalid".into()),
+            };
         let disconnected = Arc::new(AtomicBool::new(false));
-        let (sender, receiver) = mpsc::sync_channel(8);
+        let (sender, receiver) = mpsc::sync_channel::<WorkerInbound>(8);
         let read_disconnected = disconnected.clone();
         runtime
             .cancelled
@@ -2925,25 +3207,39 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     MAX_WORKER_FRAME_BYTES,
                     bridget_transport::jsonl::LineDeadline::AfterFirstByte(Duration::from_secs(5)),
                 );
-                let request = match frame {
+                let inbound = match frame {
                     Ok(Some(bytes)) => match serde_json::from_slice::<DaemonToWrapper>(&bytes) {
-                        Ok(DaemonToWrapper::WorkerRequest { request }) => request,
+                        Ok(DaemonToWrapper::WorkerRequest { request })
+                            if request.connection_epoch == read_epoch
+                                && request.worker == read_worker
+                                && request.validate().is_ok() =>
+                        {
+                            WorkerInbound::Request(request)
+                        }
+                        Ok(DaemonToWrapper::CandidateProbe { probe })
+                            if candidate_probe_negotiated
+                                && probe.connection_epoch == read_epoch
+                                && probe.worker == read_worker
+                                && probe.validate_shape().is_ok() =>
+                        {
+                            WorkerInbound::CandidateProbe(probe)
+                        }
                         _ => break,
                     },
                     _ => break,
                 };
-                if request.connection_epoch != read_epoch
-                    || request.worker != read_worker
-                    || request.validate().is_err()
-                {
-                    break;
-                }
                 if matches!(
-                    &request.request,
-                    WorkerRequestOperation::Cancel {
-                        target: WorkerCancelScope::Command {}
-                    }
+                    &inbound,
+                    WorkerInbound::Request(WorkerRequest {
+                        request: WorkerRequestOperation::Cancel {
+                            target: WorkerCancelScope::Command {}
+                        },
+                        ..
+                    })
                 ) {
+                    let WorkerInbound::Request(request) = &inbound else {
+                        unreachable!();
+                    };
                     if let Ok(key) = json_digest(&request.command) {
                         if let Ok(mut cancelled) = cancelled.lock() {
                             if cancelled.len() >= MAX_WORKER_STORE_ENTRIES {
@@ -2955,7 +3251,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         }
                     }
                 }
-                if sender.try_send(request).is_err() {
+                if sender.try_send(inbound).is_err() {
                     break;
                 }
             }
@@ -3061,7 +3357,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 last_relay = Instant::now();
             }
             match receiver.recv_timeout(Duration::from_millis(50)) {
-                Ok(request) => {
+                Ok(WorkerInbound::Request(request)) => {
                     let response = match runtime.handle(&request, &epoch, &disconnected) {
                         Ok(response) => response,
                         Err(reason) => WorkerResponseOperation::Rejected { reason },
@@ -3079,6 +3375,23 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         break;
                     }
                     if send_worker_frame(&writer, &WrapperToDaemon::WorkerResponse { response })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(WorkerInbound::CandidateProbe(probe)) => {
+                    let result = match runtime.candidate_probe(&probe) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            // Un probe hors contrat ou hors époque a déjà fermé
+                            // le lecteur. Ne jamais répondre par une admission
+                            // partielle ni tenter une reconnexion locale.
+                            fatal = Some("worker_candidate_probe_invalid".into());
+                            break;
+                        }
+                    };
+                    if send_worker_frame(&writer, &WrapperToDaemon::CandidateProbeResult { result })
                         .is_err()
                     {
                         break;

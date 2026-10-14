@@ -1003,6 +1003,7 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
             None,
             &mut st,
             WorkspacePass::Probe,
+            None,
         )
         .unwrap()
         {
@@ -1025,6 +1026,7 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
                 task_id: &id,
                 selection: (&selected, &raw, substitution.as_ref()),
             },
+            None,
         )
         .unwrap()
         {
@@ -1064,6 +1066,7 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
                 record: &record,
                 selection: (&selected, &raw, substitution.as_ref()),
             },
+            None,
         )
         .unwrap()
         {
@@ -1171,6 +1174,7 @@ fn native154_creation_reservation_liberee_sur_panique() {
             None,
             &mut st,
             WorkspacePass::Probe,
+            None,
         )
         .unwrap()
         {
@@ -1193,6 +1197,7 @@ fn native154_creation_reservation_liberee_sur_panique() {
                 task_id: &id,
                 selection: (&selected, &raw, substitution.as_ref()),
             },
+            None,
         )
         .unwrap()
         {

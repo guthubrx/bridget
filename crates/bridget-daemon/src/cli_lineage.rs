@@ -140,6 +140,9 @@ pub(super) fn run(args: &[String]) {
         }
     };
     let mut refused = false;
+    // `--response-version` est une demande explicite : la CLI relaye donc le
+    // refus du maître dans cette version sans négociation cachée. Le Reader T3
+    // effectue seul les tentatives v3→v2→v1 et son staging homogène.
     let result = crate::communication::client::human_lineage(
         &namespace.socket,
         request,
@@ -217,22 +220,24 @@ mod tests {
     }
 
     #[test]
-    fn native162_lineage_cli_negotiates_only_list_and_show() {
-        let list = parse(&request_args("list", &["--response-version", "2"])).unwrap();
-        let show = parse(&request_args(
-            "show",
-            &[
-                "--task",
-                "00000000-0000-4000-8000-000000000162",
-                "--response-version",
-                "2",
-            ],
-        ))
-        .unwrap();
-        assert_eq!(list.version, 2);
-        assert_eq!(show.version, 2);
+    fn spec163_lineage_cli_negocie_v3_seulement_pour_list_et_show() {
+        for (wire, version) in [("2", 2), ("3", 3)] {
+            let list = parse(&request_args("list", &["--response-version", wire])).unwrap();
+            let show = parse(&request_args(
+                "show",
+                &[
+                    "--task",
+                    "00000000-0000-4000-8000-000000000162",
+                    "--response-version",
+                    wire,
+                ],
+            ))
+            .unwrap();
+            assert_eq!(list.version, version);
+            assert_eq!(show.version, version);
+        }
         for action in ["list", "show"] {
-            let mut args = request_args(action, &["--response-version", "3"]);
+            let mut args = request_args(action, &["--response-version", "4"]);
             if action == "show" {
                 args.extend(["--task", "00000000-0000-4000-8000-000000000162"].map(String::from));
             }
@@ -241,8 +246,8 @@ mod tests {
     }
 
     #[test]
-    fn native162_lineage_cli_refuses_version_flag_on_existing_actions() {
-        for version in ["1", "2"] {
+    fn spec163_lineage_cli_refuse_v3_hors_des_lectures_paginees() {
+        for version in ["1", "2", "3"] {
             let journal = request_args(
                 "journal",
                 &[

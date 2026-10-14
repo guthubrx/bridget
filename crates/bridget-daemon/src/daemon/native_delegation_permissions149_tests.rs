@@ -5381,6 +5381,7 @@ fn native157_fallback_premier_puis_second_candidat_valide() {
             None,
             &mut st,
             WorkspacePass::Probe,
+            None,
         )
         .unwrap()
         {
@@ -5425,6 +5426,7 @@ fn native157_fallback_premier_puis_second_candidat_valide() {
                     task_id: &id,
                     selection: (&selected, &raw, substitution.as_ref()),
                 },
+                None,
             ) {
                 Err(code) => code,
                 Ok(_) => panic!("quota atteint après Probe : refus, jamais le second candidat"),
@@ -5442,6 +5444,7 @@ fn native157_fallback_premier_puis_second_candidat_valide() {
                     task_id: &id,
                     selection: (&selected, &raw, substitution.as_ref()),
                 },
+                None,
             )
             .unwrap()
             {
@@ -5472,6 +5475,7 @@ fn native157_fallback_premier_puis_second_candidat_valide() {
                     record: &record,
                     selection: (&selected, &raw, substitution.as_ref()),
                 },
+                None,
             ) {
                 Err(code) => code,
                 Ok(_) => panic!("quota atteint après Reserve : refus, jamais le second candidat"),

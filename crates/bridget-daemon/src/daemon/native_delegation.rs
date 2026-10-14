@@ -1,13 +1,21 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
 use super::*;
+use crate::decision_service::{
+    CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
+    LayaDecisionRequest,
+};
 use crate::delegation::{
-    QuotaHold, QuotaWait, QuotaWaitPhase, Task, WorkspaceRecord, WorkspaceState,
+    AutoAdmissionMode, AutoAdmissionReceipt, AutoAdmissionState, QuotaHold, QuotaWait,
+    QuotaWaitPhase, Task, WorkspaceRecord, WorkspaceState,
 };
+use crate::registry::{AdmissionPolicy, CandidateProfile, DecisionService};
 use bridget_transport::protocol::{
-    NativeDelegationRequest, SpawnOwnership, SpawnPosture, WorkspaceRequest,
+    AutoDelegateV1, NativeDelegationRequest, SpawnOwnership, SpawnPosture, WorkspaceRequest,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Digest;
+use std::collections::BTreeMap;
 use std::path::Path;
 const MISSION_REPLY_LIMIT_SECS: i64 = 3600;
 const WAIT_DEFAULT_SECS: u64 = 600;
@@ -17,6 +25,1079 @@ pub(super) const CHILD_REQUEST_HUMAN_WINDOW_SECS: i64 = 3600;
 /// Bornes du délai de réponse choisi par le parent (session 150).
 const MISSION_REPLY_MIN_SECS: u64 = 60;
 const MISSION_REPLY_MAX_SECS: u64 = 86_400;
+
+/// Plan immuable dérivé d'une lecture fraîche du registre. Il ne contacte pas
+/// le service de décision et ne réserve aucune capacité : T011–T021 ajoutent
+/// ces observations séparément avant que T028 ne l'admette au puits natif.
+#[derive(Debug, Clone)]
+struct AutoAdmissionPlan {
+    policy: AdmissionPolicy,
+    policy_digest: String,
+    candidates: Vec<CandidateProfile>,
+    decision_service: Option<DecisionService>,
+}
+
+/// Le reçu conserve le seul plan qu'une reprise est autorisée à consulter :
+/// le registre courant ne peut ni déplacer un choix, ni rouvrir un appel HTTP.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoAdmissionSnapshot {
+    policy: AdmissionPolicy,
+    candidates: Vec<CandidateProfile>,
+    decision_service: Option<DecisionService>,
+}
+
+fn frozen_auto_admission_plan(receipt: &AutoAdmissionReceipt) -> Result<AutoAdmissionPlan, String> {
+    let snapshot: AutoAdmissionSnapshot =
+        serde_json::from_slice(&receipt.metadata).map_err(|_| "auto_admission_invalid")?;
+    let policy_revision =
+        i64::try_from(snapshot.policy.revision).map_err(|_| "auto_admission_invalid")?;
+    let policy_digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(
+            serde_json::to_vec(&snapshot.policy).map_err(|_| "auto_admission_invalid")?,
+        )
+    );
+    if policy_revision != receipt.policy_revision
+        || policy_digest != receipt.policy_digest
+        || !(1..=8).contains(&snapshot.candidates.len())
+    {
+        return Err("auto_admission_invalid".into());
+    }
+    Ok(AutoAdmissionPlan {
+        policy: snapshot.policy,
+        policy_digest,
+        candidates: snapshot.candidates,
+        decision_service: snapshot.decision_service,
+    })
+}
+
+enum AutoReceiptReservation {
+    Existing(Value),
+    New(AutoAdmissionReceipt),
+}
+
+fn fresh_auto_admission_plan(
+    fallback: &AgentRegistry,
+    request: &AutoDelegateV1,
+) -> Result<AutoAdmissionPlan, String> {
+    let fresh = AgentRegistry::load_from_path(fallback.source().to_path_buf())
+        .map_err(|_| "admission_policy_unavailable")?;
+    auto_admission_plan(&fresh, request)
+}
+
+/// Aucun produit cartésien : les candidats sont toujours les profils déclarés
+/// qui correspondent aux contraintes de la demande et de l'axe figé.
+fn auto_admission_plan(
+    registry: &AgentRegistry,
+    request: &AutoDelegateV1,
+) -> Result<AutoAdmissionPlan, String> {
+    let policy = registry
+        .admission_policy()
+        .cloned()
+        .ok_or("auto_admission_disabled")?;
+    let fixed = policy
+        .fixed_profile
+        .as_deref()
+        .and_then(|id| policy.profiles.iter().find(|profile| profile.id == id));
+
+    if !policy.auto_engine
+        && fixed.is_none()
+        && (request.agent_type.is_none() || request.model.is_none())
+    {
+        return Err("auto_engine_not_fixed".into());
+    }
+    if !policy.auto_placement && fixed.is_none() && request.machine_id.is_none() {
+        return Err("auto_placement_not_fixed".into());
+    }
+
+    let mut candidates = policy
+        .profiles
+        .iter()
+        .filter(|profile| {
+            request
+                .machine_id
+                .as_deref()
+                .is_none_or(|value| value == profile.machine_id)
+                && request
+                    .agent_type
+                    .as_deref()
+                    .is_none_or(|value| value == profile.agent_type)
+                && request
+                    .model
+                    .as_deref()
+                    .is_none_or(|value| value == profile.model)
+                && request
+                    .effort
+                    .as_deref()
+                    .is_none_or(|value| profile.effort.as_deref() == Some(value))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(fixed) = fixed {
+        if !policy.auto_engine {
+            candidates.retain(|profile| {
+                profile.agent_type == fixed.agent_type
+                    && profile.model == fixed.model
+                    && profile.effort == fixed.effort
+            });
+        }
+        if !policy.auto_placement {
+            candidates.retain(|profile| profile.machine_id == fixed.machine_id);
+        }
+    }
+    if candidates.is_empty() {
+        return Err("auto_candidate_unavailable".into());
+    }
+
+    if !policy.auto_engine
+        && candidates
+            .iter()
+            .map(|profile| (&profile.agent_type, &profile.model, &profile.effort))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 1
+    {
+        return Err("auto_engine_not_fixed".into());
+    }
+    if !policy.auto_placement
+        && candidates
+            .iter()
+            .map(|profile| &profile.machine_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 1
+    {
+        return Err("auto_placement_not_fixed".into());
+    }
+
+    let needs_decision = (policy.auto_engine || policy.auto_placement) && candidates.len() > 1;
+    let decision_service = needs_decision
+        .then(|| {
+            policy
+                .service_id
+                .as_deref()
+                .and_then(|id| registry.decision_service(id).ok())
+        })
+        .flatten()
+        .cloned();
+    let policy_digest = format!(
+        "{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&policy).map_err(|error| error.to_string())?)
+    );
+    Ok(AutoAdmissionPlan {
+        policy,
+        policy_digest,
+        candidates,
+        decision_service,
+    })
+}
+
+/// Le canon `Delegate` est construit avant le choix durable. Un profil distant
+/// requiert un project_id explicitement fourni par l'appelant : ni le profil ni
+/// le décideur ne peuvent inventer un mapping de projet.
+fn delegate_from_auto(
+    request: &AutoDelegateV1,
+    candidate: &CandidateProfile,
+) -> Result<NativeDelegationRequest, String> {
+    let (machine_id, project_id) = if candidate.machine_id == "local" {
+        if request.project_id.is_some() {
+            return Err("auto_local_project_forbidden".into());
+        }
+        (None, None)
+    } else {
+        (
+            Some(candidate.machine_id.clone()),
+            Some(
+                request
+                    .project_id
+                    .clone()
+                    .ok_or("auto_remote_project_required")?,
+            ),
+        )
+    };
+    Ok(NativeDelegationRequest::Delegate {
+        machine_id,
+        project_id,
+        request_id: request.request_id.clone(),
+        agent_type: candidate.agent_type.clone(),
+        model: candidate.model.clone(),
+        effort: candidate.effort.clone(),
+        task: request.task.clone(),
+        cwd: request.cwd.clone(),
+        posture: request.posture,
+        reply_timeout: request.reply_timeout,
+        workspace: request.workspace.clone(),
+        keep_alive_secs: request.keep_alive_secs,
+        brief: request.brief.clone(),
+        child_requests: request.child_requests.clone(),
+        fallback: Vec::new(),
+        resume_on_limit: None,
+    })
+}
+
+fn local_delegate_from_auto(
+    request: &AutoDelegateV1,
+    candidate: &CandidateProfile,
+) -> Result<NativeDelegationRequest, String> {
+    let delegate = delegate_from_auto(request, candidate)?;
+    matches!(
+        &delegate,
+        NativeDelegationRequest::Delegate {
+            machine_id: None,
+            ..
+        }
+    )
+    .then_some(delegate)
+    .ok_or_else(|| "auto_remote_probe_required".into())
+}
+
+fn auto_admission_id(canonical: &[u8]) -> String {
+    format!(
+        "a-{}",
+        &format!("{:x}", sha2::Sha256::digest(canonical))[..32]
+    )
+}
+
+fn auto_receipt_view(
+    st: &mut DaemonState,
+    receipt: &AutoAdmissionReceipt,
+) -> Result<Value, String> {
+    match receipt.state {
+        AutoAdmissionState::Admitted => {
+            let task_id = receipt.task_id.as_deref().ok_or("auto_admission_invalid")?;
+            let task = st
+                .delegation_store
+                .get(task_id)?
+                .ok_or("auto_admission_invalid")?;
+            current_task_view(st, &task, true)
+        }
+        AutoAdmissionState::Refused => Err(receipt
+            .refusal_code
+            .clone()
+            .unwrap_or_else(|| "auto_admission_refused".into())),
+        AutoAdmissionState::Pending
+        | AutoAdmissionState::DecisionStarted
+        | AutoAdmissionState::Chosen => Err("admission_pending".into()),
+    }
+}
+
+// Liste volontairement fermée : l'admission auto ne clôt durablement qu'un
+// refus métier déjà décidé. Une chaîne SQLite/Git/E/S inconnue reste `chosen`
+// et sera entretenue avec le même choix, sans nouvelle décision.
+fn auto_terminal_refusal_code(code: &str) -> Option<&str> {
+    let canonical = code
+        .split_once(':')
+        .map_or(code, |(canonical, _)| canonical);
+    if matches!(
+        canonical,
+        "agent_type_unknown"
+            | "auto_admission_invalid"
+            | "brief_invalid"
+            | "child_requests_reviewer_unsupported"
+            | "cwd_outside_parent_project"
+            | "cwd_unavailable"
+            | "delegations_halted"
+            | "effort_unavailable"
+            | "invalid_request"
+            | "keep_alive_out_of_range"
+            | "model_unavailable"
+            | "permission_not_inherited"
+            | "provider_quota_exhausted"
+            | "referent_paused"
+            | "reply_timeout_out_of_range"
+            | "retention_saturated"
+            | "task_limit"
+            | "workspace_path_unsafe"
+            | "workspace_requires_development"
+    ) {
+        return Some(canonical);
+    }
+    matches!(
+        code,
+        "workspace_base_unavailable: référence de base invalide"
+            | "workspace_base_unavailable: référence de base inconnue"
+    )
+    .then_some(code)
+}
+
+/// Après un choix local, le CAS libère le reçu et sa place seulement pour un
+/// refus métier fermé. Si la Task a gagné entre-temps, elle reste admise et le
+/// code du puits demeure observable plutôt que d'être remplacé par le CAS.
+fn close_auto_admission_error(
+    st: &DaemonState,
+    receipt: &AutoAdmissionReceipt,
+    code: String,
+) -> Result<String, String> {
+    let Some(refusal) = auto_terminal_refusal_code(&code) else {
+        return Ok(code);
+    };
+    match st
+        .delegation_store
+        .refuse_auto_admission(receipt, refusal, unix_timestamp())
+    {
+        Ok(_) => Ok(code),
+        Err(refusal_error) if refusal_error == "admission_pending" => {
+            let current = st
+                .delegation_store
+                .auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+                .ok_or("auto_admission_missing")?;
+            if current.state == AutoAdmissionState::Admitted {
+                Ok(code)
+            } else {
+                Ok(refusal_error)
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn auto_receipt(
+    owner: String,
+    request: &AutoDelegateV1,
+    canonical: Vec<u8>,
+    plan: &AutoAdmissionPlan,
+    coordinator_epoch: i64,
+    now: i64,
+) -> Result<AutoAdmissionReceipt, String> {
+    let policy_revision =
+        i64::try_from(plan.policy.revision).map_err(|_| "auto_admission_invalid")?;
+    let metadata = serde_json::to_vec(&json!({
+        "policy": &plan.policy,
+        "candidates": &plan.candidates,
+        "decision_service": &plan.decision_service,
+    }))
+    .map_err(|error| error.to_string())?;
+    Ok(AutoAdmissionReceipt {
+        owner,
+        request_id: request.request_id.clone(),
+        canonical,
+        metadata,
+        state: AutoAdmissionState::Pending,
+        coordinator_epoch,
+        revision: 0,
+        policy_revision,
+        policy_digest: plan.policy_digest.clone(),
+        candidate_id: None,
+        delegate_canonical: None,
+        mode: None,
+        reason: None,
+        task_id: None,
+        refusal_code: None,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+/// Les bornes de l'enveloppe sont vérifiées avant toute réservation. Le client
+/// MCP les répète avant connexion ; cette garde couvre aussi les appels natifs.
+fn validate_auto_admission_request(request: &AutoDelegateV1) -> Result<(), String> {
+    if request.task.is_empty() || request.task.len() > 65_536 {
+        return Err("auto_admission_invalid".into());
+    }
+    let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(request.clone()))
+        .map_err(|error| error.to_string())?;
+    if canonical.len() > crate::delegation::MAX_AUTO_ADMISSION_CANONICAL_BYTES {
+        return Err("auto_admission_invalid".into());
+    }
+    Ok(())
+}
+
+fn reserve_auto_receipt(
+    conn: &str,
+    request: &AutoDelegateV1,
+    plan: &AutoAdmissionPlan,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<AutoReceiptReservation, String> {
+    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    recheck_attested_thread(&st, conn, thread)?;
+    let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+    let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(request.clone()))
+        .map_err(|error| error.to_string())?;
+    if let Some(existing) = st
+        .delegation_store
+        .auto_admission_receipt(&owner, &request.request_id)?
+    {
+        if existing.canonical != canonical {
+            return Err("envelope_mismatch".into());
+        }
+        return auto_receipt_view(&mut st, &existing).map(AutoReceiptReservation::Existing);
+    }
+    let now = unix_timestamp();
+    make_room_for_auto_reservation(&st, now)?;
+    let receipt = auto_receipt(owner, request, canonical, plan, st.coordinator_epoch, now)?;
+    if st
+        .delegation_store
+        .reserve_auto_admission_receipt(&receipt, now)?
+    {
+        Ok(AutoReceiptReservation::New(receipt))
+    } else {
+        let existing = st
+            .delegation_store
+            .auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+            .ok_or("auto_admission_missing")?;
+        auto_receipt_view(&mut st, &existing).map(AutoReceiptReservation::Existing)
+    }
+}
+
+/// La purge d'arbres vivants reste sous le verrou du daemon. La réservation
+/// SQLite refait ensuite atomiquement tous les plafonds et ne purge que les
+/// refus auto sûrs avec leur tombstone.
+fn make_room_for_auto_reservation(st: &DaemonState, now: i64) -> Result<(), String> {
+    if st.delegation_store.admission_counts("")?.2 < crate::delegation::MAX_RETAINED_TASKS {
+        return Ok(());
+    }
+    if let Err(error) = copy_delivery_acks(st) {
+        warn!("rétention admission auto: accusés non recopiés avant la purge : {error}");
+    }
+    purge_retained(
+        st,
+        now,
+        Some(crate::delegation::MAX_RETAINED_TASKS),
+        usize::MAX,
+    );
+    Ok(())
+}
+
+/// Le rejeu est traité avant tout probe, santé ou décision : un reçu durable
+/// connu ne doit jamais produire de nouvelle E/S ni réexaminer les profils.
+fn existing_auto_receipt_view(
+    conn: &str,
+    request: &AutoDelegateV1,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Option<Value>, String> {
+    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    recheck_attested_thread(&st, conn, thread)?;
+    let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+    let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(request.clone()))
+        .map_err(|error| error.to_string())?;
+    let Some(receipt) = st
+        .delegation_store
+        .auto_admission_receipt(&owner, &request.request_id)?
+    else {
+        return Ok(None);
+    };
+    if receipt.canonical != canonical {
+        return Err("envelope_mismatch".into());
+    }
+    auto_receipt_view(&mut st, &receipt).map(Some)
+}
+
+fn auto_candidate_index(candidate_id: &str, candidates: &[CandidateProfile]) -> Option<usize> {
+    let ordinal = candidate_id.strip_prefix("c0")?.parse::<usize>().ok()?;
+    ordinal
+        .checked_sub(1)
+        .filter(|index| *index < candidates.len())
+}
+
+fn laya_auto_request(
+    request: &AutoDelegateV1,
+    receipt: &AutoAdmissionReceipt,
+    plan: &AutoAdmissionPlan,
+) -> Result<LayaDecisionRequest, String> {
+    let brief = request.brief.as_ref().ok_or("decision_brief_required")?;
+    let objective = brief
+        .get("objective")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && !value.chars().any(bridget_core::is_disallowed_control)
+        })
+        .ok_or("decision_brief_invalid")?;
+    let summary = brief
+        .get("summary")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && !value.chars().any(bridget_core::is_disallowed_control)
+        })
+        .ok_or("decision_brief_invalid")?;
+    if request.deliverable.as_deref().is_some_and(|value| {
+        value.is_empty()
+            || value.len() > 128
+            || value.chars().any(bridget_core::is_disallowed_control)
+    }) {
+        return Err("decision_brief_invalid".into());
+    }
+    let admission_id = auto_admission_id(&receipt.canonical);
+    let mut criteria = vec!["candidate_policy_match".into()];
+    // O(p*c), avec p et c bornés à 8 par la politique et le snapshot. Seuls
+    // les IDs opaques du snapshot filtré quittent cette boucle.
+    let preferred = plan
+        .policy
+        .preferences
+        .iter()
+        .filter_map(|profile_id| {
+            plan.candidates
+                .iter()
+                .position(|candidate| candidate.id == profile_id.as_str())
+                .map(|index| format!("c{:02}", index + 1))
+        })
+        .collect::<Vec<_>>();
+    let state = if preferred.is_empty() {
+        "initial_admission".into()
+    } else {
+        // Le critère reste court (instruction ≤128) ; l'ordre tient dans le
+        // state déjà borné et rappelle que brief et contraintes prévalent.
+        criteria.push("preference_order=state; brief_constraints_first".into());
+        format!(
+            "initial_admission; preference_order={}",
+            preferred.join(",")
+        )
+    };
+    Ok(LayaDecisionRequest {
+        admission_id,
+        policy_revision: plan.policy.revision,
+        brief: DecisionBrief {
+            objective: objective.into(),
+            summary: summary.into(),
+        },
+        urgent: request.urgent.unwrap_or(false),
+        deliverable: request.deliverable.clone(),
+        criteria,
+        state,
+        candidates: plan
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| DecisionCandidate {
+                candidate_id: format!("c{:02}", index + 1),
+                description: candidate.description.clone(),
+            })
+            .collect(),
+    })
+}
+
+/// Réduit le snapshot aux profils réellement observables avant tout appel HTTP.
+/// Une sonde est groupée par worker, strictement sans Prepare. Les échecs de
+/// droits, mapping ou capacité rendent le profil indisponible ; ils ne créent
+/// ni une autorisation implicite ni un repli vers une autre machine.
+fn filter_auto_candidates(
+    conn: &str,
+    request: &AutoDelegateV1,
+    candidates: &[CandidateProfile],
+    policy_revision: u64,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Vec<CandidateProfile>, String> {
+    use bridget_transport::protocol::{
+        CandidateProbe, CandidateProbeCandidate, CandidateProbeVerdict,
+        WORKER_CANDIDATE_PROBE_VERSION, WorkerIdentity,
+    };
+
+    let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(request.clone()))
+        .map_err(|error| error.to_string())?;
+    let admission_id = auto_admission_id(&canonical);
+    let (parent, mut eligible, remote_batches) = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)
+            .ok()
+            .flatten();
+        let Some(parent) = parent else {
+            return Ok(Vec::new());
+        };
+        let source = Path::new(&request.cwd);
+        if !source.is_absolute()
+            || source
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+            || !source.starts_with(&parent.cwd)
+        {
+            return Ok(Vec::new());
+        }
+        let origin_host = st
+            .delegation_store
+            .for_child(&owner)?
+            .and_then(|task| task.remote_placement)
+            .map_or_else(|| st.host.clone(), |placement| placement.machine_id);
+        let mut eligible = std::collections::BTreeSet::new();
+        let mut remote_batches: BTreeMap<String, (WorkerIdentity, Vec<CandidateProbeCandidate>)> =
+            BTreeMap::new();
+        for (index, candidate) in candidates.iter().enumerate() {
+            let candidate_id = format!("c{:02}", index + 1);
+            if candidate.machine_id == "local" {
+                if request.project_id.is_some()
+                    || resolve_target(
+                        &st.registry,
+                        &st.source_env,
+                        &st.provider_limits,
+                        &owner,
+                        &instance,
+                        Some(&parent),
+                        &candidate.agent_type,
+                        &candidate.model,
+                        candidate.effort.as_deref(),
+                        source,
+                        request.posture,
+                        request.workspace.as_ref(),
+                        request.child_requests.as_deref(),
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
+                eligible.insert(candidate_id);
+                continue;
+            }
+            let Some(project_id) = request.project_id.as_deref() else {
+                continue;
+            };
+            let Ok(provision) = st.registry.machine(&candidate.machine_id) else {
+                continue;
+            };
+            if !provision.permits_agent_type(&candidate.agent_type) {
+                continue;
+            }
+            let Ok(mapping) = st
+                .registry
+                .project_mapping(&candidate.machine_id, project_id)
+            else {
+                continue;
+            };
+            if mapping.source_host != origin_host || !source.starts_with(&mapping.source_root) {
+                continue;
+            }
+            let Ok(relative) = source.strip_prefix(&mapping.source_root) else {
+                continue;
+            };
+            let relative_cwd = if relative.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                relative.to_string_lossy().into_owned()
+            };
+            let worker = WorkerIdentity {
+                machine_id: candidate.machine_id.clone(),
+                worker_id: provision.worker_id.clone(),
+                provisioning_revision: provision.provisioning_revision,
+            };
+            let probe_candidate = CandidateProbeCandidate {
+                candidate_id,
+                project_id: project_id.to_string(),
+                origin_host: mapping.source_host.clone(),
+                origin_cwd: request.cwd.clone(),
+                source_root: mapping.source_root.to_string_lossy().into_owned(),
+                remote_root: mapping.remote_root.to_string_lossy().into_owned(),
+                source_root_identity: mapping.expected_git_identity.clone(),
+                relative_cwd,
+                base_commit: None,
+                agent_type: candidate.agent_type.clone(),
+                model: candidate.model.clone(),
+                effort: candidate.effort.clone(),
+                posture: request.posture,
+                workspace: request.workspace.clone(),
+            };
+            remote_batches
+                .entry(candidate.machine_id.clone())
+                .or_insert_with(|| (worker, Vec::new()))
+                .1
+                .push(probe_candidate);
+        }
+        (parent, eligible, remote_batches)
+    };
+
+    for (_, (worker, probe_candidates)) in remote_batches {
+        let wanted = probe_candidates
+            .iter()
+            .map(|candidate| candidate.candidate_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let probe = CandidateProbe {
+            version: WORKER_CANDIDATE_PROBE_VERSION,
+            correlation_id: Uuid::new_v4().to_string(),
+            connection_epoch: String::new(),
+            worker,
+            admission_id: admission_id.clone(),
+            policy_revision,
+            parent: parent.clone(),
+            candidates: probe_candidates,
+        };
+        let Ok(result) =
+            remote_candidate_probe(state, probe, Instant::now() + Duration::from_secs(5))
+        else {
+            continue;
+        };
+        for verdict in result.verdicts {
+            if let CandidateProbeVerdict::Eligible { candidate_id, .. } = verdict
+                && wanted.contains(&candidate_id)
+            {
+                eligible.insert(candidate_id);
+            }
+        }
+    }
+    Ok(candidates
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| eligible.contains(&format!("c{:02}", index + 1)))
+        .map(|(_, candidate)| candidate.clone())
+        .collect())
+}
+
+fn finalise_auto_local_choice(
+    conn: &str,
+    request: &AutoDelegateV1,
+    candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    receipt: &AutoAdmissionReceipt,
+    plan: &AutoAdmissionPlan,
+    choice: DecisionChoice,
+    mode: AutoAdmissionMode,
+    st: &mut DaemonState,
+) -> Result<Value, String> {
+    let index = auto_candidate_index(&choice.candidate_id, &plan.candidates)
+        .ok_or("decision_service_response_invalid")?;
+    let candidate = &plan.candidates[index];
+    let delegate = match local_delegate_from_auto(request, candidate) {
+        Ok(delegate) => delegate,
+        Err(code) => {
+            return Err(close_auto_admission_error(st, receipt, code)?);
+        }
+    };
+    let delegate_canonical = serde_json::to_vec(&delegate).map_err(|error| error.to_string())?;
+    let chosen = st.delegation_store.choose_auto_admission(
+        &receipt.owner,
+        &receipt.request_id,
+        &receipt.canonical,
+        choice.candidate_id,
+        delegate_canonical,
+        mode,
+        choice.reason,
+        unix_timestamp(),
+    )?;
+    match admit_delegate(
+        conn,
+        &delegate,
+        candidate_project,
+        attested,
+        st,
+        WorkspacePass::Shared,
+        Some(&chosen),
+    ) {
+        Ok(WorkspaceAdmission::View(view)) => Ok(view),
+        Ok(_) => Err(close_auto_admission_error(
+            st,
+            &chosen,
+            "auto_admission_invalid".into(),
+        )?),
+        Err(code) => Err(close_auto_admission_error(st, &chosen, code)?),
+    }
+}
+
+/// Le choix est toujours durci dans le reçu avant tout effet. Les candidats
+/// locaux restent au puits déjà verrouillé ; un candidat distant passe ensuite
+/// par Prepare162 avec le même reçu chosen, sans réordonner les profils.
+fn finalise_auto_choice(
+    conn: &str,
+    request: &AutoDelegateV1,
+    candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    receipt: &AutoAdmissionReceipt,
+    plan: &AutoAdmissionPlan,
+    choice: DecisionChoice,
+    mode: AutoAdmissionMode,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Value, String> {
+    // SC007 : avec les deux axes gelés, un profil unique du snapshot est un
+    // choix explicite. Un fallback reste un fallback et tout axe automatique
+    // conserve son mode Automatic. Cette normalisation précède chaque puits,
+    // donc le reçu est identique après reprise.
+    let mode = if !plan.policy.auto_engine
+        && !plan.policy.auto_placement
+        && mode == AutoAdmissionMode::Automatic
+    {
+        AutoAdmissionMode::Explicit
+    } else {
+        mode
+    };
+    let index = auto_candidate_index(&choice.candidate_id, &plan.candidates)
+        .ok_or("decision_service_response_invalid")?;
+    let candidate = plan
+        .candidates
+        .get(index)
+        .ok_or("decision_service_response_invalid")?;
+    let delegate = delegate_from_auto(request, candidate)?;
+    if matches!(
+        &delegate,
+        NativeDelegationRequest::Delegate {
+            machine_id: None,
+            ..
+        }
+    ) {
+        if matches!(
+            &delegate,
+            NativeDelegationRequest::Delegate {
+                workspace: Some(WorkspaceRequest::Worktree { .. }),
+                ..
+            }
+        ) {
+            let chosen = {
+                let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                recheck_attested_thread(&st, conn, thread)?;
+                st.delegation_store.choose_auto_admission(
+                    &receipt.owner,
+                    &receipt.request_id,
+                    &receipt.canonical,
+                    choice.candidate_id,
+                    serde_json::to_vec(&delegate).map_err(|error| error.to_string())?,
+                    mode,
+                    choice.reason,
+                    unix_timestamp(),
+                )?
+            };
+            return match delegate_worktree(
+                conn,
+                &delegate,
+                candidate_project,
+                attested,
+                thread,
+                Some(&chosen),
+                state,
+            ) {
+                Ok(view) => Ok(view),
+                Err(code) => {
+                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    recheck_attested_thread(&st, conn, thread)?;
+                    Err(close_auto_admission_error(&st, &chosen, code)?)
+                }
+            };
+        }
+        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        return finalise_auto_local_choice(
+            conn,
+            request,
+            candidate_project,
+            attested,
+            receipt,
+            plan,
+            choice,
+            mode,
+            &mut st,
+        );
+    }
+
+    let delegate_canonical = serde_json::to_vec(&delegate).map_err(|error| error.to_string())?;
+    let chosen = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        st.delegation_store.choose_auto_admission(
+            &receipt.owner,
+            &receipt.request_id,
+            &receipt.canonical,
+            choice.candidate_id,
+            delegate_canonical,
+            mode,
+            choice.reason,
+            unix_timestamp(),
+        )?
+    };
+    match delegate_remote(
+        conn,
+        &delegate,
+        candidate_project,
+        attested,
+        thread,
+        permission_proof,
+        Some(&chosen),
+        state,
+    ) {
+        Ok(view) => Ok(view),
+        Err(code) => {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            recheck_attested_thread(&st, conn, thread)?;
+            // Si la Task a déjà été liée, le CAS refuse et son état admis reste
+            // la seule vérité. Le conflit CAS ne masque donc pas l'erreur
+            // distante initiale ; une erreur SQL, elle, reste observable.
+            Err(close_auto_admission_error(&st, &chosen, code)?)
+        }
+    }
+}
+
+/// Seule voie HTTP 163 : le reçu passe à `decision_started` avant toute E/S,
+/// puis le mutex daemon est relâché jusqu'au retour. Une deadline demandeur
+/// n'autorise aucun deuxième appel, car le permis vit dans `DecisionServiceClient`.
+fn admit_auto_configured(
+    conn: &str,
+    request: &AutoDelegateV1,
+    candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Value, String> {
+    validate_auto_admission_request(request)?;
+    // Un rejeu relit d'abord son reçu et son canon, sous les mêmes gardes
+    // d'identité/fil. La politique fraîche ne concerne qu'une nouvelle clé :
+    // une modification ou une indisponibilité ultérieure ne peut pas masquer
+    // une admission déjà décidée.
+    if let Some(view) = existing_auto_receipt_view(conn, request, thread, state)? {
+        return Ok(view);
+    }
+    let registry = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        st.registry.clone()
+    };
+    let mut plan = fresh_auto_admission_plan(&registry, request)?;
+    plan.candidates = filter_auto_candidates(
+        conn,
+        request,
+        &plan.candidates,
+        plan.policy.revision,
+        attested,
+        state,
+    )?;
+    if plan.candidates.is_empty() {
+        return Err("auto_candidate_unavailable".into());
+    }
+    let receipt = match reserve_auto_receipt(conn, request, &plan, thread, state)? {
+        AutoReceiptReservation::Existing(view) => return Ok(view),
+        AutoReceiptReservation::New(receipt) => receipt,
+    };
+    if plan.candidates.len() == 1 || plan.decision_service.is_none() {
+        let selection = if plan.candidates.len() == 1 {
+            Some((0, AutoAdmissionMode::Automatic))
+        } else {
+            plan.policy
+                .fallback_profile
+                .as_deref()
+                .and_then(|fallback| {
+                    plan.candidates
+                        .iter()
+                        .position(|candidate| candidate.id == fallback)
+                        .map(|index| (index, AutoAdmissionMode::Fallback))
+                })
+        };
+        let Some((index, mode)) = selection else {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            recheck_attested_thread(&st, conn, thread)?;
+            st.delegation_store.refuse_auto_admission(
+                &receipt,
+                "decision_service_unavailable",
+                unix_timestamp(),
+            )?;
+            return Err("decision_service_unavailable".into());
+        };
+        return finalise_auto_choice(
+            conn,
+            request,
+            candidate_project,
+            attested,
+            thread,
+            permission_proof,
+            &receipt,
+            &plan,
+            DecisionChoice {
+                candidate_id: format!("c{:02}", index + 1),
+                reason: None,
+            },
+            mode,
+            state,
+        );
+    }
+
+    let (receipt, client, service) = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        let started = st
+            .delegation_store
+            .start_auto_decision(&receipt, unix_timestamp())?;
+        (
+            started,
+            st.decision_service.clone(),
+            plan.decision_service
+                .clone()
+                .ok_or("decision_service_unavailable")?,
+        )
+    };
+    let payload = match laya_auto_request(request, &receipt, &plan) {
+        Ok(payload) => payload,
+        Err(code) => {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            recheck_attested_thread(&st, conn, thread)?;
+            st.delegation_store
+                .refuse_auto_admission(&receipt, &code, unix_timestamp())?;
+            return Err(code);
+        }
+    };
+    let deadline = CallerDeadline::new();
+    let outcome: Result<DecisionChoice, String> = match client.health(
+        plan.policy
+            .service_id
+            .as_deref()
+            .ok_or("decision_service_unavailable")?,
+        &service,
+        deadline,
+    ) {
+        Ok(HealthStatus::Available) => client
+            .decide(&service, &payload, deadline)
+            .map_err(|error| error.code().into()),
+        Ok(HealthStatus::Unavailable { reason }) => Err(reason.into()),
+        Err(error) => Err(error.code().into()),
+    };
+    match outcome {
+        Ok(choice) => finalise_auto_choice(
+            conn,
+            request,
+            candidate_project,
+            attested,
+            thread,
+            permission_proof,
+            &receipt,
+            &plan,
+            choice,
+            AutoAdmissionMode::Automatic,
+            state,
+        ),
+        Err(code) => {
+            if let Some(fallback) = plan.policy.fallback_profile.as_deref() {
+                let Some(index) = plan
+                    .candidates
+                    .iter()
+                    .position(|candidate| candidate.id == fallback)
+                else {
+                    let fallback_code = "fallback_profile_unavailable";
+                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    recheck_attested_thread(&st, conn, thread)?;
+                    st.delegation_store.refuse_auto_admission(
+                        &receipt,
+                        fallback_code,
+                        unix_timestamp(),
+                    )?;
+                    return Err(fallback_code.into());
+                };
+                return finalise_auto_choice(
+                    conn,
+                    request,
+                    candidate_project,
+                    attested,
+                    thread,
+                    permission_proof,
+                    &receipt,
+                    &plan,
+                    DecisionChoice {
+                        candidate_id: format!("c{:02}", index + 1),
+                        reason: None,
+                    },
+                    AutoAdmissionMode::Fallback,
+                    state,
+                );
+            }
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            recheck_attested_thread(&st, conn, thread)?;
+            st.delegation_store
+                .refuse_auto_admission(&receipt, &code, unix_timestamp())?;
+            Err(code)
+        }
+    }
+}
 
 #[derive(Default)]
 pub(super) struct WorkspaceWork {
@@ -754,6 +1835,7 @@ fn handle_with_fact(
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
         let cwd = match &request {
             NativeDelegationRequest::Delegate { cwd, .. } => Some(cwd.clone()),
+            NativeDelegationRequest::AutoDelegate(request) => Some(request.cwd.clone()),
             NativeDelegationRequest::Continue { task_id, .. } => {
                 // Ce calcul n'est qu'un candidat Git. La propriété, les erreurs
                 // de magasin et le rejeu sont contrôlés ensuite dans leur ordre.
@@ -796,6 +1878,7 @@ fn handle_with_fact(
             fact.as_ref(),
             thread,
             permission_proof,
+            None,
             state,
         )
         .unwrap_or_else(|code| failure(&code));
@@ -814,6 +1897,23 @@ fn handle_with_fact(
             candidate_project.as_ref(),
             fact.as_ref(),
             thread,
+            None,
+            state,
+        )
+        .unwrap_or_else(|code| failure(&code));
+        if result["status"] != "refused" {
+            tick(state);
+        }
+        return DaemonToWrapper::NativeDelegationResult { result };
+    }
+    if let NativeDelegationRequest::AutoDelegate(request) = &request {
+        let result = admit_auto_configured(
+            conn,
+            request,
+            candidate_project.as_ref(),
+            fact.as_ref(),
+            thread,
+            permission_proof,
             state,
         )
         .unwrap_or_else(|code| failure(&code));
@@ -1009,6 +2109,7 @@ fn delegate_remote(
     attested: Option<&bridget_transport::protocol::ProviderPermissions>,
     thread: Option<&str>,
     permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    auto_receipt: Option<&AutoAdmissionReceipt>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
     use bridget_transport::protocol::*;
@@ -1037,6 +2138,17 @@ fn delegate_remote(
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, instance) =
             live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        // La clé auto appartient au reçu durci : un Delegate externe ne peut
+        // ni le rejoindre ni atteindre Prepare. Le chemin interne porte son
+        // reçu chosen et reste le seul autorisé à matérialiser cette Task.
+        if auto_receipt.is_none()
+            && st
+                .delegation_store
+                .auto_admission_receipt(&owner, request_id)?
+                .is_some()
+        {
+            return Err("auto_admission_reserved".into());
+        }
         if let Some(mut saved) = st
             .delegation_store
             .by_agent_request(&owner, request_id, &canonical)?
@@ -1139,6 +2251,7 @@ fn delegate_remote(
                 prepared: &prepared,
                 task_id: &task_id,
             },
+            auto_receipt,
         )? {
             WorkspaceAdmission::View(view)
                 if view["task_id"].as_str() != Some(task_id.as_str()) =>
@@ -1820,12 +2933,21 @@ fn delegate_worktree(
     project: Option<&bridget_transport::protocol::CommunicationProject>,
     fact: Option<&bridget_transport::protocol::ProviderPermissions>,
     thread: Option<&str>,
+    auto_receipt: Option<&AutoAdmissionReceipt>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
     let (cwd, selected_request, selected_definition, substitution) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
-        match admit_delegate(conn, request, project, fact, &mut st, WorkspacePass::Probe)? {
+        match admit_delegate(
+            conn,
+            request,
+            project,
+            fact,
+            &mut st,
+            WorkspacePass::Probe,
+            auto_receipt,
+        )? {
             WorkspaceAdmission::View(view) => return Ok(view),
             WorkspaceAdmission::Probe(cwd, selected, definition, substitution) => {
                 (cwd, selected, definition, substitution)
@@ -1840,7 +2962,9 @@ fn delegate_worktree(
     else {
         return Err("invalid_request".into());
     };
-    let plan = crate::workspace_git::preflight(&cwd, base_ref.as_deref(), branch.as_deref())?;
+    let plan =
+        crate::workspace_git::preflight_classified(&cwd, base_ref.as_deref(), branch.as_deref())
+            .map_err(|error| error.into_admission(auto_receipt.is_some()))?;
     let task_id = Uuid::new_v4().to_string();
     let (reserved, _claim) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1860,6 +2984,7 @@ fn delegate_worktree(
                     substitution.as_ref(),
                 ),
             },
+            auto_receipt,
         )? {
             WorkspaceAdmission::View(view) => return Ok(view),
             WorkspaceAdmission::Reserved { task, claim } => (task, claim),
@@ -1876,7 +3001,15 @@ fn delegate_worktree(
         expected_path.display(),
         branch
     );
-    let record = crate::workspace_git::create(&plan, &reserved.task_id)?;
+    // La réservation est seulement en RAM. Un échec de création peut laisser
+    // des effets Git : Auto conserve le choix et le diagnostic complet.
+    let record = crate::workspace_git::create(&plan, &reserved.task_id).map_err(|error| {
+        if auto_receipt.is_some() {
+            format!("workspace_create_technical: {error}")
+        } else {
+            error
+        }
+    })?;
     let result = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread).and_then(|()| {
@@ -1896,6 +3029,7 @@ fn delegate_worktree(
                         substitution.as_ref(),
                     ),
                 },
+                auto_receipt,
             )
         })
     };
@@ -2313,6 +3447,7 @@ fn admit_delegate(
     attested: Option<&bridget_transport::protocol::ProviderPermissions>,
     st: &mut DaemonState,
     pass: WorkspacePass<'_>,
+    auto_receipt: Option<&crate::delegation::AutoAdmissionReceipt>,
 ) -> Result<WorkspaceAdmission, String> {
     let (owner, instance) = live_connection_identity(st, conn).ok_or("identity_unavailable")?;
     let NativeDelegationRequest::Delegate {
@@ -2410,6 +3545,14 @@ fn admit_delegate(
         })
         .transpose()?;
     let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+    if auto_receipt.is_none()
+        && st
+            .delegation_store
+            .auto_admission_receipt(&owner, request_id)?
+            .is_some()
+    {
+        return Err("auto_admission_reserved".into());
+    }
     if let Some(mut saved) = st
         .delegation_store
         .by_agent_request(&owner, request_id, &canonical)?
@@ -2420,6 +3563,15 @@ fn admit_delegate(
     // Le magasin garde seul la liste fermée. Capturer uniquement les
     // refus d'une nouvelle admission, jamais un rejeu ou un parse invalide.
     let receipt_owner = owner.clone();
+    // Avant admit_auto_task, les lectures Commit restent susceptibles d'E/S.
+    // Les textes legacy sont inchangés; Auto garde l'erreur originale ouverte.
+    let path_error = |legacy: &str, error: std::io::Error| -> String {
+        if auto_receipt.is_some() && matches!(pass, WorkspacePass::Commit { .. }) {
+            format!("workspace_commit_technical: {legacy}: {error}")
+        } else {
+            legacy.into()
+        }
+    };
     let result: Result<WorkspaceAdmission, String> = (|| {
         // ADR 027 : garde unique des puits autonomes. Après le rejeu (une clé admise ou
         // purgée garde sa réponse), avant toute lecture de droits ; aucune écriture.
@@ -2476,8 +3628,10 @@ fn admit_delegate(
             }
             PathBuf::from(&prepared.placement.execution_cwd)
         } else if let Some(fact) = &fact {
-            let path = std::fs::canonicalize(cwd).map_err(|_| "cwd_unavailable")?;
-            let root = std::fs::canonicalize(&fact.cwd).map_err(|_| "cwd_unavailable")?;
+            let path =
+                std::fs::canonicalize(cwd).map_err(|error| path_error("cwd_unavailable", error))?;
+            let root = std::fs::canonicalize(&fact.cwd)
+                .map_err(|error| path_error("cwd_unavailable", error))?;
             if !path.is_dir() || !path.starts_with(&root) {
                 return Err("cwd_outside_parent_project".into());
             }
@@ -2728,9 +3882,10 @@ fn admit_delegate(
                 }
                 let expected = plan.worktree_dir.join(&task_id_for_pass(pass)[..8]);
                 let path = std::fs::canonicalize(&record.path)
-                    .map_err(|_| "workspace_path_unsafe: worktree absent")?;
-                let child = std::fs::canonicalize(path.join(&plan.offset))
-                    .map_err(|_| "workspace_path_unsafe: dossier enfant absent")?;
+                    .map_err(|error| path_error("workspace_path_unsafe: worktree absent", error))?;
+                let child = std::fs::canonicalize(path.join(&plan.offset)).map_err(|error| {
+                    path_error("workspace_path_unsafe: dossier enfant absent", error)
+                })?;
                 if path != expected
                     || !path.starts_with(&frozen_cwd)
                     || child != expected.join(&plan.offset)
@@ -2767,8 +3922,14 @@ fn admit_delegate(
             WorkspacePass::Probe => unreachable!(),
         };
         // Complexité : O(a + n) — comptages SQL, aucune tâche chargée (n ≤ 4096).
-        let (active, instance_active, mut retained) =
-            st.delegation_store.admission_counts(&instance)?;
+        // Le reçu auto `chosen` tient déjà une place. Son puits remplace cette
+        // place par la Task dans la même transaction, sans l'additionner une
+        // seconde fois ni ramener la limite de l'owner à l'instance éphémère.
+        let (active, instance_active, mut retained) = if auto_receipt.is_some() {
+            st.delegation_store.admission_counts_for_owner(&owner)?
+        } else {
+            st.delegation_store.admission_counts(&instance)?
+        };
         let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
         let own = matches!(pass, WorkspacePass::Commit { .. });
         let reservations = work
@@ -2784,12 +3945,32 @@ fn admit_delegate(
             })
             .count();
         drop(work);
-        if active + reservations >= 128 || instance_active + instance_reservations >= 16 {
+        let existing_auto_slot = usize::from(auto_receipt.is_some());
+        if active + reservations >= crate::delegation::MAX_ACTIVE_ADMISSIONS + existing_auto_slot
+            || instance_active + instance_reservations
+                >= crate::delegation::MAX_ACTIVE_ADMISSIONS_PER_OWNER + existing_auto_slot
+        {
             return Err("task_limit".into());
         }
-        if retained >= crate::delegation::MAX_RETAINED_TASKS {
-            // Borne de rétention atteinte : purge de borne (accusés recopiés d'abord,
-            // arbres soldés du plus ancien au plus récent), puis seulement refus.
+        // Le reçu auto choisi et la Task finale portent la même clé UNION : au
+        // plafond exact, le puits interne la remplace, il ne l'ajoute pas.
+        let retained_bound = crate::delegation::MAX_RETAINED_TASKS + existing_auto_slot;
+        if retained >= retained_bound {
+            // Le seul reçu auto terminal sans Task est évacuable avant tout refus
+            // de saturation. Sa suppression et son tombstone sont atomiques.
+            st.delegation_store.purge_auto_refusals_under_pressure(
+                unix_timestamp(),
+                crate::delegation::MAX_RETAINED_TASKS,
+            )?;
+            retained = if auto_receipt.is_some() {
+                st.delegation_store.admission_counts_for_owner(&owner)?.2
+            } else {
+                st.delegation_store.admission_counts(&instance)?.2
+            };
+        }
+        if retained >= retained_bound {
+            // Les arbres historiques restent le second recours ; les accusés
+            // sont recopiés avant une purge de borne native.
             if let Err(error) = copy_delivery_acks(st) {
                 warn!("rétention native: accusés non recopiés avant la purge de borne : {error}");
             }
@@ -2799,8 +3980,12 @@ fn admit_delegate(
                 Some(crate::delegation::MAX_RETAINED_TASKS),
                 usize::MAX,
             );
-            retained = st.delegation_store.admission_counts(&instance)?.2;
-            if retained >= crate::delegation::MAX_RETAINED_TASKS {
+            retained = if auto_receipt.is_some() {
+                st.delegation_store.admission_counts_for_owner(&owner)?.2
+            } else {
+                st.delegation_store.admission_counts(&instance)?.2
+            };
+            if retained >= retained_bound {
                 return Err("retention_saturated".into());
             }
         }
@@ -2938,8 +4123,18 @@ fn admit_delegate(
             } else {
                 0
             };
-        st.delegation_store
-            .insert(&record, request_id, &canonical)?;
+        if let Some(receipt) = auto_receipt {
+            st.delegation_store.admit_auto_task(
+                receipt,
+                &record,
+                request_id,
+                &canonical,
+                unix_timestamp(),
+            )?;
+        } else {
+            st.delegation_store
+                .insert(&record, request_id, &canonical)?;
+        }
         if matches!(pass, WorkspacePass::Commit { .. }) {
             // La place réservée devient la tâche durable sous le même verrou.
             st.workspace_work
@@ -2959,14 +4154,21 @@ fn admit_delegate(
         Ok(WorkspaceAdmission::View(view))
     })();
     if let Err(code) = &result {
-        st.delegation_store.record_refusal(
-            &receipt_owner,
-            request_id,
-            &canonical,
-            code.split_once(':')
-                .map_or(code.as_str(), |(canonical, _)| canonical),
-            unix_timestamp(),
-        )?;
+        if let Some(receipt) = auto_receipt {
+            if let Some(refusal) = auto_terminal_refusal_code(code) {
+                st.delegation_store
+                    .refuse_auto_admission(receipt, refusal, unix_timestamp())?;
+            }
+        } else {
+            st.delegation_store.record_refusal(
+                &receipt_owner,
+                request_id,
+                &canonical,
+                code.split_once(':')
+                    .map_or(code.as_str(), |(canonical, _)| canonical),
+                unix_timestamp(),
+            )?;
+        }
     }
     result
 }
@@ -3151,11 +4353,13 @@ fn handle_locked_with_remote_proof(
                 attested,
                 st,
                 WorkspacePass::Shared,
+                None,
             )? {
                 WorkspaceAdmission::View(view) => Ok(view),
                 _ => unreachable!("admission partagée"),
             }
         }
+        NativeDelegationRequest::AutoDelegate(_) => Err("auto_admission_configured_only".into()),
         NativeDelegationRequest::Status { task_id } => {
             let task = st
                 .delegation_store
@@ -5555,6 +6759,337 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
     }
 }
 
+fn recovered_auto_request(receipt: &AutoAdmissionReceipt) -> Result<AutoDelegateV1, String> {
+    let request: NativeDelegationRequest =
+        serde_json::from_slice(&receipt.canonical).map_err(|_| "auto_admission_invalid")?;
+    let NativeDelegationRequest::AutoDelegate(request) = request else {
+        return Err("auto_admission_invalid".into());
+    };
+    if request.request_id != receipt.request_id {
+        return Err("auto_admission_invalid".into());
+    }
+    Ok(request)
+}
+
+/// Trouve une route du propriétaire sans la considérer comme un rejeu : la
+/// reprise n'utilise que les mêmes faits vivants de droits que le puits natif.
+/// Un reçu d'époque antérieure a déjà reçu une réconciliation complète : sans
+/// route ou sans fait, il ne peut plus obtenir de droit et devient refusé au
+/// passage appelant. Les erreurs techniques restent, elles, observables.
+fn auto_recovery_context(
+    receipt: &AutoAdmissionReceipt,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<
+    (
+        String,
+        Option<bridget_transport::protocol::ProviderPermissions>,
+        Option<bridget_transport::protocol::CommunicationProject>,
+    ),
+    String,
+> {
+    let request = recovered_auto_request(receipt)?;
+    let (conn, fact, host, cwd) = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(route) = st.router.get_agent(&receipt.owner) else {
+            return Err("permission_not_inherited".into());
+        };
+        let conn = route.connection_id.clone();
+        let Some((owner, instance)) = live_connection_identity(&st, &conn) else {
+            return Err("permission_not_inherited".into());
+        };
+        if owner != receipt.owner {
+            return Err("permission_not_inherited".into());
+        }
+        let fact = parent_fact(&st, &owner, &instance, Some(&receipt.request_id), None)?;
+        if fact.is_none() && root_permission(&st, &owner, &instance)?.is_none() {
+            return Err("permission_not_inherited".into());
+        }
+        (conn, fact, st.host.clone(), request.cwd)
+    };
+    let project = crate::communication::resolve_communication_project(
+        &cwd,
+        &host,
+        bridget_transport::protocol::CommunicationProjectSource::Git,
+        None,
+    );
+    Ok((conn, fact, project))
+}
+
+/// Revalide seulement les profils déjà figés dans le reçu. Aucun registre
+/// frais, candidat supplémentaire ou appel de décision n'entre dans cette
+/// reprise post-crash.
+fn reprobe_frozen_auto_candidate_indices(
+    conn: &str,
+    request: &AutoDelegateV1,
+    plan: &AutoAdmissionPlan,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Vec<usize>, String> {
+    let available = filter_auto_candidates(
+        conn,
+        request,
+        &plan.candidates,
+        plan.policy.revision,
+        fact,
+        state,
+    )?;
+    Ok(plan
+        .candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| available.iter().any(|value| value.id == candidate.id))
+        .map(|(index, _)| index)
+        .collect())
+}
+
+fn frozen_fallback_choice(
+    plan: &AutoAdmissionPlan,
+    available: &[usize],
+) -> Option<(DecisionChoice, AutoAdmissionMode)> {
+    plan.policy
+        .fallback_profile
+        .as_deref()
+        .and_then(|fallback| {
+            plan.candidates
+                .iter()
+                .position(|candidate| candidate.id == fallback)
+                .filter(|index| available.contains(index))
+                .map(|index| {
+                    (
+                        DecisionChoice {
+                            candidate_id: format!("c{:02}", index + 1),
+                            reason: None,
+                        },
+                        AutoAdmissionMode::Fallback,
+                    )
+                })
+        })
+}
+
+fn resume_chosen_auto_admission(
+    conn: &str,
+    request: &AutoDelegateV1,
+    candidate_project: Option<&bridget_transport::protocol::CommunicationProject>,
+    fact: Option<&bridget_transport::protocol::ProviderPermissions>,
+    receipt: &AutoAdmissionReceipt,
+    plan: &AutoAdmissionPlan,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<(), String> {
+    let result = (|| {
+        let candidate_id = receipt
+            .candidate_id
+            .as_deref()
+            .ok_or("auto_admission_invalid")?;
+        let candidate = plan
+            .candidates
+            .get(
+                auto_candidate_index(candidate_id, &plan.candidates)
+                    .ok_or("auto_admission_invalid")?,
+            )
+            .ok_or("auto_admission_invalid")?;
+        let expected = delegate_from_auto(request, candidate)?;
+        let expected_canonical =
+            serde_json::to_vec(&expected).map_err(|error| error.to_string())?;
+        if receipt.delegate_canonical.as_deref() != Some(expected_canonical.as_slice()) {
+            return Err("auto_admission_invalid".into());
+        }
+        match &expected {
+            NativeDelegationRequest::Delegate {
+                machine_id: Some(_),
+                ..
+            } => {
+                delegate_remote(
+                    conn,
+                    &expected,
+                    candidate_project,
+                    fact,
+                    None,
+                    None,
+                    Some(receipt),
+                    state,
+                )?;
+            }
+            NativeDelegationRequest::Delegate {
+                workspace: Some(WorkspaceRequest::Worktree { .. }),
+                ..
+            } => {
+                delegate_worktree(
+                    conn,
+                    &expected,
+                    candidate_project,
+                    fact,
+                    None,
+                    Some(receipt),
+                    state,
+                )?;
+            }
+            NativeDelegationRequest::Delegate { .. } => {
+                let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+                match admit_delegate(
+                    conn,
+                    &expected,
+                    candidate_project,
+                    fact,
+                    &mut st,
+                    WorkspacePass::Shared,
+                    Some(receipt),
+                )? {
+                    WorkspaceAdmission::View(_) => {}
+                    _ => return Err("auto_admission_invalid".into()),
+                }
+            }
+            _ => return Err("auto_admission_invalid".into()),
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(code) => {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            Err(close_auto_admission_error(&st, receipt, code)?)
+        }
+    }
+}
+
+/// Rattrapage post-réconciliation : une époque antérieure n'est jamais
+/// redécidée. Les E/S éventuelles du puits (préparation distante ou Git) sont
+/// faites hors mutex, tandis que chaque transition conserve son CAS durable.
+fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
+    let receipts = {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        st.delegation_store
+            .auto_admission_receipts_before_epoch(st.coordinator_epoch, 128)
+    };
+    let receipts = match receipts {
+        Ok(receipts) => receipts,
+        Err(error) => {
+            warn!("entretien admission auto: lecture des reçus orphelins: {error}");
+            return;
+        }
+    };
+    for receipt in receipts {
+        let result = (|| -> Result<(), String> {
+            let request = recovered_auto_request(&receipt)?;
+            let plan = frozen_auto_admission_plan(&receipt)?;
+            let (conn, fact, project) = match auto_recovery_context(&receipt, state) {
+                Ok(context) => context,
+                Err(code) if code == "permission_not_inherited" => {
+                    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                    st.delegation_store.refuse_auto_admission(
+                        &receipt,
+                        "permission_not_inherited",
+                        unix_timestamp(),
+                    )?;
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            };
+            match receipt.state {
+                AutoAdmissionState::Pending => {
+                    let available = reprobe_frozen_auto_candidate_indices(
+                        &conn,
+                        &request,
+                        &plan,
+                        fact.as_ref(),
+                        state,
+                    )?;
+                    if available.len() == 1 {
+                        let index = available[0];
+                        finalise_auto_choice(
+                            &conn,
+                            &request,
+                            project.as_ref(),
+                            fact.as_ref(),
+                            None,
+                            None,
+                            &receipt,
+                            &plan,
+                            DecisionChoice {
+                                candidate_id: format!("c{:02}", index + 1),
+                                reason: None,
+                            },
+                            AutoAdmissionMode::Automatic,
+                            state,
+                        )?;
+                    } else if let Some((choice, mode)) = frozen_fallback_choice(&plan, &available) {
+                        finalise_auto_choice(
+                            &conn,
+                            &request,
+                            project.as_ref(),
+                            fact.as_ref(),
+                            None,
+                            None,
+                            &receipt,
+                            &plan,
+                            choice,
+                            mode,
+                            state,
+                        )?;
+                    } else {
+                        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                        st.delegation_store.refuse_auto_admission(
+                            &receipt,
+                            "decision_interrupted",
+                            unix_timestamp(),
+                        )?;
+                    }
+                }
+                AutoAdmissionState::DecisionStarted => {
+                    let available = reprobe_frozen_auto_candidate_indices(
+                        &conn,
+                        &request,
+                        &plan,
+                        fact.as_ref(),
+                        state,
+                    )?;
+                    if let Some((choice, mode)) = frozen_fallback_choice(&plan, &available) {
+                        finalise_auto_choice(
+                            &conn,
+                            &request,
+                            project.as_ref(),
+                            fact.as_ref(),
+                            None,
+                            None,
+                            &receipt,
+                            &plan,
+                            choice,
+                            mode,
+                            state,
+                        )?;
+                    } else {
+                        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                        st.delegation_store.refuse_auto_admission(
+                            &receipt,
+                            "decision_interrupted",
+                            unix_timestamp(),
+                        )?;
+                    }
+                }
+                AutoAdmissionState::Chosen => resume_chosen_auto_admission(
+                    &conn,
+                    &request,
+                    project.as_ref(),
+                    fact.as_ref(),
+                    &receipt,
+                    &plan,
+                    state,
+                )?,
+                AutoAdmissionState::Admitted | AutoAdmissionState::Refused => {}
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            // Une panne SQL, un snapshot hostile ou une garde redevenue
+            // indisponible ne clôt jamais fictivement le reçu : le lot suivant
+            // le relira avec son même canon et sans appel de décision.
+            warn!(
+                "entretien admission auto {}/{}: {error}",
+                receipt.owner, receipt.request_id
+            );
+        }
+    }
+}
+
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     // Une sonde par cadence existante (1 s), sans attendre sa réponse réseau.
     // L'observation revient par le handler worker corrélé, même après reprise maître.
@@ -6433,6 +7968,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     for task in cleanups {
         cancel_tree(state, &task);
     }
+    // Après la réconciliation des tâches 152/160 de cette cadence, reprendre
+    // seulement les reçus auto de l'incarnation précédente. Aucun appel de
+    // décision n'est autorisé sur ce chemin d'entretien.
+    recover_auto_admissions(state);
 }
 
 fn descendants_busy(st: &DaemonState, task: &Task) -> Result<bool, String> {
@@ -7128,6 +8667,17 @@ pub(super) fn copy_delivery_acks(st: &DaemonState) -> Result<usize, String> {
 pub(super) fn maintain_retention(st: &DaemonState, now: i64) {
     let max_trees = crate::disk_hygiene::MAX_ENTRIES_PER_PASS;
     let mut trees = purge_retained(st, now, None, max_trees);
+    let auto_limit = max_trees.saturating_sub(trees);
+    if auto_limit > 0 {
+        match st
+            .delegation_store
+            .purge_expired_auto_admission_refusals(now, auto_limit)
+        {
+            Ok(0) => {}
+            Ok(count) => info!("entretien: {count} reçu(s) auto terminal(aux) expiré(s) purgé(s)"),
+            Err(error) => warn!("entretien: reçus auto terminaux : {error}"),
+        }
+    }
     // Purge de borne : une base au-dessus de 4096 tâches (écriture externe, ancien
     // volume) redescend par lots, sans attendre une admission. Le quota de 128 arbres
     // est partagé avec la purge d'âge : le second appel ne reçoit que le reste.
@@ -7156,6 +8706,1537 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
+
+    fn auto163_request() -> AutoDelegateV1 {
+        AutoDelegateV1 {
+            request_id: "auto-163".into(),
+            machine_id: None,
+            project_id: None,
+            agent_type: None,
+            model: None,
+            effort: None,
+            task: "mission bornée".into(),
+            cwd: "/tmp".into(),
+            posture: None,
+            reply_timeout: None,
+            workspace: None,
+            keep_alive_secs: None,
+            brief: None,
+            child_requests: None,
+            urgent: None,
+            deliverable: None,
+        }
+    }
+
+    fn auto163_registry_value(auto_engine: bool, auto_placement: bool) -> Value {
+        json!({
+            "decision_services": {"laya": {
+                "enabled": true,
+                "machine_id": "decision-host",
+                "protocol": "laya_systemone_v1",
+                "model": "typed-decisions",
+                "endpoint": "https://decision.internal/v1"
+            }},
+            "admission_policy": {
+                "revision": 7,
+                "auto_engine": auto_engine,
+                "auto_placement": auto_placement,
+                "service_id": "laya",
+                "profiles": [
+                    {"id":"local-codex","machine_id":"local","agent_type":"codex","model":"m1","effort":"high","description":"local codex"},
+                    {"id":"remote-codex","machine_id":"cartae","agent_type":"codex","model":"m1","effort":"high","description":"remote codex"},
+                    {"id":"local-claude","machine_id":"local","agent_type":"claude","model":"m2","description":"local claude"}
+                ]
+            }
+        })
+    }
+
+    fn auto163_registry(auto_engine: bool, auto_placement: bool) -> AgentRegistry {
+        AgentRegistry::from_json(
+            &auto163_registry_value(auto_engine, auto_placement).to_string(),
+            "/tmp/auto163-policy.json",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn spec163_axes_independants_figent_les_profils_sans_effet_reseau() {
+        let mut none = auto163_request();
+        none.machine_id = Some("local".into());
+        none.agent_type = Some("codex".into());
+        none.model = Some("m1".into());
+        let plan = auto_admission_plan(&auto163_registry(false, false), &none).unwrap();
+        assert_eq!(plan.candidates.len(), 1);
+        assert!(plan.decision_service.is_none());
+
+        let mut placement = auto163_request();
+        placement.agent_type = Some("codex".into());
+        placement.model = Some("m1".into());
+        let plan = auto_admission_plan(&auto163_registry(false, true), &placement).unwrap();
+        assert_eq!(plan.candidates.len(), 2);
+        assert!(plan.decision_service.is_some());
+
+        let mut engine = auto163_request();
+        engine.machine_id = Some("local".into());
+        let plan = auto_admission_plan(&auto163_registry(true, false), &engine).unwrap();
+        assert_eq!(plan.candidates.len(), 2);
+        assert!(plan.decision_service.is_some());
+
+        let plan = auto_admission_plan(&auto163_registry(true, true), &auto163_request()).unwrap();
+        assert_eq!(plan.candidates.len(), 3);
+        assert!(plan.decision_service.is_some());
+        assert_eq!(plan.policy.revision, 7);
+        assert_eq!(plan.policy_digest.len(), 64);
+
+        assert_eq!(
+            auto_admission_plan(&auto163_registry(false, false), &auto163_request()).unwrap_err(),
+            "auto_engine_not_fixed"
+        );
+
+        let root = std::env::temp_dir().join(format!("bridget-auto163-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("agents.json");
+        std::fs::write(&path, auto163_registry_value(true, true).to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let fallback = AgentRegistry::from_json("{}", &path).unwrap();
+        let frozen = fresh_auto_admission_plan(&fallback, &auto163_request()).unwrap();
+        assert_eq!(frozen.policy.revision, 7);
+        let mut next = auto163_registry_value(true, true);
+        next["admission_policy"]["revision"] = json!(8);
+        next["admission_policy"]["profiles"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(1);
+        std::fs::write(&path, next.to_string()).unwrap();
+        let refreshed = fresh_auto_admission_plan(&fallback, &auto163_request()).unwrap();
+        assert_eq!(
+            frozen.policy.revision, 7,
+            "le snapshot déjà obtenu reste immuable"
+        );
+        assert_eq!(
+            refreshed.policy.revision, 8,
+            "une admission suivante relit le registre"
+        );
+        assert_eq!(refreshed.candidates.len(), 1);
+        assert!(
+            refreshed.decision_service.is_none(),
+            "un candidat unique ne prépare aucun HTTP"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec163_admission_locale_recue_atomique_et_rejeu_sans_delegue_externe() {
+        let (mut st, config, rx, _reader) = fixture("a163-local");
+        let root = std::env::temp_dir().join(format!("bridget-auto163-runtime-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("agents.json");
+        let registry = json!({
+            "agents": {"native-test": {
+                "command":"/bin/sh", "args":["app-server"], "protocol":"codex_app_server",
+                "forbidden_env":[], "capabilities":{"execution_paths":["codex_app_server"],
+                "models":{"custom/model":{"efforts":["high"]}}}
+            }},
+            "admission_policy": {
+                "revision":1, "auto_engine":false, "auto_placement":false,
+                "profiles":[{"id":"only-local","machine_id":"local","agent_type":"native-test",
+                "model":"custom/model","effort":"high","description":"local test profile"}]
+            }
+        });
+        std::fs::write(&path, registry.to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry = AgentRegistry::load_from_path(path.clone()).unwrap();
+        let mut auto = auto163_request();
+        auto.machine_id = Some("local".into());
+        auto.agent_type = Some("native-test".into());
+        auto.model = Some("custom/model".into());
+        auto.effort = Some("high".into());
+        auto.cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        auto.posture = Some(SpawnPosture::Discovery);
+        st.native_permission_facts.insert(
+            "conn-1".into(),
+            (
+                bridget_transport::protocol::ProviderPermissions {
+                    version: 1,
+                    source: "native_wrapper".into(),
+                    run_id: "run-a163-local".into(),
+                    provider_session_id: "session-a163-local".into(),
+                    provider_instance_id: "instance-1".into(),
+                    revision: 1,
+                    driver: "codex_app_server".into(),
+                    cwd: auto.cwd.clone(),
+                    runtime_mode: "full-access".into(),
+                    interaction_mode: "default".into(),
+                    provider_policy: json!({
+                        "kind":"codex", "approval_policy":"never", "approvals_reviewer":"user",
+                        "sandbox_policy":{"type":"dangerFullAccess"}
+                    }),
+                },
+                None,
+            ),
+        );
+        // F1 : la validation du puits local intervient après `chosen`. Elle
+        // doit donc fermer le reçu et libérer sa place, sans aucun lancement.
+        let repo = root.join("worktree-f1");
+        std::fs::create_dir(&repo).unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "--quiet", "--initial-branch=main"])
+                .arg(&repo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(repo.join("README.md"), "fixture F1\n").unwrap();
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["add", "README.md"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args([
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "Base F1",
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let state = Arc::new(Mutex::new(st));
+        let mut invalid_timeout = auto.clone();
+        invalid_timeout.request_id = "local-reply-timeout-f1".into();
+        invalid_timeout.reply_timeout = Some(10);
+        assert_eq!(
+            admit_auto_configured("conn-1", &invalid_timeout, None, None, None, None, &state,)
+                .unwrap_err(),
+            "reply_timeout_out_of_range"
+        );
+        let timeout_receipt = {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .auto_admission_receipt(OWNER, &invalid_timeout.request_id)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(timeout_receipt.state, AutoAdmissionState::Refused);
+        assert_eq!(
+            timeout_receipt.refusal_code.as_deref(),
+            Some("reply_timeout_out_of_range")
+        );
+        assert_eq!(
+            admit_auto_configured("conn-1", &invalid_timeout, None, None, None, None, &state,)
+                .unwrap_err(),
+            "reply_timeout_out_of_range",
+            "le rejeu local conserve le refus terminal plutôt que admission_pending"
+        );
+        let mut unavailable_base = auto.clone();
+        unavailable_base.request_id = "local-worktree-base-f1".into();
+        unavailable_base.cwd = repo.to_string_lossy().into_owned();
+        unavailable_base.posture = Some(SpawnPosture::Development);
+        unavailable_base.workspace = Some(WorkspaceRequest::Worktree {
+            base_ref: Some("missing-base-f1".into()),
+            branch: Some("bridget/f1-missing-base".into()),
+        });
+        let unavailable_error =
+            admit_auto_configured("conn-1", &unavailable_base, None, None, None, None, &state)
+                .unwrap_err();
+        assert!(
+            unavailable_error.starts_with("workspace_base_unavailable:"),
+            "le préflight Git réel doit refuser la référence absente: {unavailable_error}"
+        );
+        let worktree_receipt = {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .auto_admission_receipt(OWNER, &unavailable_base.request_id)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(worktree_receipt.state, AutoAdmissionState::Refused);
+        assert_eq!(
+            worktree_receipt.refusal_code.as_deref(),
+            Some(unavailable_error.as_str())
+        );
+        assert_eq!(
+            admit_auto_configured("conn-1", &unavailable_base, None, None, None, None, &state,)
+                .unwrap_err(),
+            unavailable_error,
+            "le rejeu Worktree relit le refus durable sans nouveau préflight"
+        );
+        {
+            let st = state.lock().unwrap();
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+            assert_eq!(
+                st.delegation_store
+                    .admission_counts_for_owner(OWNER)
+                    .unwrap()
+                    .0,
+                0
+            );
+        }
+        assert!(
+            matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "les deux refus F1 ne réservent aucun lancement fournisseur"
+        );
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .purge_auto_refusals_under_pressure(unix_timestamp(), 1)
+                .unwrap(),
+            2,
+            "la suite T048 repart de son jeu de reçus borné, après vérification des refus F1"
+        );
+        // R9 : le même transport que delegate_worktree garde la classe jusqu'au
+        // magasin. EIO ne devient pas Refused par son ancien préfixe path_unsafe.
+        let io_message = format!(
+            "workspace_path_unsafe: {}",
+            std::io::Error::from_raw_os_error(libc::EIO)
+        );
+        assert_eq!(
+            crate::workspace_git::WorkspacePreflightError::Technical(io_message.clone())
+                .into_admission(false),
+            io_message,
+            "la voie legacy conserve exactement son diagnostic"
+        );
+        let unsafe_directory = repo.join(".worktrees");
+        std::fs::write(&unsafe_directory, "garde pure R9").unwrap();
+        let pure_failure =
+            crate::workspace_git::preflight_classified(&repo, Some("HEAD"), None).unwrap_err();
+        assert!(matches!(
+            &pure_failure,
+            crate::workspace_git::WorkspacePreflightError::Refused(error)
+                if error == "workspace_path_unsafe: .worktrees doit être un vrai dossier"
+        ));
+        std::fs::remove_file(&unsafe_directory).unwrap();
+        for (request_id, failure, expected_state) in [
+            (
+                "local-worktree-io-r9",
+                crate::workspace_git::WorkspacePreflightError::Technical(io_message.clone()),
+                AutoAdmissionState::Chosen,
+            ),
+            (
+                "local-worktree-pure-r9",
+                pure_failure,
+                AutoAdmissionState::Refused,
+            ),
+        ] {
+            let mut guarded_request = unavailable_base.clone();
+            guarded_request.request_id = request_id.into();
+            guarded_request.workspace = Some(WorkspaceRequest::Worktree {
+                base_ref: Some("HEAD".into()),
+                branch: None,
+            });
+            let st = state.lock().unwrap();
+            let plan = auto_admission_plan(&st.registry, &guarded_request).unwrap();
+            let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+                guarded_request.clone(),
+            ))
+            .unwrap();
+            let now = unix_timestamp();
+            let receipt = auto_receipt(
+                OWNER.into(),
+                &guarded_request,
+                canonical,
+                &plan,
+                st.coordinator_epoch,
+                now,
+            )
+            .unwrap();
+            assert!(
+                st.delegation_store
+                    .insert_auto_admission_receipt(&receipt)
+                    .unwrap()
+            );
+            let delegate = local_delegate_from_auto(&guarded_request, &plan.candidates[0]).unwrap();
+            let chosen = st
+                .delegation_store
+                .choose_auto_admission(
+                    OWNER,
+                    request_id,
+                    &receipt.canonical,
+                    "c01".into(),
+                    serde_json::to_vec(&delegate).unwrap(),
+                    AutoAdmissionMode::Explicit,
+                    None,
+                    now,
+                )
+                .unwrap();
+            let code = failure.into_admission(true);
+            if expected_state == AutoAdmissionState::Chosen {
+                assert_eq!(code, format!("workspace_preflight_technical: {io_message}"));
+            }
+            assert_eq!(
+                close_auto_admission_error(&st, &chosen, code.clone()).unwrap(),
+                code
+            );
+            let after = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(after.state, expected_state);
+            assert!(after.task_id.is_none());
+            assert_eq!(after.candidate_id.as_deref(), Some("c01"));
+            if expected_state == AutoAdmissionState::Chosen {
+                assert_eq!(after.revision, chosen.revision);
+                assert!(after.refusal_code.is_none());
+            } else {
+                assert_eq!(after.refusal_code.as_deref(), Some("workspace_path_unsafe"));
+            }
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+            assert!(matches!(
+                rx.try_recv(),
+                Err(std::sync::mpsc::TryRecvError::Empty)
+            ));
+            // Ces seules clés de fixture ne doivent pas décaler le jeu borné T048.
+            st.delegation_store
+                .test_connection()
+                .execute(
+                    "DELETE FROM auto_admission_receipts WHERE owner=?1 AND request_id=?2",
+                    rusqlite::params![OWNER, request_id],
+                )
+                .unwrap();
+        }
+        let st = Arc::try_unwrap(state)
+            .unwrap_or_else(|_| panic!("aucune autre référence de fixture"))
+            .into_inner()
+            .unwrap_or_else(|error| error.into_inner());
+        // T048 : 4 095 refus auto terminaux retiennent déjà des clés UNION.
+        // Le nouveau reçu devient la 4 096e clé puis est remplacé par sa Task
+        // dans la même clé, sans un refus artificiel ni double comptage.
+        let plan = auto_admission_plan(&st.registry, &auto).unwrap();
+        let now = unix_timestamp();
+        for index in 0..(crate::delegation::MAX_RETAINED_TASKS - 1) {
+            let mut filler = auto.clone();
+            filler.request_id = format!("retained-filler-{index:04}");
+            let canonical =
+                serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(filler.clone())).unwrap();
+            let mut receipt = auto_receipt(
+                format!("retained-owner-{index:04}"),
+                &filler,
+                canonical,
+                &plan,
+                st.coordinator_epoch,
+                now - 1,
+            )
+            .unwrap();
+            receipt.state = AutoAdmissionState::Refused;
+            receipt.refusal_code = Some("decision_interrupted".into());
+            assert!(
+                st.delegation_store
+                    .insert_auto_admission_receipt(&receipt)
+                    .unwrap()
+            );
+        }
+        assert_eq!(
+            st.delegation_store.admission_counts("").unwrap().2,
+            crate::delegation::MAX_RETAINED_TASKS - 1
+        );
+        let state = Arc::new(Mutex::new(st));
+        let first = admit_auto_configured("conn-1", &auto, None, None, None, None, &state).unwrap();
+        let task_id = first["task_id"].as_str().unwrap();
+        let receipt = {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .auto_admission_receipt(OWNER, &auto.request_id)
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(receipt.state, AutoAdmissionState::Admitted);
+        assert_eq!(receipt.task_id.as_deref(), Some(task_id));
+        assert_eq!(receipt.candidate_id.as_deref(), Some("c01"));
+        assert_eq!(receipt.mode, Some(AutoAdmissionMode::Explicit));
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .admission_counts_for_owner(OWNER)
+                .unwrap()
+                .2,
+            crate::delegation::MAX_RETAINED_TASKS,
+            "la Task remplace le reçu auto sur sa clé UNION au plafond exact"
+        );
+        assert_eq!(
+            admit_auto_configured("conn-1", &auto, None, None, None, None, &state).unwrap(),
+            first,
+            "le replay retourne la Task durable sans nouvelle admission"
+        );
+        // Le registre devient inutilisable après l'admission : la voie
+        // configurée doit néanmoins relire le reçu canonique avant toute
+        // politique fraîche (FR014), donc ne pas masquer le résultat durable.
+        std::fs::write(&path, r#"{"admission_policy":{"revision":2}}"#).unwrap();
+        assert_eq!(
+            admit_auto_configured("conn-1", &auto, None, None, None, None, &state).unwrap(),
+            first,
+            "un rejeu confirmé ignore une politique ultérieure indisponible"
+        );
+        // FR021/T026 : la purge place un tombstone avant la suppression. Même
+        // quand la politique fraîche est désormais invalide, le rejeu de cette
+        // clé doit s'arrêter au refus durable, avant toute lecture/probe.
+        let mut expired_request = auto.clone();
+        expired_request.request_id = "expired-after-purge".into();
+        let expired_canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+            expired_request.clone(),
+        ))
+        .unwrap();
+        let mut expired = auto_receipt(
+            OWNER.into(),
+            &expired_request,
+            expired_canonical,
+            &plan,
+            1,
+            now - 2,
+        )
+        .unwrap();
+        expired.state = AutoAdmissionState::Refused;
+        expired.refusal_code = Some("decision_interrupted".into());
+        {
+            let st = state.lock().unwrap();
+            assert!(
+                st.delegation_store
+                    .insert_auto_admission_receipt(&expired)
+                    .unwrap()
+            );
+            assert_eq!(
+                st.delegation_store
+                    .purge_auto_refusals_under_pressure(now, crate::delegation::MAX_RETAINED_TASKS,)
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                st.delegation_store
+                    .auto_admission_receipt(OWNER, &expired_request.request_id)
+                    .unwrap_err(),
+                "request_expired"
+            );
+        }
+        assert_eq!(
+            admit_auto_configured("conn-1", &expired_request, None, None, None, None, &state,)
+                .unwrap_err(),
+            "request_expired",
+            "le tombstone auto est lu avant la politique fraîche invalide"
+        );
+        let mut st = Arc::try_unwrap(state)
+            .unwrap_or_else(|_| panic!("aucune autre référence de fixture"))
+            .into_inner()
+            .unwrap_or_else(|error| error.into_inner());
+        let explicit = local_delegate_from_auto(
+            &auto,
+            &auto_admission_plan(&st.registry, &auto).unwrap().candidates[0],
+        )
+        .unwrap();
+        assert_eq!(
+            handle_locked("conn-1", explicit, &mut st).unwrap_err(),
+            "auto_admission_reserved",
+            "le chemin externe ne peut ni rejoindre ni remplacer le reçu auto"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec163_t054_concurrent_auto_configured_ne_decide_ni_lance_qu_une_fois() {
+        use crate::decision_service::tests::{
+            ControlledServer, MINREQ_TIMEOUT_LOCK, MinreqTimeoutRestore, response,
+        };
+
+        let _timeout_lock = MINREQ_TIMEOUT_LOCK.lock().unwrap();
+        let _timeout = MinreqTimeoutRestore::set(None);
+        let decision = br#"{"model":"laya-rl-agent","answers":{"candidate":{"type":"choice","choice":"c01","probabilities":{"c01":0.5},"confidence":0.0,"answer_confidence":0.5,"action":{"act_probability":0.5}}},"routing":{"model":"typed-decisions","repo":"convaiinnovations/laya/typed-decisions","reason":"explicit model=typed-decisions","detection":null,"workflow":null},"usage":{"input_tokens":12,"output_tokens":0}}"#;
+        let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = ControlledServer::start_gated(
+            vec![
+                (
+                    response("200 OK", br#"{"status":"ok"}"#),
+                    std::time::Duration::ZERO,
+                ),
+                (response("200 OK", decision), std::time::Duration::ZERO),
+            ],
+            Some(accepted_tx),
+            Some(release_rx),
+        );
+        let (mut st, config, rx, _reader) = fixture("a163-concurrent");
+        let root = std::env::temp_dir().join(format!("bridget-auto163-race-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("agents.json");
+        let registry = json!({
+            "agents": {"native-test": {
+                "command":"/bin/sh", "args":["app-server"], "protocol":"codex_app_server",
+                "forbidden_env":[], "capabilities":{"execution_paths":["codex_app_server"],
+                "models":{"custom/model":{"efforts":["high"]}}}
+            }},
+            "decision_services": {"laya": {
+                "enabled":true, "machine_id":"decision-host", "protocol":"laya_systemone_v1",
+                "model":"typed-decisions", "endpoint":server.endpoint.clone()
+            }},
+            "admission_policy": {
+                "revision":1, "auto_engine":true, "auto_placement":false, "service_id":"laya",
+                "fallback_profile":"local-g",
+                "profiles":[
+                    {"id":"local-a","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local a"},
+                    {"id":"local-b","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local b"},
+                    {"id":"local-c","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local c"},
+                    {"id":"local-d","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local d"},
+                    {"id":"local-e","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local e"},
+                    {"id":"local-f","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local f"},
+                    {"id":"local-g","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local g"},
+                    {"id":"private-filtered","machine_id":"local","agent_type":"hidden-provider","model":"hidden-model","description":"hidden"}
+                ],
+                "preferences":["local-g","private-filtered","local-a"]
+            }
+        });
+        std::fs::write(&path, registry.to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry = AgentRegistry::load_from_path(path.clone()).unwrap();
+        let mut auto = auto163_request();
+        auto.request_id = "concurrent-auto".into();
+        auto.machine_id = Some("local".into());
+        auto.cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        auto.posture = Some(SpawnPosture::Discovery);
+        auto.brief = Some(json!({"objective":"Choisir","summary":"concurrence fermée"}));
+        let mut preferred_plan = auto_admission_plan(&st.registry, &auto).unwrap();
+        assert_eq!(preferred_plan.candidates.len(), 8);
+        // Snapshot déjà filtré, dont le POST réel ci-dessous atteste que le
+        // profil local sans définition n'est jamais réintroduit.
+        preferred_plan
+            .candidates
+            .retain(|candidate| candidate.id != "private-filtered");
+        assert_eq!(preferred_plan.candidates.len(), 7);
+        let preferred_receipt = auto_receipt(
+            OWNER.into(),
+            &auto,
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(auto.clone())).unwrap(),
+            &preferred_plan,
+            1,
+            0,
+        )
+        .unwrap();
+        let preferred = laya_auto_request(&auto, &preferred_receipt, &preferred_plan).unwrap();
+        assert_eq!(
+            preferred.criteria,
+            vec![
+                "candidate_policy_match",
+                "preference_order=state; brief_constraints_first"
+            ]
+        );
+        assert_eq!(
+            preferred.state,
+            "initial_admission; preference_order=c07,c01"
+        );
+        let mut inverted_plan = preferred_plan.clone();
+        inverted_plan.policy.preferences = vec![
+            "local-a".into(),
+            "private-filtered".into(),
+            "local-g".into(),
+        ];
+        assert_eq!(
+            laya_auto_request(&auto, &preferred_receipt, &inverted_plan)
+                .unwrap()
+                .criteria,
+            vec![
+                "candidate_policy_match",
+                "preference_order=state; brief_constraints_first"
+            ]
+        );
+        assert_eq!(
+            laya_auto_request(&auto, &preferred_receipt, &inverted_plan)
+                .unwrap()
+                .state,
+            "initial_admission; preference_order=c01,c07"
+        );
+        let mut unavailable_preference_plan = preferred_plan.clone();
+        unavailable_preference_plan.policy.preferences = vec!["private-filtered".into()];
+        assert_eq!(
+            laya_auto_request(&auto, &preferred_receipt, &unavailable_preference_plan)
+                .unwrap()
+                .criteria,
+            vec!["candidate_policy_match"]
+        );
+        assert_eq!(
+            laya_auto_request(&auto, &preferred_receipt, &unavailable_preference_plan)
+                .unwrap()
+                .state,
+            "initial_admission"
+        );
+        let mut historical_plan = preferred_plan.clone();
+        historical_plan.policy.preferences.clear();
+        assert_eq!(
+            laya_auto_request(&auto, &preferred_receipt, &historical_plan)
+                .unwrap()
+                .criteria,
+            vec!["candidate_policy_match"]
+        );
+        assert_eq!(
+            laya_auto_request(&auto, &preferred_receipt, &historical_plan)
+                .unwrap()
+                .state,
+            "initial_admission"
+        );
+        let maximum = auto.clone();
+        let mut maximum_plan = auto_admission_plan(&st.registry, &maximum).unwrap();
+        assert_eq!(maximum_plan.candidates.len(), 8);
+        maximum_plan.policy.preferences = maximum_plan
+            .candidates
+            .iter()
+            .map(|candidate| candidate.id.clone())
+            .collect();
+        let maximum_request =
+            laya_auto_request(&maximum, &preferred_receipt, &maximum_plan).unwrap();
+        assert_eq!(maximum_request.candidates.len(), 8);
+        assert_eq!(
+            maximum_request.criteria[1],
+            "preference_order=state; brief_constraints_first"
+        );
+        assert_eq!(
+            maximum_request.state,
+            "initial_admission; preference_order=c01,c02,c03,c04,c05,c06,c07,c08"
+        );
+        assert!(
+            format!(
+                "Choisir un candidat autorisé. Critères: {}",
+                maximum_request.criteria.join("; ")
+            )
+            .len()
+                <= 128
+        );
+        assert!(
+            format!(
+                "admission_id={}; policy_revision={}; objective={}; summary={}; urgent={}; deliverable={}; state={}",
+                maximum_request.admission_id,
+                maximum_request.policy_revision,
+                maximum_request.brief.objective,
+                maximum_request.brief.summary,
+                maximum_request.urgent,
+                maximum_request.deliverable.as_deref().unwrap_or("none"),
+                maximum_request.state,
+            )
+            .len()
+                <= 1536
+        );
+        st.native_permission_facts.insert(
+            "conn-1".into(),
+            (
+                bridget_transport::protocol::ProviderPermissions {
+                    version: 1,
+                    source: "native_wrapper".into(),
+                    run_id: "run-t054-concurrent".into(),
+                    provider_session_id: "session-t054-concurrent".into(),
+                    provider_instance_id: "instance-1".into(),
+                    revision: 1,
+                    driver: "codex_app_server".into(),
+                    cwd: auto.cwd.clone(),
+                    runtime_mode: "full-access".into(),
+                    interaction_mode: "default".into(),
+                    provider_policy: json!({
+                        "kind":"codex", "approval_policy":"never", "approvals_reviewer":"user",
+                        "sandbox_policy":{"type":"dangerFullAccess"}
+                    }),
+                },
+                None,
+            ),
+        );
+        let state = Arc::new(Mutex::new(st));
+        let first_request = auto.clone();
+        let first_state = Arc::clone(&state);
+        let first = std::thread::spawn(move || {
+            admit_auto_configured(
+                "conn-1",
+                &first_request,
+                None,
+                None,
+                None,
+                None,
+                &first_state,
+            )
+        });
+        // La première admission a consommé sa santé puis son unique POST de
+        // décision. Le serveur bloque ce POST, donc le second appel voit le
+        // reçu durable `decision_started`, et non une politique reconstruite.
+        accepted_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        accepted_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            admit_auto_configured("conn-1", &auto, None, None, None, None, &state).unwrap_err(),
+            "admission_pending"
+        );
+        // T021 : la réponse HTTP c01 reste fermée par le canal du serveur.
+        // L'entretien d'une nouvelle époque doit d'abord résoudre le même
+        // reçu par le CAS réel, avec le fallback figé c07.
+        {
+            let mut st = state.lock().unwrap();
+            let started = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, &auto.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(started.state, AutoAdmissionState::DecisionStarted);
+            assert!(started.task_id.is_none());
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+            assert_eq!(started.coordinator_epoch, st.coordinator_epoch);
+            st.coordinator_epoch = st.coordinator_epoch.checked_add(1).unwrap();
+        }
+        recover_auto_admissions(&state);
+        let (admitted, resolved) = {
+            let mut st = state.lock().unwrap();
+            let resolved = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, &auto.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(resolved.state, AutoAdmissionState::Admitted);
+            assert_eq!(resolved.candidate_id.as_deref(), Some("c07"));
+            assert_eq!(resolved.mode, Some(AutoAdmissionMode::Fallback));
+            assert_eq!(
+                resolved.revision, 3,
+                "start, choice et Task : trois CAS réels"
+            );
+            assert!(resolved.coordinator_epoch < st.coordinator_epoch);
+            assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+            let admitted = auto_receipt_view(&mut st, &resolved).unwrap();
+            (admitted, resolved)
+        };
+        let task_id = admitted["task_id"].as_str().unwrap().to_owned();
+        assert_eq!(resolved.task_id.as_deref(), Some(task_id.as_str()));
+        // Le premier effet fournisseur existe avant toute réponse tardive.
+        tick(&state);
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("un seul lancement fournisseur fermé est attendu avant la réponse");
+        };
+        assert_eq!(prepared.lease.command_id, task_id);
+        assert_eq!(prepared.resolved_definition.protocol, "codex_app_server");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        // Le Start vient de faire passer la Task queued -> starting.
+        // La vue du rejeu est relue au même état, avant la réponse tardive.
+        let admitted = {
+            let mut st = state.lock().unwrap();
+            let view = auto_receipt_view(&mut st, &resolved).unwrap();
+            assert_eq!(view["task_id"].as_str(), Some(task_id.as_str()));
+            assert_eq!(view["status"].as_str(), Some("starting"));
+            view
+        };
+        assert!(
+            !first.is_finished(),
+            "le POST réel attend toujours le canal de réponse"
+        );
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            first.join().unwrap().unwrap_err(),
+            "auto_admission_already_resolved",
+            "la réponse HTTP c01 tardive ne peut remplacer le choix c07 committé"
+        );
+        let requests = server.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("POST "))
+                .count(),
+            1,
+            "un seul POST de décision pour la clé owner/request_id"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.starts_with("GET "))
+                .count(),
+            1,
+            "la santé n'est pas doublée par le concurrent"
+        );
+        let post = requests
+            .iter()
+            .find(|request| request.starts_with("POST "))
+            .unwrap();
+        let (_, body) = post.split_once("\r\n\r\n").unwrap();
+        let payload: Value = serde_json::from_str(body).unwrap();
+        let candidate = &payload["questions"]["candidate"];
+        let instructions = candidate["instructions"].as_str().unwrap();
+        assert!(instructions.contains("preference_order=state; brief_constraints_first"));
+        assert_eq!(
+            payload["state"].as_str().unwrap().split("; state=").last(),
+            Some("initial_admission; preference_order=c07,c01")
+        );
+        let criteria = candidate["criteria"].as_object().unwrap();
+        assert_eq!(criteria.len(), 7);
+        assert!(!criteria.contains_key("c08"));
+        assert!(!post.contains("private-filtered"));
+        assert!(!post.contains("hidden-provider"));
+        assert!(!post.contains("hidden-model"));
+        {
+            let st = state.lock().unwrap();
+            assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+            let receipt = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, &auto.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt.state, AutoAdmissionState::Admitted);
+            assert_eq!(receipt.task_id.as_deref(), Some(task_id.as_str()));
+            assert_eq!(
+                receipt, resolved,
+                "la réponse tardive ne modifie aucun champ du reçu"
+            );
+        }
+        assert_eq!(
+            admit_auto_configured("conn-1", &auto, None, None, None, None, &state).unwrap(),
+            admitted,
+            "le rejeu restitue la Task durable"
+        );
+        // L'entretien répété et le rejeu ne décident ni ne lancent une seconde fois.
+        recover_auto_admissions(&state);
+        tick(&state);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        tick(&state);
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            server
+                .requests()
+                .iter()
+                .filter(|request| request.starts_with("POST "))
+                .count(),
+            1,
+            "le rejeu et l'entretien ne réémettent aucun POST"
+        );
+        {
+            let st = state.lock().unwrap();
+            assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+            assert_eq!(
+                st.delegation_store
+                    .auto_admission_receipt(OWNER, &auto.request_id)
+                    .unwrap()
+                    .unwrap(),
+                resolved,
+                "le reçu gagnant reste exact après rejeu et entretiens répétés"
+            );
+        }
+        server.join();
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec163_t049_repli_absent_refuse_durablement_et_l_erreur_sql_reste_visible() {
+        let (mut st, config, _rx, _reader) = fixture("a163-fallback-absent");
+        let root =
+            std::env::temp_dir().join(format!("bridget-auto163-fallback-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = root.join("agents.json");
+        let registry = json!({
+            "agents": {"native-test": {
+                "command":"/bin/sh", "args":["app-server"], "protocol":"codex_app_server",
+                "forbidden_env":[], "capabilities":{"execution_paths":["codex_app_server"],
+                "models":{"custom/model":{"efforts":["high"]}}}
+            }},
+            "decision_services": {"laya": {
+                "enabled":true, "machine_id":"decision-host", "protocol":"laya_systemone_v1",
+                "model":"typed-decisions", "endpoint":"http://127.0.0.1:1/v1"
+            }},
+            "admission_policy": {
+                "revision":1, "auto_engine":true, "auto_placement":false,
+                "service_id":"laya", "fallback_profile":"missing-fallback",
+                "profiles":[
+                    {"id":"local-a","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local a"},
+                    {"id":"local-b","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local b"},
+                    {"id":"missing-fallback","machine_id":"local","agent_type":"missing-test","model":"m2","description":"missing"}
+                ]
+            }
+        });
+        std::fs::write(&path, registry.to_string()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry = AgentRegistry::load_from_path(path.clone()).unwrap();
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let fact = bridget_transport::protocol::ProviderPermissions {
+            version: 1,
+            source: "native_wrapper".into(),
+            run_id: "run-t049".into(),
+            provider_session_id: "session-t049".into(),
+            provider_instance_id: "instance-1".into(),
+            revision: 1,
+            driver: "codex_app_server".into(),
+            cwd: cwd.clone(),
+            runtime_mode: "full-access".into(),
+            interaction_mode: "default".into(),
+            provider_policy: json!({
+                "kind":"codex", "approval_policy":"never", "approvals_reviewer":"user",
+                "sandbox_policy":{"type":"dangerFullAccess"}
+            }),
+        };
+        let mut auto = auto163_request();
+        auto.request_id = "fallback-absent".into();
+        auto.machine_id = Some("local".into());
+        auto.cwd = cwd;
+        auto.posture = Some(SpawnPosture::Discovery);
+        auto.brief = Some(json!({"objective":"Choisir","summary":"repli fermé"}));
+        let state = Arc::new(Mutex::new(st));
+        assert_eq!(
+            admit_auto_configured("conn-1", &auto, None, Some(&fact), None, None, &state)
+                .unwrap_err(),
+            "fallback_profile_unavailable"
+        );
+        {
+            let st = state.lock().unwrap();
+            let receipt = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, &auto.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt.state, AutoAdmissionState::Refused);
+            assert_eq!(
+                receipt.refusal_code.as_deref(),
+                Some("fallback_profile_unavailable")
+            );
+        }
+        assert_eq!(
+            admit_auto_configured("conn-1", &auto, None, Some(&fact), None, None, &state)
+                .unwrap_err(),
+            "fallback_profile_unavailable",
+            "le rejeu terminal lit le reçu sans HTTP ni politique fraîche"
+        );
+
+        let mut sql = auto.clone();
+        sql.request_id = "fallback-sql".into();
+        {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .test_connection()
+                .execute_batch(
+                    "CREATE TRIGGER reject_auto_refusal BEFORE UPDATE ON auto_admission_receipts
+                     WHEN NEW.request_id='fallback-sql' AND NEW.state='refused'
+                     BEGIN SELECT RAISE(ABORT,'fixture refusal rollback'); END;",
+                )
+                .unwrap();
+        }
+        let error = admit_auto_configured("conn-1", &sql, None, Some(&fact), None, None, &state)
+            .unwrap_err();
+        assert!(
+            error.contains("fixture refusal rollback"),
+            "l'échec SQL du refus n'est jamais masqué par le code métier: {error}"
+        );
+        {
+            let st = state.lock().unwrap();
+            let receipt = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, &sql.request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt.state, AutoAdmissionState::DecisionStarted);
+        }
+        assert_eq!(
+            admit_auto_configured("conn-1", &sql, None, Some(&fact), None, None, &state)
+                .unwrap_err(),
+            "admission_pending",
+            "une panne SQL ne fabrique pas de clôture refusée"
+        );
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec163_t025_entretien_reprend_une_epoque_ancienne_sans_redecision() {
+        let (mut st, config, rx, _reader) = fixture("a163-reprise");
+        let policy = json!({
+            "revision": 1,
+            "auto_engine": true,
+            "auto_placement": false,
+            "fallback_profile": "local-a",
+            "profiles": [
+                {"id":"local-a","machine_id":"local","agent_type":"native-test","model":"custom/model","effort":"high","description":"local a"},
+                {"id":"local-b","machine_id":"local","agent_type":"missing-test","model":"m2","description":"local b"}
+            ]
+        });
+        st.registry = AgentRegistry::from_json(
+            &json!({
+                "agents": {"native-test": {
+                    "command":"/bin/sh", "args":["app-server"], "protocol":"codex_app_server",
+                    "forbidden_env":[], "capabilities":{"execution_paths":["codex_app_server"],"models":{"custom/model":{"efforts":["high"]}}}
+                }},
+                "admission_policy": policy,
+            })
+            .to_string(),
+            "/tmp/native163-recovery.json",
+        )
+        .unwrap();
+        let recovery_cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        st.native_permission_facts.insert(
+            "conn-1".into(),
+            (
+                bridget_transport::protocol::ProviderPermissions {
+                    version: 1,
+                    source: "native_wrapper".into(),
+                    run_id: "run-t025".into(),
+                    provider_session_id: "session-t025".into(),
+                    provider_instance_id: "instance-1".into(),
+                    revision: 1,
+                    driver: "codex_app_server".into(),
+                    cwd: recovery_cwd.clone(),
+                    runtime_mode: "full-access".into(),
+                    interaction_mode: "default".into(),
+                    provider_policy: json!({
+                        "kind":"codex", "approval_policy":"never", "approvals_reviewer":"user",
+                        "sandbox_policy":{"type":"dangerFullAccess"}
+                    }),
+                },
+                None,
+            ),
+        );
+        let mut single = auto163_request();
+        single.request_id = "reprise-single".into();
+        single.machine_id = Some("local".into());
+        single.agent_type = Some("native-test".into());
+        single.model = Some("custom/model".into());
+        single.effort = Some("high".into());
+        single.cwd = recovery_cwd;
+        single.posture = Some(SpawnPosture::Discovery);
+        let mut multiple = AutoDelegateV1 {
+            request_id: "reprise-started".into(),
+            ..single.clone()
+        };
+        multiple.machine_id = Some("local".into());
+        multiple.agent_type = None;
+        multiple.model = None;
+        multiple.effort = None;
+        let chosen_request = AutoDelegateV1 {
+            request_id: "reprise-chosen".into(),
+            ..single.clone()
+        };
+        let mut chosen_timeout_request = AutoDelegateV1 {
+            request_id: "reprise-chosen-timeout-f1".into(),
+            ..single.clone()
+        };
+        chosen_timeout_request.reply_timeout = Some(10);
+        let pending_reprobe_request = AutoDelegateV1 {
+            request_id: "reprise-pending-reprobe".into(),
+            ..multiple.clone()
+        };
+        let single_plan = auto_admission_plan(&st.registry, &single).unwrap();
+        let multiple_plan = auto_admission_plan(&st.registry, &multiple).unwrap();
+        assert_eq!(single_plan.candidates.len(), 1);
+        assert_eq!(multiple_plan.candidates.len(), 2);
+        let epoch = st.coordinator_epoch.saturating_sub(1);
+        let now = unix_timestamp();
+        let single_canonical =
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(single.clone())).unwrap();
+        let started_canonical =
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(multiple.clone())).unwrap();
+        let chosen_canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+            chosen_request.clone(),
+        ))
+        .unwrap();
+        let chosen_timeout_canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+            chosen_timeout_request.clone(),
+        ))
+        .unwrap();
+        let pending_reprobe_canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+            pending_reprobe_request.clone(),
+        ))
+        .unwrap();
+        let single_receipt = auto_receipt(
+            OWNER.into(),
+            &single,
+            single_canonical,
+            &single_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        let started_receipt = auto_receipt(
+            OWNER.into(),
+            &multiple,
+            started_canonical,
+            &multiple_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        let chosen_receipt = auto_receipt(
+            OWNER.into(),
+            &chosen_request,
+            chosen_canonical,
+            &single_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        let chosen_timeout_receipt = auto_receipt(
+            OWNER.into(),
+            &chosen_timeout_request,
+            chosen_timeout_canonical,
+            &single_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        let pending_reprobe_receipt = auto_receipt(
+            OWNER.into(),
+            &pending_reprobe_request,
+            pending_reprobe_canonical,
+            &multiple_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        let offline_request = AutoDelegateV1 {
+            request_id: "reprise-owner-hors-ligne".into(),
+            ..single.clone()
+        };
+        let offline_canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+            offline_request.clone(),
+        ))
+        .unwrap();
+        let offline_receipt = auto_receipt(
+            "owner-hors-ligne".into(),
+            &offline_request,
+            offline_canonical,
+            &single_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&single_receipt)
+                .unwrap()
+        );
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&started_receipt)
+                .unwrap()
+        );
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&chosen_receipt)
+                .unwrap()
+        );
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&chosen_timeout_receipt)
+                .unwrap()
+        );
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&pending_reprobe_receipt)
+                .unwrap()
+        );
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&offline_receipt)
+                .unwrap()
+        );
+        let active_before_offline_recovery = st.delegation_store.admission_counts("").unwrap().0;
+        let started = st
+            .delegation_store
+            .start_auto_decision(&started_receipt, now)
+            .unwrap();
+        let chosen_delegate =
+            local_delegate_from_auto(&chosen_request, &single_plan.candidates[0]).unwrap();
+        st.delegation_store
+            .choose_auto_admission(
+                &chosen_receipt.owner,
+                &chosen_receipt.request_id,
+                &chosen_receipt.canonical,
+                "c01".into(),
+                serde_json::to_vec(&chosen_delegate).unwrap(),
+                AutoAdmissionMode::Automatic,
+                None,
+                now,
+            )
+            .unwrap();
+        let chosen_timeout_delegate =
+            local_delegate_from_auto(&chosen_timeout_request, &single_plan.candidates[0]).unwrap();
+        st.delegation_store
+            .choose_auto_admission(
+                &chosen_timeout_receipt.owner,
+                &chosen_timeout_receipt.request_id,
+                &chosen_timeout_receipt.canonical,
+                "c01".into(),
+                serde_json::to_vec(&chosen_timeout_delegate).unwrap(),
+                AutoAdmissionMode::Automatic,
+                None,
+                now,
+            )
+            .unwrap();
+        assert_eq!(started.state, AutoAdmissionState::DecisionStarted);
+        let state = Arc::new(Mutex::new(st));
+        recover_auto_admissions(&state);
+        let mut st = state.lock().unwrap();
+        for request_id in [
+            "reprise-single",
+            "reprise-started",
+            "reprise-chosen",
+            "reprise-pending-reprobe",
+        ] {
+            let receipt = st
+                .delegation_store
+                .auto_admission_receipt(OWNER, request_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt.state, AutoAdmissionState::Admitted, "{request_id}");
+            assert!(receipt.task_id.is_some(), "{request_id}");
+        }
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            4,
+            "les reçus hors ligne et timeout ne créent ni Task ni lancement"
+        );
+        let offline = st
+            .delegation_store
+            .auto_admission_receipt("owner-hors-ligne", &offline_request.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(offline.state, AutoAdmissionState::Refused);
+        assert_eq!(
+            offline.refusal_code.as_deref(),
+            Some("permission_not_inherited")
+        );
+        assert_eq!(
+            st.delegation_store.admission_counts("").unwrap().0,
+            active_before_offline_recovery - 2,
+            "les reçus hors ligne et chosen invalide libèrent chacun leur slot actif"
+        );
+        assert_eq!(
+            auto_receipt_view(&mut st, &offline).unwrap_err(),
+            "permission_not_inherited",
+            "le rejeu durable reste le refus, sans HTTP ni lancement"
+        );
+        let resumed_timeout = st
+            .delegation_store
+            .auto_admission_receipt(OWNER, &chosen_timeout_request.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed_timeout.state, AutoAdmissionState::Refused);
+        assert_eq!(
+            resumed_timeout.refusal_code.as_deref(),
+            Some("reply_timeout_out_of_range")
+        );
+        assert_eq!(
+            auto_receipt_view(&mut st, &resumed_timeout).unwrap_err(),
+            "reply_timeout_out_of_range",
+            "la reprise chosen ferme et rejoue le refus métier, sans admission_pending"
+        );
+        let reprobed = st
+            .delegation_store
+            .auto_admission_receipt(OWNER, "reprise-pending-reprobe")
+            .unwrap()
+            .unwrap();
+        assert_eq!(reprobed.mode, Some(AutoAdmissionMode::Automatic));
+        assert_eq!(reprobed.candidate_id.as_deref(), Some("c01"));
+        let restarted = st
+            .delegation_store
+            .auto_admission_receipt(OWNER, "reprise-started")
+            .unwrap()
+            .unwrap();
+        assert_eq!(restarted.mode, Some(AutoAdmissionMode::Fallback));
+        assert_eq!(restarted.candidate_id.as_deref(), Some("c01"));
+        let admitted = st
+            .delegation_store
+            .auto_admission_receipt(OWNER, "reprise-chosen")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            close_auto_admission_error(&st, &admitted, "reply_timeout_out_of_range".into())
+                .unwrap(),
+            "reply_timeout_out_of_range",
+            "un CAS stale ne remplace jamais la Task liée par un refus"
+        );
+        assert_eq!(
+            st.delegation_store
+                .auto_admission_receipt(OWNER, "reprise-chosen")
+                .unwrap()
+                .unwrap()
+                .state,
+            AutoAdmissionState::Admitted
+        );
+        // R8/FR015 : l'insertion atomique de Task peut échouer après `chosen`.
+        // L'UPDATE de refus est autorisé ici : l'erreur primaire SQL ne doit
+        // pourtant ni devenir un refus terminal, ni perdre le choix gelé.
+        let task_sql_request = AutoDelegateV1 {
+            request_id: "reprise-task-sql-r8".into(),
+            ..single.clone()
+        };
+        let task_sql_canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(
+            task_sql_request.clone(),
+        ))
+        .unwrap();
+        let task_sql_receipt = auto_receipt(
+            OWNER.into(),
+            &task_sql_request,
+            task_sql_canonical,
+            &single_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&task_sql_receipt)
+                .unwrap()
+        );
+        let task_sql_delegate =
+            local_delegate_from_auto(&task_sql_request, &single_plan.candidates[0]).unwrap();
+        let task_sql_chosen = st
+            .delegation_store
+            .choose_auto_admission(
+                &task_sql_receipt.owner,
+                &task_sql_receipt.request_id,
+                &task_sql_receipt.canonical,
+                "c01".into(),
+                serde_json::to_vec(&task_sql_delegate).unwrap(),
+                AutoAdmissionMode::Automatic,
+                None,
+                now,
+            )
+            .unwrap();
+        st.delegation_store
+            .test_connection()
+            .execute_batch(
+                "CREATE TRIGGER reject_r8_auto_task_insert BEFORE INSERT ON native_delegations
+                 WHEN NEW.request_id='reprise-task-sql-r8'
+                 BEGIN SELECT RAISE(ABORT,'fixture_task_sql'); END;",
+            )
+            .unwrap();
+        drop(st);
+        let task_sql_error = resume_chosen_auto_admission(
+            "conn-1",
+            &task_sql_request,
+            None,
+            None,
+            &task_sql_chosen,
+            &single_plan,
+            &state,
+        )
+        .unwrap_err();
+        assert!(
+            task_sql_error.contains("fixture_task_sql"),
+            "l'erreur INSERT primaire reste visible: {task_sql_error}"
+        );
+        let st = state.lock().unwrap();
+        let task_sql_after_error = st
+            .delegation_store
+            .auto_admission_receipt(OWNER, &task_sql_request.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task_sql_after_error.state, AutoAdmissionState::Chosen);
+        assert_eq!(task_sql_after_error.candidate_id.as_deref(), Some("c01"));
+        assert!(task_sql_after_error.task_id.is_none());
+        assert!(
+            matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "l'échec SQL n'émet aucun lancement fournisseur"
+        );
+        st.delegation_store
+            .test_connection()
+            .execute_batch("DROP TRIGGER reject_r8_auto_task_insert;")
+            .unwrap();
+        drop(st);
+        recover_auto_admissions(&state);
+        let st = state.lock().unwrap();
+        let task_sql_recovered = st
+            .delegation_store
+            .auto_admission_receipt(OWNER, &task_sql_request.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task_sql_recovered.state, AutoAdmissionState::Admitted);
+        assert_eq!(task_sql_recovered.candidate_id.as_deref(), Some("c01"));
+        assert!(task_sql_recovered.task_id.is_some());
+        assert_eq!(
+            st.delegation_store.tasks().unwrap().len(),
+            5,
+            "la reprise garde le choix et crée une seule Task sans redécision"
+        );
+        let sql_request = AutoDelegateV1 {
+            request_id: "reprise-sql-visible-f1".into(),
+            ..single.clone()
+        };
+        let sql_canonical =
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegate(sql_request.clone()))
+                .unwrap();
+        let sql_receipt = auto_receipt(
+            OWNER.into(),
+            &sql_request,
+            sql_canonical,
+            &single_plan,
+            epoch,
+            now,
+        )
+        .unwrap();
+        assert!(
+            st.delegation_store
+                .insert_auto_admission_receipt(&sql_receipt)
+                .unwrap()
+        );
+        let sql_delegate =
+            local_delegate_from_auto(&sql_request, &single_plan.candidates[0]).unwrap();
+        let sql_chosen = st
+            .delegation_store
+            .choose_auto_admission(
+                &sql_receipt.owner,
+                &sql_receipt.request_id,
+                &sql_receipt.canonical,
+                "c01".into(),
+                serde_json::to_vec(&sql_delegate).unwrap(),
+                AutoAdmissionMode::Automatic,
+                None,
+                now,
+            )
+            .unwrap();
+        st.delegation_store
+            .test_connection()
+            .execute_batch(
+                "CREATE TRIGGER reject_r7_auto_refusal BEFORE UPDATE ON auto_admission_receipts
+                 WHEN NEW.request_id='reprise-sql-visible-f1' AND NEW.state='refused'
+                 BEGIN SELECT RAISE(ABORT,'fixture R7 refusal rollback'); END;",
+            )
+            .unwrap();
+        let sql_error =
+            close_auto_admission_error(&st, &sql_chosen, "reply_timeout_out_of_range".into())
+                .unwrap_err();
+        assert!(
+            sql_error.contains("fixture R7 refusal rollback"),
+            "l'erreur SQLite du CAS reste observable: {sql_error}"
+        );
+        assert_eq!(
+            st.delegation_store
+                .auto_admission_receipt(OWNER, &sql_request.request_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            AutoAdmissionState::Chosen,
+            "l'échec SQLite ne fabrique aucun refus terminal"
+        );
+        drop(st);
+        cleanup(&config);
+    }
 
     // T003–T037 : admission et remise réelles du harnais150 ; le JSON reste
     // compilable avant les DTO160. Aucun fournisseur ni processus n'est lancé.

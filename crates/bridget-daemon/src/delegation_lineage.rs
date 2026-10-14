@@ -1,7 +1,8 @@
 //! Projection des faits de la saga dans le même magasin transactionnel.
 use super::{DelegationStore, RoundRecord, Task};
 use bridget_transport::protocol::{
-    HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, LineagePlacementV2, NativeDelegationRequest,
+    HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, LineageDecisionModeV3, LineageDecisionV3,
+    LineagePlacementV2, NativeDelegationRequest,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -170,6 +171,44 @@ fn increment(tx: &Transaction<'_>) -> rusqlite::Result<ProjectionMutation> {
 }
 
 impl DelegationStore {
+    /// Lecture de projection seulement : l'absence de reçu163 reste `null`
+    /// pour une Task historique. Les données qui dépassent le contrat fermé
+    /// rendent le magasin indisponible au lieu d'inventer une décision.
+    fn decision_summary_in(
+        tx: &Transaction<'_>,
+        task_id: &str,
+    ) -> Result<Option<LineageDecisionV3>, E> {
+        let row: Option<(String, String, Option<String>)> = tx
+            .query_row(
+                "SELECT mode,candidate_id,reason FROM auto_admission_receipts WHERE task_id=?1 AND mode IS NOT NULL AND candidate_id IS NOT NULL LIMIT 1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(|_| E::StoreUnavailable)?;
+        row.map(|(mode, candidate_id, reason)| {
+            let mode = match mode.as_str() {
+                "explicit" => LineageDecisionModeV3::Explicit,
+                "automatic" => LineageDecisionModeV3::Automatic,
+                "fallback" => LineageDecisionModeV3::Fallback,
+                _ => return Err(E::StoreUnavailable),
+            };
+            if !bridget_transport::protocol::is_auto_candidate_id(&candidate_id)
+                || reason.as_deref().is_some_and(|value| {
+                    !bridget_transport::protocol::is_auto_admission_reason(value)
+                })
+            {
+                return Err(E::StoreUnavailable);
+            }
+            Ok(LineageDecisionV3 {
+                mode,
+                candidate_id,
+                reason,
+            })
+        })
+        .transpose()
+    }
+
     pub(super) fn initialize_lineage(&self) -> rusqlite::Result<()> {
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS native_delegation_projection_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation TEXT NOT NULL,seq INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS native_delegation_cancel_receipts(root TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(root,request_id));
@@ -448,21 +487,39 @@ impl DelegationStore {
         request_id: &str,
         canonical: &[u8],
     ) -> Result<(), String> {
-        let mut task = stamp(task.clone(), None);
-        if task.root_owner_agent_id.is_empty() {
-            task.root_owner_agent_id = task.owner.clone();
-        }
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| e.to_string())?;
+        let (task, mutation) = self.insert_projected_in(&tx, task, request_id, canonical)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.publish_projection(task.root_owner(), mutation);
+        Ok(())
+    }
+
+    /// Écrit une Task et sa mutation dans une transaction fournie. L'appelant
+    /// reste seul responsable du commit puis de `publish_projection` : aucun
+    /// lecteur ne doit observer une mutation qui sera rollbackée.
+    pub(super) fn insert_projected_in(
+        &self,
+        tx: &Transaction<'_>,
+        task: &Task,
+        request_id: &str,
+        canonical: &[u8],
+    ) -> Result<(Task, ProjectionMutation), String> {
+        let mut task = stamp(task.clone(), None);
+        if task.root_owner_agent_id.is_empty() {
+            task.root_owner_agent_id = task.owner.clone();
+        }
         let payload = serde_json::to_string(&task).map_err(|e| e.to_string())?;
         tx.execute("INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",params![task.task_id,task.owner_instance,request_id,canonical,payload]).map_err(|e|e.to_string())?;
-        let mutation = increment(&tx).map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
+        let mutation = increment(tx).map_err(|e| e.to_string())?;
+        Ok((task, mutation))
+    }
+
+    pub(super) fn publish_projection(&self, root: &str, mutation: ProjectionMutation) {
         self.wait_epoch.bump();
-        self.committed(task.root_owner(), mutation);
-        Ok(())
+        self.committed(root, mutation);
     }
 
     pub(super) fn save_projected(&self, task: &Task) -> Result<(), String> {
@@ -735,7 +792,7 @@ impl DelegationStore {
         version: u16,
         mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
     ) -> Result<Value, E> {
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1 | 2 | 3) {
             return Err(E::UnsupportedVersion);
         }
         if !(1..=100).contains(&limit) {
@@ -785,9 +842,14 @@ impl DelegationStore {
                 .map_err(|_| E::StoreUnavailable)?;
             let (journal, placement) = facts(&task);
             let mut entry = task_entry(&task, journal)?;
-            if version == 2 {
+            if version >= 2 {
                 entry["placement"] =
                     serde_json::to_value(placement).map_err(|_| E::StoreUnavailable)?;
+            }
+            if version == 3 {
+                entry["decision"] =
+                    serde_json::to_value(Self::decision_summary_in(&tx, &task.task_id)?)
+                        .map_err(|_| E::StoreUnavailable)?;
             }
             let size = serde_json::to_vec(&entry)
                 .map_err(|_| E::StoreUnavailable)?
@@ -844,7 +906,7 @@ impl DelegationStore {
         version: u16,
         mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
     ) -> Result<Value, E> {
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1 | 2 | 3) {
             return Err(E::UnsupportedVersion);
         }
         if !(1..=16384).contains(&limit) {
@@ -887,9 +949,14 @@ impl DelegationStore {
         }
         let (journal_available, placement) = facts(&task);
         let mut entry = task_entry(&task, journal_available)?;
-        if version == 2 {
+        if version >= 2 {
             entry["placement"] =
                 serde_json::to_value(placement).map_err(|_| E::StoreUnavailable)?;
+        }
+        if version == 3 {
+            entry["decision"] =
+                serde_json::to_value(Self::decision_summary_in(&tx, &task.task_id)?)
+                    .map_err(|_| E::StoreUnavailable)?;
         }
         let response = json!({"version":version,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"task":entry,"result":result.map(|s|&s[start..end]),"result_offset":offset,"result_next_offset":if end<total {Some(end)}else{None},"result_total_bytes":total});
         tx.commit().map_err(|_| E::StoreUnavailable)?;

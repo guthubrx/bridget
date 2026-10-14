@@ -2932,3 +2932,110 @@ fn native162_lineage_versions_contact_et_fraicheur_sans_mutation_metier() {
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn spec163_lineage_v3_projette_seulement_le_resume_ferme_de_decision() {
+    use crate::delegation::{AutoAdmissionMode, AutoAdmissionReceipt, AutoAdmissionState};
+    use bridget_transport::protocol::{RemotePlacement, WorkerContactState};
+
+    let dir = temp_dir("decision163");
+    let store = open_store(&dir.join("store.sqlite"));
+    let task_id = "16300000-0000-4000-8000-000000000001";
+    let mut task = task(
+        task_id,
+        "humain",
+        "inst",
+        "inst",
+        "enfant-163",
+        None,
+        "queued",
+        100,
+    );
+    task.remote_placement = Some(RemotePlacement {
+        machine_id: "cartae".into(),
+        worker_id: "worker-cartae".into(),
+        provisioning_revision: 1,
+        project_id: "projet".into(),
+        mapping_revision: 1,
+        origin_host: "mac".into(),
+        origin_cwd: "/source".into(),
+        source_root_identity: "fixture".into(),
+        relative_cwd: String::new(),
+        execution_cwd: "/remote".into(),
+        base_commit: None,
+        definition_digest: "definition".into(),
+        permission_digest: "permissions".into(),
+    });
+    store
+        .insert(&task, "delegate-163", b"delegate-163")
+        .unwrap();
+    store
+        .insert_auto_admission_receipt(&AutoAdmissionReceipt {
+            owner: "humain".into(),
+            request_id: "auto-163".into(),
+            canonical: br#"{"operation":"auto_delegate"}"#.to_vec(),
+            metadata: br#"{"policy_revision":7}"#.to_vec(),
+            state: AutoAdmissionState::Admitted,
+            coordinator_epoch: 1,
+            revision: 3,
+            policy_revision: 7,
+            policy_digest: "a".repeat(64),
+            candidate_id: Some("c01".into()),
+            delegate_canonical: Some(b"delegate-163".to_vec()),
+            mode: Some(AutoAdmissionMode::Automatic),
+            reason: Some("profil adapté".into()),
+            task_id: Some(task_id.into()),
+            refusal_code: None,
+            created_at: 100,
+            updated_at: 101,
+        })
+        .unwrap();
+
+    let facts = |task: &Task| {
+        (
+            false,
+            task.remote_placement
+                .as_ref()
+                .map(|placement| LineagePlacementV2 {
+                    machine_id: placement.machine_id.clone(),
+                    display_name: None,
+                    worker_id: placement.worker_id.clone(),
+                    last_contact_at: None,
+                    contact_state: WorkerContactState::Unknown,
+                }),
+        )
+    };
+    let v1 = store
+        .lineage_page_versioned("humain", 100, None, 1, facts)
+        .unwrap();
+    let v2 = store
+        .lineage_page_versioned("humain", 100, None, 2, facts)
+        .unwrap();
+    let v3 = store
+        .lineage_page_versioned("humain", 100, None, 3, facts)
+        .unwrap();
+    assert!(v1["tasks"][0].get("decision").is_none());
+    assert!(v1["tasks"][0].get("placement").is_none());
+    assert!(v2["tasks"][0].get("decision").is_none());
+    assert_eq!(
+        v2["tasks"][0]["placement"],
+        json!({
+            "machine_id":"cartae","display_name":null,"worker_id":"worker-cartae",
+            "last_contact_at":null,"contact_state":"unknown"
+        })
+    );
+    assert_eq!(v3["tasks"][0]["placement"], v2["tasks"][0]["placement"]);
+    assert_eq!(
+        v3["tasks"][0]["decision"],
+        json!({"mode":"automatic","candidate_id":"c01","reason":"profil adapté"})
+    );
+    assert!(!v3.to_string().contains("decision.internal"));
+
+    let show = store
+        .lineage_show_versioned("humain", task_id, 0, 100, 3, facts)
+        .unwrap();
+    assert_eq!(show["task"]["decision"], v3["tasks"][0]["decision"]);
+    assert_eq!(show["task"]["placement"], v3["tasks"][0]["placement"]);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}

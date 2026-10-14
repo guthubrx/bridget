@@ -267,6 +267,7 @@ fn run_with_args(args: Vec<String>) {
         "artifact" => cmd_artifact(&args[2..]),
         "spawn" => cmd_spawn(&args[2..]),
         "delegate-grant" => cmd_delegate_grant(&args[2..]),
+        "auto-delegate" => cmd_auto_delegate(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
         "relaunch" => cmd_relaunch(&args[2..]),
         "decommission" => cmd_decommission(&args[2..]),
@@ -757,6 +758,7 @@ fn print_usage() {
            handoff <OP>           Dossier de passation : preview | send, objet JSON sur stdin (--json-stdin [--json])\n  \
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            delegate-grant <N>     Autorise la délégation dans une racine (--cwd CHEMIN --posture discovery|development) [--revoke]\n  \
+           auto-delegate <OPTS>   Admission configurée native (auto-delegate --help)\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
            decommission <N>       Retire un équipier de la flotte visible\n  \
@@ -2790,6 +2792,185 @@ fn cmd_delegate_grant(args: &[String]) {
         }
         Err(error) => {
             eprintln!("bridget delegate-grant : résultat non confirmé : {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+const AUTO_DELEGATE_USAGE: &str = "usage: bridget auto-delegate \\
+  --request-id ID --task MISSION --cwd CHEMIN [--machine-id ID] [--project-id ID] \\
+  [--agent-type TYPE] [--model MODEL] [--effort EFFORT] \\
+  [--posture discovery|development] [--reply-timeout SECONDES] \\
+  [--workspace JSON] [--keep-alive-secs SECONDES] [--child-requests deny|forward] \\
+  [--brief JSON] [--urgent true|false] [--deliverable TEXTE]\n\
+`--workspace` et `--brief` reçoivent les mêmes objets JSON fermés que l'outil \\
+MCP bridget_auto_delegate. Rejouer une même request_id avec le même payload \\
+affiche le dernier état durable confirmé ; une erreur technique ne vaut pas clôture.";
+
+/// La CLI n'interprète aucune option d'admission : elle ne fait que produire
+/// l'objet fermé déjà consommé par le handler MCP commun.
+fn parse_auto_delegate_args(args: &[String]) -> Result<serde_json::Value, String> {
+    let mut payload = serde_json::Map::new();
+    let mut index = 0;
+    while index < args.len() {
+        let option = args[index].as_str();
+        let (key, value) = match option {
+            "--request-id" => (
+                "request_id",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--machine-id" => (
+                "machine_id",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--project-id" => (
+                "project_id",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--agent-type" => (
+                "agent_type",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--model" => (
+                "model",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--effort" => (
+                "effort",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--task" => (
+                "task",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--cwd" => (
+                "cwd",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--posture" => (
+                "posture",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--child-requests" => (
+                "child_requests",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--deliverable" => (
+                "deliverable",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--reply-timeout" => {
+                let value = option_value(args, &mut index, option)?
+                    .parse::<u64>()
+                    .map_err(|_| "--reply-timeout attend un entier non négatif".to_string())?;
+                ("reply_timeout", serde_json::Value::from(value))
+            }
+            "--keep-alive-secs" => {
+                let value = option_value(args, &mut index, option)?
+                    .parse::<u64>()
+                    .map_err(|_| "--keep-alive-secs attend un entier non négatif".to_string())?;
+                ("keep_alive_secs", serde_json::Value::from(value))
+            }
+            "--urgent" => {
+                let value = option_value(args, &mut index, option)?
+                    .parse::<bool>()
+                    .map_err(|_| "--urgent attend true ou false".to_string())?;
+                ("urgent", serde_json::Value::Bool(value))
+            }
+            "--workspace" | "--brief" => {
+                let key = if option == "--workspace" {
+                    "workspace"
+                } else {
+                    "brief"
+                };
+                let raw = option_value(args, &mut index, option)?;
+                let value = serde_json::from_str(&raw)
+                    .map_err(|error| format!("{option} attend un JSON valide : {error}"))?;
+                (key, value)
+            }
+            _ => return Err(unknown_argument("auto-delegate", option)),
+        };
+        if payload.insert(key.to_string(), value).is_some() {
+            return Err(format!("auto-delegate : option répétée {option}"));
+        }
+        index += 1;
+    }
+    for required in ["request_id", "task", "cwd"] {
+        if !payload.contains_key(required) {
+            return Err(format!(
+                "auto-delegate : --{} est obligatoire",
+                required.replace('_', "-")
+            ));
+        }
+    }
+    if payload
+        .get("task")
+        .and_then(serde_json::Value::as_str)
+        .is_none_or(|task| task.len() > 65_536)
+    {
+        return Err("auto-delegate : --task dépasse 65536 octets".into());
+    }
+    let mut canonical = payload.clone();
+    canonical.insert(
+        "operation".into(),
+        serde_json::Value::String("auto_delegate".into()),
+    );
+    if serde_json::to_vec(&serde_json::Value::Object(canonical))
+        .map_err(|error| format!("auto-delegate : payload invalide : {error}"))?
+        .len()
+        > crate::delegation::MAX_AUTO_ADMISSION_CANONICAL_BYTES
+    {
+        return Err("auto-delegate : payload canonique dépasse 512 Kio".into());
+    }
+    Ok(serde_json::Value::Object(payload))
+}
+
+/// Même parcours que l'outil MCP : identité, capacité maître et résultat
+/// durable sont tous traités par `delegation_mcp::execute`.
+fn cmd_auto_delegate(args: &[String]) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("help" | "--help" | "-h")
+    ) {
+        println!("{AUTO_DELEGATE_USAGE}");
+        return;
+    }
+    let payload = parse_auto_delegate_args(args).unwrap_or_else(|error| {
+        eprintln!("{AUTO_DELEGATE_USAGE}");
+        eprintln!("erreur: {error}");
+        std::process::exit(2);
+    });
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        eprintln!(
+            "bridget auto-delegate : {} : {}",
+            error.code(),
+            error.remediation()
+        );
+        std::process::exit(1);
+    });
+    match crate::delegation_mcp::execute(
+        &identity,
+        "bridget_auto_delegate",
+        &payload,
+        &DaemonConfig::default().socket_path,
+    ) {
+        Ok(result) => {
+            let confirmed = result
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|status| status != "error");
+            println!("{result}");
+            if !confirmed {
+                eprintln!("bridget auto-delegate : dernier état non confirmé");
+                std::process::exit(1);
+            }
+        }
+        Err(crate::communication::client::ClientError::InvalidParams(error)) => {
+            eprintln!("bridget auto-delegate : {error}");
+            std::process::exit(2);
+        }
+        Err(error) => {
+            eprintln!("bridget auto-delegate : résultat non confirmé : {error}");
             std::process::exit(1);
         }
     }
@@ -7896,6 +8077,118 @@ mod hook_tests {
     }
 
     #[test]
+    fn spec163_auto_delegate_cli_conserve_le_payload_ferme_du_handler_mcp() {
+        let payload = parse_auto_delegate_args(&argv(&[
+            "--request-id",
+            "auto-163",
+            "--task",
+            "admettre une mission",
+            "--cwd",
+            "/workspace",
+            "--agent-type",
+            "codex",
+            "--model",
+            "gpt-5.6",
+            "--effort",
+            "high",
+            "--posture",
+            "development",
+            "--reply-timeout",
+            "21600",
+            "--workspace",
+            r#"{"strategy":"shared"}"#,
+            "--keep-alive-secs",
+            "600",
+            "--child-requests",
+            "deny",
+            "--brief",
+            r#"{"objective":"objectif","summary":"résumé"}"#,
+            "--urgent",
+            "true",
+            "--deliverable",
+            "rapport",
+        ]))
+        .unwrap();
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "request_id":"auto-163", "task":"admettre une mission", "cwd":"/workspace",
+                "agent_type":"codex", "model":"gpt-5.6", "effort":"high",
+                "posture":"development", "reply_timeout":21600,
+                "workspace":{"strategy":"shared"}, "keep_alive_secs":600,
+                "child_requests":"deny", "brief":{"objective":"objectif","summary":"résumé"},
+                "urgent":true, "deliverable":"rapport"
+            })
+        );
+        for args in [
+            argv(&["--request-id", "r", "--task", "t"]),
+            argv(&[
+                "--request-id",
+                "r",
+                "--task",
+                "t",
+                "--task",
+                "autre",
+                "--cwd",
+                "/workspace",
+            ]),
+            argv(&[
+                "--request-id",
+                "r",
+                "--task",
+                "t",
+                "--cwd",
+                "/workspace",
+                "--workspace",
+                "not-json",
+            ]),
+            argv(&[
+                "--request-id",
+                "r",
+                "--task",
+                "t",
+                "--cwd",
+                "/workspace",
+                "--urgent",
+                "yes",
+            ]),
+            argv(&[
+                "--request-id",
+                "r",
+                "--task",
+                "t",
+                "--cwd",
+                "/workspace",
+                "--parent",
+                "forged",
+            ]),
+        ] {
+            assert!(parse_auto_delegate_args(&args).is_err(), "args={args:?}");
+        }
+        let task_trop_long = vec![
+            "--request-id".into(),
+            "r".into(),
+            "--task".into(),
+            "x".repeat(65_537),
+            "--cwd".into(),
+            "/workspace".into(),
+        ];
+        assert!(parse_auto_delegate_args(&task_trop_long).is_err());
+        let canon_trop_long = vec![
+            "--request-id".into(),
+            "r".into(),
+            "--task".into(),
+            "t".into(),
+            "--cwd".into(),
+            "/workspace".into(),
+            "--brief".into(),
+            format!(r#"{{"objective":"{}"}}"#, "x".repeat(512 * 1024)),
+        ];
+        assert!(parse_auto_delegate_args(&canon_trop_long).is_err());
+        assert!(command_requires_principal("auto-delegate"));
+    }
+
+    #[test]
     fn reaper_exige_une_racine_explicitement_choisie() {
         assert!(
             require_explicit_reaper_tmp(None)
@@ -8047,9 +8340,26 @@ mod hook_tests {
         use crate::mcp_identity::IdentityError;
 
         for command in [
-            "send", "reply", "who", "journal", "events", "thread", "handoff", "artifact", "cancel",
-            "rename", "runtime", "domain", "control", "dnd", "guichet", "ledger", "spawn", "stop",
+            "send",
+            "reply",
+            "who",
+            "journal",
+            "events",
+            "thread",
+            "handoff",
+            "artifact",
+            "cancel",
+            "rename",
+            "runtime",
+            "domain",
+            "control",
+            "dnd",
+            "guichet",
+            "ledger",
+            "spawn",
+            "stop",
             "relaunch",
+            "auto-delegate",
         ] {
             assert!(command_requires_principal(command), "{command}");
             assert_eq!(

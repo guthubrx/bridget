@@ -14,6 +14,7 @@ pub mod communication;
 mod connection_channel;
 pub mod daemon;
 pub mod desired_state;
+pub(crate) mod decision_service;
 pub mod disk_hygiene;
 pub mod environment;
 pub mod execution_store;
