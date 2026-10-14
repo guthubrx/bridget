@@ -1,6 +1,6 @@
 # Audit de réemploi SPEC-163
 
-**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 ajoutés ici restent à committer/pousser par ROOT, sans hash futur anticipé.
 **Statut :** PASS — inventaire et six précisions relus par ROOT le 13 octobre 2026. Ce PASS de réemploi ne vaut ni approbation de la contre-revue ni preuve d’implémentation.
 **Date :** 2026-10-13. **Source :** lecture indépendante de reuse163, puis six précisions tranchées par ROOT et intégrées au plan, aux contrats et à l’ADR. Aucun code, test, build, SSH ou modèle exécuté par l’auditeur.
 

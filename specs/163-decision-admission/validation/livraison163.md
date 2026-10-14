@@ -1,6 +1,6 @@
-# Livraison SPEC-163 — 57/58, G8/G9 validés, clôture documentaire en cours
+# Livraison SPEC-163 — 58/58, Livré avec conservations justifiées
 
-**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 ajoutés ici restent à committer/pousser par ROOT, sans hash futur anticipé.
 
 ## Checkpoint installation et provenance — 53/57, 14 octobre 2026
 
@@ -104,3 +104,12 @@ L’audit 163 reste A/99,047619 partiel : 0C/0H/3M/2L, couverture 4,655325 % du 
 Les suites FULL antérieures avec échecs restent historiques et ne sont pas réécrites GREEN. Les campagnes ciblées réussies restent rattachées à leurs sources. Aucun FULL répété, benchmark nouveau, nouveau test du hook auto sans request_id ou nouveau processus fournisseur issu du test de dispatch n’est inventé. Les douze exacts T058 restent 11 lib + 1 intégration ; le zéro-filtre initial reste exclu.
 
 L’ETA initiale du plan 300–540 min et celle après Tasks 360–600 min sont historiques. La dernière fenêtre recalibrée 05:30–06:00 CEST n’est pas une mesure CPU. ROOT situe approximativement le début du planning au 13 octobre 2026 à 19:52:55 CEST. Le reçu G8 du 14 octobre vers 05:38:41 CEST intervient près de 9 h 46 plus tard ; ce temps écoulé approximatif inclut attente, incidents, revues, tests, builds et maintenance, sans attribution de temps processeur.
+
+
+## Clôture T045 — 58/58, 14 octobre 2026
+
+ROOT a intégré et poussé les documents de livraison G8/G9 au commit c57cfd35efa1338cda5256a02c57d71258d8b8d4 sur github/main. Le reçu vérifie HEAD égal à la référence distante et dépôt propre à ce checkpoint. T045 est acceptée sur cette preuve : 58/58, Implemented ; Pipeline : Livré avec conservations justifiées. Le checkpoint 57/58 précédent, intégré dans c57, reste historique.
+
+Preuve : /Users/moi/.cache/bridget-delivery163-20261013/git-final-doc-checkpoint-c57cfd35.json ; SHA-256 56316fdcb4202865fbb57e7979a11d302bb968e2170453a9523070a490a30390. Le build actif reste 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5. Le commit documentaire c57 n’est pas un nouveau binaire. Les marqueurs Implemented/58/58 ajoutés par ce GO attendent leur commit/push final ROOT ; aucun hash ultérieur n’est inventé.
+
+Les conservations G9 sont acceptées et nommées, sans suppression forcée. Anciennes FULL non GREEN, audits partiels et leurs findings, P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 sont maintenus. Aucun nouveau test, audit global, service ou P4 formel n’est déduit. L’ETA initiale 300–540 min et l’ETA après Tasks 360–600 min restent historiques ; dernière fenêtre 05:30–06:00 CEST. Aucun temps écoulé exact de développement ou CPU n’est ajouté.

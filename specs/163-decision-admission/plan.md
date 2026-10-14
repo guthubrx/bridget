@@ -1,6 +1,6 @@
 # Plan SPEC-163 — Décision initiale configurable
 
-**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 ajoutés ici restent à committer/pousser par ROOT, sans hash futur anticipé.
 **Source de référence :** Bridget 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437 ; checkout initial dcfd9bc29140457b1fa016c276f5a48933415a5c. Session 162 livrée, 46/46, G8/G9 validés avec conservations justifiées.
 **Estimation initiale du 13 octobre 2026, historique :** 300–540 minutes (5–9 heures), jusqu’à livraison et nettoyage. Recalibrage après Tasks. La première estimation privée de 12–24 heures est historique et remplacée. Le découpage initial après audit/contre-revue compte 45 tâches ; ETA de réalisation recommandée 360–600 minutes après Tasks, à confirmer par ROOT, hors quotas/indisponibilité.
 
@@ -233,10 +233,19 @@ L’ETA initiale du plan 300–540 min et celle après Tasks 360–600 min sont 
 
 
 
-## Acceptation opérationnelle ROOT — 57/58, 14 octobre 2026
+## Acceptation opérationnelle ROOT — historique57/58 intégré dans c57, 14 octobre 2026
 
 ROOT accepte T039/T043/T044/T058 sur les preuves de configuration effective, de recette G8 et de nettoyage G9. T045 reste seule ouverte pour la clôture documentaire, le commit et le push finaux. La source active est 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 ; les métadonnées de clôture ultérieures auront leur propre commit. Le correctif T058 est fermé par son code, douze oracles exacts, la revue R5 avec F1 aligné, le delta d’audit et G8 réelle.
 
 Reçus : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-final.json ; SHA-256 5b1c00923f2f307136b5831cc8d3328227b7284deacf44c793d71542e3ceb52c. /Users/moi/.cache/bridget-delivery163-20261013/g9-t058-cleanup-final.json ; SHA-256 08091fc94791644308b258f2eb912ee375145d66004ef9f9c5e0d822a34fb5c3. Les faits et limites sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md. Les anciens chemins de worktrees Mac retirés désignent des lieux historiques, sans nouvelle copie de travail active.
 
 P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 restent conservés, sans P4 formel inventé. Les anciennes FULL avec échecs, l’audit163 partiel 3M/2L, le delta T058 partiel sans finding et le delta T3 R6 sans finding restent distincts ; aucun GREEN global déduit.
+
+
+## Clôture T045 — 58/58, 14 octobre 2026
+
+ROOT a intégré et poussé les documents de livraison G8/G9 au commit c57cfd35efa1338cda5256a02c57d71258d8b8d4 sur github/main. Le reçu vérifie HEAD égal à la référence distante et dépôt propre à ce checkpoint. T045 est acceptée sur cette preuve : 58/58, Implemented ; Pipeline : Livré avec conservations justifiées. Le checkpoint 57/58 précédent, intégré dans c57, reste historique.
+
+Preuve : /Users/moi/.cache/bridget-delivery163-20261013/git-final-doc-checkpoint-c57cfd35.json ; SHA-256 56316fdcb4202865fbb57e7979a11d302bb968e2170453a9523070a490a30390. Le build actif reste 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5. Le commit documentaire c57 n’est pas un nouveau binaire. Les marqueurs Implemented/58/58 ajoutés par ce GO attendent leur commit/push final ROOT ; aucun hash ultérieur n’est inventé.
+
+Les conservations G9 sont acceptées et nommées, sans suppression forcée. Anciennes FULL non GREEN, audits partiels et leurs findings, P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 sont maintenus. Aucun nouveau test, audit global, service ou P4 formel n’est déduit. L’ETA initiale 300–540 min et l’ETA après Tasks 360–600 min restent historiques ; dernière fenêtre 05:30–06:00 CEST. Aucun temps écoulé exact de développement ou CPU n’est ajouté.

@@ -1,6 +1,6 @@
 # Analyse croisée SPEC-163
 
-**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 ajoutés ici restent à committer/pousser par ROOT, sans hash futur anticipé.
 
 ## Analyse initiale du 13 octobre 2026 — historique conservé
 
@@ -288,7 +288,7 @@ Passe1 : l’annonce tools/list ne prouve pas l’aiguillage tools/call ; le dé
 Passe2 :58 IDs uniques,53 cochées inchangées, seulesT039/T043/T044/T045/T058 ouvertes ;22FR/neufSC/cinqUS inchangés. MappingT058 vers FR005/013/014/015/019/020/022 et SC003/005/007/009 complète la couverture31/31 documentaire. Le défaut de code reste ouvert ; aucune Analyze ne le ferme, aucun quota/auth ou redémarrageT3 supposé. Revue/audit/build/redelivery/G8 ciblés futurs, pas de FULL ou succès anticipé.
 
 
-## Acceptation opérationnelle ROOT — 57/58, 14 octobre 2026
+## Acceptation opérationnelle ROOT — historique57/58 intégré dans c57, 14 octobre 2026
 
 ROOT accepte T039/T043/T044/T058 sur les preuves de configuration effective, de recette G8 et de nettoyage G9. T045 reste seule ouverte pour la clôture documentaire, le commit et le push finaux. La source active est 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 ; les métadonnées de clôture ultérieures auront leur propre commit. Le correctif T058 est fermé par son code, douze oracles exacts, la revue R5 avec F1 aligné, le delta d’audit et G8 réelle.
 
@@ -300,3 +300,12 @@ P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateu
 ## Rapprochement de clôture avant Git ROOT
 
 58 identifiants de tâche conservés ; 57 cochés sur GO ROOT, seule T045 ouverte. Les 22 FR/9 SC et cinq US conservent leur mapping documentaire. Les preuves de la phase corrective clôturent T058, sans convertir le P3 historique en CONVERGED ou inventer une passe P4. Aucun nouveau test ou audit exécuté par ce rapprochement ; les limites des reçus G8/G9 restent explicites.
+
+
+## Clôture T045 — 58/58, 14 octobre 2026
+
+ROOT a intégré et poussé les documents de livraison G8/G9 au commit c57cfd35efa1338cda5256a02c57d71258d8b8d4 sur github/main. Le reçu vérifie HEAD égal à la référence distante et dépôt propre à ce checkpoint. T045 est acceptée sur cette preuve : 58/58, Implemented ; Pipeline : Livré avec conservations justifiées. Le checkpoint 57/58 précédent, intégré dans c57, reste historique.
+
+Preuve : /Users/moi/.cache/bridget-delivery163-20261013/git-final-doc-checkpoint-c57cfd35.json ; SHA-256 56316fdcb4202865fbb57e7979a11d302bb968e2170453a9523070a490a30390. Le build actif reste 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5. Le commit documentaire c57 n’est pas un nouveau binaire. Les marqueurs Implemented/58/58 ajoutés par ce GO attendent leur commit/push final ROOT ; aucun hash ultérieur n’est inventé.
+
+Les conservations G9 sont acceptées et nommées, sans suppression forcée. Anciennes FULL non GREEN, audits partiels et leurs findings, P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 sont maintenus. Aucun nouveau test, audit global, service ou P4 formel n’est déduit. L’ETA initiale 300–540 min et l’ETA après Tasks 360–600 min restent historiques ; dernière fenêtre 05:30–06:00 CEST. Aucun temps écoulé exact de développement ou CPU n’est ajouté.

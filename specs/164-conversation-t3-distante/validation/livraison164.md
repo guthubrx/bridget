@@ -1,6 +1,6 @@
-# Livraison164 — intégration, paquet et recette acceptés
+# Livraison164 — 22/22, G8/G9 et clôture acceptés
 
-**Statut : In Progress,21/22.** La source est intégrée et poussée vers le fork T3. Le paquet signé est installé sur disque. La recette web isolée S164-12 est acceptée par ROOT. G8 et G9 sont acceptés par ROOT. T018/T019 sont cochées. T020 reste ouverte : le push documentaire final n’est pas encore attesté.
+**Statut : Implemented,22/22. Pipeline : Livré.** Source T3 intégrée et poussée, paquet signé installé, recette web isolée acceptée. G8/G9 et conservations justifiées acceptés par ROOT. T020 clôturée sur le push documentaire réelc57. Le prochain commit de cette clôture n’est pas encore attesté.
 
 ## Preuves durables
 
@@ -43,3 +43,11 @@ Tests sources :28PASSR6 distincts des10réducteurR4 et8MarkdownR1 conservés, so
 ### Conservations G9 supplémentaires
 
 Les caches `/Users/moi/.cache/t3-final162.2nosz6zd` et `/Users/moi/.cache/t3-final163.zsb7fmfu` sont conservés pour leurs bases SQLite persistantes réelles,20480octets chacune, aux chemins `/Users/moi/.cache/t3-final162.2nosz6zd/source/node_modules/.vite/task-cache/v18/cache.db` et `/Users/moi/.cache/t3-final163.zsb7fmfu/source/node_modules/.vite/task-cache/v18/cache.db`. Ces dépendances ne sont pas conservées sous prétexte d'un futur build163. L'ancien échange `/Applications/.T3 Code (Local).app.new-163` reste utilisé par les processus T3 protégés ; le rollback et les preuves restent conservés. Cache Cargo partagé `/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug` conservé, permis lourd rendu ; aucun nouveau FULL ou build163 en attente prétendu. Les trois namespaces SQLite `/tmp/b163.uqd3443p`, `/tmp/b163.dxmfq_la` et `/tmp/b163.07di472q` sont protégés par leurs attestations historiques ; leur existence actuelle n'est pas revendiquée. Aucun gain physique ni modification DB de production revendiqué.
+
+## Clôture documentaire acceptée par ROOT — 2026-10-14
+
+**Statut canonique : Implemented. Progression :22/22. Pipeline : Livré, G8/G9 acceptés avec conservations justifiées.** T020 est cochée sur le push documentaire réel `c57cfd35efa1338cda5256a02c57d71258d8b8d4` vers github/main. Reçu : `/Users/moi/.cache/bridget-delivery163-20261013/git-final-doc-checkpoint-c57cfd35.json`, SHA-256 `56316fdcb4202865fbb57e7979a11d302bb968e2170453a9523070a490a30390` ; HEAD et référence distante égaux, racine propre à cette observation. Ce commit contient les documents de livraison G8/G9 avant le cochage final. Le dernier commit de ce cochage et son push seront réalisés par ROOT ; aucun hash futur n'est présenté comme acquis. Les checkpoints21/22 précédents restent historiques.
+
+Le build actif Bridget est toujours source `3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5` ; le commit de métadonnéesc57 est distinct et ne prétend pas une nouvelle compilation. Source T3 `511190beb307e0952066fe1a4b511cb9dd7adb18` poussée au fork/local/main-20261009, application164 signée sur disque. T3PID704/969 reste chargé en162, sans redémarrage ni activation différée.
+
+La recette S164-12 prouve le client web construit avec données synthétiques, en taille desktop et mobileCSS ; elle ne vaut pas Electron actif ni React Native natif. Les tests et les audits ciblés restent qualifiés par leur provenance et couverture partielle. Aucun nouveau Converge, audit, test, build ou succès global GREEN n'est créé par cette clôture. Bridget reste indépendant de T3.

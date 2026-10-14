@@ -5,10 +5,11 @@
 
 Spec: 163-decision-admission
 Titre: Choix configurable du moteur et de la machine
-Statut: In Progress
+Statut: Implemented
+Pipeline: Livré avec conservations justifiées
 Priorité: P1
-Tâches: 57/58 (98,28%)
-Tests: preuves ciblées, audits partiels, recette G8 et nettoyage G9 acceptés ROOT ; T045 seule ouverte pour commit/push documentaire
+Tâches: 58/58 (100%)
+Tests: preuves ciblées, audits partiels, recette G8, nettoyage G9 et documents de livraison acceptés ROOT ; aucune suite globale GREEN déduite
 
 Résumé:
 - Contexte: Le placement explicite 162 est livré.
@@ -18,13 +19,13 @@ Résumé:
 Fichiers:
 - spec.md: ✓
 - plan.md: ✓
-- tasks.md: ✓ — 58 tâches ; 57 acceptées, T045 seule ouverte pour clôture documentaire/Git.
+- tasks.md: ✓ — 58/58 acceptées ; pipeline Livré avec conservations justifiées.
 <!-- SPEC-FORMALISM:END -->
 
-**Statut courant au 14 octobre 2026 :** In Progress, 57/58 (98,28 %) ; T045 seule ouverte jusqu’au commit et au push des documents finaux par ROOT. Source3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 intégrée, poussée et active sur Mac/Cartae. G8 validée ; G9 validé avec retraits et conservations justifiées. T058 corrigée, testée, revue et livrée ; aucun hash futur de clôture documentaire.
+**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 ajoutés ici restent à committer/pousser par ROOT, sans hash futur anticipé.
 **Priorité :** P1
 **Périmètre :** choix initial d’une mission Bridget ; configuration et explication du choix
-**Tâches :** 57/58 — T045 seule ouverte pour clôture documentaire ; T058, G8 et G9 validés sur leurs reçus réels.
+**Tâches :** 58/58 — T045 acceptée sur le commit documentaire c57 poussé ; G8/G9 validés avec conservations justifiées.
 **Date :** 2026-10-13
 **Branche :** session-163-decision-admission
 **Emplacement :** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission
@@ -212,3 +213,12 @@ Le MCP propre à la nouvelle commande annonce bridget_auto_delegate dans tools/l
 T058 reste dans la session163 autorisée : correctif minimal sur Cartae, oracles MCP existants affectés, contre-revue/delta d’audit ciblés, build et livraison du correctif avant reprise G8. Aucun nouveau framework, banc de confort ou FULL. Le prochain commit source sera différent de5105378bf4f03376e9bc93e52065cb022f81dee5 ; aucun hash futur fixé. T038/T042 demeurent cochées pour les builds/installations réellement prouvés du510, pas pour le futur correctif. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18/version164 est déjà installée et inchangée. Aucun résultat antérieur effacé, aucun livré final ou G8/G9 déduit.
 
 Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brute est conservée : /Users/moi/.cache/bridget-delivery163-20261013/g8-mcp-off-error-observation.log ; SHA-256 03e823bb6a993a7f1b8b546edc53f6aeded6e163bcd9ed507b22a68dc28f2f47. P3 NONCONVERGED historique et poursuite corrective sous mandat utilisateur restent explicites ; aucun P4 formel inventé.
+
+
+## Clôture T045 — 58/58, 14 octobre 2026
+
+ROOT a intégré et poussé les documents de livraison G8/G9 au commit c57cfd35efa1338cda5256a02c57d71258d8b8d4 sur github/main. Le reçu vérifie HEAD égal à la référence distante et dépôt propre à ce checkpoint. T045 est acceptée sur cette preuve : 58/58, Implemented ; Pipeline : Livré avec conservations justifiées. Le checkpoint 57/58 précédent, intégré dans c57, reste historique.
+
+Preuve : /Users/moi/.cache/bridget-delivery163-20261013/git-final-doc-checkpoint-c57cfd35.json ; SHA-256 56316fdcb4202865fbb57e7979a11d302bb968e2170453a9523070a490a30390. Le build actif reste 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5. Le commit documentaire c57 n’est pas un nouveau binaire. Les marqueurs Implemented/58/58 ajoutés par ce GO attendent leur commit/push final ROOT ; aucun hash ultérieur n’est inventé.
+
+Les conservations G9 sont acceptées et nommées, sans suppression forcée. Anciennes FULL non GREEN, audits partiels et leurs findings, P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 sont maintenus. Aucun nouveau test, audit global, service ou P4 formel n’est déduit. L’ETA initiale 300–540 min et l’ETA après Tasks 360–600 min restent historiques ; dernière fenêtre 05:30–06:00 CEST. Aucun temps écoulé exact de développement ou CPU n’est ajouté.
