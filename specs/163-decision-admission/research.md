@@ -1,6 +1,6 @@
 # Recherche SPEC-163 — préparation ciblée après 162
 
-**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 ajoutés ici restent à committer/pousser par ROOT, sans hash futur anticipé.
+**Statut courant au 14 octobre 2026 :** Implemented, 58/58 (100 %) ; **Pipeline : Livré** avec conservations justifiées. G8/G9 et documents de livraison sont acceptés ROOT ; T045 clôturée sur le commit documentaire c57cfd35efa1338cda5256a02c57d71258d8b8d4 poussé et vérifié. Source active 3efa3ef5a88a9a00b104f53c5183ba68dbb11fd5 inchangée ; les marqueurs de clôture 58/58 sont intégrés et poussés dans af8998a7d7494913d4420e2dca7354a73bd8a4f5, github/main égal HEAD propre vérifié par ROOT. La source active reste 3efa, distincte de ce commit documentaire.
 
 **Préparation initiale — historique :** Draft. Les lectures initiales ci-dessous portaient sur 611bfa7557b97587614687f6c6379d5961101fa6. Le socle canonique est désormais la source livrée 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437, checkout dcfd9bc29140457b1fa016c276f5a48933415a5c. Les numéros de ligne initiaux restent historiques et seront réattestés par l’audit ciblé. Aucun test, build, modèle ou service exécuté pour ce document.
 
