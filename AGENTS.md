@@ -1,4 +1,6 @@
 <!-- SPECKIT START -->
+Session 165 active : cycle de vie borné des liens T3. Plan : `specs/165-cycle-vie-liens-t3/plan.md`. Le correctif ferme les liens des sous-agents inactifs sans supprimer leur historique. La limite de fichiers reste un garde-fou, jamais la solution.
+
 Complément visuel164 livré le14octobre2026 : T3 source3ea39f11095debbba6ca6a73f99f44fbe308cd60 intégrée/poussée fork/local/main-20261009. Symbole Bridget avant fournisseur, bleu local connu/monochrome distant/neutre inconnu. App164 signée installée, ASARdc5623d70f45c85909703274ba59d216295b9e84b1e50ab8685b75aabe73f942. T3 processus courants conservés sans relance ; ancien code chargé. Reçu /Users/moi/.cache/t3-lineage-icons-164-backup/T3-install-receipt.json. Développement et contrôles ciblés Cartae ; 7PASS Bridget et typecheck/lint conformes, échec de libellé de compte fournisseur attesté sur baseline. Les checkpoints ci-dessous sont historiques.
 
 Sessions 163/164 livrées et nettoyées le 14 octobre 2026 avec conservations justifiées : 163 58/58 et 164 22/22, Implemented ; Pipeline : Livré. G8/G9 validés ; T045 163 clôturée sur documents de livraison c57 poussés.

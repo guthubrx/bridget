@@ -51,6 +51,23 @@ fn state(value: &str) -> Result<&str, ContractError> {
     }
 }
 
+fn validate_relationship(thread: &Value) -> Result<(), ContractError> {
+    let Some(lineage) = thread.get("lineage") else {
+        return Ok(());
+    };
+    if lineage.is_null() {
+        return Ok(());
+    }
+    let Some(lineage) = lineage.as_object() else {
+        return Err(invalid("lineage.relationshipToParent"));
+    };
+    match lineage.get("relationshipToParent") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(value)) if matches!(value.as_str(), "subagent" | "fork") => Ok(()),
+        _ => Err(invalid("lineage.relationshipToParent")),
+    }
+}
+
 /// O(fils), conversion à la frontière ; le parseur V1 garde les gardes de projet.
 pub(crate) fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
     let mut value: Value = serde_json::from_str(text).map_err(|_| invalid("json"))?;
@@ -73,6 +90,7 @@ pub(crate) fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
         .collect::<Result<Vec<_>, _>>()?;
     *threads = ordinary;
     for thread in threads {
+        validate_relationship(thread)?;
         let status = string(thread, "status")?;
         let run_id = nullable_string(thread, "latestRunId")?;
         let active_id = nullable_string(thread, "activeRunId")?;
@@ -699,6 +717,7 @@ mod tests {
         json!({"schemaVersion":2,"snapshotSequence":17,"projects":[{"id":"p","workspaceRoot":"/fixture/project"}],
             "threads":[{"id":"t","projectId":"p","title":"test","providerInstanceId":"claude_glm",
                 "modelSelection":{"instanceId":"claude_glm"},"runtimeMode":"approval-required","interactionMode":"default",
+                "lineage":{"relationshipToParent":"subagent","parentThreadId":"parent"},
                 "latestRunId":"r","latestRunRequestedAt":"2026-10-09T00:00:00.000Z","activeRunId":"r","status":"running",
                 "updatedAt":"2026-10-09T00:00:01.000Z","archivedAt":null,"deletedAt":null,"settledOverride":null}]})
     }
@@ -721,6 +740,7 @@ mod tests {
         let thread = &parsed.threads[0];
         assert_eq!(thread.workspace_root.as_deref(), Some("/fixture/project"));
         assert_eq!(thread.latest_turn.as_ref().unwrap().turn_id, "r");
+        assert_eq!(thread.relationship_to_parent.as_deref(), Some("subagent"));
         assert_eq!(
             thread.session.as_ref().unwrap().active_turn_id.as_deref(),
             Some("r")
@@ -729,6 +749,48 @@ mod tests {
             crate::t3code::thread_provider(thread).as_deref(),
             Some("claude")
         );
+    }
+
+    #[test]
+    fn spec165_v2_relation_reelle_est_portee_et_inconnue_refusee() {
+        for (value, expected) in [
+            (json!("subagent"), Some("subagent")),
+            (json!("fork"), Some("fork")),
+            (Value::Null, None),
+        ] {
+            let mut fixture = shell();
+            fixture["threads"][0]["lineage"]["relationshipToParent"] = value;
+            assert_eq!(
+                parse_snapshot(&fixture.to_string()).unwrap().threads[0]
+                    .relationship_to_parent
+                    .as_deref(),
+                expected
+            );
+        }
+        let mut absent = shell();
+        absent["threads"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("lineage");
+        assert_eq!(
+            parse_snapshot(&absent.to_string()).unwrap().threads[0].relationship_to_parent,
+            None
+        );
+        let mut null_lineage = shell();
+        null_lineage["threads"][0]["lineage"] = Value::Null;
+        assert_eq!(
+            parse_snapshot(&null_lineage.to_string()).unwrap().threads[0].relationship_to_parent,
+            None
+        );
+        for invalid in [json!("future"), json!(7), json!({})] {
+            let mut fixture = shell();
+            fixture["threads"][0]["lineage"]["relationshipToParent"] = invalid;
+            assert!(matches!(
+                parse_snapshot(&fixture.to_string()),
+                Err(ContractError::InvalidShape { field, .. })
+                    if field == "lineage.relationshipToParent"
+            ));
+        }
     }
 
     #[test]

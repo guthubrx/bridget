@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -54,6 +54,9 @@ const AUTH_FAILED_PAUSE: Duration = Duration::from_secs(60);
 const DETAIL_PAGE: u32 = 20;
 const DETAIL_PAGE_MAX: u32 = 320;
 const SEEN_BOUND: usize = 1000;
+/// Une reprise durable ne doit jamais recréer le pic de descripteurs qu'elle
+/// répare. Les obligations suivantes restent planifiées pour un cycle futur.
+const DRAIN_REOPEN_BOUND: usize = 32;
 /// Lectures successives avant de signaler une corrélation incertaine. L'attente
 /// reste conservée : ce seuil ne prouve ni l'absence du tour ni sa clôture.
 const SETTLE_ATTEMPTS: u32 = 5;
@@ -270,6 +273,17 @@ impl ThreadState {
     fn save(&self, path: &Path) -> Result<(), String> {
         let text = serde_json::to_string(self).map_err(|e| e.to_string())?;
         private_write(path, &text)
+    }
+
+    fn has_drain_obligation(&self, summary: &ThreadSummary) -> bool {
+        if !self.pending.is_empty() {
+            return true;
+        }
+        summary.latest_turn.as_ref().is_some_and(|turn| {
+            turn_is_final(&turn.state)
+                && self.turn_origins.contains_key(&turn.turn_id)
+                && !self.ended_turns.contains(&turn.turn_id)
+        })
     }
 
     fn remember(&mut self, message_id: &str) {
@@ -601,7 +615,11 @@ fn status(paths: &Paths) -> Result<i32, String> {
     if let (Ok(runtime), Some(token)) = (runtime, token) {
         match Client::new(&runtime, &token.token).snapshot() {
             Ok(snapshot) => {
-                for thread in snapshot.threads.iter().filter(|t| t.is_live()) {
+                for thread in snapshot
+                    .threads
+                    .iter()
+                    .filter(|thread| thread_requires_link(thread, false))
+                {
                     println!(
                         "  fil {} « {} » → agent {} ({})",
                         &thread.id[..thread.id.len().min(8)],
@@ -1113,6 +1131,11 @@ fn serve(paths: &Paths) -> Result<(), String> {
 
     let mut links: BTreeMap<String, Link> = BTreeMap::new();
     let mut retry_after: BTreeMap<String, Instant> = BTreeMap::new();
+    let mut obligations: HashSet<String> = HashSet::new();
+    let mut attempted_obligations: HashSet<String> = HashSet::new();
+    let mut drain_reopens: HashSet<String> = HashSet::new();
+    let mut obligation_scan_required = true;
+    let mut last_relation_counts: Option<RelationCounts> = None;
     let t3_base = contract::base_dir().map_err(|e| e.to_string())?;
     let mut identities = crate::t3code_identity::IdentityBindings::new(&paths.root);
     let mut identity_error: Option<String> = None;
@@ -1153,6 +1176,8 @@ fn serve(paths: &Paths) -> Result<(), String> {
                 for (_, link) in std::mem::take(&mut links) {
                     link.close();
                 }
+                drain_reopens.clear();
+                obligation_scan_required = true;
                 publish_status(paths, "waiting", &detail, 0);
                 session.reset_runtime(wait_runtime(paths, poll));
                 continue;
@@ -1169,40 +1194,116 @@ fn serve(paths: &Paths) -> Result<(), String> {
             }
         };
 
-        // Liens morts (daemon parti, panique) : retirés, recréés après un délai.
-        links.retain(|thread_id, link| {
-            if link.is_alive() {
-                true
-            } else {
-                warn!("lien du fil {thread_id} terminé ; nouvelle tentative dans {RECONNECT_BACKOFF:?}");
-                retry_after.insert(thread_id.clone(), Instant::now() + RECONNECT_BACKOFF);
-                false
-            }
-        });
+        let counts = relation_counts(&snapshot.threads);
+        if last_relation_counts != Some(counts) {
+            info!(
+                "inventaire T3 : {} racine(s), {} fork(s), {} sous-agent(s)",
+                counts.roots, counts.forks, counts.subagents
+            );
+            last_relation_counts = Some(counts);
+        }
 
-        // O(fils) par tour de boucle : un fil = un lien, retiré à l'archivage.
-        // Un fil neuf n'a pas encore de session fournisseur (elle naît au
-        // premier tour) : l'exiger le rendrait injoignable pour son premier
-        // message. Seul un fournisseur identifiable est requis.
-        let live: HashSet<&str> = snapshot
+        // Le nom compact d'un état n'est pas réversible : le premier snapshot
+        // réussi fournit les identifiants qui autorisent une lecture ciblée.
+        if obligation_scan_required {
+            for summary in snapshot.threads.iter().filter(|summary| {
+                summary.relationship_to_parent.as_deref() == Some("subagent")
+                    && summary.is_live()
+                    && !thread_requires_link(summary, false)
+                    && !attempted_obligations.contains(&summary.id)
+            }) {
+                if paths
+                    .load_thread_state(&summary.id)
+                    .has_drain_obligation(summary)
+                {
+                    obligations.insert(summary.id.clone());
+                }
+            }
+            info!(
+                "reprise T3 : {} obligation(s) persistée(s), plafond {} drain(s)",
+                obligations.len(),
+                DRAIN_REOPEN_BOUND
+            );
+            obligation_scan_required = false;
+        }
+
+        let summaries: HashMap<&str, &ThreadSummary> = snapshot
             .threads
             .iter()
-            .filter(|t| t.is_live() && thread_provider(t).is_some())
-            .map(|t| t.id.as_str())
+            .map(|summary| (summary.id.as_str(), summary))
             .collect();
-        for thread_id in links.keys().cloned().collect::<Vec<_>>() {
-            if !live.contains(thread_id.as_str())
-                && let Some(link) = links.remove(&thread_id)
-            {
-                info!("fil {thread_id} archivé ou sans fournisseur : agent retiré");
+        for thread_id in links_missing_from_snapshot(links.keys(), &summaries) {
+            if let Some(link) = links.remove(&thread_id) {
+                info!("fil {thread_id} absent du snapshot : agent retiré");
                 link.close();
             }
+            obligations.remove(&thread_id);
+            attempted_obligations.remove(&thread_id);
+            drain_reopens.remove(&thread_id);
+            retry_after.remove(&thread_id);
         }
-        for summary in snapshot
-            .threads
+        obligations.retain(|thread_id| summaries.contains_key(thread_id.as_str()));
+        attempted_obligations.retain(|thread_id| summaries.contains_key(thread_id.as_str()));
+        drain_reopens.retain(|thread_id| summaries.contains_key(thread_id.as_str()));
+        retry_after.retain(|thread_id, _| summaries.contains_key(thread_id.as_str()));
+
+        // Un worker mort ne doit jamais abandonner son lecteur. Une obligation
+        // créée après le scan initial obtient une seule reprise par processus.
+        for thread_id in links
             .iter()
-            .filter(|t| live.contains(t.id.as_str()))
+            .filter(|(_, link)| !link.is_alive())
+            .map(|(thread_id, _)| thread_id.clone())
+            .collect::<Vec<_>>()
         {
+            let retry_obligation = summaries.get(thread_id.as_str()).is_some_and(|summary| {
+                summary.relationship_to_parent.as_deref() == Some("subagent")
+                    && summary.is_live()
+                    && !thread_requires_link(summary, false)
+                    && !attempted_obligations.contains(&thread_id)
+                    && paths
+                        .load_thread_state(&thread_id)
+                        .has_drain_obligation(summary)
+            });
+            if retry_obligation {
+                obligations.insert(thread_id.clone());
+            }
+            let retry_active = summaries
+                .get(thread_id.as_str())
+                .is_some_and(|summary| thread_requires_link(summary, false));
+            if let Some(link) = links.remove(&thread_id) {
+                link.finish_dead();
+            }
+            drain_reopens.remove(&thread_id);
+            if retry_active || retry_obligation {
+                warn!(
+                    "lien du fil {thread_id} terminé ; nouvelle tentative dans {RECONNECT_BACKOFF:?}"
+                );
+                retry_after.insert(thread_id, Instant::now() + RECONNECT_BACKOFF);
+            }
+        }
+
+        let linked: HashSet<String> = links.keys().cloned().collect();
+        let reopen_cooldowns: HashSet<String> = retry_after
+            .iter()
+            .filter(|(_, until)| Instant::now() < **until)
+            .map(|(thread_id, _)| thread_id.clone())
+            .collect();
+        let selected_reopens: HashSet<String> = select_drain_reopens(
+            &snapshot.threads,
+            &obligations,
+            &attempted_obligations,
+            &linked,
+            &reopen_cooldowns,
+            drain_reopens.len(),
+        )
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+        // O(fils) par tour : la décision pure sépare présence T3, exposition et
+        // drain. Une racine ou un fork neuf reste ouvrable dès qu'un
+        // fournisseur est connu. Un sous-agent attend sa première activité.
+        for summary in &snapshot.threads {
             // Un fil sans worktree travaille dans la racine publiée du projet.
             // Nécessaire aux chemins relatifs des écritures, jamais à l'identité.
             let mut summary = summary.clone();
@@ -1213,7 +1314,63 @@ fn serve(paths: &Paths) -> Result<(), String> {
                     .find(|project| project.id == summary.project_id)
                     .map(|project| project.workspace_root.clone());
             }
-            if !links.contains_key(&summary.id) {
+
+            if thread_provider(&summary).is_none() {
+                if let Some(link) = links.remove(&summary.id) {
+                    info!("fil {} sans fournisseur : agent retiré", summary.id);
+                    link.close();
+                }
+                drain_reopens.remove(&summary.id);
+                continue;
+            }
+
+            let now = Instant::now();
+            let requires_link = thread_requires_link(&summary, false);
+            if requires_link {
+                // Un nouveau tour rend possible une future obligation distincte.
+                // L'essai unique du tour précédent ne doit pas la neutraliser.
+                attempted_obligations.remove(&summary.id);
+                obligations.remove(&summary.id);
+            }
+            let has_link = links.contains_key(&summary.id);
+            let (drained_key, drain_since, wait) = links
+                .get(&summary.id)
+                .map(|link| (link.drained_key(), link.drain_since, link.turn_wait))
+                .unwrap_or((None, None, turn_wait()));
+            let action = link_action(
+                &summary,
+                has_link,
+                drained_key.as_deref(),
+                drain_since,
+                obligations.contains(&summary.id) && !attempted_obligations.contains(&summary.id),
+                now,
+                wait,
+            );
+
+            if action == LinkAction::Close {
+                let terminal_child = summary.relationship_to_parent.as_deref() == Some("subagent")
+                    && summary.is_live()
+                    && !thread_requires_link(&summary, false);
+                if let Some(link) = links.remove(&summary.id) {
+                    info!("fil {} drainé ou retiré : agent fermé", summary.id);
+                    link.close();
+                }
+                if terminal_child {
+                    record_terminal_child_closed(
+                        &summary.id,
+                        &mut obligations,
+                        &mut attempted_obligations,
+                    );
+                }
+                drain_reopens.remove(&summary.id);
+                continue;
+            }
+
+            if action == LinkAction::Open {
+                let persisted_reopen = !thread_requires_link(&summary, false);
+                if persisted_reopen && !selected_reopens.contains(&summary.id) {
+                    continue;
+                }
                 if retry_after
                     .get(&summary.id)
                     .is_some_and(|until| Instant::now() < *until)
@@ -1221,7 +1378,15 @@ fn serve(paths: &Paths) -> Result<(), String> {
                     continue;
                 }
                 match Link::open(paths, session.clone(), &summary) {
-                    Ok(link) => {
+                    Ok(mut link) => {
+                        if persisted_reopen {
+                            link.begin_drain(now);
+                            record_reopen_started(
+                                &summary.id,
+                                &mut obligations,
+                                &mut drain_reopens,
+                            );
+                        }
                         links.insert(summary.id.clone(), link);
                     }
                     Err(e) => {
@@ -1231,8 +1396,15 @@ fn serve(paths: &Paths) -> Result<(), String> {
                     }
                 }
             }
-            if let Some(link) = links.get(&summary.id) {
-                link.tick(summary.clone());
+
+            if let Some(link) = links.get_mut(&summary.id) {
+                if requires_link {
+                    link.cancel_drain();
+                    drain_reopens.remove(&summary.id);
+                } else {
+                    link.begin_drain(now);
+                }
+                link.tick(summary);
             }
         }
         let bindings: Vec<_> = links
@@ -1295,6 +1467,12 @@ enum LinkEvent {
 struct Link {
     events: Sender<LinkEvent>,
     worker: Option<thread::JoinHandle<()>>,
+    reader: Option<thread::JoinHandle<()>>,
+    shutdown: Option<UnixStream>,
+    drained_key: Arc<Mutex<Option<String>>>,
+    inbound_deliveries: Arc<AtomicUsize>,
+    drain_since: Option<Instant>,
+    turn_wait: Duration,
 }
 
 impl Link {
@@ -1344,8 +1522,11 @@ impl Link {
             .and_then(|_| stream.set_read_timeout(None))
             .map_err(|e| format!("socket du lien : {e}"))?;
         let stream = reader.get_ref().try_clone().map_err(|e| e.to_string())?;
+        let shutdown = reader.get_ref().try_clone().map_err(|e| e.to_string())?;
         let (events, inbox) = mpsc::channel();
-        let worker = LinkWorker::new(
+        let drained_key = Arc::new(Mutex::new(None));
+        let inbound_deliveries = Arc::new(AtomicUsize::new(0));
+        let worker = LinkWorker::new_with_drain(
             paths,
             session,
             summary,
@@ -1353,21 +1534,62 @@ impl Link {
             instance_id,
             writer,
             stream,
+            drained_key.clone(),
+            inbound_deliveries.clone(),
         )?;
-        spawn_reader(
-            reader,
-            events.clone(),
-            worker.daemon_alive.clone(),
-            worker.cancelled.clone(),
-        );
-        let handle = thread::Builder::new()
+        let daemon_alive = worker.daemon_alive.clone();
+        let cancelled = worker.cancelled.clone();
+        let worker_handle = thread::Builder::new()
             .name(format!("t3-{}", &summary.id[..summary.id.len().min(8)]))
             .spawn(move || worker.run(inbox))
             .map_err(|e| e.to_string())?;
-        Ok(Self {
+        let reader_handle = match spawn_reader(
+            reader,
+            events.clone(),
+            daemon_alive,
+            cancelled,
+            drained_key.clone(),
+            inbound_deliveries.clone(),
+            &summary.id,
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = events.send(LinkEvent::Close);
+                let _ = worker_handle.join();
+                let _ = shutdown.shutdown(std::net::Shutdown::Both);
+                return Err(error);
+            }
+        };
+        Ok(Self::from_parts(
             events,
-            worker: Some(handle),
-        })
+            worker_handle,
+            reader_handle,
+            shutdown,
+            drained_key,
+            inbound_deliveries,
+            turn_wait(),
+        ))
+    }
+
+    fn from_parts(
+        events: Sender<LinkEvent>,
+        worker: thread::JoinHandle<()>,
+        reader: thread::JoinHandle<()>,
+        shutdown: UnixStream,
+        drained_key: Arc<Mutex<Option<String>>>,
+        inbound_deliveries: Arc<AtomicUsize>,
+        turn_wait: Duration,
+    ) -> Self {
+        Self {
+            events,
+            worker: Some(worker),
+            reader: Some(reader),
+            shutdown: Some(shutdown),
+            drained_key,
+            inbound_deliveries,
+            drain_since: None,
+            turn_wait,
+        }
     }
 
     fn is_alive(&self) -> bool {
@@ -1378,10 +1600,58 @@ impl Link {
         let _ = self.events.send(LinkEvent::Tick(Box::new(summary)));
     }
 
-    fn close(mut self) {
-        let _ = self.events.send(LinkEvent::Close);
+    fn drained_key(&self) -> Option<String> {
+        if self.inbound_deliveries.load(Ordering::SeqCst) != 0 {
+            return None;
+        }
+        let value = self
+            .drained_key
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        if self.inbound_deliveries.load(Ordering::SeqCst) != 0 {
+            None
+        } else {
+            value
+        }
+    }
+
+    fn begin_drain(&mut self, now: Instant) {
+        self.drain_since.get_or_insert(now);
+    }
+
+    fn cancel_drain(&mut self) {
+        self.drain_since = None;
+    }
+
+    fn finish(mut self, unregister: bool) {
+        if unregister {
+            let _ = self.events.send(LinkEvent::Close);
+        }
         if let Some(handle) = self.worker.take() {
             let _ = handle.join();
+        }
+        if let Some(stream) = self.shutdown.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        if let Some(handle) = self.reader.take() {
+            let _ = handle.join();
+        }
+    }
+
+    fn close(self) {
+        self.finish(true);
+    }
+
+    fn finish_dead(self) {
+        self.finish(false);
+    }
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        if let Some(stream) = self.shutdown.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
         }
     }
 }
@@ -1391,44 +1661,70 @@ fn spawn_reader(
     events: Sender<LinkEvent>,
     alive: Arc<AtomicBool>,
     cancelled: Arc<Mutex<BTreeMap<String, Instant>>>,
-) {
-    thread::spawn(move || {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match reader.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    match decode::<DaemonToWrapper>(trimmed) {
-                        Ok(frame) => {
-                            match &frame {
-                                DaemonToWrapper::CancelDelivery { id, .. } => {
-                                    cancelled
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
-                                        .insert(id.clone(), Instant::now());
-                                }
-                                DaemonToWrapper::Disconnect => alive.store(false, Ordering::SeqCst),
-                                _ => {}
-                            }
-                            if events.send(LinkEvent::Frame(Box::new(frame))).is_err() {
-                                break;
-                            }
+    drained_key: Arc<Mutex<Option<String>>>,
+    inbound_deliveries: Arc<AtomicUsize>,
+    thread_id: &str,
+) -> Result<thread::JoinHandle<()>, String> {
+    thread::Builder::new()
+        .name(format!(
+            "t3-reader-{}",
+            &thread_id[..thread_id.len().min(8)]
+        ))
+        .spawn(move || {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
                         }
-                        Err(e) => warn!("trame daemon illisible : {e}"),
+                        match decode::<DaemonToWrapper>(trimmed) {
+                            Ok(frame) => {
+                                let delivery = matches!(
+                                    &frame,
+                                    DaemonToWrapper::Deliver { .. }
+                                        | DaemonToWrapper::DeliverIdempotent { .. }
+                                );
+                                match &frame {
+                                    DaemonToWrapper::Deliver { .. }
+                                    | DaemonToWrapper::DeliverIdempotent { .. } => {
+                                        inbound_deliveries.fetch_add(1, Ordering::SeqCst);
+                                        *drained_key
+                                            .lock()
+                                            .unwrap_or_else(|error| error.into_inner()) = None;
+                                    }
+                                    DaemonToWrapper::CancelDelivery { id, .. } => {
+                                        cancelled
+                                            .lock()
+                                            .unwrap_or_else(|e| e.into_inner())
+                                            .insert(id.clone(), Instant::now());
+                                    }
+                                    DaemonToWrapper::Disconnect => {
+                                        alive.store(false, Ordering::SeqCst)
+                                    }
+                                    _ => {}
+                                }
+                                if events.send(LinkEvent::Frame(Box::new(frame))).is_err() {
+                                    if delivery {
+                                        inbound_deliveries.fetch_sub(1, Ordering::SeqCst);
+                                    }
+                                    break;
+                                }
+                            }
+                            Err(e) => warn!("trame daemon illisible : {e}"),
+                        }
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
             }
-        }
-        alive.store(false, Ordering::SeqCst);
-        let _ = events.send(LinkEvent::DaemonGone);
-    });
+            alive.store(false, Ordering::SeqCst);
+            let _ = events.send(LinkEvent::DaemonGone);
+        })
+        .map_err(|error| error.to_string())
 }
 
 struct LinkWorker {
@@ -1452,6 +1748,9 @@ struct LinkWorker {
     /// est envoyé au daemon, qui décide seul de sa cohérence.
     project_context: Option<(Option<String>, Option<String>)>,
     last_key: String,
+    /// Clé observée juste avant un dispatch qui a pu démarrer un nouveau tour.
+    /// Tant que T3 la republie, le lien ne peut pas se déclarer drainé.
+    awaiting_snapshot_change: Option<String>,
     turn_wait: Duration,
     queue: VecDeque<(DaemonToWrapper, Instant)>,
     requests: BTreeMap<String, RequestInfo>,
@@ -1472,9 +1771,14 @@ struct LinkWorker {
     journal_block: Option<(&'static str, Instant, bool)>,
     observation_events: Vec<bridget_transport::protocol::ObservationKind>,
     observation_schema: Vec<bridget_transport::protocol::ObservationKind>,
+    drained_key: Arc<Mutex<Option<String>>>,
+    /// Remises déjà lues sur le socket, mais pas encore placées dans la file
+    /// du worker. Ce compteur ferme la fenêtre lecteur → canal → worker.
+    inbound_deliveries: Arc<AtomicUsize>,
 }
 
 impl LinkWorker {
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn new(
         paths: &Paths,
@@ -1484,6 +1788,31 @@ impl LinkWorker {
         instance_id: String,
         writer: BufWriter<UnixStream>,
         stream: UnixStream,
+    ) -> Result<Self, String> {
+        Self::new_with_drain(
+            paths,
+            session,
+            summary,
+            agent_id,
+            instance_id,
+            writer,
+            stream,
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicUsize::new(0)),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_drain(
+        paths: &Paths,
+        session: SharedSession,
+        summary: &ThreadSummary,
+        agent_id: String,
+        instance_id: String,
+        writer: BufWriter<UnixStream>,
+        stream: UnixStream,
+        drained_key: Arc<Mutex<Option<String>>>,
+        inbound_deliveries: Arc<AtomicUsize>,
     ) -> Result<Self, String> {
         let tracker = IdempotentDeliveryTracker::open_at(&paths.root.join("state"), &instance_id)?;
         let journal_root = paths.root.join("sessions");
@@ -1534,6 +1863,7 @@ impl LinkWorker {
             title_refused_at: None,
             project_context: None,
             last_key: String::new(),
+            awaiting_snapshot_change: None,
             turn_wait: turn_wait(),
             queue: VecDeque::new(),
             requests: BTreeMap::new(),
@@ -1549,6 +1879,8 @@ impl LinkWorker {
             journal_block: None,
             observation_events: Vec::new(),
             observation_schema: Vec::new(),
+            drained_key,
+            inbound_deliveries,
         };
         worker.report_project_context(summary);
         Ok(worker)
@@ -1598,13 +1930,16 @@ impl LinkWorker {
             if self.journal_failed.load(Ordering::SeqCst) {
                 // Le writer est arrêté après échec : rouvrir le lien recrée le
                 // journal. Les messages non confirmés restent à reprendre.
+                self.publish_drain_state(false);
                 break;
             }
             if !self.queue.is_empty() && Instant::now() >= self.next_dispatch_check {
                 self.next_dispatch_check = Instant::now() + Duration::from_millis(500);
                 self.drive_queue(&inbox);
             }
+            self.publish_drain_state(true);
         }
+        self.publish_drain_state(false);
         self.relay.shutdown();
         self.journal.stop();
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
@@ -1638,6 +1973,7 @@ impl LinkWorker {
                     self.title_refused_at = Some(Instant::now());
                 }
                 let key = summary.change_key();
+                self.observe_snapshot_change(&key);
                 if (key != self.last_key
                     || self.state.pending.iter().any(Pending::needs_correlation)
                     || !self.journal_inflight.is_empty()
@@ -1651,19 +1987,61 @@ impl LinkWorker {
                     self.send_ready_responses();
                 }
             }
-            LinkEvent::Frame(frame) => self.handle_frame(*frame),
+            LinkEvent::Frame(frame) => {
+                if self.daemon_alive.load(Ordering::SeqCst) {
+                    self.handle_frame(*frame);
+                } else if matches!(
+                    frame.as_ref(),
+                    DaemonToWrapper::Deliver { .. } | DaemonToWrapper::DeliverIdempotent { .. }
+                ) {
+                    self.report_discard(frame.as_ref(), Discard::LinkClosing);
+                }
+            }
             LinkEvent::Unavailable => {
                 self.set_observation_ready(false);
                 self.last_key.clear();
+                self.publish_drain_state(false);
             }
             LinkEvent::DaemonGone => {
                 warn!("daemon parti pour le fil {}", self.thread_id);
                 self.daemon_alive.store(false, Ordering::SeqCst);
             }
             LinkEvent::Close => {
+                while let Some((frame, _)) = self.queue.pop_front() {
+                    self.report_discard(&frame, Discard::LinkClosing);
+                }
                 send_wrapper_message(&self.writer, WrapperToDaemon::Unregister);
                 self.daemon_alive.store(false, Ordering::SeqCst);
             }
+        }
+    }
+
+    fn publish_drain_state(&self, available: bool) {
+        let mut published = self
+            .drained_key
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let drained = available
+            && !self.last_key.is_empty()
+            && self.awaiting_snapshot_change.is_none()
+            && self.queue.is_empty()
+            && self.journal_inflight.is_empty()
+            && self.journal_caught_up
+            && !self.journal_dirty
+            && !self.journal_failed.load(Ordering::SeqCst)
+            && self.inbound_deliveries.load(Ordering::SeqCst) == 0
+            && self.state.pending.is_empty()
+            && self.response_sent.is_empty();
+        *published = drained.then(|| self.last_key.clone());
+    }
+
+    fn observe_snapshot_change(&mut self, key: &str) {
+        if self
+            .awaiting_snapshot_change
+            .as_ref()
+            .is_some_and(|before| before != key)
+        {
+            self.awaiting_snapshot_change = None;
         }
     }
 
@@ -1680,6 +2058,15 @@ impl LinkWorker {
                     self.report_discard(&oldest, Discard::Saturated);
                 }
                 self.queue.push_back((delivery, Instant::now()));
+                *self
+                    .drained_key
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner()) = None;
+                let _ = self.inbound_deliveries.fetch_update(
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                    |count| count.checked_sub(1),
+                );
                 self.request_status();
             }
             DaemonToWrapper::CancelDelivery { id, reason, .. } => {
@@ -1875,6 +2262,7 @@ impl LinkWorker {
             Discard::Expired(which) => format!("échéance {which} dépassée avant démarrage"),
             Discard::RequestClosed(state) => format!("demande {state} avant démarrage"),
             Discard::GuidanceUnavailable(reason) => reason.into(),
+            Discard::LinkClosing => "lien fermé avant démarrage de la remise".into(),
         };
         warn!(
             "remise {} écartée du fil {} : {reason}",
@@ -2290,6 +2678,8 @@ impl LinkWorker {
         }
         // Session.call peut attendre le verrou partagé de renouvellement.
         // Vérifier aussi dans sa closure, à la dernière frontière HTTP.
+        self.awaiting_snapshot_change = Some(summary.change_key());
+        self.publish_drain_state(false);
         match self.session.call(|client| {
             if !self.daemon_alive.load(Ordering::SeqCst)
                 || messages.iter().any(|message| {
@@ -2319,6 +2709,7 @@ impl LinkWorker {
                 if reason == "steer_unavailable"
                     || reason.contains("protocole T3 historique sans deliveryIntent") =>
             {
+                self.awaiting_snapshot_change = None;
                 self.state.pending.retain(|pending| {
                     !messages
                         .iter()
@@ -2336,6 +2727,7 @@ impl LinkWorker {
                     ..
                 },
             ) => {
+                self.awaiting_snapshot_change = None;
                 self.state
                     .pending
                     .retain(|p| !messages.iter().any(|message| p.request_id == message.id));
@@ -3125,6 +3517,8 @@ enum Discard {
     RequestClosed(&'static str),
     /// Capacité T3 absente : aucune injection ni interruption tentée.
     GuidanceUnavailable(&'static str),
+    /// Le propriétaire ferme le lien avant que la remise ait démarré.
+    LinkClosing,
 }
 
 fn request_state_label(state: &str) -> &'static str {
@@ -3360,6 +3754,151 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
 
 pub(crate) fn turn_is_final(state: &str) -> bool {
     matches!(state, "completed" | "error" | "interrupted")
+}
+
+/// Distingue l'existence du fil T3 du besoin de garder un agent Bridget.
+/// L'absence de filiation conserve le comportement V1 compatible.
+fn thread_requires_link(summary: &ThreadSummary, has_obligation: bool) -> bool {
+    if !summary.is_live() {
+        return false;
+    }
+    if summary.relationship_to_parent.as_deref() != Some("subagent") {
+        return true;
+    }
+    has_obligation
+        || summary
+            .session
+            .as_ref()
+            .is_some_and(|session| session.active_turn_id.is_some())
+        || summary
+            .latest_turn
+            .as_ref()
+            .is_some_and(|turn| !turn_is_final(&turn.state))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LinkAction {
+    Open,
+    Tick,
+    Drain,
+    Close,
+    Ignore,
+}
+
+/// Décision sans I/O. `drain_since` appartient au lien et ne dépend jamais de
+/// `change_key()`, afin qu'un `updated_at` mouvant ne repousse pas la borne.
+fn link_action(
+    summary: &ThreadSummary,
+    has_link: bool,
+    drained_key: Option<&str>,
+    drain_since: Option<Instant>,
+    has_reopen_obligation: bool,
+    now: Instant,
+    wait: Duration,
+) -> LinkAction {
+    if !summary.is_live() {
+        return if has_link {
+            LinkAction::Close
+        } else {
+            LinkAction::Ignore
+        };
+    }
+    if thread_requires_link(summary, has_reopen_obligation) {
+        return if has_link {
+            LinkAction::Tick
+        } else {
+            LinkAction::Open
+        };
+    }
+    if has_link {
+        let drained = drained_key.is_some_and(|key| key == summary.change_key());
+        let expired = drain_since.is_some_and(|since| now.duration_since(since) >= wait);
+        return if drained || expired {
+            LinkAction::Close
+        } else {
+            LinkAction::Drain
+        };
+    }
+    LinkAction::Ignore
+}
+
+fn select_drain_reopens<'a>(
+    threads: &'a [ThreadSummary],
+    obligations: &HashSet<String>,
+    attempted: &HashSet<String>,
+    linked: &HashSet<String>,
+    cooldowns: &HashSet<String>,
+    already_open: usize,
+) -> Vec<&'a str> {
+    let available = DRAIN_REOPEN_BOUND.saturating_sub(already_open);
+    threads
+        .iter()
+        .filter(|thread| {
+            thread.relationship_to_parent.as_deref() == Some("subagent")
+                && thread.is_live()
+                && !thread_requires_link(thread, false)
+                && obligations.contains(&thread.id)
+                && !attempted.contains(&thread.id)
+                && !linked.contains(&thread.id)
+                && !cooldowns.contains(&thread.id)
+                && thread_provider(thread).is_some()
+        })
+        .take(available)
+        .map(|thread| thread.id.as_str())
+        .collect()
+}
+
+/// Identifie les propriétaires qui n'existent plus dans la projection T3.
+/// La fermeture reste dans `serve`, car elle doit joindre les deux threads.
+fn links_missing_from_snapshot<'a>(
+    linked: impl Iterator<Item = &'a String>,
+    summaries: &HashMap<&str, &ThreadSummary>,
+) -> Vec<String> {
+    linked
+        .filter(|thread_id| !summaries.contains_key(thread_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// Une ouverture ne consomme pas la tentative. Une mort imprévue du worker
+/// peut ainsi relire l'obligation et reprendre après le délai de reconnexion.
+fn record_reopen_started(
+    thread_id: &str,
+    obligations: &mut HashSet<String>,
+    drain_reopens: &mut HashSet<String>,
+) {
+    obligations.remove(thread_id);
+    drain_reopens.insert(thread_id.to_string());
+}
+
+/// Seule une fermeture attestée par drain ou par borne dure consomme l'essai
+/// du processus courant.
+fn record_terminal_child_closed(
+    thread_id: &str,
+    obligations: &mut HashSet<String>,
+    attempted: &mut HashSet<String>,
+) {
+    attempted.insert(thread_id.to_string());
+    obligations.remove(thread_id);
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RelationCounts {
+    roots: usize,
+    forks: usize,
+    subagents: usize,
+}
+
+fn relation_counts(threads: &[ThreadSummary]) -> RelationCounts {
+    let mut counts = RelationCounts::default();
+    for thread in threads {
+        match thread.relationship_to_parent.as_deref() {
+            Some("subagent") => counts.subagents += 1,
+            Some("fork") => counts.forks += 1,
+            _ => counts.roots += 1,
+        }
+    }
+    counts
 }
 
 /// O(messages), page bornée. T3 projette requestedAt et createdAt depuis la
@@ -5604,6 +6143,7 @@ mod tests {
             archived_at: None,
             deleted_at: None,
             settled_override: None,
+            relationship_to_parent: None,
             updated_at: "2026-09-14T00:00:00Z".to_string(),
             latest_turn: latest.map(|(id, state)| LatestTurn {
                 requested_at: None,
@@ -5613,6 +6153,353 @@ mod tests {
             }),
             session: None,
         }
+    }
+
+    #[test]
+    fn spec165_decision_conserve_racines_et_travail_actif_seulement() {
+        let root = summary(Some(("done", "completed")));
+        assert!(thread_requires_link(&root, false));
+
+        let mut fork = root.clone();
+        fork.relationship_to_parent = Some("fork".into());
+        assert!(thread_requires_link(&fork, false));
+
+        let mut child = root.clone();
+        child.relationship_to_parent = Some("subagent".into());
+        assert!(!thread_requires_link(&child, false));
+        assert!(thread_requires_link(&child, true));
+
+        child.latest_turn.as_mut().unwrap().state = "running".into();
+        assert!(thread_requires_link(&child, false));
+        child.latest_turn = None;
+        child.session = Some(contract::SessionSummary {
+            provider_name: "codex".into(),
+            provider_instance_id: Some("codex".into()),
+            status: "running".into(),
+            active_turn_id: Some("active".into()),
+        });
+        assert!(thread_requires_link(&child, false));
+        child.archived_at = Some("now".into());
+        assert!(!thread_requires_link(&child, true));
+    }
+
+    #[test]
+    fn spec165_mille_enfants_terminaux_ne_deviennent_pas_mille_liens() {
+        let mut threads = Vec::new();
+        for index in 0..1_000 {
+            let mut child = summary(Some(("done", "completed")));
+            child.id = format!("child-{index}");
+            child.relationship_to_parent = Some("subagent".into());
+            threads.push(child);
+        }
+        for index in 0..30 {
+            let mut root = summary(Some(("done", "completed")));
+            root.id = format!("root-{index}");
+            threads.push(root);
+        }
+        assert_eq!(
+            threads
+                .iter()
+                .filter(|thread| thread_requires_link(thread, false))
+                .count(),
+            30
+        );
+    }
+
+    #[test]
+    fn spec165_action_draine_sans_repousser_la_borne() {
+        let mut child = summary(Some(("done", "completed")));
+        child.relationship_to_parent = Some("subagent".into());
+        let now = Instant::now();
+        let wait = Duration::from_secs(120);
+        assert_eq!(
+            link_action(&child, false, None, None, false, now, wait),
+            LinkAction::Ignore
+        );
+        assert_eq!(
+            link_action(&child, false, None, None, true, now, wait),
+            LinkAction::Open
+        );
+        for _ in 0..5 {
+            assert_eq!(
+                link_action(&child, true, None, Some(now), false, now, wait),
+                LinkAction::Drain
+            );
+        }
+        let key = child.change_key();
+        assert_eq!(
+            link_action(&child, true, Some(&key), Some(now), false, now, wait),
+            LinkAction::Close
+        );
+        child.updated_at = "nouvelle-cle-terminale".into();
+        assert_eq!(
+            link_action(&child, true, None, Some(now - wait), false, now, wait),
+            LinkAction::Close
+        );
+        child.latest_turn.as_mut().unwrap().state = "running".into();
+        assert_eq!(
+            link_action(&child, true, None, Some(now), false, now, wait),
+            LinkAction::Tick
+        );
+    }
+
+    #[test]
+    fn spec165_obligation_couvre_pending_et_tour_connu_non_projete() {
+        let completed = summary(Some(("turn-final", "completed")));
+        let mut state = ThreadState::default();
+        assert!(!state.has_drain_obligation(&completed));
+        state.pending.push(pending("message", Some("turn-final")));
+        assert!(state.has_drain_obligation(&completed));
+        state.pending.clear();
+        state
+            .turn_origins
+            .insert("turn-final".into(), "message".into());
+        assert!(state.has_drain_obligation(&completed));
+        state.ended_turns.push("turn-final".into());
+        assert!(!state.has_drain_obligation(&completed));
+    }
+
+    #[test]
+    fn spec165_cent_obligations_rouvrent_trente_deux_drains() {
+        let mut threads = Vec::new();
+        let mut obligations = HashSet::new();
+        for index in 0..100 {
+            let mut child = summary(Some(("done", "completed")));
+            child.id = format!("obligation-{index:03}");
+            child.provider_instance_id = Some("codex".into());
+            child.relationship_to_parent = Some("subagent".into());
+            obligations.insert(child.id.clone());
+            threads.push(child);
+        }
+        let selected = select_drain_reopens(
+            &threads,
+            &obligations,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            0,
+        );
+        assert_eq!(selected.len(), 32);
+        assert_eq!(obligations.len() - selected.len(), 68);
+
+        let cooldowns: HashSet<String> = selected.iter().map(|id| (*id).to_string()).collect();
+        let next = select_drain_reopens(
+            &threads,
+            &obligations,
+            &HashSet::new(),
+            &HashSet::new(),
+            &cooldowns,
+            0,
+        );
+        assert_eq!(next.len(), 32);
+        assert!(next.iter().all(|id| !cooldowns.contains(*id)));
+    }
+
+    #[test]
+    fn spec165_reconciliation_retire_un_lien_absent_du_snapshot() {
+        let present = summary(Some(("done", "completed")));
+        let summaries = HashMap::from([(present.id.as_str(), &present)]);
+        let linked = [present.id.clone(), "thread-supprime".to_string()];
+        assert_eq!(
+            links_missing_from_snapshot(linked.iter(), &summaries),
+            vec!["thread-supprime".to_string()]
+        );
+    }
+
+    #[test]
+    fn spec165_reprise_ne_consomme_la_tentative_qu_a_la_fermeture() {
+        let id = "obligation";
+        let mut obligations = HashSet::from([id.to_string()]);
+        let mut attempted = HashSet::new();
+        let mut drain_reopens = HashSet::new();
+
+        record_reopen_started(id, &mut obligations, &mut drain_reopens);
+        assert!(drain_reopens.contains(id));
+        assert!(!attempted.contains(id));
+
+        // Une mort du worker peut donc remettre l'obligation en attente.
+        obligations.insert(id.to_string());
+        assert!(!attempted.contains(id));
+
+        record_terminal_child_closed(id, &mut obligations, &mut attempted);
+        assert!(attempted.contains(id));
+        assert!(!obligations.contains(id));
+    }
+
+    #[test]
+    fn spec165_remise_invalide_la_cle_drainee() {
+        let (mut worker, _peer) = worker099();
+        worker.last_key = summary(Some(("done", "completed"))).change_key();
+        worker.journal_caught_up = true;
+        worker.publish_drain_state(true);
+        assert!(
+            worker
+                .drained_key
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_some()
+        );
+        worker.handle_frame(DaemonToWrapper::Deliver {
+            message: plain114("pendant-drain"),
+            mid_turn_ok: None,
+        });
+        worker.publish_drain_state(true);
+        assert!(
+            worker
+                .drained_key
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_none()
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec165_dispatch_attend_un_nouveau_snapshot_avant_drain() {
+        let (mut worker, _peer) = worker099();
+        let previous = summary(Some(("done", "completed"))).change_key();
+        worker.last_key = previous.clone();
+        worker.awaiting_snapshot_change = Some(previous.clone());
+        worker.journal_caught_up = true;
+        worker.publish_drain_state(true);
+        assert!(
+            worker
+                .drained_key
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_none()
+        );
+        worker.observe_snapshot_change(&previous);
+        assert!(worker.awaiting_snapshot_change.is_some());
+        worker.observe_snapshot_change("nouveau-tour");
+        worker.publish_drain_state(true);
+        assert!(
+            worker
+                .drained_key
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_deref()
+                == Some(previous.as_str())
+        );
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec165_lecteur_invalide_le_drain_avant_la_file_worker() {
+        use std::io::Write;
+
+        let (reader_stream, mut peer) = UnixStream::pair().unwrap();
+        let (events, inbox) = mpsc::channel();
+        let drained_key = Arc::new(Mutex::new(Some("terminal".into())));
+        let inbound_deliveries = Arc::new(AtomicUsize::new(0));
+        let reader = spawn_reader(
+            BufReader::new(reader_stream),
+            events,
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            drained_key.clone(),
+            inbound_deliveries.clone(),
+            "course-drain",
+        )
+        .unwrap();
+        let frame = DaemonToWrapper::Deliver {
+            message: plain114("pendant-fermeture"),
+            mid_turn_ok: None,
+        };
+        writeln!(
+            peer,
+            "{}",
+            bridget_transport::protocol::encode(&frame).unwrap()
+        )
+        .unwrap();
+        let event = inbox.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            drained_key
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_none()
+        );
+        assert_eq!(inbound_deliveries.load(Ordering::SeqCst), 1);
+
+        let (mut worker, _worker_peer) = worker099();
+        worker.last_key = "terminal".into();
+        worker.journal_caught_up = true;
+        worker.drained_key = drained_key.clone();
+        worker.inbound_deliveries = inbound_deliveries.clone();
+        worker.publish_drain_state(true);
+        assert!(drained_key.lock().unwrap().is_none());
+        // Simule l'écriture périmée qu'un publish commencé avant la lecture
+        // réseau aurait pu faire après l'invalidation du lecteur.
+        *drained_key.lock().unwrap() = Some("terminal".into());
+        let LinkEvent::Frame(frame) = event else {
+            panic!("une remise était attendue");
+        };
+        worker.handle_frame(*frame);
+        assert_eq!(inbound_deliveries.load(Ordering::SeqCst), 0);
+        assert!(
+            drained_key.lock().unwrap().is_none(),
+            "la mise en file efface elle-même toute publication périmée"
+        );
+        worker.publish_drain_state(true);
+        assert!(drained_key.lock().unwrap().is_none());
+        worker.journal.stop();
+        worker.relay.shutdown();
+        drop(peer);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn spec165_fermeture_rapporte_une_remise_restant_en_file() {
+        let (mut worker, peer) = worker099();
+        worker.handle_frame(idempotent113("fermeture"));
+        assert_eq!(worker.queue.len(), 1);
+
+        worker.handle_event(LinkEvent::Close);
+        assert!(worker.queue.is_empty());
+        worker.journal.stop();
+        worker.relay.shutdown();
+
+        let frames = frames113(peer);
+        assert!(saga_closed113(&frames, "d-fermeture"));
+        assert!(
+            rejection113(&frames, "fermeture").is_some_and(|reason| reason.contains("lien fermé"))
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|frame| matches!(frame, WrapperToDaemon::Unregister))
+        );
+    }
+
+    #[test]
+    fn spec165_panique_worker_ferme_et_joint_le_lecteur_une_fois() {
+        let (reader_stream, peer) = UnixStream::pair().unwrap();
+        let shutdown = reader_stream.try_clone().unwrap();
+        let (events, _inbox) = mpsc::channel();
+        let reader = spawn_reader(
+            BufReader::new(reader_stream),
+            events.clone(),
+            Arc::new(AtomicBool::new(true)),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicUsize::new(0)),
+            "panic-worker",
+        )
+        .unwrap();
+        let worker = thread::spawn(|| panic!("panique attendue du worker"));
+        let link = Link::from_parts(
+            events,
+            worker,
+            reader,
+            shutdown,
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicUsize::new(0)),
+            Duration::from_secs(1),
+        );
+        link.finish_dead();
+        drop(peer);
     }
 
     fn pending(message_id: &str, anchor: Option<&str>) -> Pending {

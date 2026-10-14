@@ -258,6 +258,9 @@ pub struct ThreadSummary {
     /// Présent même sur un fil jamais démarré : c'est la seule source du
     /// fournisseur tant qu'aucune session n'existe.
     pub provider_instance_id: Option<String>,
+    /// Nature du lien au parent publiée par T3 V2. Absente sur V1 et sur une
+    /// racine : aucune filiation n'est déduite du titre ou de l'identifiant.
+    pub relationship_to_parent: Option<String>,
     /// Politique du fil, répétée telle quelle au démarrage d'un tour : le pont
     /// ne décide jamais du niveau d'approbation à la place de l'humain.
     pub runtime_mode: String,
@@ -382,6 +385,9 @@ pub fn parse_snapshot(text: &str) -> Result<Snapshot, ContractError> {
             provider_instance_id: thread
                 .get("modelSelection")
                 .and_then(|selection| opt_str(selection, "instanceId")),
+            relationship_to_parent: thread
+                .get("lineage")
+                .and_then(|lineage| opt_str(lineage, "relationshipToParent")),
             // Défauts volontairement restrictifs si t3code cessait de les publier.
             runtime_mode: opt_str(thread, "runtimeMode")
                 .unwrap_or_else(|| "approval-required".to_string()),
@@ -936,6 +942,7 @@ mod tests {
         assert_eq!(snapshot.projects[0].workspace_root, "/tmp/p1");
         let live = &snapshot.threads[0];
         assert_eq!(live.workspace_root.as_deref(), Some("/tmp/p1"));
+        assert_eq!(live.relationship_to_parent, None);
         assert!(live.is_live());
         assert_eq!(live.session.as_ref().unwrap().provider_name, "claudeAgent");
         assert_eq!(
