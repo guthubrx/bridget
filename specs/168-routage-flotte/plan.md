@@ -1,6 +1,6 @@
 # Plan SPEC168 — Routage de la flotte
 
-## État courant — 15/10/2026 à 17:18 CEST
+## État courant — 15/10/2026 à 17:24 CEST
 
 **Implemented — 56/56 tâches cochées. Pipeline : Livré, avec conservations explicites T048.** ROOT a validé le contrôle final des 35 exigences, 11 critères et 7 histoires. Aucune tâche ne reste ouverte.
 
@@ -26,7 +26,7 @@ Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les an
 
 ---
 
-**Statut** : In Progress ; 55/56 tâches cochées. T045–T048 closes ; source B activée, trois recettes et release vérifiées, C1 intégré/poussé. Seule T049 reste ouverte.
+**Statut** : Implemented ; 56/56 tâches cochées. Pipeline : Livré avec conservations motivées. T045–T049 closes ; source binaire B active, trois recettes et release vérifiées, documents intégrés et poussés.
 **Gates de conception historiques** : réemploi PASS 5/5 ; contre-revue Claude Sonnet 5.5 R1 corrigée puis R2 APPROVE. Les preuves de code et de validation ultérieures sont distinguées ci-dessous.
 **Date** : 2026-10-15.
 **Branche** : session-168-routage-flotte.

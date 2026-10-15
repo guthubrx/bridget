@@ -1,6 +1,6 @@
 # T044 — activation 0.4.0 exécutée
 
-## État courant — 15/10/2026 à 17:18 CEST
+## État courant — 15/10/2026 à 17:24 CEST
 
 **Implemented — 56/56 tâches cochées. Pipeline : Livré, avec conservations explicites T048.** ROOT a validé le contrôle final des 35 exigences, 11 critères et 7 histoires. Aucune tâche ne reste ouverte.
 
