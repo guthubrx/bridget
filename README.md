@@ -78,6 +78,19 @@ Un daemon neuf n'a pas encore d'agents : lancer leurs wrappers ou rattacher T3.
 Les exemples de fil supposent une session attestée et des membres du même projet.
 Un fil mixte exige un motif explicite à chaque création ou dépôt, même silencieux.
 
+### Coordonner sans T3
+
+Un agent lancé par Bridget peut créer un enfant et lui confier une mission en une commande :
+
+```sh
+bridget delegate "Analyse les tests et rends les risques principaux"
+bridget task wait '<task_id>'
+bridget task status '<task_id>'
+bridget task ack '<task_id>'
+```
+
+`bridget task continue`, `respond` et `cancel` couvrent la suite du cycle. Ajouter `--json` pour un script. La propriété reste liée à l’agent coordinateur. Un terminal sans identité d’agent reçoit un refus et une instruction de rattachement. T3 reste un client possible. Il n’est pas requis.
+
 ## Ce que Bridget sait faire
 
 **Se trouver.** Un annuaire vivant : nom, fournisseur, modèle, effort, disponibilité, domaine. Un agent
@@ -118,6 +131,8 @@ ne modifie pas les processus déjà ouverts : l'activation exige leur prochain r
 **Se passer le relais.** Le dossier de passation transporte objectif, résumé, décisions, questions,
 prochain pas et références. Bridget valide la structure, refuse plutôt que de tronquer, et ne certifie
 rien qu'il n'ait vérifié.
+
+**Déléguer depuis le terminal.** Un agent coordinateur peut appeler `bridget delegate` avec la seule mission. Bridget applique sa politique existante, crée l’enfant et rend un identifiant durable. Le groupe `bridget task` suit, attend, continue, répond, annule et accuse lecture avec les mêmes états que MCP. Aucun coordinateur T3 n’est nécessaire.
 
 **Retrouver.** Recherche bornée et reprenable dans ses propres échanges ou dans un fil, accents et casse
 repliés, curseur pour continuer, relecture exacte par fragments avec empreinte SHA-256. Une recherche est

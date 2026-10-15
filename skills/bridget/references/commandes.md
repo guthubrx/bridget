@@ -1,4 +1,4 @@
-# Commandes Bridget et accès 094–158A
+# Commandes Bridget et accès 094–167
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
 réponse liée de base. Elle décrit les contrats jusqu’à158A ; elle ne prouve
@@ -49,6 +49,9 @@ de couverture.
 | `artifact` | Équivalence MCP | `bridget_read_artifact` pour `artifact read`; publication par `bridget_publish_artifact` | Lit des octets par références et bornes, sans chemin libre ni exécution. La publication structurée n'a pas de commande CLI jumelle. |
 | `spawn` | CLI (humain ou agent) | Aucun outil MCP de supervision | Crée un équipier géré avec persistance et répertoire explicites. Un agent peut lancer en lecture seule (posture globale `discovery`, sans terminal) ; `--posture development` exige un terminal humain. |
 | `delegate-grant` | CLI humain (148) | Aucun outil MCP de grant | Accorde ou retire les droits natifs d'une instance dans une racine absolue, avec posture maximale explicite ; exige un terminal humain et le contrôle natif. Accepte un nom de fil ou UUID attesté. `--revoke` ferme les nouvelles demandes et l'héritage implicite. |
+| `auto-delegate` | Équivalence MCP (163) | `bridget_auto_delegate` | Interface technique historique de l'admission automatique. Elle exige une identité d'agent et conserve le contrat complet. |
+| `delegate` | Équivalence MCP (167) | `bridget_auto_delegate` | Façade courte pour un agent coordinateur authentifié. La mission est le seul argument métier obligatoire. Elle n'ajoute ni identité humaine, ni politique d'admission. |
+| `task` | Équivalence MCP (167) | `bridget_task_status`, `bridget_task_wait`, `bridget_task_continue`, `bridget_task_respond`, `bridget_task_cancel` et `bridget_task_ack` | Pilote les tâches natives du coordinateur. `task list` réutilise la projection humaine globale et bornée de `control delegations`; les autres actions restent limitées au propriétaire. |
 | `stop` | CLI (humain ou agent) | Aucun outil MCP de supervision | Arrête un équipier géré désigné ; un agent n'arrête que les équipiers qu'il a lancés lui-même. |
 | `relaunch` | CLI humain | Aucun outil MCP de supervision | Relance un équipier arrêté avec sa définition figée ; ne change pas sa posture ni ses droits. |
 | `decommission` | CLI humain | Aucun outil MCP de supervision | Retire un équipier de la flotte visible en conservant l'historique ; décision propriétaire. |

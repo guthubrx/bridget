@@ -823,6 +823,35 @@ explicitement sandbox et approbations Codex ; il n'est jamais ajouté par défau
 | `bridget spawn codex --persistent …` | Agent supervisé, indépendant du terminal. |
 | `bridget attach <uuid>` | Journal et saisie de messages, pas reprise de la TUI Codex. |
 
+## Coordination native depuis la ligne de commande
+
+Un agent Bridget authentifié peut déléguer sans T3 :
+
+```sh
+bridget delegate "Relis le plan et rends les défauts prioritaires"
+bridget task wait '<task_id>' --timeout 600
+bridget task status '<task_id>'
+bridget task ack '<task_id>'
+```
+
+`delegate` utilise l’admission automatique native. Le dossier courant devient le dossier de mission. Une clé de demande est générée et affichée. Pour un script qui doit rejouer la même admission après une coupure, fournir `--request-id` et conserver sa valeur.
+
+Les choix avancés restent facultatifs : `--agent-type`, `--model`, `--effort`, `--posture`, `--cwd`, `--reply-timeout`, `--keep-alive-secs`, `--child-requests`, `--workspace`, `--brief`, `--urgent` et `--deliverable`. Un choix explicite indisponible est refusé. Il n’est pas remplacé en silence.
+
+Le groupe `task` expose :
+
+| Commande | Effet |
+|---|---|
+| `task list` | Projection humaine globale et bornée. Aucun droit ajouté. |
+| `task status` | État durable d’une tâche du coordinateur. |
+| `task wait` | Attente bloquante, sans polling et sans annulation à l’expiration. |
+| `task continue` | Nouvelle ronde sur un enfant encore gardé. |
+| `task respond` | Réponse à une demande actionnable de l’enfant. |
+| `task cancel` | Annulation de la tâche et de sa descendance selon les règles natives. |
+| `task ack` | Accusé de lecture informatif du résultat ou de l’échec. |
+
+Toutes les opérations sauf `list` utilisent l’identité du parent. Un processus humain sans identité ne reçoit aucun droit d’agent. Il doit lancer ou rattacher un coordinateur avec un wrapper Bridget, par exemple `bridget codex` ou `bridget claude`.
+
 Pour confier du développement à un nouveau Codex, l'humain lance depuis son
 terminal `bridget spawn codex --persistent --cwd "$PWD" --posture development`.
 Ce profil autorise l'écriture dans ce répertoire, pas le réseau des commandes

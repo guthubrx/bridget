@@ -5,6 +5,19 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.3.0] - 2026-10-15
+
+### Ajouté
+
+- `bridget delegate <MISSION>` donne à un agent coordinateur un parcours court pour choisir un profil, créer un enfant et lui confier une mission. Les options avancées restent facultatives.
+- `bridget task` expose la liste, l’état, l’attente, la continuation, les réponses, l’annulation et l’accusé de lecture. Ces commandes réutilisent le moteur natif et fonctionnent sans T3.
+- La sortie `--json` reste exploitable par script. Un terminal sans identité d’agent reçoit un refus avant tout effet et une instruction de rattachement.
+
+### Limites de validation
+
+- La coordination directe exige une identité d’agent Bridget vivante. Elle ne transforme pas un terminal humain en agent.
+- `task list` est une projection humaine globale. Les autres opérations restent limitées au coordinateur propriétaire.
+
 ## [0.2.1] - 2026-10-15
 
 ### Corrigé

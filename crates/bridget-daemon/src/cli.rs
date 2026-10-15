@@ -268,6 +268,8 @@ fn run_with_args(args: Vec<String>) {
         "spawn" => cmd_spawn(&args[2..]),
         "delegate-grant" => cmd_delegate_grant(&args[2..]),
         "auto-delegate" => cmd_auto_delegate(&args[2..]),
+        "delegate" => cmd_delegate(&args[2..]),
+        "task" => cmd_task(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
         "relaunch" => cmd_relaunch(&args[2..]),
         "decommission" => cmd_decommission(&args[2..]),
@@ -759,6 +761,8 @@ fn print_usage() {
            spawn <TYPE>           Lance un équipier géré (--persistent | --no-persistent) [--agent-id UUID] [--posture discovery|development]\n  \
            delegate-grant <N>     Autorise la délégation dans une racine (--cwd CHEMIN --posture discovery|development) [--revoke]\n  \
            auto-delegate <OPTS>   Admission configurée native (auto-delegate --help)\n  \
+           delegate <MISSION>     Choisit un profil, crée un agent et confie la mission (delegate --help)\n  \
+           task <OP>              Pilote les tâches natives : list|status|wait|continue|respond|cancel|ack\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
            decommission <N>       Retire un équipier de la flotte visible\n  \
@@ -2973,6 +2977,472 @@ fn cmd_auto_delegate(args: &[String]) {
             eprintln!("bridget auto-delegate : résultat non confirmé : {error}");
             std::process::exit(1);
         }
+    }
+}
+
+const DELEGATE_USAGE: &str = "usage: bridget delegate MISSION [--request-id ID] [--cwd CHEMIN] \\
+  [--machine-id ID] [--project-id ID] [--agent-type TYPE] [--model MODEL] \\
+  [--effort EFFORT] [--posture discovery|development] [--reply-timeout SECONDES] \\
+  [--workspace JSON] [--keep-alive-secs SECONDES] [--child-requests deny|forward] \\
+  [--brief JSON] [--urgent] [--deliverable TEXTE] [--json]\n\
+La mission est le seul argument métier obligatoire. Le parent est l'agent Bridget \
+authentifié qui exécute la commande. Utilisez --request-id pour un rejeu contrôlé.";
+
+const TASK_USAGE: &str = "usage: bridget task \\
+  list [--state active|all] [--limit 1..100] [--json] | \\
+  status TASK_ID [--json] | wait TASK_ID... [--timeout SECONDES] [--json] | \\
+  continue TASK_ID MISSION [--request-id ID] [--brief JSON] [--json] | \\
+  respond TASK_ID REQUEST_ID accept|decline|cancel [--answer JSON] [--json] | \\
+  cancel TASK_ID [--json] | ack TASK_ID... [--json]";
+
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedDelegateArgs {
+    tool: &'static str,
+    payload: serde_json::Value,
+    json: bool,
+    request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ParsedNativeCli {
+    tool: &'static str,
+    payload: serde_json::Value,
+    json: bool,
+    displayed_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TaskCliAction {
+    List(Vec<String>),
+    Native(ParsedNativeCli),
+}
+
+fn parse_delegate_args(
+    args: &[String],
+    current_dir: &Path,
+    generate_request_id: impl FnOnce() -> String,
+) -> Result<ParsedDelegateArgs, String> {
+    use std::collections::HashSet;
+
+    let mission = args
+        .first()
+        .filter(|value| !value.trim().is_empty() && !value.starts_with("--"))
+        .ok_or_else(|| "delegate : MISSION est obligatoire".to_string())?;
+    let mut forwarded = Vec::new();
+    let mut request_id = None;
+    let mut cwd = None;
+    let mut json_output = false;
+    let mut seen = HashSet::new();
+    let mut index = 1;
+    while index < args.len() {
+        let option = args[index].as_str();
+        if !seen.insert(option.to_string()) {
+            return Err(format!("delegate : option répétée {option}"));
+        }
+        match option {
+            "--json" => json_output = true,
+            "--urgent" => {
+                forwarded.push("--urgent".to_string());
+                forwarded.push("true".to_string());
+            }
+            "--request-id" | "--cwd" => {
+                let value = option_value(args, &mut index, option)?;
+                if option == "--request-id" {
+                    request_id = Some(value);
+                } else {
+                    cwd = Some(value);
+                }
+            }
+            "--machine-id" | "--project-id" | "--agent-type" | "--model" | "--effort"
+            | "--posture" | "--reply-timeout" | "--workspace" | "--keep-alive-secs"
+            | "--child-requests" | "--brief" | "--deliverable" => {
+                let value = option_value(args, &mut index, option)?;
+                forwarded.push(option.to_string());
+                forwarded.push(value);
+            }
+            _ => return Err(unknown_argument("delegate", option)),
+        }
+        index += 1;
+    }
+    let request_id = request_id.unwrap_or_else(generate_request_id);
+    let cwd = cwd.unwrap_or_else(|| current_dir.to_string_lossy().into_owned());
+    let mut technical = vec![
+        "--request-id".to_string(),
+        request_id.clone(),
+        "--task".to_string(),
+        mission.clone(),
+        "--cwd".to_string(),
+        cwd,
+    ];
+    technical.extend(forwarded);
+    Ok(ParsedDelegateArgs {
+        tool: "bridget_auto_delegate",
+        payload: parse_auto_delegate_args(&technical)?,
+        json: json_output,
+        request_id,
+    })
+}
+
+fn split_json_flag(args: &[String]) -> Result<(Vec<String>, bool), String> {
+    let mut values = Vec::with_capacity(args.len());
+    let mut json = false;
+    for value in args {
+        if value == "--json" {
+            if json {
+                return Err("task : option répétée --json".into());
+            }
+            json = true;
+        } else {
+            values.push(value.clone());
+        }
+    }
+    Ok((values, json))
+}
+
+fn task_ids(values: &[String]) -> Result<Vec<String>, String> {
+    use std::collections::HashSet;
+    if !(1..=16).contains(&values.len()) {
+        return Err("task : 1 à 16 identifiants distincts sont requis".into());
+    }
+    let mut seen = HashSet::new();
+    for value in values {
+        if value.is_empty() || value.starts_with("--") || !seen.insert(value) {
+            return Err("task : identifiants non vides et distincts requis".into());
+        }
+    }
+    Ok(values.to_vec())
+}
+
+fn parse_task_args(
+    args: &[String],
+    generate_request_id: impl Fn() -> String,
+) -> Result<TaskCliAction, String> {
+    let operation = args
+        .first()
+        .map(String::as_str)
+        .ok_or_else(|| TASK_USAGE.to_string())?;
+    if operation == "list" {
+        let mut control = vec!["delegations".to_string(), "list".to_string()];
+        control.extend_from_slice(&args[1..]);
+        parse_delegation_control(&control)?;
+        return Ok(TaskCliAction::List(control));
+    }
+    let (values, json) = split_json_flag(args)?;
+    let native = match values.first().map(String::as_str) {
+        Some("status") | Some("cancel") if values.len() == 2 => ParsedNativeCli {
+            tool: if values[0] == "status" {
+                "bridget_task_status"
+            } else {
+                "bridget_task_cancel"
+            },
+            payload: serde_json::json!({"task_id":values[1]}),
+            json,
+            displayed_request_id: None,
+        },
+        Some("ack") => ParsedNativeCli {
+            tool: "bridget_task_ack",
+            payload: serde_json::json!({"task_ids":task_ids(&values[1..])?}),
+            json,
+            displayed_request_id: None,
+        },
+        Some("wait") => {
+            let mut ids = Vec::new();
+            let mut timeout = None;
+            let mut index = 1;
+            while index < values.len() {
+                if values[index] == "--timeout" {
+                    if timeout.is_some() {
+                        return Err("task wait : option répétée --timeout".into());
+                    }
+                    index += 1;
+                    timeout = Some(
+                        values
+                            .get(index)
+                            .ok_or_else(|| "task wait : valeur absente pour --timeout".to_string())?
+                            .parse::<u64>()
+                            .map_err(|_| "task wait : --timeout attend un entier".to_string())?,
+                    );
+                } else if values[index].starts_with("--") {
+                    return Err(unknown_argument("task wait", &values[index]));
+                } else {
+                    ids.push(values[index].clone());
+                }
+                index += 1;
+            }
+            let ids = task_ids(&ids)?;
+            let mut payload = serde_json::json!({"task_ids":ids});
+            if let Some(timeout) = timeout {
+                payload["wait_timeout"] = serde_json::json!(timeout);
+            }
+            ParsedNativeCli {
+                tool: "bridget_task_wait",
+                payload,
+                json,
+                displayed_request_id: None,
+            }
+        }
+        Some("continue") if values.len() >= 3 => {
+            let mut request_id = None;
+            let mut brief = None;
+            let mut index = 3;
+            while index < values.len() {
+                let option = values[index].as_str();
+                index += 1;
+                let value = values
+                    .get(index)
+                    .ok_or_else(|| format!("task continue : valeur absente pour {option}"))?;
+                match option {
+                    "--request-id" if request_id.is_none() => request_id = Some(value.clone()),
+                    "--brief" if brief.is_none() => {
+                        brief = Some(serde_json::from_str(value).map_err(|error| {
+                            format!("task continue : --brief attend un JSON valide : {error}")
+                        })?)
+                    }
+                    _ => return Err(unknown_argument("task continue", option)),
+                }
+                index += 1;
+            }
+            let request_id = request_id.unwrap_or_else(generate_request_id);
+            let mut payload = serde_json::json!({
+                "task_id":values[1], "request_id":request_id.clone(),
+                "task":values[2]
+            });
+            if let Some(brief) = brief {
+                payload["brief"] = brief;
+            }
+            ParsedNativeCli {
+                tool: "bridget_task_continue",
+                payload,
+                json,
+                displayed_request_id: Some(request_id),
+            }
+        }
+        Some("respond") if values.len() >= 4 => {
+            if !matches!(values[3].as_str(), "accept" | "decline" | "cancel") {
+                return Err("task respond : décision attendue accept|decline|cancel".into());
+            }
+            let mut answer = None;
+            let mut index = 4;
+            while index < values.len() {
+                if values[index] != "--answer" || answer.is_some() {
+                    return Err(unknown_argument("task respond", &values[index]));
+                }
+                index += 1;
+                answer = Some(
+                    serde_json::from_str(values.get(index).ok_or_else(|| {
+                        "task respond : valeur absente pour --answer".to_string()
+                    })?)
+                    .map_err(|error| {
+                        format!("task respond : --answer attend un JSON valide : {error}")
+                    })?,
+                );
+                index += 1;
+            }
+            let mut payload = serde_json::json!({
+                "task_id":values[1], "request_id":values[2], "decision":values[3]
+            });
+            if let Some(answer) = answer {
+                payload["answer"] = answer;
+            }
+            ParsedNativeCli {
+                tool: "bridget_task_respond",
+                payload,
+                json,
+                displayed_request_id: None,
+            }
+        }
+        _ => return Err(TASK_USAGE.into()),
+    };
+    Ok(TaskCliAction::Native(native))
+}
+
+fn coordination_identity_error(
+    command: &str,
+    error: &crate::mcp_identity::IdentityError,
+) -> String {
+    format!(
+        "bridget {command} : {} : {}. Lancez le coordinateur avec `bridget codex`, \
+`bridget claude` ou un autre wrapper Bridget ; aucune tâche n'a été créée",
+        error.code(),
+        error.remediation()
+    )
+}
+
+fn render_coordination_error(code: &str, message: &str, request_id: Option<&str>) -> String {
+    let mut value = serde_json::json!({"status":"error","code":code,"message":message});
+    if let Some(request_id) = request_id {
+        value["request_id"] = serde_json::json!(request_id);
+    }
+    value.to_string()
+}
+
+fn exit_coordination_error(
+    command: &str,
+    json: bool,
+    code: &str,
+    message: &str,
+    request_id: Option<&str>,
+    status: i32,
+) -> ! {
+    if json {
+        println!("{}", render_coordination_error(code, message, request_id));
+    } else {
+        eprintln!("bridget {command} : {message}");
+        if let Some(request_id) = request_id {
+            eprintln!("demande : {request_id}");
+        }
+    }
+    std::process::exit(status);
+}
+
+fn render_native_cli_result(result: &serde_json::Value, json_output: bool) -> String {
+    if json_output {
+        return result.to_string();
+    }
+    let mut lines = Vec::new();
+    for (key, label) in [
+        ("request_id", "demande"),
+        ("task_id", "tâche"),
+        ("status", "état"),
+        ("work_state", "travail"),
+        ("child_agent_id", "agent"),
+        ("agent_type", "type"),
+        ("model", "modèle"),
+        ("error", "erreur"),
+    ] {
+        if let Some(value) = result.get(key).and_then(serde_json::Value::as_str) {
+            lines.push(format!("{label} : {value}"));
+        }
+    }
+    if let Some(value) = result.get("result").filter(|value| !value.is_null()) {
+        lines.push(format!(
+            "résultat : {}",
+            value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string())
+        ));
+    }
+    if result
+        .get("continuable")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        lines.push("suite : task continue disponible".into());
+    }
+    if let Some(count) = result
+        .get("pending_requests")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .filter(|count| *count > 0)
+    {
+        lines.push(format!("réponses requises : {count} (task respond)"));
+    }
+    if lines.is_empty() {
+        serde_json::to_string_pretty(result).unwrap_or_else(|_| result.to_string())
+    } else {
+        lines.join("\n")
+    }
+}
+
+fn run_native_cli(command: &str, parsed: ParsedNativeCli) {
+    let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
+        let message = coordination_identity_error(command, &error);
+        exit_coordination_error(
+            command,
+            parsed.json,
+            error.code(),
+            &message,
+            parsed.displayed_request_id.as_deref(),
+            1,
+        )
+    });
+    match crate::delegation_mcp::execute(
+        &identity,
+        parsed.tool,
+        &parsed.payload,
+        &DaemonConfig::default().socket_path,
+    ) {
+        Ok(mut result) => {
+            if result.get("request_id").is_none()
+                && let Some(request_id) = parsed.displayed_request_id
+            {
+                result["request_id"] = serde_json::json!(request_id);
+            }
+            println!("{}", render_native_cli_result(&result, parsed.json));
+            if result.get("status").and_then(serde_json::Value::as_str) == Some("error") {
+                std::process::exit(1);
+            }
+        }
+        Err(crate::communication::client::ClientError::InvalidParams(error)) => {
+            exit_coordination_error(
+                command,
+                parsed.json,
+                "invalid_params",
+                &error,
+                parsed.displayed_request_id.as_deref(),
+                2,
+            )
+        }
+        Err(crate::communication::client::ClientError::Technical { code, message }) => {
+            exit_coordination_error(
+                command,
+                parsed.json,
+                code,
+                &message,
+                parsed.displayed_request_id.as_deref(),
+                1,
+            )
+        }
+    }
+}
+
+fn cmd_delegate(args: &[String]) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("help" | "--help" | "-h")
+    ) {
+        println!("{DELEGATE_USAGE}");
+        return;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|error| {
+        eprintln!("bridget delegate : dossier courant inaccessible : {error}");
+        std::process::exit(1);
+    });
+    let parsed = parse_delegate_args(args, &cwd, || uuid::Uuid::new_v4().to_string())
+        .unwrap_or_else(|error| {
+            let json = args.iter().any(|argument| argument == "--json");
+            if !json {
+                eprintln!("{DELEGATE_USAGE}");
+            }
+            exit_coordination_error("delegate", json, "invalid_arguments", &error, None, 2)
+        });
+    let call = ParsedNativeCli {
+        tool: parsed.tool,
+        payload: parsed.payload,
+        json: parsed.json,
+        displayed_request_id: Some(parsed.request_id),
+    };
+    run_native_cli("delegate", call);
+}
+
+fn cmd_task(args: &[String]) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("help" | "--help" | "-h")
+    ) {
+        println!("{TASK_USAGE}");
+        return;
+    }
+    match parse_task_args(args, || uuid::Uuid::new_v4().to_string()).unwrap_or_else(|error| {
+        let json = args.iter().any(|argument| argument == "--json");
+        if !json {
+            eprintln!("{TASK_USAGE}");
+        }
+        exit_coordination_error("task", json, "invalid_arguments", &error, None, 2)
+    }) {
+        TaskCliAction::List(args) => cmd_control(&args),
+        TaskCliAction::Native(parsed) => run_native_cli("task", parsed),
     }
 }
 
@@ -8190,6 +8660,236 @@ mod hook_tests {
     }
 
     #[test]
+    fn spec167_delegate_reduit_le_parcours_nominal_a_la_mission() {
+        let parsed = parse_delegate_args(
+            &argv(&["analyser le dépôt"]),
+            Path::new("/workspace"),
+            || "request-167".into(),
+        )
+        .unwrap();
+        assert_eq!(parsed.tool, "bridget_auto_delegate");
+        assert!(!parsed.json);
+        assert_eq!(parsed.request_id, "request-167");
+        assert_eq!(
+            parsed.payload,
+            serde_json::json!({
+                "request_id":"request-167",
+                "task":"analyser le dépôt",
+                "cwd":"/workspace"
+            })
+        );
+    }
+
+    #[test]
+    fn spec167_delegate_conserve_les_choix_explicites_sans_defaults_caches() {
+        let parsed = parse_delegate_args(
+            &argv(&[
+                "réviser le plan",
+                "--request-id",
+                "stable-167",
+                "--cwd",
+                "/project",
+                "--agent-type",
+                "claude",
+                "--model",
+                "sonnet",
+                "--effort",
+                "high",
+                "--posture",
+                "development",
+                "--machine-id",
+                "worker-1",
+                "--project-id",
+                "project-1",
+                "--reply-timeout",
+                "900",
+                "--keep-alive-secs",
+                "600",
+                "--child-requests",
+                "forward",
+                "--workspace",
+                r#"{"strategy":"shared"}"#,
+                "--brief",
+                r#"{"objective":"revoir"}"#,
+                "--urgent",
+                "--deliverable",
+                "rapport",
+                "--json",
+            ]),
+            Path::new("/ignored"),
+            || panic!("une clé explicite ne doit pas être remplacée"),
+        )
+        .unwrap();
+        assert!(parsed.json);
+        assert_eq!(parsed.request_id, "stable-167");
+        assert_eq!(
+            parsed.payload,
+            serde_json::json!({
+                "request_id":"stable-167", "task":"réviser le plan", "cwd":"/project",
+                "agent_type":"claude", "model":"sonnet", "effort":"high",
+                "posture":"development", "machine_id":"worker-1", "project_id":"project-1",
+                "reply_timeout":900, "keep_alive_secs":600, "child_requests":"forward",
+                "workspace":{"strategy":"shared"}, "brief":{"objective":"revoir"},
+                "urgent":true, "deliverable":"rapport"
+            })
+        );
+        for invalid in [
+            argv(&[]),
+            argv(&["--json"]),
+            argv(&["mission", "surplus"]),
+            argv(&["mission", "--urgent", "--urgent"]),
+            argv(&["mission", "--json", "--json"]),
+            argv(&["mission", "--task", "forgée"]),
+        ] {
+            assert!(
+                parse_delegate_args(&invalid, Path::new("/workspace"), || "id".into()).is_err(),
+                "args={invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec167_task_traduit_le_cycle_de_vie_vers_les_outils_natifs() {
+        let cases = [
+            (
+                argv(&["status", "task-1", "--json"]),
+                "bridget_task_status",
+                serde_json::json!({"task_id":"task-1"}),
+                true,
+            ),
+            (
+                argv(&["wait", "task-1", "task-2", "--timeout", "30"]),
+                "bridget_task_wait",
+                serde_json::json!({"task_ids":["task-1","task-2"],"wait_timeout":30}),
+                false,
+            ),
+            (
+                argv(&["ack", "task-1", "task-2"]),
+                "bridget_task_ack",
+                serde_json::json!({"task_ids":["task-1","task-2"]}),
+                false,
+            ),
+            (
+                argv(&["cancel", "task-1"]),
+                "bridget_task_cancel",
+                serde_json::json!({"task_id":"task-1"}),
+                false,
+            ),
+            (
+                argv(&[
+                    "continue",
+                    "task-1",
+                    "approfondir",
+                    "--request-id",
+                    "round-2",
+                ]),
+                "bridget_task_continue",
+                serde_json::json!({"task_id":"task-1","request_id":"round-2","task":"approfondir"}),
+                false,
+            ),
+            (
+                argv(&[
+                    "respond",
+                    "task-1",
+                    "question-1",
+                    "accept",
+                    "--answer",
+                    r#"{"q1":["oui"]}"#,
+                ]),
+                "bridget_task_respond",
+                serde_json::json!({"task_id":"task-1","request_id":"question-1","decision":"accept","answer":{"q1":["oui"]}}),
+                false,
+            ),
+        ];
+        for (args, tool, payload, json) in cases {
+            let TaskCliAction::Native(parsed) =
+                parse_task_args(&args, || "generated-167".into()).unwrap()
+            else {
+                panic!("action native attendue pour {args:?}");
+            };
+            assert_eq!(parsed.tool, tool);
+            assert_eq!(parsed.payload, payload);
+            assert_eq!(parsed.json, json);
+        }
+        for invalid in [
+            argv(&[]),
+            argv(&["status"]),
+            argv(&["wait", "task-1", "task-1"]),
+            argv(&["wait", "task-1", "--timeout"]),
+            argv(&["continue", "task-1"]),
+            argv(&["respond", "task-1", "question-1", "maybe"]),
+            argv(&["ack"]),
+            argv(&["cancel", "task-1", "surplus"]),
+        ] {
+            assert!(
+                parse_task_args(&invalid, || "generated-167".into()).is_err(),
+                "args={invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn spec167_task_list_reutilise_la_projection_humaine_globale() {
+        let TaskCliAction::List(args) = parse_task_args(
+            &argv(&["list", "--state", "all", "--limit", "12", "--json"]),
+            || "unused".into(),
+        )
+        .unwrap() else {
+            panic!("liste humaine attendue");
+        };
+        assert_eq!(
+            args,
+            argv(&[
+                "delegations",
+                "list",
+                "--state",
+                "all",
+                "--limit",
+                "12",
+                "--json"
+            ])
+        );
+    }
+
+    #[test]
+    fn spec167_sorties_et_refus_restent_exploitables() {
+        let result = serde_json::json!({
+            "version":1, "task_id":"task-167", "status":"working",
+            "work_state":"working", "child_agent_id":"agent-167",
+            "request_id":"request-167", "continuable":true,
+            "pending_requests":[{"request_id":"question-167"}]
+        });
+        assert_eq!(render_native_cli_result(&result, true), result.to_string());
+        let human = render_native_cli_result(&result, false);
+        assert!(human.contains("task-167"));
+        assert!(human.contains("working"));
+        assert!(human.contains("agent-167"));
+        assert!(human.contains("request-167"));
+        assert!(human.contains("task continue"));
+        assert!(human.contains("task respond"));
+
+        let error = coordination_identity_error(
+            "delegate",
+            &crate::mcp_identity::IdentityError::IdentityNotFound,
+        );
+        assert!(error.contains("identity_not_found"));
+        assert!(error.contains("bridget codex"));
+        assert!(error.contains("aucune tâche"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&render_coordination_error(
+                "identity_not_found",
+                "aucune tâche créée",
+                Some("request-167")
+            ))
+            .unwrap(),
+            serde_json::json!({
+                "status":"error", "code":"identity_not_found", "message":"aucune tâche créée",
+                "request_id":"request-167"
+            })
+        );
+    }
+
+    #[test]
     fn reaper_exige_une_racine_explicitement_choisie() {
         assert!(
             require_explicit_reaper_tmp(None)
@@ -8361,6 +9061,8 @@ mod hook_tests {
             "stop",
             "relaunch",
             "auto-delegate",
+            "delegate",
+            "task",
         ] {
             assert!(command_requires_principal(command), "{command}");
             assert_eq!(
