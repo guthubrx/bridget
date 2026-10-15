@@ -184,6 +184,20 @@ Le retour arrière de cette adoption consiste à arrêter le seul daemon, restau
 le binaire sauvegardé (et l'état arrêté sauvegardé si nécessaire), puis relancer
 son plist inchangé. Ce n'est pas la procédure d'installation isolée ci-dessous.
 
+### Dépanner le pont T3
+
+`t3_session_unavailable` signifie que la preuve privée présentée par le fil n'est
+plus acceptée. Avec T3 Code `0.0.45-local.166` ou plus récent, une reprise Codex
+remonte automatiquement la preuve courante avant son premier tour. Si le remontage
+échoue, T3 bloque ce tour. Il ne faut pas enchaîner les désinstallations et les
+réinstallations. Vérifier d'abord les versions réellement chargées, puis relancer
+T3 une fois seulement si l'application ouverte exécute encore une ancienne version.
+
+`Too many open files` indique un défaut de cycle de vie des liens ou un ancien
+pont encore chargé. Le pont corrigé ferme les liens des sous-agents terminés après
+leur drain et limite à 32 les reprises simultanées. La limite souple normale de
+4 096 fichiers suffit. L'augmenter masque le symptôme sans fermer les ressources.
+
 ## 4. Fédération SSH
 
 `scripts/federate-ssh.sh --help` décrit le transfert maître → client ;

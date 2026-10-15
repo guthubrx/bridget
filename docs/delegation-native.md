@@ -945,9 +945,15 @@ Bridget n'emprunte jamais l'identité d'une conversation voisine.
 
 Un credential retiré, révoqué ou tourné ferme tous les outils Bridget de cette
 session avec `t3_session_unavailable`. Ce refus n'a ni repli par PID ni repli en
-lecture seule. Une session qui n'a jamais eu de fait de droits garde l'identité seule (version 1)
-pour les lectures et le rejeu d'une demande déjà admise. Une admission héritée ou
-`development` exige la version 2 : sans elle, la réponse est
+lecture seule. Avec T3 Code `0.0.45-local.166` ou plus récent, une reprise Codex
+compare la preuve privée courante à la preuve montée avant le premier tour. Si
+elles diffèrent, T3 reprend le même fil natif et remonte Bridget avec la preuve
+courante. Il attend la fin de ce remontage avant de publier les droits et avant
+`turn/start`. Un échec bloque le tour ; il ne réutilise pas l'ancienne preuve et
+n'emprunte pas celle d'un autre fil. Une session qui n'a jamais eu de fait de
+droits garde l'identité seule (version 1) pour les lectures et le rejeu d'une
+demande déjà admise. Une admission héritée ou `development` exige la version 2 :
+sans elle, la réponse est
 `permission_attestation_unavailable`, sans grant ni repli vers `discovery`.
 
 Les options MCP humaines existantes et les désactivations restent prioritaires.

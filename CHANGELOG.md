@@ -5,6 +5,33 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.2.1] - 2026-10-15
+
+### Corrigé
+
+- Le pont T3 ferme les liens des sous-agents terminés après avoir drainé leurs derniers événements.
+  Les conversations restent dans l'historique, mais elles ne gardent plus des milliers de fichiers
+  ouverts. Les reprises nécessaires sont limitées à 32 liens simultanés.
+- Avec T3 Code `0.0.45-local.166` ou plus récent, la reprise d'un fil Codex remonte la preuve privée
+  Bridget courante avant son premier tour. Une ancienne preuve reste refusée et un échec de remontage
+  bloque le tour, sans emprunter l'identité d'un autre fil.
+
+### Exploitation
+
+- La limite souple normale de 4 096 fichiers suffit à nouveau. Augmenter cette limite ne remplace pas
+  la fermeture des liens et ne constitue plus le correctif recommandé.
+- Un fil repris n'a plus besoin d'une boucle de désinstallation et de réinstallation du pont pour
+  retrouver Bridget. Vérifier d'abord que les versions T3 et Bridget compatibles sont chargées.
+
+### Limites de validation
+
+- Les tests ciblés du pont passent : 13 scénarios de cycle de vie, 102 tests du module T3 et 22 tests
+  de contrat ; un test de contrat reste ignoré.
+- La recette réelle est passée de 1 130 à 32 liens et de 4 539 à 167 fichiers ouverts. Aucun `EMFILE`
+  ni `Too many open files` n'a été observé après activation.
+- La suite complète du crate conserve 91 échecs hérités hors des fichiers affectés. Aucun résultat
+  GREEN global n'est revendiqué.
+
 ## [0.2.0] - 2026-10-14
 
 ### Ajouté
