@@ -13,7 +13,7 @@ La reprise d’un fil Codex T3 recharge maintenant l’identité Bridget courant
 - Application : `/Applications/T3 Code (Local).app`
 - Version active : `0.0.45-local.166`
 - SHA-256 ASAR : `b397aaa905d5c023392afee8459c6d6150a576fc7ef5d18987c0dafb822fb433`
-- Archive signée : `/Users/moi/.cache/t3-final166.K49J0ZDU/artifacts/T3-Code-0.0.45-local.166-arm64.zip`
+- Archive de construction, créée avant la signature finale du stage : `/Users/moi/.cache/t3-final166.K49J0ZDU/artifacts/T3-Code-0.0.45-local.166-arm64.zip`
 - SHA-256 archive : `8fbf8c9a7043bb0e263939fb70cb77643805f790ca71c9222abcd19b38b3328c`
 - Rollback : `/Users/moi/.cache/t3-install166.VqBHdpl2/T3-before.app`
 
