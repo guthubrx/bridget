@@ -28,4 +28,6 @@ Le premier contrôle post-construction a échoué pendant la recherche du stage 
 - Version du rollback : `0.0.45-local.164`
 - Données utilisateur : inchangées.
 
-Au moment de ce checkpoint, les processus nés le 14 octobre 2026 à 15:50:30 utilisent encore la version 164 chargée en mémoire. La relance contrôlée et la recette réelle restent à effectuer.
+La version 166 a ensuite été activée. Une erreur de livraison a provoqué une boucle de relance : `launchctl submit` a traité le script temporaire comme une tâche persistante. Le script a été exécuté 71 fois avant le retrait du service. Le diagnostic a montré des arrêts propres, pas des crashs du code T3.
+
+Le service `com.bridget.t3-activate166` a été retiré. Le script `/Users/moi/.cache/t3-activate166.sh` a été rendu inerte. T3 est ensuite resté sur le même processus. La recette réelle est consignée dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/166-rattachement-bridget-reprise/validation/livraison166.md`.

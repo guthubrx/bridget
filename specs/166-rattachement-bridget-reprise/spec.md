@@ -5,9 +5,9 @@
 
 Spec: 166-rattachement-bridget-reprise
 Titre: Rattachement Bridget après reprise T3
-Statut: In Progress
+Statut: Implemented
 Priorité: P1
-Tâches: 13/14 (92,9%)
+Tâches: 14/14 (100%)
 Tests: 0/0 (0%)
 
 Résumé:
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-166-rattachement-bridget-reprise`  
 **Created**: 2026-10-15  
-**Status**: In Progress  
+**Status**: Implemented
 **Priority**: P1  
 **Dependencies**: SPEC-149, SPEC-163, SPEC-165
 

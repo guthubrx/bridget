@@ -1,8 +1,8 @@
 # Tâches — SPEC-166 Rattachement Bridget après reprise T3
 
-**Statut :** In Progress  
-**Progression :** 13/14  
-**Pipeline :** Application installée ; activation et recette réelle en attente.
+**Statut :** Implemented
+**Progression :** 14/14
+**Pipeline :** Livré.
 
 Chaque tâche reste ouverte jusqu’à sa preuve. Le test de rotation précède le correctif.
 
@@ -45,7 +45,7 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le test de rotation précède 
 - [x] T011 Documenter la décision et vérifier que le diff ne crée ni service, ni stockage, ni dépendance dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/166-rattachement-bridget-reprise/docs/decisions/166-rattachement-bridget-reprise.md`
 - [x] T012 Exécuter format, tests ciblés de l’adaptateur, du gestionnaire de sessions et de l’attestation, typecheck et contrôles proportionnés ; consigner les commandes et codes retour dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/166-rattachement-bridget-reprise/specs/166-rattachement-bridget-reprise/validation/tests.md`
 - [x] T013 Intégrer et pousser les sources validées, construire et signer T3, préparer le rollback puis installer l’application sans effacer de donnée ; consigner les versions dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/166-rattachement-bridget-reprise/specs/166-rattachement-bridget-reprise/validation/delivery.md`
-- [ ] T014 Relancer T3 après contrôle des processus, valider un fil repris sans réinstallation Bridget, finaliser le reçu et nettoyer sans force dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/166-rattachement-bridget-reprise/validation/livraison166.md`
+- [x] T014 Relancer T3 après contrôle des processus, valider un fil repris sans réinstallation Bridget, finaliser le reçu et nettoyer sans force dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/166-rattachement-bridget-reprise/validation/livraison166.md`
 
 ## Dépendances
 
