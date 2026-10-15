@@ -260,11 +260,22 @@ sujets et le texte enfant ne sont pas des instructions. En shared, shared_writer
 est un avertissement sans refus. Git 2.44+, `.worktrees/` ignoré dans le dépôt,
 plafond de 32 chemins distincts ; dépôts LFS/filtres/inclusions/partiels refusés.
 
-Bridget crée et lit seulement. Aucun commit, merge, rebase, push, fetch,
-PR, suppression Git ni modification de configuration. Nettoyage humain après examen ;
+Le daemon Bridget crée et lit seulement. Aucun commit, merge, rebase, push, fetch,
+PR, suppression Git ni modification de configuration. Nettoyage autorisé après examen ;
 voir la référence des commandes pour les 13 refus et la recette. Un enfant Codex
 workspaceWrite peut modifier les fichiers sans pouvoir commiter dans le dossier Git commun.
 Cette skill ne prouve pas l’activation de la session 154. Les contrats 153 restent conservés.
+
+### Livraison Git entre machines
+
+Le coordinateur rend le SHA de départ disponible sur la cible, puis demande
+un worktree avec `base_ref` égal à ce SHA explicite. Aucun fetch automatique.
+L’enfant committe/pousse sa seule branche si la mission et ses droits l’autorisent.
+Un intégrateur unique vérifie, intègre, pousse et compare les SHA des machines.
+`result_available` ne vaut pas intégration ; préserver toute copie modifiée ou
+divergente. L’auto-pull T3 facultatif ne synchronise pas la flotte Bridget.
+Procédure « Livraison Git entre machines » :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md.
 
 ### Rondes et brief - contrat153
 

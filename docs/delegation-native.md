@@ -506,10 +506,10 @@ En mode shared en développement, shared_writers apparaît dans le reçu si un
 autre enfant actif écrit dans le même dossier. Cet avertissement ne bloque
 rien. La détection file_collision garde son comportement.
 
-Bridget crée le worktree et lit son état Git. Il ne fait ni commit, fusion,
-rebase, push, fetch, pull request, suppression de branche ou de worktree.
-Le nettoyage appartient à l’humain. Exemple pour un dépôt et un chemin issus
-du reçu, à adapter après examen du travail :
+Le daemon Bridget crée le worktree et lit son état Git. Il ne fait ni commit,
+fusion, rebase, push, fetch, pull request, suppression de branche ou de worktree.
+Le nettoyage appartient à l’humain ou à son agent explicitement autorisé.
+Exemple pour un dépôt et un chemin issus du reçu, à adapter après examen du travail :
 
 ```sh
 git -C /Users/moi/Nextcloud/10.Scripts/64.bridget worktree list
@@ -521,6 +521,36 @@ git -C /Users/moi/Nextcloud/10.Scripts/64.bridget branch -d bridget/1a2b3c4d
 
 Ces commandes humaines refusent le retrait sale ou une branche non intégrée.
 Ne pas ajouter force pour contourner ce refus.
+
+## Livraison Git entre machines
+
+Cette procédure appartient au coordinateur et aux agents autorisés par la mission.
+Elle ne donne aucune permission Git supplémentaire au daemon ni à l’enfant.
+
+1. Le coordinateur choisit le dépôt, la référence et le dépôt distant autorisés.
+   Il récupère au besoin les commits avec `git fetch` sur les machines concernées,
+   puis résout le SHA de départ et vérifie sa présence sur la machine cible.
+2. Pour du code distant, il fournit `workspace.strategy="worktree"` et
+   `workspace.base_ref` égal à ce SHA explicite. Sans base, HEAD serait celui du
+   dépôt distant ; Bridget ne récupère pas automatiquement la référence d’origine.
+   Bridget fige et contrôle ce commit, puis rapporte branche, base, tête et commits.
+3. L’enfant committe et pousse uniquement sa branche attribuée si la mission
+   et ses droits l’autorisent. Il retourne les SHA produits et les preuves de tests.
+   `result_available` signifie résultat disponible, pas travail intégré.
+4. Un seul intégrateur vérifie les preuves et l’état propre des dépôts concernés.
+   Il récupère la branche enfant, l’intègre dans la branche cible selon le workflow
+   du projet, pousse le résultat et vérifie le SHA publié sur le dépôt distant.
+5. Il met ensuite à jour les autres copies de travail durables concernées avec
+   `git pull --ff-only`, après vérification de la branche et du dépôt distant.
+   Une copie modifiée ou divergente reste conservée et signalée comme non mise
+   à jour ; aucun retrait ni écrasement forcé ne contourne ce blocage.
+6. Il compare les SHA attendus sur chaque machine avant le nettoyage autorisé
+   des branches, worktrees et temporaires du lot. Il conserve les travaux étrangers.
+
+L’auto-pull T3 est un confort facultatif des projets où il est activé.
+Il ne synchronise pas la flotte Bridget et ne remplace pas cette vérification.
+Bridget reste indépendant de T3 : aucun pull, merge ou sondage Git périodique
+n’est ajouté au daemon pour synchroniser les machines.
 
 ## Demandes de l’enfant — contrat155
 
