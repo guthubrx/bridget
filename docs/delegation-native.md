@@ -91,7 +91,7 @@ enabled, connections, model_catalog et machine_policies. Conserver profils et ma
 | automatic_axes / fixed_values | Cinq axes engine/model/machine/connection/effort ; axe OFF exige valeur fixe valide. |
 | decision_service.enabled / accessible / service_id | Service joignable depuis cette coordinatrice, référencé dans decision_services avec endpoint et model. |
 | lightweight_decision.enabled / accessible / engine / connection_id / model / effort | Petit Claude local déjà authentifié ; effort absent/null tant que l’effort de ce rôle n’est pas qualifié. |
-| decision_timeout_ms / service_timeout_ms | Chaîne 1 à 30 s ; plafond effectif service 2 s dans le budget commun. |
+| decision_timeout_ms / service_timeout_ms | Chaîne 1 à 30 s ; service 1 à 30 s, limité par le budget global ; défaut 2 s. |
 | telemetry.enabled / max_age_secs / seuils / weights | Fraîcheur, saturation et sept poids bornés du coordinateur, uniformes pour les cibles. |
 | compilation_capacity | Capacité déclarée 0..10 ou null ; aucun benchmark automatique. |
 

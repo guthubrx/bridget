@@ -1775,7 +1775,8 @@ fn admit_auto_routing(
     if let Some(held_permit) = permit {
         if let Some(service) = &plan.decision_service {
             let deadline = CallerDeadline::until(global_deadline.min(
-                Instant::now() + Duration::from_millis(machine_policy.service_timeout_ms.min(2000)),
+                Instant::now()
+                    + Duration::from_millis(machine_policy.service_timeout_ms.min(30000)),
             ));
             let service_id = machine_policy
                 .decision_service
@@ -12389,6 +12390,91 @@ for frame in frames: print(json.dumps(frame),flush=True)
         server.join_assert_no_extra_requests();
         drop(state);
         cleanup(&config);
+
+        // T045 : le budget déclaré peut dépasser le défaut de deux secondes.
+        // Santé et POST conservent pourtant une seule échéance de chaîne.
+        for (name, service_ms, global_ms, health_ms, post_ms, expected_source) in [
+            (
+                "configured-over-two-seconds",
+                4500,
+                5000,
+                0,
+                2200,
+                "decision_service",
+            ),
+            ("default-two-seconds", 2000, 10000, 0, 2200, "deterministic"),
+            (
+                "shared-global-deadline",
+                1000,
+                1000,
+                600,
+                650,
+                "deterministic",
+            ),
+        ] {
+            let server = ControlledServer::start(
+                vec![
+                    (
+                        response("200 OK", br#"{"status":"ok"}"#),
+                        Duration::from_millis(health_ms),
+                    ),
+                    (response("200 OK", body), Duration::from_millis(post_ms)),
+                ],
+                None,
+            );
+            let (state, config, _rx, _reader, mut request, _root) = routing168_fixture(2);
+            request.request_id = format!("routing168-budget-{name}");
+            routing168_service(&state, &server.endpoint);
+            routing168_update(&state, |value| {
+                value["routing_policy"]["machine_policies"]["local"]["service_timeout_ms"] =
+                    json!(service_ms);
+                value["routing_policy"]["machine_policies"]["local"]["decision_timeout_ms"] =
+                    json!(global_ms);
+            });
+            let started = Instant::now();
+            let admitted =
+                admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+            let elapsed = started.elapsed();
+            let receipt = routing168_receipt(&state, &request);
+            let metadata: Value = serde_json::from_slice(&receipt.metadata).unwrap();
+            assert_eq!(
+                metadata["decision"]["source"], expected_source,
+                "{name}: {metadata}"
+            );
+            if expected_source == "decision_service" {
+                assert_eq!(metadata["decision"]["candidate_id"], "c002");
+                assert!(
+                    elapsed >= Duration::from_millis(2200),
+                    "{name}: {elapsed:?}"
+                );
+            } else {
+                assert_eq!(metadata["decision"]["candidate_id"], "c001");
+                assert!(
+                    metadata["decision_notes"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("decision_service_caller_deadline")),
+                    "{name}: {metadata}"
+                );
+            }
+            assert!(
+                elapsed < Duration::from_millis(global_ms + 500),
+                "budget global de {global_ms}ms, tolérance d'oracle500ms : {name}: {elapsed:?}"
+            );
+            let observed = server.requests();
+            assert_eq!(observed.len(), 2, "{name}: {observed:?}");
+            assert!(observed[0].starts_with("GET /health "));
+            assert!(observed[1].starts_with("POST /v1/systemone "));
+            server.join_assert_no_extra_requests();
+            assert_eq!(
+                admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap(),
+                admitted,
+                "le retour tardif ne remplace pas le choix : {name}"
+            );
+            assert_eq!(routing168_receipt(&state, &request), receipt, "{name}");
+            drop(state);
+            cleanup(&config);
+        }
 
         let server = ControlledServer::start(
             vec![(response("503 Service Unavailable", b"{}"), Duration::ZERO)],

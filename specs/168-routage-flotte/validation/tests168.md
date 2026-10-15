@@ -1040,3 +1040,32 @@ Les trois logs FAIL du lot r1 sont conservés, même après les PASS r2 :
 - `daemon::presence_tests::sigkill_daemon_reconcilie_l_ancien_groupe_avant_une_reprise_unique` : /home/moi/.local/state/bridget-delivery168/tests/t036-replay-post-fixtures-r1/test-19.log ; SHA-256 `2af7f9b42a1461c6a90738454dc11c3c08ce493c8364d07b98172df69193816e`.
 
 Aucun test, scan ou build supplémentaire n’a été lancé pour rédiger ce reçu. Il n’établit ni recette réelle de modèle, ni activation, ni release. T036 n’est pas cochée par ce reçu ; ROOT conserve cette responsabilité après lecture.
+
+
+## Complément T045B — délai service configuré, preuve contrôlée
+
+Le 15 octobre 2026, ROOT a fait corriger le plafond effectif fixe de 2 s : le délai du service respecte maintenant sa valeur configurée de 1 à 30 s, dans le budget global absolu restant. Le défaut reste 2 s ; santé et POST ne reçoivent pas deux budgets indépendants.
+
+Source /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/daemon/native_delegation.rs : SHA-256 avant correctif e0e57e569e36593bd3b94c0ba71d1c0a4b6a3f5735eed562c07d7e3dd2f10901 ; après correctif 5668719253fb44f96ccf28a878c952da559c0a3349f73adf0ebf56462c90da7c. Le hash est stable pendant le test.
+
+Une seule sélection exacte est exécutée : daemon::native_delegation::tests::spec168_service_valide_choisit_la_combinaison_complete. Résultat : RC 0, 1 PASS / 0 FAIL, 6,15 s de test et 45,433 s pour la commande, compilation comprise. Ce nom existant n’ajoute pas un nouveau test distinct.
+
+| Sous-cas contrôlé | Configuration et délais simulés | Issue observée |
+|---|---|---|
+| Service supérieur à 2 s | Service 4 500 ms, global 5 000 ms, POST 2 200 ms | decision_service |
+| Défaut conservé | Service 2 000 ms, global 10 000 ms, POST 2 200 ms | deterministic ; decision_service_caller_deadline |
+| Budget global partagé | Service et global 1 000 ms ; santé 600 ms puis POST 650 ms | deterministic ; decision_service_caller_deadline |
+
+Commande exécutée par ROOT, sans rejeu lors de cette rédaction :
+
+nice -n 10 /home/moi/.cargo/bin/cargo test --offline --locked -j 2 -p bridget-daemon --lib daemon::native_delegation::tests::spec168_service_valide_choisit_la_combinaison_complete -- --exact --test-threads=2
+
+- Reçu : /home/moi/.local/state/bridget-delivery168/tests/t045-budget-service-config-r1.json ; SHA-256 738ac4d040cd13d59d5273821b229f323aa5da2cb406a0de991b0308f6f43149.
+- Log : /home/moi/.local/state/bridget-delivery168/tests/t045-budget-service-config-r1.log ; SHA-256 429d6d6d979099e130d4ad4ed9a0610763a901a2dca99fcfd37dbc6a811f024f.
+- Diff : /home/moi/.local/state/bridget-delivery168/tests/t045-budget-native-final.patch ; SHA-256 73987a8276b632dc1c14e4a8f9e3f7cbca7d9c2fda751f6fdc7088a1baca0c97.
+
+La contre-lecture statique verify_git_handoff est APPROVE selon la passation ROOT. Aucun autre Cargo, FULL, scanner V15 ou passage P4 n’est déduit. La FULL historique et ses limites restent inchangées.
+
+La première recette réelle source A a rendu un résultat distant sur host cartae au SHA 269de64e172f71f8856373fe8b09cb2d8642da52, mais decision.source=deterministic avec note caller_deadline. Elle ne valide donc pas la voie Laya. Après redémarrage privé, Task, canon, BLOB metadata et résultat restent stables : une Task, un reçu, une exécution. Le payload binaire de Task n’est pas byte-identique ; sa projection métier est stable. Le nombre réel d’appels HTTP n’a pas été observé. Ces faits sont transmis par ROOT, distincts du test contrôlé ci-dessus.
+
+T045 reste ouverte, état 51/56. Nouveau commit source B, paquets, activation et trois recettes réelles restent nécessaires avant release ; aucun SHA B ni succès futur n’est présumé.

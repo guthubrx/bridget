@@ -73,3 +73,14 @@ Reçu terminal r2 : /home/moi/.local/state/bridget-delivery168/tests/t036-replay
 ### Copie publique de présentation
 
 Au contrôle d’index avant commit, une espace finale dans scoring.md ligne671 a été retirée de la seule copie publique Markdown. Aucun résultat, finding, score ou objet JSON n’est modifié. L’archive privée canonique reste byte-identique ; sa copie originale de scoring.md a le SHA256 0114879cb61a55c24bca6e37abaa4b6cc4c15854492c48f58203c85e9b618d60. Copie publique sans espace finale : 496fed0ce6eb52717a89715e7fb266663d237afe070698b89bddc59c48809cd1. Ce changement de présentation n’est ni un recalcul ni un nouvel audit.
+
+
+## Annexe T045B — délai service configurable après activation A
+
+La recette privée sur source A a utilisé le repli deterministic avec caller_deadline ; elle ne prouve pas une décision Laya valide. Le correctif produit retire le plafond fixe de 2 s et respecte service_timeout_ms, de 1 à 30 s, dans le budget global restant ; défaut 2 s inchangé. Le diff produit d’une ligne est relu APPROVE par verify_git_handoff selon ROOT ; aucun point bloquant n’est signalé dans ce delta.
+
+Le test exact existant daemon::native_delegation::tests::spec168_service_valide_choisit_la_combinaison_complete passe : RC 0, 1 PASS / 0 FAIL, avec les trois sous-cas service 4 500/global 5 000/POST 2 200 ms, défaut 2 000 ms et santé 600+POST 650 ms dans un global 1 000 ms. Source finale SHA-256 5668719253fb44f96ccf28a878c952da559c0a3349f73adf0ebf56462c90da7c, stable à l’exécution.
+
+Preuve : /home/moi/.local/state/bridget-delivery168/tests/t045-budget-service-config-r1.json ; SHA-256 738ac4d040cd13d59d5273821b229f323aa5da2cb406a0de991b0308f6f43149. Détails et log : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/tests168.md, complément T045B.
+
+L’audit V15 pass A sur son manifeste source A est conservé. Ce delta ciblé ne constitue ni un nouveau scan V15, ni un score global recalculé, ni une nouvelle FULL ou passe P4. Les deux LOW TLS et l’INFO restent ouverts. T045 reste ouverte ; les nouveaux paquets, l’activation et les trois recettes devront viser le futur commit B.
