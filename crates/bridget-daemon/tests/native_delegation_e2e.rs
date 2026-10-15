@@ -2457,3 +2457,73 @@ fn native148_sans_t3_retry_reponse_correllee_annulation_et_reprise_durable() {
     );
     parent.send(WrapperToDaemon::Unregister);
 }
+
+#[test]
+fn spec168_catalogue_daemon_reel_12_128_sans_agent_t3_task_ni_modele() {
+    let mut fixture = Fixture::new();
+    for count in [12, 128] {
+        fixture.stop();
+        let path = fixture.root.join("state/agents.json");
+        let mut registry: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let models = (0..count)
+            .map(|index| format!("glm-real-{index:03}"))
+            .collect::<Vec<_>>();
+        registry["agents"]["fake-glm"]["capabilities"]["models"] = Value::Object(
+            models
+                .iter()
+                .map(|model| (model.clone(), json!({"efforts":[]})))
+                .collect(),
+        );
+        registry["routing_policy"] = json!({"version":2,"revision":1,"enabled":true,
+            "connections":[{"connection_id":"native-existing","machine_id":"local","engine":"claude",
+                "agent_type":"fake-glm","enabled":true}],
+            "model_catalog":{"native-existing":models.iter().map(|model|json!({
+                "model":model,"supported_efforts":[],"default_effort":null,
+                "provenance":"operator_observation"})).collect::<Vec<_>>()},
+            "machine_policies":{"local":{"enabled":true}}});
+        support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+        fixture.start();
+        let output = support::isolated_command(&fixture.root)
+            .args(["delegate", "--catalogue", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let catalogue: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(catalogue["version"], 1);
+        assert_eq!(catalogue["options"].as_array().unwrap().len(), count);
+        assert_eq!(catalogue["options"][0]["default_effort"], Value::Null);
+        assert_eq!(catalogue["options"][0]["connection_id"], "native-existing");
+        let database = rusqlite::Connection::open_with_flags(
+            fixture.root.join("state/bridget.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let tasks: i64 = database
+            .query_row("SELECT count(*) FROM native_delegations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let receipts: i64 = database
+            .query_row("SELECT count(*) FROM auto_admission_receipts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!((tasks, receipts), (0, 0));
+        assert_eq!(
+            fs::metadata(fixture.root.join("evidence.jsonl"))
+                .unwrap()
+                .len(),
+            0,
+            "aucun fournisseur fermé ou réel n'a été lancé"
+        );
+        let filtered = support::isolated_command(&fixture.root)
+            .args(["delegate", "--catalogue", "--machine", "absent", "--json"])
+            .output()
+            .unwrap();
+        assert!(filtered.status.success());
+        let filtered: Value = serde_json::from_slice(&filtered.stdout).unwrap();
+        assert_eq!(filtered["options"], json!([]));
+        drop(database);
+    }
+    fixture.stop();
+}

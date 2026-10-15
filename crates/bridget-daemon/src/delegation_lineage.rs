@@ -2,7 +2,7 @@
 use super::{DelegationStore, RoundRecord, Task};
 use bridget_transport::protocol::{
     HUMAN_LINEAGE_MAX_SEQ, HumanLineageError as E, LineageDecisionModeV3, LineageDecisionV3,
-    LineagePlacementV2, NativeDelegationRequest,
+    LineageDecisionV4, LineagePlacementV2, NativeDelegationRequest,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
@@ -174,19 +174,25 @@ impl DelegationStore {
     /// Lecture de projection seulement : l'absence de reçu163 reste `null`
     /// pour une Task historique. Les données qui dépassent le contrat fermé
     /// rendent le magasin indisponible au lieu d'inventer une décision.
-    fn decision_summary_in(
+    fn decision_summary_v3_in(
         tx: &Transaction<'_>,
         task_id: &str,
     ) -> Result<Option<LineageDecisionV3>, E> {
-        let row: Option<(String, String, Option<String>)> = tx
+        let row: Option<(u8, String, String, Option<String>)> = tx
             .query_row(
-                "SELECT mode,candidate_id,reason FROM auto_admission_receipts WHERE task_id=?1 AND mode IS NOT NULL AND candidate_id IS NOT NULL LIMIT 1",
+                "SELECT metadata_version,mode,candidate_id,reason FROM auto_admission_receipts WHERE task_id=?1 AND mode IS NOT NULL AND candidate_id IS NOT NULL LIMIT 1",
                 [task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()
             .map_err(|_| E::StoreUnavailable)?;
-        row.map(|(mode, candidate_id, reason)| {
+        row.map(|(metadata_version, mode, candidate_id, reason)| {
+            if metadata_version == 2 {
+                return Ok(None);
+            }
+            if metadata_version != 1 {
+                return Err(E::StoreUnavailable);
+            }
             let mode = match mode.as_str() {
                 "explicit" => LineageDecisionModeV3::Explicit,
                 "automatic" => LineageDecisionModeV3::Automatic,
@@ -200,13 +206,44 @@ impl DelegationStore {
             {
                 return Err(E::StoreUnavailable);
             }
-            Ok(LineageDecisionV3 {
+            Ok(Some(LineageDecisionV3 {
                 mode,
                 candidate_id,
                 reason,
-            })
+            }))
         })
         .transpose()
+        .map(Option::flatten)
+    }
+
+    fn decision_summary_v4_in(
+        tx: &Transaction<'_>,
+        task_id: &str,
+    ) -> Result<Option<LineageDecisionV4>, E> {
+        let row: Option<(u8, Vec<u8>)> = tx
+            .query_row(
+                "SELECT metadata_version,metadata FROM auto_admission_receipts WHERE task_id=?1 LIMIT 1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|_| E::StoreUnavailable)?;
+        let Some((metadata_version, metadata)) = row else {
+            return Ok(None);
+        };
+        if metadata_version == 1 {
+            return Ok(None);
+        }
+        if metadata_version != 2 {
+            return Err(E::StoreUnavailable);
+        }
+        let metadata: Value = serde_json::from_slice(&metadata).map_err(|_| E::StoreUnavailable)?;
+        let decision = metadata.get("decision").ok_or(E::StoreUnavailable)?;
+        // La forme publique fermée valide aussi facts et sa borne, comme lors
+        // de la sérialisation du choix. Aucune mesure ni horloge fraîche ici ;
+        // l'absence historique de facts reste une absence, sans reconstruction.
+        serde_json::from_value::<Option<LineageDecisionV4>>(decision.clone())
+            .map_err(|_| E::StoreUnavailable)
     }
 
     pub(super) fn initialize_lineage(&self) -> rusqlite::Result<()> {
@@ -792,7 +829,7 @@ impl DelegationStore {
         version: u16,
         mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
     ) -> Result<Value, E> {
-        if !matches!(version, 1 | 2 | 3) {
+        if !matches!(version, 1 | 2 | 3 | 4) {
             return Err(E::UnsupportedVersion);
         }
         if !(1..=100).contains(&limit) {
@@ -846,10 +883,13 @@ impl DelegationStore {
                 entry["placement"] =
                     serde_json::to_value(placement).map_err(|_| E::StoreUnavailable)?;
             }
-            if version == 3 {
-                entry["decision"] =
-                    serde_json::to_value(Self::decision_summary_in(&tx, &task.task_id)?)
-                        .map_err(|_| E::StoreUnavailable)?;
+            if version >= 3 {
+                entry["decision"] = if version == 3 {
+                    serde_json::to_value(Self::decision_summary_v3_in(&tx, &task.task_id)?)
+                } else {
+                    serde_json::to_value(Self::decision_summary_v4_in(&tx, &task.task_id)?)
+                }
+                .map_err(|_| E::StoreUnavailable)?;
             }
             let size = serde_json::to_vec(&entry)
                 .map_err(|_| E::StoreUnavailable)?
@@ -906,7 +946,7 @@ impl DelegationStore {
         version: u16,
         mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
     ) -> Result<Value, E> {
-        if !matches!(version, 1 | 2 | 3) {
+        if !matches!(version, 1 | 2 | 3 | 4) {
             return Err(E::UnsupportedVersion);
         }
         if !(1..=16384).contains(&limit) {
@@ -953,10 +993,13 @@ impl DelegationStore {
             entry["placement"] =
                 serde_json::to_value(placement).map_err(|_| E::StoreUnavailable)?;
         }
-        if version == 3 {
-            entry["decision"] =
-                serde_json::to_value(Self::decision_summary_in(&tx, &task.task_id)?)
-                    .map_err(|_| E::StoreUnavailable)?;
+        if version >= 3 {
+            entry["decision"] = if version == 3 {
+                serde_json::to_value(Self::decision_summary_v3_in(&tx, &task.task_id)?)
+            } else {
+                serde_json::to_value(Self::decision_summary_v4_in(&tx, &task.task_id)?)
+            }
+            .map_err(|_| E::StoreUnavailable)?;
         }
         let response = json!({"version":version,"status":"ok","generation":meta.generation,"seq":meta.seq,"root_owner_agent_id":root,"task":entry,"result":result.map(|s|&s[start..end]),"result_offset":offset,"result_next_offset":if end<total {Some(end)}else{None},"result_total_bytes":total});
         tx.commit().map_err(|_| E::StoreUnavailable)?;

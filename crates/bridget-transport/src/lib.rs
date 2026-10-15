@@ -26,7 +26,10 @@ pub use acp::{AcpEvent, AcpEventQueue, AcpOptions, AcpTransport, TurnState};
 pub use claude_provider_session::{
     CLAUDE_RESUME_FAILED_PREFIX, ProviderSessionStore, ResumeFailure, ResumeFailureKind,
 };
-pub use claude_stream_json::{ClaudeStreamJsonOptions, ClaudeStreamJsonTransport};
+pub use claude_stream_json::{
+    ClaudeIsolatedDecisionError, ClaudeIsolatedDecisionOptions, ClaudeIsolatedDecisionResult,
+    ClaudeStreamJsonOptions, ClaudeStreamJsonTransport, run_isolated_claude_decision,
+};
 pub use codex_app_server::{CodexAppServerOptions, CodexAppServerTransport};
 pub use managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,

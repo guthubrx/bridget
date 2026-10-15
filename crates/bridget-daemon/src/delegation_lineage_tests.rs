@@ -2975,6 +2975,7 @@ fn spec163_lineage_v3_projette_seulement_le_resume_ferme_de_decision() {
             request_id: "auto-163".into(),
             canonical: br#"{"operation":"auto_delegate"}"#.to_vec(),
             metadata: br#"{"policy_revision":7}"#.to_vec(),
+            metadata_version: 1,
             state: AutoAdmissionState::Admitted,
             coordinator_epoch: 1,
             revision: 3,
@@ -3014,6 +3015,9 @@ fn spec163_lineage_v3_projette_seulement_le_resume_ferme_de_decision() {
     let v3 = store
         .lineage_page_versioned("humain", 100, None, 3, facts)
         .unwrap();
+    let v4 = store
+        .lineage_page_versioned("humain", 100, None, 4, facts)
+        .unwrap();
     assert!(v1["tasks"][0].get("decision").is_none());
     assert!(v1["tasks"][0].get("placement").is_none());
     assert!(v2["tasks"][0].get("decision").is_none());
@@ -3029,6 +3033,10 @@ fn spec163_lineage_v3_projette_seulement_le_resume_ferme_de_decision() {
         v3["tasks"][0]["decision"],
         json!({"mode":"automatic","candidate_id":"c01","reason":"profil adapté"})
     );
+    assert!(
+        v4["tasks"][0]["decision"].is_null(),
+        "c01 n'est jamais promu en c001"
+    );
     assert!(!v3.to_string().contains("decision.internal"));
 
     let show = store
@@ -3036,6 +3044,350 @@ fn spec163_lineage_v3_projette_seulement_le_resume_ferme_de_decision() {
         .unwrap();
     assert_eq!(show["task"]["decision"], v3["tasks"][0]["decision"]);
     assert_eq!(show["task"]["placement"], v3["tasks"][0]["placement"]);
+    drop(store);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn spec168_lineage_v4_projette_seulement_decision_figee_et_v3_reste_null() {
+    use crate::delegation::{AutoAdmissionMode, AutoAdmissionReceipt, AutoAdmissionState};
+    use bridget_transport::protocol::{RemotePlacement, WorkerContactState};
+
+    let dir = temp_dir("decision168");
+    let store = open_store(&dir.join("store.sqlite"));
+    let task_id = "16800000-0000-4000-8000-000000000001";
+    let mut task = task(
+        task_id,
+        "humain",
+        "inst",
+        "inst",
+        "enfant-168",
+        None,
+        "queued",
+        100,
+    );
+    task.remote_placement = Some(RemotePlacement {
+        machine_id: "cartae".into(),
+        worker_id: "worker-cartae".into(),
+        provisioning_revision: 1,
+        project_id: "projet".into(),
+        mapping_revision: 1,
+        origin_host: "mac".into(),
+        origin_cwd: "/source".into(),
+        source_root_identity: "fixture".into(),
+        relative_cwd: String::new(),
+        execution_cwd: "/remote".into(),
+        base_commit: None,
+        definition_digest: "definition".into(),
+        permission_digest: "permissions".into(),
+    });
+    store
+        .insert(&task, "delegate-168", b"delegate-168")
+        .unwrap();
+    let decision = json!({
+        "candidate_id":"c012", "connection_id":"codex-work", "machine_id":"cartae",
+        "engine":"codex", "model":"gpt-6.1-sol", "effort":"high",
+        "source":"decision_service", "reason":"capacité attestée"
+    });
+    store
+        .insert_auto_admission_receipt(&AutoAdmissionReceipt {
+            owner: "humain".into(),
+            request_id: "auto-168".into(),
+            canonical: br#"{"operation":"auto_delegate_v2"}"#.to_vec(),
+            metadata: serde_json::to_vec(&json!({
+                "decision_level":"decision_service", "decision":decision,
+                "policy":"private-not-projected", "host_facts":{"token":"forbidden"}
+            }))
+            .unwrap(),
+            metadata_version: 2,
+            state: AutoAdmissionState::Admitted,
+            coordinator_epoch: 1,
+            revision: 3,
+            policy_revision: 7,
+            policy_digest: "a".repeat(64),
+            candidate_id: Some("c012".into()),
+            delegate_canonical: Some(b"delegate-168".to_vec()),
+            mode: Some(AutoAdmissionMode::Automatic),
+            reason: Some("capacité attestée".into()),
+            task_id: Some(task_id.into()),
+            refusal_code: None,
+            created_at: 100,
+            updated_at: 101,
+        })
+        .unwrap();
+    let facts = |task: &Task| {
+        (
+            false,
+            task.remote_placement
+                .as_ref()
+                .map(|placement| LineagePlacementV2 {
+                    machine_id: placement.machine_id.clone(),
+                    display_name: None,
+                    worker_id: placement.worker_id.clone(),
+                    last_contact_at: None,
+                    contact_state: WorkerContactState::Unknown,
+                }),
+        )
+    };
+    let v3 = store
+        .lineage_page_versioned("humain", 1, None, 3, facts)
+        .unwrap();
+    assert!(
+        v3["tasks"][0]["decision"].is_null(),
+        "c001 ne passe jamais en v3"
+    );
+    let v4 = store
+        .lineage_page_versioned("humain", 1, None, 4, facts)
+        .unwrap();
+    assert_eq!(v4["version"], 4);
+    assert_eq!(v4["tasks"][0]["decision"]["candidate_id"], "c012");
+    assert_eq!(v4["tasks"][0]["decision"]["source"], "decision_service");
+    assert_eq!(v4["tasks"][0]["placement"], v3["tasks"][0]["placement"]);
+    assert!(!v4.to_string().contains("private-not-projected"));
+    assert!(!v4.to_string().contains("forbidden"));
+    let show = store
+        .lineage_show_versioned("humain", task_id, 0, 100, 4, facts)
+        .unwrap();
+    assert_eq!(show["task"]["decision"], v4["tasks"][0]["decision"]);
+    assert!(
+        v4["tasks"][0]["decision"].get("facts").is_none(),
+        "ancien reçu v4 lisible sans invention de faits"
+    );
+    // Les faits sont un semis du choix d'origine, pas des observations à la lecture.
+    for unknown in [false, true] {
+        let resources = if unknown {
+            json!({"observed_at":null,"age_secs":null,"fresh":false,
+                "cpu_percent":null,"available_memory_percent":null,
+                "normalized_load_percent":null,"compilation_slots":null})
+        } else {
+            json!({"observed_at":990,"age_secs":10,"fresh":true,
+                "cpu_percent":40,"available_memory_percent":50,
+                "normalized_load_percent":20,"compilation_slots":2})
+        };
+        let quota = if unknown {
+            json!({"observed_at":null,"age_secs":null,"used_percent":null,"resets_at":null})
+        } else {
+            json!({"observed_at":995,"age_secs":5,"used_percent":20,"resets_at":1200})
+        };
+        let terms = if unknown {
+            json!({"cpu":0,"memory":0,"load":0,"continuity":10,"compilation":8,
+                "quota_remaining":0,"quota_reset":0,"saturation_penalty":0,"total":18})
+        } else {
+            json!({"cpu":12,"memory":10,"load":16,"continuity":10,"compilation":8,
+                "quota_remaining":4,"quota_reset":3,"saturation_penalty":0,"total":63})
+        };
+        let frozen = json!({
+            "scored_at":1000,"resources":resources,"compilation_capacity":8,
+            "continuity":"pinned_base","quota":quota,"score_terms":terms
+        });
+        let historical = json!({
+            "candidate_id":"c012","connection_id":"codex-work","machine_id":"cartae",
+            "engine":"codex","model":"gpt-6.1-sol","effort":"high",
+            "source":"deterministic","facts":frozen
+        });
+        let metadata = serde_json::to_vec(&json!({
+            "decision_level":"decision_service","decision":historical,
+            "policy":"private-not-projected","host_facts":{"token":"forbidden"}
+        }))
+        .unwrap();
+        store
+            .test_connection()
+            .execute(
+                "UPDATE auto_admission_receipts SET metadata=?1 WHERE request_id='auto-168'",
+                [&metadata],
+            )
+            .unwrap();
+        for version in [1, 2, 3] {
+            let legacy = store
+                .lineage_page_versioned("humain", 1, None, version, facts)
+                .unwrap();
+            assert!(legacy["tasks"][0].get("facts").is_none());
+            assert!(
+                legacy["tasks"][0]["decision"].is_null(),
+                "la projection v{version} reste historique"
+            );
+        }
+        let listed = store
+            .lineage_page_versioned("humain", 1, None, 4, facts)
+            .unwrap();
+        assert_eq!(listed["tasks"][0]["decision"], historical);
+        assert!(
+            listed["tasks"][0]["decision"].get("reason").is_none(),
+            "le choix déterministe n'a pas besoin d'une raison fournisseur"
+        );
+        let later_contact = |task: &Task| {
+            let (_, mut placement) = facts(task);
+            placement.as_mut().unwrap().last_contact_at = Some(9000);
+            (false, placement)
+        };
+        let inspected = store
+            .lineage_show_versioned("humain", task_id, 0, 100, 4, later_contact)
+            .unwrap();
+        assert_eq!(
+            inspected["task"]["decision"], historical,
+            "un contact fraîchement lu ne change ni les valeurs ni leur âge historique"
+        );
+        assert_eq!(inspected["task"]["decision"]["facts"]["scored_at"], 1000);
+        assert_eq!(inspected["task"]["placement"]["last_contact_at"], 9000);
+        if unknown {
+            assert!(inspected["task"]["decision"]["facts"]["resources"]["cpu_percent"].is_null());
+            assert_eq!(
+                inspected["task"]["decision"]["facts"]["score_terms"]["cpu"],
+                0
+            );
+        }
+        assert!(!inspected.to_string().contains("private-not-projected"));
+        assert!(!inspected.to_string().contains("forbidden"));
+        let persisted: Vec<u8> = store
+            .test_connection()
+            .query_row(
+                "SELECT metadata FROM auto_admission_receipts WHERE request_id='auto-168'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            persisted, metadata,
+            "une consultation ne réécrit pas les faits figés"
+        );
+
+        let mut invalid = serde_json::from_slice::<Value>(&metadata).unwrap();
+        invalid["decision"]["facts"]["quota"]["credential"] = json!("forbidden");
+        store
+            .test_connection()
+            .execute(
+                "UPDATE auto_admission_receipts SET metadata=?1 WHERE request_id='auto-168'",
+                [serde_json::to_vec(&invalid).unwrap()],
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                store.lineage_show_versioned("humain", task_id, 0, 100, 4, facts),
+                Err(bridget_transport::protocol::HumanLineageError::StoreUnavailable)
+            ),
+            "une extension privée inconnue n'est jamais projetée"
+        );
+        assert!(
+            store
+                .lineage_page_versioned("humain", 1, None, 3, facts)
+                .unwrap()["tasks"][0]["decision"]
+                .is_null(),
+            "v3 ne lit pas les détails v4"
+        );
+        store
+            .test_connection()
+            .execute(
+                "UPDATE auto_admission_receipts SET metadata=?1 WHERE request_id='auto-168'",
+                [&metadata],
+            )
+            .unwrap();
+    }
+    // Trois états fermés pour la seule connexion du choix ; les crédits d'une
+    // autre connexion du snapshot ne doivent jamais combler ses inconnus.
+    for credits in ["usable", "unusable", "unknown"] {
+        let opposite = if credits == "usable" {
+            "unusable"
+        } else {
+            "usable"
+        };
+        let frozen = json!({
+            "scored_at":1000,
+            "resources":{"observed_at":1,"age_secs":999,"fresh":false,
+                "cpu_percent":null,"available_memory_percent":null,
+                "normalized_load_percent":null,"compilation_slots":2},
+            "compilation_capacity":8,"continuity":"pinned_base",
+            "quota":{"observed_at":995,"age_secs":5,"used_percent":100,
+                "resets_at":1200,"credits":credits},
+            "score_terms":{"cpu":0,"memory":0,"load":0,"continuity":10,
+                "compilation":8,"quota_remaining":0,"quota_reset":3,
+                "saturation_penalty":0,"total":21}
+        });
+        let historical = json!({
+            "candidate_id":"c012","connection_id":"codex-work","machine_id":"cartae",
+            "engine":"codex","model":"gpt-6.1-sol","effort":"high",
+            "source":"deterministic","facts":frozen
+        });
+        let metadata = serde_json::to_vec(&json!({
+            "decision_level":"decision_service","decision":historical,
+            "connections":[{"id":"other-connection","credits":opposite}],
+            "policy":"private-not-projected","host_facts":{"token":"forbidden"}
+        }))
+        .unwrap();
+        store
+            .test_connection()
+            .execute(
+                "UPDATE auto_admission_receipts SET metadata=?1 WHERE request_id='auto-168'",
+                [&metadata],
+            )
+            .unwrap();
+        let first = store
+            .lineage_show_versioned("humain", task_id, 0, 100, 4, facts)
+            .unwrap();
+        let replay = store
+            .lineage_show_versioned("humain", task_id, 0, 100, 4, facts)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_vec(&first["task"]["decision"]).unwrap(),
+            serde_json::to_vec(&replay["task"]["decision"]).unwrap(),
+            "relecture historique byte-identique, aucune nouvelle interprétation des crédits"
+        );
+        let decision = &replay["task"]["decision"];
+        assert_eq!(decision, &historical);
+        assert_eq!(decision["connection_id"], "codex-work");
+        assert_eq!(decision["facts"]["quota"]["used_percent"], 100);
+        assert_eq!(decision["facts"]["quota"]["credits"], credits);
+        assert!(decision["facts"]["resources"]["cpu_percent"].is_null());
+        assert!(decision["facts"]["resources"]["available_memory_percent"].is_null());
+        assert!(decision["facts"]["resources"]["normalized_load_percent"].is_null());
+        assert_eq!(decision["facts"]["resources"]["age_secs"], 999);
+        assert_eq!(decision["facts"]["compilation_capacity"], 8);
+        assert_eq!(decision["facts"]["score_terms"]["compilation"], 8);
+        assert!(!replay.to_string().contains("other-connection"));
+        assert!(!replay.to_string().contains("private-not-projected"));
+        assert!(!replay.to_string().contains("forbidden"));
+        let persisted: Vec<u8> = store
+            .test_connection()
+            .query_row(
+                "SELECT metadata FROM auto_admission_receipts WHERE request_id='auto-168'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted, metadata);
+        for version in [1, 2, 3] {
+            let legacy = store
+                .lineage_page_versioned("humain", 1, None, version, facts)
+                .unwrap();
+            assert!(legacy["tasks"][0]["decision"].is_null());
+        }
+        let mut invalid = serde_json::from_slice::<Value>(&metadata).unwrap();
+        invalid["decision"]["facts"]["resources"]["compilation_slots"] = json!(11);
+        store
+            .test_connection()
+            .execute(
+                "UPDATE auto_admission_receipts SET metadata=?1 WHERE request_id='auto-168'",
+                [serde_json::to_vec(&invalid).unwrap()],
+            )
+            .unwrap();
+        assert!(
+            matches!(
+                store.lineage_show_versioned("humain", task_id, 0, 100, 4, facts),
+                Err(bridget_transport::protocol::HumanLineageError::StoreUnavailable)
+            ),
+            "la projection historique réemploie le refus compilation_slots=11"
+        );
+        store
+            .test_connection()
+            .execute(
+                "UPDATE auto_admission_receipts SET metadata=?1 WHERE request_id='auto-168'",
+                [&metadata],
+            )
+            .unwrap();
+    }
+    assert!(matches!(
+        store.lineage_page_versioned("humain", 1, None, 5, facts),
+        Err(bridget_transport::protocol::HumanLineageError::UnsupportedVersion)
+    ));
     drop(store);
     std::fs::remove_dir_all(dir).unwrap();
 }

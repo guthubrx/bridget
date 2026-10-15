@@ -109,7 +109,7 @@ fn send_frame(stream: &mut UnixStream, frame: &impl serde::Serialize) -> io::Res
     stream.write_all(b"\n")
 }
 
-type WorkerConnection = (BufReader<UnixStream>, WorkerHello, bool);
+type WorkerConnection = (BufReader<UnixStream>, WorkerHello, bool, bool);
 
 // Relais privé de cette seule recette. Les connexions déjà classées passent
 // ensuite octet pour octet ; aucune réécriture des faits de permission natifs.
@@ -123,22 +123,26 @@ struct Relay {
 
 impl Relay {
     fn new(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, false)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, false, false)
     }
     fn with_ready_delay(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
-        Self::with_worker_capability(front, daemon, ready_delay, false)
+        Self::with_worker_capability(front, daemon, ready_delay, false, false)
     }
     /// Force l'annonce de capacité sur ce relais de recette, sans modifier le
     /// daemon réel ni son build. Le worker doit négocier l'enveloppe distincte avant
     /// de recevoir le probe.
     fn with_candidate_probe(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, false)
+    }
+    fn with_candidate_probe_v2(front: &Path, daemon: PathBuf) -> Self {
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true)
     }
     fn with_worker_capability(
         front: &Path,
         daemon: PathBuf,
         ready_delay: Duration,
         candidate_probe_feature: bool,
+        candidate_probe_v2_feature: bool,
     ) -> Self {
         let listener = UnixListener::bind(front).unwrap();
         fs::set_permissions(front, fs::Permissions::from_mode(0o600)).unwrap();
@@ -211,19 +215,16 @@ impl Relay {
                                     backend_reader.read_line(&mut report)?;
                                     eprintln!("relais162 identity response bytes={}", report.len());
                                     stage = "write identity client";
-                                    if candidate_probe_feature {
-                                        let mut identity = serde_json::from_str::<DaemonToWrapper>(&report)
-                                            .map_err(io::Error::other)?;
-                                        let DaemonToWrapper::DaemonIdentityReport { features, .. } = &mut identity else {
-                                            return Err(io::Error::other("identité maître inattendue"));
-                                        };
-                                        if !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
-                                            features.push("worker_candidate_probe_v1".into());
-                                        }
-                                        send_frame(reader.get_mut(), &identity)?;
-                                    } else {
-                                        reader.get_mut().write_all(report.as_bytes())?;
+                                    let mut identity = serde_json::from_str::<DaemonToWrapper>(&report).map_err(io::Error::other)?;
+                                    let DaemonToWrapper::DaemonIdentityReport { features, .. } = &mut identity else {
+                                        return Err(io::Error::other("identité maître inattendue"));
+                                    };
+                                    features.retain(|feature| feature != "worker_candidate_probe_v2");
+                                    if candidate_probe_feature && !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
+                                        features.push("worker_candidate_probe_v1".into());
                                     }
+                                    if candidate_probe_v2_feature { features.push("worker_candidate_probe_v2".into()); }
+                                    send_frame(reader.get_mut(), &identity)?;
                                     first.clear();
                                     stage = "read second client frame";
                                     if reader.read_line(&mut first)? == 0 {
@@ -239,20 +240,21 @@ impl Relay {
                                     );
                                 }
                                 let worker = match serde_json::from_str::<WrapperToDaemon>(&first) {
-                                    Ok(WrapperToDaemon::WorkerHello { hello }) => Some((hello, false)),
+                                    Ok(WrapperToDaemon::WorkerHello { hello }) => Some((hello, false, false)),
                                     Ok(WrapperToDaemon::WorkerHelloWithCapabilities { hello })
-                                        if hello.capabilities == vec![WorkerCapability::CandidateProbeV1] =>
+                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2)) =>
                                     {
-                                        Some((hello.hello, true))
+                                        Some((hello.hello, hello.capabilities.contains(&WorkerCapability::CandidateProbeV1),
+                                            hello.capabilities.contains(&WorkerCapability::CandidateProbeV2)))
                                     }
                                     _ => None,
                                 };
                                 let worker_connection = worker.is_some();
-                                if let Some((hello, candidate_probe)) = worker
+                                if let Some((hello, candidate_probe, candidate_probe_v2)) = worker
                                     && ready_delay.is_zero()
                                 {
                                     sender
-                                        .send((reader, hello, candidate_probe))
+                                        .send((reader, hello, candidate_probe, candidate_probe_v2))
                                         .map_err(|_| io::Error::other("maître de recette fermé"))?;
                                     return Ok(());
                                 }
@@ -323,7 +325,7 @@ impl Relay {
     }
 
     fn connect(&self) -> Control {
-        let (mut reader, hello, candidate_probe) = self
+        let (mut reader, hello, candidate_probe, candidate_probe_v2) = self
             .workers
             .recv_timeout(Duration::from_secs(12))
             .expect("WorkerHello réel absent");
@@ -336,11 +338,17 @@ impl Relay {
             identity: identity(),
             connection_epoch: epoch.clone(),
         };
-        let response = if candidate_probe {
+        let response = if candidate_probe || candidate_probe_v2 {
             DaemonToWrapper::WorkerAcceptedWithCapabilities {
                 accepted: WorkerAcceptedWithCapabilities {
                     accepted,
-                    capabilities: vec![WorkerCapability::CandidateProbeV1],
+                    capabilities: [
+                        (candidate_probe, WorkerCapability::CandidateProbeV1),
+                        (candidate_probe_v2, WorkerCapability::CandidateProbeV2),
+                    ]
+                    .into_iter()
+                    .filter_map(|(supported, capability)| supported.then_some(capability))
+                    .collect(),
                 },
             }
         } else {
@@ -351,6 +359,7 @@ impl Relay {
             reader,
             epoch,
             candidate_probe,
+            candidate_probe_v2,
         }
     }
 }
@@ -371,6 +380,7 @@ struct Control {
     reader: BufReader<UnixStream>,
     epoch: String,
     candidate_probe: bool,
+    candidate_probe_v2: bool,
 }
 impl Control {
     fn request(
@@ -460,6 +470,73 @@ impl Control {
                     return result;
                 }
                 other => panic!("trame probe163 inattendue: {other:?}"),
+            }
+        }
+    }
+    fn candidate_probe_v2(&mut self, probe: CandidateProbeV2) -> CandidateProbeV2Result {
+        assert!(
+            self.candidate_probe_v2,
+            "capacité168 distincte non négociée"
+        );
+        assert_eq!(probe.connection_epoch, self.epoch);
+        probe.validate_shape().unwrap();
+        send_frame(
+            self.reader.get_mut(),
+            &DaemonToWrapper::CandidateProbeV2 {
+                probe: probe.clone(),
+            },
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(45);
+        loop {
+            assert!(Instant::now() < deadline, "résultat168 absent");
+            self.reader
+                .get_mut()
+                .set_read_timeout(Some(deadline.saturating_duration_since(Instant::now())))
+                .unwrap();
+            let mut line = String::new();
+            assert!(
+                self.reader.read_line(&mut line).unwrap() > 0,
+                "worker fermé pendant probe168"
+            );
+            match serde_json::from_str::<WrapperToDaemon>(&line).unwrap() {
+                WrapperToDaemon::Heartbeat => {}
+                WrapperToDaemon::CandidateProbeResultV2 { result } => {
+                    result.validate_shape().unwrap();
+                    assert_eq!(result.correlation_id, probe.correlation_id);
+                    assert_eq!(result.connection_epoch, self.epoch);
+                    assert_eq!(result.worker, identity());
+                    assert_eq!(result.admission_id, probe.admission_id);
+                    assert_eq!(result.policy_revision, probe.policy_revision);
+                    return result;
+                }
+                other => panic!("trame168 inattendue:{other:?}"),
+            }
+        }
+    }
+
+    fn expect_closed_without_result(&mut self) {
+        self.reader
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        loop {
+            let mut line = String::new();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => assert!(matches!(
+                    serde_json::from_str::<WrapperToDaemon>(&line).unwrap(),
+                    WrapperToDaemon::Heartbeat
+                )),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                    ) =>
+                {
+                    break;
+                }
+                other => panic!("ancien lien devait fermer sans résultat:{other:?}"),
             }
         }
     }
@@ -591,7 +668,13 @@ impl RemoteFixture {
     fn new_with_candidate_probe() -> Self {
         Self::with_candidate_probe(true)
     }
+    fn new_with_candidate_probe_v2() -> Self {
+        Self::with_probe_version(2)
+    }
     fn with_candidate_probe(candidate_probe: bool) -> Self {
+        Self::with_probe_version(if candidate_probe { 1 } else { 0 })
+    }
+    fn with_probe_version(probe_version: u8) -> Self {
         let fixture = Fixture::new_with_provider(60, false, Some(PROVIDER), false);
         let root = &fixture.root;
         // Épingler uniquement Git depuis le runner, sans hériter tout son PATH.
@@ -669,7 +752,9 @@ impl RemoteFixture {
         }});
         support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
         let front = root.join("state/worker.sock");
-        let relay = if candidate_probe {
+        let relay = if probe_version == 2 {
+            Relay::with_candidate_probe_v2(&front, support::socket(root))
+        } else if probe_version == 1 {
             Relay::with_candidate_probe(&front, support::socket(root))
         } else {
             Relay::new(&front, support::socket(root))
@@ -696,6 +781,14 @@ impl RemoteFixture {
             support::isolated_command(&self.fixture.root)
                 .arg("daemon")
                 .env("BRIDGET_FLEET_QUOTA", "1")
+                // Même Git épinglé que le worker pour le préflight Worktree du maître.
+                .env(
+                    "PATH",
+                    format!(
+                        "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+                        self.fixture.root.join("bin").display()
+                    ),
+                )
                 .env("TMPDIR", self.fixture.root.join("tmp"))
                 .env("RUST_LOG", "info")
                 .stdout(Stdio::null())
@@ -1693,7 +1786,8 @@ fn remote162_e2e_cancel_naissance_divergente_preserve_processus_puis_arret_attes
 
 #[test]
 fn remote162_e2e_delegate_maitre_reel_resultat_unique_cwd_et_modele() {
-    for case in ["nominal", "startup-failed", "late-ready"] {
+    // Le cas168 passe le premier pour que son RED ne rejoue pas les trois recettes162.
+    for case in ["worktree168", "nominal", "startup-failed", "late-ready"] {
         real_master_case(case);
     }
 }
@@ -1714,6 +1808,11 @@ fn real_master_case(case: &str) {
     f.relay.take();
     fs::remove_file(&f.front).unwrap();
     f.front = socket.clone();
+    let worktree_base = if case == "worktree168" {
+        Some(fixture168_routes(&f))
+    } else {
+        None
+    };
     let origin = f.fixture.root.join("origin-project");
     support::private_dir(&origin).unwrap();
     for args in [
@@ -1735,10 +1834,31 @@ fn real_master_case(case: &str) {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+    if let Some((base, head)) = &worktree_base {
+        // S existe sur les deux dépôts, mais seul le checkout distant reste à T.
+        // Le transport ne doit exiger ni fetch ni changement de HEAD sur la cible.
+        let project = f.fixture.root.join("project");
+        git168(
+            &origin,
+            &["fetch", "--quiet", project.to_str().unwrap(), base],
+        );
+        git168(&origin, &["checkout", "--quiet", "--detach", base]);
+        assert_ne!(base, head);
+        assert_eq!(git168(&origin, &["rev-parse", "HEAD^{commit}"]), *base);
+        assert_eq!(git168(&project, &["rev-parse", "HEAD^{commit}"]), *head);
+        assert_eq!(git168(&project, &["rev-parse", "--verify", base]), *base);
+    }
     let path = f.fixture.root.join("state/agents.json");
     let mut registry: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     registry["machines"]["cartae162"]["mappings"]["project162"]["source_host"] = json!(host);
     registry["machines"]["cartae162"]["mappings"]["project162"]["source_root"] = json!(origin);
+    if worktree_base.is_some() {
+        // La politique du worker ne remplace pas celle du coordinateur local.
+        // Même précondition que routing168_fixture, sans décideur externe.
+        registry["routing_policy"]["machine_policies"]["local"] = json!({
+            "enabled":true, "decision_timeout_ms":10000, "service_timeout_ms":2000
+        });
+    }
     support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
     f.start_master_with_one_slot();
     if case == "late-ready" {
@@ -1809,6 +1929,27 @@ fn real_master_case(case: &str) {
     *project_id = Some("project162".into());
     *agent_type = "fake-codex".into();
     *model = "gpt-5.6-terra".into();
+    if let Some((base, _)) = &worktree_base {
+        request = NativeDelegationRequest::AutoDelegateV2(
+            serde_json::from_value(json!({
+                "request_id":"nominal168-worktree-unique",
+                "machine_id":"cartae162",
+                "project_id":"project162",
+                "engine":"codex",
+                "connection_id":"connection168",
+                "model":"gpt-5.6-terra",
+                "effort":"high",
+                "workload":"general",
+                "expected_base_commit":base,
+                "workspace":{"strategy":"worktree","base_ref":base},
+                "task":"NATIVE162_NOMINAL Worktree168 base épinglée",
+                "cwd":origin,
+                "posture":"discovery",
+                "reply_timeout":60
+            }))
+            .unwrap(),
+        );
+    }
     let deadline = Instant::now() + Duration::from_secs(12);
     let mut created = loop {
         let result = f.fixture.request(&mut parent, request.clone());
@@ -1820,10 +1961,15 @@ fn real_master_case(case: &str) {
         {
             break result;
         }
+        let waiting_for_worker = if worktree_base.is_some() {
+            "routing_candidate_unavailable"
+        } else {
+            "remote_prepare:WorkerUnavailable"
+        };
         assert_eq!(
             result["code"],
-            "remote_prepare:WorkerUnavailable",
-            "admission162: {result}; {}",
+            waiting_for_worker,
+            "admission réelle {case}: un Worktree dont S existe doit démarrer même si HEADworker=T≠S; réponse={result}; {}",
             f.fixture.root.display()
         );
         assert!(
@@ -1837,7 +1983,7 @@ fn real_master_case(case: &str) {
         thread::sleep(Duration::from_millis(25));
     };
     let mut failed_attempt = None;
-    if case != "nominal" {
+    if matches!(case, "startup-failed" | "late-ready") {
         let files: Vec<_> = fs::read_dir(f.worker_state.join("store/commands"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -1991,7 +2137,20 @@ fn real_master_case(case: &str) {
         .map(|number| number.parse().unwrap())
         .collect();
     assert_eq!(actual, vec![provider_pid, marker.pgid, provider_pid]);
-    assert_eq!(turn["cwd"], json!(f.fixture.root.join("project")));
+    let execution_cwd = PathBuf::from(turn["cwd"].as_str().unwrap());
+    if let Some((base, head)) = &worktree_base {
+        let project = f.fixture.root.join("project");
+        assert!(execution_cwd.starts_with(project.join(".worktrees")));
+        assert_ne!(execution_cwd, project);
+        assert_eq!(
+            git168(&execution_cwd, &["rev-parse", "HEAD^{commit}"]),
+            *base
+        );
+        assert_eq!(git168(&project, &["rev-parse", "HEAD^{commit}"]), *head);
+        assert_eq!(task["remote_placement"]["base_commit"], json!(base));
+    } else {
+        assert_eq!(execution_cwd, f.fixture.root.join("project"));
+    }
     assert_ne!(turn["cwd"], json!(origin));
     assert_eq!(turn["model"], "gpt-5.6-terra");
     assert_eq!(task["remote_placement"]["machine_id"], "cartae162");
@@ -2002,7 +2161,7 @@ fn real_master_case(case: &str) {
     let replay = f.fixture.request(&mut parent, request);
     assert_eq!(replay["task_id"], task_id);
     assert_eq!(replay["message_id"], mission);
-    support::private_write(&f.fixture.root.join("project/release162"), b"go").unwrap();
+    support::private_write(&execution_cwd.join("release162"), b"go").unwrap();
     f.fixture
         .status_until(&mut parent, &task_id, "result_available");
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -2026,8 +2185,46 @@ fn real_master_case(case: &str) {
         .filter(|message| message.in_reply_to.as_deref() == Some(mission.as_str()))
         .collect();
     assert_eq!(replies.len(), 1);
-    assert_eq!(replies[0].body, "fixture162-remote-answer");
     let saved = native_task152(&f.fixture, &task_id);
+    if let Some((base, _)) = &worktree_base {
+        let workspace = &saved["workspace"];
+        let branch = workspace["branch"].as_str().unwrap();
+        assert_eq!(workspace["path"], json!(execution_cwd));
+        assert_eq!(workspace["base_commit"], json!(base));
+        assert_eq!(workspace["head_commit"], json!(base));
+        assert_eq!(workspace["branch_commit"], json!(base));
+        assert_eq!(workspace["state"], "kept");
+        assert_eq!(workspace["head_on_branch"], true);
+        assert_eq!(workspace["commit_count"], 0);
+        assert_eq!(workspace["dirty"], true);
+        assert_eq!(
+            git168(&execution_cwd, &["branch", "--show-current"]),
+            branch
+        );
+        assert_eq!(
+            git168(&execution_cwd, &["rev-parse", "HEAD^{commit}"]),
+            *base
+        );
+        let range = format!("{base}..HEAD");
+        assert_eq!(
+            git168(&execution_cwd, &["rev-list", "--count", &range]),
+            "0"
+        );
+        assert_eq!(
+            git168(&execution_cwd, &["status", "--porcelain"]),
+            "?? release162"
+        );
+        // Corps fournisseur exact et unique note attestée, sans suffixe libre.
+        let expected = format!(
+            "fixture162-remote-answer\n\n[Bridget] espace de travail : branche {branch}, base {}, 0 commit(s), modifications non commitées : oui, tête sur la branche : oui, worktree conservé : {}",
+            &base[..7],
+            execution_cwd.display()
+        );
+        assert_eq!(replies[0].body, expected);
+        assert_eq!(saved["result"], json!(expected));
+    } else {
+        assert_eq!(replies[0].body, "fixture162-remote-answer");
+    }
     assert_eq!(saved["remote_result_receipts"].as_array().unwrap().len(), 1);
     assert_eq!(f.starts(&command.instance_id), 1);
     assert_eq!(
@@ -2048,4 +2245,717 @@ fn real_master_case(case: &str) {
         );
     }
     parent.send(WrapperToDaemon::Unregister);
+}
+
+#[test]
+fn spec168_probe_v2_128_ids_reste_distinct_du_wire163() {
+    let ids = (1..=128).map(|n| format!("c{n:03}")).collect::<Vec<_>>();
+    assert_eq!(ids.len(), 128);
+    assert!(ids.iter().all(|id| is_routing_candidate_id(id)));
+    assert!(!is_routing_candidate_id("c01"));
+    assert_eq!(MAX_CANDIDATE_PROBE_V2_CANDIDATES, 128);
+    assert_eq!(MAX_CANDIDATE_PROBE_CANDIDATES, 8);
+}
+
+// T016/T024/T032 : mêmes processus et répertoires fermés que162/163.
+fn git168(project: &Path, args: &[&str]) -> String {
+    let output = Command::new("/usr/bin/git")
+        .args(args)
+        .current_dir(project)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "Git de fixture168 {args:?}: {:?}",
+        output.stderr
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+fn fixture168_routes(f: &RemoteFixture) -> (String, String) {
+    let project = f.fixture.root.join("project");
+    support::private_write(&project.join(".gitignore"), b".worktrees/\n").unwrap();
+    git168(&project, &["add", ".gitignore"]);
+    git168(
+        &project,
+        &[
+            "-c",
+            "user.name=fixture162",
+            "-c",
+            "user.email=fixture162@invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "base168",
+        ],
+    );
+    let base = git168(&project, &["rev-parse", "HEAD^{commit}"]);
+    git168(&project, &["branch", "probe168-base", &base]);
+    support::private_write(&project.join("head168"), b"seconde base\n").unwrap();
+    git168(&project, &["add", "head168"]);
+    git168(
+        &project,
+        &[
+            "-c",
+            "user.name=fixture162",
+            "-c",
+            "user.email=fixture162@invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "head168",
+        ],
+    );
+    let head = git168(&project, &["rev-parse", "HEAD^{commit}"]);
+    let path = f.fixture.root.join("state/agents.json");
+    let mut registry: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let models = (1..=127)
+        .map(|n| {
+            if n == 1 {
+                "gpt-5.6-terra".to_owned()
+            } else {
+                format!("fixture168-model-{n}")
+            }
+        })
+        .collect::<Vec<_>>();
+    for model in &models {
+        registry["agents"]["fake-codex"]["capabilities"]["models"][model] =
+            json!({"efforts":["high"]});
+    }
+    let catalogue=models.iter().map(|model|json!({"model":model,"supported_efforts":["high"],"default_effort":"high","provenance":"declared"})).collect::<Vec<_>>();
+    registry["routing_policy"] = json!({"version":2,"revision":1,"enabled":true,
+        "connections":[
+            {"connection_id":"connection168","machine_id":"cartae162","engine":"codex","agent_type":"fake-codex","enabled":true},
+            {"connection_id":"connection168-other","machine_id":"cartae162","engine":"codex","agent_type":"fake-codex","enabled":true}
+        ],
+        "model_catalog":{"connection168":catalogue,"connection168-other":[{"model":"gpt-5.6-terra","supported_efforts":["high"],"default_effort":"high","provenance":"declared"}]},
+        "machine_policies":{"cartae162":{"enabled":true,"compilation_capacity":7}}
+    });
+    support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    (base, head)
+}
+
+fn probe168(f: &RemoteFixture, epoch: &str, base: &str, head: &str) -> CandidateProbeV2 {
+    CandidateProbeV2 {
+        version: WORKER_CANDIDATE_PROBE_V2_VERSION,
+        correlation_id: uuid::Uuid::new_v4().to_string(),
+        connection_epoch: epoch.into(),
+        worker: identity(),
+        admission_id: "admission168".into(),
+        policy_revision: 1,
+        parent: ProviderPermissions {
+            version: 1,
+            source: "native_wrapper".into(),
+            run_id: "probe168".into(),
+            provider_session_id: "session168".into(),
+            provider_instance_id: "parent168".into(),
+            revision: 1,
+            driver: "codex_app_server".into(),
+            cwd: ORIGIN.into(),
+            runtime_mode: "full-access".into(),
+            interaction_mode: "default".into(),
+            provider_policy: json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+        },
+        candidates: (1..=128)
+            .map(|n| CandidateProbeV2Candidate {
+                candidate_id: format!("c{n:03}"),
+                project_id: "project162".into(),
+                origin_host: "origin162".into(),
+                origin_cwd: ORIGIN.into(),
+                source_root: ORIGIN.into(),
+                remote_root: f
+                    .fixture
+                    .root
+                    .join("project")
+                    .to_string_lossy()
+                    .into_owned(),
+                source_root_identity: REPOSITORY.into(),
+                relative_cwd: ".".into(),
+                expected_base_commit: Some(if n == 1 { base } else { head }.into()),
+                engine: "codex".into(),
+                connection_id: if n == 128 {
+                    "connection168-other"
+                } else {
+                    "connection168"
+                }
+                .into(),
+                agent_type: "fake-codex".into(),
+                model: if n == 1 || n == 128 {
+                    "gpt-5.6-terra".into()
+                } else {
+                    format!("fixture168-model-{n}")
+                },
+                effort: Some("high".into()),
+                workload: AutoDelegateWorkload::General,
+                posture: Some(SpawnPosture::Discovery),
+                workspace: Some(if n == 1 {
+                    WorkspaceRequest::Worktree {
+                        base_ref: Some("probe168-base".into()),
+                        branch: None,
+                    }
+                } else {
+                    WorkspaceRequest::Shared {}
+                }),
+            })
+            .collect(),
+    }
+}
+
+fn prepare168(
+    probe: &CandidateProbeV2,
+    result: &CandidateProbeV2Result,
+    index: usize,
+) -> WorkerRequestOperation {
+    let candidate = &probe.candidates[index];
+    let CandidateProbeV2Verdict::Eligible {
+        mapping_revision,
+        definition_digest,
+        permission_digest,
+        ..
+    } = &result.verdicts[index]
+    else {
+        panic!("candidat168 non admissible")
+    };
+    WorkerRequestOperation::PrepareV2 {
+        inspect_only: false,
+        prepare: WorkerPrepare {
+            machine_id: identity().machine_id,
+            project_id: candidate.project_id.clone(),
+            provisioning_revision: 1,
+            mapping_revision: *mapping_revision,
+            origin_host: candidate.origin_host.clone(),
+            origin_cwd: candidate.origin_cwd.clone(),
+            source_root: candidate.source_root.clone(),
+            remote_root: candidate.remote_root.clone(),
+            source_root_identity: candidate.source_root_identity.clone(),
+            relative_cwd: candidate.relative_cwd.clone(),
+            base_commit: candidate.expected_base_commit.clone(),
+            agent_type: candidate.agent_type.clone(),
+            model: candidate.model.clone(),
+            effort: candidate.effort.clone(),
+            posture: candidate.posture,
+            parent: probe.parent.clone(),
+            workspace: candidate.workspace.clone(),
+        },
+        workload: candidate.workload,
+        connection_id: candidate.connection_id.clone(),
+        engine: candidate.engine.clone(),
+        expected_definition_digest: definition_digest.clone(),
+        expected_permission_digest: permission_digest.clone(),
+    }
+}
+
+fn assert_no_effects168(f: &RemoteFixture) {
+    for directory in ["commands", "slots", "workspaces", "markers"] {
+        assert_eq!(
+            fs::read_dir(f.worker_state.join("store").join(directory))
+                .unwrap()
+                .count(),
+            0,
+            "classement/refus168 a écrit {directory}"
+        );
+    }
+    assert!(!f.fixture.root.join("project/.worktrees").exists());
+    assert!(
+        f.fixture
+            .evidence()
+            .iter()
+            .all(|event| event["event"] != "started162")
+    );
+}
+
+#[test]
+fn worker168_probe128_connexion_revoquee_prepare_et_base_epinglee() {
+    let mut f = RemoteFixture::new_with_candidate_probe_v2();
+    let (base, head) = fixture168_routes(&f);
+    // Compter les vrais processus Git du worker, sans hook ni métrique produit.
+    // Le wrapper reste privé à cette fixture et exec le Git épinglé du runner.
+    let git_path = f.fixture.root.join("bin/git");
+    let real_git = git_path.canonicalize().unwrap();
+    let git_counter = f.fixture.root.join("git168-probe-calls");
+    support::private_write(&git_counter, []).unwrap();
+    let counter_program = format!(
+        "#!/usr/bin/python3\nimport os, sys\nwith open({}, \"a\") as target:\n    target.write(\"git\\n\")\nos.execv({}, [{}, *sys.argv[1:]])\n",
+        serde_json::to_string(&git_counter).unwrap(),
+        serde_json::to_string(&real_git).unwrap(),
+        serde_json::to_string(&real_git).unwrap(),
+    );
+    fs::remove_file(&git_path).unwrap();
+    support::private_write(&git_path, counter_program).unwrap();
+    fs::set_permissions(&git_path, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut control = f.start_worker();
+    assert!(control.candidate_probe_v2);
+    let probe = probe168(&f, &control.epoch, &base, &head);
+    let git_calls_before = fs::read_to_string(&git_counter).unwrap().lines().count();
+    let before = now();
+    let result = control.candidate_probe_v2(probe.clone());
+    let git_calls = fs::read_to_string(&git_counter).unwrap().lines().count() - git_calls_before;
+    // Deux faits Git distincts : Worktree(base=S), Shared(base=T). Les modèles
+    // et connexions doivent garder leurs contrôles individuels, sans répéter Git.
+    let distinct_git_tuples = 2;
+    let git_call_bound = distinct_git_tuples * 20;
+    eprintln!(
+        "probe168 Git réels={git_calls}, tuples={distinct_git_tuples}, borne={git_call_bound}"
+    );
+    assert!(
+        git_calls <= git_call_bound,
+        "Git ne doit pas croître avec les128candidats : {git_calls} appels pour {distinct_git_tuples} tuples"
+    );
+    assert_eq!(result.verdicts.len(), 128);
+    assert!(
+        result
+            .verdicts
+            .iter()
+            .all(|verdict| matches!(verdict, CandidateProbeV2Verdict::Eligible { .. }))
+    );
+    assert_eq!(
+        result.resources.cpu_percent, None,
+        "le premier relevé du lot reste inconnu malgré128options"
+    );
+    assert_eq!(result.resources.compilation_slots, Some(7));
+    assert!((before..=now()).contains(&result.resources.source_observed_at));
+    assert_no_effects168(&f);
+    let operation = prepare168(&probe, &result, 0);
+    let command = WorkerCommandIdentity {
+        command_id: "prepare168".into(),
+        task_id: uuid::Uuid::new_v4().to_string(),
+        instance_id: String::new(),
+        generation: 0,
+    };
+    let mut inspection = operation.clone();
+    let WorkerRequestOperation::PrepareV2 { inspect_only, .. } = &mut inspection else {
+        unreachable!()
+    };
+    *inspect_only = true;
+    let inspected = match control.request(&command, inspection.clone()) {
+        WorkerResponseOperation::Prepared { prepared } => prepared,
+        other => panic!("inspection Worktree S≠HEAD doit rester sans effets: {other:?}"),
+    };
+    assert_eq!(inspected.token, WORKER_INSPECTION_TOKEN);
+    assert!(inspected.workspace.is_none());
+    assert_eq!(
+        inspected.placement.base_commit.as_deref(),
+        Some(base.as_str())
+    );
+    assert_eq!(
+        inspected.placement.execution_cwd,
+        f.fixture
+            .root
+            .join("project")
+            .to_string_lossy()
+            .into_owned()
+    );
+    assert_no_effects168(&f);
+    let mut inspection_start_command = command.clone();
+    inspection_start_command.instance_id = uuid::Uuid::new_v4().to_string();
+    inspection_start_command.generation = 1;
+    let inspection_start = WorkerStart {
+        prepared_token: inspected.token.clone(),
+        child_id: uuid::Uuid::new_v4().to_string(),
+        mission_id: "never-inspect168".into(),
+        forward_child_requests: false,
+        placement: inspected.placement.clone(),
+        definition: inspected.definition.clone(),
+        child_policy: inspected.child_policy.clone(),
+        effective_posture: inspected.effective_posture,
+        deadline_at: now() + 30,
+    };
+    assert_eq!(
+        control.request(
+            &inspection_start_command,
+            WorkerRequestOperation::Start {
+                start: inspection_start.clone()
+            }
+        ),
+        WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::InvalidEnvelope
+        }
+    );
+    assert_no_effects168(&f);
+    let path = f.fixture.root.join("state/agents.json");
+    let mut registry: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    registry["routing_policy"]["connections"][0]["enabled"] = json!(false);
+    support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    // Une autre connexion du même agent_type est toujours active : elle ne
+    // remplace jamais l'ID exact désactivé après le probe.
+    assert_eq!(
+        control.request(&command, inspection.clone()),
+        WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::CapabilityRequired
+        }
+    );
+    assert_no_effects168(&f);
+    registry["routing_policy"]["connections"][0]["enabled"] = json!(true);
+    support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    let original_args = registry["agents"]["fake-codex"]["args"].clone();
+    registry["agents"]["fake-codex"]["args"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("--fixture-changed168"));
+    support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    assert!(
+        matches!(
+            control.request(&command, inspection.clone()),
+            WorkerResponseOperation::Rejected {
+                reason: WorkerRefusal::DefinitionChanged | WorkerRefusal::PermissionsChanged
+            }
+        ),
+        "la définition réellement changée après probe doit être relue"
+    );
+    assert_no_effects168(&f);
+    registry["agents"]["fake-codex"]["args"] = original_args;
+    support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    for case in [
+        "connection",
+        "engine",
+        "model",
+        "effort",
+        "definition",
+        "permission",
+        "base_missing",
+        "base_mismatch",
+        "base_ref",
+    ] {
+        let mut invalid = inspection.clone();
+        let WorkerRequestOperation::PrepareV2 {
+            prepare,
+            connection_id,
+            engine,
+            expected_definition_digest,
+            expected_permission_digest,
+            ..
+        } = &mut invalid
+        else {
+            unreachable!()
+        };
+        let reason = match case {
+            "connection" => {
+                *connection_id = "missing168".into();
+                WorkerRefusal::CapabilityRequired
+            }
+            "engine" => {
+                *engine = "claude".into();
+                WorkerRefusal::CapabilityRequired
+            }
+            "model" => {
+                prepare.model = "missing168".into();
+                WorkerRefusal::CapabilityRequired
+            }
+            "effort" => {
+                prepare.effort = Some("low".into());
+                WorkerRefusal::CapabilityRequired
+            }
+            "definition" => {
+                *expected_definition_digest = "b".repeat(64);
+                WorkerRefusal::DefinitionChanged
+            }
+            "permission" => {
+                *expected_permission_digest = "b".repeat(64);
+                WorkerRefusal::PermissionsChanged
+            }
+            "base_missing" => {
+                prepare.base_commit = None;
+                WorkerRefusal::PlacementMismatch
+            }
+            "base_mismatch" => {
+                prepare.base_commit = Some("b".repeat(40));
+                WorkerRefusal::PlacementMismatch
+            }
+            "base_ref" => {
+                prepare.workspace = Some(WorkspaceRequest::Worktree {
+                    base_ref: Some("HEAD".into()),
+                    branch: None,
+                });
+                WorkerRefusal::PlacementMismatch
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            control.request(&command, invalid),
+            WorkerResponseOperation::Rejected { reason },
+            "{case}"
+        );
+        assert_no_effects168(&f);
+    }
+    // SharedGit doit aussi refuser une base absente ou différente de HEAD.
+    for expected in [None, Some("b".repeat(40))] {
+        let mut shared = prepare168(&probe, &result, 1);
+        let WorkerRequestOperation::PrepareV2 { prepare, .. } = &mut shared else {
+            unreachable!()
+        };
+        prepare.base_commit = expected;
+        assert_eq!(
+            control.request(&command, shared),
+            WorkerResponseOperation::Rejected {
+                reason: WorkerRefusal::PlacementMismatch
+            }
+        );
+        assert_no_effects168(&f);
+    }
+    let prepared = match control.request(&command, operation) {
+        WorkerResponseOperation::Prepared { prepared } => prepared,
+        other => panic!("base_ref168 antérieure à HEAD doit être préparée:{other:?}"),
+    };
+    assert_eq!(
+        prepared.placement.base_commit.as_deref(),
+        Some(base.as_str())
+    );
+    assert_ne!(prepared.token, WORKER_INSPECTION_TOKEN);
+    assert!(uuid::Uuid::parse_str(&prepared.token).is_ok());
+    assert!(prepared.workspace.is_some());
+    // L inspection reste inerte même après une vraie préparation du même command_id.
+    assert_eq!(
+        control.request(
+            &inspection_start_command,
+            WorkerRequestOperation::Start {
+                start: inspection_start
+            }
+        ),
+        WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::InvalidEnvelope
+        }
+    );
+    assert_eq!(
+        fs::read_dir(f.worker_state.join("store/workspaces"))
+            .unwrap()
+            .count(),
+        1
+    );
+    for directory in ["commands", "slots", "markers"] {
+        assert_eq!(
+            fs::read_dir(f.worker_state.join("store").join(directory))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    assert!(
+        f.fixture
+            .evidence()
+            .iter()
+            .all(|event| event["event"] != "started162")
+    );
+    // La sélection opaque reste dans PreparedRuntime : une révocation tardive
+    // ferme aussi Start avant le slot local, le bootstrap ou le fournisseur.
+    registry["routing_policy"]["connections"][0]["enabled"] = json!(false);
+    support::private_write(&path, serde_json::to_vec(&registry).unwrap()).unwrap();
+    let mut start_command = command.clone();
+    start_command.instance_id = uuid::Uuid::new_v4().to_string();
+    start_command.generation = 1;
+    let start = WorkerStart {
+        prepared_token: prepared.token,
+        child_id: uuid::Uuid::new_v4().to_string(),
+        mission_id: "never168".into(),
+        forward_child_requests: false,
+        placement: prepared.placement,
+        definition: prepared.definition,
+        child_policy: prepared.child_policy,
+        effective_posture: prepared.effective_posture,
+        deadline_at: now() + 30,
+    };
+    assert_eq!(
+        control.request(&start_command, WorkerRequestOperation::Start { start }),
+        WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::CapabilityRequired
+        }
+    );
+    for directory in ["commands", "slots", "markers"] {
+        assert_eq!(
+            fs::read_dir(f.worker_state.join("store").join(directory))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    assert!(
+        f.fixture
+            .evidence()
+            .iter()
+            .all(|event| event["event"] != "started162")
+    );
+}
+
+#[test]
+fn worker168_reconnexion_epoch_et_capacite163_restent_distinctes() {
+    let mut f = RemoteFixture::new_with_candidate_probe_v2();
+    let (base, head) = fixture168_routes(&f);
+    let mut control = f.start_worker();
+    let old_epoch = control.epoch.clone();
+    let mut probe = probe168(&f, &control.epoch, &base, &head);
+    probe.candidates.truncate(1);
+    let first = control.candidate_probe_v2(probe.clone());
+    assert_no_effects168(&f);
+    control.disconnect();
+    let mut control = f.relay.as_ref().unwrap().connect();
+    assert_ne!(control.epoch, old_epoch);
+    let mut stale = probe.clone();
+    stale.connection_epoch = old_epoch;
+    send_frame(
+        control.reader.get_mut(),
+        &DaemonToWrapper::CandidateProbeV2 { probe: stale },
+    )
+    .unwrap();
+    control.expect_closed_without_result();
+    let mut control = f.relay.as_ref().unwrap().connect();
+    probe.connection_epoch = control.epoch.clone();
+    probe.correlation_id = uuid::Uuid::new_v4().to_string();
+    let fresh = control.candidate_probe_v2(probe);
+    assert_ne!(fresh.connection_epoch, first.connection_epoch);
+    assert!(fresh.resources.source_observed_at >= first.resources.source_observed_at);
+    assert_eq!(
+        fresh.resources.cpu_percent, None,
+        "l'ancien delta ne traverse pas l'époque"
+    );
+    assert_no_effects168(&f);
+
+    // Un maître163 négocie seulement v1 ; le worker conserve la sonde8 mais
+    // refuse une demande168 non négociée avant toute lecture/effectuation.
+    let mut legacy = RemoteFixture::new_with_candidate_probe();
+    let (base, head) = fixture168_routes(&legacy);
+    let mut old = legacy.start_worker();
+    assert!(old.candidate_probe);
+    assert!(!old.candidate_probe_v2);
+    let mut modern = probe168(&legacy, &old.epoch, &base, &head);
+    modern.candidates.truncate(1);
+    let candidate = &modern.candidates[0];
+    let result = old.candidate_probe(CandidateProbe {
+        version: 1,
+        correlation_id: "legacy168".into(),
+        connection_epoch: old.epoch.clone(),
+        worker: identity(),
+        admission_id: "admission168".into(),
+        policy_revision: 1,
+        parent: modern.parent.clone(),
+        candidates: vec![CandidateProbeCandidate {
+            candidate_id: "c01".into(),
+            project_id: candidate.project_id.clone(),
+            origin_host: candidate.origin_host.clone(),
+            origin_cwd: candidate.origin_cwd.clone(),
+            source_root: candidate.source_root.clone(),
+            remote_root: candidate.remote_root.clone(),
+            source_root_identity: candidate.source_root_identity.clone(),
+            relative_cwd: ".".into(),
+            base_commit: candidate.expected_base_commit.clone(),
+            agent_type: candidate.agent_type.clone(),
+            model: candidate.model.clone(),
+            effort: candidate.effort.clone(),
+            posture: candidate.posture,
+            workspace: candidate.workspace.clone(),
+        }],
+    });
+    assert!(matches!(
+        result.verdicts.as_slice(),
+        [CandidateProbeVerdict::Eligible { .. }]
+    ));
+    // Une opération PrepareV2 valide en forme ne peut pas emprunter la
+    // capacité163. La garde de négociation précède tout examen des digests.
+    let denied_prepare = prepare168(&modern, &first, 0);
+    send_frame(
+        old.reader.get_mut(),
+        &DaemonToWrapper::CandidateProbeV2 { probe: modern },
+    )
+    .unwrap();
+    old.expect_closed_without_result();
+    let mut old = legacy.relay.as_ref().unwrap().connect();
+    assert!(!old.candidate_probe_v2);
+    let denied_request = WorkerRequest {
+        version: REMOTE_WORKER_VERSION,
+        correlation_id: uuid::Uuid::new_v4().to_string(),
+        connection_epoch: old.epoch.clone(),
+        worker: identity(),
+        command: WorkerCommandIdentity {
+            command_id: "unnegotiated168".into(),
+            task_id: uuid::Uuid::new_v4().to_string(),
+            instance_id: String::new(),
+            generation: 0,
+        },
+        request: denied_prepare,
+    };
+    denied_request.validate().unwrap();
+    send_frame(
+        old.reader.get_mut(),
+        &DaemonToWrapper::WorkerRequest {
+            request: denied_request,
+        },
+    )
+    .unwrap();
+    old.expect_closed_without_result();
+    assert_no_effects168(&legacy);
+}
+
+#[test]
+fn worker168_shared_hors_git_general_sha_et_erreur_ambigue() {
+    let mut f = RemoteFixture::new_with_candidate_probe_v2();
+    let (base, head) = fixture168_routes(&f);
+    // Le support initialise aussi un dépôt parent : retirer les deux dépôts
+    // privés de cette seule fixture pour attester réellement le cas hors Git.
+    fs::remove_dir_all(f.fixture.root.join("project/.git")).unwrap();
+    fs::remove_dir_all(f.fixture.root.join(".git")).unwrap();
+    let mut control = f.start_worker();
+    let mut probe = probe168(&f, &control.epoch, &base, &head);
+    probe.candidates.truncate(1);
+    probe.candidates[0].workspace = Some(WorkspaceRequest::Shared {});
+    probe.candidates[0].expected_base_commit = None;
+    let result = control.candidate_probe_v2(probe.clone());
+    assert!(
+        matches!(
+            result.verdicts.as_slice(),
+            [CandidateProbeV2Verdict::Eligible { .. }]
+        ),
+        "verdict Shared général hors Git réel : {:?}",
+        result.verdicts
+    );
+    assert_no_effects168(&f);
+    let command = WorkerCommandIdentity {
+        command_id: "outside168".into(),
+        task_id: uuid::Uuid::new_v4().to_string(),
+        instance_id: String::new(),
+        generation: 0,
+    };
+    for case in ["sha", "compilation", "worktree"] {
+        let mut operation = prepare168(&probe, &result, 0);
+        let WorkerRequestOperation::PrepareV2 {
+            prepare, workload, ..
+        } = &mut operation
+        else {
+            unreachable!()
+        };
+        match case {
+            "sha" => prepare.base_commit = Some(base.clone()),
+            "compilation" => *workload = AutoDelegateWorkload::Compilation,
+            "worktree" => {
+                prepare.workspace = Some(WorkspaceRequest::Worktree {
+                    base_ref: Some("HEAD".into()),
+                    branch: None,
+                })
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            control.request(&command, operation),
+            WorkerResponseOperation::Rejected {
+                reason: WorkerRefusal::PlacementMismatch
+            },
+            "{case}"
+        );
+        assert_no_effects168(&f);
+    }
+    let marker = f.fixture.root.join("project/.git");
+    std::os::unix::fs::symlink(f.fixture.root.join("missing-git168"), &marker).unwrap();
+    assert_eq!(
+        control.request(&command, prepare168(&probe, &result, 0)),
+        WorkerResponseOperation::Rejected {
+            reason: WorkerRefusal::PlacementMismatch
+        }
+    );
+    assert_no_effects168(&f);
+    fs::remove_file(marker).unwrap();
+    assert!(matches!(
+        control.request(&command, prepare168(&probe, &result, 0)),
+        WorkerResponseOperation::Prepared { .. }
+    ));
+    assert_no_effects168(&f);
 }
