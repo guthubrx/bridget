@@ -2,13 +2,97 @@
   "agents": {
     "codex": {
       "command": "codex",
-      "protocol": "acp",
+      "protocol": "codex_app_server",
       "permissions": "allow"
     },
     "claude": {
       "command": "claude",
-      "protocol": "acp",
+      "protocol": "claude_stream_json",
       "permissions": "allow"
+    }
+  },
+  "routing_policy": {
+    "version": 2,
+    "revision": 1,
+    "enabled": true,
+    "connections": [
+      {
+        "connection_id": "codex-local",
+        "machine_id": "local",
+        "engine": "codex",
+        "agent_type": "codex",
+        "enabled": true,
+        "display_name": "Codex local"
+      },
+      {
+        "connection_id": "claude-local",
+        "machine_id": "local",
+        "engine": "claude",
+        "agent_type": "claude",
+        "enabled": true,
+        "display_name": "Claude local"
+      },
+      {
+        "connection_id": "codex-cartae-nonprovisioned",
+        "machine_id": "cartae",
+        "engine": "codex",
+        "agent_type": "codex",
+        "enabled": false,
+        "display_name": "Codex Cartae non provisionné"
+      }
+    ],
+    "model_catalog": {
+      "codex-local": [
+        {
+          "model": "gpt-6.1-sol",
+          "supported_efforts": ["low", "high"],
+          "default_effort": "high",
+          "provenance": "operator_observation"
+        },
+        {
+          "model": "gpt-6.1-luna",
+          "supported_efforts": [],
+          "default_effort": null,
+          "provenance": "codex_model_list"
+        }
+      ],
+      "claude-local": [
+        {
+          "model": "claude-sonnet-4-5",
+          "supported_efforts": ["low"],
+          "default_effort": "low",
+          "provenance": "declared"
+        }
+      ],
+      "codex-cartae-nonprovisioned": [
+        {
+          "model": "gpt-6.1-sol",
+          "supported_efforts": ["high"],
+          "default_effort": "high",
+          "provenance": "declared"
+        }
+      ]
+    },
+    "machine_policies": {
+      "local": {
+        "enabled": true,
+        "automatic_axes": {
+          "engine": true,
+          "model": true,
+          "machine": true,
+          "connection": true,
+          "effort": true
+        },
+        "telemetry": {
+          "enabled": true,
+          "max_age_secs": 30,
+          "cpu_saturation_percent": 90,
+          "memory_available_min_percent": 10,
+          "normalized_load_saturation_percent": 100
+        },
+        "decision_timeout_ms": 10000,
+        "service_timeout_ms": 2000
+      }
     }
   }
 }

@@ -1,6 +1,8 @@
 //! Registre déclaratif des types d'agents lancés par Bridget.
 
-use bridget_transport::protocol::IdentityCredential;
+use bridget_transport::protocol::{
+    IdentityCredential, RoutingCatalogueOptionV1, RoutingCatalogueV1, RoutingEntitlement,
+};
 use bridget_transport::{
     AdapterCapabilities, ModelCapabilities, ResolvedAgentDefinition, ResolvedMcpDefinition,
     SpawnRefusal,
@@ -28,6 +30,11 @@ const MAX_MACHINE_MAPPINGS: usize = 64;
 const MAX_MACHINE_REVISION: u64 = (1 << 53) - 1;
 const MAX_ADMISSION_PROFILES: usize = 8;
 const MAX_ADMISSION_PREFERENCES: usize = 8;
+const ROUTING_POLICY_VERSION: u16 = 2;
+const MAX_ROUTING_CANDIDATES: usize = 128;
+const DEFAULT_ROUTING_TELEMETRY_MAX_AGE_SECS: u64 = 30;
+const DEFAULT_ROUTING_DECISION_TIMEOUT_MS: u64 = 10_000;
+const DEFAULT_ROUTING_SERVICE_TIMEOUT_MS: u64 = 2_000;
 const MAX_DECISION_ENDPOINT_BYTES: usize = 2048;
 const MAX_PROFILE_DESCRIPTION_BYTES: usize = 32;
 const MAX_PROFILE_VALUE_BYTES: usize = 256;
@@ -104,6 +111,248 @@ pub struct AgentRegistryFile {
     pub decision_services: BTreeMap<String, DecisionService>,
     #[serde(default)]
     pub admission_policy: Option<AdmissionPolicy>,
+    /// Politique168 additive. Son absence conserve intégralement le parcours
+    /// d'admission163 ; le registre ne démarre aucun moteur en la lisant.
+    #[serde(default)]
+    pub routing_policy: Option<RoutingPolicy>,
+}
+
+/// Déclaration opaque d'un environnement déjà authentifié. Les secrets et
+/// chemins d'authentification restent exclusivement dans le lanceur existant.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingConnection {
+    pub connection_id: String,
+    pub machine_id: String,
+    pub engine: String,
+    pub agent_type: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+/// Provenance explicitement déclarée d'un modèle. Elle décrit une observation
+/// ou une déclaration, jamais une entitlement fournisseur.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingModelProvenance {
+    Declared,
+    CodexModelList,
+    OperatorObservation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingModel {
+    pub model: String,
+    #[serde(default)]
+    pub supported_efforts: Vec<String>,
+    pub default_effort: Option<String>,
+    pub provenance: RoutingModelProvenance,
+    #[serde(default)]
+    pub observed_at: Option<i64>,
+}
+
+/// Les cinq axes visibles restent indépendants. Les champs fixes ne sont
+/// utilisés que lorsque l'axe correspondant est désactivé.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingAutomaticAxes {
+    #[serde(default = "default_routing_automatic_axis")]
+    pub engine: bool,
+    #[serde(default = "default_routing_automatic_axis")]
+    pub model: bool,
+    #[serde(default = "default_routing_automatic_axis")]
+    pub machine: bool,
+    #[serde(default = "default_routing_automatic_axis")]
+    pub connection: bool,
+    #[serde(default = "default_routing_automatic_axis")]
+    pub effort: bool,
+}
+
+impl Default for RoutingAutomaticAxes {
+    fn default() -> Self {
+        Self {
+            engine: true,
+            model: true,
+            machine: true,
+            connection: true,
+            effort: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingFixedValues {
+    #[serde(default)]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub machine_id: Option<String>,
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
+/// Poids168 bornés. La pénalité de saturation reste fixée à100 hors réglage.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoutingScoreWeights {
+    pub cpu: u8,
+    pub ram: u8,
+    pub load: u8,
+    pub continuity: u8,
+    pub compilation: u8,
+    pub quota: u8,
+    pub reset: u8,
+}
+
+impl Default for RoutingScoreWeights {
+    fn default() -> Self {
+        Self {
+            cpu: 20,
+            ram: 20,
+            load: 20,
+            continuity: 20,
+            compilation: 10,
+            quota: 5,
+            reset: 3,
+        }
+    }
+}
+
+impl RoutingScoreWeights {
+    // Les anciens snapshots168 omettaient les poids par défaut. Les réécrire
+    // changerait leur digest lors de la reprise ; seuls les écarts sont figés.
+    fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingTelemetryPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_routing_telemetry_max_age_secs")]
+    pub max_age_secs: u64,
+    #[serde(default = "default_routing_cpu_saturation_percent")]
+    pub cpu_saturation_percent: u8,
+    #[serde(default = "default_routing_memory_min_percent")]
+    pub memory_available_min_percent: u8,
+    #[serde(default = "default_routing_load_saturation_percent")]
+    pub normalized_load_saturation_percent: u8,
+    #[serde(default, skip_serializing_if = "RoutingScoreWeights::is_default")]
+    pub weights: RoutingScoreWeights,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingDecisionServicePolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub service_id: Option<String>,
+    #[serde(default)]
+    pub accessible: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingLightweightDecisionPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub accessible: bool,
+    #[serde(default)]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub connection_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingMachinePolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Capacité de compilation déclarée par l'opérateur. `None` reste une
+    /// inconnue : le registre ne déduit jamais une vitesse du matériel.
+    #[serde(default)]
+    pub compilation_capacity: Option<u8>,
+    #[serde(default)]
+    pub automatic_axes: RoutingAutomaticAxes,
+    #[serde(default)]
+    pub fixed_values: RoutingFixedValues,
+    #[serde(default)]
+    pub telemetry: Option<RoutingTelemetryPolicy>,
+    #[serde(default)]
+    pub decision_service: Option<RoutingDecisionServicePolicy>,
+    #[serde(default)]
+    pub lightweight_decision: Option<RoutingLightweightDecisionPolicy>,
+    #[serde(default = "default_routing_decision_timeout_ms")]
+    pub decision_timeout_ms: u64,
+    #[serde(default = "default_routing_service_timeout_ms")]
+    pub service_timeout_ms: u64,
+}
+
+/// Politique168 déclarative. Le catalogue est indexé par connexion afin de ne
+/// jamais transférer un modèle ou une observation entre deux environnements.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingPolicy {
+    pub version: u16,
+    pub revision: u64,
+    #[serde(default)]
+    pub enabled: bool,
+    pub connections: Vec<RoutingConnection>,
+    pub model_catalog: BTreeMap<String, Vec<RoutingModel>>,
+    pub machine_policies: BTreeMap<String, RoutingMachinePolicy>,
+}
+
+/// Produit déclaré connexion×modèle. Il est construit en mémoire depuis le
+/// registre déjà lu ; aucune découverte, authentification ou entitlement ne
+/// participe à cette projection.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingCandidate {
+    pub machine_id: String,
+    pub engine: String,
+    pub connection_id: String,
+    pub agent_type: String,
+    pub enabled: bool,
+    pub model: String,
+    pub supported_efforts: Vec<String>,
+    pub default_effort: Option<String>,
+    pub provenance: RoutingModelProvenance,
+    pub observed_at: Option<i64>,
+}
+
+/// Contraintes demandées pour les cinq axes168. `None` laisse l'axe
+/// automatique, sauf lorsqu'une politique le fixe explicitement.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoutingCandidateFilters {
+    pub engine: Option<String>,
+    pub model: Option<String>,
+    pub machine_id: Option<String>,
+    pub connection_id: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// Candidat après application des contraintes de demande et des axes fixes.
+/// `imposed_effort` est distinct du défaut déclaré du modèle : `None` laisse
+/// le consommateur employer ce défaut attesté, y compris le défaut natif.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoutingCandidateSelection {
+    pub candidate: RoutingCandidate,
+    pub imposed_effort: Option<String>,
 }
 
 /// Endpoint de décision explicitement administré. Son hébergement ne choisit
@@ -217,6 +466,7 @@ pub struct AgentRegistry {
     machines: BTreeMap<String, MachineProvision>,
     decision_services: BTreeMap<String, DecisionService>,
     admission_policy: Option<AdmissionPolicy>,
+    routing_policy: Option<RoutingPolicy>,
     source: PathBuf,
 }
 
@@ -238,6 +488,85 @@ fn default_interactive_mcp() -> String {
 fn default_decision_health_seconds() -> u64 {
     DEFAULT_DECISION_HEALTH_SECONDS
 }
+fn default_routing_automatic_axis() -> bool {
+    true
+}
+fn default_routing_telemetry_max_age_secs() -> u64 {
+    DEFAULT_ROUTING_TELEMETRY_MAX_AGE_SECS
+}
+fn default_routing_cpu_saturation_percent() -> u8 {
+    90
+}
+fn default_routing_memory_min_percent() -> u8 {
+    10
+}
+fn default_routing_load_saturation_percent() -> u8 {
+    100
+}
+fn default_routing_decision_timeout_ms() -> u64 {
+    DEFAULT_ROUTING_DECISION_TIMEOUT_MS
+}
+fn default_routing_service_timeout_ms() -> u64 {
+    DEFAULT_ROUTING_SERVICE_TIMEOUT_MS
+}
+
+fn routing_model_provenance_name(provenance: RoutingModelProvenance) -> &'static str {
+    match provenance {
+        RoutingModelProvenance::Declared => "declared",
+        RoutingModelProvenance::CodexModelList => "codex_model_list",
+        RoutingModelProvenance::OperatorObservation => "operator_observation",
+    }
+}
+
+fn requested_or_fixed(
+    requested: &Option<String>,
+    automatic: bool,
+    fixed: &Option<String>,
+) -> Result<Option<String>, String> {
+    if requested.is_some() {
+        return Ok(requested.clone());
+    }
+    if automatic {
+        return Ok(None);
+    }
+    fixed
+        .clone()
+        .map(Some)
+        .ok_or("routing_fixed_axis_missing".into())
+}
+
+fn effective_routing_filters(
+    requested: &RoutingCandidateFilters,
+    policy: &RoutingMachinePolicy,
+) -> Result<RoutingCandidateFilters, String> {
+    Ok(RoutingCandidateFilters {
+        engine: requested_or_fixed(
+            &requested.engine,
+            policy.automatic_axes.engine,
+            &policy.fixed_values.engine,
+        )?,
+        model: requested_or_fixed(
+            &requested.model,
+            policy.automatic_axes.model,
+            &policy.fixed_values.model,
+        )?,
+        machine_id: requested_or_fixed(
+            &requested.machine_id,
+            policy.automatic_axes.machine,
+            &policy.fixed_values.machine_id,
+        )?,
+        connection_id: requested_or_fixed(
+            &requested.connection_id,
+            policy.automatic_axes.connection,
+            &policy.fixed_values.connection_id,
+        )?,
+        effort: requested_or_fixed(
+            &requested.effort,
+            policy.automatic_axes.effort,
+            &policy.fixed_values.effort,
+        )?,
+    })
+}
 
 fn default_capabilities() -> AdapterCapabilities {
     // Compatibilité des registres historiques : ACP était déjà le seul chemin
@@ -256,6 +585,7 @@ impl AgentRegistry {
         let mut machines = BTreeMap::new();
         let mut decision_services = BTreeMap::new();
         let mut admission_policy = None;
+        let mut routing_policy = None;
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
@@ -267,9 +597,18 @@ impl AgentRegistry {
                 validate_registry(&user.agents, &source)?;
                 validate_machines(&user.machines)?;
                 validate_admission_config(&user.decision_services, user.admission_policy.as_ref())?;
+                let mut validation_agents = default_agents()?;
+                validation_agents.extend(user.agents.clone());
+                validate_routing_policy(
+                    user.routing_policy.as_ref(),
+                    &validation_agents,
+                    &user.machines,
+                    &user.decision_services,
+                )?;
                 if !user.machines.is_empty()
                     || !user.decision_services.is_empty()
                     || user.admission_policy.is_some()
+                    || user.routing_policy.is_some()
                 {
                     validate_private_machine_registry_parent(&source)?;
                 }
@@ -277,6 +616,7 @@ impl AgentRegistry {
                 machines = user.machines;
                 decision_services = user.decision_services;
                 admission_policy = user.admission_policy;
+                routing_policy = user.routing_policy;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -292,6 +632,7 @@ impl AgentRegistry {
             machines,
             decision_services,
             admission_policy,
+            routing_policy,
             source,
         })
     }
@@ -303,6 +644,14 @@ impl AgentRegistry {
         validate_registry(&user.agents, &source)?;
         validate_machines(&user.machines)?;
         validate_admission_config(&user.decision_services, user.admission_policy.as_ref())?;
+        let mut validation_agents = default_agents()?;
+        validation_agents.extend(user.agents.clone());
+        validate_routing_policy(
+            user.routing_policy.as_ref(),
+            &validation_agents,
+            &user.machines,
+            &user.decision_services,
+        )?;
         let mut agents = default_agents()?;
         agents.extend(user.agents);
         add_project_discovery_definitions(&mut agents);
@@ -311,6 +660,7 @@ impl AgentRegistry {
             machines: user.machines,
             decision_services: user.decision_services,
             admission_policy: user.admission_policy,
+            routing_policy: user.routing_policy,
             source,
         })
     }
@@ -338,6 +688,166 @@ impl AgentRegistry {
 
     pub fn admission_policy(&self) -> Option<&AdmissionPolicy> {
         self.admission_policy.as_ref()
+    }
+
+    /// Politique168 optionnelle : `None` signifie chemin163 inchangé.
+    /// Sa consultation ne lance jamais de préflight ni de découverte modèle.
+    pub fn routing_policy(&self) -> Option<&RoutingPolicy> {
+        self.routing_policy.as_ref()
+    }
+
+    /// Matrice complète déclarée avant les filtres de demande. Les connexions
+    /// désactivées restent comptées ici afin qu'un registre129 ne puisse pas
+    /// devenir valide en masquant arbitrairement une partie du catalogue.
+    pub fn routing_candidates(&self) -> Option<Vec<RoutingCandidate>> {
+        self.routing_policy.as_ref().map(|policy| {
+            policy
+                .connections
+                .iter()
+                .flat_map(|connection| {
+                    policy
+                        .model_catalog
+                        .get(&connection.connection_id)
+                        .into_iter()
+                        .flatten()
+                        .map(move |model| RoutingCandidate {
+                            machine_id: connection.machine_id.clone(),
+                            engine: connection.engine.clone(),
+                            connection_id: connection.connection_id.clone(),
+                            agent_type: connection.agent_type.clone(),
+                            enabled: connection.enabled,
+                            model: model.model.clone(),
+                            supported_efforts: model.supported_efforts.clone(),
+                            default_effort: model.default_effort.clone(),
+                            provenance: model.provenance,
+                            observed_at: model.observed_at,
+                        })
+                })
+                .collect()
+        })
+    }
+
+    /// Projection de lecture seule destinée au catalogue168. Elle ne révèle ni
+    /// lanceur, ni chemin, ni variable d'environnement ; les observations
+    /// sont celles déjà déclarées dans le registre, jamais rafraîchies ici.
+    pub fn routing_catalogue(&self, observed_at: i64) -> Result<RoutingCatalogueV1, String> {
+        let policy = self
+            .routing_policy
+            .as_ref()
+            .ok_or("routing_policy_unavailable")?;
+        if !policy.enabled {
+            return Err("routing_policy_disabled".into());
+        }
+        let mut options = self
+            .routing_candidates()
+            .expect("routing_policy was checked above")
+            .into_iter()
+            .filter(|candidate| candidate.enabled)
+            .map(|candidate| RoutingCatalogueOptionV1 {
+                machine_id: candidate.machine_id,
+                engine: candidate.engine,
+                connection_id: candidate.connection_id,
+                model: candidate.model,
+                supported_efforts: candidate.supported_efforts,
+                default_effort: candidate.default_effort,
+                provenance: routing_model_provenance_name(candidate.provenance).into(),
+                observed_at: candidate.observed_at,
+                entitlement: RoutingEntitlement::Unknown,
+            })
+            .collect::<Vec<_>>();
+        options.sort_by(|left, right| {
+            (
+                &left.machine_id,
+                &left.engine,
+                &left.connection_id,
+                &left.model,
+            )
+                .cmp(&(
+                    &right.machine_id,
+                    &right.engine,
+                    &right.connection_id,
+                    &right.model,
+                ))
+        });
+        Ok(RoutingCatalogueV1 {
+            version: 1,
+            observed_at,
+            options,
+        })
+    }
+
+    /// Applique uniquement les contraintes explicites et les axes fixes de
+    /// la machine coordinatrice. Le score, les faits dynamiques et les droits
+    /// restent hors de cette méthode pure et sont traités par l'admission.
+    pub fn select_routing_candidates(
+        &self,
+        coordinator_machine_id: &str,
+        requested: &RoutingCandidateFilters,
+    ) -> Result<Vec<RoutingCandidateSelection>, String> {
+        let policy = self
+            .routing_policy
+            .as_ref()
+            .ok_or("routing_policy_unavailable")?;
+        if !policy.enabled {
+            return Err("routing_policy_disabled".into());
+        }
+        let machine_policy = policy
+            .machine_policies
+            .get(coordinator_machine_id)
+            .ok_or("routing_machine_policy_unknown")?;
+        if !machine_policy.enabled {
+            return Err("routing_machine_policy_disabled".into());
+        }
+        let effective = effective_routing_filters(requested, machine_policy)?;
+        let mut candidates = self
+            .routing_candidates()
+            .expect("routing_policy was checked above")
+            .into_iter()
+            .filter(|candidate| candidate.enabled)
+            .filter(|candidate| {
+                effective
+                    .engine
+                    .as_deref()
+                    .is_none_or(|value| candidate.engine == value)
+                    && effective
+                        .model
+                        .as_deref()
+                        .is_none_or(|value| candidate.model == value)
+                    && effective
+                        .machine_id
+                        .as_deref()
+                        .is_none_or(|value| candidate.machine_id == value)
+                    && effective
+                        .connection_id
+                        .as_deref()
+                        .is_none_or(|value| candidate.connection_id == value)
+                    && effective.effort.as_deref().is_none_or(|value| {
+                        candidate
+                            .supported_efforts
+                            .iter()
+                            .any(|effort| effort == value)
+                    })
+            })
+            .map(|candidate| RoutingCandidateSelection {
+                candidate,
+                imposed_effort: effective.effort.clone(),
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| {
+            (
+                &left.candidate.machine_id,
+                &left.candidate.engine,
+                &left.candidate.connection_id,
+                &left.candidate.model,
+            )
+                .cmp(&(
+                    &right.candidate.machine_id,
+                    &right.candidate.engine,
+                    &right.candidate.connection_id,
+                    &right.candidate.model,
+                ))
+        });
+        Ok(candidates)
     }
 
     pub fn machine(&self, machine_id: &str) -> Result<&MachineProvision, String> {
@@ -464,6 +974,7 @@ impl AgentRegistry {
             machines: BTreeMap::new(),
             decision_services: BTreeMap::new(),
             admission_policy: None,
+            routing_policy: None,
             source: self.source.clone(),
         })
     }
@@ -516,6 +1027,7 @@ impl AgentRegistry {
             machines: BTreeMap::new(),
             decision_services: BTreeMap::new(),
             admission_policy: None,
+            routing_policy: None,
             source,
         })
     }
@@ -575,6 +1087,7 @@ impl AgentRegistry {
             machines: BTreeMap::new(),
             decision_services: BTreeMap::new(),
             admission_policy: None,
+            routing_policy: None,
             source: self.source.clone(),
         }
         .pin_delegation_model(agent_type, model, effort)
@@ -591,6 +1104,7 @@ impl AgentRegistry {
         self.machines.clear();
         self.decision_services.clear();
         self.admission_policy = None;
+        self.routing_policy = None;
         let definition = self
             .agents
             .get_mut(agent_type)
@@ -1349,6 +1863,191 @@ fn validate_admission_config(
     Ok(())
 }
 
+fn valid_routing_engine(engine: &str, protocol: &str) -> bool {
+    matches!(
+        (engine, protocol),
+        ("codex", "codex_app_server") | ("claude", "claude_stream_json")
+    )
+}
+
+fn valid_routing_machine(machine_id: &str, machines: &BTreeMap<String, MachineProvision>) -> bool {
+    machine_id == "local" || machines.contains_key(machine_id)
+}
+
+fn validate_routing_policy(
+    policy: Option<&RoutingPolicy>,
+    agents: &BTreeMap<String, AgentDefinition>,
+    machines: &BTreeMap<String, MachineProvision>,
+    services: &BTreeMap<String, DecisionService>,
+) -> Result<(), String> {
+    let Some(policy) = policy else {
+        return Ok(());
+    };
+    if policy.version != ROUTING_POLICY_VERSION || policy.revision == 0 {
+        return Err("routing_policy_invalid".into());
+    }
+
+    let mut connection_ids = std::collections::BTreeSet::new();
+    let mut candidate_count = 0usize;
+    for connection in &policy.connections {
+        let Some(definition) = agents.get(&connection.agent_type) else {
+            return Err("routing_connection_agent_unknown".into());
+        };
+        if !profile_value(&connection.connection_id)
+            || (connection.enabled && !valid_routing_machine(&connection.machine_id, machines))
+            || !valid_routing_engine(&connection.engine, &definition.protocol)
+            || connection
+                .display_name
+                .as_deref()
+                .is_some_and(|name| !profile_value(name))
+            || !connection_ids.insert(connection.connection_id.as_str())
+        {
+            return Err("routing_connection_invalid".into());
+        }
+        let Some(models) = policy.model_catalog.get(&connection.connection_id) else {
+            return Err("routing_catalogue_connection_missing".into());
+        };
+        if models.is_empty() {
+            return Err("routing_catalogue_empty".into());
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for model in models {
+            if !profile_value(&model.model)
+                || !names.insert(&model.model)
+                || model
+                    .supported_efforts
+                    .iter()
+                    .any(|effort| !profile_value(effort))
+                || model.supported_efforts.len()
+                    != model
+                        .supported_efforts
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                || (model.supported_efforts.is_empty() && model.default_effort.is_some())
+                || (!model.supported_efforts.is_empty()
+                    && !matches!(
+                        &model.default_effort,
+                        Some(effort) if model.supported_efforts.iter().any(|item| item == effort)
+                    ))
+            {
+                return Err("routing_model_invalid".into());
+            }
+        }
+        candidate_count = candidate_count.saturating_add(models.len());
+    }
+    if policy
+        .model_catalog
+        .keys()
+        .any(|connection_id| !connection_ids.contains(connection_id.as_str()))
+    {
+        return Err("routing_catalogue_connection_unknown".into());
+    }
+    if candidate_count == 0 || candidate_count > MAX_ROUTING_CANDIDATES {
+        return Err("candidate_limit".into());
+    }
+
+    for (machine_id, machine_policy) in &policy.machine_policies {
+        if !valid_routing_machine(machine_id, machines)
+            || !(1_000..=30_000).contains(&machine_policy.decision_timeout_ms)
+            || !(1_000..=30_000).contains(&machine_policy.service_timeout_ms)
+            || machine_policy.service_timeout_ms > machine_policy.decision_timeout_ms
+            || machine_policy
+                .compilation_capacity
+                .is_some_and(|value| value > 10)
+        {
+            return Err("routing_machine_policy_invalid".into());
+        }
+        if let Some(telemetry) = &machine_policy.telemetry {
+            if !(1..=300).contains(&telemetry.max_age_secs)
+                || !(1..=100).contains(&telemetry.cpu_saturation_percent)
+                || telemetry.memory_available_min_percent > 100
+                || !(1..=100).contains(&telemetry.normalized_load_saturation_percent)
+            {
+                return Err("routing_telemetry_invalid".into());
+            }
+            let weights = &telemetry.weights;
+            if weights.cpu > 20
+                || weights.ram > 20
+                || weights.load > 20
+                || weights.continuity > 20
+                || weights.compilation > 10
+                || weights.quota > 5
+                || weights.reset > 3
+            {
+                return Err("routing_score_weights_invalid".into());
+            }
+        }
+        let fixed = &machine_policy.fixed_values;
+        let automatic = &machine_policy.automatic_axes;
+        if (!automatic.engine && !fixed.engine.as_deref().is_some_and(profile_value))
+            || (!automatic.model && !fixed.model.as_deref().is_some_and(profile_value))
+            || (!automatic.machine && !fixed.machine_id.as_deref().is_some_and(profile_value))
+            || (!automatic.connection && !fixed.connection_id.as_deref().is_some_and(profile_value))
+            || (!automatic.effort && !fixed.effort.as_deref().is_some_and(profile_value))
+        {
+            return Err("routing_fixed_axis_missing".into());
+        }
+        if fixed
+            .machine_id
+            .as_deref()
+            .is_some_and(|value| !valid_routing_machine(value, machines))
+            || fixed
+                .connection_id
+                .as_deref()
+                .is_some_and(|value| !connection_ids.contains(value))
+        {
+            return Err("routing_fixed_axis_invalid".into());
+        }
+        if let Some(service) = &machine_policy.decision_service {
+            if service.enabled
+                && !service
+                    .service_id
+                    .as_deref()
+                    .is_some_and(|id| services.contains_key(id))
+            {
+                return Err("routing_decision_service_invalid".into());
+            }
+        }
+        if let Some(lightweight) = &machine_policy.lightweight_decision {
+            if lightweight.enabled {
+                let valid_connection = lightweight.connection_id.as_deref().and_then(|id| {
+                    policy
+                        .connections
+                        .iter()
+                        .find(|entry| entry.connection_id == id)
+                });
+                let valid_model = valid_connection.and_then(|connection| {
+                    policy
+                        .model_catalog
+                        .get(&connection.connection_id)
+                        .and_then(|models| {
+                            models
+                                .iter()
+                                .find(|model| lightweight.model.as_deref() == Some(&model.model))
+                        })
+                });
+                if lightweight.engine.as_deref() != Some("claude")
+                    || valid_connection.is_none_or(|connection| {
+                        !connection.enabled
+                            || connection.machine_id != *machine_id
+                            || connection.engine != "claude"
+                    })
+                    || valid_model.is_none_or(|model| {
+                        lightweight.effort.as_deref().is_some_and(|effort| {
+                            !model.supported_efforts.iter().any(|item| item == effort)
+                        })
+                    })
+                {
+                    return Err("routing_lightweight_decision_invalid".into());
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_private_machine_registry_parent(source: &Path) -> Result<(), String> {
     let parent = source.parent().ok_or("machine_registry_parent_invalid")?;
     let metadata =
@@ -2046,6 +2745,343 @@ mod tests {
         assert_eq!(
             AgentRegistry::from_json(&reference.to_string(), "/tmp/agents.json").unwrap_err(),
             "admission_profile_reference_unknown"
+        );
+    }
+
+    fn routing168_registry_value() -> serde_json::Value {
+        let mut value = remote162_registry_value();
+        value["machines"]["cartae"]["enabled"] = true.into();
+        value["agents"] = serde_json::json!({
+            "codex-personal": {"command":"codex", "protocol":"codex_app_server"},
+            "codex-work": {"command":"codex", "protocol":"codex_app_server"},
+            "claude": {"command":"claude", "protocol":"claude_stream_json"}
+        });
+        value["routing_policy"] = serde_json::json!({
+            "version": 2,
+            "revision": 1,
+            "enabled": true,
+            "connections": [
+                {"connection_id":"codex-personal", "machine_id":"local", "engine":"codex", "agent_type":"codex-personal", "enabled":true},
+                {"connection_id":"codex-work", "machine_id":"cartae", "engine":"codex", "agent_type":"codex-work", "enabled":true},
+                {"connection_id":"claude-local", "machine_id":"local", "engine":"claude", "agent_type":"claude", "enabled":true},
+                {"connection_id":"claude-cartae", "machine_id":"cartae", "engine":"claude", "agent_type":"claude", "enabled":true}
+            ],
+            "model_catalog": {
+                "codex-personal": [
+                    {"model":"gpt-6.1-sol", "supported_efforts":["low","high"], "default_effort":"high", "provenance":"operator_observation"},
+                    {"model":"gpt-6.1-luna", "supported_efforts":[], "default_effort":null, "provenance":"codex_model_list"},
+                    {"model":"gpt-6.1-terra", "supported_efforts":["medium"], "default_effort":"medium", "provenance":"codex_model_list"}
+                ],
+                "codex-work": [
+                    {"model":"gpt-6.1-sol", "supported_efforts":["low","high"], "default_effort":"high", "provenance":"operator_observation"},
+                    {"model":"gpt-6.1-luna", "supported_efforts":[], "default_effort":null, "provenance":"codex_model_list"},
+                    {"model":"gpt-6.1-terra", "supported_efforts":["medium"], "default_effort":"medium", "provenance":"codex_model_list"}
+                ],
+                "claude-local": [
+                    {"model":"claude-sonnet-4-5", "supported_efforts":["high"], "default_effort":"high", "provenance":"declared"},
+                    {"model":"claude-opus-4-5", "supported_efforts":["high"], "default_effort":"high", "provenance":"declared"},
+                    {"model":"claude-haiku-4-5", "supported_efforts":[], "default_effort":null, "provenance":"declared"}
+                ],
+                "claude-cartae": [
+                    {"model":"claude-sonnet-4-5", "supported_efforts":["high"], "default_effort":"high", "provenance":"declared"},
+                    {"model":"claude-opus-4-5", "supported_efforts":["high"], "default_effort":"high", "provenance":"declared"},
+                    {"model":"claude-haiku-4-5", "supported_efforts":[], "default_effort":null, "provenance":"declared"}
+                ]
+            },
+            "machine_policies": {
+                "local": {"enabled":true, "decision_timeout_ms":10000, "service_timeout_ms":2000},
+                "cartae": {"enabled":true, "decision_timeout_ms":10000, "service_timeout_ms":2000}
+            }
+        });
+        value
+    }
+
+    #[test]
+    fn routing168_catalogue_12_preserve_connexions_efforts_et_defaut_natif() {
+        let registry = AgentRegistry::from_json(
+            &routing168_registry_value().to_string(),
+            "/tmp/agents-routing168.json",
+        )
+        .unwrap();
+        let catalogue = registry.routing_catalogue(1_700_000_000).unwrap();
+        assert_eq!(catalogue.version, 1);
+        assert_eq!(catalogue.options.len(), 12);
+        assert_eq!(
+            registry.routing_policy().unwrap().machine_policies["local"].compilation_capacity,
+            None,
+            "absence de déclaration reste inconnue ; aucune vitesse n'est déduite"
+        );
+        assert!(catalogue.options.iter().any(|option| {
+            option.connection_id == "codex-personal"
+                && option.model == "gpt-6.1-sol"
+                && option
+                    .supported_efforts
+                    .iter()
+                    .map(String::as_str)
+                    .eq(["low", "high"])
+                && option.default_effort.as_deref() == Some("high")
+        }));
+        assert!(catalogue.options.iter().any(|option| {
+            option.connection_id == "codex-work"
+                && option.model == "gpt-6.1-luna"
+                && option.supported_efforts.is_empty()
+                && option.default_effort.is_none()
+        }));
+        assert!(catalogue.options.iter().any(|option| {
+            option.connection_id == "claude-local"
+                && option.model == "claude-sonnet-4-5"
+                && option.entitlement == RoutingEntitlement::Unknown
+        }));
+    }
+
+    #[test]
+    fn routing168_129_meme_desactive_refuse_sans_catalogue_partiel() {
+        let mut value = routing168_registry_value();
+        value["routing_policy"]["connections"].as_array_mut().unwrap().push(
+            serde_json::json!({"connection_id":"overflow-disabled", "machine_id":"cartae", "engine":"codex", "agent_type":"codex-work", "enabled":false}),
+        );
+        value["routing_policy"]["model_catalog"]["overflow-disabled"] = serde_json::Value::Array(
+            (0..129)
+                .map(|index| {
+                    serde_json::json!({
+                        "model": format!("declared-overflow-{index}"),
+                        "supported_efforts": [],
+                        "default_effort": null,
+                        "provenance": "declared"
+                    })
+                })
+                .collect(),
+        );
+        assert_eq!(
+            AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing168.json")
+                .unwrap_err(),
+            "candidate_limit"
+        );
+    }
+
+    #[test]
+    fn routing168_axes_independants_fixes_et_contradiction_restent_des_filtres() {
+        let mut value = routing168_registry_value();
+        value["routing_policy"]["machine_policies"]["local"]["automatic_axes"] = serde_json::json!({"engine":false, "model":true, "machine":true, "connection":true, "effort":true});
+        value["routing_policy"]["machine_policies"]["local"]["fixed_values"] =
+            serde_json::json!({"engine":"codex"});
+        let registry =
+            AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing168.json").unwrap();
+        let selected = registry
+            .select_routing_candidates(
+                "local",
+                &RoutingCandidateFilters {
+                    model: Some("gpt-6.1-sol".into()),
+                    ..RoutingCandidateFilters::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(selected.len(), 2, "un modèle conserve les deux machines");
+        assert_eq!(selected[0].candidate.machine_id, "cartae");
+        assert_eq!(selected[1].candidate.machine_id, "local");
+        assert!(
+            registry
+                .select_routing_candidates(
+                    "local",
+                    &RoutingCandidateFilters {
+                        connection_id: Some("claude-local".into()),
+                        ..RoutingCandidateFilters::default()
+                    },
+                )
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn routing168_decideurs_inaccessibles_sont_valides_et_claude_distant_refuse() {
+        let mut value = routing168_registry_value();
+        value["decision_services"] = serde_json::json!({"laya":{"machine_id":"local", "protocol":"laya_systemone_v1", "model":"routing", "endpoint":"https://decision.internal/v1"}});
+        value["routing_policy"]["machine_policies"]["local"]["decision_service"] =
+            serde_json::json!({"enabled":true, "accessible":false, "service_id":"laya"});
+        value["routing_policy"]["machine_policies"]["local"]["lightweight_decision"] = serde_json::json!({"enabled":true, "accessible":false, "engine":"claude", "connection_id":"claude-local", "model":"claude-sonnet-4-5", "effort":"high"});
+        assert!(
+            AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing168.json").is_ok()
+        );
+
+        value["routing_policy"]["machine_policies"]["local"]["lightweight_decision"]["connection_id"] =
+            "claude-cartae".into();
+        assert_eq!(
+            AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing168.json")
+                .unwrap_err(),
+            "routing_lightweight_decision_invalid"
+        );
+    }
+
+    #[test]
+    fn spec168_telemetrie_cpu_charge_seuils_1_100_fermes() {
+        let mut value = routing168_registry_value();
+        value["routing_policy"]["machine_policies"]["local"]["telemetry"] =
+            serde_json::json!({"enabled":true});
+        let defaults = RoutingScoreWeights::default();
+        let registry =
+            AgentRegistry::from_json(&value.to_string(), "/tmp/routing168-defaults.json").unwrap();
+        assert_eq!(
+            registry.routing_policy().unwrap().machine_policies["local"]
+                .telemetry
+                .as_ref()
+                .unwrap()
+                .weights,
+            defaults
+        );
+        let default_policy = serde_json::to_vec(registry.routing_policy().unwrap()).unwrap();
+        let old_snapshot: serde_json::Value = serde_json::from_slice(&default_policy).unwrap();
+        assert!(
+            old_snapshot["machine_policies"]["local"]["telemetry"]
+                .get("weights")
+                .is_none(),
+            "le JSON historique sans poids reste sans ce champ"
+        );
+        let restored: RoutingPolicy = serde_json::from_slice(&default_policy).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&restored).unwrap(),
+            default_policy,
+            "ancien snapshot sans weights : roundtrip byte-identique et digest conservé"
+        );
+        value["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"] =
+            serde_json::to_value(&defaults).unwrap();
+        let explicit =
+            AgentRegistry::from_json(&value.to_string(), "/tmp/routing168-defaults.json").unwrap();
+        let explicit_policy = serde_json::to_vec(explicit.routing_policy().unwrap()).unwrap();
+        assert_eq!(
+            default_policy, explicit_policy,
+            "poids omis et défauts explicites figent les mêmes octets de politique/digest"
+        );
+        let default_digest = Sha256::digest(&default_policy);
+
+        value["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"] =
+            serde_json::json!({"cpu":7});
+        let partial =
+            AgentRegistry::from_json(&value.to_string(), "/tmp/routing168-weights.json").unwrap();
+        assert_eq!(
+            partial.routing_policy().unwrap().machine_policies["local"]
+                .telemetry
+                .as_ref()
+                .unwrap()
+                .weights,
+            RoutingScoreWeights {
+                cpu: 7,
+                ..defaults.clone()
+            },
+            "les champs d'un objet partiel gardent leurs défauts"
+        );
+        let changed_policy = serde_json::to_vec(partial.routing_policy().unwrap()).unwrap();
+        let changed_snapshot: serde_json::Value = serde_json::from_slice(&changed_policy).unwrap();
+        assert_eq!(
+            changed_snapshot["machine_policies"]["local"]["telemetry"]["weights"]["cpu"], 7,
+            "les poids non par défaut restent explicitement figés"
+        );
+        assert_ne!(
+            Sha256::digest(&changed_policy),
+            default_digest,
+            "les poids configurés sont portés par la politique sérialisée du snapshot/digest"
+        );
+
+        for (field, cap) in [
+            ("cpu", 20),
+            ("ram", 20),
+            ("load", 20),
+            ("continuity", 20),
+            ("compilation", 10),
+            ("quota", 5),
+            ("reset", 3),
+        ] {
+            for valid in [0, cap] {
+                let mut configured = value.clone();
+                configured["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"] =
+                    serde_json::json!({});
+                configured["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"]
+                    [field] = serde_json::json!(valid);
+                assert!(
+                    AgentRegistry::from_json(
+                        &configured.to_string(),
+                        "/tmp/routing168-weights.json"
+                    )
+                    .is_ok(),
+                    "{field}={valid}"
+                );
+            }
+            for invalid in [cap + 1, 255] {
+                let mut configured = value.clone();
+                configured["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"] =
+                    serde_json::json!({});
+                configured["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"]
+                    [field] = serde_json::json!(invalid);
+                assert_eq!(
+                    AgentRegistry::from_json(
+                        &configured.to_string(),
+                        "/tmp/routing168-weights.json"
+                    )
+                    .unwrap_err(),
+                    "routing_score_weights_invalid",
+                    "{field}={invalid}"
+                );
+            }
+        }
+        let mut zero = value.clone();
+        zero["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"] = serde_json::json!({"cpu":0,"ram":0,"load":0,"continuity":0,"compilation":0,"quota":0,"reset":0});
+        assert!(
+            AgentRegistry::from_json(&zero.to_string(), "/tmp/routing168-weights.json").is_ok()
+        );
+        zero["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"]["saturation"] =
+            serde_json::json!(0);
+        assert!(
+            AgentRegistry::from_json(&zero.to_string(), "/tmp/routing168-weights.json").is_err(),
+            "la pénalité100 n'est jamais réglable, même quand les autres poids valent0"
+        );
+        for invalid in [
+            serde_json::json!(-1),
+            serde_json::json!(256),
+            serde_json::json!(1.5),
+            serde_json::json!("7"),
+            serde_json::Value::Null,
+        ] {
+            let mut configured = value.clone();
+            configured["routing_policy"]["machine_policies"]["local"]["telemetry"]["weights"]["cpu"] =
+                invalid;
+            assert!(
+                AgentRegistry::from_json(&configured.to_string(), "/tmp/routing168-weights.json")
+                    .is_err(),
+                "chaque poids exige un entier borné"
+            );
+        }
+
+        for field in [
+            "cpu_saturation_percent",
+            "normalized_load_saturation_percent",
+        ] {
+            for invalid in [0, 101, 255] {
+                let mut value = routing168_registry_value();
+                value["routing_policy"]["machine_policies"]["local"]["telemetry"] =
+                    serde_json::json!({"enabled":true});
+                value["routing_policy"]["machine_policies"]["local"]["telemetry"][field] =
+                    serde_json::json!(invalid);
+                assert_eq!(
+                    AgentRegistry::from_json(&value.to_string(), "/tmp/routing168-invalid.json")
+                        .unwrap_err(),
+                    "routing_telemetry_invalid"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn routing168_capacite_compilation_est_declarative_et_bornee() {
+        let mut value = routing168_registry_value();
+        value["routing_policy"]["machine_policies"]["local"]["compilation_capacity"] = 10.into();
+        assert!(
+            AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing168.json").is_ok()
+        );
+        value["routing_policy"]["machine_policies"]["local"]["compilation_capacity"] = 11.into();
+        assert_eq!(
+            AgentRegistry::from_json(&value.to_string(), "/tmp/agents-routing168.json")
+                .unwrap_err(),
+            "routing_machine_policy_invalid"
         );
     }
 

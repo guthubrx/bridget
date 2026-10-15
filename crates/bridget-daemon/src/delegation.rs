@@ -9,7 +9,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 pub(crate) const MAX_AUTO_ADMISSION_CANONICAL_BYTES: usize = 512 * 1024;
-pub(crate) const MAX_AUTO_ADMISSION_METADATA_BYTES: usize = 16 * 1024;
+/// Borne historique des snapshots 163 (version absente ou `1`).
+pub(crate) const MAX_AUTO_ADMISSION_METADATA_V1_BYTES: usize = 16 * 1024;
+/// Borne des snapshots de routage 168. Le canon reste volontairement séparé.
+pub(crate) const MAX_AUTO_ADMISSION_METADATA_V2_BYTES: usize = 128 * 1024;
+/// Alias conservé pour les appelants 163 : il ne doit jamais valider un reçu v2.
+pub(crate) const MAX_AUTO_ADMISSION_METADATA_BYTES: usize = MAX_AUTO_ADMISSION_METADATA_V1_BYTES;
 pub(crate) const MAX_ACTIVE_ADMISSIONS: usize = 128;
 pub(crate) const MAX_ACTIVE_ADMISSIONS_PER_OWNER: usize = 16;
 
@@ -176,6 +181,15 @@ pub(crate) enum AutoAdmissionMode {
     Fallback,
 }
 
+/// Niveau de la chaîne qui possède actuellement le CAS. Ce n'est pas une
+/// politique : la source détaillée et le repli restent dans le snapshot opaque.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AutoAdmissionDecisionLevel {
+    DecisionService,
+    LightweightModel,
+}
+
 impl AutoAdmissionMode {
     fn as_sql(self) -> &'static str {
         match self {
@@ -203,6 +217,8 @@ pub(crate) struct AutoAdmissionReceipt {
     pub request_id: String,
     pub canonical: Vec<u8>,
     pub metadata: Vec<u8>,
+    /// 1 pour le reçu 163 (y compris l'absence historique), 2 pour le snapshot168.
+    pub metadata_version: u8,
     pub state: AutoAdmissionState,
     pub coordinator_epoch: i64,
     pub revision: i64,
@@ -232,13 +248,31 @@ impl AutoAdmissionReceipt {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     }
 
+    fn valid_candidate_id(&self, value: &str) -> bool {
+        if self.metadata_version == 1 {
+            return bridget_transport::protocol::is_auto_candidate_id(value);
+        }
+        value.len() == 4
+            && value.starts_with('c')
+            && value[1..].bytes().all(|byte| byte.is_ascii_digit())
+            && value[1..]
+                .parse::<u16>()
+                .ok()
+                .is_some_and(|id| (1..=128).contains(&id))
+    }
+
     fn validate(&self) -> Result<(), String> {
+        let metadata_limit = match self.metadata_version {
+            1 => MAX_AUTO_ADMISSION_METADATA_V1_BYTES,
+            2 => MAX_AUTO_ADMISSION_METADATA_V2_BYTES,
+            _ => return Err("auto_admission_invalid".into()),
+        };
         if !Self::valid_atom(&self.owner, 256)
             || !Self::valid_atom(&self.request_id, 256)
             || self.canonical.is_empty()
             || self.canonical.len() > MAX_AUTO_ADMISSION_CANONICAL_BYTES
             || self.metadata.is_empty()
-            || self.metadata.len() > MAX_AUTO_ADMISSION_METADATA_BYTES
+            || self.metadata.len() > metadata_limit
             || !serde_json::from_slice::<serde_json::Value>(&self.metadata)
                 .ok()
                 .is_some_and(|value| value.is_object())
@@ -251,7 +285,7 @@ impl AutoAdmissionReceipt {
             || self
                 .candidate_id
                 .as_deref()
-                .is_some_and(|value| !bridget_transport::protocol::is_auto_candidate_id(value))
+                .is_some_and(|value| !self.valid_candidate_id(value))
             || self.delegate_canonical.as_ref().is_some_and(|value| {
                 value.is_empty() || value.len() > MAX_AUTO_ADMISSION_CANONICAL_BYTES
             })
@@ -301,12 +335,12 @@ impl AutoAdmissionReceipt {
         let state: String = row.get("state")?;
         let mode: Option<String> = row.get("mode")?;
         let state = AutoAdmissionState::from_sql(&state).ok_or_else(|| {
-            rusqlite::Error::InvalidColumnType(4, "state".into(), rusqlite::types::Type::Text)
+            rusqlite::Error::InvalidColumnType(5, "state".into(), rusqlite::types::Type::Text)
         })?;
         let mode = match mode.as_deref() {
             None => None,
             Some(value) => Some(AutoAdmissionMode::from_sql(value).ok_or_else(|| {
-                rusqlite::Error::InvalidColumnType(11, "mode".into(), rusqlite::types::Type::Text)
+                rusqlite::Error::InvalidColumnType(12, "mode".into(), rusqlite::types::Type::Text)
             })?),
         };
         Ok(Self {
@@ -314,6 +348,7 @@ impl AutoAdmissionReceipt {
             request_id: row.get("request_id")?,
             canonical: row.get("canonical")?,
             metadata: row.get("metadata")?,
+            metadata_version: row.get("metadata_version")?,
             state,
             coordinator_epoch: row.get("coordinator_epoch")?,
             revision: row.get("revision")?,
@@ -337,12 +372,313 @@ fn auto_admission_receipt_in(
     request_id: &str,
 ) -> Result<Option<AutoAdmissionReceipt>, String> {
     tx.query_row(
-        "SELECT owner,request_id,canonical,metadata,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at FROM auto_admission_receipts WHERE owner=?1 AND request_id=?2",
+        "SELECT owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at FROM auto_admission_receipts WHERE owner=?1 AND request_id=?2",
         params![owner, request_id],
         AutoAdmissionReceipt::from_row,
     )
     .optional()
     .map_err(|error| error.to_string())
+}
+
+fn receipt_decision_level(
+    receipt: &AutoAdmissionReceipt,
+) -> Result<AutoAdmissionDecisionLevel, String> {
+    if receipt.metadata_version != 2 {
+        return Err("auto_admission_level_unsupported".into());
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&receipt.metadata).map_err(|_| "auto_admission_invalid")?;
+    match value
+        .get("decision_level")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("decision_service") => Ok(AutoAdmissionDecisionLevel::DecisionService),
+        Some("lightweight_model") => Ok(AutoAdmissionDecisionLevel::LightweightModel),
+        _ => Err("auto_admission_invalid".into()),
+    }
+}
+
+const AUTO_RECEIPT_COLUMNS_163: &[&str] = &[
+    "owner",
+    "request_id",
+    "canonical",
+    "metadata",
+    "state",
+    "coordinator_epoch",
+    "revision",
+    "policy_revision",
+    "policy_digest",
+    "candidate_id",
+    "delegate_canonical",
+    "mode",
+    "reason",
+    "task_id",
+    "refusal_code",
+    "created_at",
+    "updated_at",
+];
+const AUTO_RECEIPT_COLUMNS_168: &[&str] = &[
+    "owner",
+    "request_id",
+    "canonical",
+    "metadata",
+    "metadata_version",
+    "state",
+    "coordinator_epoch",
+    "revision",
+    "policy_revision",
+    "policy_digest",
+    "candidate_id",
+    "delegate_canonical",
+    "mode",
+    "reason",
+    "task_id",
+    "refusal_code",
+    "created_at",
+    "updated_at",
+];
+const AUTO_RECEIPT_CREATE_168: &str = "CREATE TABLE auto_admission_receipts_168_new(
+  owner TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  canonical BLOB NOT NULL CHECK (length(canonical) BETWEEN 1 AND 524288),
+  metadata BLOB NOT NULL,
+  metadata_version INTEGER NOT NULL DEFAULT 1 CHECK (metadata_version IN (1,2)),
+  state TEXT NOT NULL CHECK (state IN ('pending','decision_started','chosen','admitted','refused')),
+  coordinator_epoch INTEGER NOT NULL CHECK (coordinator_epoch >= 0),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  policy_revision INTEGER NOT NULL CHECK (policy_revision > 0),
+  policy_digest TEXT NOT NULL,
+  candidate_id TEXT,
+  delegate_canonical BLOB,
+  mode TEXT CHECK (mode IS NULL OR mode IN ('explicit','automatic','fallback')),
+  reason TEXT,
+  task_id TEXT,
+  refusal_code TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 131072 ELSE 16384 END),
+  PRIMARY KEY(owner, request_id)
+)";
+const AUTO_RECEIPT_INDEXES_168: &str = "
+CREATE INDEX auto_admission_receipts_maintenance
+ON auto_admission_receipts(coordinator_epoch, state, updated_at);
+CREATE INDEX auto_admission_receipts_task
+ON auto_admission_receipts(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX auto_admission_receipts_refused_purge
+ON auto_admission_receipts(state, task_id, updated_at, owner, request_id)
+WHERE state='refused' AND task_id IS NULL;";
+
+/// Migration froide de la seule table de reçus. Toute forme non reconnue est
+/// refusée avant écriture : une ouverture ne doit jamais "réparer" une base
+/// inconnue ni désactiver les contraintes SQLite.
+fn migrate_auto_admission_receipts_168(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let columns = tx
+        .prepare("PRAGMA table_info(auto_admission_receipts)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let names = columns.iter().map(String::as_str).collect::<Vec<_>>();
+    if names == AUTO_RECEIPT_COLUMNS_168 {
+        verify_auto_receipt_schema_168(tx)?;
+        return Ok(());
+    }
+    if names != AUTO_RECEIPT_COLUMNS_163 {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    verify_auto_receipt_schema_163(tx)?;
+    reject_unexpected_auto_receipt_dependencies(tx)?;
+    tx.execute_batch(AUTO_RECEIPT_CREATE_168)?;
+    tx.execute_batch(
+        "INSERT INTO auto_admission_receipts_168_new(
+           owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,
+           policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,
+           refusal_code,created_at,updated_at)
+         SELECT owner,request_id,canonical,metadata,1,state,coordinator_epoch,revision,
+           policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,
+           refusal_code,created_at,updated_at
+         FROM auto_admission_receipts;
+         DROP TABLE auto_admission_receipts;
+         ALTER TABLE auto_admission_receipts_168_new RENAME TO auto_admission_receipts;",
+    )?;
+    tx.execute_batch(AUTO_RECEIPT_INDEXES_168)?;
+    verify_auto_receipt_schema_168(tx)?;
+    let quick_check: String = tx.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    let foreign_key_violation: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+        [],
+        |row| row.get(0),
+    )?;
+    if quick_check != "ok" || foreign_key_violation {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
+}
+
+fn normalized_auto_receipt_sql(tx: &Transaction<'_>) -> rusqlite::Result<String> {
+    let sql: String = tx.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_admission_receipts'",
+        [],
+        |row| row.get(0),
+    )?;
+    let normalized = sql
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    // SQLite cite le nom de table après ALTER TABLE ... RENAME. Ne
+    // normaliser que cet identifiant connu ; les contraintes restent exactes.
+    let table = normalized
+        .strip_prefix("createtableifnotexists")
+        .or_else(|| normalized.strip_prefix("createtable"))
+        .ok_or(rusqlite::Error::InvalidQuery)?;
+    let body = table
+        .strip_prefix("\"auto_admission_receipts\"(")
+        .or_else(|| table.strip_prefix("auto_admission_receipts("))
+        .ok_or(rusqlite::Error::InvalidQuery)?;
+    Ok(format!("createtableauto_admission_receipts({body}"))
+}
+
+fn verify_auto_receipt_schema_163(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    reject_unexpected_auto_receipt_dependencies(tx)?;
+    verify_auto_receipt_columns(tx, AUTO_RECEIPT_COLUMNS_163)?;
+    let sql = normalized_auto_receipt_sql(tx)?;
+    const EXPECTED: &str = "createtableauto_admission_receipts(ownertextnotnull,request_idtextnotnull,canonicalblobnotnullcheck(length(canonical)between1and524288),metadatablobnotnullcheck(length(metadata)between1and16384),statetextnotnullcheck(statein('pending','decision_started','chosen','admitted','refused')),coordinator_epochintegernotnullcheck(coordinator_epoch>=0),revisionintegernotnullcheck(revision>=0),policy_revisionintegernotnullcheck(policy_revision>0),policy_digesttextnotnull,candidate_idtext,delegate_canonicalblob,modetextcheck(modeisnullormodein('explicit','automatic','fallback')),reasontext,task_idtext,refusal_codetext,created_atintegernotnull,updated_atintegernotnull,primarykey(owner,request_id))";
+    if sql != EXPECTED {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    verify_auto_receipt_indexes(tx)?;
+    Ok(())
+}
+
+fn reject_unexpected_auto_receipt_dependencies(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    let has_trigger: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='auto_admission_receipts')",
+        [], |row| row.get(0),
+    )?;
+    let has_foreign_key: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('auto_admission_receipts'))",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_trigger || has_foreign_key {
+        Err(rusqlite::Error::InvalidQuery)
+    } else {
+        let mut tables = tx.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'auto_admission_receipts'")?;
+        let tables = tables
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for table in tables {
+            let escaped = table.replace('"', "\"\"");
+            let mut foreign_keys =
+                tx.prepare(&format!("PRAGMA foreign_key_list(\"{escaped}\")"))?;
+            let references_receipt = foreign_keys
+                .query_map([], |row| row.get::<_, String>(2))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+                .into_iter()
+                .any(|target| target.eq_ignore_ascii_case("auto_admission_receipts"));
+            if references_receipt {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+        }
+        Ok(())
+    }
+}
+
+fn verify_auto_receipt_schema_168(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    reject_unexpected_auto_receipt_dependencies(tx)?;
+    verify_auto_receipt_columns(tx, AUTO_RECEIPT_COLUMNS_168)?;
+    let sql = normalized_auto_receipt_sql(tx)?;
+    const EXPECTED: &str = "createtableauto_admission_receipts(ownertextnotnull,request_idtextnotnull,canonicalblobnotnullcheck(length(canonical)between1and524288),metadatablobnotnull,metadata_versionintegernotnulldefault1check(metadata_versionin(1,2)),statetextnotnullcheck(statein('pending','decision_started','chosen','admitted','refused')),coordinator_epochintegernotnullcheck(coordinator_epoch>=0),revisionintegernotnullcheck(revision>=0),policy_revisionintegernotnullcheck(policy_revision>0),policy_digesttextnotnull,candidate_idtext,delegate_canonicalblob,modetextcheck(modeisnullormodein('explicit','automatic','fallback')),reasontext,task_idtext,refusal_codetext,created_atintegernotnull,updated_atintegernotnull,check(length(metadata)between1andcasemetadata_versionwhen2then131072else16384end),primarykey(owner,request_id))";
+    if sql != EXPECTED {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    verify_auto_receipt_indexes(tx)?;
+    Ok(())
+}
+
+fn verify_auto_receipt_indexes(tx: &Transaction<'_>) -> rusqlite::Result<()> {
+    for (index, expected) in [
+        (
+            "auto_admission_receipts_maintenance",
+            "createindexauto_admission_receipts_maintenanceonauto_admission_receipts(coordinator_epoch,state,updated_at)",
+        ),
+        (
+            "auto_admission_receipts_task",
+            "createindexauto_admission_receipts_taskonauto_admission_receipts(task_id)wheretask_idisnotnull",
+        ),
+        (
+            "auto_admission_receipts_refused_purge",
+            "createindexauto_admission_receipts_refused_purgeonauto_admission_receipts(state,task_id,updated_at,owner,request_id)wherestate='refused'andtask_idisnull",
+        ),
+    ] {
+        let actual: String = tx.query_row("SELECT sql FROM sqlite_master WHERE type='index' AND name=?1 AND tbl_name='auto_admission_receipts'", [index], |row| row.get(0))?;
+        let actual = actual
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+        let actual = actual
+            .strip_prefix("createindexifnotexists")
+            .map(|tail| format!("createindex{tail}"))
+            .unwrap_or(actual);
+        if actual != expected {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+    }
+    Ok(())
+}
+
+fn verify_auto_receipt_columns(tx: &Transaction<'_>, expected: &[&str]) -> rusqlite::Result<()> {
+    let actual = tx
+        .prepare("PRAGMA table_info(auto_admission_receipts)")?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?.to_ascii_uppercase(),
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(5)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if actual.len() != expected.len()
+        || actual
+            .iter()
+            .map(|column| column.0.as_str())
+            .collect::<Vec<_>>()
+            != expected
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    for (index, (_, ty, not_null, pk)) in actual.iter().enumerate() {
+        let expected_type = match expected[index] {
+            "canonical" | "metadata" | "delegate_canonical" => "BLOB",
+            "coordinator_epoch" | "revision" | "policy_revision" | "created_at" | "updated_at"
+            | "metadata_version" => "INTEGER",
+            _ => "TEXT",
+        };
+        if ty != expected_type
+            || (*not_null == 0
+                && !matches!(
+                    expected[index],
+                    "candidate_id"
+                        | "delegate_canonical"
+                        | "mode"
+                        | "reason"
+                        | "task_id"
+                        | "refusal_code"
+                ))
+            || (*pk
+                != if index == 0 {
+                    1
+                } else if index == 1 {
+                    2
+                } else {
+                    0
+                })
+        {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+    }
+    Ok(())
 }
 
 fn tombstoned_in(tx: &Transaction<'_>, owner: &str, request_id: &str) -> Result<bool, String> {
@@ -853,7 +1189,8 @@ CREATE TABLE IF NOT EXISTS auto_admission_receipts(
   owner TEXT NOT NULL,
   request_id TEXT NOT NULL,
   canonical BLOB NOT NULL CHECK (length(canonical) BETWEEN 1 AND 524288),
-  metadata BLOB NOT NULL CHECK (length(metadata) BETWEEN 1 AND 16384),
+  metadata BLOB NOT NULL,
+  metadata_version INTEGER NOT NULL DEFAULT 1 CHECK (metadata_version IN (1,2)),
   state TEXT NOT NULL CHECK (state IN ('pending','decision_started','chosen','admitted','refused')),
   coordinator_epoch INTEGER NOT NULL CHECK (coordinator_epoch >= 0),
   revision INTEGER NOT NULL CHECK (revision >= 0),
@@ -867,6 +1204,7 @@ CREATE TABLE IF NOT EXISTS auto_admission_receipts(
   refusal_code TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  CHECK (length(metadata) BETWEEN 1 AND CASE metadata_version WHEN 2 THEN 131072 ELSE 16384 END),
   PRIMARY KEY(owner, request_id)
 );
 CREATE INDEX IF NOT EXISTS auto_admission_receipts_maintenance
@@ -877,6 +1215,7 @@ CREATE INDEX IF NOT EXISTS auto_admission_receipts_refused_purge
 ON auto_admission_receipts(state, task_id, updated_at, owner, request_id)
 WHERE state='refused' AND task_id IS NULL;
 ")?;
+        migrate_auto_admission_receipts_168(&tx)?;
         const LEGACY_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'))";
         const CURRENT_INDEX: &str = "CREATE INDEX native_delegations_state ON native_delegations(json_extract(payload,'$.state'),coalesce(json_extract(payload,'$.guarded'),0),coalesce(json_extract(payload,'$.cleanup_done'),0),owner_instance)";
         let existing: Option<String> = tx.query_row(
@@ -1322,7 +1661,7 @@ WHERE state='refused' AND task_id IS NULL;
         let receipt = self
             .conn
             .query_row(
-                "SELECT owner,request_id,canonical,metadata,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at FROM auto_admission_receipts WHERE owner=?1 AND request_id=?2",
+                "SELECT owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at FROM auto_admission_receipts WHERE owner=?1 AND request_id=?2",
                 params![owner, request_id],
                 AutoAdmissionReceipt::from_row,
             )
@@ -1346,7 +1685,7 @@ WHERE state='refused' AND task_id IS NULL;
         }
         self.conn
             .prepare(
-                "SELECT owner,request_id,canonical,metadata,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at
+                "SELECT owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at
                  FROM auto_admission_receipts
                  WHERE coordinator_epoch<?1
                    AND state IN ('pending','decision_started','chosen')
@@ -1423,6 +1762,100 @@ WHERE state='refused' AND task_id IS NULL;
         Ok(purged)
     }
 
+    /// Passe du service au décideur léger avec l'unique snapshot v2 déjà
+    /// préparé par le coordinateur. Le store ne construit ni politique ni
+    /// métadonnée : il vérifie seulement le niveau déclaré et le CAS complet.
+    pub(crate) fn advance_auto_admission_decision_level(
+        &self,
+        receipt: &AutoAdmissionReceipt,
+        expected_epoch: i64,
+        expected_revision: i64,
+        expected_level: AutoAdmissionDecisionLevel,
+        next_metadata: Vec<u8>,
+        now: i64,
+    ) -> Result<AutoAdmissionReceipt, String> {
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut current = auto_admission_receipt_in(&tx, &receipt.owner, &receipt.request_id)?
+            .ok_or("auto_admission_missing")?;
+        if current.canonical != receipt.canonical {
+            return Err("envelope_mismatch".into());
+        }
+        if expected_level != AutoAdmissionDecisionLevel::DecisionService
+            || current.coordinator_epoch != expected_epoch
+            || current.revision != expected_revision
+            || current.state != AutoAdmissionState::DecisionStarted
+            || receipt_decision_level(&current)? != expected_level
+        {
+            return Err("admission_pending".into());
+        }
+        current.metadata = next_metadata;
+        current.revision = current
+            .revision
+            .checked_add(1)
+            .ok_or("auto_admission_invalid")?;
+        current.updated_at = now.max(current.created_at);
+        current.validate()?;
+        if receipt_decision_level(&current)? != AutoAdmissionDecisionLevel::LightweightModel {
+            return Err("auto_admission_invalid".into());
+        }
+        let changed = tx.execute(
+            "UPDATE auto_admission_receipts SET metadata=?3,revision=?4,updated_at=?5
+             WHERE owner=?1 AND request_id=?2 AND coordinator_epoch=?6 AND revision=?7 AND state='decision_started'",
+            params![current.owner, current.request_id, current.metadata, current.revision,
+                current.updated_at, expected_epoch, expected_revision],
+        ).map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("admission_pending".into());
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(current)
+    }
+
+    /// Démarre un niveau v2 sous époque/révision explicites. La méthode163
+    /// ci-dessous reste l'adaptateur des reçus v1 et ne peut pas ouvrir v2.
+    pub(crate) fn start_auto_decision_level(
+        &self,
+        receipt: &AutoAdmissionReceipt,
+        expected_epoch: i64,
+        expected_revision: i64,
+        level: AutoAdmissionDecisionLevel,
+        now: i64,
+    ) -> Result<AutoAdmissionReceipt, String> {
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut current = auto_admission_receipt_in(&tx, &receipt.owner, &receipt.request_id)?
+            .ok_or("auto_admission_missing")?;
+        if current.canonical != receipt.canonical {
+            return Err("envelope_mismatch".into());
+        }
+        if current.coordinator_epoch != expected_epoch
+            || current.revision != expected_revision
+            || current.state != AutoAdmissionState::Pending
+            || receipt_decision_level(&current)? != level
+        {
+            return Err("admission_pending".into());
+        }
+        current.state = AutoAdmissionState::DecisionStarted;
+        current.revision = current
+            .revision
+            .checked_add(1)
+            .ok_or("auto_admission_invalid")?;
+        current.updated_at = now.max(current.created_at);
+        current.validate()?;
+        let changed = tx.execute(
+            "UPDATE auto_admission_receipts SET state='decision_started',revision=?3,updated_at=?4
+             WHERE owner=?1 AND request_id=?2 AND coordinator_epoch=?5 AND revision=?6 AND state='pending'",
+            params![current.owner, current.request_id, current.revision, current.updated_at,
+                expected_epoch, expected_revision],
+        ).map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("admission_pending".into());
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(current)
+    }
+
     /// Persiste l'unique choix autorisé avant le puits native. Le CAS par
     /// révision interdit qu'une réponse tardive remplace un état repris.
     pub(crate) fn choose_auto_admission(
@@ -1442,6 +1875,9 @@ WHERE state='refused' AND task_id IS NULL;
             auto_admission_receipt_in(&tx, owner, request_id)?.ok_or("auto_admission_missing")?;
         if receipt.canonical != canonical {
             return Err("envelope_mismatch".into());
+        }
+        if receipt.metadata_version != 1 {
+            return Err("auto_admission_level_unsupported".into());
         }
         if !matches!(
             receipt.state,
@@ -1485,6 +1921,80 @@ WHERE state='refused' AND task_id IS NULL;
         Ok(receipt)
     }
 
+    /// Variante168 : une réponse ne peut choisir que le niveau, l'époque et
+    /// la révision qu'elle a effectivement consultés. Une réponse tardive est
+    /// donc `admission_pending`, jamais un refus synthétique.
+    pub(crate) fn choose_auto_admission_at(
+        &self,
+        receipt: &AutoAdmissionReceipt,
+        expected_epoch: i64,
+        expected_revision: i64,
+        level: AutoAdmissionDecisionLevel,
+        candidate_id: String,
+        delegate_canonical: Vec<u8>,
+        mode: AutoAdmissionMode,
+        reason: Option<String>,
+        chosen_metadata: Vec<u8>,
+        now: i64,
+    ) -> Result<AutoAdmissionReceipt, String> {
+        let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let mut current = auto_admission_receipt_in(&tx, &receipt.owner, &receipt.request_id)?
+            .ok_or("auto_admission_missing")?;
+        if current.canonical != receipt.canonical {
+            return Err("envelope_mismatch".into());
+        }
+        if current.coordinator_epoch != expected_epoch
+            || current.revision != expected_revision
+            || current.state != AutoAdmissionState::DecisionStarted
+            || receipt_decision_level(&current)? != level
+        {
+            return Err("admission_pending".into());
+        }
+        current.state = AutoAdmissionState::Chosen;
+        current.candidate_id = Some(candidate_id);
+        current.delegate_canonical = Some(delegate_canonical);
+        current.mode = Some(mode);
+        current.reason = reason;
+        current.metadata = chosen_metadata;
+        current.refusal_code = None;
+        current.revision = current
+            .revision
+            .checked_add(1)
+            .ok_or("auto_admission_invalid")?;
+        current.updated_at = now.max(current.created_at);
+        current.validate()?;
+        if current.metadata_version != 2 || receipt_decision_level(&current)? != level {
+            return Err("auto_admission_invalid".into());
+        }
+        let changed = tx
+            .execute(
+                "UPDATE auto_admission_receipts SET state='chosen',revision=?3,candidate_id=?4,
+             delegate_canonical=?5,mode=?6,reason=?7,metadata=?8,refusal_code=NULL,updated_at=?9
+             WHERE owner=?1 AND request_id=?2 AND coordinator_epoch=?10 AND revision=?11
+             AND state='decision_started'",
+                params![
+                    current.owner,
+                    current.request_id,
+                    current.revision,
+                    current.candidate_id,
+                    current.delegate_canonical,
+                    current.mode.map(AutoAdmissionMode::as_sql),
+                    current.reason,
+                    current.metadata,
+                    current.updated_at,
+                    expected_epoch,
+                    expected_revision
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        if changed != 1 {
+            return Err("admission_pending".into());
+        }
+        tx.commit().map_err(|error| error.to_string())?;
+        Ok(current)
+    }
+
     /// Marque la frontière juste avant l'appel HTTP. Une reprise ne doit pas
     /// réouvrir ce reçu ni réémettre une décision après un crash demandeur.
     pub(crate) fn start_auto_decision(
@@ -1498,6 +2008,9 @@ WHERE state='refused' AND task_id IS NULL;
             .ok_or("auto_admission_missing")?;
         if current.canonical != receipt.canonical {
             return Err("envelope_mismatch".into());
+        }
+        if current.metadata_version != 1 {
+            return Err("auto_admission_level_unsupported".into());
         }
         if current.state != AutoAdmissionState::Pending || current.revision != receipt.revision {
             return Err(if matches!(
@@ -1720,12 +2233,13 @@ WHERE state='refused' AND task_id IS NULL;
         }
         let changed = tx
             .execute(
-                "INSERT OR IGNORE INTO auto_admission_receipts(owner,request_id,canonical,metadata,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                "INSERT OR IGNORE INTO auto_admission_receipts(owner,request_id,canonical,metadata,metadata_version,state,coordinator_epoch,revision,policy_revision,policy_digest,candidate_id,delegate_canonical,mode,reason,task_id,refusal_code,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
                 params![
                     receipt.owner,
                     receipt.request_id,
                     receipt.canonical,
                     receipt.metadata,
+                    receipt.metadata_version,
                     receipt.state.as_sql(),
                     receipt.coordinator_epoch,
                     receipt.revision,
@@ -2229,6 +2743,7 @@ mod tests {
             canonical: format!(r#"{{"operation":"auto_delegate","request_id":"{request_id}"}}"#)
                 .into_bytes(),
             metadata: br#"{"policy_revision":7,"profiles":["c01"]}"#.to_vec(),
+            metadata_version: 1,
             state: AutoAdmissionState::Pending,
             coordinator_epoch: epoch,
             revision: 0,
@@ -3503,6 +4018,7 @@ mod tests {
             request_id: "request-163".into(),
             canonical: br#"{"operation":"auto_delegate"}"#.to_vec(),
             metadata: br#"{"policy_revision":7,"profiles":["c01"]}"#.to_vec(),
+            metadata_version: 1,
             state: AutoAdmissionState::Pending,
             coordinator_epoch: 1,
             revision: 0,
@@ -3540,6 +4056,650 @@ mod tests {
         );
     }
 
+    const LEGACY_AUTO_RECEIPT_CREATE_FOR_168: &str = "CREATE TABLE auto_admission_receipts(
+          owner TEXT NOT NULL, request_id TEXT NOT NULL,
+          canonical BLOB NOT NULL CHECK (length(canonical) BETWEEN 1 AND 524288),
+          metadata BLOB NOT NULL CHECK (length(metadata) BETWEEN 1 AND 16384),
+          state TEXT NOT NULL CHECK (state IN ('pending','decision_started','chosen','admitted','refused')),
+          coordinator_epoch INTEGER NOT NULL CHECK (coordinator_epoch >= 0),
+          revision INTEGER NOT NULL CHECK (revision >= 0), policy_revision INTEGER NOT NULL CHECK (policy_revision > 0),
+          policy_digest TEXT NOT NULL, candidate_id TEXT, delegate_canonical BLOB,
+          mode TEXT CHECK (mode IS NULL OR mode IN ('explicit','automatic','fallback')),
+          reason TEXT, task_id TEXT, refusal_code TEXT, created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL, PRIMARY KEY(owner, request_id));";
+
+    #[test]
+    fn spec168_migre_163_sans_alterer_les_blobs_et_borne_v2() {
+        let dir = std::env::temp_dir().join(format!("bridget-auto168-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("admission.sqlite");
+        let legacy_canonical = b"legacy-canonical".to_vec();
+        let legacy_metadata = br#"{"legacy":true}"#.to_vec();
+        let legacy_delegate = b"legacy-delegate".to_vec();
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(LEGACY_AUTO_RECEIPT_CREATE_FOR_168)
+            .unwrap();
+        conn.execute("INSERT INTO auto_admission_receipts VALUES(?1,?2,?3,?4,'chosen',1,2,7,?5,'c01',?6,'automatic',NULL,NULL,NULL,10,11)",
+            params!["owner", "legacy", legacy_canonical.clone(), legacy_metadata.clone(), "a".repeat(64), legacy_delegate.clone()]).unwrap();
+        let mut legacy_rows = vec![(
+            "legacy".to_string(),
+            "chosen",
+            legacy_canonical,
+            legacy_metadata,
+            legacy_delegate,
+        )];
+        for state in ["pending", "decision_started", "admitted", "refused"] {
+            let mut canonical = format!("canonical-{state}").into_bytes();
+            canonical.extend_from_slice(&[0, 255]);
+            let metadata = serde_json::to_vec(&serde_json::json!({"state":state})).unwrap();
+            let mut delegate = format!("delegate-{state}").into_bytes();
+            delegate.extend_from_slice(&[0, 128, 255]);
+            conn.execute(
+                "INSERT INTO auto_admission_receipts VALUES(?1,?2,?3,?4,?5,1,0,7,?6,NULL,?7,NULL,NULL,NULL,?8,10,11)",
+                params!["owner", format!("legacy-{state}"), canonical, metadata, state,
+                    "a".repeat(64), delegate,
+                    if state == "refused" { Some("decision_interrupted") } else { None }],
+            ).unwrap();
+            legacy_rows.push((
+                format!("legacy-{state}"),
+                state,
+                canonical,
+                metadata,
+                delegate,
+            ));
+        }
+        drop(conn);
+
+        let store = DelegationStore::open(&path).unwrap();
+        let renamed_sql: String = store.test_connection().query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_admission_receipts'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(
+            renamed_sql.contains("\"auto_admission_receipts\""),
+            "le schéma renommé par SQLite conserve bien le nom cité"
+        );
+        for (request, state, canonical, metadata, delegate) in legacy_rows {
+            let migrated = store
+                .auto_admission_receipt("owner", &request)
+                .unwrap()
+                .unwrap();
+            assert_eq!(migrated.state.as_sql(), state);
+            assert_eq!(migrated.metadata_version, 1);
+            assert_eq!(migrated.canonical, canonical, "canon opaque de {state}");
+            assert_eq!(migrated.metadata, metadata, "snapshot opaque de {state}");
+            assert_eq!(
+                migrated.delegate_canonical.as_deref(),
+                Some(delegate.as_slice()),
+                "canon de délégation opaque de {state}"
+            );
+        }
+        let mut v2 = auto_receipt163("owner", "v2", 2, 12);
+        v2.metadata_version = 2;
+        v2.metadata = serde_json::to_vec(&serde_json::json!({
+            "decision_level": "decision_service",
+            "snapshot": "x".repeat(MAX_AUTO_ADMISSION_METADATA_V1_BYTES),
+        }))
+        .unwrap();
+        assert!(v2.metadata.len() > MAX_AUTO_ADMISSION_METADATA_V1_BYTES);
+        assert!(store.insert_auto_admission_receipt(&v2).unwrap());
+        drop(store);
+        let store = DelegationStore::open(&path).unwrap();
+        assert_eq!(
+            store.auto_admission_receipt("owner", "v2").unwrap(),
+            Some(v2.clone()),
+            "réouverture du snapshot v2 au-delà de 16 Kio, octet pour octet"
+        );
+        let mut v1_over_limit = auto_receipt163("owner", "too-large-v1", 2, 12);
+        v1_over_limit.metadata = serde_json::to_vec(&serde_json::json!({
+            "snapshot": "x".repeat(MAX_AUTO_ADMISSION_METADATA_V1_BYTES),
+        }))
+        .unwrap();
+        assert_eq!(
+            store
+                .insert_auto_admission_receipt(&v1_over_limit)
+                .unwrap_err(),
+            "auto_admission_invalid"
+        );
+        v2.request_id = "too-large-v2".into();
+        v2.metadata = serde_json::to_vec(&serde_json::json!({
+            "decision_level": "decision_service",
+            "snapshot": "x".repeat(MAX_AUTO_ADMISSION_METADATA_V2_BYTES),
+        }))
+        .unwrap();
+        assert_eq!(
+            store.insert_auto_admission_receipt(&v2).unwrap_err(),
+            "auto_admission_invalid"
+        );
+        let mut oversized_canonical = auto_receipt163("owner", "too-large-canonical", 2, 12);
+        oversized_canonical.canonical = vec![b'x'; MAX_AUTO_ADMISSION_CANONICAL_BYTES + 1];
+        assert_eq!(
+            store
+                .insert_auto_admission_receipt(&oversized_canonical)
+                .unwrap_err(),
+            "auto_admission_invalid"
+        );
+        drop(store);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn spec168_migration_faute_copie_rollback_conserve_legacy() {
+        let dir =
+            std::env::temp_dir().join(format!("bridget-auto168-copy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("admission.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(LEGACY_AUTO_RECEIPT_CREATE_FOR_168)
+            .unwrap();
+        let canonical = b"copy-fault-canonical".to_vec();
+        let metadata = vec![b'x'; MAX_AUTO_ADMISSION_METADATA_V1_BYTES + 1];
+        let delegate = vec![0_u8, 128, 255];
+        // Seulement pour construire la fixture invalide : la copie réelle
+        // réapplique ensuite les contraintes du DDL168, sans aucun failpoint.
+        conn.execute_batch("PRAGMA ignore_check_constraints=ON;")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO auto_admission_receipts VALUES('owner','copy-fault',?1,?2,'chosen',1,0,7,?3,'c01',?4,'automatic',NULL,NULL,NULL,10,11)",
+            params![canonical, metadata, "a".repeat(64), delegate],
+        ).unwrap();
+        conn.execute_batch("PRAGMA ignore_check_constraints=OFF;")
+            .unwrap();
+        let legacy_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_admission_receipts'",
+            [], |row| row.get(0),
+        ).unwrap();
+        drop(conn);
+        let error = match DelegationStore::open(&path) {
+            Ok(_) => panic!("la copie doit refuser le BLOB legacy hors borne"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("CASE metadata_version"),
+            "la faute doit provenir du CHECK de copie168 : {error}"
+        );
+        let conn = Connection::open(&path).unwrap();
+        let after_sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_admission_receipts'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(after_sql, legacy_sql, "rollback du DDL complet");
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM pragma_table_info('auto_admission_receipts')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            17
+        );
+        assert_eq!(conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='auto_admission_receipts_168_new'
+             OR name IN ('auto_admission_receipts_maintenance','auto_admission_receipts_task','auto_admission_receipts_refused_purge')",
+            [], |row| row.get::<_, i64>(0),
+        ).unwrap(), 0, "ni table de migration ni index créés avant la copie ne subsistent");
+        let blobs: (Vec<u8>, Vec<u8>, Vec<u8>) = conn.query_row(
+            "SELECT canonical,metadata,delegate_canonical FROM auto_admission_receipts WHERE owner='owner' AND request_id='copy-fault'",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(blobs, (canonical, metadata, delegate));
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM auto_admission_receipts", [], |row| {
+                row.get::<_, i64>(0)
+            },)
+                .unwrap(),
+            1
+        );
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn spec168_cas_niveau_epoch_revision_et_choix_sont_fermes() {
+        let store = DelegationStore::open(Path::new(":memory:")).unwrap();
+        let mut receipt = auto_receipt163("owner", "levels", 9, 10);
+        receipt.metadata_version = 2;
+        receipt.metadata = br#"{"decision_level":"decision_service","fallback":"c002"}"#.to_vec();
+        assert!(store.insert_auto_admission_receipt(&receipt).unwrap());
+        let started = store
+            .start_auto_decision_level(
+                &receipt,
+                9,
+                0,
+                AutoAdmissionDecisionLevel::DecisionService,
+                11,
+            )
+            .unwrap();
+        let lightweight = store
+            .advance_auto_admission_decision_level(
+                &started,
+                9,
+                1,
+                AutoAdmissionDecisionLevel::DecisionService,
+                br#"{"decision_level":"lightweight_model","fallback":"c002"}"#.to_vec(),
+                12,
+            )
+            .unwrap();
+        assert_eq!(lightweight.revision, 2);
+        assert_eq!(
+            store
+                .choose_auto_admission_at(
+                    &started,
+                    9,
+                    1,
+                    AutoAdmissionDecisionLevel::DecisionService,
+                    "c001".into(),
+                    b"late-service".to_vec(),
+                    AutoAdmissionMode::Automatic,
+                    None,
+                    br#"{"decision_level":"decision_service","decision":{"source":"service"}}"#
+                        .to_vec(),
+                    13,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        let chosen = store
+            .choose_auto_admission_at(
+                &lightweight,
+                9,
+                2,
+                AutoAdmissionDecisionLevel::LightweightModel,
+                "c001".into(),
+                b"lightweight".to_vec(),
+                AutoAdmissionMode::Automatic,
+                None,
+                br#"{"decision_level":"lightweight_model","decision":{"source":"lightweight","effort":"low","combination":"fallback"}}"#.to_vec(),
+                14,
+            )
+            .unwrap();
+        assert_eq!(chosen.state, AutoAdmissionState::Chosen);
+        assert_eq!(
+            chosen.metadata,
+            br#"{"decision_level":"lightweight_model","decision":{"source":"lightweight","effort":"low","combination":"fallback"}}"#.to_vec()
+        );
+        assert_eq!(
+            store
+                .advance_auto_admission_decision_level(
+                    &lightweight,
+                    9,
+                    2,
+                    AutoAdmissionDecisionLevel::LightweightModel,
+                    br#"{"decision_level":"decision_service"}"#.to_vec(),
+                    15,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        assert_eq!(
+            store.start_auto_decision(&receipt, 16).unwrap_err(),
+            "auto_admission_level_unsupported"
+        );
+        assert_eq!(
+            store
+                .choose_auto_admission(
+                    &receipt.owner,
+                    &receipt.request_id,
+                    &receipt.canonical,
+                    "c01".into(),
+                    b"legacy".to_vec(),
+                    AutoAdmissionMode::Automatic,
+                    None,
+                    16,
+                )
+                .unwrap_err(),
+            "auto_admission_level_unsupported"
+        );
+    }
+
+    #[test]
+    fn spec168_reouverture_refuse_trigger_et_fk_entrante() {
+        for (suffix, dependency) in [
+            (
+                "trigger",
+                "CREATE TRIGGER receipt_guard BEFORE INSERT ON auto_admission_receipts BEGIN SELECT 1; END;",
+            ),
+            (
+                "incoming",
+                "CREATE TABLE receipt_child(receipt_owner TEXT, receipt_request TEXT, FOREIGN KEY(receipt_owner,receipt_request) REFERENCES auto_admission_receipts(owner,request_id));",
+            ),
+            (
+                "incoming-uppercase-cascade",
+                "CREATE TABLE receipt_child(receipt_owner TEXT, receipt_request TEXT, FOREIGN KEY(receipt_owner,receipt_request) REFERENCES AUTO_ADMISSION_RECEIPTS(owner,request_id) ON DELETE CASCADE);",
+            ),
+        ] {
+            let dir = std::env::temp_dir()
+                .join(format!("bridget-auto168-{suffix}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("admission.sqlite");
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(LEGACY_AUTO_RECEIPT_CREATE_FOR_168)
+                .unwrap();
+            let sentinel = vec![0_u8, 128, 255];
+            conn.execute(
+                "INSERT INTO auto_admission_receipts VALUES('owner','sentinel',?1,?2,'pending',1,0,7,?3,NULL,?1,NULL,NULL,NULL,NULL,10,11)",
+                params![sentinel, b"{}".as_slice(), "a".repeat(64)],
+            ).unwrap();
+            conn.execute_batch(dependency).unwrap();
+            if suffix != "trigger" {
+                conn.execute("INSERT INTO receipt_child VALUES('owner','sentinel')", [])
+                    .unwrap();
+            }
+            let legacy_sql: String = conn.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_admission_receipts'",
+                [], |row| row.get(0),
+            ).unwrap();
+            drop(conn);
+            assert!(DelegationStore::open(&path).is_err(), "{suffix}");
+            let conn = Connection::open(&path).unwrap();
+            let preserved: Vec<u8> = conn.query_row(
+                "SELECT canonical FROM auto_admission_receipts WHERE owner='owner' AND request_id='sentinel'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(preserved, sentinel, "parent legacy conservé : {suffix}");
+            let after_sql: String = conn.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='auto_admission_receipts'",
+                [], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(after_sql, legacy_sql, "refus avant remplacement du schéma");
+            if suffix != "trigger" {
+                assert_eq!(conn.query_row(
+                    "SELECT count(*) FROM receipt_child WHERE receipt_owner='owner' AND receipt_request='sentinel'",
+                    [], |row| row.get::<_, i64>(0),
+                ).unwrap(), 1, "la sentinelle enfant ne doit pas être supprimée : {suffix}");
+            }
+            drop(conn);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn spec168_refuse_schema_index_fk_sortante_et_preserve_la_base() {
+        let dir =
+            std::env::temp_dir().join(format!("bridget-auto168-schema-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let index_path = dir.join("index.sqlite");
+        let store = DelegationStore::open(&index_path).unwrap();
+        store
+            .test_connection()
+            .execute_batch(
+                "DROP INDEX auto_admission_receipts_task;
+                 CREATE INDEX auto_admission_receipts_task ON auto_admission_receipts(state);",
+            )
+            .unwrap();
+        drop(store);
+        assert!(DelegationStore::open(&index_path).is_err());
+        let conn = Connection::open(&index_path).unwrap();
+        let index_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='auto_admission_receipts_task'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            index_sql.contains("(state)"),
+            "échec sans réparation implicite"
+        );
+        drop(conn);
+
+        let unknown_path = dir.join("unknown.sqlite");
+        let store = DelegationStore::open(&unknown_path).unwrap();
+        store
+            .test_connection()
+            .execute_batch("ALTER TABLE auto_admission_receipts ADD COLUMN unknown_shape TEXT")
+            .unwrap();
+        drop(store);
+        assert!(DelegationStore::open(&unknown_path).is_err());
+        let conn = Connection::open(&unknown_path).unwrap();
+        let columns: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('auto_admission_receipts')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 19, "aucun effacement d'une forme inconnue");
+        drop(conn);
+
+        let foreign_key_path = dir.join("outgoing.sqlite");
+        let conn = Connection::open(&foreign_key_path).unwrap();
+        conn.execute_batch("CREATE TABLE receipt_parent(owner TEXT PRIMARY KEY);
+CREATE TABLE auto_admission_receipts(
+  owner TEXT NOT NULL, request_id TEXT NOT NULL,
+  canonical BLOB NOT NULL CHECK (length(canonical) BETWEEN 1 AND 524288),
+  metadata BLOB NOT NULL CHECK (length(metadata) BETWEEN 1 AND 16384),
+  state TEXT NOT NULL CHECK (state IN ('pending','decision_started','chosen','admitted','refused')),
+  coordinator_epoch INTEGER NOT NULL CHECK (coordinator_epoch >= 0),
+  revision INTEGER NOT NULL CHECK (revision >= 0), policy_revision INTEGER NOT NULL CHECK (policy_revision > 0),
+  policy_digest TEXT NOT NULL, candidate_id TEXT, delegate_canonical BLOB,
+  mode TEXT CHECK (mode IS NULL OR mode IN ('explicit','automatic','fallback')),
+  reason TEXT, task_id TEXT, refusal_code TEXT, created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL, PRIMARY KEY(owner, request_id),
+  FOREIGN KEY(owner) REFERENCES receipt_parent(owner));
+CREATE INDEX auto_admission_receipts_maintenance ON auto_admission_receipts(coordinator_epoch,state,updated_at);
+CREATE INDEX auto_admission_receipts_task ON auto_admission_receipts(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX auto_admission_receipts_refused_purge ON auto_admission_receipts(state,task_id,updated_at,owner,request_id) WHERE state='refused' AND task_id IS NULL;").unwrap();
+        drop(conn);
+        assert!(DelegationStore::open(&foreign_key_path).is_err());
+        let conn = Connection::open(&foreign_key_path).unwrap();
+        let columns: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('auto_admission_receipts')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(columns, 17, "le rollback ne remplace pas une forme refusée");
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn spec168_v2_persiste_decision_fermee_et_admission_atomique() {
+        let dir = std::env::temp_dir().join(format!("bridget-auto168-v2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("admission.sqlite");
+        let store = DelegationStore::open(&path).unwrap();
+        let mut receipt = auto_receipt163("owner-v2", "atomic-v2", 7, 10);
+        receipt.metadata_version = 2;
+        receipt.metadata = br#"{"decision_level":"decision_service","decision":{"source":"service","effort":"medium"}}"#.to_vec();
+        assert!(store.insert_auto_admission_receipt(&receipt).unwrap());
+        assert_eq!(
+            store
+                .start_auto_decision_level(
+                    &receipt,
+                    8,
+                    0,
+                    AutoAdmissionDecisionLevel::DecisionService,
+                    11,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        assert_eq!(
+            store
+                .start_auto_decision_level(
+                    &receipt,
+                    7,
+                    1,
+                    AutoAdmissionDecisionLevel::DecisionService,
+                    11,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        assert_eq!(
+            store
+                .start_auto_decision_level(
+                    &receipt,
+                    7,
+                    0,
+                    AutoAdmissionDecisionLevel::LightweightModel,
+                    11,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        let started = store
+            .start_auto_decision_level(
+                &receipt,
+                7,
+                0,
+                AutoAdmissionDecisionLevel::DecisionService,
+                11,
+            )
+            .unwrap();
+        let final_metadata = br#"{"decision_level":"decision_service","decision":{"source":"service","effort":"high","score":91,"combination":"single"}}"#.to_vec();
+        assert_eq!(
+            store
+                .choose_auto_admission_at(
+                    &started,
+                    7,
+                    1,
+                    AutoAdmissionDecisionLevel::LightweightModel,
+                    "c001".into(),
+                    b"delegate".to_vec(),
+                    AutoAdmissionMode::Automatic,
+                    None,
+                    final_metadata.clone(),
+                    12,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        assert_eq!(
+            store
+                .choose_auto_admission_at(
+                    &started,
+                    8,
+                    1,
+                    AutoAdmissionDecisionLevel::DecisionService,
+                    "c001".into(),
+                    b"delegate".to_vec(),
+                    AutoAdmissionMode::Automatic,
+                    None,
+                    final_metadata.clone(),
+                    12,
+                )
+                .unwrap_err(),
+            "admission_pending"
+        );
+        assert_eq!(
+            store.choose_auto_admission_at(
+                &started, 7, 1, AutoAdmissionDecisionLevel::DecisionService,
+                "c001".into(), b"delegate".to_vec(), AutoAdmissionMode::Automatic, None,
+                br#"{"decision_level":"lightweight_model","decision":{"source":"wrong-level"}}"#.to_vec(), 12,
+            ).unwrap_err(),
+            "auto_admission_invalid"
+        );
+        let chosen = store
+            .choose_auto_admission_at(
+                &started,
+                7,
+                1,
+                AutoAdmissionDecisionLevel::DecisionService,
+                "c001".into(),
+                b"delegate".to_vec(),
+                AutoAdmissionMode::Automatic,
+                None,
+                final_metadata.clone(),
+                12,
+            )
+            .unwrap();
+        let mut wrong_owner = legacy_task151();
+        wrong_owner.owner = "other-owner".into();
+        assert_eq!(
+            store
+                .admit_auto_task(&chosen, &wrong_owner, &receipt.request_id, b"delegate", 13)
+                .unwrap_err(),
+            "native_owner_identity_mismatch"
+        );
+        assert_eq!(
+            store
+                .auto_admission_receipt(&receipt.owner, &receipt.request_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            AutoAdmissionState::Chosen
+        );
+        let mut task = legacy_task151();
+        task.owner = receipt.owner.clone();
+        task.root_owner_agent_id = receipt.owner.clone();
+        task.task_id = "16800000-0000-4000-8000-000000000001".into();
+        task.child = "16800000-0000-4000-8000-000000000002".into();
+        task.mission = "16800000-0000-4000-8000-000000000003".into();
+        store.take_changes();
+        store.test_connection().execute_batch(
+            "CREATE TRIGGER reject_v2_after_task BEFORE UPDATE OF state ON auto_admission_receipts
+             WHEN NEW.state='admitted' AND NEW.request_id='atomic-v2'
+             BEGIN
+               SELECT CASE
+                 WHEN EXISTS(SELECT 1 FROM native_delegations WHERE task_id=NEW.task_id)
+                 THEN RAISE(ABORT,'fixture v2 rollback after Task')
+                 ELSE RAISE(ABORT,'fixture v2 Task absent')
+               END;
+             END;"
+        ).unwrap();
+        let error = store
+            .admit_auto_task(&chosen, &task, &receipt.request_id, b"delegate", 13)
+            .unwrap_err();
+        assert!(
+            error.contains("fixture v2 rollback after Task"),
+            "la faute doit survenir après l'insertion réelle de Task : {error}"
+        );
+        assert_eq!(
+            store
+                .auto_admission_receipt(&receipt.owner, &receipt.request_id)
+                .unwrap(),
+            Some(chosen.clone()),
+            "rollback du choix et de toutes ses métadonnées v2"
+        );
+        assert!(
+            store.get(&task.task_id).unwrap().is_none(),
+            "aucune Task après rollback"
+        );
+        assert!(
+            store.take_changes().is_empty(),
+            "aucune projection avant commit"
+        );
+        store
+            .test_connection()
+            .execute_batch("DROP TRIGGER reject_v2_after_task")
+            .unwrap();
+        drop(store);
+        let store = DelegationStore::open(&path).unwrap();
+        assert_eq!(
+            store
+                .auto_admission_receipt(&receipt.owner, &receipt.request_id)
+                .unwrap(),
+            Some(chosen.clone()),
+            "choix v2 intact après réouverture sans la faute"
+        );
+        assert!(store.get(&task.task_id).unwrap().is_none());
+        store
+            .admit_auto_task(&chosen, &task, &receipt.request_id, b"delegate", 14)
+            .unwrap();
+        drop(store);
+        let reopened = DelegationStore::open(&path).unwrap();
+        let admitted = reopened
+            .auto_admission_receipt(&receipt.owner, &receipt.request_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(admitted.state, AutoAdmissionState::Admitted);
+        assert_eq!(admitted.metadata, final_metadata);
+        assert!(reopened.get(&task.task_id).unwrap().is_some());
+        assert_eq!(
+            reopened
+                .admit_auto_task(&chosen, &task, &receipt.request_id, b"delegate", 15)
+                .unwrap_err(),
+            "admission_pending"
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn spec163_choix_et_task_sont_durables_et_atomiques() {
         let store = DelegationStore::open(Path::new(":memory:")).unwrap();
@@ -3549,6 +4709,7 @@ mod tests {
             canonical: br#"{"operation":"auto_delegate","request_id":"request-atomic-163"}"#
                 .to_vec(),
             metadata: br#"{"policy_revision":7,"candidates":["c01"]}"#.to_vec(),
+            metadata_version: 1,
             state: AutoAdmissionState::Pending,
             coordinator_epoch: 1,
             revision: 0,

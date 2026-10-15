@@ -5,8 +5,8 @@ use crate::communication::client::{
 };
 use crate::mcp_identity::ResolvedIdentity;
 use bridget_transport::protocol::{
-    AutoDelegateV1, ChildRequestDecision, FallbackTarget, NativeDelegationRequest, SpawnPosture,
-    WorkspaceRequest,
+    AutoDelegateV2, AutoDelegateWorkload, ChildRequestDecision, FallbackTarget,
+    NativeDelegationRequest, SpawnPosture, WorkspaceRequest,
 };
 use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
 use serde_json::{Value, json};
@@ -73,7 +73,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. can_run et constraints donnent le verdict de lancement au dossier verdict_context.cwd, avec les droits attestés de la session. Les faits limités à une demande et les autres dossiers restent soumis à l’admission. Les binaires sont vérifiés ; aucune connexion fournisseur ni authentification n’est testée. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
-        json!({"name":"bridget_auto_delegate","description":"Demande une admission configurée, sans transformer les sélecteurs facultatifs en choix implicites. Conserver request_id sur retry identique. Le daemon fixe sa politique et son candidat avant tout effet ; un maître sans auto_delegate_v1 refuse explicitement.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256},"project_id":{"type":"string","minLength":1,"maxLength":256},"agent_type":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants ; conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"agent_type":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":64},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
@@ -116,9 +116,13 @@ pub(crate) fn execute(
             "request_id",
             "machine_id",
             "project_id",
+            "engine",
+            "connection_id",
             "agent_type",
             "model",
             "effort",
+            "workload",
+            "expected_base_commit",
             "task",
             "cwd",
             "posture",
@@ -250,7 +254,7 @@ pub(crate) fn execute(
             },
             brief: args.get("brief").cloned(),
         },
-        "bridget_auto_delegate" => NativeDelegationRequest::AutoDelegate(AutoDelegateV1 {
+        "bridget_auto_delegate" => NativeDelegationRequest::AutoDelegateV2(AutoDelegateV2 {
             request_id: string("request_id")?,
             machine_id: args
                 .get("machine_id")
@@ -260,12 +264,39 @@ pub(crate) fn execute(
                 .get("project_id")
                 .map(|_| string("project_id"))
                 .transpose()?,
+            engine: args.get("engine").map(|_| string("engine")).transpose()?,
+            connection_id: args
+                .get("connection_id")
+                .map(|_| string("connection_id"))
+                .transpose()?,
             agent_type: args
                 .get("agent_type")
                 .map(|_| string("agent_type"))
                 .transpose()?,
             model: args.get("model").map(|_| string("model")).transpose()?,
             effort: args.get("effort").map(|_| string("effort")).transpose()?,
+            workload: match args.get("workload") {
+                None => AutoDelegateWorkload::General,
+                Some(Value::String(value)) if value == "general" => AutoDelegateWorkload::General,
+                Some(Value::String(value)) if value == "compilation" => {
+                    AutoDelegateWorkload::Compilation
+                }
+                _ => return Err(ClientError::InvalidParams("workload invalide".into())),
+            },
+            expected_base_commit: match args.get("expected_base_commit") {
+                None => None,
+                Some(_) => {
+                    let value = string("expected_base_commit")?;
+                    if !matches!(value.len(), 40 | 64)
+                        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    {
+                        return Err(ClientError::InvalidParams(
+                            "expected_base_commit invalide".into(),
+                        ));
+                    }
+                    Some(value)
+                }
+            },
             task: string("task")?,
             cwd: string("cwd")?,
             posture: match args.get("posture") {
@@ -377,6 +408,17 @@ pub(crate) fn execute(
             ));
         }
     }
+    if let NativeDelegationRequest::AutoDelegateV2(auto) = &request {
+        let canonical = serde_json::to_vec(&request)
+            .map_err(|_| ClientError::InvalidParams("auto_delegate_v2 invalide".into()))?;
+        if auto.task.len() > 65_536
+            || canonical.len() > crate::delegation::MAX_AUTO_ADMISSION_CANONICAL_BYTES
+        {
+            return Err(ClientError::InvalidParams(
+                "auto_delegate_v2 hors limites".into(),
+            ));
+        }
+    }
     if matches!(
         &request,
         NativeDelegationRequest::Wait { .. } | NativeDelegationRequest::Ack { .. }
@@ -408,6 +450,9 @@ pub(crate) fn execute(
         } => Some(("remote_worker_v1", "remote_worker_unsupported")),
         NativeDelegationRequest::AutoDelegate(_) => {
             Some(("auto_delegate_v1", "auto_delegate_unsupported"))
+        }
+        NativeDelegationRequest::AutoDelegateV2(_) => {
+            Some(("auto_delegate_v2", "auto_delegate_v2_unsupported"))
         }
         _ => None,
     };
@@ -464,7 +509,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spec163_mcp_auto_delegate_negocie_et_preserve_le_wire_ferme() {
+    fn spec168_wire163_byte_compatible_et_nouveau_client_refuse_ancien_maitre() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+        let legacy: NativeDelegationRequest = serde_json::from_value(json!({
+            "operation":"auto_delegate","request_id":"legacy163","task":"mission","cwd":"/tmp"}))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&legacy).unwrap(),
+            r#"{"operation":"auto_delegate","request_id":"legacy163","task":"mission","cwd":"/tmp"}"#
+        );
+        let socket = crate::mcp_identity::mock_socket("legacy168-refusal");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let backend = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "RegisterAuxiliary"
+            );
+            writeln!(
+                stream,
+                "{}",
+                json!({"type":"Registered","agent_id":"owner","credential":null})
+            )
+            .unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "DaemonIdentityRequest"
+            );
+            writeln!(
+                stream,
+                "{}",
+                json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture",
+                "instance_id":"fixture","features":["auto_delegate_v1"]})
+            )
+            .unwrap();
+            line.clear();
+            assert_eq!(
+                reader.read_line(&mut line).unwrap(),
+                0,
+                "aucun envoi V2 à un ancien maître"
+            );
+        });
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let result = execute(
+            &identity,
+            "bridget_auto_delegate",
+            &json!({"request_id":"new168","task":"mission","cwd":"/tmp"}),
+            &socket,
+        );
+        assert!(
+            matches!(result,Err(ClientError::Technical{message,..}) if message=="auto_delegate_v2_unsupported")
+        );
+        backend.join().unwrap();
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+    }
+
+    #[test]
+    fn spec168_mcp_auto_delegate_negocie_v2_et_preserve_le_schema_ferme() {
         use std::io::{BufRead, BufReader, Write};
         use std::os::fd::AsRawFd;
         use std::os::unix::net::UnixListener;
@@ -509,7 +624,7 @@ mod tests {
                 serde_json::from_str::<Value>(&line).unwrap()["type"],
                 "DaemonIdentityRequest"
             );
-            writeln!(stream, "{}", json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["auto_delegate_v1"]})).unwrap();
+            writeln!(stream, "{}", json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["auto_delegate_v2"]})).unwrap();
             line.clear();
             reader.read_line(&mut line).unwrap();
             let request: Value = serde_json::from_str(&line).unwrap();
@@ -532,7 +647,7 @@ mod tests {
         assert_eq!(result["task_id"], "task-163");
         let request = backend.join().unwrap();
         assert_eq!(request["type"], "NativeDelegation");
-        assert_eq!(request["request"]["operation"], "auto_delegate");
+        assert_eq!(request["request"]["operation"], "auto_delegate_v2");
         assert_eq!(request["request"]["urgent"], true);
         assert!(request["request"].get("fallback").is_none());
         let _ = std::fs::remove_dir_all(socket.parent().unwrap());
