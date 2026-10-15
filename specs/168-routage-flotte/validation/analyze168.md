@@ -1,5 +1,27 @@
 # Analyze SPEC168 avant implémentation
 
+## État courant — 15/10/2026 à 17:13 CEST
+
+**In Progress, 53/56 tâches cochées par ROOT.** T045 et T046 sont closes. T047, commit documentaire C1, est en cours ; T048 et T049 restent ouvertes. Le nettoyage final de la source appartient à ROOT. Aucun statut Livré ou Implemented n’est annoncé.
+
+La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, est construite et activée sur Mac/Cartae. Les trois voies réelles ont résultats et rejeux vérifiés : Laya `decision_service` sur 2 candidats, Haiku `lightweight_model` sur 21 candidats, dernier repli `deterministic` sur 21 candidats. Détail : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/recette168.md.
+
+**Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
+
+Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
+
+Preuves existantes :
+
+- /Users/moi/.cache/bridget-delivery168/final-health/mac-health.json — SHA-256 `be3ec722c86f8fcdd6de90353e1748e318b0de3beb086690cc66fdd276d114ba` ;
+- /Users/moi/.cache/bridget-delivery168/final-health/database-health.json — SHA-256 `98feb24442412b8e2ce12d5c6a92e75605c500bd6f67b4e7fc349fc6cebab147` ;
+- /home/moi/.local/state/bridget-delivery168/final-health/cartae-health.json — SHA-256 `a409e7698a2f7ff7bdede77a2a2126eeda0d835052765473f0ef60850818f32a`.
+
+Limites : FULL unique 2820 PASS/32 FAIL/71 ignorés ; 29 échecs initiaux PASS après reprises, trois annulations 159 non validables sur Linux, cause initiale T3 inconnue malgré replay PASS. Deux LOW rustls-webpki et une INFO unsafe-libyaml restent documentés ; aucun GREEN global. Aucun nouvel audit/FULL/P4/build/service/test/modèle par cette rédaction. Aucun retour direct au binaire 0.3.0 après reçu admission v2. Les commits documentaires descendants conservent la source binaire B et ne nécessitent aucune reconstruction.
+
+Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les anciennes mentions de publication en préparation. Les DB, preuves et sauvegardes sont protégées.
+
+---
+
 Date :2026-10-15. Portée :spec, plan, contrats, réemploi, revues et Tasks.
 Aucune compilation, test de code, action Git/service ou activation exécutés.
 ROOT a effectué la première analyse complète :35FR/11SC/7US couverts, aucun CRITICAL,
@@ -58,3 +80,23 @@ La décision de démarrage effectif appartient à ROOT.
   SHA-256 344c3c8cfeaed00f86b304bd5cdb5ea919c242e7a1f992efb0cb373c308567e2
 - /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/tasks.md
   SHA-256 31d91d3dbe1bc63110209f75ee5455b7697c7aa3cab8d717c533d7e872d8bc36
+
+
+> Historique importé sans réécriture depuis /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/168-routage-flotte/validation/analyze168.md. La restriction décrite ci-après est levée ; voir la mise à jour finale.
+
+## Analyse documentaire de reprise — 15 octobre 2026, 16 h 56 CEST
+
+Contrôle manuel limité au complément de livraison, sans nouvelle implémentation. Relecture des dépendances T045–T049 et des FR/SC de la spec ; comparaison du complément avec les deux reçus locaux de rejeu Laya/score et le reçu d’activation B. Les 51 tâches cochées et les cinq tâches ouvertes sont cohérentes. La preuve Haiku distante est distinguée du contexte transmis ; son ACK, son rejeu et son nettoyage ne sont pas présumés. La référence locale github/main ne vaut pas nouvelle lecture distante. Les PID historiques ne sont pas présentés comme revalidés.
+
+Résultat après relecture : aucun ajout de code ni nouvel écart critique documentaire identifié dans ce complément. Les anciens nombres de tâches ci-dessus restent historiques. T045–T049 ne sont pas cochées ; statut In Progress conservé. La restriction SSH constatée et l’interdiction d’écriture Git empêchent la clôture opérationnelle. Les documents non committés du worktree Cartae doivent être rapprochés avant intégration ; ne pas les remplacer par la copie locale plus ancienne. Aucun Converge, audit ou FULL supplémentaire n’est revendiqué.
+
+
+## Mise à jour après levée des restrictions — 15/10/2026 à 17:05 CEST
+
+Le complément Mac de 16 h 56 CEST ci-dessus est conservé sans réécriture. Ses limites décrivent cette reprise passée. L’accès SSH et les droits nécessaires sont désormais rétablis selon ROOT ; cette restriction ne bloque plus la clôture opérationnelle.
+
+La recette matrice Haiku finale est maintenant vérifiée par /home/moi/.local/state/bridget-delivery168/r168-ch-759bee18/after-restart-matrix-receipt.json. SHA-256 : `f6d3d046bfe8cd1c3665b3a583931a3dbc170aa1b9603be20ef239a52c740581`. Le reçu atteste 21 candidats, une décision `lightweight_model`, le rejeu privé 3804689 → 3834811, la même Task, les trois BLOB canon/metadata/delegate identiques et la même projection métier, avec ACK présent et `cleanup_done=true`. Le payload brut de Task n’est pas byte-identique ; les appels HTTP et nouveaux processus ne sont pas instrumentés. Aucun zéro physique n’est revendiqué. Le contexte antérieur « ACK et rejeu à vérifier » est donc historique. Les détails de cette recette et des rejeux Laya/score restent dans /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/recette168.md, sans réécriture de ce document ici.
+
+La source B, les paquets et l’activation déjà documentés restent acquis. État : 51/56 au mandat ROOT, T045 prête à clore par ROOT. La publication reste en préparation, sans release publiée ni statut Livré/Implemented déclaré. La suite T046–T049 relève de ROOT ; aucun nouvel audit, FULL, P4 ou build n’est requis par ce seul rapprochement documentaire.
+
+Les PID de production du checkpoint d’activation ne sont pas recontrôlés par cette rédaction. Pour T3, ROOT précise : application 65544 et tunnel 60206 inchangés ; remplacement extérieur du serveur 65608 par 97328, né à 16:51:02 CEST pendant les restrictions. Aucun signal T3 de notre part.

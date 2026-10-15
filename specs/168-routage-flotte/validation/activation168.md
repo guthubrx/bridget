@@ -1,5 +1,30 @@
 # T044 — activation 0.4.0 exécutée
 
+## État courant — 15/10/2026 à 17:13 CEST
+
+**In Progress, 53/56 tâches cochées par ROOT.** T045 et T046 sont closes. T047, commit documentaire C1, est en cours ; T048 et T049 restent ouvertes. Le nettoyage final de la source appartient à ROOT. Aucun statut Livré ou Implemented n’est annoncé.
+
+La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, est construite et activée sur Mac/Cartae. Les trois voies réelles ont résultats et rejeux vérifiés : Laya `decision_service` sur 2 candidats, Haiku `lightweight_model` sur 21 candidats, dernier repli `deterministic` sur 21 candidats. Détail : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/recette168.md.
+
+**Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
+
+Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
+
+Preuves existantes :
+
+- /Users/moi/.cache/bridget-delivery168/final-health/mac-health.json — SHA-256 `be3ec722c86f8fcdd6de90353e1748e318b0de3beb086690cc66fdd276d114ba` ;
+- /Users/moi/.cache/bridget-delivery168/final-health/database-health.json — SHA-256 `98feb24442412b8e2ce12d5c6a92e75605c500bd6f67b4e7fc349fc6cebab147` ;
+- /home/moi/.local/state/bridget-delivery168/final-health/cartae-health.json — SHA-256 `a409e7698a2f7ff7bdede77a2a2126eeda0d835052765473f0ef60850818f32a`.
+
+Limites : FULL unique 2820 PASS/32 FAIL/71 ignorés ; 29 échecs initiaux PASS après reprises, trois annulations 159 non validables sur Linux, cause initiale T3 inconnue malgré replay PASS. Deux LOW rustls-webpki et une INFO unsafe-libyaml restent documentés ; aucun GREEN global. Aucun nouvel audit/FULL/P4/build/service/test/modèle par cette rédaction. Aucun retour direct au binaire 0.3.0 après reçu admission v2. Les commits documentaires descendants conservent la source binaire B et ne nécessitent aucune reconstruction.
+
+Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les anciennes mentions de publication en préparation. Les DB, preuves et sauvegardes sont protégées.
+
+---
+
+> État courant : source B 431b78f72bdd73eac4772af17bf36879d7a629d2 ; checkpoints A historiques.
+> Référence : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/activation168.md (section « Checkpoint B courant »).
+
 Date : 15 octobre 2026. **Activation utile vérifiée**, source `269de64e172f71f8856373fe8b09cb2d8642da52`. La session complète reste In Progress : recettes réelles T045, release et nettoyage non terminés. Ce reçu ne coche aucune tâche.
 
 ## Installation et services chargés
@@ -58,3 +83,34 @@ Le suivi runtime relie explicitement les hashes des reçus d’activation, d’i
 ## Limites et suite
 
 Les préqualifications sans modèle T043 sont distinctes des recettes réelles T045 encore à faire. La release n’est pas publiée à ce checkpoint. La FULL historique reste 2 820 PASS / 32 FAIL / 71 ignorés ; 29 des 32 échecs initiaux passent après reprise, trois annulations non validables sur Linux ; cause initiale T3 inconnue malgré replay PASS. Aucun GREEN global ni clôture complète de livraison n’est déduit.
+
+
+## Checkpoint B courant — activation vérifiée
+
+Source désormais chargée : `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0. Les activations A 0.4.0 et 0.3.0 précédentes restent des faits historiques ; elles ne décrivent plus les services courants. Les actions B preflight, freeze-install et activate sont réellement RC0. Le worker est préparé avant l’arrêt maître/pont, avec quiescence et sauvegardes cohérentes. Le reçu initial B conserve sa phase active_pending_mcp_checks ; un suivi séparé prouve ensuite active_verified sans réécrire cet historique.
+
+| Service courant | PID et naissance | Exécutable |
+|---|---|---|
+| Daemon Mac | 71927 ; 15 octobre 15:57:58 CEST | /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget |
+| Pont Mac | 72468 ; 15 octobre 15:58:00 CEST | /Users/moi/.local/bin/bridget |
+| Worker Cartae | 3767260 ; naissance Linux 158783879 | /home/moi/.local/lib/bridget-communication/0.4.0-431b78f72bdd/bin/bridget |
+
+Mac SHA-256 : `3502daf850bae303a9ad0f4bdd2dbc073f6b36fdd51ced8ac62f52014aa15bed`. Linux SHA-256 : `3b86b8fd48698e567d5f190a67f946d84d99fecd4526441ba6702bba9c3bf95a`. Le statut natif répond RC0, daemon en ligne et Build-id B exact. Le pont répond running, avec 33 fils au moment de cette lecture ; les 34 fils du reçu A restent une mesure historique.
+
+Le catalogue natif B expose exactement 27 options = 17 locales + 10 Cartae. Registre ON : Mac `59802f1a8e42bdca8fc01935b0638f448f493a8dcf30973bf46d0f846ef7bf47`, worker `bac0293a069ed4d90a3fcff7feb439c42fd5c49d5b1a3d86ad605a975bfe1083`. Le seul delta de politique est le budget local global/service 30 s / 20 s. Credential worker inchangé ; fleet et plists Mac inchangés ; unité worker dirigée vers le préfixe B.
+
+DB de production : quick_check ok, FK0, migrations 7/12 et hash de schéma `ce291503bf9b09228775ba8825b25ff7e194d920788a56c51f3cc3ddbb1b329f` inchangé entre préflight et après activation B. Aucun rollback de DB.
+
+Les ancres T3 65544/65608, nées le 15 octobre à 04:07:14/15, et le tunnel 60206, né le 13 octobre à 20:14:11, sont préservés avec leurs chemins et naissances. Aucun redémarrage T3. La lecture MCP who réussit et porte project_warnings=[]. Ce rattachement et le worker actif ne constituent pas une recette de Task distante ; aucun connection_epoch de production non exposé n’est déduit.
+
+Preuves canoniques :
+
+- /Users/moi/.cache/bridget-delivery168/activation/B-preflight-command.json ; SHA-256 `0dec216d0ebc179c5ba0cadd7034d4f61bcefa88ac7564308541f0da5303cc83`.
+- /Users/moi/.cache/bridget-delivery168/activation/B-freeze-install-command.json ; SHA-256 `a49affa634eec8fad51aa27d524dcaed63b0386eea62355a1e9a96e71702095b`.
+- /Users/moi/.cache/bridget-delivery168/activation/B-activate-command.json ; SHA-256 `15722d3a2dae73f0b1c83905936b975fcc47cff11c8eab34ce498839d999cc82`.
+- /Users/moi/.cache/bridget-delivery168/activation/backup-431b78f72bdd-B/activation.json ; SHA-256 `a55769f921f1cdd6e1fa51075c726a55309aa399a67f6cca5583180688369ba2`.
+- /Users/moi/.cache/bridget-delivery168/activation/B-runtime-native-checks168.json ; SHA-256 `85d0f462f859412862d2e8ce773b762e3f3e4f0665584dc5ac30b563682f2bc0`.
+- /Users/moi/.cache/bridget-delivery168/activation/B-runtime-mcp-who168.json ; SHA-256 `ac5f773abf3444baab60fdb24bbd8e601b57c6b9a9b0488a493e0d8eb57dd447`.
+- /Users/moi/.cache/bridget-delivery168/activation/B-runtime-followup168.json ; SHA-256 `6d50c3181012c13b2334722f3e3ae13468800c0f8c75d988cfeca27be2c8f86e`.
+
+État ROOT au présent mandat : 51/56, sans cochage par cette rédaction. Les recettes réelles T045 sur B sont en cours ; la release n’est pas publiée. La session reste In Progress. Les limites de T036 sont conservées : FULL unique 2 820 PASS / 32 FAIL / 71 ignorés ; 29 des 32 échecs initiaux PASS après reprise ; trois annulations 159 non validables sur Linux ; cause initiale T3 inconnue malgré replay PASS. Aucun GREEN global. Aucun service ou modèle n’est lancé par la rédaction de ce checkpoint.
