@@ -1,0 +1,14 @@
+{
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/daemon/native_delegation.rs": "5b21825ea345436ed4d18fe830b061ae277a20b390772093b807ec4d60193c08",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/daemon.rs": "4f4a4dd782a28c5831db0721c66b6170e36899c1a5d5efd7dbfc32bd40736ca3",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/cli.rs": "e958db1d4b0d2a8fb5375921335448a9f5fafc62abbdf5774197e3960315e387",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/delegation_mcp.rs": "f574fad2d74ddbd2806760e589957b08440ca3624d092566b80b165afe1d6d35",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/communication/client.rs": "00fce6e594acd7df94bccf8a0d3d45ce16973fa5d13ef059e0966f05cc3f5452",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/provider_limits.rs": "dafc1ad7e5710ef9f0e806473fd9d0e71b3ac6f41c81ce400451aefed03b9ee5",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/lifecycle.rs": "2c57a6ac06d9ddcf0d6ded39fa26547f9ee5b5673bcfb06c28ca784a70ac0abc",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/lib.rs": "c1173a450a35056a6107f542977713dd3f15075a0ae3d794bc60c690d02fba76",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/tests/cli_arguments_integration_test.rs": "2a86c66c999b0fc9f9a6b9ef43b9f8f275b9c637463e93d99dcfebe3a11cda86",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/tests/native_delegation_e2e.rs": "22fc8c37f5494956d0deff7f0446c53e565f4053227bcd076ac1278dc525836e",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/registry.rs": "4e9e6eace6905e014b7cd7fbc6a6ef7c3cf8829dba2bfeae1c3899ea919ed1ab",
+  "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/delegation_lineage.rs": "0a77065988f26855cfd28d550c1b09e87aa0298622062bc28c5ee4d35a5b2f03"
+}
