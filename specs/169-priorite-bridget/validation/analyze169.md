@@ -78,3 +78,7 @@ Les jalons de livraison restent séparés pour éviter un commit circulaire. Le 
 Artefacts stables : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget. Prochaine action : copie Cartae puis GO code par ROOT. La couverture décrit le travail prévu, pas des critères déjà réalisés.
 
 Aménagement d'exécution autorisé ensuite par ROOT : seule T012 est marquée `[P]`, sous ownership séparé des deux fichiers HTTP. T001–T010 restent séquentielles. Le principal garde le permis unique de contrôles lourds ; le second n'exécute aucun contrôle. T011 attend toujours T010 et T012. Cette répartition ne change ni les totaux, ni la couverture, ni les dépendances ; la matrice Analyze reste valable.
+
+## Relecture finale ROOT après recette (2026-10-15)
+
+Relecture manuelle des artefacts et des preuves d’exploitation :14/14 cases inchangées,17FR/9SC reliés aux preuves existantes, FR017/SC003 réel/SC009 couverts par J5. Les deux corrections Analyze restent closes ; aucun manque nouveau ni changement de code. Source T3 58ddcf3a16205a24f940164cba500089f49ec6c0 inchangée ; P2 reste le dernier Converge. Scripts projet absents : même substitut manuel documenté, sans script simulé. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/169-priorite-bridget/validation/livraison169.md.

@@ -8,7 +8,7 @@ Titre: Priorité Bridget pour les sous-tâches depuis T3
 Statut: Implemented
 Priorité: P1
 Tâches: 14/14 (100%)
-Pipeline: In Progress
+Pipeline: Livré avec conservations justifiées
 Tests: 536/536 ciblés R2 ; R1 conservé, aucun GREEN global
 
 Résumé:
@@ -28,7 +28,7 @@ Fichiers:
 
 **Status**: Implemented
 
-**Pipeline**: In Progress
+**Pipeline**: Livré avec conservations justifiées
 
 **Priority**: P1
 
@@ -174,7 +174,7 @@ L'utilisateur a explicitement autorisé l'activation finale de T3 pendant cette 
 
 Nouvelle interface de réglage, second moteur de politiques, blocage technique des outils natifs T3, nouveau sélecteur de modèle ou de machine, nouvel algorithme de flotte, compte ou authentification supplémentaires, gestion de facture, migration des tâches en cours, nouvelle conversation T3 en doublon, refonte de Lineage, activation persistante ou relances en boucle.
 
-## État de préparation
+## État de préparation historique
 
 ROOT accepte les corrections T013/T014 après lecture des9 deltas et des preuves R2 :14/14 tâches, statut Implemented pour l'implémentation, pipeline In Progress. Les536 cas distincts affectés R2 sont finalement PASS après reprises ; ils ne sont pas ajoutés au bilan R1 recouvrant. Le passage1 reste historique ; ROOT a ensuite clos le passage2 CONVERGED, sans tâche ajoutée. La contre-revue R2 est APPROVE_WITH_CHANGES ; ROOT ne confirme pas C1 et conserve C2 comme exception d'enveloppe OFF documentée. L'audit source est clos pass, J1 clos, sans code nouveau ni passage3. Les preuves sont décrites dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/validation/tests169.md. FR017, SC003 réel, SC009 et les jalonsJ2–J6 restent ouverts. Aucun paquet installé, activation ou recette réelle169 n'est déduit de cette acceptation d'implémentation.
 
@@ -186,6 +186,10 @@ Le template projet et le template global annoncé étant absents lors du cadrage
 
 C1 n'est pas confirmé dans le SDK installé. Une query Claude blocked peut rester ainsi jusqu'à réouverture ou changement de clé/processus. Absence physique d'un processus figé, reprise Claude existante positive et visibilité UI du message de divergence ne sont pas prouvées. Les qualifications natives couvrent seulement les sorties normales des deux paires installées. Pi réel absent, serveur types non GREEN et gates FR017/SC003 réel/SC009/J2–J6 restent des limites ; P2 reste clos.
 
-## Checkpoint documentaire après clôture J1
+## Checkpoint historique après clôture J1
 
 J1 est clos :P2 CONVERGED sans ajout, contre-revue R2 arbitrée et audit source pass. Les12 notes par axe,42 critères et réserves exactes sont dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/validation/audit169.md ; le score de pénalités100 n'est pas une qualité100 ni un GREEN global. J2 est partiel :source T3 `58ddcf3a16205a24f940164cba500089f49ec6c0` intégrée/poussée fork/local/main-20261009,35 SHA R2 identiques après hook sans bypass ; documents Bridget à committer par ROOT. J3–J6 et FR017/SC003 réel/SC009 restent ouverts. Aucun paquet169 construit, installé ou activé n'est attesté à ce checkpoint. Suite canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/validation/livraison169.md.
+
+## Clôture opérationnelle169
+
+Le paquet signé169 est installé et actif, ON est prouvé dans le tour de reprise48. FR017, SC003 réel et SC009 sont couverts par la recette Cartae et son rejeu identique, selon /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/169-priorite-bridget/validation/livraison169.md. Les réserves de tests et fournisseurs restent explicites ; aucun GREEN global. Git et nettoyage finaux : /Users/moi/.cache/bridget-delivery169/final169.json.

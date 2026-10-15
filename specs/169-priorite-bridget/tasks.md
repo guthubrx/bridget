@@ -1,6 +1,6 @@
 # Tâches SPEC169 — Priorité Bridget depuis T3
 
-Implémentation : 14/14 tâches acceptées par ROOT. Statut : Implemented. Pipeline : In Progress. J1 clos : P2 CONVERGED,0 tâche ajoutée, contre-revue R2 arbitrée et audit source pass. J2 partiellement réalisé : source T3 intégrée/poussée58ddcf3a16205a24f940164cba500089f49ec6c0 ; documents Bridget à committer par ROOT. J3–J6, FR017, SC003 réel et SC009 restent ouverts.
+Implémentation :14/14 tâches acceptées par ROOT. Statut :Implemented. Pipeline :Livré avec conservations justifiées. P2 CONVERGED,0 ajout ; revue R2 arbitrée et audit source pass. Source T3 58ddcf3a16205a24f940164cba500089f49ec6c0, documents C1 f4cb623aed57ce251bbd0b1f293f9b0c2b6f2c11 ; complément C2 et nettoyage tracés dans /Users/moi/.cache/bridget-delivery169/final169.json. FR017, SC003 réel et SC009 sont couverts par la recette limitée décrite dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/169-priorite-bridget/validation/livraison169.md.
 
 Gel P2 historique : SHA-256 2f31c10404bfd9f81d273285ebea29605a42dd27df5a1cec27dafafa2c678147, strictement identique avant/après cette phase close. Après sa clôture et sur GO ROOT, seul cet en-tête est actualisé documentairement ; les14 cases et descriptions fonctionnelles restent conservées. Les formulations de la section Convergence relatent le checkpoint antérieur à P2. Aucun nouveau passage ni changement de code n'est déclaré.
 

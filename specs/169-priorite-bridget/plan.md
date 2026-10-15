@@ -1,6 +1,6 @@
 # Plan SPEC169 — Priorité Bridget depuis T3
 
-Date : 2026-10-15. Phase5 acceptée par ROOT après les9 deltas et les preuves R2 :14/14 tâches. Statut d'implémentation : Implemented. Pipeline : In Progress. T013 corrige les resets OFF Codex/ACP/Cursor ; T014 utilise le montage Claude réel avant toute offre de prompt. Les536 cas affectés R2 sont finalement PASS après reprises, sans total ajouté à R1. Les preuves figurent dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/validation/tests169.md. FR017, SC003 réel, SC009 et J2–J6 restent ouverts ; passage1 historique, passage2 clos CONVERGED par ROOT avec0 tâche ajoutée. La contre-revue R2 est reçue et arbitrée documentairement ; l'audit source est clos pass et J1 clos.
+Date :2026-10-15. Implémentation14/14, P2 CONVERGED avec0 ajout. Pipeline :Livré avec conservations justifiées. Installation, activation unique, reprise, consigne ON, HTTP et recette native sont prouvés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/169-priorite-bridget/validation/livraison169.md. Les checkpoints antérieurs ci-dessous restent historiques.
 
 Spécification : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/spec.md
 
@@ -147,6 +147,10 @@ C2 est conservé : absence/OFF garde la politique habituelle avec enveloppe de r
 
 Cache Claude blocked jusqu'à réouverture/changement de clé ou processus, message UI et reprise existante positive non prouvés restent explicites. Pi absent et75 erreurs TS non GREEN sont conservés. P2 et J1 restent clos ; J2 est partiel et FR017/SC003 réel/SC009/J3–J6 restent ouverts.
 
-## Checkpoint documentaire après clôture J1
+## Checkpoint historique après clôture J1
 
 J1 est clos :P2 CONVERGED sans ajout, contre-revue R2 arbitrée et audit source pass. Les12 notes par axe,42 critères et réserves exactes sont dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/validation/audit169.md ; le score de pénalités100 n'est pas une qualité100 ni un GREEN global. J2 est partiel :source T3 `58ddcf3a16205a24f940164cba500089f49ec6c0` intégrée/poussée fork/local/main-20261009,35 SHA R2 identiques après hook sans bypass ; documents Bridget à committer par ROOT. J3–J6 et FR017/SC003 réel/SC009 restent ouverts. Aucun paquet169 construit, installé ou activé n'est attesté à ce checkpoint. Suite canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/169-priorite-bridget/specs/169-priorite-bridget/validation/livraison169.md.
+
+## Bilan opérationnel
+
+Une compilation du paquet et une activation seulement. Les tests source ne sont pas relancés après les seules mises à jour documentaires. Retraits et conservations du lot169 sont consignés dans /Users/moi/.cache/bridget-delivery169/final169.json ; aucun nettoyage étranger ni suppression de base.
