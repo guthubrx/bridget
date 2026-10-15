@@ -1,0 +1,3 @@
+Bridget 0.3.0 — archive Linux x86_64
+BUILD_ID=24a6507a99520bf2245caf67fa69cbac40bd300f
+Source: https://github.com/guthubrx/bridget/tree/24a6507a99520bf2245caf67fa69cbac40bd300f

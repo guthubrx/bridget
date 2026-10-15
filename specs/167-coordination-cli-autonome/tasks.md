@@ -1,7 +1,7 @@
 # Tâches — SPEC-167 Coordination CLI autonome
 
-**Statut :** In Progress  
-**Progression :** 27/28  
+**Statut :** In Progress
+**Progression :** 27/28
 **Pipeline :** Livraison.
 
 Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule source de vérité.
@@ -24,7 +24,7 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule
 
 ## Phase 3 — US1 Confier une mission en une commande
 
-**But :** un coordinateur authentifié démarre une mission avec son seul texte.  
+**But :** un coordinateur authentifié démarre une mission avec son seul texte.
 **Test indépendant :** `delegate` produit la charge `bridget_auto_delegate` avec mission, dossier courant et clé sûre.
 
 - [x] T011 [US1] Ajouter le routage et l’aide de `bridget delegate` dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
@@ -34,7 +34,7 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule
 
 ## Phase 4 — US2 Garder les choix avancés
 
-**But :** les choix explicites traversent la façade sans substitution.  
+**But :** les choix explicites traversent la façade sans substitution.
 **Test indépendant :** chaque option produit le même champ que `bridget_auto_delegate` ou un refus local précis.
 
 - [x] T015 [US2] Exposer les sélecteurs type, modèle, effort, posture, machine et projet dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
@@ -43,7 +43,7 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule
 
 ## Phase 5 — US3 Piloter le cycle de vie
 
-**But :** le coordinateur pilote ses tâches depuis le terminal.  
+**But :** le coordinateur pilote ses tâches depuis le terminal.
 **Test indépendant :** chaque sous-commande appelle l’outil natif existant avec la charge attendue.
 
 - [x] T018 [US3] Ajouter `task status`, `wait` et `ack` dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
@@ -53,7 +53,7 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule
 
 ## Phase 6 — US4 Automatiser sans T3
 
-**But :** les scripts utilisent une sortie stable et le même moteur sans processus T3.  
+**But :** les scripts utilisent une sortie stable et le même moteur sans processus T3.
 **Test indépendant :** `--json` produit un objet unique et la recette passe avec T3 absent.
 
 - [x] T022 [US4] Implémenter la sortie JSON pure et la vue humaine concise dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`

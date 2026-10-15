@@ -21,10 +21,10 @@ Fichiers:
 - plan.md: ✓
 <!-- SPEC-FORMALISM:END -->
 
-**Feature Branch**: `session-167-coordination-cli-autonome`  
-**Created**: 2026-10-15  
-**Status**: In Progress  
-**Priority**: P1  
+**Feature Branch**: `session-167-coordination-cli-autonome`
+**Created**: 2026-10-15
+**Status**: In Progress
+**Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-151, SPEC-153, SPEC-155, SPEC-157, SPEC-163
 
 ## Problème

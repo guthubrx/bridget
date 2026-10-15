@@ -1,7 +1,7 @@
 # Commandes Bridget et accès 094–167
 
 Lire cette référence pour toute demande qui dépasse l'annuaire, l'envoi et la
-réponse liée de base. Elle décrit les contrats jusqu’à158A ; elle ne prouve
+réponse liée de base. Elle décrit les contrats jusqu’à167 ; elle ne prouve
 ni que le binaire installé correspond à cette version, ni qu'un serveur MCP déjà
 ouvert a rechargé son catalogue.
 

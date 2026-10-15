@@ -1,7 +1,7 @@
 # Checklist de qualité — Coordination CLI autonome
 
-**Objet** : vérifier que la spécification est complète avant la planification  
-**Création** : 2026-10-15  
+**Objet** : vérifier que la spécification est complète avant la planification
+**Création** : 2026-10-15
 **Feature** : `../spec.md`
 
 ## Qualité du contenu
