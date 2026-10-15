@@ -1,12 +1,16 @@
-# Livraison SPEC168 — reçu courant avant clôture documentaire
+# Livraison SPEC168 — Bridget 0.4.0 livrée
 
-## État courant — 15/10/2026 à 17:13 CEST
+## État courant — 15/10/2026 à 17:18 CEST
 
-**In Progress, 53/56 tâches cochées par ROOT.** T045 et T046 sont closes. T047, commit documentaire C1, est en cours ; T048 et T049 restent ouvertes. Le nettoyage final de la source appartient à ROOT. Aucun statut Livré ou Implemented n’est annoncé.
+**Implemented — 56/56 tâches cochées. Pipeline : Livré, avec conservations explicites T048.** ROOT a validé le contrôle final des 35 exigences, 11 critères et 7 histoires. Aucune tâche ne reste ouverte.
 
-La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, est construite et activée sur Mac/Cartae. Les trois voies réelles ont résultats et rejeux vérifiés : Laya `decision_service` sur 2 candidats, Haiku `lightweight_model` sur 21 candidats, dernier repli `deterministic` sur 21 candidats. Détail : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/recette168.md.
+La récupération documentaire T047 est prouvée : C1 `db46c7816777199da7c41bb9bc10063cd361dae7` intégré et poussé, main Mac/Cartae alignés et propres aux reçus. Source binaire B et release v0.4.0 inchangées ; aucun rebuild. Preuves : /home/moi/.local/state/bridget-delivery168/git/integration-pushC1-cartae.json, SHA-256 `e32d1529d986fff8af4441928353d8b1a5fd163e4aefaf7e3b90651d9ce90454` ; /Users/moi/.cache/bridget-delivery168/git/integration-pullC1-mac.json, SHA-256 `4cf769d0707b2b28535a6f91052d786ff5c5b1c861738e645f6a20df84111766`.
 
-**Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
+L’examen T048 est terminé avec retraits et conservations motivées. Le worktree source Cartae et sa branche sont conservés : C1 fusionné/poussé, arbre propre et zéro ignoré ; garde lsof RC0 mais 4 337 octets stderr, donc observation incomplète. Aucun match observé ne vaut preuve d’absence d’usage. Aucun contournement ni suppression inventée. Les 18 anciens candidats conservent leurs motifs. Reçu : /home/moi/.local/state/bridget-delivery168/cleanup/t048-source-final-guard.json, SHA-256 `e2410c3dc3d838b1fb49cdb065f0a9c067cda717a105cce4d0458b94ea25cfc3`. Bilan : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/nettoyage168.md. Le contrôle final T049 est validé. Le SHA du commit documentaire final est vérifié hors de son propre contenu dans les reçus Git privés.
+
+La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, est construite et activée sur Mac/Cartae. Les trois voies réelles ont résultats et rejeux vérifiés : Laya `decision_service` sur 2 candidats, Haiku `lightweight_model` sur 21 candidats, dernier repli `deterministic` sur 21 candidats. Détail : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/recette168.md.
+
+**Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
 
 Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
 
@@ -249,3 +253,12 @@ La recette matrice Haiku finale est maintenant vérifiée par /home/moi/.local/s
 La source B, les paquets et l’activation déjà documentés restent acquis. État : 51/56 au mandat ROOT, T045 prête à clore par ROOT. La publication reste en préparation, sans release publiée ni statut Livré/Implemented déclaré. La suite T046–T049 relève de ROOT ; aucun nouvel audit, FULL, P4 ou build n’est requis par ce seul rapprochement documentaire.
 
 Les PID de production du checkpoint d’activation ne sont pas recontrôlés par cette rédaction. Pour T3, ROOT précise : application 65544 et tunnel 60206 inchangés ; remplacement extérieur du serveur 65608 par 97328, né à 16:51:02 CEST pendant les restrictions. Aucun signal T3 de notre part.
+
+
+## Bilan final et portée des preuves
+
+Les phases SpecKit, réemploi, implémentation et trois passages de convergence sont consignés ; P3 CONVERGED, contre-revue adverse puis audit conservés. Le correctif B de délai a une contre-lecture statique APPROVE et un oracle exact PASS avec trois sous-cas ; aucun passage P4 ni nouvelle FULL n’est revendiqué. Un seul nouveau module Rust, host_resources.rs, porte la mesure de machine ; registre, admission, store, flotte, CLI, protocoles et Lineage sont étendus. Les arbitrages de réemploi restent dans reuse-audit.md ; aucune nouvelle dépendance externe.
+
+Les 35 FR, 11 SC et 7 US sont rapprochés dans criteres168.md. Les limites FULL et d’authentification restent celles exposées plus haut : catalogue déclaré ne vaut pas droit universel, HTTP/processus réels non instrumentés, trois anciens cas Linux non validables, deux LOW TLS et une INFO de maintenance. Le nettoyage est terminé par retrait ou conservation motivée ; le worktree Cartae168 et sa branche ne sont pas annoncés supprimés.
+
+La borne haute d’ETA précédemment communiquée était18:50CEST. Le contrôle final intervient avant cette borne. La restriction temporaire SSH/Git16:56a retardé la reprise ; elle a été levée et les compléments ont été récupérés sans perte. La fourchette initiale complète et le temps global avant les passations ne sont pas reconstruits ici ; aucun écart en pourcentage n’est inventé. Les durées de FULL et builds restent mesurées dans leurs reçus. Source binaire B distincte des commits documentaires C1 et de cette clôture : aucune reconstruction ni relance supplémentaire.

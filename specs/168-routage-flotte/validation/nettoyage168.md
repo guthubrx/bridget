@@ -1,4 +1,16 @@
-# Nettoyage de la session 168 — reçu intermédiaire
+# Nettoyage de la session 168 — bilan d’examen T048
+
+## État courant — 15/10/2026 à 17:18 CEST
+
+**Implemented — 56/56 tâches cochées. Pipeline : Livré, avec conservations explicites T048.** ROOT a validé le contrôle final des 35 exigences, 11 critères et 7 histoires. Aucune tâche ne reste ouverte.
+
+La récupération documentaire T047 est prouvée : C1 `db46c7816777199da7c41bb9bc10063cd361dae7` intégré et poussé, main Mac/Cartae alignés et propres aux reçus. Source binaire B et release v0.4.0 inchangées ; aucun rebuild. Preuves : /home/moi/.local/state/bridget-delivery168/git/integration-pushC1-cartae.json, SHA-256 `e32d1529d986fff8af4441928353d8b1a5fd163e4aefaf7e3b90651d9ce90454` ; /Users/moi/.cache/bridget-delivery168/git/integration-pullC1-mac.json, SHA-256 `4cf769d0707b2b28535a6f91052d786ff5c5b1c861738e645f6a20df84111766`.
+
+L’examen T048 est terminé avec retraits et conservations motivées. Le worktree source Cartae et sa branche sont conservés : C1 fusionné/poussé, arbre propre et zéro ignoré ; garde lsof RC0 mais 4 337 octets stderr, donc observation incomplète. Aucun match observé ne vaut preuve d’absence d’usage. Aucun contournement ni suppression inventée. Les 18 anciens candidats conservent leurs motifs. Reçu : /home/moi/.local/state/bridget-delivery168/cleanup/t048-source-final-guard.json, SHA-256 `e2410c3dc3d838b1fb49cdb065f0a9c067cda717a105cce4d0458b94ea25cfc3`. Bilan : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/nettoyage168.md. Le contrôle final T049 est validé. Le SHA du commit documentaire final est vérifié hors de son propre contenu dans les reçus Git privés.
+
+Les sections ci-dessous sont les observations historiques des opérations : leurs mentions T048 ouverte sont dépassées par ce bilan. Toutes DB, preuves, archives et sauvegardes restent protégées. Aucune nouvelle opération de nettoyage par cette rédaction.
+
+---
 
 État arrêté au 15 octobre 2026, 16:29 CEST. **T048 reste ouverte.** Ce document rassemble des preuves existantes. Sa rédaction n’a lancé aucun nettoyage, arrêt, contrôle de processus, test ou commande Git supplémentaire.
 
@@ -122,3 +134,12 @@ Les namespaces Laya, Score et Haiku des deux machines restent conservés avec le
 3. Les huit racines contenant des DB ou reçus et le cache de qualification restent protégés, avec leurs chemins exacts dans le reçu des 18 candidats. Ils ne rejoignent pas une liste de suppression automatique. Les namespaces des recettes réelles, archives, stashes, sauvegardes et paquets actifs restent également conservés comme preuves ou moyens de retour arrière.
 
 Ce bilan ne revendique aucun gain physique, aucun nettoyage global et aucune clôture anticipée de T048. Les conservations sont explicites et les retraits déjà faits restent traçables par leurs reçus.
+
+
+## Bilan final T048 — récupération et conservation motivée, 15/10/2026 à 17:18 CEST
+
+La récupération documentaire T047 est prouvée : C1 `db46c7816777199da7c41bb9bc10063cd361dae7` intégré et poussé, main Mac/Cartae alignés et propres aux reçus. Source binaire B et release v0.4.0 inchangées ; aucun rebuild. Preuves : /home/moi/.local/state/bridget-delivery168/git/integration-pushC1-cartae.json, SHA-256 `e32d1529d986fff8af4441928353d8b1a5fd163e4aefaf7e3b90651d9ce90454` ; /Users/moi/.cache/bridget-delivery168/git/integration-pullC1-mac.json, SHA-256 `4cf769d0707b2b28535a6f91052d786ff5c5b1c861738e645f6a20df84111766`.
+
+L’examen T048 est terminé avec retraits et conservations motivées. Le worktree source Cartae et sa branche sont conservés : C1 fusionné/poussé, arbre propre et zéro ignoré ; garde lsof RC0 mais 4 337 octets stderr, donc observation incomplète. Aucun match observé ne vaut preuve d’absence d’usage. Aucun contournement ni suppression inventée. Les 18 anciens candidats conservent leurs motifs. Reçu : /home/moi/.local/state/bridget-delivery168/cleanup/t048-source-final-guard.json, SHA-256 `e2410c3dc3d838b1fb49cdb065f0a9c067cda717a105cce4d0458b94ea25cfc3`. Bilan : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/nettoyage168.md. Seul le contrôle final T049 et l’identification du futur commit documentaire restent à établir par ROOT.
+
+Le worktree examiné est /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte ; branche session-168-routage-flotte. Le reçu indique removed=false et branch_removed=false. Le worktree163 /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission est protégé. Conservation motivée conforme à l’examen autorisé T048 ; volume retiré pour ce dernier candidat : 0 octet. Aucun gain physique revendiqué. T048 est cochée par ROOT ; T049 est validée par ROOT.
