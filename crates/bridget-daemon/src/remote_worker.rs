@@ -65,6 +65,15 @@ impl std::fmt::Display for WorkerStoreError {
 }
 impl std::error::Error for WorkerStoreError {}
 
+/// Sélection168 opaque conservée dans le reçu privé pour les rechecks frais.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct RoutingPreparation {
+    connection_id: String,
+    engine: String,
+    workload: bridget_transport::protocol::AutoDelegateWorkload,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerCommandReceipt {
@@ -87,6 +96,8 @@ pub struct WorkerCommandReceipt {
     /// Canon préparé conservé avant bootstrap pour les rechecks après reprise.
     #[serde(default)]
     preparation: Option<(WorkerPrepare, WorkerPrepared)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    routing: Option<RoutingPreparation>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -352,6 +363,7 @@ impl WorkerStore {
             native_ready: false,
             startup_failed: false,
             preparation: None,
+            routing: None,
             created_at: now,
             updated_at: now,
         };
@@ -430,11 +442,12 @@ impl WorkerStore {
             || receipt
                 .preparation
                 .as_ref()
-                .is_some_and(|previous| previous != &canon)
+                .is_some_and(|previous| previous != &canon || receipt.routing != prepared.routing)
         {
             return Err(WorkerStoreError::Conflict);
         }
         receipt.preparation = Some(canon);
+        receipt.routing = prepared.routing.clone();
         // Refus avant bootstrap si le canon excède la réservation de métadonnées.
         let bytes = serde_json::to_vec(&receipt).map_err(|_| WorkerStoreError::Quota)?;
         if bytes.len() > MAX_METADATA_BYTES {
@@ -1510,12 +1523,13 @@ use crate::managed_process::{
 use crate::registry::{AgentRegistry, ProjectMapping};
 use bridget_transport::protocol::{
     CandidateProbe, CandidateProbeCandidate, CandidateProbeRefusal, CandidateProbeResult,
-    CandidateProbeVerdict, ClientCapability, DaemonToWrapper, IdentityCredential,
-    MAX_WORKER_FRAME_BYTES, REMOTE_WORKER_VERSION, ResolvedAgentDefinition, SpawnPosture,
-    WORKER_CANDIDATE_PROBE_VERSION, WorkerCancelScope, WorkerCapability, WorkerHello,
-    WorkerHelloWithCapabilities, WorkerJournalFragment, WorkerObservation, WorkerPrepare,
-    WorkerPrepared, WorkerRequest, WorkerRequestOperation, WorkerResponse, WorkerResponseOperation,
-    WorkerStart, WrapperToDaemon,
+    CandidateProbeV2, CandidateProbeV2Result, CandidateProbeV2Verdict, CandidateProbeVerdict,
+    ClientCapability, DaemonToWrapper, IdentityCredential, MAX_WORKER_FRAME_BYTES,
+    REMOTE_WORKER_VERSION, ResolvedAgentDefinition, SpawnPosture,
+    WORKER_CANDIDATE_PROBE_V2_VERSION, WORKER_CANDIDATE_PROBE_VERSION, WorkerCancelScope,
+    WorkerCapability, WorkerHello, WorkerHelloWithCapabilities, WorkerJournalFragment,
+    WorkerObservation, WorkerPrepare, WorkerPrepared, WorkerRequest, WorkerRequestOperation,
+    WorkerResponse, WorkerResponseOperation, WorkerStart, WrapperToDaemon,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -1580,6 +1594,7 @@ fn marker_key(command: &WorkerCommandIdentity) -> String {
 }
 
 struct PreparedRuntime {
+    routing: Option<RoutingPreparation>,
     command: WorkerCommandIdentity,
     request: WorkerPrepare,
     prepared: WorkerPrepared,
@@ -1595,9 +1610,14 @@ struct CandidateReadiness {
     effective_posture: SpawnPosture,
 }
 
+// Faits de chemins/Git seulement, jamais droits, modèle ou définition.
+// Cache privé au lot v2 : au plus 128 clés, aucune persistance ni partage entre époques.
+type ProbeGitFacts = BTreeMap<Vec<u8>, Result<(ProjectMapping, PathBuf), CandidateProbeRefusal>>;
+
 enum WorkerInbound {
     Request(WorkerRequest),
     CandidateProbe(CandidateProbe),
+    CandidateProbeV2(CandidateProbeV2),
 }
 
 struct HeldRuntime {
@@ -1620,6 +1640,8 @@ struct WorkerRuntime {
     abandoned: BTreeMap<String, std::process::Child>,
     last_maintenance: Instant,
     cancelled: Arc<Mutex<BTreeSet<String>>>,
+    host_resources: crate::host_resources::HostResourceCollector,
+    last_resource_refresh: Instant,
 }
 
 impl WorkerRuntime {
@@ -1701,6 +1723,8 @@ impl WorkerRuntime {
             abandoned: BTreeMap::new(),
             last_maintenance: Instant::now() - Duration::from_secs(1),
             cancelled: Arc::new(Mutex::new(BTreeSet::new())),
+            host_resources: crate::host_resources::HostResourceCollector::default(),
+            last_resource_refresh: Instant::now(),
         };
         runtime
             .reconcile_all()
@@ -1730,11 +1754,21 @@ impl WorkerRuntime {
             self.config.state_root.clone(),
         ]
     }
-    fn mapping(
+    fn mapping_for(
         &self,
         request: &WorkerPrepare,
         registry: &AgentRegistry,
+        workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
     ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
+        let mapping = self.mapping_authority(request, registry)?;
+        self.mapping_paths_and_git(request, mapping, workload)
+    }
+
+    fn mapping_authority(
+        &self,
+        request: &WorkerPrepare,
+        registry: &AgentRegistry,
+    ) -> Result<ProjectMapping, WorkerRefusal> {
         let provision = registry
             .machine(&self.identity.machine_id)
             .map_err(|_| WorkerRefusal::PlacementMismatch)?;
@@ -1762,6 +1796,15 @@ impl WorkerRuntime {
         if origin != Path::new(&request.origin_cwd) {
             return Err(WorkerRefusal::PlacementMismatch);
         }
+        Ok(mapping)
+    }
+
+    fn mapping_paths_and_git(
+        &self,
+        request: &WorkerPrepare,
+        mapping: ProjectMapping,
+        workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
+    ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
         let protected = self.protected();
         let root =
             crate::registry::validate_unprotected_local_path(&mapping.remote_root, &protected)
@@ -1773,6 +1816,27 @@ impl WorkerRuntime {
         .map_err(|_| WorkerRefusal::PlacementMismatch)?;
         if !cwd.starts_with(&root) || !cwd.is_dir() {
             return Err(WorkerRefusal::PlacementMismatch);
+        }
+        if let Some(workload) = workload {
+            let git = Self::git_markers_present(&cwd)?;
+            let worktree = matches!(
+                &request.workspace,
+                Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
+            );
+            if !git {
+                if request.base_commit.is_some()
+                    || worktree
+                    || workload == bridget_transport::protocol::AutoDelegateWorkload::Compilation
+                {
+                    return Err(WorkerRefusal::PlacementMismatch);
+                }
+                // HorsGit attesté : l'autorité est le mapping explicite et les
+                // mêmes chemins/protections/droits, jamais un échec Git supposé.
+                return Ok((mapping, cwd));
+            }
+            if request.base_commit.is_none() {
+                return Err(WorkerRefusal::PlacementMismatch);
+            }
         }
         let origin = crate::workspace_git::run_git(
             &root,
@@ -1793,6 +1857,90 @@ impl WorkerRuntime {
             return Err(WorkerRefusal::PlacementMismatch);
         }
         Ok((mapping, cwd))
+    }
+
+    /// O(h), h<=256 ancêtres ; une erreur ou un marqueur ambigu reste un refus.
+    /// Aucun stderr/code Git ne sert à déduire l'absence de dépôt.
+    fn git_markers_present(cwd: &Path) -> Result<bool, WorkerRefusal> {
+        for (depth, ancestor) in cwd.ancestors().enumerate() {
+            if depth >= 256 {
+                return Err(WorkerRefusal::PlacementMismatch);
+            }
+            match fs::symlink_metadata(ancestor.join(".git")) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(WorkerRefusal::PlacementMismatch);
+                }
+                Ok(metadata) if metadata.is_file() || metadata.is_dir() => return Ok(true),
+                Ok(_) => return Err(WorkerRefusal::PlacementMismatch),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(_) => return Err(WorkerRefusal::PlacementMismatch),
+            }
+            let mut bare = 0;
+            for name in ["HEAD", "objects", "refs"] {
+                match fs::symlink_metadata(ancestor.join(name)) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(WorkerRefusal::PlacementMismatch);
+                    }
+                    Ok(_) => bare += 1,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(_) => return Err(WorkerRefusal::PlacementMismatch),
+                }
+            }
+            if bare == 3 {
+                return Ok(true);
+            }
+            if bare != 0 {
+                return Err(WorkerRefusal::PlacementMismatch);
+            }
+        }
+        Ok(false)
+    }
+
+    fn check_routing_connection(
+        &self,
+        registry: &AgentRegistry,
+        request: &WorkerPrepare,
+        routing: &RoutingPreparation,
+    ) -> Result<(), WorkerRefusal> {
+        let policy = registry
+            .routing_policy()
+            .ok_or(WorkerRefusal::CapabilityRequired)?;
+        if !policy.enabled
+            || !policy
+                .machine_policies
+                .get(&self.identity.machine_id)
+                .is_some_and(|policy| policy.enabled)
+        {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        let candidates = registry
+            .routing_candidates()
+            .ok_or(WorkerRefusal::CapabilityRequired)?;
+        if !candidates.iter().any(|entry| {
+            entry.enabled
+                && entry.machine_id == self.identity.machine_id
+                && entry.connection_id == routing.connection_id
+                && entry.engine == routing.engine
+                && entry.agent_type == request.agent_type
+                && entry.model == request.model
+                && request
+                    .effort
+                    .as_ref()
+                    .map_or(entry.default_effort.is_none(), |effort| {
+                        entry.supported_efforts.contains(effort)
+                    })
+        }) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        Ok(())
+    }
+
+    fn compilation_capacity(&self, registry: &AgentRegistry) -> Option<u8> {
+        registry
+            .routing_policy()?
+            .machine_policies
+            .get(&self.identity.machine_id)?
+            .compilation_capacity
     }
 
     /// Contrôle Git de lecture, également utilisé pour le cwd partagé et la
@@ -1951,6 +2099,16 @@ impl WorkerRuntime {
         candidate: &CandidateProbeCandidate,
         registry: &AgentRegistry,
     ) -> CandidateProbeVerdict {
+        self.probe_one_candidate_for(probe, candidate, registry, None, None)
+    }
+    fn probe_one_candidate_for(
+        &self,
+        probe: &CandidateProbe,
+        candidate: &CandidateProbeCandidate,
+        registry: &AgentRegistry,
+        workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
+        git_facts: Option<&mut ProbeGitFacts>,
+    ) -> CandidateProbeVerdict {
         let mapping_revision =
             match registry.project_mapping(&self.identity.machine_id, &candidate.project_id) {
                 Ok(mapping) => mapping.mapping_revision,
@@ -1968,8 +2126,10 @@ impl WorkerRuntime {
                 reason: CandidateProbeRefusal::InvalidRequest,
             };
         }
-        let (mapping, cwd) = match self.mapping(&request, registry) {
-            Ok(values) => values,
+        // Cette autorité reste individuelle, même si les faits Git du projet
+        // sont déjà connus pour un autre modèle ou agent du même lot.
+        let mapping = match self.mapping_authority(&request, registry) {
+            Ok(mapping) => mapping,
             Err(_) => {
                 return CandidateProbeVerdict::Ineligible {
                     candidate_id: candidate.candidate_id.clone(),
@@ -1977,12 +2137,52 @@ impl WorkerRuntime {
                 };
             }
         };
-        if let Err(reason) = Self::probe_workspace_preconditions(&request, &mapping, &cwd) {
-            return CandidateProbeVerdict::Ineligible {
-                candidate_id: candidate.candidate_id.clone(),
-                reason,
+        let read_git_facts = || {
+            let (mapping, cwd) = self
+                .mapping_paths_and_git(&request, mapping, workload)
+                .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
+            Self::probe_workspace_preconditions(&request, &mapping, &cwd)?;
+            Ok((mapping, cwd))
+        };
+        let checked = if let Some(cache) = git_facts {
+            // Worker/provisioning/epoch/registre/protections sont constants dans
+            // ce seul lot. Tout fait variable de mapping/base figure dans la clé.
+            let key = match serde_json::to_vec(&(
+                &request.project_id,
+                request.mapping_revision,
+                &request.origin_host,
+                &request.origin_cwd,
+                &request.source_root,
+                &request.remote_root,
+                &request.source_root_identity,
+                &request.relative_cwd,
+                &request.workspace,
+                &request.base_commit,
+                workload,
+            )) {
+                Ok(key) => key,
+                Err(_) => {
+                    return CandidateProbeVerdict::Ineligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        reason: CandidateProbeRefusal::InvalidRequest,
+                    };
+                }
             };
-        }
+            // Le refus commun est lui aussi mémorisé : une base absente ne
+            // provoque pas 128 préflights. Aucun résultat ne quitte ce lot.
+            cache.entry(key).or_insert_with(read_git_facts).clone()
+        } else {
+            read_git_facts()
+        };
+        let (mapping, cwd) = match checked {
+            Ok(values) => values,
+            Err(reason) => {
+                return CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id.clone(),
+                    reason,
+                };
+            }
+        };
         let readiness = match self.inspect_candidate(registry, &request, &mapping, &cwd) {
             Ok(readiness) => readiness,
             Err(WorkerRefusal::DefinitionChanged) => {
@@ -2055,12 +2255,166 @@ impl WorkerRuntime {
         })
     }
 
+    /// Probe168 : le registre local est l'autorité de la connexion opaque.
+    /// Le contrôle est lecture seule et précède toute conversion en Prepare.
+    fn candidate_probe_v2(
+        &mut self,
+        probe: &CandidateProbeV2,
+    ) -> Result<CandidateProbeV2Result, WorkerRefusal> {
+        probe.validate_shape()?;
+        if probe.worker != self.identity {
+            return Err(WorkerRefusal::StaleConnection);
+        }
+        let registry = self.registry()?;
+        let capacity = self.compilation_capacity(&registry);
+        let resources = self.host_resources.collect(worker_now(), capacity);
+        self.last_resource_refresh = Instant::now();
+        let candidates = registry
+            .routing_candidates()
+            .ok_or(WorkerRefusal::CapabilityRequired)?;
+        let policy = registry
+            .routing_policy()
+            .ok_or(WorkerRefusal::CapabilityRequired)?;
+        let enabled = policy.enabled
+            && policy
+                .machine_policies
+                .get(&self.identity.machine_id)
+                .is_some_and(|policy| policy.enabled);
+        let index = candidates
+            .iter()
+            .map(|entry| {
+                (
+                    (
+                        entry.machine_id.as_str(),
+                        entry.connection_id.as_str(),
+                        entry.engine.as_str(),
+                        entry.agent_type.as_str(),
+                        entry.model.as_str(),
+                    ),
+                    entry,
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut git_facts = ProbeGitFacts::new();
+        let verdicts = probe
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let registered = enabled
+                    && index
+                        .get(&(
+                            self.identity.machine_id.as_str(),
+                            candidate.connection_id.as_str(),
+                            candidate.engine.as_str(),
+                            candidate.agent_type.as_str(),
+                            candidate.model.as_str(),
+                        ))
+                        .is_some_and(|entry| {
+                            entry.enabled
+                                && candidate
+                                    .effort
+                                    .as_ref()
+                                    .map_or(entry.default_effort.is_none(), |effort| {
+                                        entry.supported_efforts.contains(effort)
+                                    })
+                        });
+                if !registered {
+                    return CandidateProbeV2Verdict::Ineligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        reason: CandidateProbeRefusal::CapabilityUnavailable,
+                    };
+                }
+                let legacy = CandidateProbeCandidate {
+                    candidate_id: "c01".into(),
+                    project_id: candidate.project_id.clone(),
+                    origin_host: candidate.origin_host.clone(),
+                    origin_cwd: candidate.origin_cwd.clone(),
+                    source_root: candidate.source_root.clone(),
+                    remote_root: candidate.remote_root.clone(),
+                    source_root_identity: candidate.source_root_identity.clone(),
+                    relative_cwd: candidate.relative_cwd.clone(),
+                    base_commit: candidate.expected_base_commit.clone(),
+                    agent_type: candidate.agent_type.clone(),
+                    model: candidate.model.clone(),
+                    effort: candidate.effort.clone(),
+                    posture: candidate.posture,
+                    workspace: candidate.workspace.clone(),
+                };
+                let legacy_probe = CandidateProbe {
+                    version: WORKER_CANDIDATE_PROBE_VERSION,
+                    correlation_id: probe.correlation_id.clone(),
+                    connection_epoch: probe.connection_epoch.clone(),
+                    worker: probe.worker.clone(),
+                    admission_id: probe.admission_id.clone(),
+                    policy_revision: probe.policy_revision,
+                    parent: probe.parent.clone(),
+                    candidates: vec![legacy],
+                };
+                match self.probe_one_candidate_for(
+                    &legacy_probe,
+                    &legacy_probe.candidates[0],
+                    &registry,
+                    Some(candidate.workload),
+                    Some(&mut git_facts),
+                ) {
+                    CandidateProbeVerdict::Eligible {
+                        mapping_revision,
+                        definition_digest,
+                        permission_digest,
+                        observed_at,
+                        ..
+                    } => CandidateProbeV2Verdict::Eligible {
+                        candidate_id: candidate.candidate_id.clone(),
+                        mapping_revision,
+                        definition_digest,
+                        permission_digest,
+                        observed_at,
+                    },
+                    CandidateProbeVerdict::Ineligible { reason, .. } => {
+                        CandidateProbeV2Verdict::Ineligible {
+                            candidate_id: candidate.candidate_id.clone(),
+                            reason,
+                        }
+                    }
+                }
+            })
+            .collect();
+        Ok(CandidateProbeV2Result {
+            version: WORKER_CANDIDATE_PROBE_V2_VERSION,
+            correlation_id: probe.correlation_id.clone(),
+            connection_epoch: probe.connection_epoch.clone(),
+            worker: self.identity.clone(),
+            admission_id: probe.admission_id.clone(),
+            policy_revision: probe.policy_revision,
+            resources,
+            verdicts,
+        })
+    }
+
     fn prepare(
         &mut self,
         command: &WorkerCommandIdentity,
         request: &WorkerPrepare,
     ) -> Result<WorkerPrepared, WorkerRefusal> {
+        self.prepare_for(command, request, None, false)
+    }
+    fn prepare_for(
+        &mut self,
+        command: &WorkerCommandIdentity,
+        request: &WorkerPrepare,
+        routing: Option<(RoutingPreparation, &str, &str)>,
+        inspect_only: bool,
+    ) -> Result<WorkerPrepared, WorkerRefusal> {
         validate_prepare_command(command)?;
+        if inspect_only
+            && (routing.is_none()
+                || !matches!(
+                    request.workspace,
+                    Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
+                ))
+        {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
         if !self.held.is_empty() {
             return Err(WorkerRefusal::ResourceLimit);
         }
@@ -2069,7 +2423,15 @@ impl WorkerRuntime {
         }
         let expires = Instant::now() + Duration::from_secs(30);
         let registry = self.registry()?;
-        let (mut mapping, mut cwd) = self.mapping(request, &registry)?;
+        if let Some((selection, _, _)) = &routing {
+            self.check_routing_connection(&registry, request, selection)?;
+        }
+        let (mut mapping, mut cwd) = self.mapping_for(
+            request,
+            &registry,
+            routing.as_ref().map(|(selection, _, _)| selection.workload),
+        )?;
+        let mut inspected_base = None;
         // Les droits et la définition sont revalidés avant toute création de
         // worktree. Une révocation entre Probe et Prepare reste donc sans
         // slot, répertoire ni lancement fournisseur.
@@ -2093,10 +2455,49 @@ impl WorkerRuntime {
             {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
+            inspected_base = Some(preflight.base_commit);
         } else {
             Self::verify_base_commit(&cwd, request.base_commit.as_deref())?;
         }
-        self.inspect_candidate(&registry, request, &mapping, &cwd)?;
+        let initial = self.inspect_candidate(&registry, request, &mapping, &cwd)?;
+        if let Some((_, expected_definition, expected_permission)) = &routing {
+            if initial.definition.digest != *expected_definition {
+                return Err(WorkerRefusal::DefinitionChanged);
+            }
+            if json_digest(&initial.child_policy).map_err(refuse)? != *expected_permission {
+                return Err(WorkerRefusal::PermissionsChanged);
+            }
+        }
+        if inspect_only {
+            if Instant::now() >= expires {
+                return Err(WorkerRefusal::PrepareExpired);
+            }
+            // Ce résultat sert uniquement à l admission durable du maître.
+            // Il ne crée aucun reçu, slot, worktree, garde Git ou PreparedRuntime.
+            return Ok(WorkerPrepared {
+                workspace: None,
+                placement: RemotePlacement {
+                    machine_id: self.identity.machine_id.clone(),
+                    worker_id: self.identity.worker_id.clone(),
+                    provisioning_revision: self.identity.provisioning_revision,
+                    project_id: request.project_id.clone(),
+                    mapping_revision: request.mapping_revision,
+                    origin_host: request.origin_host.clone(),
+                    origin_cwd: request.origin_cwd.clone(),
+                    source_root_identity: request.source_root_identity.clone(),
+                    relative_cwd: request.relative_cwd.clone(),
+                    execution_cwd: cwd.to_string_lossy().into_owned(),
+                    base_commit: inspected_base,
+                    definition_digest: initial.definition.digest.clone(),
+                    permission_digest: json_digest(&initial.child_policy).map_err(refuse)?,
+                },
+                token: bridget_transport::protocol::WORKER_INSPECTION_TOKEN.into(),
+                definition: initial.definition,
+                child_policy: initial.child_policy,
+                effective_posture: initial.effective_posture,
+                prepared_at: worker_now(),
+            });
+        }
         let mut worktree_base = None;
         let mut workspace = None;
         if matches!(
@@ -2156,6 +2557,7 @@ impl WorkerRuntime {
         self.prepared.insert(
             command.command_id.clone(),
             PreparedRuntime {
+                routing: routing.map(|(selection, _, _)| selection),
                 command: command.clone(),
                 request: request.clone(),
                 prepared: prepared.clone(),
@@ -2175,7 +2577,14 @@ impl WorkerRuntime {
         before_release: bool,
     ) -> Result<AgentRegistry, WorkerRefusal> {
         let registry = self.registry()?;
-        let (mut mapping, mut cwd) = self.mapping(&prepared.request, &registry)?;
+        if let Some(routing) = &prepared.routing {
+            self.check_routing_connection(&registry, &prepared.request, routing)?;
+        }
+        let (mut mapping, mut cwd) = self.mapping_for(
+            &prepared.request,
+            &registry,
+            prepared.routing.as_ref().map(|routing| routing.workload),
+        )?;
         if matches!(
             &prepared.request.workspace,
             Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
@@ -2264,6 +2673,10 @@ impl WorkerRuntime {
         start: &WorkerStart,
         disconnected: &AtomicBool,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        // Même un rejeu durable ne transforme jamais une inspection en Start.
+        if start.prepared_token == bridget_transport::protocol::WORKER_INSPECTION_TOKEN {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
         let digest = worker_command_digest(&self.identity, command, start).map_err(refuse)?;
         // Le rejeu durable ne dépend pas d'un token volatil toujours présent.
         match self.store.command(command) {
@@ -2735,6 +3148,7 @@ impl WorkerRuntime {
         prepare_command.instance_id.clear();
         prepare_command.generation = 0;
         let retained = PreparedRuntime {
+            routing: receipt.routing,
             command: prepare_command,
             request,
             prepared,
@@ -2872,6 +3286,14 @@ impl WorkerRuntime {
             self.store.collect(worker_now()).map_err(refuse)?;
             self.last_maintenance = Instant::now();
         }
+        if self.last_resource_refresh.elapsed() >= Duration::from_secs(10) {
+            let capacity = self
+                .registry()
+                .ok()
+                .and_then(|registry| self.compilation_capacity(&registry));
+            let _ = self.host_resources.collect(worker_now(), capacity);
+            self.last_resource_refresh = Instant::now();
+        }
         Ok(())
     }
 
@@ -2891,6 +3313,30 @@ impl WorkerRuntime {
         match &request.request {
             WorkerRequestOperation::Prepare { prepare } => self
                 .prepare(&request.command, prepare)
+                .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
+            WorkerRequestOperation::PrepareV2 {
+                prepare,
+                inspect_only,
+                workload,
+                connection_id,
+                engine,
+                expected_definition_digest,
+                expected_permission_digest,
+            } => self
+                .prepare_for(
+                    &request.command,
+                    prepare,
+                    Some((
+                        RoutingPreparation {
+                            connection_id: connection_id.clone(),
+                            engine: engine.clone(),
+                            workload: *workload,
+                        },
+                        expected_definition_digest,
+                        expected_permission_digest,
+                    )),
+                    *inspect_only,
+                )
                 .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
             WorkerRequestOperation::Start { start } => {
                 self.start(&request.command, start, disconnected)
@@ -3075,7 +3521,7 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<bool, String> {
+) -> Result<(bool, bool), String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -3088,9 +3534,14 @@ fn probe_worker_capability(
         Ok(DaemonToWrapper::DaemonIdentityReport { features, .. })
             if features.iter().any(|feature| feature == "remote_worker_v1") =>
         {
-            Ok(features
-                .iter()
-                .any(|feature| feature == "worker_candidate_probe_v1"))
+            Ok((
+                features
+                    .iter()
+                    .any(|feature| feature == "worker_candidate_probe_v1"),
+                features
+                    .iter()
+                    .any(|feature| feature == "worker_candidate_probe_v2"),
+            ))
         }
         _ => Err("worker_capability_required".into()),
     }
@@ -3121,7 +3572,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let master_supports_candidate_probe = probe_worker_capability(&writer, &mut reader)?;
+        let (master_supports_candidate_probe, master_supports_probe_v2) =
+            probe_worker_capability(&writer, &mut reader)?;
         let worker_hello = WorkerHello {
             version: REMOTE_WORKER_VERSION,
             identity: runtime.identity.clone(),
@@ -3129,11 +3581,20 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             build: crate::build_info::BUILD_ID.to_owned(),
             capability: ClientCapability::RemoteWorkerV1,
         };
-        let hello = if master_supports_candidate_probe {
+        let hello = if master_supports_candidate_probe || master_supports_probe_v2 {
             WrapperToDaemon::WorkerHelloWithCapabilities {
                 hello: WorkerHelloWithCapabilities {
                     hello: worker_hello,
-                    capabilities: vec![WorkerCapability::CandidateProbeV1],
+                    capabilities: [
+                        (
+                            master_supports_candidate_probe,
+                            WorkerCapability::CandidateProbeV1,
+                        ),
+                        (master_supports_probe_v2, WorkerCapability::CandidateProbeV2),
+                    ]
+                    .into_iter()
+                    .filter_map(|(supported, capability)| supported.then_some(capability))
+                    .collect(),
                 },
             }
         } else {
@@ -3159,22 +3620,35 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 continue;
             }
         };
-        let (epoch, candidate_probe_negotiated) =
+        let (epoch, candidate_probe_negotiated, candidate_probe_v2_negotiated) =
             match serde_json::from_slice::<DaemonToWrapper>(&line) {
                 Ok(DaemonToWrapper::WorkerAccepted { accepted })
                     if !master_supports_candidate_probe
+                        && !master_supports_probe_v2
                         && accepted.validate().is_ok()
                         && accepted.identity == runtime.identity =>
                 {
-                    (accepted.connection_epoch, false)
+                    (accepted.connection_epoch, false, false)
                 }
                 Ok(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
-                    if master_supports_candidate_probe
+                    if (master_supports_candidate_probe || master_supports_probe_v2)
+                        && (!accepted
+                            .capabilities
+                            .contains(&WorkerCapability::CandidateProbeV1)
+                            || master_supports_candidate_probe)
                         && accepted.accepted.validate().is_ok()
                         && accepted.accepted.identity == runtime.identity
-                        && (accepted.capabilities.is_empty()
-                            || accepted.capabilities
-                                == vec![WorkerCapability::CandidateProbeV1]) =>
+                        && (!accepted
+                            .capabilities
+                            .contains(&WorkerCapability::CandidateProbeV2)
+                            || master_supports_probe_v2)
+                        && accepted.capabilities.iter().all(|capability| {
+                            matches!(
+                                capability,
+                                WorkerCapability::CandidateProbeV1
+                                    | WorkerCapability::CandidateProbeV2
+                            )
+                        }) =>
                 {
                     let candidate_probe_negotiated = accepted
                         .capabilities
@@ -3182,6 +3656,9 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     (
                         accepted.accepted.connection_epoch,
                         candidate_probe_negotiated,
+                        accepted
+                            .capabilities
+                            .contains(&WorkerCapability::CandidateProbeV2),
                     )
                 }
                 Ok(DaemonToWrapper::WorkerRejected { .. }) => {
@@ -3189,6 +3666,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 }
                 _ => return Err("worker_handshake_invalid".into()),
             };
+        runtime.host_resources.reset();
+        runtime.last_resource_refresh = Instant::now();
         let disconnected = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<WorkerInbound>(8);
         let read_disconnected = disconnected.clone();
@@ -3212,7 +3691,12 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         Ok(DaemonToWrapper::WorkerRequest { request })
                             if request.connection_epoch == read_epoch
                                 && request.worker == read_worker
-                                && request.validate().is_ok() =>
+                                && request.validate().is_ok()
+                                && (candidate_probe_v2_negotiated
+                                    || !matches!(
+                                        &request.request,
+                                        WorkerRequestOperation::PrepareV2 { .. }
+                                    )) =>
                         {
                             WorkerInbound::Request(request)
                         }
@@ -3223,6 +3707,14 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                 && probe.validate_shape().is_ok() =>
                         {
                             WorkerInbound::CandidateProbe(probe)
+                        }
+                        Ok(DaemonToWrapper::CandidateProbeV2 { probe })
+                            if candidate_probe_v2_negotiated
+                                && probe.connection_epoch == read_epoch
+                                && probe.worker == read_worker
+                                && probe.validate_shape().is_ok() =>
+                        {
+                            WorkerInbound::CandidateProbeV2(probe)
                         }
                         _ => break,
                     },
@@ -3381,6 +3873,9 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     }
                 }
                 Ok(WorkerInbound::CandidateProbe(probe)) => {
+                    if disconnected.load(Ordering::Acquire) {
+                        break;
+                    }
                     let result = match runtime.candidate_probe(&probe) {
                         Ok(result) => result,
                         Err(_) => {
@@ -3393,6 +3888,26 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     };
                     if send_worker_frame(&writer, &WrapperToDaemon::CandidateProbeResult { result })
                         .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(WorkerInbound::CandidateProbeV2(probe)) => {
+                    if disconnected.load(Ordering::Acquire) {
+                        break;
+                    }
+                    let result = match runtime.candidate_probe_v2(&probe) {
+                        Ok(result) => result,
+                        Err(_) => {
+                            fatal = Some("worker_candidate_probe_v2_invalid".into());
+                            break;
+                        }
+                    };
+                    if send_worker_frame(
+                        &writer,
+                        &WrapperToDaemon::CandidateProbeResultV2 { result },
+                    )
+                    .is_err()
                     {
                         break;
                     }

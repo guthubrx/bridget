@@ -2803,7 +2803,8 @@ fn cmd_delegate_grant(args: &[String]) {
 
 const AUTO_DELEGATE_USAGE: &str = "usage: bridget auto-delegate \\
   --request-id ID --task MISSION --cwd CHEMIN [--machine-id ID] [--project-id ID] \\
-  [--agent-type TYPE] [--model MODEL] [--effort EFFORT] \\
+  [--engine ENGINE] [--connection-id ID] [--agent-type TYPE] [--model MODEL] [--effort EFFORT] \\
+  [--workload general|compilation] [--expected-base-commit SHA] \\
   [--posture discovery|development] [--reply-timeout SECONDES] \\
   [--workspace JSON] [--keep-alive-secs SECONDES] [--child-requests deny|forward] \\
   [--brief JSON] [--urgent true|false] [--deliverable TEXTE]\n\
@@ -2831,6 +2832,14 @@ fn parse_auto_delegate_args(args: &[String]) -> Result<serde_json::Value, String
                 "project_id",
                 serde_json::Value::String(option_value(args, &mut index, option)?),
             ),
+            "--engine" => (
+                "engine",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--connection-id" => (
+                "connection_id",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
             "--agent-type" => (
                 "agent_type",
                 serde_json::Value::String(option_value(args, &mut index, option)?),
@@ -2841,6 +2850,14 @@ fn parse_auto_delegate_args(args: &[String]) -> Result<serde_json::Value, String
             ),
             "--effort" => (
                 "effort",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--workload" => (
+                "workload",
+                serde_json::Value::String(option_value(args, &mut index, option)?),
+            ),
+            "--expected-base-commit" => (
+                "expected_base_commit",
                 serde_json::Value::String(option_value(args, &mut index, option)?),
             ),
             "--task" => (
@@ -2981,10 +2998,12 @@ fn cmd_auto_delegate(args: &[String]) {
 }
 
 const DELEGATE_USAGE: &str = "usage: bridget delegate MISSION [--request-id ID] [--cwd CHEMIN] \\
-  [--machine-id ID] [--project-id ID] [--agent-type TYPE] [--model MODEL] \\
-  [--effort EFFORT] [--posture discovery|development] [--reply-timeout SECONDES] \\
+  [--machine-id ID] [--project-id ID] [--engine MOTEUR] [--connection-id CONNEXION] \\
+  [--agent-type TYPE] [--model MODEL] [--effort EFFORT] [--workload general|compilation] \\
+  [--posture discovery|development] [--reply-timeout SECONDES] \\
   [--workspace JSON] [--keep-alive-secs SECONDES] [--child-requests deny|forward] \\
-  [--brief JSON] [--urgent] [--deliverable TEXTE] [--json]\n\
+  [--brief JSON] [--urgent] [--deliverable TEXTE] [--json] | \\
+bridget delegate --catalogue [--machine ID] [--json]\n\
 La mission est le seul argument métier obligatoire. Le parent est l'agent Bridget \
 authentifié qui exécute la commande. Utilisez --request-id pour un rejeu contrôlé.";
 
@@ -3001,6 +3020,13 @@ struct ParsedDelegateArgs {
     payload: serde_json::Value,
     json: bool,
     request_id: String,
+}
+
+/// La CLI fige le SHA de sa source locale avant de construire l'enveloppe.
+/// Une erreur Git reste technique : elle ne peut jamais être présentée comme
+/// un dossier hors Git.
+fn source_base_commit(cwd: &Path) -> Result<Option<String>, String> {
+    crate::lifecycle::source_base_commit(cwd)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3053,9 +3079,10 @@ fn parse_delegate_args(
                     cwd = Some(value);
                 }
             }
-            "--machine-id" | "--project-id" | "--agent-type" | "--model" | "--effort"
-            | "--posture" | "--reply-timeout" | "--workspace" | "--keep-alive-secs"
-            | "--child-requests" | "--brief" | "--deliverable" => {
+            "--machine-id" | "--project-id" | "--engine" | "--connection-id" | "--agent-type"
+            | "--model" | "--effort" | "--workload" | "--posture" | "--reply-timeout"
+            | "--workspace" | "--keep-alive-secs" | "--child-requests" | "--brief"
+            | "--deliverable" => {
                 let value = option_value(args, &mut index, option)?;
                 forwarded.push(option.to_string());
                 forwarded.push(value);
@@ -3075,9 +3102,25 @@ fn parse_delegate_args(
         cwd,
     ];
     technical.extend(forwarded);
+    let mut payload = parse_auto_delegate_args(&technical)?;
+    let payload_object = payload
+        .as_object_mut()
+        .ok_or_else(|| "delegate : charge interne invalide".to_string())?;
+    let source = Path::new(
+        payload_object
+            .get("cwd")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "delegate : cwd invalide".to_string())?,
+    );
+    if let Some(base_commit) = source_base_commit(source)? {
+        payload_object.insert(
+            "expected_base_commit".into(),
+            serde_json::Value::String(base_commit),
+        );
+    }
     Ok(ParsedDelegateArgs {
         tool: "bridget_auto_delegate",
-        payload: parse_auto_delegate_args(&technical)?,
+        payload,
         json: json_output,
         request_id,
     })
@@ -3405,6 +3448,12 @@ fn cmd_delegate(args: &[String]) {
         println!("{DELEGATE_USAGE}");
         return;
     }
+    if args
+        .first()
+        .is_some_and(|argument| argument == "--catalogue")
+    {
+        return cmd_delegate_catalogue(&args[1..]);
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|error| {
         eprintln!("bridget delegate : dossier courant inaccessible : {error}");
         std::process::exit(1);
@@ -3424,6 +3473,119 @@ fn cmd_delegate(args: &[String]) {
         displayed_request_id: Some(parsed.request_id),
     };
     run_native_cli("delegate", call);
+}
+
+fn cmd_delegate_catalogue(args: &[String]) {
+    let mut machine = None;
+    let mut json_output = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" if !json_output => json_output = true,
+            "--machine" if machine.is_none() => {
+                machine = Some(option_value(args, &mut index, "--machine").unwrap_or_else(
+                    |error| {
+                        exit_coordination_error(
+                            "delegate",
+                            json_output,
+                            "invalid_arguments",
+                            &error,
+                            None,
+                            2,
+                        )
+                    },
+                ));
+            }
+            option => exit_coordination_error(
+                "delegate",
+                json_output,
+                "invalid_arguments",
+                &unknown_argument("delegate --catalogue", option),
+                None,
+                2,
+            ),
+        }
+        index += 1;
+    }
+    let result =
+        crate::communication::client::routing_catalogue(&DaemonConfig::default().socket_path)
+            .unwrap_or_else(|error| {
+                exit_coordination_error(
+                    "delegate",
+                    json_output,
+                    "capability_unavailable",
+                    &error.to_string(),
+                    None,
+                    1,
+                )
+            });
+    let options = result
+        .get("options")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "routing_catalogue_invalid".to_string())
+        .and_then(|options| {
+            let options = options
+                .iter()
+                .filter(|option| {
+                    machine.as_deref().is_none_or(|id| {
+                        option.get("machine_id").and_then(serde_json::Value::as_str) == Some(id)
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            (options.len() <= 128)
+                .then_some(options)
+                .ok_or_else(|| "routing_catalogue_invalid".to_string())
+        })
+        .unwrap_or_else(|error| {
+            exit_coordination_error(
+                "delegate",
+                json_output,
+                "catalogue_invalid",
+                &error,
+                None,
+                1,
+            )
+        });
+    if json_output {
+        let mut result = result;
+        result["options"] = serde_json::Value::Array(options);
+        println!("{result}");
+        return;
+    }
+    println!("machine\tmoteur\tconnexion\tmodèle\tefforts\tdéfaut\tprovenance");
+    for option in options {
+        let text = |key| {
+            option
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("?")
+        };
+        let efforts = option
+            .get("supported_efforts")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            text("machine_id"),
+            text("engine"),
+            text("connection_id"),
+            text("model"),
+            efforts,
+            option
+                .get("default_effort")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("natif"),
+            text("provenance")
+        );
+    }
 }
 
 fn cmd_task(args: &[String]) {
@@ -8661,11 +8823,14 @@ mod hook_tests {
 
     #[test]
     fn spec167_delegate_reduit_le_parcours_nominal_a_la_mission() {
-        let parsed = parse_delegate_args(
-            &argv(&["analyser le dépôt"]),
-            Path::new("/workspace"),
-            || "request-167".into(),
-        )
+        let cwd = std::env::temp_dir().join(format!(
+            "bridget-cli167-nominal-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bridget_transport::fsutil::create_private_dir(&cwd).unwrap();
+        let parsed = parse_delegate_args(&argv(&["analyser le dépôt"]), &cwd, || {
+            "request-167".into()
+        })
         .unwrap();
         assert_eq!(parsed.tool, "bridget_auto_delegate");
         assert!(!parsed.json);
@@ -8675,20 +8840,26 @@ mod hook_tests {
             serde_json::json!({
                 "request_id":"request-167",
                 "task":"analyser le dépôt",
-                "cwd":"/workspace"
+                "cwd":cwd.to_string_lossy()
             })
         );
+        std::fs::remove_dir(&cwd).unwrap();
     }
 
     #[test]
     fn spec167_delegate_conserve_les_choix_explicites_sans_defaults_caches() {
+        let cwd = std::env::temp_dir().join(format!(
+            "bridget-cli167-explicite-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        bridget_transport::fsutil::create_private_dir(&cwd).unwrap();
         let parsed = parse_delegate_args(
             &argv(&[
                 "réviser le plan",
                 "--request-id",
                 "stable-167",
                 "--cwd",
-                "/project",
+                cwd.to_str().unwrap(),
                 "--agent-type",
                 "claude",
                 "--model",
@@ -8725,7 +8896,7 @@ mod hook_tests {
         assert_eq!(
             parsed.payload,
             serde_json::json!({
-                "request_id":"stable-167", "task":"réviser le plan", "cwd":"/project",
+                "request_id":"stable-167", "task":"réviser le plan", "cwd":cwd.to_string_lossy(),
                 "agent_type":"claude", "model":"sonnet", "effort":"high",
                 "posture":"development", "machine_id":"worker-1", "project_id":"project-1",
                 "reply_timeout":900, "keep_alive_secs":600, "child_requests":"forward",
@@ -8746,6 +8917,7 @@ mod hook_tests {
                 "args={invalid:?}"
             );
         }
+        std::fs::remove_dir(&cwd).unwrap();
     }
 
     #[test]

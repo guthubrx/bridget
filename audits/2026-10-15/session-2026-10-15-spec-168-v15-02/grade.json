@@ -1,0 +1,28 @@
+{
+  "protocol": "15.0.0",
+  "grade": "A",
+  "score": 98,
+  "date": "2026-10-15",
+  "spec": "168-routage-flotte",
+  "scope": "SPEC168 : diff de code avant livraison, contrats et tests ciblés T002–T035/T050–T056 ; activation, recette réelle et release restent des gates ultérieures",
+  "decision": "pass",
+  "release_blocked": false,
+  "coverage_percent": 100.0,
+  "controls_verified": 14,
+  "controls_applicable": 14,
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 2,
+    "info": 1,
+    "total": 3,
+    "candidates": 0,
+    "suppressed": 0
+  },
+  "limits": [],
+  "source_drift": [],
+  "input_sha256": "2cf0c3e3202ee21e094dd2620d5cb4c627cec76f7c150c0deb25c3aa6767435d",
+  "manifest_sha256": "4d8a0c215db8e256a56e1489a4b3801fef767f52fb55356578bf69f30df2d1b3",
+  "policy_sha256": "88132df4e2ca463f2b8f303c5163527afcc650d3292350e3ffa49a4744b79446"
+}

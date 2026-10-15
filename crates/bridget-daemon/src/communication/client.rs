@@ -20,6 +20,50 @@ pub(crate) use lineage::human_lineage;
 
 pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
+/// Lecture locale publique du catalogue168. Cette connexion ne porte aucune
+/// identité d'agent : le daemon vérifie le rôle Client, la négociation et le
+/// UID Unix observé avant toute projection.
+pub(crate) fn routing_catalogue(socket: &Path) -> Result<serde_json::Value, ClientError> {
+    let mut connection = DaemonConnection::connect(socket)?;
+    match connection.exchange(&WrapperToDaemon::RoleHandshake {
+        role: ConnectionRole::Client,
+    })? {
+        DaemonToWrapper::RoleAccepted {
+            role: ConnectionRole::Client,
+        } => {}
+        _ => {
+            return Err(ClientError::Technical {
+                code: "capability_unavailable",
+                message: "le daemon refuse le rôle client du catalogue".into(),
+            });
+        }
+    }
+    let capabilities = match connection.exchange(&WrapperToDaemon::ClientHello {
+        contract_version: CLIENT_CONTRACT_VERSION,
+        issuer_scope: crate::communication::issuer_scope("routing-catalogue"),
+        capabilities: vec![ClientCapability::RoutingCatalogueV1],
+    })? {
+        DaemonToWrapper::ClientWelcome {
+            version,
+            capabilities,
+            ..
+        } if version == CLIENT_CONTRACT_VERSION => capabilities,
+        _ => Vec::new(),
+    };
+    if !capabilities.contains(&ClientCapability::RoutingCatalogueV1) {
+        return Err(ClientError::Technical {
+            code: "capability_unavailable",
+            message: "le daemon ne négocie pas routing_catalogue_v1".into(),
+        });
+    }
+    match connection.exchange(&WrapperToDaemon::NativeDelegation {
+        request: bridget_transport::protocol::NativeDelegationRequest::RoutingCatalogueV1 {},
+    })? {
+        DaemonToWrapper::NativeDelegationResult { result } => Ok(result),
+        other => unexpected_response(other),
+    }
+}
+
 /// Sonde sans identité auxiliaire : budget propre, avant toute trame 151.
 pub(crate) fn daemon_supports_wait(socket: &Path) -> bool {
     let Ok(mut connection) =

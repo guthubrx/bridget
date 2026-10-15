@@ -518,7 +518,7 @@ fn native149_recheck_gele_resout_le_launcher_par_path_et_detecte_le_changement()
     let faux_sh = bin.join("sh");
     fs::write(&faux_sh, b"#!/bin/sh\n").unwrap();
     fs::set_permissions(&faux_sh, fs::Permissions::from_mode(0o755)).unwrap();
-    let vrai_sh = PathBuf::from("/bin/sh");
+    let vrai_sh = PathBuf::from("/bin/sh").canonicalize().unwrap();
     let revision = permission_source_revision(&vrai_sh, 512 * 1024 * 1024).unwrap();
     let mut context = json!({
         "cli_path":vrai_sh,

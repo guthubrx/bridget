@@ -4758,7 +4758,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    31
+                    32
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -6131,10 +6131,10 @@ mod tests {
             assert!(matches!(read_command(&mut reader), WrapperToDaemon::RegisterAuxiliary { .. }));
             writeln!(stream,"{}",json!({"type":"Registered","agent_id":"parent158","credential":null})).unwrap();
             assert!(matches!(read_command(&mut reader), WrapperToDaemon::DaemonIdentityRequest));
-            writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["auto_delegate_v1"]})).unwrap();
+            writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["auto_delegate_v2"]})).unwrap();
             let request = read_command(&mut reader);
             assert!(matches!(&request, WrapperToDaemon::NativeDelegation {
-                request: bridget_transport::protocol::NativeDelegationRequest::AutoDelegate(config)
+                request: bridget_transport::protocol::NativeDelegationRequest::AutoDelegateV2(config)
             } if config.request_id == "auto-public-163" && config.task == "mission" && config.cwd == "/tmp"));
             writeln!(stream,"{}",json!({"type":"NativeDelegationResult","result":{"status":"refused","code":"auto_candidate_unavailable"}})).unwrap();
             request

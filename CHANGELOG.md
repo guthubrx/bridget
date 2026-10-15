@@ -5,6 +5,37 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.4.0] - 2026-10-15
+
+### Ajouté
+
+- Le catalogue de routage présente les modèles déclarés sur chaque machine avec leur moteur, leur connexion et leurs efforts pris en charge. `bridget delegate --catalogue --json` permet de le consulter sans T3.
+- Une tâche peut imposer séparément le modèle, le moteur, la machine, la connexion ou l’effort. Les axes non imposés restent libres dans les limites du registre. Un effort absent conserve le comportement natif du fournisseur.
+- Le choix tient compte des faits de charge frais, de la continuité du travail Git, des capacités de compilation déclarées et de l’état attesté des quotas ou crédits de la connexion cible. La continuité reste bornée : elle ne bloque pas le déplacement vers une autre machine disponible.
+- La chaîne de décision est configurable et désactivable par fichier de configuration. Elle applique les filtres déterministes, puis peut consulter un serveur de décision compatible, tel que Laya ou Jev, puis un modèle léger de secours. Le classement déterministe reste le dernier recours. Le modèle de secours choisit la combinaison d’exécution ; il n’effectue pas la tâche à sa place.
+- L’accès au service de décision est déclaré par machine. Un service désactivé ou indisponible n’empêche pas les niveaux de secours autorisés. Les décideurs ne peuvent choisir que parmi les combinaisons déjà admissibles.
+- L’état durable et la projection Lineage v4 conservent le choix, sa provenance et les faits bornés utilisés. Un rejeu exact retrouve le reçu enregistré sans nouvelle décision.
+
+### Git et exécution distante
+
+- Le démarrage distant vérifie le commit de départ attendu avant la préparation du travail. Une divergence Git ne devient pas une tâche exécutée sur une autre révision.
+- Des travaux distincts peuvent utiliser leurs propres worktrees. Le moteur de routage ne lance aucun `git fetch`, `git push` ou merge : la synchronisation et la livraison Git restent des actions explicites de coordination.
+- Le catalogue reste distinct des droits réels. Un modèle déclaré ne prouve ni l’accès du compte, ni un quota ou des crédits inconnus. Les connexions restent celles autorisées et configurées sur chaque machine.
+
+### Compatibilité et exploitation
+
+- Les contrats existants, dont les projections Lineage v1 à v3, restent conservés. Lineage v4 ajoute les métadonnées de décision bornées ; les lectures anciennes gardent leur forme et n’obtiennent pas ces nouveaux détails.
+- L’admission v2 et les nouvelles capacités de probe sont négociées explicitement. Une capacité absente ne déclenche pas de conversion silencieuse vers une ancienne admission.
+- La migration du stockage conserve les reçus antérieurs. Après l’écriture d’un reçu d’admission v2, ne pas revenir à un binaire 0.3.0, même si le routage est ensuite désactivé. Utiliser un binaire compatible avec cette migration, ou une restauration cohérente validée qui ne perd aucun travail.
+- Bridget reste utilisable depuis le terminal et indépendant de T3.
+
+### Validation et limites connues
+
+- L’audit V15 r2 conclut `PASS`, avec `release_blocked=false` et une note A. Le compteur fondé sur les pénalités vaut 98. Les axes de qualité indiqués `N/A` restent non notés. Aucun constat critique, élevé ou moyen n’est ouvert.
+- Deux constats faibles restent suivis : `RUSTSEC-2026-0098` et `RUSTSEC-2026-0099`, sur `rustls-webpki` 0.101.7. `RUSTSEC-2024-0449` signale la maintenance de `unsafe-libyaml` 0.2.11. Cette version ne modifie aucune dépendance et ne prétend pas résoudre ces avis.
+- La campagne complète unique a compté 2 820 tests réussis, 32 échecs et 71 tests ignorés. Pour 29 de ces échecs, le dernier résultat ciblé est désormais réussi. Trois scénarios d’annulation de la session 159 ne sont pas validables sous Linux. La cause initiale de l’échec T3 reste inconnue. Aucun succès global du workspace n’est déduit de ces résultats.
+- Le reçu de livraison distingue les preuves Git, les paquets, l’installation et le fonctionnement. Aucun succès de construction, d’activation ou de recette réelle n’est déduit des seuls résultats de tests ou d’audit.
+
 ## [0.3.0] - 2026-10-15
 
 ### Ajouté

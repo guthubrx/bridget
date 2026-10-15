@@ -998,6 +998,7 @@ impl Drop for FixtureRoot {
 struct DaemonState {
     /// Quotas observés, volatils et bornés par type de fournisseur.
     provider_limits: crate::provider_limits::ProviderLimits,
+    host_resources: crate::host_resources::HostResourceCollector,
     /// Identifiants métier retenus : filtre des rappels, source durable send_deliveries.
     held_ids: HashSet<String>,
     /// Suivis de consultation : aucune observation, mission ou donnée durable.
@@ -1108,6 +1109,7 @@ struct DaemonState {
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
     pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
+    pending_candidate_probes_v2: HashMap<String, PendingCandidateProbeV2>,
     terminal_sessions: HashSet<String>,
     /// Une négociation appartient à la connexion, tandis que le scope peut
     /// volontairement être partagé par plusieurs retries coopératifs.
@@ -1173,6 +1175,18 @@ struct PendingCandidateProbe {
     policy_revision: u64,
     candidate_ids: std::collections::BTreeSet<String>,
     reply: mpsc::SyncSender<bridget_transport::protocol::CandidateProbeResult>,
+}
+
+/// Corrélation éphémère168 : même garde qu'une sonde163, avec la version
+/// négociée et le relevé de ressources borné du worker.
+struct PendingCandidateProbeV2 {
+    conn_id: String,
+    epoch: String,
+    worker: bridget_transport::protocol::WorkerIdentity,
+    admission_id: String,
+    policy_revision: u64,
+    candidate_ids: std::collections::BTreeSet<String>,
+    reply: mpsc::SyncSender<bridget_transport::protocol::CandidateProbeV2Result>,
 }
 
 struct ManagedSpawnRecord {
@@ -4950,6 +4964,7 @@ impl DaemonState {
         let coordinator_epoch = delegation_store.next_auto_coordinator_epoch()?;
         Ok(DaemonState {
             provider_limits: Default::default(),
+            host_resources: Default::default(),
             held_ids,
             human_thread_watches: HashMap::new(),
             lineage_watches: HashMap::new(),
@@ -5022,6 +5037,7 @@ impl DaemonState {
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
             pending_candidate_probes: HashMap::new(),
+            pending_candidate_probes_v2: HashMap::new(),
             terminal_sessions: HashSet::new(),
             client_negotiations: HashMap::new(),
             service_negotiations: HashMap::new(),
@@ -9023,6 +9039,40 @@ fn handle_rate_limit(
         state
             .provider_limits
             .record_scoped(&agent_type, &instance, fact, source, unix_timestamp());
+        // Le runtime doit réattester la définition exacte du lanceur. Une
+        // observation sans cette preuve reste disponible au chemin legacy,
+        // mais ne devient pas un fait de compte pour le routage168.
+        let binding = state.registry.routing_policy().and_then(|policy| {
+            let mut matches = policy.connections.iter().filter(|connection| {
+                connection.enabled
+                    && connection.agent_type == agent_type
+                    && (connection.machine_id == "local" || connection.machine_id == state.host)
+            });
+            let connection = matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            let declared = state.registry.resolved_definition(&agent_type).ok()?;
+            let runtime = state
+                .idempotency
+                .latest_connected_spawn_by_name(agent)
+                .ok()??;
+            if runtime.resolved_definition != declared
+                || state.managed_by_instance.get(&instance) != Some(&runtime.command_id)
+            {
+                return None;
+            }
+            Some((connection.connection_id.clone(), declared.digest))
+        });
+        if let Some((connection_id, digest)) = binding {
+            state.provider_limits.bind_routing_instance(
+                &connection_id,
+                &agent_type,
+                &instance,
+                &digest,
+                state.coordinator_epoch,
+            );
+        }
     }
     DaemonToWrapper::Ack {
         project_warnings: Vec::new(),
@@ -18332,7 +18382,15 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHello { hello } => Some((hello.clone(), Vec::new())),
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
-            (capabilities.len() == 1 && capabilities[0] == WorkerCapability::CandidateProbeV1)
+            (!capabilities.is_empty()
+                && capabilities.len() <= 2
+                && capabilities.iter().all(|capability| {
+                    matches!(
+                        capability,
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2
+                    )
+                })
+                && !(capabilities.len() == 2 && capabilities[0] == capabilities[1]))
                 .then(|| (hello.hello.clone(), capabilities))
         }
         _ => None,
@@ -18405,6 +18463,10 @@ fn handle_worker_message(
             .and_then(|id| st.connections.get(id).cloned());
         if let Some(previous) = &previous_conn {
             st.pending_worker_responses
+                .retain(|_, pending| &pending.conn_id != previous);
+            st.pending_candidate_probes
+                .retain(|_, pending| &pending.conn_id != previous);
+            st.pending_candidate_probes_v2
                 .retain(|_, pending| &pending.conn_id != previous);
         }
         drop(st);
@@ -18606,6 +18668,48 @@ fn handle_worker_message(
             let _ = pending.reply.try_send(result);
             None
         }
+        WrapperToDaemon::CandidateProbeResultV2 { result } => {
+            let worker = &st.remote_workers[&machine];
+            if !worker
+                .capabilities
+                .contains(&WorkerCapability::CandidateProbeV2)
+                || result.connection_epoch != worker.epoch
+                || result.worker != worker.identity
+                || result.validate_shape().is_err()
+            {
+                return refused(WorkerRefusal::StaleConnection);
+            }
+            let Some(pending) = st.pending_candidate_probes_v2.get(&result.correlation_id) else {
+                return refused(WorkerRefusal::CommandMismatch);
+            };
+            let result_ids = result
+                .verdicts
+                .iter()
+                .map(|verdict| match verdict {
+                    CandidateProbeV2Verdict::Eligible { candidate_id, .. }
+                    | CandidateProbeV2Verdict::Ineligible { candidate_id, .. } => candidate_id,
+                })
+                .collect::<std::collections::BTreeSet<_>>();
+            if pending.conn_id != conn_id
+                || pending.epoch != result.connection_epoch
+                || pending.worker != result.worker
+                || pending.admission_id != result.admission_id
+                || pending.policy_revision != result.policy_revision
+                || pending.candidate_ids.len() != result_ids.len()
+                || !pending
+                    .candidate_ids
+                    .iter()
+                    .all(|candidate_id| result_ids.contains(candidate_id))
+            {
+                return refused(WorkerRefusal::CommandMismatch);
+            }
+            let pending = st
+                .pending_candidate_probes_v2
+                .remove(&result.correlation_id)
+                .expect("la sonde v2 vient d'être trouvée");
+            let _ = pending.reply.try_send(result);
+            None
+        }
         _ => refused(WorkerRefusal::Unauthorized),
     }
 }
@@ -18634,6 +18738,7 @@ fn remote_worker_roundtrip(
             && matches!(
                 &operation,
                 WorkerRequestOperation::Prepare { .. }
+                    | WorkerRequestOperation::PrepareV2 { .. }
                     | WorkerRequestOperation::Start { .. }
                     | WorkerRequestOperation::Release { .. }
                     | WorkerRequestOperation::ReserveResultSlot { .. }
@@ -18658,6 +18763,13 @@ fn remote_worker_roundtrip(
             || session.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
         {
             return Err(WorkerRefusal::WorkerUnavailable);
+        }
+        if matches!(&operation, WorkerRequestOperation::PrepareV2 { .. })
+            && !session
+                .capabilities
+                .contains(&WorkerCapability::CandidateProbeV2)
+        {
+            return Err(WorkerRefusal::CapabilityRequired);
         }
         let writer = st
             .connections
@@ -18813,6 +18925,113 @@ pub(super) fn remote_candidate_probe(
     };
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     st.pending_candidate_probes.remove(&correlation_id);
+    if !st
+        .remote_workers
+        .get(&machine_id)
+        .is_some_and(|current| current.conn_id == conn_id && current.epoch == epoch)
+    {
+        return Err(WorkerRefusal::StaleConnection);
+    }
+    result.ok_or(WorkerRefusal::WorkerUnavailable)
+}
+
+/// Sonde168 corrélée au worker. Elle ne passe jamais par Prepare et ne porte
+/// aucune réservation ; le relevé de ressources retourné reste le fait du
+/// worker, pas une valeur inventée par le maître.
+fn remote_candidate_probe_v2(
+    state: &Arc<Mutex<DaemonState>>,
+    mut probe: bridget_transport::protocol::CandidateProbeV2,
+    deadline: Instant,
+) -> Result<
+    bridget_transport::protocol::CandidateProbeV2Result,
+    bridget_transport::protocol::WorkerRefusal,
+> {
+    use bridget_transport::protocol::{
+        DaemonToWrapper, MAX_WORKER_STORE_ENTRIES, WORKER_STALE_SECS, WorkerCapability,
+        WorkerContactState, WorkerRefusal,
+    };
+    probe.validate_shape()?;
+    let correlation_id = probe.correlation_id.clone();
+    let machine_id = probe.worker.machine_id.clone();
+    let candidate_ids = probe
+        .candidates
+        .iter()
+        .map(|candidate| candidate.candidate_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    let (tx, rx) = mpsc::sync_channel(1);
+    let (writer, conn_id, epoch) = {
+        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let provision = st
+            .registry
+            .machines()
+            .get(&probe.worker.machine_id)
+            .ok_or(WorkerRefusal::Unauthorized)?;
+        if !provision.enabled
+            || provision.worker_id != probe.worker.worker_id
+            || provision.provisioning_revision != probe.worker.provisioning_revision
+        {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let session = st
+            .remote_workers
+            .get(&probe.worker.machine_id)
+            .ok_or(WorkerRefusal::WorkerUnavailable)?;
+        if !session
+            .capabilities
+            .contains(&WorkerCapability::CandidateProbeV2)
+        {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if session.identity != probe.worker
+            || session.contact != WorkerContactState::Connected
+            || session.last_contact.elapsed() >= Duration::from_secs(WORKER_STALE_SECS as u64)
+            || !session
+                .capabilities
+                .contains(&WorkerCapability::CandidateProbeV2)
+        {
+            return Err(WorkerRefusal::WorkerUnavailable);
+        }
+        if st.pending_candidate_probes_v2.len() >= MAX_WORKER_STORE_ENTRIES
+            || st.pending_candidate_probes_v2.contains_key(&correlation_id)
+        {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        let writer = st
+            .connections
+            .get(&session.conn_id)
+            .cloned()
+            .ok_or(WorkerRefusal::WorkerUnavailable)?;
+        let conn_id = session.conn_id.clone();
+        let epoch = session.epoch.clone();
+        probe.connection_epoch = epoch.clone();
+        st.pending_candidate_probes_v2.insert(
+            correlation_id.clone(),
+            PendingCandidateProbeV2 {
+                conn_id: conn_id.clone(),
+                epoch: epoch.clone(),
+                worker: probe.worker.clone(),
+                admission_id: probe.admission_id.clone(),
+                policy_revision: probe.policy_revision,
+                candidate_ids,
+                reply: tx,
+            },
+        );
+        (writer, conn_id, epoch)
+    };
+    let written = push_control_message_until(
+        &writer,
+        &DaemonToWrapper::CandidateProbeV2 { probe },
+        deadline,
+    )
+    .is_ok();
+    let result = written
+        .then(|| {
+            rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok()
+        })
+        .flatten();
+    let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+    st.pending_candidate_probes_v2.remove(&correlation_id);
     if !st
         .remote_workers
         .get(&machine_id)
@@ -19067,7 +19286,8 @@ fn handle_wrapper_message_with_peer(
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
-                | WrapperToDaemon::CandidateProbeResult { .. } =>
+                | WrapperToDaemon::CandidateProbeResult { .. }
+                | WrapperToDaemon::CandidateProbeResultV2 { .. } =>
                     Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::HumanInboxDeposit { .. }
@@ -19345,7 +19565,8 @@ fn handle_wrapper_message_with_peer(
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
-                | WrapperToDaemon::CandidateProbeResult { .. } =>
+                | WrapperToDaemon::CandidateProbeResult { .. }
+                | WrapperToDaemon::CandidateProbeResultV2 { .. } =>
                     Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueEditV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
@@ -19628,7 +19849,8 @@ fn handle_wrapper_message_with_peer(
         WrapperToDaemon::WorkerHello { .. }
         | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
         | WrapperToDaemon::WorkerResponse { .. }
-        | WrapperToDaemon::CandidateProbeResult { .. } => Some(DaemonToWrapper::WorkerRejected {
+        | WrapperToDaemon::CandidateProbeResult { .. }
+        | WrapperToDaemon::CandidateProbeResultV2 { .. } => Some(DaemonToWrapper::WorkerRejected {
             reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
         }),
         WrapperToDaemon::WakeRequest { request } => Some(handle_wake_request(
@@ -21217,6 +21439,7 @@ fn handle_wrapper_message_with_peer(
                             | ClientCapability::ExecutionControlV1
                             | ClientCapability::ProjectRoundPolicyV1
                             | ClientCapability::ControlStateV1
+                            | ClientCapability::RoutingCatalogueV1
                     )
                 })
                 .collect();
@@ -23129,6 +23352,9 @@ fn handle_wrapper_message_with_peer(
                     "remote_worker_v1".to_string(),
                     "worker_candidate_probe_v1".to_string(),
                     "auto_delegate_v1".to_string(),
+                    "auto_delegate_v2".to_string(),
+                    "worker_candidate_probe_v2".to_string(),
+                    "routing_catalogue_v1".to_string(),
                 ],
             })
         }
@@ -30867,7 +31093,10 @@ mod presence_tests {
                 .env("HOME", root)
                 .env("BRIDGET_HOME", root.join(".state"))
                 .env("BRIDGET_SOCKET", root.join(".state/bridget.sock"))
-                .env("PATH", "/usr/bin:/bin")
+                .env(
+                    "PATH",
+                    std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()),
+                )
                 .env("BRIDGET_T908_MANAGED_EXECUTABLE", managed_test_binary())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -36028,7 +36257,7 @@ mod presence_tests {
 
     #[test]
     fn guidance156_rate_survit_au_redemarrage() {
-        let (mut st, _first_config) = state_with_registered_agent("g156c9af4b48");
+        let (mut st, config) = state_with_registered_agent("g156c9af4b48");
         let (writer, mut reader) = control_socket("g156c9af4b48");
         st.connections.insert("conn-1".into(), writer);
         let shared = Arc::new(Mutex::new(st));
@@ -36062,11 +36291,38 @@ mod presence_tests {
             "{response:?}"
         );
         read_control(&mut reader);
-        let keep_root = shared.lock().unwrap().fixture_root.take();
+        let registry = shared.lock().unwrap().registry.clone();
+        let root = shared.lock().unwrap().fixture_root.take();
         drop(shared);
-        let (mut st, config) = state_with_registered_agent("g156c9af4b48");
+        let (tx, _rx) = mpsc::channel();
+        let mut st = DaemonState::new(&config, tx).unwrap();
+        // Même base ; seuls le registre privé et les connexions sont rétablis en mémoire.
+        st.registry = registry;
+        st.fixture_root = root;
+        assert!(st.presences.is_empty());
         let (writer, _reader) = control_socket("g156c9af4b48");
         st.connections.insert("conn-1".into(), writer);
+        assert!(matches!(
+            handle_register_with_channel(
+                "conn-1",
+                2,
+                "claude".into(),
+                "89000000-0000-4000-8000-000000000102".into(),
+                Some("macbook".into()),
+                Some("acp".into()),
+                ChannelReport::Known("unix".into()),
+                Some(PresenceMode::Acp),
+                None,
+                Some("macOS".into()),
+                Some("instance-1-restarted156".into()),
+                None,
+                false,
+                Some(true),
+                &mut st,
+                true,
+            ),
+            DaemonToWrapper::Registered { .. }
+        ));
         let shared = Arc::new(Mutex::new(st));
         negotiate_idempotent_client(
             &shared,
@@ -36074,6 +36330,7 @@ mod presence_tests {
             "012_scope_guard_tests156",
             "89000000-0000-4000-8000-000000000200",
         );
+        guidance156_link_parent(&mut shared.lock().unwrap(), "g156-client", "conn-1");
         let mut message = idempotent_message("restart-second156");
         message.intent = Some(bridget_core::MessageIntent::InterruptAndStart);
         let response = handle_wrapper_message(
@@ -36103,7 +36360,6 @@ mod presence_tests {
                 .0,
             1
         );
-        drop(keep_root);
         drop(shared);
         let _ = std::fs::remove_file(config.db_path);
     }

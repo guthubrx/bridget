@@ -672,3 +672,188 @@ fn nom_de_hook_inconnu_reste_une_exception_fail_soft() {
     assert!(output.status.success(), "sortie réelle: {output:?}");
     assert!(output.stdout.is_empty(), "stdout doit rester vide");
 }
+
+fn routing168_catalogue_cli_fixture(
+    count: usize,
+    json_output: bool,
+    old: bool,
+    machine: Option<&str>,
+) -> (Output, Vec<bridget_transport::WrapperToDaemon>, PathBuf) {
+    use bridget_transport::protocol::{CLIENT_CONTRACT_VERSION, ClientCapability, ConnectionRole};
+    use bridget_transport::{DaemonToWrapper, WrapperToDaemon};
+    let root = fixture_root("catalogue168");
+    bridget_daemon::environment::ensure_private_directory(&root.join("state")).unwrap();
+    let listener = UnixListener::bind(root.join("state/bridget.sock")).unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut captured = Vec::new();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let role: WrapperToDaemon = serde_json::from_str(&line).unwrap();
+        assert!(matches!(
+            role,
+            WrapperToDaemon::RoleHandshake {
+                role: ConnectionRole::Client
+            }
+        ));
+        captured.push(role);
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&DaemonToWrapper::RoleAccepted {
+                role: ConnectionRole::Client
+            })
+            .unwrap()
+        )
+        .unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let hello: WrapperToDaemon = serde_json::from_str(&line).unwrap();
+        assert!(
+            matches!(&hello,WrapperToDaemon::ClientHello{contract_version,capabilities,..}
+            if *contract_version==CLIENT_CONTRACT_VERSION && capabilities==&vec![ClientCapability::RoutingCatalogueV1])
+        );
+        captured.push(hello);
+        writeln!(
+            stream,
+            "{}",
+            serde_json::to_string(&DaemonToWrapper::ClientWelcome {
+                version: CLIENT_CONTRACT_VERSION,
+                build_id: "fixture168".into(),
+                horizon_secs: 600,
+                issued_at_tolerance_secs: 30,
+                capabilities: if old {
+                    vec![]
+                } else {
+                    vec![ClientCapability::RoutingCatalogueV1]
+                },
+            })
+            .unwrap()
+        )
+        .unwrap();
+        line.clear();
+        if old {
+            assert_eq!(
+                reader.read_line(&mut line).unwrap(),
+                0,
+                "aucune requête catalogue sans capacité"
+            );
+        } else {
+            reader.read_line(&mut line).unwrap();
+            let request: WrapperToDaemon = serde_json::from_str(&line).unwrap();
+            assert!(matches!(
+                request,
+                WrapperToDaemon::NativeDelegation {
+                    request:
+                        bridget_transport::protocol::NativeDelegationRequest::RoutingCatalogueV1 {}
+                }
+            ));
+            captured.push(request);
+            let options=(0..count).map(|index|serde_json::json!({
+                "machine_id":if index%2==0{"machine-a"}else{"machine-b"},"engine":"codex",
+                "connection_id":"environment168","model":format!("real-model-{index:03}"),
+                "supported_efforts":[],"default_effort":null,"provenance":"operator_observation",
+                "observed_at":100,"entitlement":"unknown",
+            })).collect::<Vec<_>>();
+            writeln!(
+                stream,
+                "{}",
+                serde_json::to_string(&DaemonToWrapper::NativeDelegationResult {
+                    result: serde_json::json!({"version":1,"observed_at":100,"options":options})
+                })
+                .unwrap()
+            )
+            .unwrap();
+        }
+        captured
+    });
+    let mut args = vec!["delegate", "--catalogue"];
+    if let Some(machine) = machine {
+        args.extend(["--machine", machine]);
+    }
+    if json_output {
+        args.push("--json");
+    }
+    let output = run_cli_as(&root, &args, None);
+    (output, server.join().unwrap(), root)
+}
+
+#[test]
+fn spec168_catalogue_cli_humain_negocie_12_128_et_filtre_machine_sans_identite() {
+    for count in [12, 128] {
+        let (output, messages, root) = routing168_catalogue_cli_fixture(count, true, false, None);
+        assert!(output.status.success(), "{output:?}");
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["options"].as_array().unwrap().len(), count);
+        assert_eq!(
+            value["options"][0]["default_effort"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            messages.len(),
+            3,
+            "pas de Register agent ni opération cachée"
+        );
+        assert!(!root.join("state/bridget.db").exists());
+        fs::remove_dir_all(root).unwrap();
+        let (output, _, root) =
+            routing168_catalogue_cli_fixture(count, true, false, Some("machine-a"));
+        assert!(output.status.success());
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["options"].as_array().unwrap().len(), count / 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+    let (output, _, root) = routing168_catalogue_cli_fixture(12, false, false, None);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(text.lines().count(), 13);
+    assert!(text.contains("real-model-011"));
+    assert!(text.contains("natif"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec168_catalogue_cli_ancien_maitre_refuse_avant_toute_lecture() {
+    let (output, messages, root) = routing168_catalogue_cli_fixture(12, true, true, None);
+    assert!(!output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["code"], "capability_unavailable");
+    assert_eq!(messages.len(), 2);
+    assert!(!root.join("state/bridget.db").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec168_delegate_workload_et_axes_refusent_les_valeurs_invalides_avant_connexion() {
+    let root = fixture_root("invalid168");
+    for option in ["--engine", "--connection-id", "--workload"] {
+        let value = if option == "--workload" {
+            "compile"
+        } else {
+            ""
+        };
+        let output = run_cli_as(
+            &root,
+            &[
+                "delegate",
+                "Mission",
+                "--cwd",
+                root.to_str().unwrap(),
+                "--request-id",
+                "invalid168",
+                option,
+                value,
+                "--json",
+            ],
+            None,
+        );
+        assert!(!output.status.success());
+        assert!(!root.join("state/bridget.sock").exists());
+        assert!(!root.join("state/bridget.db").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}

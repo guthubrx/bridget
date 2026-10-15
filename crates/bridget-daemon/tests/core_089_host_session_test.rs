@@ -7,7 +7,7 @@ use bridget_transport::{DaemonToWrapper, SpawnRefusal, StopOutcome, WrapperToDae
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::FromRawFd;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -66,9 +66,21 @@ impl Fixture {
             &root.join("state"),
             &root.join("home"),
             &root.join("tmp"),
+            &root.join("bin"),
         ] {
             fs::DirBuilder::new().mode(0o700).create(path).unwrap();
         }
+        // Toute tentative Docker dans les enfants isolés laisse une preuve puis échoue.
+        let docker = root.join("bin/docker");
+        private_file(
+            &docker,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' docker >> '{}'\nexit 125\n",
+                root.join("docker-called").display()
+            )
+            .as_bytes(),
+        );
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o700)).unwrap();
         private_file(&root.join("adapter.py"), ADAPTER.as_bytes());
         let registry = serde_json::json!({"agents":{"fixture":{
             "command":"/usr/bin/python3", "args":[root.join("adapter.py"), root.join("started")],
@@ -79,6 +91,10 @@ impl Fixture {
             &root.join("state/agents.json"),
             &serde_json::to_vec(&registry).unwrap(),
         );
+        let command_path = std::env::join_paths(std::iter::once(root.join("bin")).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
         let mut f = Self {
             root,
             daemon: None,
@@ -94,7 +110,7 @@ impl Fixture {
                 .env("BRIDGET_HOME", f.root.join("state"))
                 .env("BRIDGET_SOCKET", f.socket())
                 .env("TMPDIR", f.root.join("tmp"))
-                .env("PATH", "/usr/bin:/bin")
+                .env("PATH", command_path)
                 .env("HOSTNAME", "core-089-fixture")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -144,6 +160,10 @@ impl Fixture {
         let _master = unsafe { fs::File::from_raw_fd(master_fd) };
         let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
         let error = private_file(&self.root.join("control.log"), &[]);
+        let command_path = std::env::join_paths(std::iter::once(self.root.join("bin")).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .unwrap();
         self.control_cli = Some(
             Command::new(env!("CARGO_BIN_EXE_bridget"))
                 .args(["control", "posture", "complete"])
@@ -152,7 +172,7 @@ impl Fixture {
                 .env("BRIDGET_HOME", self.root.join("state"))
                 .env("BRIDGET_SOCKET", self.socket())
                 .env("TMPDIR", self.root.join("tmp"))
-                .env("PATH", "/usr/bin:/bin")
+                .env("PATH", command_path)
                 .stdin(slave.try_clone().unwrap())
                 .stdout(slave)
                 .stderr(error)
@@ -303,8 +323,7 @@ impl Peer {
 
 #[test]
 fn projet_refuse_et_session_hote_spawn_send_attach_stop_sans_docker() {
-    // PATH limité aux outils système : l'ancien moteur ne peut être requis.
-    assert!(!Path::new("/usr/bin/docker").exists() && !Path::new("/bin/docker").exists());
+    // Le PATH privé observe les tentatives Docker, quel que soit l'hôte de test.
     let mut f = Fixture::new();
     let mut control = f.peer();
     control.register();
@@ -418,5 +437,9 @@ fn projet_refuse_et_session_hote_spawn_send_attach_stop_sans_docker() {
     assert!(
         !group_exists(marker.pgid).unwrap(),
         "le groupe fournisseur doit avoir disparu"
+    );
+    assert!(
+        !f.root.join("docker-called").exists(),
+        "la session hôte ne doit appeler aucun moteur Docker"
     );
 }

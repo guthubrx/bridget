@@ -1489,9 +1489,35 @@ mod spec101_identity {
                 session: session.clone(),
             }
         };
-        let first = spawn();
+        let mut first = spawn();
         let pid = first.child.id();
-        assert_eq!(process_arguments(pid).unwrap()[0], "claude");
+        let arguments = process_arguments(pid).unwrap_or_else(|| {
+            let child_status = first.child.try_wait();
+            let birth = process_birth(pid);
+            let parent = process_parent(pid);
+            let still_owned = matches!(&child_status, Ok(None))
+                && birth.as_ref().ok() == Some(&first.birth)
+                && parent.as_ref().ok() == Some(&std::process::id());
+            let snapshot = if still_owned {
+                Command::new("/bin/ps")
+                    .args(["-p", &pid.to_string(), "-o", "pid=,ppid=,stat=,command="])
+                    .output()
+                    .map(|output| {
+                        (
+                            output.status.code(),
+                            String::from_utf8_lossy(&output.stdout).into_owned(),
+                            String::from_utf8_lossy(&output.stderr).into_owned(),
+                        )
+                    })
+            } else {
+                Err(std::io::Error::other("enfant terminé ou identité non confirmée"))
+            };
+            panic!(
+                "arguments fixture absents: pid={pid} expected_birth={} child_status={child_status:?} birth={birth:?} parent={parent:?} os_snapshot={snapshot:?}",
+                first.birth
+            );
+        });
+        assert_eq!(arguments[0], "claude");
         let runtime = ServerRuntime {
             pid: std::process::id(),
             port: 3773,

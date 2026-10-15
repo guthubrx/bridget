@@ -432,6 +432,66 @@ pub(crate) fn prepare_spawn_parts(
     })
 }
 
+/// Preuve168 de la source Git. O(d+B), d ancêtres du cwd, B sortie Git bornée.
+/// Une absence Git exige des métadonnées absentes sur tous les ancêtres.
+/// Une erreur E/S, un dépôt nu ou une sortie Git invalide reste technique.
+pub(crate) fn source_base_commit(cwd: &Path) -> Result<Option<String>, String> {
+    let cwd = std::fs::canonicalize(cwd)
+        .map_err(|error| format!("workspace_base_preflight_failed: {error}"))?;
+    if !cwd.is_dir() {
+        return Err("workspace_base_preflight_failed".into());
+    }
+    let mut outside = true;
+    for ancestor in cwd.ancestors() {
+        let mut present = [false; 3];
+        for (index, metadata) in [
+            ancestor.join(".git"),
+            ancestor.join("HEAD"),
+            ancestor.join("objects"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            match std::fs::symlink_metadata(&metadata) {
+                Ok(_) => present[index] = true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("workspace_base_preflight_failed: {error}")),
+            }
+        }
+        outside &= !present[0] && !(present[1] && present[2]);
+    }
+    if outside {
+        return Ok(None);
+    }
+    let root = crate::workspace_git::run_git(
+        &cwd,
+        &["rev-parse", "--show-toplevel"],
+        crate::workspace_git::READ_TIMEOUT,
+    )
+    .map_err(|error| format!("workspace_base_preflight_failed: {error}"))?;
+    if root.truncated {
+        return Err("workspace_base_preflight_failed".into());
+    }
+    if !root.success() {
+        return Err("workspace_base_preflight_failed".into());
+    }
+    let head = crate::workspace_git::run_git(
+        &cwd,
+        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+        crate::workspace_git::READ_TIMEOUT,
+    )
+    .map_err(|error| format!("workspace_base_preflight_failed: {error}"))?;
+    let commit = head.stdout.trim();
+    if !head.success()
+        || head.truncated
+        || commit.len() != 40
+        || !commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("workspace_base_unavailable".into());
+    }
+    Ok(Some(commit.to_ascii_lowercase()))
+}
+
 pub fn build_environment(
     definition: &AgentDefinition,
     source: &SourceEnvironment,

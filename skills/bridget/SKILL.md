@@ -134,6 +134,32 @@ Unknown n’est pas renvoyé ; prochain résumé seulement nouveau retour réel.
 Les détails et limites figurent dans la référence des commandes. Aucun secret
 US8 ni HTTP ; le reçu 158A reste distinct.
 
+### Choisir une combinaison de flotte — contrat168
+
+Lire bridget delegate --catalogue --json hors T3 ; --machine filtre cette lecture.
+Le catalogue sépare modèle réel, connexion, moteur, machine et effort. entitlement=unknown
+ne prouve aucun accès fournisseur. Une connexion est un environnement déjà authentifié ;
+ne copier aucun secret et ne lancer aucun login depuis Bridget.
+
+Une mission automatique emploie bridget_auto_delegate ou bridget delegate MISSION
+--request-id ID --cwd CHEMIN --json depuis le parent authentifié. Contraintes indépendantes :
+--machine-id, --engine, --connection-id, --model, --effort. --workload general|compilation
+est explicite, général par défaut. Modèle sans efforts : défaut natif null, aucun medium inventé.
+
+Préparer le SHA source sur la cible. delegate le fige depuis le HEAD courant ; MCP et
+auto-delegate --expected-base-commit SHA le fournissent directement. Shared Git et Worktree
+l’exigent ; workspace.base_ref doit résoudre le même SHA. Après un nouveau commit source,
+lire bridget task status TASK_ID --json : la même clé avec une nouvelle base rend envelope_mismatch.
+
+La politique privée routing_policy configure chaque machine : score → service accessible
+→ petit Claude autorisé → score. OFF/inaccessible = aucun essai ; V2 sans politique active
+refuse sans downgradeV1. bridget_delegate explicite reste distinct. Le choix durable ne migre pas.
+Les inconnus restent inconnus et les crédits ne passent pas entre connexions.
+Le décideur n’exécute pas la mission : sortie ID/effort fermée, seul formateur StructuredOutput,
+aucun outil métier/système/réseau/MCP. Aucun fetch/push/merge automatique du daemon.
+Configuration exacte, bornes et distinction entre source et activation observée :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md.
+
 ### Déléguer une nouvelle mission
 
 Employer `bridget_capabilities` pour connaître les fournisseurs, modèles, efforts

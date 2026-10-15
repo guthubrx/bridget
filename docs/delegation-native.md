@@ -32,6 +32,88 @@ Cet exemple ne prouve pas que ce profil existe dans tous les registres.
 Un profil absent, un modèle différent ou un effort non déclaré produit un refus.
 Sans fallback explicite, Bridget ne remplace pas la cible demandée.
 
+## Choisir une combinaison de flotte — routage 168
+
+Cette interface exige un binaire chargé et une politique 168 active. La présence du texte ne
+prouve aucune recette, installation ou activation. Bridget reste autonome, avec ou sans T3.
+
+~~~sh
+bridget delegate --catalogue
+bridget delegate --catalogue --json
+bridget delegate --catalogue --machine cartae --json
+~~~
+
+Le catalogue humain n’exige pas d’identité d’agent. Une mission exige toujours un parent
+authentifié et ses droits. --machine filtre la lecture ; --machine-id impose la cible d’une mission.
+Chaque option sépare machine_id, engine, connection_id, model, supported_efforts, default_effort,
+provenance, observed_at et entitlement. entitlement=unknown ne certifie aucun accès fournisseur.
+La lecture ne lance aucun modèle. Le plafond 128 compte les connexions×modèles déclarés,
+y compris désactivés, avant filtres ; aucun catalogue silencieusement réduit à huit.
+
+Une connexion désigne un environnement déjà authentifié sur une machine et un moteur,
+pas un modèle. Un lanceur expose plusieurs modèles. Bridget ne lance aucun login et ne copie
+aucun secret. Effort natif sans réglage : supported_efforts vide et default_effort null ;
+ne pas inventer medium. Une contrainte incompatible refuse sans bascule cachée.
+
+Exemple de forme à adapter au modèle exact et à la racine attestée du parent :
+
+~~~sh
+bridget delegate "Relis le contrat et rends les défauts prouvés." --request-id revue168-01 --cwd /home/moi/10.Scripts/64.bridget --model MODELE_DU_CATALOGUE --json
+~~~
+
+Les cinq contraintes sont indépendantes : --engine, --model, --machine-id, --connection-id,
+--effort. Omettre un axe laisse agir la politique, y compris sa valeur fixe déclarée.
+--workload general|compilation déclare le travail ; general est le défaut, sans mots-clés.
+--project-id choisit un mapping distant autorisé. --workspace reçoit le JSON fermé existant,
+par exemple {"strategy":"worktree","base_ref":"SHA_SOURCE_EXACT"} : remplacer ce marqueur par
+le SHA complet réellement disponible sur les machines. Posture et permissions restent héritées.
+
+La CLI delegate lit le HEAD source courant et fige expected_base_commit ; elle n’accepte pas
+--expected-base-commit. Le MCP bridget_auto_delegate et la CLI technique auto-delegate acceptent
+ce champ directement. Shared Git et Worktree exigent le SHA exact ; base_ref doit résoudre
+ce même SHA. Aucun HEAD distant implicite. Shared hors Git sans SHA reste réservé au travail général.
+
+Conserver request_id, l’enveloppe et task_id. Après un commit source, la même clé avec le nouveau
+HEAD rend envelope_mismatch ; lire le résultat précédent avec bridget task status TASK_ID --json.
+bridget task wait TASK_ID --timeout 120 --json attend ; bridget task cancel TASK_ID --json arrête.
+Une attente expirée n’annule rien. Le rejeu exact ne relance aucun décideur.
+Le choix durable reste fixe ; sa revalidation peut refuser le lancement pour droits/capacité/base,
+sans choisir une autre machine. Lineage v4 expose les faits figés ; v3 garde decision:null pour168.
+
+### Configuration privée et niveaux facultatifs
+
+Le registre privé du namespace BRIDGET_HOME porte routing_policy version2, revision positive,
+enabled, connections, model_catalog et machine_policies. Conserver profils et mappings existants.
+
+| Clé dans la politique de chaque machine | Effet |
+|---|---|
+| enabled | Autoriser le routage sur cette machine. |
+| automatic_axes / fixed_values | Cinq axes engine/model/machine/connection/effort ; axe OFF exige valeur fixe valide. |
+| decision_service.enabled / accessible / service_id | Service joignable depuis cette coordinatrice, référencé dans decision_services avec endpoint et model. |
+| lightweight_decision.enabled / accessible / engine / connection_id / model / effort | Petit Claude local déjà authentifié ; effort absent/null tant que l’effort de ce rôle n’est pas qualifié. |
+| decision_timeout_ms / service_timeout_ms | Chaîne 1 à 30 s ; plafond effectif service 2 s dans le budget commun. |
+| telemetry.enabled / max_age_secs / seuils / weights | Fraîcheur, saturation et sept poids bornés du coordinateur, uniformes pour les cibles. |
+| compilation_capacity | Capacité déclarée 0..10 ou null ; aucun benchmark automatique. |
+
+La chaîne est : admissibilité/score → service configuré, Laya ou API compatible
+→ petit décideur autorisé → score déterministe figé. Une seule option ou tous les axes fixés
+évitent les consultations. OFF ou inaccessible signifie aucun essai. Couper le service garde
+le secours ; couper les deux garde le score. Sans politique168 active, une demande V2 refuse,
+sans transformation silencieuse en163. bridget_delegate explicite et les anciennes enveloppes V1 restent servis.
+
+Les décideurs reçoivent l’ensemble et les faits utiles. Si Laya ne peut représenter cet ensemble
+dans ses limites (8 options, état1536octets), le niveau devient indisponible ; aucune coupe à huit.
+Le petit modèle choisit uniquement un ID et un effort compatibles. Son seul formateur
+StructuredOutput n’accorde aucun outil métier/système/réseau/MCP. Aucun secret de configuration
+n’est injecté. Le budget absolu inclut attente, préparation et scheduling, sans renouvellement au spawn.
+
+Les mesures périmées restent inconnues. Une saturation fraîche exclut une cible si l’alternative
+admissible est prouvée disponible ; machine imposée saturée = refus. Les crédits attestés restent
+liés à leur connexion : quota inclus100% et crédits utilisables/contrôle dépenses ouvert permettent
+de poursuivre. Aucun solde opaque ni crédit voisin emprunté. Les faits Git seuls sont partagés
+par tuple dans un lot ; droits et connexion restent individuels, Prepare/Start revalident fraîchement.
+Le daemon ne fait aucun fetch, pull, push ou merge de livraison ; voir la procédure Git ci-dessous.
+
 ### Catalogue, quotas et remplacement explicite (157)
 
 Vérifier le catalogue effectivement chargé. Cette documentation ne prouve pas
@@ -531,9 +613,11 @@ Elle ne donne aucune permission Git supplémentaire au daemon ni à l’enfant.
    Il récupère au besoin les commits avec `git fetch` sur les machines concernées,
    puis résout le SHA de départ et vérifie sa présence sur la machine cible.
 2. Pour du code distant, il fournit `workspace.strategy="worktree"` et
-   `workspace.base_ref` égal à ce SHA explicite. Sans base, HEAD serait celui du
-   dépôt distant ; Bridget ne récupère pas automatiquement la référence d’origine.
-   Bridget fige et contrôle ce commit, puis rapporte branche, base, tête et commits.
+   `workspace.base_ref` égal à ce SHA explicite. Le routage168 exige aussi
+   `expected_base_commit` ; la CLI `delegate` le fige depuis sa source courante.
+   Shared Git exige lui aussi ce SHA exact. Le défaut HEAD hérité154 reste distinct :
+   il ne permet jamais une base distante implicite168. Aucun fetch automatique.
+   Bridget contrôle la base et rapporte branche, tête, commits et état modifié.
 3. L’enfant committe et pousse uniquement sa branche attribuée si la mission
    et ses droits l’autorisent. Il retourne les SHA produits et les preuves de tests.
    `result_available` signifie résultat disponible, pas travail intégré.

@@ -142,7 +142,9 @@ pub(super) fn run(args: &[String]) {
     let mut refused = false;
     // `--response-version` est une demande explicite : la CLI relaye donc le
     // refus du maître dans cette version sans négociation cachée. Le Reader T3
-    // effectue seul les tentatives v3→v2→v1 et son staging homogène.
+    // effectue seul les tentatives de compatibilité et son staging homogène.
+    // La v4 transporte notamment les faits figés et leurs inconnues tels quels :
+    // la CLI ne les enrichit jamais avec une mesure ou une horloge locale.
     let result = crate::communication::client::human_lineage(
         &namespace.socket,
         request,
@@ -221,7 +223,7 @@ mod tests {
 
     #[test]
     fn spec163_lineage_cli_negocie_v3_seulement_pour_list_et_show() {
-        for (wire, version) in [("2", 2), ("3", 3)] {
+        for (wire, version) in [("2", 2), ("3", 3), ("4", 4)] {
             let list = parse(&request_args("list", &["--response-version", wire])).unwrap();
             let show = parse(&request_args(
                 "show",
@@ -236,18 +238,11 @@ mod tests {
             assert_eq!(list.version, version);
             assert_eq!(show.version, version);
         }
-        for action in ["list", "show"] {
-            let mut args = request_args(action, &["--response-version", "4"]);
-            if action == "show" {
-                args.extend(["--task", "00000000-0000-4000-8000-000000000162"].map(String::from));
-            }
-            assert!(matches!(parse(&args), Err(E::UnsupportedVersion)));
-        }
     }
 
     #[test]
     fn spec163_lineage_cli_refuse_v3_hors_des_lectures_paginees() {
-        for version in ["1", "2", "3"] {
+        for version in ["1", "2", "3", "4"] {
             let journal = request_args(
                 "journal",
                 &[

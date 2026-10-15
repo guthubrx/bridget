@@ -145,7 +145,7 @@ impl Daemon {
 
     /// Descripteurs réellement ouverts par le daemon, vus par le système.
     fn open_descriptors(&self) -> usize {
-        let output = Command::new("/usr/sbin/lsof")
+        let output = Command::new("lsof")
             .args(["-n", "-P", "-Ff", "-p", &self.child.id().to_string()])
             .output()
             .expect("lsof");

@@ -172,6 +172,7 @@ fn negotiated_lineage162(action: &str, reply: Value) -> (Option<i32>, Value) {
 fn negotiated_lineage163(
     action: &str,
     replies: Vec<Value>,
+    response_version: &str,
 ) -> (Option<i32>, Value, Vec<Vec<Value>>) {
     let root = support::test_root("l163-cli-negociation");
     let socket = support::socket(&root);
@@ -233,7 +234,7 @@ fn negotiated_lineage163(
         "--action",
         action,
         "--response-version",
-        "3",
+        response_version,
     ];
     if action == "show" {
         args.extend_from_slice(&["--task", TASK]);
@@ -290,7 +291,7 @@ fn negotiated_auto_delegate163(features: &[&str]) -> (std::process::Output, Vec<
     let listener = UnixListener::bind(&socket).unwrap();
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
     let advertised: Vec<String> = features.iter().map(|value| (*value).to_owned()).collect();
-    let supports_auto = features.contains(&"auto_delegate_v1");
+    let supports_auto = features.contains(&"auto_delegate_v2");
     let server = std::thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
@@ -425,14 +426,14 @@ fn spec163_lineage_cli_version_explicite_est_stricte_et_v3_garde_placement() {
             direct_v3.as_object_mut().unwrap().remove("decision");
             direct_v3["task"] = task;
         }
-        let (code, value, seen) = negotiated_lineage163(action, vec![direct_v3.clone()]);
+        let (code, value, seen) = negotiated_lineage163(action, vec![direct_v3.clone()], "3");
         assert_eq!(code, Some(0), "{action}: {value}");
         assert_eq!(value, direct_v3, "{action}");
         assert_eq!(seen.len(), 1, "{action}");
         assert_eq!(seen[0][2]["request"]["version"], 3, "{action}");
 
         let refusal = bridget_transport::protocol::HumanLineageError::UnsupportedVersion.result();
-        let (code, value, seen) = negotiated_lineage163(action, vec![refusal.clone()]);
+        let (code, value, seen) = negotiated_lineage163(action, vec![refusal.clone()], "3");
         assert_eq!(code, Some(2), "{action}: {value}");
         assert_eq!(value, refusal, "le refus v3 reste brut : {action}");
         assert_eq!(seen.len(), 1, "aucun downgrade CLI : {action}");
@@ -446,9 +447,57 @@ fn spec163_lineage_cli_version_explicite_est_stricte_et_v3_garde_placement() {
 }
 
 #[test]
+fn spec168_lineage_cli_v4_conserve_version_et_refus_sans_downgrade() {
+    for action in ["list", "show"] {
+        let mut success = serde_json::json!({"version":4,"status":"ok","seq":0});
+        let decision = serde_json::json!({
+            "candidate_id":"c012", "connection_id":"codex-work", "machine_id":"cartae",
+            "engine":"codex", "model":"gpt-6.1-sol", "effort":"high",
+            "source":"deterministic",
+            "facts":{"scored_at":1000,
+                "resources":{"observed_at":null,"age_secs":null,"fresh":false,
+                    "cpu_percent":null,"available_memory_percent":null,
+                    "normalized_load_percent":null,"compilation_slots":null},
+                "compilation_capacity":null,"continuity":"unknown",
+                "quota":{"observed_at":null,"age_secs":null,"used_percent":null,"resets_at":null},
+                "score_terms":{"cpu":0,"memory":0,"load":0,"continuity":0,"compilation":0,
+                    "quota_remaining":0,"quota_reset":0,"saturation_penalty":0,"total":0}}
+        });
+        if action == "list" {
+            success["tasks"] = serde_json::json!([{"task_id":TASK,"decision":decision}]);
+        } else {
+            success["task"] = serde_json::json!({"task_id":TASK,"decision":decision});
+        }
+        let (code, value, seen) = negotiated_lineage163(action, vec![success.clone()], "4");
+        assert_eq!(code, Some(0), "{action}: {value}");
+        assert_eq!(
+            value, success,
+            "faits figés et inconnus transmis sans reconstruction"
+        );
+        let decision = if action == "list" {
+            &value["tasks"][0]["decision"]
+        } else {
+            &value["task"]["decision"]
+        };
+        assert!(decision.get("reason").is_none());
+        assert!(decision["facts"]["resources"]["cpu_percent"].is_null());
+        assert_eq!(decision["facts"]["scored_at"], 1000);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0][2]["request"]["version"], 4);
+
+        let refusal = bridget_transport::protocol::HumanLineageError::UnsupportedVersion.result();
+        let (code, value, seen) = negotiated_lineage163(action, vec![refusal.clone()], "4");
+        assert_eq!(code, Some(2), "{action}: {value}");
+        assert_eq!(value, refusal);
+        assert_eq!(seen.len(), 1, "aucun downgrade v4 : {action}");
+        assert_eq!(seen[0][2]["request"]["version"], 4);
+    }
+}
+
+#[test]
 fn spec163_lineage_cli_v3_invalid_request_ne_declenche_pas_de_repli() {
     let refusal = bridget_transport::protocol::HumanLineageError::InvalidRequest.result();
-    let (code, value, seen) = negotiated_lineage163("show", vec![refusal.clone()]);
+    let (code, value, seen) = negotiated_lineage163("show", vec![refusal.clone()], "3");
     assert_eq!(code, Some(2), "{value}");
     assert_eq!(value, refusal);
     assert_eq!(seen.len(), 1, "un refus v3 invalide est terminal");
@@ -457,7 +506,7 @@ fn spec163_lineage_cli_v3_invalid_request_ne_declenche_pas_de_repli() {
 
 #[test]
 fn spec163_auto_delegate_cli_negocie_le_feature_et_ne_masque_pas_les_erreurs() {
-    let (output, seen) = negotiated_auto_delegate163(&["auto_delegate_v1"]);
+    let (output, seen) = negotiated_auto_delegate163(&["auto_delegate_v2"]);
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -472,7 +521,7 @@ fn spec163_auto_delegate_cli_negocie_le_feature_et_ne_masque_pas_les_erreurs() {
     assert_eq!(seen[0]["type"], "RegisterAuxiliary");
     assert_eq!(seen[1]["type"], "DaemonIdentityRequest");
     assert_eq!(seen[2]["type"], "NativeDelegation");
-    assert_eq!(seen[2]["request"]["operation"], "auto_delegate");
+    assert_eq!(seen[2]["request"]["operation"], "auto_delegate_v2");
     assert_eq!(seen[2]["request"]["request_id"], "auto-cli-163");
     assert_eq!(seen[2]["request"]["task"], "mission CLI auto");
     assert_eq!(seen[2]["request"]["urgent"], true);
@@ -487,7 +536,7 @@ fn spec163_auto_delegate_cli_negocie_le_feature_et_ne_masque_pas_les_erreurs() {
     );
     assert!(output.stdout.is_empty(), "aucun succès synthétique");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("auto_delegate_unsupported"),
+        String::from_utf8_lossy(&output.stderr).contains("auto_delegate_v2_unsupported"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );

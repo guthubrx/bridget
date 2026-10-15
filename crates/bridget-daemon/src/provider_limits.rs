@@ -15,7 +15,16 @@ pub(crate) struct ProviderLimits {
     by_agent_type: BTreeMap<String, BTreeMap<String, Seen>>,
     // Au plus 4096 instances ; aucune capacité payante ne traverse cette clé.
     by_instance: BTreeMap<(String, String), ProviderLimits>,
+    routing_bindings: BTreeMap<String, RoutingQuotaBinding>,
     codex_credits: BTreeMap<String, (Option<bridget_transport::protocol::CodexCredits>, i64)>,
+}
+
+#[derive(Debug, Clone)]
+struct RoutingQuotaBinding {
+    agent_type: String,
+    instance: String,
+    definition_digest: String,
+    coordinator_epoch: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,6 +119,84 @@ impl ProviderLimits {
             .entry(key)
             .or_default()
             .record(agent_type, fact, source, observed_at);
+    }
+
+    /// Lie une observation existante à une seule connexion attestée.
+    /// O(log C), C<=128 ; aucune fusion par type ni entre comptes.
+    pub(crate) fn bind_routing_instance(
+        &mut self,
+        connection_id: &str,
+        agent_type: &str,
+        instance: &str,
+        definition_digest: &str,
+        coordinator_epoch: i64,
+    ) {
+        if self.routing_bindings.len() >= 128 && !self.routing_bindings.contains_key(connection_id)
+        {
+            return;
+        }
+        self.routing_bindings.insert(
+            connection_id.to_owned(),
+            RoutingQuotaBinding {
+                agent_type: agent_type.to_owned(),
+                instance: instance.to_owned(),
+                definition_digest: definition_digest.to_owned(),
+                coordinator_epoch,
+            },
+        );
+    }
+
+    /// O(log C + log I + F), F<=8 : seules les fenêtres fraîches du même
+    /// lanceur, instance et époque restent utilisables. Unknown reste None.
+    pub(crate) fn routing_quota(
+        &self,
+        connection_id: &str,
+        definition_digest: &str,
+        coordinator_epoch: i64,
+        live_instances: &std::collections::HashSet<String>,
+        now: i64,
+        max_age_secs: u64,
+    ) -> Option<Quota> {
+        let binding = self.routing_bindings.get(connection_id)?;
+        if binding.coordinator_epoch != coordinator_epoch
+            || binding.definition_digest != definition_digest
+            || !live_instances.contains(&binding.instance)
+            || !(1..=300).contains(&max_age_secs)
+        {
+            return None;
+        }
+        let scoped = self
+            .by_instance
+            .get(&(binding.agent_type.clone(), binding.instance.clone()))?;
+        let fresh = |at: i64| at > 0 && at <= now && now.saturating_sub(at) <= max_age_secs as i64;
+        let mut filtered = ProviderLimits::default();
+        for seen in scoped
+            .by_agent_type
+            .get(&binding.agent_type)
+            .into_iter()
+            .flat_map(|v| v.values())
+        {
+            if fresh(seen.observed_at) {
+                filtered.record(
+                    &binding.agent_type,
+                    seen.fact.clone(),
+                    seen.source,
+                    seen.observed_at,
+                );
+            }
+        }
+        // Un crédit périmé n'est pas rafraîchi par une nouvelle fenêtre.
+        filtered.codex_credits.remove(&binding.agent_type);
+        if let Some(credits) = scoped
+            .codex_credits
+            .get(&binding.agent_type)
+            .filter(|(_, at)| fresh(*at))
+        {
+            filtered
+                .codex_credits
+                .insert(binding.agent_type.clone(), credits.clone());
+        }
+        filtered.quota_with_credits(&binding.agent_type, now, true)
     }
 
     pub(crate) fn scoped_quota(&self, agent_type: &str, instance: &str, now: i64) -> Option<Quota> {
@@ -239,6 +326,94 @@ impl ProviderLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec168_quota_connexion_instance_definition_epoque_ttl_et_credits_100() {
+        use bridget_transport::protocol::CodexCredits;
+        let mut limits = ProviderLimits::default();
+        let fact = RateLimitFact {
+            window: "weekly".into(),
+            status: "rate_limit_reached".into(),
+            resets_at: Some(500),
+            used_percent: Some(100),
+            credits: Some(CodexCredits {
+                has_credits: Some(true),
+                unlimited: Some(false),
+                spend_control_reached: false,
+            }),
+        };
+        limits.record_scoped(
+            "codex",
+            "personal",
+            fact.clone(),
+            RateLimitSource::CodexAppServer,
+            90,
+        );
+        limits.record_scoped(
+            "codex",
+            "work",
+            RateLimitFact {
+                credits: None,
+                ..fact
+            },
+            RateLimitSource::CodexAppServer,
+            90,
+        );
+        limits.bind_routing_instance("personal", "codex", "personal", "digest-a", 7);
+        limits.bind_routing_instance("work", "codex", "work", "digest-b", 7);
+        let live = std::collections::HashSet::from(["personal".into(), "work".into()]);
+        let personal = limits
+            .routing_quota("personal", "digest-a", 7, &live, 100, 30)
+            .unwrap();
+        assert!(personal.exhausted);
+        assert!(
+            !personal.launch_blocked,
+            "crédits utilisables contre fenêtre100%"
+        );
+        assert!(
+            limits
+                .routing_quota("work", "digest-b", 7, &live, 100, 30)
+                .unwrap()
+                .launch_blocked
+        );
+        assert!(
+            limits
+                .routing_quota("personal", "digest-b", 7, &live, 100, 30)
+                .is_none()
+        );
+        assert!(
+            limits
+                .routing_quota("personal", "digest-a", 8, &live, 100, 30)
+                .is_none()
+        );
+        assert!(
+            limits
+                .routing_quota(
+                    "personal",
+                    "digest-a",
+                    7,
+                    &std::collections::HashSet::new(),
+                    100,
+                    30
+                )
+                .is_none()
+        );
+        assert!(
+            limits
+                .routing_quota("personal", "digest-a", 7, &live, 121, 30)
+                .is_none()
+        );
+        assert!(
+            limits
+                .routing_quota("personal", "digest-a", 7, &live, 89, 30)
+                .is_none()
+        );
+        assert!(
+            limits
+                .routing_quota("unknown", "digest-a", 7, &live, 100, 30)
+                .is_none()
+        );
+    }
 
     #[test]
     fn native157_credits_portee_retrait_et_plafond_instances() {

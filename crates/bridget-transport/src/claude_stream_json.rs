@@ -12,23 +12,62 @@ use crate::journal::{JournalFailureSink, JournalLiveFeed, JournalWriter, with_tu
 use crate::managed_session::{
     ManagedEvent, ManagedEventKind, ManagedEventOrigin, ManagedEventSource,
     ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
+    stop_owned_child,
 };
 use crate::protocol::{PresenceMode, ProviderObservation};
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Délai absolu daemon avant Connected (`DEFAULT_SPAWN_TIMEOUT_SECS` dans cli).
 pub const DAEMON_SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
+pub const MAX_ISOLATED_DECISION_STDOUT_BYTES: usize = 64 * 1024;
+pub const MAX_ISOLATED_DECISION_JSON_BYTES: usize = 4096;
+
+/// Invocation Claude168 sans session, journal ni Task Bridget. Le seul outil
+/// toléré est le formateur interne `StructuredOutput` imposé par json-schema.
+#[derive(Debug, Clone)]
+pub struct ClaudeIsolatedDecisionOptions {
+    pub command: String,
+    /// Arguments de lanceur attestés par le registre (vides pour Claude CLI).
+    pub command_args: Vec<String>,
+    pub model: String,
+    pub environment: Vec<(String, String)>,
+    pub request_json: String,
+    /// Échéance absolue partagée avec la chaîne, préparation et scheduling inclus.
+    pub deadline: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeIsolatedDecisionResult {
+    pub candidate_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeIsolatedDecisionError {
+    InvalidInput,
+    Unavailable,
+    OutputTooLarge,
+    Timeout,
+    InvalidOutput,
+}
 
 /// Contexte de validation `--resume` déplacée hors du chemin spawn (reader).
 struct ResumeBootstrap {
@@ -555,6 +594,330 @@ fn ensure_stream_arguments(args: &mut Vec<String>) -> Result<(), TransportError>
         .map(str::to_string),
     );
     Ok(())
+}
+
+/// Exécute exactement une décision168 dans un contexte enfant jetable. Ce
+/// chemin ne construit ni transport géré, ni journal, ni Task :
+/// le processus est uniquement un adaptateur de sélection structuré.
+/// O(b) pour b octets d'entrée/sortie, bornés chacun à 64 Kio.
+pub fn run_isolated_claude_decision(
+    options: &ClaudeIsolatedDecisionOptions,
+) -> Result<ClaudeIsolatedDecisionResult, ClaudeIsolatedDecisionError> {
+    if options.command.trim().is_empty()
+        || options.model.is_empty()
+        || options.request_json.is_empty()
+        || options.request_json.len() > 64 * 1024
+    {
+        return Err(ClaudeIsolatedDecisionError::InvalidInput);
+    }
+    let deadline = options.deadline;
+    if Instant::now() >= deadline {
+        return Err(ClaudeIsolatedDecisionError::Timeout);
+    }
+    let schema = r#"{"type":"object","additionalProperties":false,"required":["candidate_id"],"properties":{"candidate_id":{"type":"string"},"effort":{"type":"string"},"reason":{"type":"string","maxLength":256}}}"#;
+    let nonce = format!(
+        "bridget-routing-decision-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    );
+    let cwd = std::env::temp_dir().join(nonce);
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&cwd)
+        .map_err(|_| ClaudeIsolatedDecisionError::Unavailable)?;
+    let result = (|| {
+        let mut command = Command::new(&options.command);
+        command
+            .args(&options.command_args)
+            .arg("--print")
+            .args(["--model", &options.model])
+            .args([
+                "--safe-mode",
+                "--restricted",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--mcp-config",
+                r#"{"mcpServers":{}}"#,
+                "--setting-sources",
+                "",
+                "--disable-slash-commands",
+                "--no-session-persistence",
+            ])
+            .args([
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--json-schema",
+                schema,
+            ])
+            .env_clear()
+            .envs(options.environment.iter().cloned())
+            .current_dir(&cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        if Instant::now() >= deadline {
+            return Err(ClaudeIsolatedDecisionError::Timeout);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|_| ClaudeIsolatedDecisionError::Unavailable)?;
+        // Tout retour après spawn passe par l'arrêt confirmé ci-dessous. Le
+        // thread appelant conserve donc aussi son permis pendant le drain,
+        // même si son demandeur cesse déjà d'attendre sa réponse.
+        let decision = (|| {
+            let mut stdin = Some(
+                child
+                    .stdin
+                    .take()
+                    .ok_or(ClaudeIsolatedDecisionError::Unavailable)?,
+            );
+            let mut stdout = child
+                .stdout
+                .take()
+                .ok_or(ClaudeIsolatedDecisionError::Unavailable)?;
+            for fd in [stdin.as_ref().unwrap().as_raw_fd(), stdout.as_raw_fd()] {
+                let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                if flags < 0
+                    || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+                {
+                    return Err(ClaudeIsolatedDecisionError::Unavailable);
+                }
+            }
+            let mut input = options.request_json.as_bytes().to_vec();
+            input.push(b'\n');
+            let mut written = 0;
+            let mut bytes = Vec::with_capacity(MAX_ISOLATED_DECISION_STDOUT_BYTES + 1);
+            let mut chunk = [0_u8; 4096];
+            let mut eof = false;
+            let mut status = None;
+            loop {
+                if Instant::now() >= deadline {
+                    return Err(ClaudeIsolatedDecisionError::Timeout);
+                }
+                // Lire en même temps qu'on écrit évite qu'un fournisseur qui
+                // remplit stdout avant de lire stdin bloque les deux tubes.
+                if !eof {
+                    let remaining =
+                        (MAX_ISOLATED_DECISION_STDOUT_BYTES + 1 - bytes.len()).min(chunk.len());
+                    match stdout.read(&mut chunk[..remaining]) {
+                        Ok(0) => eof = true,
+                        Ok(count) => {
+                            bytes.extend_from_slice(&chunk[..count]);
+                            if bytes.len() > MAX_ISOLATED_DECISION_STDOUT_BYTES {
+                                return Err(ClaudeIsolatedDecisionError::OutputTooLarge);
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => return Err(ClaudeIsolatedDecisionError::Unavailable),
+                    }
+                }
+                if let Some(writer) = stdin.as_mut() {
+                    match writer.write(&input[written..]) {
+                        Ok(0) => return Err(ClaudeIsolatedDecisionError::Unavailable),
+                        Ok(count) => {
+                            written += count;
+                            if written == input.len() {
+                                stdin.take();
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => return Err(ClaudeIsolatedDecisionError::Unavailable),
+                    }
+                }
+                if status.is_none() {
+                    status = child
+                        .try_wait()
+                        .map_err(|_| ClaudeIsolatedDecisionError::Unavailable)?;
+                }
+                if let Some(status) = status.filter(|_| eof) {
+                    if !status.success() {
+                        return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+                    }
+                    return parse_isolated_decision_output(&bytes);
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        })();
+        stop_isolated_group_until_confirmed(&mut child);
+        decision
+    })();
+    let _ = std::fs::remove_dir(&cwd);
+    result
+}
+
+fn stop_isolated_group_until_confirmed(child: &mut Child) {
+    while stop_owned_child(child, true, Duration::from_secs(1)).is_err() {
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+// RawValue emprunte les objets de décision sans les parser ni les copier.
+// Leurs bornes de 4 Kio sont vérifiées avant le décodage de leurs champs.
+#[derive(Deserialize)]
+struct IsolatedDecisionFrame<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    #[serde(default)]
+    subtype: Option<&'a str>,
+    #[serde(default)]
+    tools: Option<Vec<String>>,
+    #[serde(default)]
+    capabilities: Vec<String>,
+    #[serde(default)]
+    mcp_servers: Vec<Value>,
+    #[serde(default)]
+    skills: Vec<Value>,
+    #[serde(default)]
+    slash_commands: Vec<Value>,
+    #[serde(default)]
+    plugins: Vec<Value>,
+    #[serde(default, borrow)]
+    message: Option<IsolatedDecisionMessage<'a>>,
+    #[serde(default)]
+    is_error: Option<bool>,
+    #[serde(default, borrow)]
+    structured_output: Option<&'a serde_json::value::RawValue>,
+    #[serde(default)]
+    result: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct IsolatedDecisionMessage<'a> {
+    #[serde(borrow)]
+    content: Vec<IsolatedDecisionContent<'a>>,
+}
+
+#[derive(Deserialize)]
+struct IsolatedDecisionContent<'a> {
+    #[serde(rename = "type")]
+    kind: &'a str,
+    #[serde(default)]
+    name: Option<&'a str>,
+    #[serde(default, borrow)]
+    input: Option<&'a serde_json::value::RawValue>,
+}
+
+fn parse_isolated_decision_output(
+    bytes: &[u8],
+) -> Result<ClaudeIsolatedDecisionResult, ClaudeIsolatedDecisionError> {
+    if bytes.len() > MAX_ISOLATED_DECISION_STDOUT_BYTES {
+        return Err(ClaudeIsolatedDecisionError::OutputTooLarge);
+    }
+    let text =
+        std::str::from_utf8(bytes).map_err(|_| ClaudeIsolatedDecisionError::InvalidOutput)?;
+    let mut initialized = false;
+    let mut structured_input = None;
+    let mut final_output = None;
+    // O(b), flux entier <=64 Kio ; chaque objet détaillé <=4 Kio.
+    for line in text.lines() {
+        let frame: IsolatedDecisionFrame<'_> =
+            serde_json::from_str(line).map_err(|_| ClaudeIsolatedDecisionError::InvalidOutput)?;
+        if final_output.is_some()
+            || !matches!(
+                frame.kind,
+                "system" | "rate_limit_event" | "assistant" | "user" | "result"
+            )
+        {
+            return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+        }
+        if frame.kind == "system" && frame.subtype == Some("init") {
+            if initialized
+                || !frame
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.len() == 1 && tools[0] == "StructuredOutput")
+                || !frame.mcp_servers.is_empty()
+                || !frame.skills.is_empty()
+                || !frame.slash_commands.is_empty()
+                || !frame.plugins.is_empty()
+                || frame.capabilities.iter().any(|capability| {
+                    !matches!(
+                        capability.as_str(),
+                        "interrupt_receipt_v1" | "interrupt_cancel_queued_v1" | "msg_lifecycle_v1"
+                    )
+                })
+            {
+                return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+            }
+            initialized = true;
+        }
+        if let Some(message) = frame.message {
+            for part in message.content {
+                if part.kind == "tool_use" {
+                    if !initialized
+                        || frame.kind != "assistant"
+                        || part.name != Some("StructuredOutput")
+                        || structured_input.is_some()
+                    {
+                        return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+                    }
+                    let raw = part
+                        .input
+                        .ok_or(ClaudeIsolatedDecisionError::InvalidOutput)?;
+                    if raw.get().len() > MAX_ISOLATED_DECISION_JSON_BYTES {
+                        return Err(ClaudeIsolatedDecisionError::OutputTooLarge);
+                    }
+                    structured_input = Some(
+                        serde_json::from_str::<Value>(raw.get())
+                            .map_err(|_| ClaudeIsolatedDecisionError::InvalidOutput)?,
+                    );
+                }
+            }
+        }
+        if frame.kind == "result" {
+            if !initialized || frame.is_error != Some(false) || frame.subtype != Some("success") {
+                return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+            }
+            let raw = frame
+                .structured_output
+                .ok_or(ClaudeIsolatedDecisionError::InvalidOutput)?;
+            let echoed = frame
+                .result
+                .ok_or(ClaudeIsolatedDecisionError::InvalidOutput)?;
+            if raw.get().len() > MAX_ISOLATED_DECISION_JSON_BYTES
+                || echoed.len() > MAX_ISOLATED_DECISION_JSON_BYTES
+            {
+                return Err(ClaudeIsolatedDecisionError::OutputTooLarge);
+            }
+            let output: Value = serde_json::from_str(raw.get())
+                .map_err(|_| ClaudeIsolatedDecisionError::InvalidOutput)?;
+            let echoed: Value = serde_json::from_str(&echoed)
+                .map_err(|_| ClaudeIsolatedDecisionError::InvalidOutput)?;
+            if echoed != output || structured_input.as_ref() != Some(&output) {
+                return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+            }
+            final_output = Some(raw);
+        }
+    }
+    // Décoder directement le JSON fermé conserve le refus serde des champs
+    // dupliqués, qu'une conversion préalable en Value aurait effacés.
+    let result: ClaudeIsolatedDecisionResult = serde_json::from_str(
+        final_output
+            .ok_or(ClaudeIsolatedDecisionError::InvalidOutput)?
+            .get(),
+    )
+    .map_err(|_| ClaudeIsolatedDecisionError::InvalidOutput)?;
+    if result.candidate_id.is_empty()
+        || result.candidate_id.len() > 16
+        || result
+            .effort
+            .as_deref()
+            .is_some_and(|value| value.is_empty() || value.len() > 64)
+        || result
+            .reason
+            .as_deref()
+            .is_some_and(|value| value.is_empty() || value.len() > 256)
+    {
+        return Err(ClaudeIsolatedDecisionError::InvalidOutput);
+    }
+    Ok(result)
 }
 
 struct SpawnedClaude {
@@ -2874,6 +3237,389 @@ exit 0
         assert!(
             finished,
             "Claude traite la promotion comme une remise FIFO ordinaire"
+        );
+    }
+
+    fn isolated_trace(choice: &Value) -> String {
+        [
+            json!({"type":"system","subtype":"init","tools":["StructuredOutput"],
+                "mcp_servers":[],"skills":[],"plugins":[],"slash_commands":[],
+                "capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"]}),
+            json!({"type":"assistant","message":{"content":[{
+                "type":"tool_use","name":"StructuredOutput","input":choice
+            }]}}),
+            json!({"type":"result","subtype":"success","is_error":false,
+                "structured_output":choice,"result":choice.to_string()}),
+        ]
+        .into_iter()
+        .map(|frame| frame.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+            + "\n"
+    }
+
+    // Même patron de faux fournisseur Python que le banc ManagedSession.
+    // Le fichier exécutable reçoit les véritables flags, sans lanceur modèle.
+    fn isolated_fixture(source: &str, trace: &str) -> (PathBuf, ClaudeIsolatedDecisionOptions) {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "bridget-claude-decision168-{}-{}",
+            std::process::id(),
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        fs::create_dir(&root).unwrap();
+        let executable = root.join("claude-fixture");
+        fs::write(root.join("trace.jsonl"), trace).unwrap();
+        fs::write(
+            &executable,
+            format!(
+                "#!/usr/bin/python3\nimport json,os,pathlib,signal,stat,sys,time\nroot=pathlib.Path(__file__).parent\n{source}\n"
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let options = ClaudeIsolatedDecisionOptions {
+            command: executable.to_string_lossy().into_owned(),
+            command_args: vec![],
+            model: "claude-fixture-168".into(),
+            environment: vec![
+                ("HOME".into(), root.to_string_lossy().into_owned()),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+                (
+                    "CLAUDE_CONFIG_DIR".into(),
+                    root.join("auth").to_string_lossy().into_owned(),
+                ),
+            ],
+            request_json: json!({"type":"user","message":{"role":"user","content":"choisir"}})
+                .to_string(),
+            deadline: Instant::now() + Duration::from_secs(2),
+        };
+        (root, options)
+    }
+
+    #[test]
+    fn spec168_faux_executable_verifie_flags_env_cwd_et_stderr_neutralise() {
+        let trace = isolated_trace(&json!({"candidate_id":"c001","reason":"ok"}));
+        let (root, mut options) = isolated_fixture(
+            r#"(root/'started').write_text('started')
+args=sys.argv[1:]
+required=['--print','--model','claude-fixture-168','--safe-mode','--restricted','--tools','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--setting-sources','','--disable-slash-commands','--no-session-persistence','--input-format','stream-json','--output-format','stream-json','--verbose','--json-schema']
+assert args[:-1]==required, args
+schema=json.loads(args[-1])
+assert schema['additionalProperties'] is False
+assert schema['required']==['candidate_id']
+assert set(schema['properties'])=={'candidate_id','effort','reason'}
+assert json.loads(sys.stdin.read())=={'type':'user','message':{'role':'user','content':'choisir'}}
+cwd=os.getcwd()
+before=os.listdir(cwd)
+stderr=os.fstat(2)
+assert stat.S_ISCHR(stderr.st_mode) and stderr.st_rdev==os.stat(os.devnull).st_rdev
+os.write(2,b'PRIVATE_STDERR_MUST_NOT_BE_CAPTURED'*10000)
+(root/'seen.json').write_text(json.dumps({'args':args,'env':dict(os.environ),'cwd':cwd,'mode':stat.S_IMODE(os.stat(cwd).st_mode),'before':before}))
+sys.stdout.write((root/'trace.jsonl').read_text())"#,
+            &trace,
+        );
+        let parent_cwd = std::env::current_dir().unwrap();
+        let parent_home = std::env::var_os("HOME");
+        // Le budget peut être épuisé par la préparation ou le scheduling avant
+        // l’entrée transport : aucune nouvelle durée ne doit autoriser un enfant.
+        options.deadline = Instant::now();
+        assert_eq!(
+            run_isolated_claude_decision(&options),
+            Err(ClaudeIsolatedDecisionError::Timeout)
+        );
+        assert!(!root.join("started").exists());
+        assert!(!root.join("seen.json").exists());
+        options.deadline = Instant::now() + Duration::from_secs(2);
+        let result = run_isolated_claude_decision(&options);
+        let observed: Value =
+            serde_json::from_slice(&fs::read(root.join("seen.json")).unwrap()).unwrap();
+        let child_cwd = PathBuf::from(observed["cwd"].as_str().unwrap());
+        assert_eq!(result.unwrap().candidate_id, "c001");
+        assert_eq!(observed["mode"], 0o700);
+        assert_eq!(observed["before"], json!([]));
+        assert_ne!(child_cwd, parent_cwd);
+        assert!(!child_cwd.exists(), "répertoire enfant retiré après drain");
+        let environment = observed["env"].as_object().unwrap();
+        assert_eq!(environment["HOME"], root.to_string_lossy().as_ref());
+        assert_eq!(environment["PATH"], "/usr/bin:/bin");
+        for name in environment.keys() {
+            assert!(matches!(
+                name.as_str(),
+                "HOME" | "PATH" | "CLAUDE_CONFIG_DIR" | "LC_CTYPE"
+            ));
+        }
+        for forbidden in [
+            "--bare",
+            "--max-turns",
+            "--resume",
+            "--add-dir",
+            "--dangerously-skip-permissions",
+        ] {
+            assert!(
+                !observed["args"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|arg| arg == forbidden)
+            );
+        }
+        assert_eq!(std::env::current_dir().unwrap(), parent_cwd);
+        assert_eq!(std::env::var_os("HOME"), parent_home);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec168_stdin_non_lu_expire_depuis_le_lancement_et_arrete_enfant() {
+        let (root, mut options) = isolated_fixture(
+            "(root/'pid').write_text(str(os.getpid()))\ntime.sleep(5)",
+            "",
+        );
+        options.request_json = "x".repeat(64 * 1024);
+        options.deadline = Instant::now() + Duration::from_millis(200);
+        let started = Instant::now();
+        let result = run_isolated_claude_decision(&options);
+        let elapsed = started.elapsed();
+        let pid: i32 = fs::read_to_string(root.join("pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(result, Err(ClaudeIsolatedDecisionError::Timeout));
+        assert!(Instant::now() >= options.deadline && elapsed < Duration::from_secs(2));
+        assert!(unsafe { libc::kill(pid, 0) } < 0);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec168_stdout_excessif_est_borne_et_arrete_sans_attendre_la_fin_naturelle() {
+        let (root, options) = isolated_fixture(
+            "sys.stdin.read()\n(root/'pid').write_text(str(os.getpid()))\nos.write(1,b'x'*(64*1024+1))\ntime.sleep(5)",
+            "",
+        );
+        let started = Instant::now();
+        let result = run_isolated_claude_decision(&options);
+        let pid: i32 = fs::read_to_string(root.join("pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(result, Err(ClaudeIsolatedDecisionError::OutputTooLarge));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(unsafe { libc::kill(pid, 0) } < 0);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec168_sortie_leader_ne_libere_pas_un_descendant_qui_tient_stdout() {
+        let trace = isolated_trace(&json!({"candidate_id":"c001"}));
+        let (root, mut options) = isolated_fixture(
+            r#"sys.stdin.read()
+(root/'leader').write_text(str(os.getpid()))
+pid=os.fork()
+if pid==0:
+    signal.signal(signal.SIGTERM,signal.SIG_IGN)
+    def finish(*_):
+        (root/'descendant-stopped').write_text('INT')
+        sys.exit(0)
+    signal.signal(signal.SIGINT,finish)
+    (root/'descendant').write_text(str(os.getpid()))
+    while True:
+        signal.pause()
+else:
+    while not (root/'descendant').exists():
+        time.sleep(.005)
+    sys.stdout.write((root/'trace.jsonl').read_text())
+    sys.stdout.flush()
+    sys.exit(0)"#,
+            &trace,
+        );
+        options.deadline = Instant::now() + Duration::from_millis(200);
+        let result = run_isolated_claude_decision(&options);
+        let leader: i32 = fs::read_to_string(root.join("leader"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(result, Err(ClaudeIsolatedDecisionError::Timeout));
+        assert!(Instant::now() >= options.deadline);
+        assert_eq!(
+            fs::read_to_string(root.join("descendant-stopped")).unwrap(),
+            "INT"
+        );
+        assert!(
+            unsafe { libc::kill(-leader, 0) } < 0,
+            "groupe détenu entièrement drainé"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec168_exit_nonzero_refuse_meme_une_sortie_structuree_valide() {
+        let (root, options) = isolated_fixture(
+            "sys.stdin.read()\nsys.stdout.write((root/'trace.jsonl').read_text())\nsys.exit(7)",
+            &isolated_trace(&json!({"candidate_id":"c001"})),
+        );
+        assert_eq!(
+            run_isolated_claude_decision(&options),
+            Err(ClaudeIsolatedDecisionError::InvalidOutput)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec168_formateur_refuse_outils_capacites_et_reponses_contradictoires() {
+        let trace = isolated_trace(&json!({"candidate_id":"c001","reason":"ok"}));
+        let base: Vec<Value> = trace
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let mut invalid = Vec::new();
+        let mut frames = base.clone();
+        frames[0]["tools"] = json!(["StructuredOutput", "Bash"]);
+        invalid.push(frames);
+        for field in [
+            "mcp_servers",
+            "skills",
+            "plugins",
+            "slash_commands",
+            "capabilities",
+        ] {
+            let mut frames = base.clone();
+            frames[0][field] = json!(["forbidden"]);
+            invalid.push(frames);
+        }
+        let mut frames = base.clone();
+        frames[1]["message"]["content"][0]["name"] = json!("Bash");
+        invalid.push(frames);
+        let mut frames = base.clone();
+        frames[1]["message"]["content"][0]["input"]["candidate_id"] = json!("c002");
+        invalid.push(frames);
+        let mut frames = base.clone();
+        frames[2]["result"] = json!("{\"candidate_id\":\"c002\",\"reason\":\"ok\"}");
+        invalid.push(frames);
+        let mut frames = base.clone();
+        frames[2]["is_error"] = json!(true);
+        invalid.push(frames);
+        let mut frames = base.clone();
+        frames.push(base[2].clone());
+        invalid.push(frames);
+        let mut frames = base.clone();
+        frames.insert(1, base[0].clone());
+        invalid.push(frames);
+        let mut frames = base.clone();
+        frames.insert(2, base[1].clone());
+        invalid.push(frames);
+        invalid.push(base[1..].to_vec());
+        let mut frames = base.clone();
+        frames.insert(
+            2,
+            json!({"type":"control_request","request":{"type":"tool_use","name":"Bash"}}),
+        );
+        invalid.push(frames);
+        for frames in invalid {
+            let trace = frames
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                parse_isolated_decision_output(trace.as_bytes()),
+                Err(ClaudeIsolatedDecisionError::InvalidOutput)
+            );
+        }
+        let duplicate = trace.replace(
+            "\"structured_output\":{\"candidate_id\":\"c001\",\"reason\":\"ok\"}",
+            "\"structured_output\":{\"candidate_id\":\"c001\",\"candidate_id\":\"c001\",\"reason\":\"ok\"}",
+        );
+        assert_ne!(duplicate, trace);
+        assert_eq!(
+            parse_isolated_decision_output(duplicate.as_bytes()),
+            Err(ClaudeIsolatedDecisionError::InvalidOutput)
+        );
+        // Ces deux refus passent aussi par le véritable exécutable et le drain.
+        for trace in [
+            trace.replace("StructuredOutput", "Bash"),
+            isolated_trace(&json!({"candidate_id":"c001","command":"forbidden"})),
+        ] {
+            let (root, options) = isolated_fixture(
+                "sys.stdin.read()\nsys.stdout.write((root/'trace.jsonl').read_text())",
+                &trace,
+            );
+            assert_eq!(
+                run_isolated_claude_decision(&options),
+                Err(ClaudeIsolatedDecisionError::InvalidOutput)
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn spec168_objets_json_sont_bornes_avant_leur_decodage_detaille() {
+        let base = isolated_trace(&json!({"candidate_id":"c001"}));
+        assert_eq!(
+            parse_isolated_decision_output(base.as_bytes())
+                .unwrap()
+                .candidate_id,
+            "c001"
+        );
+        let large = isolated_trace(&json!({"candidate_id":"c001","reason":"x".repeat(4096)}));
+        let (root, options) = isolated_fixture(
+            "sys.stdin.read()\nsys.stdout.write((root/'trace.jsonl').read_text())",
+            &large,
+        );
+        assert_eq!(
+            run_isolated_claude_decision(&options),
+            Err(ClaudeIsolatedDecisionError::OutputTooLarge)
+        );
+        fs::remove_dir_all(root).unwrap();
+        for field in ["structured_output", "result"] {
+            let mut frames: Vec<Value> = base
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            frames[2][field] = if field == "result" {
+                json!(format!("{}{{\"candidate_id\":\"c001\"}}", " ".repeat(4096)))
+            } else {
+                json!({"candidate_id":"c001","unknown":"x".repeat(4096)})
+            };
+            let trace = frames
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                parse_isolated_decision_output(trace.as_bytes()),
+                Err(ClaudeIsolatedDecisionError::OutputTooLarge)
+            );
+        }
+        // Même sans JSON valide, aucun parsing n'a lieu au-delà de la borne stdout.
+        assert_eq!(
+            parse_isolated_decision_output(&vec![b'x'; MAX_ISOLATED_DECISION_STDOUT_BYTES + 1]),
+            Err(ClaudeIsolatedDecisionError::OutputTooLarge)
+        );
+        // Les espaces comptent aussi dans les 4 Kio bruts de StructuredOutput.
+        let padded = base.replacen(
+            "\"input\":{\"candidate_id\":\"c001\"}",
+            &format!(
+                "\"input\":{{{}\"candidate_id\":\"c001\"}}",
+                " ".repeat(4096)
+            ),
+            1,
+        );
+        assert_ne!(padded, base);
+        assert_eq!(
+            parse_isolated_decision_output(padded.as_bytes()),
+            Err(ClaudeIsolatedDecisionError::OutputTooLarge)
         );
     }
 }

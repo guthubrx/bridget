@@ -1,0 +1,934 @@
+{
+  "scoring_version": "axes-2",
+  "input_sha256": "2cf0c3e3202ee21e094dd2620d5cb4c627cec76f7c150c0deb25c3aa6767435d",
+  "manifest_sha256": "4d8a0c215db8e256a56e1489a4b3801fef767f52fb55356578bf69f30df2d1b3",
+  "axes": {
+    "security": {
+      "title": "Sécurité",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 5,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 3,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {
+        "LOW": 2,
+        "INFO": 1
+      },
+      "limits": [
+        "5 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.security.01",
+        "axes.security.02",
+        "axes.security.03",
+        "axes.security.04",
+        "axes.security.05"
+      ],
+      "finding_fingerprints": [
+        "63322e0650203470d7d1",
+        "67ca12eb2b6169b125e4",
+        "9c05ef555289c1e9ef7d",
+        "09f91debdf3075439d6a",
+        "b8ed518dfac30a5faa81",
+        "69db0237cf25014a5135",
+        "5f6f7342950d2e326efc",
+        "12c6683b2d568d341256",
+        "b01a5c2f10ca45b66912",
+        "4038ceeaa07d58c9c456",
+        "ac6b0c22f9aa231ecf44",
+        "68f603c7881968726c07",
+        "4ba02cf0d926387dfde0",
+        "b5f87a0ef8125d1706c4",
+        "fb3c2626f6ddad5163a5",
+        "75cd00c594e57dbe2a18",
+        "2d2d106ce3c662bb0100",
+        "a0947a6ffffdf9ebbfb3",
+        "9d1a881901b54c8caba6",
+        "8bf7114e09f924bb2fef",
+        "7f7a28e8e5f7392420ac",
+        "6fc4310ff094835fd217",
+        "712fd5ceb22300cb173c",
+        "a891de7a0d6c74468233",
+        "d70f3233f999971aa84d",
+        "fb6ff82b740834a1d2e0",
+        "2d5b838799282d76a028",
+        "51bf27525859e7158393",
+        "e87b54e6494448d231b6",
+        "8d6ae82ab7506b12ec1f",
+        "0089ae732d2127fd7be0",
+        "de0d785d2f7bb1664040",
+        "7d1de31a74ab66cae700",
+        "4e34bdc46c9175e5e825",
+        "3b25f98e52b604d689f4",
+        "0189feb3737c03c4ca2d",
+        "0845cf1ef966a9fce8cc",
+        "437302964b2f33f1f855",
+        "0e1e3f8e981814a76f93",
+        "3fe3b00bd3958b4b9d06",
+        "dc94bd9a227b8eeaf905",
+        "61a20f57a11178aa57c3",
+        "ca60cb79ca78ff986df3",
+        "3bd164ff2587fc5d27df",
+        "adf006c7aa89f3093060",
+        "c0cb170201701f1fd0e2",
+        "d8e6d269fd48fee315d6",
+        "844261318b9fd71fb5ce",
+        "744e00c8e24b274be918",
+        "4432f659291fd2695ca2",
+        "08ca956e4cdd2536fe61",
+        "e383056a147219d4954d",
+        "27064ca47096e45b2594",
+        "2f72a42d94e930974fa2",
+        "af32dd76bfb22dbce765",
+        "e51780f0350206f381c0",
+        "3561c2c3ea7e25c47dd5",
+        "04cadddd5ed45eeb4b87",
+        "237e002c90241302276d",
+        "dd16d94946c8ee89b123",
+        "8a79cd8ce9831b541a71",
+        "c295e6ed359067bba4a0",
+        "2dc3b75545c66871246c",
+        "8dda6574f67a6c089c04",
+        "0d276219f5a1c1e7d384",
+        "13a00d7bf55067826d37",
+        "c805a11241ea9a1b9ea5",
+        "f81c5ad51b964335756d",
+        "75b7b2835ef9cc6023a9",
+        "2aa5d9c7647272f6109f",
+        "6416fd10512c699e3cc8",
+        "b265b7ec7d141f17c0dd",
+        "4006c072d13aa333d3d2",
+        "40bdd5d3e7283acb9c54",
+        "9b873cd29f3df841d7f7",
+        "8360196db2b3fcd45c1b",
+        "ca41a0a84212b31b1689",
+        "19163c3a5570c582d632",
+        "46c3ecccd1595d7fa454",
+        "4d6a50098fb3e4250748",
+        "78059e1abe661c044f79",
+        "70cbe8e7c681cff0518e",
+        "37e61b0d94999347abd7",
+        "edb41b155bd8dc4ad87f",
+        "9a1cabfdd15e16f3fbde",
+        "5044c735dc4f1de311a4",
+        "f29de119d9e480587130",
+        "89369ff6758c21978845",
+        "e0b0cf5b43123a755dd8",
+        "eb88501da19e4538e0e4",
+        "bfe47a4617eaaa71a573",
+        "3c42e5b2b5b387eabf5f",
+        "de07d16bf8ec594f62b1",
+        "87d970a7f2dba7c30da4",
+        "3a42aab3188a9d1ed869",
+        "8d903bf5ddc42904d5c6",
+        "01a3c0416bb5c7f3fd07",
+        "28201ded2244667fa69b",
+        "245a6c39c6df86bd4cd9",
+        "49ef05f0457f6561f4f9",
+        "5a11554af5442ae146a1",
+        "4cf87b30e735593e0a1a",
+        "88746ad6e05a7ed3f8e5",
+        "6f3452e4f021efdc5122",
+        "328f93476c514572adde",
+        "1de52e02f0a020c90bf3",
+        "e6d882158ca622567242",
+        "62d0e6b4ea117d67c2db",
+        "a9154f37709bac0215ca",
+        "6c4eae073ab9eb8a2d99",
+        "5bb2f98141f61f4e82d8",
+        "4705fe6722a20ce3fc82",
+        "c8e099ff46633274d08a",
+        "6c3a18795cb0f10f32a1",
+        "007f48b8b34630483d48",
+        "146508816270d87c4c0b",
+        "877771808c51f8266417",
+        "87738a9e5cbed0caa712",
+        "0e97604d171430447877",
+        "b2b0ecb3240a79d713b1",
+        "bb216097d902986904c5",
+        "2113a3af1edfbb501cdc"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.security.01",
+          "axis": "security",
+          "title": "Analyse statique et validation des entrées",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.02",
+          "axis": "security",
+          "title": "Protection des secrets courants",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.03",
+          "axis": "security",
+          "title": "Maîtrise des secrets historiques",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.04",
+          "axis": "security",
+          "title": "Authentification et séparation des droits",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.05",
+          "axis": "security",
+          "title": "Maîtrise des dépendances vulnérables",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "llm_security": {
+      "title": "Sécurité IA",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 3,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [
+        "Aucun contrôle spécifique déclaré pour cet axe",
+        "3 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.llm_security.01",
+        "axes.llm_security.02",
+        "axes.llm_security.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.llm_security.01",
+          "axis": "llm_security",
+          "title": "Confidentialité et pseudonymisation",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.llm_security.02",
+          "axis": "llm_security",
+          "title": "Permissions des appels externes",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.llm_security.03",
+          "axis": "llm_security",
+          "title": "Résistance aux instructions malveillantes",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "reliability": {
+      "title": "Fiabilité et exploitation",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 4,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 3,
+      "severity_counts": {},
+      "limits": [
+        "4 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.reliability.01",
+        "axes.reliability.02",
+        "axes.reliability.03",
+        "axes.reliability.04"
+      ],
+      "finding_fingerprints": [
+        "ca1693b4332559b91339",
+        "ccd70c502f5da262bae1",
+        "5e4326675a7054f0ef50"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.reliability.01",
+          "axis": "reliability",
+          "title": "Conservation et rotation des sauvegardes",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.reliability.02",
+          "axis": "reliability",
+          "title": "Reprise des traitements interrompus",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.reliability.03",
+          "axis": "reliability",
+          "title": "Continuité pendant une bascule",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.reliability.04",
+          "axis": "reliability",
+          "title": "Restauration après sinistre",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "tests": {
+      "title": "Tests et validation",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 5,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 1,
+      "severity_counts": {},
+      "limits": [
+        "5 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.tests.01",
+        "axes.tests.02",
+        "axes.tests.03",
+        "axes.tests.04",
+        "axes.tests.05"
+      ],
+      "finding_fingerprints": [
+        "5e4326675a7054f0ef50"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.tests.01",
+          "axis": "tests",
+          "title": "Typage des sources et des tests",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.02",
+          "axis": "tests",
+          "title": "Analyse de style et erreurs statiques",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.03",
+          "axis": "tests",
+          "title": "Régressions et cas limites",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.04",
+          "axis": "tests",
+          "title": "Qualification du runtime livré",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.05",
+          "axis": "tests",
+          "title": "Tests interface et intégration des données",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "performance": {
+      "title": "Performance et ressources",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 4,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 2,
+      "severity_counts": {},
+      "limits": [
+        "4 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.performance.01",
+        "axes.performance.02",
+        "axes.performance.03",
+        "axes.performance.04"
+      ],
+      "finding_fingerprints": [
+        "ca1693b4332559b91339",
+        "0de45c352ed0e35dc790"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.performance.01",
+          "axis": "performance",
+          "title": "Admission et saturation des demandes",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.performance.02",
+          "axis": "performance",
+          "title": "Budget mémoire",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.performance.03",
+          "axis": "performance",
+          "title": "Délais, annulation et libération",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.performance.04",
+          "axis": "performance",
+          "title": "Mesures représentatives de latence et charge",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "complexity": {
+      "title": "Complexité algorithmique",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 3,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 1,
+      "severity_counts": {},
+      "limits": [
+        "3 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.complexity.01",
+        "axes.complexity.02",
+        "axes.complexity.03"
+      ],
+      "finding_fingerprints": [
+        "0de45c352ed0e35dc790"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.complexity.01",
+          "axis": "complexity",
+          "title": "Complexité des points d’entrée",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.complexity.02",
+          "axis": "complexity",
+          "title": "Bornes des parcours et allocations",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.complexity.03",
+          "axis": "complexity",
+          "title": "Coût des accès et écritures de données",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "quality": {
+      "title": "Qualité du code et des erreurs",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 3,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [
+        "Aucun contrôle spécifique déclaré pour cet axe",
+        "3 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.quality.01",
+        "axes.quality.02",
+        "axes.quality.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.quality.01",
+          "axis": "quality",
+          "title": "Gestion des refus et messages utilisateur",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.quality.02",
+          "axis": "quality",
+          "title": "Gestion des erreurs partielles",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.quality.03",
+          "axis": "quality",
+          "title": "Ergonomie des parcours concernés",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "architecture": {
+      "title": "Architecture et dépendances",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 4,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [
+        "4 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.architecture.01",
+        "axes.architecture.02",
+        "axes.architecture.03",
+        "axes.architecture.04"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.architecture.01",
+          "axis": "architecture",
+          "title": "Frontières et résolution des dépendances",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.architecture.02",
+          "axis": "architecture",
+          "title": "Maîtrise des cycles",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.architecture.03",
+          "axis": "architecture",
+          "title": "Séparation construction et exécution",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.architecture.04",
+          "axis": "architecture",
+          "title": "Assemblages et dépendances dynamiques",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "ai_hygiene": {
+      "title": "Responsabilité future et hygiène",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 3,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [
+        "3 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.ai_hygiene.01",
+        "axes.ai_hygiene.02",
+        "axes.ai_hygiene.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.ai_hygiene.01",
+          "axis": "ai_hygiene",
+          "title": "Invariants et compromis expliqués",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.ai_hygiene.02",
+          "axis": "ai_hygiene",
+          "title": "Périmètre et maintenabilité du changement",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.ai_hygiene.03",
+          "axis": "ai_hygiene",
+          "title": "Revue contradictoire et responsabilité",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "minimalism": {
+      "title": "Minimalisme et frugalité",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 3,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 1,
+      "severity_counts": {},
+      "limits": [
+        "3 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.minimalism.01",
+        "axes.minimalism.02",
+        "axes.minimalism.03"
+      ],
+      "finding_fingerprints": [
+        "2be7164bdf838f5bf0a9"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.minimalism.01",
+          "axis": "minimalism",
+          "title": "Dépendances nécessaires en exploitation",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.minimalism.02",
+          "axis": "minimalism",
+          "title": "Poids et ressources justifiés",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.minimalism.03",
+          "axis": "minimalism",
+          "title": "Code mort et simplifications possibles",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "business": {
+      "title": "Métier et fidélité des données",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 3,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 1,
+      "severity_counts": {},
+      "limits": [
+        "3 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.business.01",
+        "axes.business.02",
+        "axes.business.03"
+      ],
+      "finding_fingerprints": [
+        "5e4326675a7054f0ef50"
+      ],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.business.01",
+          "axis": "business",
+          "title": "Fidélité des données lues",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.business.02",
+          "axis": "business",
+          "title": "Cohérence et idempotence des versions",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.business.03",
+          "axis": "business",
+          "title": "Conformité aux règles et données de référence",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    },
+    "traceability": {
+      "title": "Traçabilité des exigences",
+      "score": null,
+      "grade": "N/A",
+      "status": "unassessed",
+      "controls_verified": 0,
+      "controls_applicable": 2,
+      "coverage_percent": 0.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [
+        "2 critère(s) sans niveau de qualité justifié"
+      ],
+      "control_ids": [
+        "axes.traceability.01",
+        "axes.traceability.02"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": null,
+      "criteria": [
+        {
+          "id": "axes.traceability.01",
+          "axis": "traceability",
+          "title": "Lien constats, corrections et preuves",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        },
+        {
+          "id": "axes.traceability.02",
+          "axis": "traceability",
+          "title": "Couverture des exigences obligatoires",
+          "weight": 1,
+          "status": "unknown",
+          "level": null,
+          "rating_rationale": "Critère non examiné.",
+          "evidence": [],
+          "excluded": false
+        }
+      ]
+    }
+  },
+  "unmapped_findings": [],
+  "method": "Qualité observée = somme des niveaux justifiés / maximum des critères notés. Niveaux ancrés de0 à4, poids figés. Le nombre de défauts ne donne plus la note : leurs pénalités restent un garde-fou. Couverture séparée. Note démontrée = points acquis / maximum de tous les critères applicables ; les inconnus ne rapportent aucun point. Aucun niveau justifié : non noté. Pas de moyenne globale des axes.",
+  "rubric_version": "quality-1",
+  "rubric_sha256": "cf850d3dd0976f4cd6ca9385ba320154248c8e85b084392af0efe9acda208607"
+}

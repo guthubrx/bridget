@@ -209,7 +209,7 @@ fn native149_validate_ferme_les_formes_ouvertes() {
     assert!(validate(&parse(base.clone())).is_ok());
 
     let mut version = base.clone();
-    version["version"] = json!(3);
+    version["version"] = json!(u16::MAX);
     assert!(matches!(
         validate(&parse(version)),
         Err(E::UnsupportedVersion)
