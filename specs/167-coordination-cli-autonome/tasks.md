@@ -1,8 +1,8 @@
 # Tâches — SPEC-167 Coordination CLI autonome
 
-**Statut :** In Progress
-**Progression :** 27/28
-**Pipeline :** Livraison.
+**Statut :** Implemented
+**Progression :** 28/28
+**Pipeline :** Livré
 
 Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule source de vérité.
 
@@ -65,7 +65,7 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule
 - [x] T025 Documenter l’invariant d’identité et le parcours sans T3 dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/167-coordination-cli-autonome.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/README.md` et `/Users/moi/Nextcloud/10.Scripts/64.bridget/CHANGELOG.md`
 - [x] T026 Exécuter format, tests ciblés, régressions et suite proportionnée ; consigner les codes retour dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/tests.md`
 - [x] T027 Faire converger l’implémentation, tenter la contre-revue inter-fournisseur et produire l’audit final dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/`
-- [ ] T028 Intégrer, pousser, construire, signer, sauvegarder, installer, vérifier le runtime et nettoyer sans force ; finaliser `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/livraison167.md`
+- [x] T028 Intégrer, pousser, construire, signer, sauvegarder, installer, vérifier le runtime et nettoyer sans force ; finaliser `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/livraison167.md`
 
 ## Dépendances
 

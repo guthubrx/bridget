@@ -5,9 +5,9 @@
 
 Spec: 167-coordination-cli-autonome
 Titre: Coordination CLI autonome
-Statut: In Progress
+Statut: Implemented
 Priorité: P1
-Tâches: 27/28 (96%)
+Tâches: 28/28 (100%)
 Tests: 87/87 (100%)
 
 Résumé:
@@ -23,7 +23,7 @@ Fichiers:
 
 **Feature Branch**: `session-167-coordination-cli-autonome`
 **Created**: 2026-10-15
-**Status**: In Progress
+**Status**: Implemented
 **Priority**: P1
 **Dependencies**: SPEC-148, SPEC-149, SPEC-151, SPEC-153, SPEC-155, SPEC-157, SPEC-163
 
