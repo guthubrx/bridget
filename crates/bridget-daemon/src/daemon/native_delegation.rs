@@ -7512,6 +7512,22 @@ pub(super) fn capture_remote_result(
     st.delegation_store
         .commit_remote_result(&task, next, result, disposition.clone())
         .map_err(|_| E::StoreUnavailable)?;
+    if disposition == (D::Accepted {}) {
+        // L'acceptation worker est déjà une réponse corrélée durable. Elle ne
+        // dépend pas de l'ACK de transport de la remise au wrapper parent.
+        // Une panne SQL du guichet reste réessayable par le tick suivant.
+        let accepted = st
+            .delegation_store
+            .get(&task.task_id)
+            .map_err(|_| E::StoreUnavailable)?
+            .ok_or(E::UnknownExecution)?;
+        if let Err(error) = settle_remote_tracked_request(st, &accepted) {
+            warn!(
+                "suivi de mission distante {} non clôturé après résultat accepté, nouvel essai à l'entretien suivant: {}",
+                accepted.mission, error
+            );
+        }
+    }
     Ok(disposition)
 }
 
@@ -9368,6 +9384,25 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 return;
             }
         };
+        // `pending()` peut légitimement exclure une tâche distante déjà
+        // nettoyée. Les suivis encore ouverts sont donc la source de reprise
+        // après une panne SQL de `mark_answered`, sans dépendre du rejeu
+        // worker qui retourne tôt sur un reçu Accepted.
+        if let Ok(open_requests) = st.store.open_requests() {
+            for request in open_requests {
+                if let Ok(Some(task)) = st.delegation_store.for_mission(&request.id)
+                    && task.remote_placement.is_some()
+                    && task.result.is_some()
+                {
+                    if let Err(error) = settle_remote_tracked_request(&mut st, &task) {
+                        warn!(
+                            "suivi de mission distante {} non clôturé pendant la reprise des demandes ouvertes: {}",
+                            task.mission, error
+                        );
+                    }
+                }
+            }
+        }
         let Ok(mut tasks) = st.delegation_store.pending() else {
             return;
         };
@@ -9383,6 +9418,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             }
         }
         for mut task in tasks.iter().cloned() {
+            if task.remote_placement.is_some()
+                && task.result.is_some()
+                && let Err(error) = settle_remote_tracked_request(&mut st, &task)
+            {
+                warn!(
+                    "suivi de mission distante {} illisible ou non clôturé, nouvel essai d'entretien: {}",
+                    task.mission, error
+                );
+            }
             if task.state == "cancelling" {
                 match cancellation_root(&st, &task) {
                     Ok(true) => cancellations.push(task),
@@ -10611,6 +10655,66 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
             task.mission
         ),
     }
+}
+
+/// Clôture le suivi de la mission avec la transition canonique du guichet.
+/// `delivery_acked` reste exclusivement le fait du transport : ne jamais le
+/// fabriquer pour supprimer un rappel. Le filtre de reçu accepté évite qu'une
+/// tâche distante étrangère, refusée ou seulement préparée ne ferme une demande.
+fn settle_remote_tracked_request(st: &mut DaemonState, task: &Task) -> Result<bool, String> {
+    use bridget_transport::protocol::RemoteResultDisposition;
+
+    if task.remote_placement.is_none()
+        || task.result.is_none()
+        || !task.remote_result_receipts.iter().any(|receipt| {
+            receipt.disposition == (RemoteResultDisposition::Accepted {})
+                && receipt.identity.mission_id == task.mission
+                && receipt.identity.round == task.round_no()
+        })
+    {
+        return Ok(false);
+    }
+    let Some(request) = st
+        .store
+        .get_request(&task.mission)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    if request.state != "open" || request.sender != task.owner || request.target != task.child {
+        return Ok(false);
+    }
+    let body = task.result.as_deref().unwrap_or_default();
+    let mut message = bridget_core::BridgetMessage::new(&task.child, &task.owner, body);
+    message.id = task.result_message_id();
+    message.in_reply_to = Some(task.mission.clone());
+    let summary = crate::store::request_reply_summary(&message);
+    let answered = st
+        .store
+        .mark_answered(&task.mission, &task.child, &task.owner, Some(&summary))
+        .map_err(|error| error.to_string())?;
+    if answered {
+        st.delegation_store.wait_epoch().bump();
+        st.pending_replies
+            .retain(|pending| pending.msg_id != task.mission);
+    }
+    Ok(answered)
+}
+
+/// Garde le collecteur de rappels pendant la fenêtre où le résultat distant
+/// est durable mais où `mark_answered` doit encore être rejoué après une panne
+/// SQL. Elle ne ferme rien et ne fabrique aucun ACK de transport.
+pub(super) fn remote_result_suppresses_reminders(st: &DaemonState, mission: &str) -> bool {
+    let Ok(Some(task)) = st.delegation_store.for_mission(mission) else {
+        return false;
+    };
+    task.remote_placement.is_some()
+        && task.result.is_some()
+        && task.remote_result_receipts.iter().any(|receipt| {
+            receipt.disposition == bridget_transport::protocol::RemoteResultDisposition::Accepted {}
+                && receipt.identity.mission_id == task.mission
+                && receipt.identity.round == task.round_no()
+        })
 }
 
 /// Purge les arbres de tâches soldés, sous le verrou du daemon (R2, R6, R10).
@@ -21737,6 +21841,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
             admission_digest: "c".repeat(64),
         });
         st.delegation_store.save(&task).unwrap();
+        st.store
+            .create_request(&task.mission, &task.owner, &task.child, 120)
+            .unwrap();
         let task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
         let mut result = RemoteResultEnvelope {
             worker: WorkerIdentity {
@@ -21757,9 +21864,43 @@ for frame in frames: print(json.dumps(frame),flush=True)
     fn remote162_resultat_canonique_notifie_parent_sans_recapture_legacy() {
         use bridget_transport::protocol::RemoteResultDisposition;
         let (mut st, config, task, result) = remote162_capture_fixture();
+        st.pending_replies.push(PendingReply {
+            msg_id: task.mission.clone(),
+            from: task.owner.clone(),
+            from_conn: "conn-1".into(),
+            to: task.child.clone(),
+            target_conn: "conn-1".into(),
+            timeout_secs: 120,
+            created_at: Instant::now() - Duration::from_secs(3600),
+            frozen_secs: 0,
+            escalation_level: 0,
+            deferred_level: None,
+        });
         assert_eq!(
             capture_remote_result(&mut st, &result.worker, &result),
             Ok(RemoteResultDisposition::Accepted {})
+        );
+        assert_eq!(
+            st.store.get_request(&task.mission).unwrap().unwrap().state,
+            "answered",
+            "l'acceptation distante clôt le suivi sans attendre l'ACK transport"
+        );
+        let answered_task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert!(
+            !answered_task.delivery_acked,
+            "aucun ACK transport fabriqué"
+        );
+        st.store
+            .connection()
+            .execute(
+                "UPDATE tracked_requests SET deadline_at=?1 WHERE id=?2",
+                rusqlite::params![unix_timestamp() - 3600, task.mission],
+            )
+            .unwrap();
+        assert!(
+            collect_reminder_actions(&mut st, Instant::now() + Duration::from_secs(3600))
+                .is_empty(),
+            "une demande déjà répondue ne produit aucun rappel après son ancienne échéance"
         );
         let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
         saved.state = "result_available".into();
@@ -21800,6 +21941,119 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 .remote_result_receipts
                 .len(),
             1
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote170_ecriture_suivi_echoue_puis_reprise_entretien() {
+        use bridget_transport::protocol::RemoteResultDisposition;
+        let (mut st, config, task, result) = remote162_capture_fixture();
+        st.store
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER remote170_answer_fail BEFORE UPDATE OF state ON tracked_requests
+                 WHEN NEW.state='answered'
+                 BEGIN SELECT RAISE(ABORT, 'remote170 synthetic write failure'); END;",
+            )
+            .unwrap();
+        assert_eq!(
+            capture_remote_result(&mut st, &result.worker, &result),
+            Ok(RemoteResultDisposition::Accepted {})
+        );
+        assert_eq!(
+            st.store.get_request(&task.mission).unwrap().unwrap().state,
+            "open",
+            "l'échec SQL ne clôture pas fictivement le suivi"
+        );
+        st.pending_replies.push(PendingReply {
+            msg_id: task.mission.clone(),
+            from: task.owner.clone(),
+            from_conn: "conn-1".into(),
+            to: task.child.clone(),
+            target_conn: "conn-1".into(),
+            timeout_secs: 120,
+            created_at: Instant::now() - Duration::from_secs(3600),
+            frozen_secs: 0,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        assert!(
+            collect_reminder_actions(&mut st, Instant::now() + Duration::from_secs(3600))
+                .is_empty(),
+            "un résultat accepté ne produit aucun rappel pendant la panne SQL"
+        );
+        st.store
+            .connection()
+            .execute_batch("DROP TRIGGER remote170_answer_fail;")
+            .unwrap();
+        let mut saved = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        saved.state = "result_available".into();
+        saved.result_sent = true;
+        saved.cleanup_done = true;
+        st.delegation_store.save(&saved).unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        tick(&shared);
+        let st = shared.lock().unwrap();
+        assert_eq!(
+            st.store.get_request(&task.mission).unwrap().unwrap().state,
+            "answered",
+            "le tick répare même une tâche déjà nettoyée sans rejouer le travail distant"
+        );
+        assert!(st.pending_replies.is_empty(), "aucun rappel ne reste armé");
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote170_recu_accepte_etranger_ne_cloture_pas_le_guichet() {
+        use crate::delegation::RemoteResultReceipt;
+        use bridget_transport::protocol::{RemoteResultDisposition, WorkerResultIdentity};
+        let (mut st, config, mut task, result) = remote162_capture_fixture();
+        task.result = Some(result.body.clone());
+        let mut foreign_identity: WorkerResultIdentity = result.identity.clone();
+        foreign_identity.mission_id = "mission-etrangere".into();
+        foreign_identity.round = task.round_no().saturating_add(1);
+        task.remote_result_receipts.push(RemoteResultReceipt {
+            worker: result.worker.clone(),
+            identity: foreign_identity,
+            message_id: result.message_id.clone(),
+            digest: result.digest.clone(),
+            disposition: RemoteResultDisposition::Accepted {},
+            conflict_seen: false,
+        });
+        assert!(!settle_remote_tracked_request(&mut st, &task).unwrap());
+        assert_eq!(
+            st.store.get_request(&task.mission).unwrap().unwrap().state,
+            "open",
+            "un reçu accepté d'une autre mission/ronde ne clôture rien"
+        );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn remote170_demande_sans_resultat_expire_vraiment() {
+        let (mut st, config, task, _) = remote162_capture_fixture();
+        st.pending_replies.push(PendingReply {
+            msg_id: task.mission.clone(),
+            from: task.owner.clone(),
+            from_conn: "conn-1".into(),
+            to: task.child.clone(),
+            target_conn: "conn-1".into(),
+            timeout_secs: 120,
+            created_at: Instant::now() - Duration::from_secs(3600),
+            frozen_secs: 0,
+            escalation_level: 0,
+            deferred_level: None,
+        });
+        let actions = collect_reminder_actions(&mut st, Instant::now());
+        assert!(actions.iter().any(|action| matches!(
+            action,
+            ReminderAction::Timeout { msg_id, .. } if msg_id == &task.mission
+        )));
+        assert_eq!(
+            st.store.get_request(&task.mission).unwrap().unwrap().state,
+            "timed_out",
+            "une demande sans résultat distant reste soumise au timeout"
         );
         cleanup(&config);
     }
@@ -22281,6 +22535,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             R::Expired,
         ] {
             let (mut st, config, mut task, result) = remote162_capture_fixture();
+            let tracked_mission = task.mission.clone();
             match reason {
                 R::Cancelled => task.state = "cancelled".into(),
                 R::StaleRound => {
@@ -22320,6 +22575,15 @@ for frame in frames: print(json.dumps(frame),flush=True)
                     .unwrap()
                     .result
                     .is_none()
+            );
+            assert_eq!(
+                st.store
+                    .get_request(&tracked_mission)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                "open",
+                "un résultat refusé ou expiré ne clôture pas une demande"
             );
             cleanup(&config);
         }

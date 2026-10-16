@@ -9366,7 +9366,21 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
             )
         })
         .collect();
+    let remote_result_pending: HashSet<String> = state
+        .pending_replies
+        .iter()
+        .filter(|pending| {
+            native_delegation::remote_result_suppresses_reminders(state, &pending.msg_id)
+        })
+        .map(|pending| pending.msg_id.clone())
+        .collect();
     for pending in state.pending_replies.iter_mut() {
+        // Un résultat distant accepté est déjà canonique, même si la clôture
+        // SQL du guichet a échoué. Le tick natif réessaie cette clôture ; entre
+        // temps, aucun rappel ni timeout ne doit être fabriqué.
+        if remote_result_pending.contains(&pending.msg_id) {
+            continue;
+        }
         match frozen.get(&pending.msg_id) {
             Some(Ok(Some((secs, quota_waiting)))) => {
                 pending.frozen_secs = *secs;

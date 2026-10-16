@@ -5,6 +5,20 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.4.1] - 2026-10-16
+
+### Corrigé
+
+- Une réponse distante acceptée ferme le suivi de sa demande, même sans accusé de transport du parent. Elle ne déclenche plus une fausse alerte de non-réponse.
+- Après une panne du stockage, l’entretien reprend cette clôture, même si la tâche est déjà nettoyée. Le résultat reste conservé et le travail ne redémarre pas.
+- La corrélation vérifie la mission, la ronde, l’enfant et le parent. Une vraie absence de réponse reste soumise au délai configuré.
+
+### Compatibilité et validation
+
+- Aucun changement de protocole, de schéma, de dépendance ou de configuration T3. Les anciens états de demandes déjà expirées restent historiques.
+- 46 tests ciblés de compatibilité distante et 3 tests du correctif réussissent. Après le dernier ajustement du test SQL sélectif, seul cet oracle a été rejoué et réussit. Aucune suite complète n’a été relancée.
+- Les paquets, l’activation et la recette réelle sont attestés séparément dans le reçu de livraison de la session 170.
+
 ## [0.4.0] - 2026-10-15
 
 ### Ajouté
