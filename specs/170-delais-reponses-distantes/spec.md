@@ -1,5 +1,7 @@
 # Session 170 — Délais de réponses distantes
 
+Statut : Implemented. Pipeline : Livré avec conservations justifiées.
+
 ## Problème
 
 Une réponse native distante acceptée avant l’échéance peut être persistée et
@@ -11,8 +13,8 @@ valide en fausse expiration.
 
 `capture_remote_result` appelle `commit_remote_result`, puis la publication
 utilise `send_as_with_result_authority`. La transition `tracked_requests →
-answered` était uniquement dans `acknowledge_send_delivery`. Les faits runtime
-170 montrent `result_available=true`, `result_sent=true`, `delivery_acked=false`
+answered` était uniquement dans `acknowledge_send_delivery`. Les faits runtime à l’origine de
+la correction170 montrent `state=result_available`, `result_sent=true`, `delivery_acked=false`
 et `tracked_requests.state=timed_out` malgré une fin avant la deadline.
 
 ## Contrat
@@ -27,5 +29,7 @@ et `tracked_requests.state=timed_out` malgré une fin avant la deadline.
 
 ## Périmètre
 
-`crates/bridget-daemon/src/daemon/native_delegation.rs` et les oracles natifs
-existants. Aucun endpoint, table, worker, dépendance ou service nouveau.
+/home/moi/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/native_delegation.rs
+/home/moi/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon.rs
+
+Les oracles natifs existants sont réemployés. Aucun endpoint, table, worker, dépendance ou service nouveau.
