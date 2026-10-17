@@ -205,10 +205,9 @@ fn remote162_origin_proof_rechecks_revision_absence_and_opaque_rules() {
         "allow",
         false,
     );
-    assert!(
-        prove_parent_permissions(&changed, changed.revision).is_err(),
-        "règle opaque non exportable"
-    );
+    // Lot 171 : la preuve authentifie seulement l'appelant. Les règles ne
+    // sont plus transplantées ; le distant applique sa propre configuration.
+    assert!(prove_parent_permissions(&changed, changed.revision).is_ok());
 }
 
 #[test]
@@ -384,6 +383,8 @@ fn fixture_root(label: &str) -> (PathBuf, SourceEnvironment) {
     ));
     fs::create_dir_all(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    // La capture travaille sur des chemins résolus (macOS : /tmp -> /private/tmp).
+    let root = root.canonicalize().unwrap();
     let mut env: SourceEnvironment = BTreeMap::new();
     env.insert("HOME".into(), root.as_os_str().to_owned());
     // Fixture unitaire, jamais une preuve modèle : un vrai binaire Mach-O
@@ -557,10 +558,9 @@ fn native149_codex_complet_devise_bypass_sans_yolo() {
         .position(|arg| arg == "--permission-mode")
         .unwrap();
     assert_eq!(args[position + 1], "bypassPermissions");
-    assert!(
-        args.windows(2)
-            .any(|pair| pair[0] == "--permission-prompts" && pair[1] == "none")
-    );
+    // Lot 171 : Claude 2.1.251 (Cartae) refuse --permission-prompts. Hors
+    // contrat de hooks attesté, le mode de droits seul est transmis.
+    assert!(!args.iter().any(|arg| arg == "--permission-prompts"), "{args:?}");
     assert!(
         args.contains(&"mission-149".to_string()),
         "les arguments métier restent"
@@ -1346,8 +1346,9 @@ fn native149_entrees_claude_sans_regles_sont_classees() {
     cli_context["permission_sources"][0]["path"] =
         json!(root.join("cli-settings.json").to_string_lossy().to_string());
     cli_context["permission_sources"][0]["kind"] = json!("cli");
+    // Les captures 171 sont au format 2 : révision v2 des sources.
     cli_context["permission_sources"][0]["revision"] = json!(
-        bridget_transport::protocol::permission_source_revision(
+        bridget_transport::protocol::permission_source_revision_v2(
             &root.join("cli-settings.json"),
             16 * 1024 * 1024
         )
@@ -1439,6 +1440,7 @@ fn native171_remote_fixture(
 }
 
 #[test]
+#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
 fn native171_remote_sources_project_and_user_bound_before_and_after_recapture() {
     let (_root, parent, mut definition, env, mapping, protected) =
         native171_remote_fixture("remote171-positive");
@@ -1515,6 +1517,7 @@ fn native171_remote_sources_project_and_user_bound_before_and_after_recapture() 
 }
 
 #[test]
+#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
 fn native171_remote_witness_omission_partial_source_and_local_marker_are_refused() {
     let (_root, mut parent, definition, env, mapping, protected) =
         native171_remote_fixture("remote171-coverage");
@@ -1578,6 +1581,7 @@ fn native171_remote_witness_omission_partial_source_and_local_marker_are_refused
 }
 
 #[test]
+#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
 fn native171_remote_recheck_rejects_mapping_parent_revision_and_mode_or_deny_change() {
     let (_root, parent, definition, env, mapping, protected) =
         native171_remote_fixture("remote171-binding");
@@ -1642,6 +1646,7 @@ fn native171_remote_recheck_rejects_mapping_parent_revision_and_mode_or_deny_cha
 }
 
 #[test]
+#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
 fn native171_remote_script_dependency_and_profile_mutations_are_not_ignored() {
     let (_root, parent, definition, env, mapping, protected) =
         native171_remote_fixture("remote171-mutation");
@@ -1703,6 +1708,7 @@ fn native171_remote_script_dependency_and_profile_mutations_are_not_ignored() {
 }
 
 #[test]
+#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
 fn native171_remote_user_hook_not_ported_and_script_bytes_changed_are_refused() {
     let (root, parent, definition, env, mapping, protected) =
         native171_remote_fixture("remote171-user-and-bytes");
@@ -1863,6 +1869,7 @@ fn native171_manifestless_plugin_and_hook_revision_recheck() {
 /// model, business command, SDK import or admission is started by this case.
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "recette sur données réelles privées : fournir BRIDGET_REAL_HOOK_PROFILE171"]
 fn native171_real_captured_profile_closed_origin_target() {
     use bridget_transport::protocol::ProviderPermissions;
     use sha2::{Digest, Sha256};
@@ -1950,6 +1957,7 @@ fn native171_real_captured_profile_closed_origin_target() {
 /// No provider, model, admission or runtime profile mutation is performed.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "recette sur données réelles privées : fournir BRIDGET_REAL_ORIGIN_RECHECK171"]
 fn native171_origin_v2_recheck_reconstructs_verified_witness_exact_sources() {
     use sha2::{Digest, Sha256};
     let root = PathBuf::from(std::env::var("BRIDGET_REAL_ORIGIN_RECHECK171").expect("private inputs required"));
@@ -2019,6 +2027,7 @@ fn native171_origin_v2_recheck_reconstructs_verified_witness_exact_sources() {
 /// The SDK port is checked here; the unmapped attachments root stays refused.
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore = "recette sur données réelles privées : fournir BRIDGET_SDK_PERMISSIONS171_INPUTS"]
 fn native171_authenticated_sdk_rules_recheck_preserves_owner_and_unmapped_root() {
     let root = PathBuf::from(std::env::var("BRIDGET_SDK_PERMISSIONS171_INPUTS").expect("private inputs required"));
     let parent: bridget_transport::protocol::ProviderPermissions = serde_json::from_slice(
@@ -2124,6 +2133,7 @@ fn native171_authenticated_sdk_rules_recheck_preserves_owner_and_unmapped_root()
 /// separately before this test; it never creates the provisioned directory.
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "recette sur données réelles privées : fournir BRIDGET_ADDITIONAL_ROOT171_INPUTS"]
 fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() {
     use std::os::unix::fs::{symlink, PermissionsExt};
     let input = PathBuf::from(std::env::var("BRIDGET_ADDITIONAL_ROOT171_INPUTS").expect("private inputs required"));

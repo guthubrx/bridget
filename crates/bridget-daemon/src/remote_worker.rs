@@ -295,6 +295,53 @@ fn drain_proof_path(root: &Path, command: &WorkerCommandIdentity) -> PathBuf {
         .join(format!("{}.drained", marker_key(command)))
 }
 
+/// O(c+p), c ≤ 64 groupes de contrôle du sous-arbre, p processus listés.
+/// Vrai seulement si tout le sous-arbre cgroup v2 du worker ne contient que
+/// lui-même. Un processus ne quitte pas ce sous-arbre sans écrire dans un
+/// autre cgroup.procs ; les fournisseurs lancés par Bridget ne le font pas.
+#[cfg(target_os = "linux")]
+fn service_cgroup_holds_only_self() -> bool {
+    let Ok(text) = fs::read_to_string("/proc/self/cgroup") else {
+        return false;
+    };
+    let Some(path) = text.lines().find_map(|line| line.strip_prefix("0::")) else {
+        return false;
+    };
+    // La racine ou un cgroup partagé (session, scope) n'est pas le service.
+    if !path.ends_with(".service") {
+        return false;
+    }
+    let me = std::process::id().to_string();
+    let mut pending = vec![Path::new("/sys/fs/cgroup").join(path.trim_start_matches('/'))];
+    let mut visited = 0;
+    while let Some(dir) = pending.pop() {
+        visited += 1;
+        if visited > 64 {
+            return false;
+        }
+        let Ok(procs) = fs::read_to_string(dir.join("cgroup.procs")) else {
+            return false;
+        };
+        if procs.lines().any(|pid| pid.trim() != me) {
+            return false;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                pending.push(entry.path());
+            }
+        }
+    }
+    visited > 0
+}
+
+#[cfg(not(target_os = "linux"))]
+fn service_cgroup_holds_only_self() -> bool {
+    false
+}
+
 /// Lecture seule par le wrapper, avant fournisseur. Le bootstrap fait exec ;
 /// vérifier néanmoins le marqueur exact au lieu de supposer PID == PGID.
 #[cfg(target_os = "linux")]
@@ -2669,7 +2716,17 @@ impl WorkerRuntime {
         if self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id) {
             return Err(WorkerRefusal::ResourceLimit);
         }
-        let expires = Instant::now() + Duration::from_secs(30);
+        // Une extraction de worktree peut durer jusqu'à WORKTREE_ADD_TIMEOUT.
+        let expires = Instant::now()
+            + Duration::from_secs(30)
+            + if matches!(
+                &request.workspace,
+                Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
+            ) {
+                crate::workspace_git::WORKTREE_ADD_TIMEOUT
+            } else {
+                Duration::ZERO
+            };
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
         let registry = self.registry()?;
         if let Some((selection, _, _)) = &routing {
@@ -3398,7 +3455,14 @@ impl WorkerRuntime {
         };
         let live = crate::managed_process::group_exists(marker.pgid).map_err(refuse)?;
         if !live {
-            if !self.store.drainage_proven(&receipt).unwrap_or(false) {
+            // Enveloppe tuée avant sa preuve (incident 171, c3b80e27) : sans
+            // autre preuve, l'annulation restait « unknown » pour toujours.
+            // Un groupe de contrôle qui ne contient plus que ce worker, sans
+            // enfant suivi, prouve qu'aucun descendant de la commande ne vit.
+            let only_worker = self.running.is_empty()
+                && self.abandoned.is_empty()
+                && service_cgroup_holds_only_self();
+            if !only_worker && !self.store.drainage_proven(&receipt).unwrap_or(false) {
                 self.store
                     .set_phase(command, WorkerCommandPhase::Unknown, worker_now())
                     .map_err(refuse)?;

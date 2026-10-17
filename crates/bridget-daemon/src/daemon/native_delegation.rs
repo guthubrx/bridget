@@ -3690,7 +3690,6 @@ pub(super) fn handle_attested(
     // après la réponse authentifiée, au même puits que l'admission durable.
     let permission_proof = proof;
     let attested = {
-        let _native171_reattest_observation = crate::communication::client::Native171Observation::request(&request, crate::communication::client::Native171ObservedPhase::Reattest, conn);
         crate::t3code_mcp::reattest(permission_proof)
     };
     let proof = match attested {
@@ -4350,7 +4349,7 @@ fn delegate_remote_with_routing(
             &worker,
             &provisional,
             routing_prepare_operation(prepare, routing.as_ref(), false),
-            Instant::now() + Duration::from_secs(30),
+            Instant::now() + Duration::from_secs(30) + crate::workspace_git::WORKTREE_ADD_TIMEOUT,
         )
         .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
         let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
@@ -5036,7 +5035,16 @@ fn delegate_worktree(
             &mut st,
             WorkspacePass::Probe,
             auto_receipt,
-        )? {
+        )
+        .map_err(|error| {
+            // Un rejeu Auto pendant l'extraction (jusqu'à WORKTREE_ADD_TIMEOUT)
+            // attend le même reçu : le client sait déjà relire admission_pending.
+            if auto_receipt.is_some() && error == "workspace_creation_in_progress" {
+                "admission_pending".into()
+            } else {
+                error
+            }
+        })? {
             WorkspaceAdmission::View(view) => return Ok(view),
             WorkspaceAdmission::Probe(cwd, selected, definition, substitution) => {
                 (cwd, selected, definition, substitution)
@@ -6376,7 +6384,6 @@ fn handle_locked_with_remote_proof(
     match &request {
         // Lecture indexée149 avant tout catalogue, fait, quota ou préflight.
         NativeDelegationRequest::CallerScope {} => {
-            let _native171_handler_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::CallerScope, crate::communication::client::Native171ObservedPhase::CallerScope, conn, Some(&instance));
             let caller_read_only = st.delegation_store.for_child(&owner)?.is_some_and(|task| {
                 let requested = match &task.request {
                     NativeDelegationRequest::Delegate { posture, .. } => *posture,
@@ -6388,7 +6395,6 @@ fn handle_locked_with_remote_proof(
             Ok(json!({"version":1,"caller_read_only":caller_read_only}))
         }
         NativeDelegationRequest::Catalogue => {
-            let _native171_handler_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::Catalogue, crate::communication::client::Native171ObservedPhase::Catalogue, conn, Some(&instance));
             // Métadonnée du type attesté ; aucun droit ni état runtime inféré.
             let caller_held_queue = st
                 .presences
@@ -6397,7 +6403,6 @@ fn handle_locked_with_remote_proof(
                 .is_some_and(|definition| definition.held_queue);
             let permission = root_permission(st, &owner, &instance)?;
             let fact = {
-                let _native171_fact_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::Catalogue, crate::communication::client::Native171ObservedPhase::ParentFact, conn, Some(&instance));
                 parent_fact(st, &owner, &instance, None, attested)?
             };
             let halted = st
@@ -6416,7 +6421,6 @@ fn handle_locked_with_remote_proof(
             let entries: Vec<Value> = st.registry.resolved_definitions()?.into_iter()
                 .filter(|(name,_)| !name.starts_with("__"))
                 .map(|(name,definition)| {
-                    let _native171_entry_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::Catalogue, crate::communication::client::Native171ObservedPhase::CatalogueEntry, conn, Some(&instance));
                     // Modèle déclaré, effort omis : aucune requête ni fait request-scoped inventé.
                     let model = definition.capabilities.models.keys().next();
                     let cwd: Result<PathBuf,String> = (|| {
@@ -7133,6 +7137,11 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
         {
             if task.child_instance.as_deref() != Some(waiter.instance_id.as_str()) {
                 return Err("native_restart_identity_mismatch".into());
+            }
+            // Seul contrôle conservé pendant l'attente : un stat, sans relecture
+            // lourde sous le mutex. Un worktree disparu clôt la tâche (154).
+            if !std::fs::canonicalize(&task.cwd).is_ok_and(|path| path.is_dir()) {
+                return Err("cwd_unavailable".into());
             }
             return Ok(());
         }
@@ -11147,6 +11156,7 @@ mod tests {
     /// It uses the actual Catalogue handler; it never delegates or starts a model.
     #[cfg(target_os = "macos")]
     #[test]
+    #[ignore = "recette sur données réelles privées : fournir BRIDGET_CATALOGUE_OPERATION171_INPUTS"]
     fn delivery171_catalogue_operation_real_parent_closed_finish_and_request_scope() {
         use std::fs;
         use sha2::{Digest, Sha256};

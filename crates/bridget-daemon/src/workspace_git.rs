@@ -14,6 +14,11 @@ mod tests;
 
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
+// Même plafond que T3 (WORKTREE_ADD_TIMEOUT_MS) : l'extraction d'un gros dépôt
+// dépasse largement 20 s (opus2D : 13 656 fichiers, 6,1 Go, 47 s mesurées).
+// Les bancs 154 simulent un Git bloqué : ils gardent l'ancienne borne de 20 s.
+pub(crate) const WORKTREE_ADD_TIMEOUT: Duration =
+    Duration::from_secs(if cfg!(test) { 20 } else { 300 });
 const MAX_OUTPUT: usize = 1024 * 1024;
 const HOSTILE_CONFIG: &str = "^(filter\\..*\\.(smudge|clean|process)|include\\..*|includeif\\..*|extensions\\.partialclone|remote\\..*\\.promisor)$";
 
@@ -175,6 +180,12 @@ fn allowed(args: &[&str]) -> bool {
         ["worktree", "add", "-b", branch, "--", path, base] => {
             validate_branch(branch).is_ok() && Path::new(path).is_absolute() && sha(base)
         }
+        ["update-ref", "-d", reference, old] => {
+            sha(old)
+                && reference
+                    .strip_prefix("refs/heads/")
+                    .is_some_and(|branch| validate_branch(branch).is_ok())
+        }
         ["rev-list", "--count", "--end-of-options", commits] => range(commits),
         [
             "log",
@@ -233,7 +244,9 @@ fn capture(
     timeout: Duration,
     anchor: Option<(&Path, &Path)>,
 ) -> Result<GitOutput, String> {
-    let timeout = timeout.min(if args.get(1) == Some(&"add") || args.first() == Some(&"fetch") {
+    let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add") {
+        WORKTREE_ADD_TIMEOUT
+    } else if args.first() == Some(&"fetch") {
         CREATE_TIMEOUT
     } else {
         READ_TIMEOUT
@@ -695,7 +708,8 @@ fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, r
     })
 }
 
-/// O(f), f fichiers extraits par Git. Aucun retrait, y compris sur échec tardif.
+/// O(f), f fichiers extraits par Git. Seule une extraction échouée retire sa
+/// branche neuve inutilisée ; aucun retrait sur échec tardif.
 pub(crate) fn create(
     preflight: &WorkspacePreflight,
     task_id: &str,
@@ -740,7 +754,7 @@ pub(crate) fn create(
     let path_text = path
         .to_str()
         .ok_or_else(|| residue("workspace_path_unsafe", "chemin non UTF-8".into()))?;
-    run_git(
+    if let Err(error) = run_git(
         &preflight.cwd,
         &[
             "worktree",
@@ -751,10 +765,20 @@ pub(crate) fn create(
             path_text,
             &preflight.base_commit,
         ],
-        CREATE_TIMEOUT,
+        WORKTREE_ADD_TIMEOUT,
     )
     .and_then(GitOutput::complete)
-    .map_err(|error| residue("workspace_create_failed", error))?;
+    {
+        // Git crée la branche avant l'extraction. Sans retrait, la reprise de
+        // la même demande serait refusée (workspace_branch_exists). Le retrait
+        // est conditionnel : la branche doit encore désigner la base exacte et
+        // aucun worktree enregistré ne doit l'utiliser. Aucun commit n'est perdu.
+        let released = release_unused_branch(&preflight.cwd, &branch, &preflight.base_commit);
+        return Err(residue(
+            "workspace_create_failed",
+            format!("{error}; branche retirée : {released}"),
+        ));
+    }
     let canonical = path
         .canonicalize()
         .map_err(|error| residue("workspace_path_unsafe", error.to_string()))?;
@@ -783,6 +807,20 @@ pub(crate) fn create(
         truncated: false,
         dirty: None,
     })
+}
+
+// O(w), w entrées du registre des worktrees. Comparer-et-supprimer atomique :
+// update-ref refuse si la branche a bougé depuis la base.
+fn release_unused_branch(cwd: &Path, branch: &str, base: &str) -> bool {
+    let reference = format!("refs/heads/{branch}");
+    let used = run_git(cwd, &["worktree", "list", "--porcelain", "-z"], READ_TIMEOUT)
+        .and_then(GitOutput::complete)
+        .map(|list| list.split('\0').any(|field| field == format!("branch {reference}")));
+    if used != Ok(false) {
+        return false;
+    }
+    run_git(cwd, &["update-ref", "-d", &reference, base], READ_TIMEOUT)
+        .is_ok_and(|output| output.success())
 }
 
 // O(a+w), a ancêtres du parent, w entrées du registre (sortie/fichiers bornés).

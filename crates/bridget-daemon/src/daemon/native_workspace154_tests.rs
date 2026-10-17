@@ -505,7 +505,8 @@ fn native154_creation_configurations_hostiles_et_objet_absent() {
         ("include-if", "includeIf.gitdir:/.path", "missing154"),
         ("partial", "extensions.partialClone", "origin"),
         ("promisor", "remote.origin.promisor", "true"),
-        ("worktree-config", "extensions.worktreeConfig", "true"),
+        // Lot 171 : extensions.worktreeConfig est admis (Git et T3 le gèrent) ;
+        // voir worktree171_per_worktree_config_creation_reporting_and_guards.
     ] {
         let fixture = fixture154(label);
         let marker = fixture.root.parent().unwrap().join("hostile-marker");

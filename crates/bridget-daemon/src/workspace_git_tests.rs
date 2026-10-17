@@ -752,3 +752,37 @@ fn worktree171_per_worktree_config_creation_reporting_and_guards() {
         assert!(preflight_classified(repo, None, None).is_ok());
     });
 }
+
+#[test]
+fn worktree171_failed_extraction_releases_only_its_unused_branch() {
+    with_repo(|repo| {
+        let branch_exists = |name: &str| {
+            run_git(repo, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{name}")], READ_TIMEOUT)
+                .unwrap()
+                .success()
+        };
+        // Dossier .worktrees en lecture seule : Git crée la branche, puis
+        // échoue à l'extraction, comme après l'arrêt d'un délai dépassé.
+        let worktrees = repo.join(".worktrees");
+        fs::create_dir(&worktrees).unwrap();
+        fs::set_permissions(&worktrees, fs::Permissions::from_mode(0o500)).unwrap();
+        let plan = preflight_classified(repo, None, Some("failed-extraction")).unwrap();
+        let error = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap_err();
+        fs::set_permissions(&worktrees, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(error.starts_with("workspace_create_failed:"), "{error}");
+        assert!(error.contains("branche retirée : true"), "{error}");
+        assert!(!branch_exists("failed-extraction"));
+        // La reprise de la même demande n'est plus bloquée par la branche.
+        let replay = preflight_classified(repo, None, Some("failed-extraction")).unwrap();
+        let workspace = create(&replay, &uuid::Uuid::new_v4().to_string()).unwrap();
+        // Branche utilisée par un worktree, ou déplacée : jamais retirée.
+        assert!(!release_unused_branch(repo, "failed-extraction", &plan.base_commit));
+        assert!(branch_exists("failed-extraction"));
+        fixture_git(repo, &["branch", "moved", &plan.base_commit]);
+        fs::write(Path::new(&workspace.path).join("sub/tracked"), "moved\n").unwrap();
+        fixture_git(Path::new(&workspace.path), &["commit", "-qam", "moved"]);
+        fixture_git(repo, &["branch", "-f", "moved", "failed-extraction"]);
+        assert!(!release_unused_branch(repo, "moved", &plan.base_commit));
+        assert!(branch_exists("moved"));
+    });
+}

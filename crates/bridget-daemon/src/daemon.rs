@@ -21492,7 +21492,6 @@ fn handle_wrapper_message_with_peer(
             instance_id,
             credential,
         } => {
-            let _native171_aux_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::RegisterAuxiliary, crate::communication::client::Native171ObservedPhase::Port, conn_id, Some(&instance_id));
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(register_auxiliary(
                 &mut st,
@@ -21727,13 +21726,11 @@ fn handle_wrapper_message_with_peer(
             Duration::from_secs(5),
         )),
         WrapperToDaemon::NativeDelegation { request } => {
-            let _native171_port_observation = crate::communication::client::Native171Observation::request(&request, crate::communication::client::Native171ObservedPhase::Port, conn_id);
             Some(native_delegation::handle_with_peer(
             conn_id, request, state, peer,
         ))
         },
         WrapperToDaemon::NativeDelegationT3 { request, proof } => {
-            let _native171_port_observation = crate::communication::client::Native171Observation::request(&request, crate::communication::client::Native171ObservedPhase::Port, conn_id);
             Some(
             native_delegation::handle_attested(conn_id, request, &proof, state, peer),
         )

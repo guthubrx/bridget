@@ -2015,7 +2015,13 @@ fn real_master_case(case: &str) {
         f.fixture
             .status_until(&mut parent, &failed_command.task_id, "failed");
         let failed = native_task152(&f.fixture, &failed_command.task_id);
-        assert_eq!(failed["error"], "remote_start_failed", "{failed}");
+        // Lot 171 : la cause attestée par le worker suit le préfixe
+        // (ex. remote_start_failed:negotiation_failed:exit=1).
+        let error = failed["error"].as_str().unwrap_or_default();
+        assert!(
+            error == "remote_start_failed" || error.starts_with("remote_start_failed:"),
+            "{failed}"
+        );
         assert!(failed["mission_issued_at"].is_null());
         let terminal = f.receipt(&failed_command);
         assert_eq!(terminal.phase, WorkerCommandPhase::Terminal);

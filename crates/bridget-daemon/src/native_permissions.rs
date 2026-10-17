@@ -123,7 +123,6 @@ fn require_sdk_native_mount171(context: &Value, definition: &AgentDefinition) ->
 
 fn recheck_parent_context171(parent: &ProviderPermissions, definition: &AgentDefinition,
     cwd: &Path, source: &SourceEnvironment) -> Result<(), String> {
-    let _native171_parent_observation = crate::communication::client::Native171Observation::parent_recheck(&parent.provider_instance_id);
     let sdk = AuthenticatedSdkInputs171::from_parent(parent)?;
     let context = parent.provider_policy.get("launch_context").ok_or_else(unavailable)?;
     let mut environment = build_environment(definition, source).map_err(|_| changed())?;
@@ -163,7 +162,6 @@ fn parent_recheck_environment171(parent: &ProviderPermissions, definition: &Agen
 
 fn recheck_parent_context_in_operation171(parent: &ProviderPermissions, definition: &AgentDefinition,
     cwd: &Path, environment: &SourceEnvironment, operation: &mut PermissionReadOperation) -> Result<(), String> {
-    let _native171_parent_observation = crate::communication::client::Native171Observation::parent_recheck(&parent.provider_instance_id);
     let sdk = AuthenticatedSdkInputs171::from_parent(parent)?;
     let context = parent.provider_policy.get("launch_context").ok_or_else(unavailable)?;
     recheck_context_with_sdk171(context, definition, cwd, environment, operation, sdk.as_ref())
@@ -1024,8 +1022,13 @@ fn append_hook_sources(
                 return Err(unavailable());
             }
             let home = env.get("HOME").map(PathBuf::from).ok_or_else(unavailable)?;
-            let owned =
-                real.starts_with(&home) || real.starts_with(project) || real.starts_with(plugin);
+            // `real` est résolu : comparer à des racines résolues aussi. Sinon
+            // un HOME via lien (macOS : /tmp -> /private/tmp) refuse à tort.
+            let under = |root: &Path| {
+                real.starts_with(root)
+                    || std::fs::canonicalize(root).is_ok_and(|root| real.starts_with(root))
+            };
+            let owned = under(&home) || under(project) || under(plugin);
             use std::os::unix::fs::MetadataExt;
             let standard = ["/bin", "/usr/bin", "/usr/local/bin"]
                 .iter()
@@ -1172,6 +1175,11 @@ fn capture_context_with_env_impl(
     if definition.protocol != "claude_stream_json" {
         return Err(unavailable());
     }
+    // Sources du projet sous le dossier résolu, comme la racine du projet et
+    // le dossier de configuration : un cwd via lien (~/10.Scripts) ne doit
+    // pas produire des chemins hors de la racine résolue (garde G054).
+    let resolved_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd = resolved_cwd.as_path();
     if definition.args.iter().any(|arg| {
         matches!(
             arg.split('=').next(),
@@ -2854,7 +2862,9 @@ fn source_equivalence_manifest(context: &Value, project: &Path) -> Result<Value,
         let (bytes, m) = equivalence_read(path)?;
         let owner = if m.uid() == profile.uid() && m.gid() == profile.gid() {
             "profile"
-        } else if kind == "managed" && m.uid() == 0 && m.gid() == 0 {
+        } else if kind == "managed" && m.uid() == 0 && (m.gid() == 0 || m.mode() & 0o022 == 0) {
+            // macOS installe ses réglages administrés en root:admin 0644 :
+            // seul root peut les modifier, comme root:root sous Linux.
             "system"
         } else {
             return Err(equivalence_fail_at(ProjectionGuard::G063));

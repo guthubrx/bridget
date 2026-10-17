@@ -1751,6 +1751,10 @@ struct LinkWorker {
     /// Clé observée juste avant un dispatch qui a pu démarrer un nouveau tour.
     /// Tant que T3 la republie, le lien ne peut pas se déclarer drainé.
     awaiting_snapshot_change: Option<String>,
+    /// Plus grande page lue avec succès après un échec d'élargissement. Le
+    /// fil complet T3 v2 n'est pas paginé : au-delà de 16 Mio il échoue
+    /// toujours. Ne pas le redemander à chaque passage (fil qui ne fait que croître).
+    detail_page_cap: Option<u32>,
     turn_wait: Duration,
     queue: VecDeque<(DaemonToWrapper, Instant)>,
     requests: BTreeMap<String, RequestInfo>,
@@ -1864,6 +1868,7 @@ impl LinkWorker {
             project_context: None,
             last_key: String::new(),
             awaiting_snapshot_change: None,
+            detail_page_cap: None,
             turn_wait: turn_wait(),
             queue: VecDeque::new(),
             requests: BTreeMap::new(),
@@ -2742,12 +2747,25 @@ impl LinkWorker {
     /// journal et clôt les remises dont la réponse est complète.
     fn refresh(&mut self, summary: &ThreadSummary) -> bool {
         let mut limit = DETAIL_PAGE;
+        let mut previous = None;
         let detail = loop {
             let fetched = self
                 .session
                 .call(|client| client.thread_detail(&self.thread_id, limit));
             let detail = match fetched {
                 Ok(detail) => detail,
+                // Même principe que T3 (fenêtre bornée récente) : l'élargissement
+                // est une aide, pas une condition. La page bornée déjà lue suffit
+                // à amorcer et à corréler les tours récents.
+                Err(e) if previous.is_some() => {
+                    info!(
+                        "détail du fil {} : élargissement à {limit} tours indisponible ({e}) ; page de {} tours conservée",
+                        self.thread_id,
+                        limit / 2
+                    );
+                    self.detail_page_cap = Some(limit / 2);
+                    break previous.take().expect("page précédente");
+                }
                 Err(e) => {
                     warn!("détail du fil {} : {e}", self.thread_id);
                     self.set_observation_ready(false);
@@ -2773,8 +2791,11 @@ impl LinkWorker {
                     && observation_origin(&detail, turn).is_none()
                     && !spontaneous_turn(&detail, turn)
             });
-            if (anchors_missing || !seeded || origin_missing) && limit < DETAIL_PAGE_MAX {
+            if (anchors_missing || !seeded || origin_missing)
+                && limit < self.detail_page_cap.unwrap_or(DETAIL_PAGE_MAX)
+            {
                 limit *= 2;
+                previous = Some(detail);
                 continue;
             }
             break detail;
@@ -5201,6 +5222,35 @@ mod tests {
         let facts = drain(&mut reader);
         assert_eq!(facts.len(), 1);
         assert_eq!(facts[0]["root"], "");
+        worker.relay.shutdown();
+        worker.journal.stop();
+    }
+
+    #[test]
+    fn incident171_elargissement_impossible_garde_la_page_bornee() {
+        // Fil T3 de 30 532 éléments : la page élargie dépassait 16 Mio. Le
+        // pont abandonnait alors la page bornée déjà lue, ne s'amorçait jamais
+        // et ne voyait ni le tour démarré ni la réponse finale.
+        let (mut worker, _peer) = worker099();
+        assert!(!worker.state.seeded);
+        let body = serde_json::json!({"thread":{
+            "messages":[{"id":"u","role":"user","streaming":false,"createdAt":"date"}],
+            "latestTurn":{"turnId":"t","state":"running","requestedAt":"date"},
+            "activities":[]
+        }})
+        .to_string();
+        // Une seule réponse : la seconde lecture (élargie) échoue au transport.
+        let server = http_once099(&worker, 200, body.clone());
+        let summary = summary(Some(("t", "running")));
+        assert!(worker.refresh(&summary));
+        assert!(server.join().unwrap().contains("turnLimit=20"));
+        assert_eq!(worker.detail_page_cap, Some(DETAIL_PAGE));
+        assert!(worker.state.seeded);
+        assert!(worker.state.seen.iter().any(|id| id == "u"));
+        // Passage suivant : une seule lecture bornée, sans nouvel élargissement.
+        let server = http_once099(&worker, 200, body);
+        assert!(worker.refresh(&summary));
+        assert!(server.join().unwrap().contains("turnLimit=20"));
         worker.relay.shutdown();
         worker.journal.stop();
     }

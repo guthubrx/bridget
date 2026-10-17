@@ -156,6 +156,8 @@ fn native149_remise_positive_termine_le_tour_sans_refus() {
     let _ = fs::remove_dir_all(capture.parent().unwrap());
 }
 
+/// Lot 171 : un outil refusé par Claude ou un hook ne fait plus échouer le
+/// tour. Le compte rendu est remis, précédé du nombre de refus conservés.
 #[test]
 fn native149_result_avec_permission_denials_est_refuse_sans_trame() {
     let script = concat!(
@@ -168,8 +170,16 @@ fn native149_result_avec_permission_denials_est_refuse_sans_trame() {
     let mut transport = ClaudeStreamJsonTransport::spawn(options).unwrap();
     transport.deliver(&message("mission-149")).unwrap();
     assert!(
-        attendre(&transport, |kind| refus_nomme(kind, "mission-149")),
-        "les permission_denials du résultat refusent la remise"
+        attendre(&transport, |kind| matches!(
+            kind,
+            ManagedEventKind::TurnFinished {
+                message,
+                terminal: ManagedTerminal::Completed,
+                response,
+                ..
+            } if message.id == "mission-149" && response.contains("1 appel(s) d'outil refusé(s)")
+        )),
+        "le tour terminé est remis avec la mention du refus"
     );
     transport.stop();
     assert!(
