@@ -70,8 +70,24 @@ le SHA complet réellement disponible sur les machines. Posture et permissions r
 
 La CLI delegate lit le HEAD source courant et fige expected_base_commit ; elle n’accepte pas
 --expected-base-commit. Le MCP bridget_auto_delegate et la CLI technique auto-delegate acceptent
-ce champ directement. Shared Git et Worktree exigent le SHA exact ; base_ref doit résoudre
-ce même SHA. Aucun HEAD distant implicite. Shared hors Git sans SHA reste réservé au travail général.
+ce champ directement. En Shared Git, ce SHA désigne le HEAD du checkout source.
+En Worktree, il désigne le commit de `workspace.base_ref` (HEAD si cette référence
+est omise), même si le checkout source est sur une autre branche. Exemple : pour
+tester `feature/x` depuis un parent resté sur `main`, fournir `base_ref:"feature/x"`
+et son SHA exact, pas celui de `main`. Le worker reçoit ce SHA figé ; une branche
+homonyme différente sur la cible ne peut pas le remplacer. Aucun HEAD distant implicite.
+Shared hors Git sans SHA reste réservé au travail général.
+
+Pour un worktree distant, les conditions de création Git sont vérifiées sur la cible,
+pas sur le checkout de départ. Une source utilisant `extensions.worktreeConfig`
+n'est donc pas refusée pour cette seule raison. Si le commit manque au checkout cible
+mais existe dans son miroir local `origin` déjà configuré et attesté par le mapping,
+Bridget importe ses objets après sélection, puis crée le worktree isolé. Le checkout
+partagé, ses branches, sa configuration et son index restent intacts. Le contrôle
+préalable des candidats reste en lecture seule. Un commit absent du miroir ou une
+origine réseau nécessitant une synchronisation reste un prérequis manquant explicite.
+Aucune connexion, installation ou copie des fichiers non commités n'est supposée.
+
 
 Conserver request_id, l’enveloppe et task_id. Après un commit source, la même clé avec le nouveau
 HEAD rend envelope_mismatch ; lire le résultat précédent avec bridget task status TASK_ID --json.
@@ -112,7 +128,7 @@ admissible est prouvée disponible ; machine imposée saturée = refus. Les cré
 liés à leur connexion : quota inclus100% et crédits utilisables/contrôle dépenses ouvert permettent
 de poursuivre. Aucun solde opaque ni crédit voisin emprunté. Les faits Git seuls sont partagés
 par tuple dans un lot ; droits et connexion restent individuels, Prepare/Start revalident fraîchement.
-Le daemon ne fait aucun fetch, pull, push ou merge de livraison ; voir la procédure Git ci-dessous.
+Le daemon ne fait aucun push ni fusion de livraison. Il peut importer un commit depuis le miroir local configuré et avancer un checkout partagé propre en fast-forward avant lancement ; voir la procédure Git ci-dessous.
 
 ### Catalogue, quotas et remplacement explicite (157)
 
@@ -588,8 +604,7 @@ En mode shared en développement, shared_writers apparaît dans le reçu si un
 autre enfant actif écrit dans le même dossier. Cet avertissement ne bloque
 rien. La détection file_collision garde son comportement.
 
-Le daemon Bridget crée le worktree et lit son état Git. Il ne fait ni commit,
-fusion, rebase, push, fetch, pull request, suppression de branche ou de worktree.
+Le daemon Bridget prépare le worktree et lit son état Git. Il importe au besoin le commit exact depuis le miroir local configuré. En shared, il avance le checkout propre en fast-forward si aucune mission ne l’utilise. Il ne fait ni commit, fusion de branches divergentes, rebase, push, pull request, suppression de branche ou de worktree.
 Le nettoyage appartient à l’humain ou à son agent explicitement autorisé.
 Exemple pour un dépôt et un chemin issus du reçu, à adapter après examen du travail :
 
@@ -610,13 +625,12 @@ Cette procédure appartient au coordinateur et aux agents autorisés par la miss
 Elle ne donne aucune permission Git supplémentaire au daemon ni à l’enfant.
 
 1. Le coordinateur choisit le dépôt, la référence et le dépôt distant autorisés.
-   Il récupère au besoin les commits avec `git fetch` sur les machines concernées,
-   puis résout le SHA de départ et vérifie sa présence sur la machine cible.
+   Il résout le SHA de départ et le fournit à Bridget. Le commit est récupéré automatiquement depuis le miroir local configuré sur la cible. Une synchronisation réseau n'est à préparer que si Bridget signale ce commit absent ; aucun checkout de qualification manuel n'est nécessaire.
 2. Pour du code distant, il fournit `workspace.strategy="worktree"` et
    `workspace.base_ref` égal à ce SHA explicite. Le routage168 exige aussi
    `expected_base_commit` ; la CLI `delegate` le fige depuis sa source courante.
    Shared Git exige lui aussi ce SHA exact. Le défaut HEAD hérité154 reste distinct :
-   il ne permet jamais une base distante implicite168. Aucun fetch automatique.
+   il ne permet jamais une base distante implicite168. L’import depuis le miroir local est automatique, sans fetch réseau implicite. Un checkout shared propre est avancé en fast-forward avant lancement ; un dossier modifié, occupé, divergent ou sans commit disponible rend respectivement workspace_dirty, workspace_busy, workspace_diverged ou workspace_base_unavailable.
    Bridget contrôle la base et rapporte branche, tête, commits et état modifié.
 3. L’enfant committe et pousse uniquement sa branche attribuée si la mission
    et ses droits l’autorisent. Il retourne les SHA produits et les preuves de tests.

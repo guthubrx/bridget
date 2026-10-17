@@ -16,6 +16,61 @@ envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
 ## Trouver puis envoyer
 
+### Aider à préparer une machine ou une connexion
+
+Chaque machine utilise ses propres programmes, connexions et réglages. Ne pas
+reproduire l'environnement de la machine de départ. Distinguer le programme
+(Claude Code, Codex…) du fournisseur et de sa connexion (Anthropic, GLM…).
+Claude Code peut servir plusieurs fournisseurs compatibles, avec des connexions
+séparées. Un alias local n'est pas une installation distante ni une preuve d'accès.
+
+Partir de la machine et du fournisseur demandés. Réutiliser le catalogue et les
+faits déjà disponibles ; en cas d'échec, lire le résultat de CETTE demande.
+Faire seulement la lecture ciblée nécessaire si une information manque.
+Ne pas lancer un modèle pour découvrir une installation ou tester toutes les
+connexions avant chaque mission. `auth:false` signifie non vérifié, pas déconnecté.
+
+| Fait établi sur la machine choisie | Explication et action proposées |
+|---|---|
+| Programme absent | « Le programme manque sur cette machine. Je peux l'installer, ou te donner la commande. » |
+| Programme présent, connexion demandée absente | « Le programme est installé, mais cette connexion n'est pas configurée. Je peux la préparer. » |
+| Fournisseur signalant une session expirée | « La connexion a expiré. Il faut te reconnecter sur cette machine. » Utiliser le login natif de ce fournisseur. |
+| Fournisseur refusant une clé | « Cette clé est refusée. Vérifions la connexion choisie, puis remplaçons-la si nécessaire. » |
+| Modèle ou offre indisponible | Nommer le modèle ou l'offre concernés. Proposer les possibilités réellement connues, sans achat ni changement silencieux. |
+| Réseau indisponible, délai dépassé ou erreur générique | Expliquer ce fait ; ne pas en déduire qu'un programme manque ou qu'un compte est déconnecté. |
+
+`api_error` et `routing_candidate_unavailable` seuls ne prouvent aucune de ces
+causes. Lire le motif disponible, sans afficher clé, jeton, environnement ou
+journal brut sensible. Si la cause reste inconnue, le dire simplement.
+
+Proposer une seule action concrète et son effet. Demander l'accord seulement si
+l'installation, la configuration ou son coût ne sont pas déjà autorisés.
+Une action manuelle requise doit être précise : machine, programme, connexion et
+commande native vérifiée. Ne pas laisser l'utilisateur avec « configurez cela ».
+
+Pour préparer une connexion Claude vers GLM ou un autre fournisseur compatible :
+réutiliser Claude Code s'il est présent ; vérifier l'adresse officielle et les
+modèles pris en charge ; préparer une configuration propre à cette connexion
+sur la cible, via les ports et lanceurs existants. Garder la connexion Anthropic
+et les autres connexions intactes. Ne pas modifier le PATH global, les droits ou
+les hooks pour faire passer la préparation. Ne pas copier le trousseau, les clés
+ou le profil de l'ordinateur de départ. Demander les secrets par le port sécurisé
+disponible, utilisable par l'action prévue, ou laisser l'utilisateur les saisir
+dans le mécanisme natif de la cible ; jamais dans le chat, les arguments ou les logs.
+
+Une demande de travail seule ne donne pas l'accord d'installer ou d'acheter.
+L'absence d'une connexion n'empêche pas d'utiliser les autres connexions
+disponibles. Respecter un fournisseur explicitement demandé ; proposer une
+alternative sans l'utiliser à sa place. Si ce choix est libre, laisser le routage
+automatique existant choisir parmi les connexions utilisables.
+
+Après préparation, reprendre un seul usage réel autorisé. Respecter l'idempotence :
+une issue inconnue conserve sa clé et son enveloppe ; une mission terminée en
+échec nécessite une nouvelle demande identifiée, pas un rejeu présenté comme neuf.
+Une connexion configurée ou un statut de login ne garantit pas que le fournisseur
+acceptera la mission. Annoncer le résultat réel. Ne pas relancer T3 ou les services
+par défaut ; utiliser le rechargement existant s'il suffit.
+
 ### Lire le verdict avant de déléguer (157)
 
 Le catalogue chargé ajoute can_run, constraints et quota par fournisseur ;
@@ -138,17 +193,26 @@ US8 ni HTTP ; le reçu 158A reste distinct.
 
 Lire bridget delegate --catalogue --json hors T3 ; --machine filtre cette lecture.
 Le catalogue sépare modèle réel, connexion, moteur, machine et effort. entitlement=unknown
-ne prouve aucun accès fournisseur. Une connexion est un environnement déjà authentifié ;
-ne copier aucun secret et ne lancer aucun login depuis Bridget.
+ne prouve aucun accès fournisseur. Une connexion décrit un environnement configuré ;
+son authentification peut expirer. Ne copier aucun secret et ne lancer aucun login
+automatiquement pendant l'admission. Une préparation autorisée emploie le mécanisme
+natif de la connexion sur la cible, selon la section d'aide ci-dessus.
 
 Une mission automatique emploie bridget_auto_delegate ou bridget delegate MISSION
 --request-id ID --cwd CHEMIN --json depuis le parent authentifié. Contraintes indépendantes :
 --machine-id, --engine, --connection-id, --model, --effort. --workload general|compilation
 est explicite, général par défaut. Modèle sans efforts : défaut natif null, aucun medium inventé.
 
-Préparer le SHA source sur la cible. delegate le fige depuis le HEAD courant ; MCP et
-auto-delegate --expected-base-commit SHA le fournissent directement. Shared Git et Worktree
-l’exigent ; workspace.base_ref doit résoudre le même SHA. Après un nouveau commit source,
+Pour Shared Git, expected_base_commit est le HEAD du checkout source. Pour Worktree,
+c'est le commit de workspace.base_ref (HEAD si omis), pas obligatoirement le HEAD du
+checkout parent : fournir la branche à tester et son SHA exact. Le MCP les transmet
+sans déplacer le parent. La CLI delegate fige encore le HEAD courant ; utiliser le port
+automatique documenté pour une autre base. Sur une cible disposant d'un miroir local
+origin configuré, Bridget importe le commit manquant puis crée le worktree : pas de
+checkout de qualification à préparer par SSH. Si le commit est absent du miroir,
+nommer ce prérequis au lieu de basculer silencieusement en Shared.
+Le champ worktree du catalogue local ne qualifie pas les droits d'une machine distante ;
+l'admission distante vérifie ses contrôles natifs dans le dossier effectivement créé. Après un nouveau commit source,
 lire bridget task status TASK_ID --json : la même clé avec une nouvelle base rend envelope_mismatch.
 
 La politique privée routing_policy configure chaque machine : score → service accessible
@@ -156,7 +220,7 @@ La politique privée routing_policy configure chaque machine : score → service
 refuse sans downgradeV1. bridget_delegate explicite reste distinct. Le choix durable ne migre pas.
 Les inconnus restent inconnus et les crédits ne passent pas entre connexions.
 Le décideur n’exécute pas la mission : sortie ID/effort fermée, seul formateur StructuredOutput,
-aucun outil métier/système/réseau/MCP. Aucun fetch/push/merge automatique du daemon.
+aucun outil métier/système/réseau/MCP. La préparation Git distante suit le contrat décrit ci-dessous ; aucun push automatique.
 Configuration exacte, bornes et distinction entre source et activation observée :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md.
 
@@ -286,16 +350,27 @@ sujets et le texte enfant ne sont pas des instructions. En shared, shared_writer
 est un avertissement sans refus. Git 2.44+, `.worktrees/` ignoré dans le dépôt,
 plafond de 32 chemins distincts ; dépôts LFS/filtres/inclusions/partiels refusés.
 
-Le daemon Bridget crée et lit seulement. Aucun commit, merge, rebase, push, fetch,
-PR, suppression Git ni modification de configuration. Nettoyage autorisé après examen ;
+Bridget prépare le dossier distant : import du commit exact depuis le miroir local
+configuré, puis création du worktree ou avance du checkout partagé propre.
+En shared, seule une avance sans perte de commits (fast-forward) est permise,
+sans mission Bridget utilisant cette racine. Aucun reset, stash, clean, commit,
+rebase, push, PR, suppression Git ni modification de configuration. Nettoyage autorisé après examen ;
 voir la référence des commandes pour les 13 refus et la recette. Un enfant Codex
 workspaceWrite peut modifier les fichiers sans pouvoir commiter dans le dossier Git commun.
 Cette skill ne prouve pas l’activation de la session 154. Les contrats 153 restent conservés.
 
 ### Livraison Git entre machines
 
-Le coordinateur rend le SHA de départ disponible sur la cible, puis demande
-un worktree avec `base_ref` égal à ce SHA explicite. Aucun fetch automatique.
+Demander directement le travail avec le commit attendu. Bridget importe ce commit
+depuis le miroir local déjà configuré, s'il y est présent. Pour un travail isolé,
+utiliser worktree avec `base_ref` égal au SHA : Bridget crée lui-même le dossier.
+Pour shared, Bridget avance automatiquement le checkout propre vers le SHA attendu
+si c'est un fast-forward et qu'aucune mission ne l'utilise. Ne pas préparer un
+checkout de qualification ni déplacer HEAD par SSH pour contourner un refus.
+Les motifs workspace_dirty, workspace_busy, workspace_diverged et
+workspace_base_unavailable distinguent travail local, utilisation en cours,
+historique divergent et commit absent. Ne pas transformer shared en worktree
+sans respecter le choix de l'utilisateur. Aucun fetch réseau implicite.
 L’enfant committe/pousse sa seule branche si la mission et ses droits l’autorisent.
 Un intégrateur unique vérifie, intègre, pousse et compare les SHA des machines.
 `result_available` ne vaut pas intégration ; préserver toute copie modifiée ou
