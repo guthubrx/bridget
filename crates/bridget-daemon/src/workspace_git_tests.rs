@@ -664,3 +664,91 @@ fn native154_git_rapport_ignore_gitfile_enfant_et_parent_emboite() {
         fs::write(&target_gitdir, &target_original).unwrap();
     });
 }
+
+#[test]
+fn worktree171_branch_mirror_import_isolation_and_refusals() {
+    with_repo(|repo| {
+        let base = resolve_source_commit(repo, None).unwrap();
+        let root = repo.parent().unwrap();
+        let mirror = root.join("mirror.git");
+        let target = root.join("target");
+        fixture_git(repo, &["clone", "--bare", "--quiet", repo.to_str().unwrap(), mirror.to_str().unwrap()]);
+        fixture_git(repo, &["clone", "--quiet", mirror.to_str().unwrap(), target.to_str().unwrap()]);
+        fixture_git(repo, &["checkout", "-qb", "feature171"]);
+        fs::write(repo.join("sub/tracked"), "feature171\n").unwrap();
+        fixture_git(repo, &["commit", "-qam", "feature"]);
+        let feature = resolve_source_commit(repo, None).unwrap();
+        fixture_git(repo, &["push", "--quiet", mirror.to_str().unwrap(), "feature171"]);
+        fixture_git(repo, &["checkout", "--detach", "--quiet", &base]);
+        fixture_git(repo, &["config", "extensions.worktreeConfig", "true"]);
+        let source_config = fs::read(repo.join(".git/config")).unwrap();
+        assert_eq!(resolve_source_commit(repo, Some("feature171")).unwrap(), feature);
+        assert_eq!(resolve_source_commit(repo, None).unwrap(), base);
+        assert_eq!(preflight_classified(repo, Some(&feature), None).unwrap().base_commit, feature);
+        let before_config = fs::read(target.join(".git/config")).unwrap();
+        let before_index = fs::read(target.join(".git/index")).unwrap();
+        assert!(resolve_source_commit(&target, Some(&feature)).is_err());
+        let plan = preflight_remote(&target, Some(&feature), None).unwrap();
+        assert_eq!(plan.base_commit, feature);
+        assert!(resolve_source_commit(&target, Some(&feature)).is_err(), "Probe ne récupère rien");
+        import_remote_commit(&target, &feature).unwrap();
+        assert!(!target.join(".git/FETCH_HEAD").exists());
+        let first = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap();
+        let second = create(&preflight_remote(&target, Some(&feature), None).unwrap(), &uuid::Uuid::new_v4().to_string()).unwrap();
+        assert_ne!(first.path, second.path);
+        assert_eq!(report(&first).unwrap().head_commit, Some(feature.clone()));
+        assert_eq!(fs::read_to_string(Path::new(&first.path).join("sub/tracked")).unwrap(), "feature171\n");
+        fs::write(Path::new(&first.path).join("sub/tracked"), "isolated edit\n").unwrap();
+        assert_eq!(fs::read_to_string(Path::new(&second.path).join("sub/tracked")).unwrap(), "feature171\n");
+        assert_eq!(fs::read_to_string(target.join("sub/tracked")).unwrap(), "initial\n");
+        assert_eq!(resolve_source_commit(&target, None).unwrap(), base);
+        assert_eq!(fs::read(target.join(".git/index")).unwrap(), before_index);
+        assert_eq!(fs::read(target.join(".git/config")).unwrap(), before_config);
+        assert_eq!(fs::read(repo.join(".git/config")).unwrap(), source_config);
+        assert!(preflight_remote(&target, Some(&"a".repeat(40)), None).is_err());
+        assert!(import_remote_commit(&target, "--upload-pack=bad").is_err());
+        fixture_git(&target, &["config", "filter.bad.clean", "false"]);
+        assert!(preflight_remote(&target, Some(&feature), None).unwrap_err().starts_with("workspace_repo_unsupported:"));
+    });
+}
+
+#[test]
+fn worktree171_per_worktree_config_creation_reporting_and_guards() {
+    with_repo(|repo| {
+        fixture_git(repo, &["config", "extensions.worktreeConfig", "true"]);
+        fixture_git(repo, &["sparse-checkout", "set", "--cone", "sub"]);
+        let config = fs::read(repo.join(".git/config")).unwrap();
+        let local = fs::read(repo.join(".git/config.worktree")).unwrap();
+        let index = fs::read(repo.join(".git/index")).unwrap();
+        let head = resolve_source_commit(repo, None).unwrap();
+        let plan = preflight_classified(repo, None, Some("generic-worktree")).unwrap();
+        let workspace = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap();
+        let child = Path::new(&workspace.path);
+        assert_eq!(resolve_source_commit(child, None).unwrap(), head);
+        assert_eq!(fs::read_to_string(child.join("sub/tracked")).unwrap(), "initial\n");
+        fs::write(child.join("sub/tracked"), "child only\n").unwrap();
+        let observed = report(&workspace).unwrap();
+        assert_eq!(observed.head_commit, Some(head.clone()));
+        assert_eq!(observed.dirty, Some(true));
+        assert_eq!(fs::read_to_string(repo.join("sub/tracked")).unwrap(), "initial\n");
+        assert_eq!(resolve_source_commit(repo, None).unwrap(), head);
+        assert_eq!(fs::read(repo.join(".git/config")).unwrap(), config);
+        assert_eq!(fs::read(repo.join(".git/config.worktree")).unwrap(), local);
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(), index);
+        // Both common and worktree-local executable settings remain refused.
+        for scope in ["--local", "--worktree"] {
+            fixture_git(repo, &["config", scope, "filter.bad.clean", "false"]);
+            assert!(matches!(preflight_classified(repo, None, None), Err(WorkspacePreflightError::Refused(e)) if e.starts_with("workspace_repo_unsupported:")));
+            assert!(create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap_err().starts_with("workspace_repo_unsupported:"));
+            fixture_git(repo, &["config", scope, "--unset", "filter.bad.clean"]);
+        }
+        fixture_git(child, &["config", "--worktree", "filter.bad.clean", "false"]);
+        assert!(report(&workspace).is_err());
+        fixture_git(child, &["config", "--worktree", "--unset", "filter.bad.clean"]);
+        fixture_git(repo, &["config", "--worktree", "include.path", "/nonexistent-bridget-config"]);
+        assert!(executable_configuration(repo).unwrap());
+        assert!(preflight_classified(repo, None, None).is_err());
+        fixture_git(repo, &["config", "--worktree", "--unset", "include.path"]);
+        assert!(preflight_classified(repo, None, None).is_ok());
+    });
+}

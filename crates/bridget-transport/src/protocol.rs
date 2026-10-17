@@ -10,6 +10,9 @@ pub use lineage_protocol::*;
 #[path = "native_permissions.rs"]
 mod native_permissions;
 pub use native_permissions::*;
+#[path = "native_hook_profile171.rs"]
+mod native_hook_profile171;
+pub use native_hook_profile171::*;
 
 use bridget_core::BridgetMessage;
 use serde::{Deserialize, Serialize};
@@ -2690,6 +2693,10 @@ pub enum CandidateProbeRefusal {
     DefinitionUnavailable,
     PermissionsChanged,
     WorkspaceUnavailable,
+    WorkspaceDirty,
+    WorkspaceBusy,
+    WorkspaceDiverged,
+    WorkspaceBaseUnavailable,
     CapabilityUnavailable,
 }
 
@@ -3078,9 +3085,31 @@ pub enum WorkerCommandPhase {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerStartupFailure {
+    CommandMissing,
+    NegotiationFailed,
+    InvalidStatus,
+    ExitedBeforeReady,
+}
+impl WorkerStartupFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::CommandMissing => "command_missing",
+            Self::NegotiationFailed => "negotiation_failed",
+            Self::InvalidStatus => "invalid_status",
+            Self::ExitedBeforeReady => "exited_before_ready",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerObservation {
+    /// Diagnostic fermé du bootstrap, jamais stderr/argv/secret fournisseur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_failure: Option<WorkerStartupFailure>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -7110,6 +7139,7 @@ mod tests {
             command: worker162_command(),
             response: WorkerResponseOperation::Observation {
                 observation: WorkerObservation {
+                    startup_failure: None,
                     phase: WorkerCommandPhase::Released,
                     native_ready: true,
                     exit_code: None,

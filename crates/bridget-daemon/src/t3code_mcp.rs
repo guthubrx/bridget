@@ -64,15 +64,28 @@ fn resolve_binding(
     let name = crate::t3code::stable_uuid(thread_id);
     let instance_id = crate::t3code::stable_uuid(&format!("instance:{thread_id}"));
     crate::mcp_identity::auxiliary_registration(&name, &instance_id, socket)
-        .map_err(|_| IdentityError::T3SessionUnavailable)?;
+        .map_err(|_| IdentityError::T3SessionUnavailableAt("binding_credential_unavailable : rattachement Bridget local absent ou invalide"))?;
     // La preuve locale seule ne suffit pas : le daemon doit reconnaître
     // cette instance maintenant, même pour un outil de diagnostic.
     crate::communication::client::registered_connection(&name, &instance_id, socket)
-        .map_err(|_| IdentityError::T3SessionUnavailable)?;
+        .map_err(binding_failure)?;
     Ok(ResolvedIdentity {
         name,
         instance_id,
         delegated_origin: None,
+    })
+}
+
+fn binding_failure(error: crate::communication::client::ClientError) -> IdentityError {
+    use crate::communication::client::ClientError;
+    IdentityError::T3SessionUnavailableAt(match error {
+        ClientError::Technical { code: "auxiliary_identity_unproven", .. } =>
+            "binding_registration_refused : le démon refuse le rattachement de cette session",
+        ClientError::Technical { code: "auxiliary_credential_required", .. } =>
+            "binding_credential_unavailable : rattachement Bridget local absent ou invalide",
+        ClientError::Technical { code: "daemon_protocol", .. } =>
+            "binding_protocol_invalid : réponse du démon invalide",
+        _ => "binding_transport_unavailable : connexion au démon interrompue ou délai dépassé ; aucune révocation de session établie",
     })
 }
 
@@ -119,8 +132,10 @@ fn attest_http(url: &str, authorization: &str) -> Result<SessionProof, IdentityE
                     Err(IdentityError::T3SessionUnavailable)
                 }
             });
-        if proof.is_ok() {
-            cleanup?;
+        // La fermeture du transport ne révoque pas une preuve déjà vérifiée.
+        // Le prochain appel refait son attestation ; aucun jeton n'est conservé.
+        if cleanup.is_err() {
+            eprintln!("bridget_t3_session cleanup=failed attestation_preserved={}", proof.is_ok());
         }
     }
     proof
@@ -144,9 +159,14 @@ fn post(
     if let Some(session_id) = session_id.as_ref() {
         request = request.with_header("Mcp-Session-Id", session_id);
     }
-    let response = request.send_lazy().map_err(|_| denied())?;
+    let response = request.send_lazy().map_err(|_| IdentityError::T3SessionUnavailableAt(
+        "attestation_transport_unavailable : transport T3 indisponible ou délai HTTP de 3 s dépassé"))?;
     if !(200..300).contains(&response.status_code) {
-        return Err(denied());
+        return Err(IdentityError::T3SessionUnavailableAt(match response.status_code {
+            401 | 403 => "attestation_http_unauthorized : T3 refuse l’authentification de cette session",
+            404 => "attestation_http_not_found : session ou port T3 introuvable",
+            _ => "attestation_http_refused : T3 refuse la requête HTTP",
+        }));
     }
     if body.get("method").and_then(Value::as_str) == Some("initialize") {
         let issued = response.headers.get("mcp-session-id").ok_or_else(denied)?;
@@ -212,6 +232,9 @@ fn attest(
     let response = exchange(
         &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"bridget_session","arguments":{}}}),
     )?;
+    if response.pointer("/result/isError") == Some(&Value::Bool(true)) {
+        return Err(attestation_failure(&response));
+    }
     if response.get("id") != Some(&json!(2))
         || response.get("error").is_some()
         || response.pointer("/result/isError") == Some(&Value::Bool(true))
@@ -241,9 +264,50 @@ fn attest(
     Ok(proof)
 }
 
+fn attestation_failure(response: &Value) -> IdentityError {
+    // T3 exposes typed failures in structuredContent or a JSON text block.
+    // Never pass through its free-form message, credentials or arbitrary fields.
+    let mut values = vec![response.pointer("/result/structuredContent").cloned().unwrap_or(Value::Null)];
+    if let Some(content) = response.pointer("/result/content").and_then(Value::as_array) {
+        for item in content.iter().take(8) {
+            if let Some(text) = item.get("text").and_then(Value::as_str).filter(|s| s.len() <= 4096) {
+                if let Ok(value) = serde_json::from_str::<Value>(text) { values.push(value); }
+            }
+        }
+    }
+    for value in values {
+        match value.get("code").and_then(Value::as_str) {
+            Some("permission_attestation_unavailable") => return IdentityError::T3SessionUnavailableAt(
+                "permission_attestation_unavailable : T3 refuse le fait de droits du tour courant ; il est absent, modifié ou ne lui appartient plus"),
+            Some("parent_not_active") => return IdentityError::T3SessionUnavailableAt(
+                "parent_not_active : ce fournisseur ne possède plus le tour actif"),
+            _ => {}
+        }
+    }
+    IdentityError::T3SessionUnavailableAt("attestation_tool_refused : T3 a refusé l’attestation sans motif reconnu")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn incident171_attestation_preserves_closed_cause_without_body_or_authority_change() {
+        for (code, expected) in [("permission_attestation_unavailable", "permission_attestation_unavailable"),
+            ("parent_not_active", "parent_not_active"), ("SECRET", "attestation_tool_refused")] {
+            let body=json!({"_tag":"OrchestratorMcpFailure","code":code,"message":"SECRET token=PRIVATE"});
+            for result in [json!({"isError":true,"structuredContent":body}),
+                json!({"isError":true,"content":[{"type":"text","text":body.to_string()}]})] {
+                let error=attest(exchange(json!({"id":2,"result":result}))).err().unwrap();
+                assert_eq!(error.code(),"t3_session_unavailable");
+                assert!(error.remediation().starts_with(expected));
+                assert!(!error.remediation().contains("SECRET") && !error.remediation().contains("PRIVATE"));
+            }
+        }
+        let valid=attest(exchange(response(proof("thread-171")))).unwrap();
+        assert_eq!(valid.thread_id,"thread-171");
+        assert!(attest(exchange(response(proof("thread\ninvalid")))).is_err());
+    }
+
     #[test]
     fn endpoint_cannot_redirect_or_choose_another_runtime() {
         let runtime = ServerRuntime {
@@ -354,7 +418,7 @@ mod tests {
         });
         assert!(matches!(
             attest_http(&url, &format!("Bearer {}", "a".repeat(43))),
-            Err(IdentityError::T3SessionUnavailable)
+            Err(IdentityError::T3SessionUnavailableAt(_))
         ));
         server.join().unwrap();
         assert!(
@@ -363,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn http_keeps_sessions_distinct_and_checks_revocation_on_next_call() {
+    fn http_cleanup_failure_preserves_verified_proof_and_next_call_rechecks() {
         use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
         use std::time::Duration;
@@ -447,7 +511,7 @@ mod tests {
                                     .to_string(),
                             )
                         }
-                        _ => (204, String::new()),
+                        _ => (503, String::new()),
                     }
                 };
                 let session_header = if index % 4 == 0 && index < 8 {
@@ -461,7 +525,7 @@ mod tests {
         let call = || attest_http(&url, &authorization);
         assert_eq!(call().unwrap().thread_id, "thread:a");
         assert_eq!(call().unwrap().thread_id, "thread:b");
-        assert!(matches!(call(), Err(IdentityError::T3SessionUnavailable)));
+        assert!(matches!(call(), Err(IdentityError::T3SessionUnavailableAt("attestation_http_unauthorized : T3 refuse l’authentification de cette session"))));
         server.join().unwrap();
     }
 

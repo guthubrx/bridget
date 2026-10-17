@@ -24,6 +24,7 @@ pub enum IdentityError {
     IdentityNotFound,
     DelegatedMcpOnly,
     T3SessionUnavailable,
+    T3SessionUnavailableAt(&'static str),
 }
 
 impl IdentityError {
@@ -33,7 +34,7 @@ impl IdentityError {
             Self::LegacyMarker => "legacy_marker",
             Self::IdentityNotFound => "identity_not_found",
             Self::DelegatedMcpOnly => "delegated_mcp_only",
-            Self::T3SessionUnavailable => "t3_session_unavailable",
+            Self::T3SessionUnavailable | Self::T3SessionUnavailableAt(_) => "t3_session_unavailable",
         }
     }
 
@@ -50,6 +51,7 @@ impl IdentityError {
             Self::DelegatedMcpOnly => {
                 "un sous-agent interne utilise uniquement les outils MCP Bridget bridget_who et bridget_send"
             }
+            Self::T3SessionUnavailableAt(detail) => detail,
             Self::T3SessionUnavailable => {
                 "la session T3 ou son rattachement Bridget n'est plus vérifiable ; vérifiez le connecteur puis réessayez depuis la session active"
             }

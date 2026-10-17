@@ -394,6 +394,7 @@ fn remote162_demande155_recontrole_worker_hors_verrou_et_epoch_avant_reponse() {
                 command: request.command,
                 response: WorkerResponseOperation::Observation {
                     observation: WorkerObservation {
+                    startup_failure: None,
                         phase: WorkerCommandPhase::Released,
                         native_ready: true,
                         exit_code: None,
@@ -781,6 +782,7 @@ fn remote162_arret_atteste_avant_connected_cloture_demarrage_apres_reprise() {
             command: request.command,
             response: WorkerResponseOperation::Observation {
                 observation: WorkerObservation {
+                    startup_failure: None,
                     phase: WorkerCommandPhase::Unknown,
                     native_ready: false,
                     exit_code: None,

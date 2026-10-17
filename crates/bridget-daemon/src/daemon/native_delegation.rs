@@ -437,6 +437,19 @@ fn routing_auto_receipt(
 /// jamais une invitation à prendre le HEAD de la machine choisie.
 fn validate_routing_source(request: &AutoDelegateV2) -> Result<(), String> {
     use bridget_transport::protocol::AutoDelegateWorkload;
+    // La branche demandée est la source d'un worktree. Le checkout du parent
+    // reste intact et peut être sur une autre branche. Les contraintes de
+    // création sont vérifiées sur la machine qui crée réellement le worktree.
+    if let Some(WorkspaceRequest::Worktree { base_ref, branch }) = &request.workspace {
+        let expected = request.expected_base_commit.as_ref()
+            .ok_or("expected_base_commit_required")?;
+        if let Some(branch) = branch { crate::workspace_git::validate_branch(branch)?; }
+        let actual = crate::workspace_git::resolve_source_commit(
+            Path::new(&request.cwd), base_ref.as_deref(),
+        ).map_err(|error| error.into_admission(true))?;
+        if &actual != expected { return Err("expected_base_commit_mismatch".into()); }
+        return Ok(());
+    }
     let actual = crate::lifecycle::source_base_commit(Path::new(&request.cwd))?;
     match (&actual, &request.expected_base_commit) {
         (Some(_), None) => return Err("expected_base_commit_required".into()),
@@ -452,17 +465,7 @@ fn validate_routing_source(request: &AutoDelegateV2) -> Result<(), String> {
         }
         _ => {}
     }
-    if let Some(WorkspaceRequest::Worktree { base_ref, branch }) = &request.workspace {
-        let preflight = crate::workspace_git::preflight_classified(
-            Path::new(&request.cwd),
-            base_ref.as_deref(),
-            branch.as_deref(),
-        )
-        .map_err(|error| error.into_admission(true))?;
-        if Some(&preflight.base_commit) != request.expected_base_commit.as_ref() {
-            return Err("expected_base_commit_mismatch".into());
-        }
-    }
+
     Ok(())
 }
 
@@ -504,6 +507,76 @@ fn routing_telemetry<'a>(
         .get(machine)
         .and_then(|policy| policy.telemetry.as_ref())
         .filter(|policy| policy.enabled)
+}
+
+const MAX_ROUTING_PROBE_REFUSAL_NOTES: usize = 128;
+const MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES: usize = 512;
+
+enum RoutingProbeRefusalCode {
+    Candidate(bridget_transport::protocol::CandidateProbeRefusal),
+    Worker(bridget_transport::protocol::WorkerRefusal),
+}
+
+// Only authenticated opaque IDs and closed wire enums enter this diagnostic.
+// No request text, provider settings, argv, environment or worker stderr.
+fn record_routing_probe_refusal(
+    plan: &mut RoutingAdmissionPlan,
+    correlation_id: &str,
+    admission_id: &str,
+    candidate_id: &str,
+    reason: RoutingProbeRefusalCode,
+) -> bool {
+    if plan.decision_notes.len() >= MAX_ROUTING_PROBE_REFUSAL_NOTES
+        || correlation_id.len() != 36
+        || Uuid::parse_str(correlation_id).is_err()
+        || admission_id.len() != 34
+        || !admission_id.starts_with("a-")
+        || !admission_id[2..].bytes().all(|b| b.is_ascii_hexdigit())
+        || !bridget_transport::protocol::is_routing_candidate_id(candidate_id)
+    {
+        return false;
+    }
+    let (kind, code) = match reason {
+        RoutingProbeRefusalCode::Candidate(code) => ("candidate", serde_json::to_value(code)),
+        RoutingProbeRefusalCode::Worker(code) => ("worker", serde_json::to_value(code)),
+    };
+    let Ok(code) = code else { return false; };
+    let note = json!({"event":"routing_probe_refused","correlation_id":correlation_id,
+        "admission_id":admission_id,"candidate_id":candidate_id,"kind":kind,"code":code})
+        .to_string();
+    if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
+        return false;
+    }
+    eprintln!("bridget_probe_refusal {note}");
+    plan.decision_notes.push(note);
+    true
+}
+
+/// Rendre au demandeur les motifs fermés déjà reçus, sans nouvelle sonde.
+fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
+    use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
+    let mut counts = BTreeMap::<(String, String), usize>::new();
+    for note in plan.decision_notes.iter().take(MAX_ROUTING_PROBE_REFUSAL_NOTES) {
+        if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES { continue; }
+        let Ok(value) = serde_json::from_str::<Value>(note) else { continue; };
+        if value["event"] != "routing_probe_refused" { continue; }
+        let kind = value["kind"].as_str().unwrap_or("");
+        let valid = match kind {
+            "candidate" => serde_json::from_value::<CandidateProbeRefusal>(value["code"].clone()).is_ok(),
+            "worker" => serde_json::from_value::<WorkerRefusal>(value["code"].clone()).is_ok(),
+            _ => false,
+        };
+        if valid && let Some(code) = value["code"].as_str() {
+            *counts.entry((kind.to_owned(), code.to_owned())).or_default() += 1;
+        }
+    }
+    let mut result = failure("routing_candidate_unavailable");
+    if !counts.is_empty() {
+        let reasons = counts.into_iter().map(|((kind, code), candidates)|
+            json!({"kind":kind,"code":code,"candidates":candidates})).collect::<Vec<_>>();
+        result["detail"] = json!({"reasons":reasons});
+    }
+    result
 }
 
 /// O(C+P) hors probes groupés et gardes natives ; aucune réservation ni Task.
@@ -698,7 +771,12 @@ fn observe_routing_candidates(
                 effort: candidate.default_effort.clone(),
                 workload: request.workload,
                 posture: request.posture,
-                workspace: request.workspace.clone(),
+                workspace: request.workspace.as_ref().map(|workspace| match workspace {
+                    WorkspaceRequest::Worktree { branch, .. } => WorkspaceRequest::Worktree {
+                        base_ref: request.expected_base_commit.clone(), branch: branch.clone(),
+                    },
+                    other => other.clone(),
+                }),
             };
             batches
                 .entry(candidate.machine_id.clone())
@@ -730,17 +808,21 @@ fn observe_routing_candidates(
             parent: parent.clone(),
             candidates,
         };
+        let correlation_id = probe.correlation_id.clone();
         let result = match remote_candidate_probe_v2(
             state,
             probe,
             Instant::now() + Duration::from_secs(5),
         ) {
             Ok(result) => result,
-            Err(WorkerRefusal::CapabilityRequired) => {
-                unsupported_worker = true;
+            Err(reason) => {
+                unsupported_worker |= reason == WorkerRefusal::CapabilityRequired;
+                for candidate_id in &wanted {
+                    record_routing_probe_refusal(plan, &correlation_id, &admission_id,
+                        candidate_id, RoutingProbeRefusalCode::Worker(reason));
+                }
                 continue;
             }
-            Err(_) => continue,
         };
         let received_at = unix_timestamp();
         let ttl = routing_telemetry(plan, &machine).map_or(30, |policy| policy.max_age_secs);
@@ -757,6 +839,13 @@ fn observe_routing_candidates(
             );
         }
         for verdict in result.verdicts {
+            if let CandidateProbeV2Verdict::Ineligible { candidate_id, reason } = &verdict {
+                if wanted.contains(candidate_id) {
+                    record_routing_probe_refusal(plan, &result.correlation_id,
+                        &result.admission_id, candidate_id,
+                        RoutingProbeRefusalCode::Candidate(*reason));
+                }
+            }
             if let CandidateProbeV2Verdict::Eligible {
                 candidate_id,
                 mapping_revision,
@@ -1667,7 +1756,13 @@ fn admit_auto_routing(
     };
     validate_routing_source(request)?;
     let mut plan = routing_admission_plan(&registry, &coordinator, request)?;
-    observe_routing_candidates(conn, request, &mut plan, attested, state)?;
+    if let Err(code) = observe_routing_candidates(conn, request, &mut plan, attested, state) {
+        return if code == "routing_candidate_unavailable" {
+            Ok(routing_probe_failure(&plan))
+        } else {
+            Err(code)
+        };
+    }
     let receipt = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
@@ -2147,6 +2242,8 @@ fn auto_terminal_refusal_code(code: &str) -> Option<&str> {
         code,
         "workspace_base_unavailable: référence de base invalide"
             | "workspace_base_unavailable: référence de base inconnue"
+            | "workspace_repo_unsupported: filtre, inclusion, clone partiel ou worktreeConfig"
+            | "workspace_repo_unsupported: filtre, inclusion ou clone partiel"
     )
     .then_some(code)
 }
@@ -3592,7 +3689,10 @@ pub(super) fn handle_attested(
     // HTTP hors verrou. La connexion, le fil et le projet sont revérifiés
     // après la réponse authentifiée, au même puits que l'admission durable.
     let permission_proof = proof;
-    let attested = crate::t3code_mcp::reattest(permission_proof);
+    let attested = {
+        let _native171_reattest_observation = crate::communication::client::Native171Observation::request(&request, crate::communication::client::Native171ObservedPhase::Reattest, conn);
+        crate::t3code_mcp::reattest(permission_proof)
+    };
     let proof = match attested {
         Ok(p) => p,
         Err(_) => {
@@ -5313,11 +5413,39 @@ fn target_resolver<'a>(
     ),
     String,
 > + 'a {
+    target_resolver_in_catalogue171(registry, source, limits, owner, instance, fact, agent_type,
+        model, effort, cwd, workspace, child_requests, None)
+}
+
+fn target_resolver_in_catalogue171<'a>(
+    registry: &'a AgentRegistry,
+    source: &'a crate::lifecycle::SourceEnvironment,
+    limits: &'a crate::provider_limits::ProviderLimits,
+    owner: &'a str,
+    instance: &'a str,
+    fact: Option<&'a bridget_transport::protocol::ProviderPermissions>,
+    agent_type: &'a str,
+    model: &'a str,
+    effort: Option<&'a str>,
+    cwd: &'a Path,
+    workspace: Option<&'a WorkspaceRequest>,
+    child_requests: Option<&'a str>,
+    catalogue: Option<&'a std::cell::RefCell<crate::native_permissions::CataloguePermissionRead171>>,
+) -> impl FnMut(
+    Option<SpawnPosture>,
+) -> Result<
+    (
+        AgentRegistry,
+        Option<bridget_transport::protocol::NativePermissionSnapshot>,
+        SpawnPosture,
+    ),
+    String,
+> + 'a {
     let mut prepared: Option<Result<AgentRegistry, String>> = None;
     let mut policy_reader = fact
         .zip(registry.get(agent_type).ok())
         .map(|(parent, target)| {
-            crate::native_permissions::child_policy_reader(parent, target, cwd, source)
+            crate::native_permissions::child_policy_reader_for_catalogue171(parent, target, cwd, source, catalogue)
         });
     move |posture| {
         let target = registry.get(agent_type).map_err(|_| "agent_type_unknown")?;
@@ -6248,6 +6376,7 @@ fn handle_locked_with_remote_proof(
     match &request {
         // Lecture indexée149 avant tout catalogue, fait, quota ou préflight.
         NativeDelegationRequest::CallerScope {} => {
+            let _native171_handler_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::CallerScope, crate::communication::client::Native171ObservedPhase::CallerScope, conn, Some(&instance));
             let caller_read_only = st.delegation_store.for_child(&owner)?.is_some_and(|task| {
                 let requested = match &task.request {
                     NativeDelegationRequest::Delegate { posture, .. } => *posture,
@@ -6259,6 +6388,7 @@ fn handle_locked_with_remote_proof(
             Ok(json!({"version":1,"caller_read_only":caller_read_only}))
         }
         NativeDelegationRequest::Catalogue => {
+            let _native171_handler_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::Catalogue, crate::communication::client::Native171ObservedPhase::Catalogue, conn, Some(&instance));
             // Métadonnée du type attesté ; aucun droit ni état runtime inféré.
             let caller_held_queue = st
                 .presences
@@ -6266,7 +6396,10 @@ fn handle_locked_with_remote_proof(
                 .and_then(|presence| st.registry.get(&presence.agent_type).ok())
                 .is_some_and(|definition| definition.held_queue);
             let permission = root_permission(st, &owner, &instance)?;
-            let fact = parent_fact(st, &owner, &instance, None, attested)?;
+            let fact = {
+                let _native171_fact_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::Catalogue, crate::communication::client::Native171ObservedPhase::ParentFact, conn, Some(&instance));
+                parent_fact(st, &owner, &instance, None, attested)?
+            };
             let halted = st
                 .delegation_store
                 .delegation_halt()
@@ -6278,9 +6411,12 @@ fn handle_locked_with_remote_proof(
                     .and_then(ParentPermission::root)
                     .map(Path::to_path_buf)
             });
+            let catalogue_read = std::cell::RefCell::new(crate::native_permissions::CataloguePermissionRead171::new(
+                fact.as_ref(), verdict_cwd.as_deref()));
             let entries: Vec<Value> = st.registry.resolved_definitions()?.into_iter()
                 .filter(|(name,_)| !name.starts_with("__"))
                 .map(|(name,definition)| {
+                    let _native171_entry_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::Catalogue, crate::communication::client::Native171ObservedPhase::CatalogueEntry, conn, Some(&instance));
                     // Modèle déclaré, effort omis : aucune requête ni fait request-scoped inventé.
                     let model = definition.capabilities.models.keys().next();
                     let cwd: Result<PathBuf,String> = (|| {
@@ -6290,8 +6426,8 @@ fn handle_locked_with_remote_proof(
                         Ok(cwd)
                     })();
                     let mut resolver = cwd.as_ref().ok().zip(model).map(|(cwd,model)|
-                        target_resolver(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
-                            fact.as_ref(),&name,model,None,cwd,None,None));
+                        target_resolver_in_catalogue171(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
+                            fact.as_ref(),&name,model,None,cwd,None,None,Some(&catalogue_read)));
                     let mut verdict = |posture| {
                         cwd.as_ref().map_err(|code| code.clone())?;
                         let resolver = resolver.as_mut().ok_or("model_unavailable")?;
@@ -6321,6 +6457,7 @@ fn handle_locked_with_remote_proof(
                                     "unsupported_capability" => "La définition ne déclare pas les capacités de lancement requises.",
                                     "negotiation_failed" => "Le protocole ne permet pas une session gérée.",
                                     "permission_source_unavailable" if fact.as_ref().is_some_and(|f| f.driver == "claude_stream_json" && f.provider_policy.get("launch_context").is_none()) => "Le contexte de lancement Claude (launch_context) est absent ; ses droits ne peuvent pas être vérifiés.",
+                                    "permission_session_start_sdk_dependency_unattested" => "La dépendance claude-agent-sdk du hook SessionStart n’est pas attestée pour l’exécution distante. Aucune installation automatique n’est autorisée.",
                                     "permission_source_unavailable" => "Une source de droits est absente, illisible ou non vérifiable.",
                                     "settings_revision_changed" => "Une source de droits a changé depuis son attestation.",
                                     "permission_mapping_unavailable" => "Les droits du parent ne peuvent pas être traduits pour ce fournisseur.",
@@ -6351,6 +6488,7 @@ fn handle_locked_with_remote_proof(
                         "discovery":discovery.is_ok(),"development":development.as_ref().is_ok_and(|(_,_,p)| *p==SpawnPosture::Development),
                         "development_refusal":development.err().map(|code| code.split_once(':').map_or(code.as_str(), |(canonical, _)| canonical).to_owned()),"can_run":can_run,"constraints":constraints,"quota":quota})
                 }).collect();
+            let entries = catalogue_read.into_inner().finish(entries)?;
             Ok(
                 json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3,"resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.as_ref().map(|f|Path::new(&f.cwd)).or_else(||permission.as_ref().and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.as_ref().map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8}),
             )
@@ -6943,7 +7081,8 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
         }
         return Ok(());
     }
-    let registry = native_launch_registry(st, task)?;
+    let known = st.fleet.knows_command(&task.task_id);
+    let checked_registry = if known { None } else { Some(native_launch_registry(st, task)?) };
     let NativeDelegationRequest::Delegate {
         agent_type,
         posture,
@@ -6984,6 +7123,25 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
             max_children: Some(16),
             max_depth: Some(8),
         }),
+    };
+    // Le superviseur possède déjà ce lancement. Attendre son issue ne lance
+    // rien : ne pas rehacher sous le mutex dont Register a besoin pour finir.
+    // Le canon, la génération et l'échéance restent vérifiés par la flotte.
+    if task.state == "starting" && known {
+        if let crate::fleet::SpawnSubmission::Await(waiter) =
+            st.fleet.request_spawn(&order, unix_timestamp()).map_err(|e| e.to_string())?
+        {
+            if task.child_instance.as_deref() != Some(waiter.instance_id.as_str()) {
+                return Err("native_restart_identity_mismatch".into());
+            }
+            return Ok(());
+        }
+    }
+    // Relecture fraîche conservée avant le premier lancement et après
+    // l'enregistrement, avant de rendre la mission transmissible.
+    let registry = match checked_registry {
+        Some(registry) => registry,
+        None => native_launch_registry(st, task)?,
     };
     let hosts = crate::lifecycle::SpawnHosts {
         searched_on: st.host.clone(),
@@ -9456,12 +9614,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                             })
                     });
                 if stopped {
-                    if let Err(error) = close_lost_execution(&st, &task, "remote_start_failed") {
+                    let failure = task.error.as_deref()
+                        .filter(|code| code.starts_with("remote_start_failed:"))
+                        .unwrap_or("remote_start_failed").to_owned();
+                    if let Err(error) = close_lost_execution(&st, &task, &failure) {
                         warn!("clôture du démarrage distant différée: {error}");
                         continue;
                     }
                     task.state = "failed".into();
-                    task.error = Some("remote_start_failed".into());
+                    task.error = Some(failure);
                     if let Err(error) = st.delegation_store.save(&task) {
                         warn!("échec du démarrage distant non persisté: {error}");
                         continue;
@@ -10982,6 +11143,120 @@ mod tests {
         (Arc::new(Mutex::new(st)), config, rx, reader, request, root)
     }
 
+    /// One affected catalogue case: real SDK parent, both roots and 74 sources.
+    /// It uses the actual Catalogue handler; it never delegates or starts a model.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn delivery171_catalogue_operation_real_parent_closed_finish_and_request_scope() {
+        use std::fs;
+        use sha2::{Digest, Sha256};
+        use crate::native_permissions::{CataloguePermissionRead171, child_policy_reader_for_catalogue171};
+        use bridget_transport::protocol::ProviderPermissions;
+        let input = PathBuf::from(std::env::var("BRIDGET_CATALOGUE_OPERATION171_INPUTS").expect("private inputs required"));
+        let mut parent: ProviderPermissions = serde_json::from_slice(&fs::read(input.join("parent-permissions171.json")).unwrap()).unwrap();
+        let registry: Value = serde_json::from_slice(&fs::read(input.join("registry-origin171.json")).unwrap()).unwrap();
+        let source: std::collections::BTreeMap<String, String> = serde_json::from_slice(&fs::read(input.join("source-environment171.json")).unwrap()).unwrap();
+        let profile_bytes = fs::read(input.join("profile171.json")).unwrap();
+        let profile: Value = serde_json::from_slice(&profile_bytes).unwrap();
+        assert_eq!(parent.provider_policy["launch_context"]["permission_sources"], profile["origin_sources"]);
+        assert_eq!(profile["origin_sources"].as_array().unwrap().len(), 74);
+        assert_eq!(parent.provider_policy["allowed_tools"], json!(["mcp__t3-code__*"]));
+        assert_eq!(parent.provider_policy["launch_context"]["settings_overrides"],
+            json!({"permissions":{"allow":["mcp__bridget__bridget_capabilities","mcp__bridget__bridget_task_status"]}}));
+        assert!(parent.provider_policy["additional_directories"].as_array().unwrap()
+            .iter().any(|p| p == "/Users/moi/.t3/userdata/attachments"));
+        let (mut st, config, rx, _reader) = fixture("c171");
+        let scratch = fs::canonicalize(&st.fixture_root.as_ref().unwrap().0).unwrap();
+        let private_profile = scratch.join("catalogue-profile171.json");
+        fs::write(&private_profile, &profile_bytes).unwrap();
+        fs::set_permissions(&private_profile, fs::Permissions::from_mode(0o600)).unwrap();
+        parent.provider_policy["launch_context"]["source_equivalence"]["profile"]["origin_path"] = json!(private_profile);
+        let registry_path = scratch.join("catalogue-registry171.json");
+        fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+        fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry = AgentRegistry::load_from_path(registry_path.clone()).unwrap();
+        st.source_env = source.iter().map(|(k,v)| (k.clone(), v.clone().into())).collect();
+        st.native_permission_facts.clear();
+        let cwd = PathBuf::from(&parent.cwd);
+        fn catalogue(st: &mut DaemonState, parent: &ProviderPermissions) -> Value {
+            handle_locked_with_project("conn-1", NativeDelegationRequest::Catalogue, None, Some(parent), st).unwrap()
+        }
+        fn refused(value: &Value, name: &str) {
+            let entry = value["providers"].as_array().unwrap().iter().find(|v| v["agent_type"]==name).unwrap();
+            assert_eq!(entry["can_run"], false, "{name}");
+            assert_eq!(entry["inherit"], false, "{name}");
+            assert_eq!(entry["development"], false, "{name}");
+            assert_eq!(entry["discovery"], false, "{name}");
+            assert!(!entry["constraints"].as_array().unwrap().is_empty());
+        }
+        let started = std::time::Instant::now();
+        let nominal = catalogue(&mut st, &parent);
+        println!("catalogue171_nominal_ms={} providers={}", started.elapsed().as_millis(), nominal["providers"].as_array().unwrap().len());
+        assert!(nominal["providers"].as_array().unwrap().len() >= 2);
+        for name in ["claude", "project-discovery-claude"] {
+            let entry = nominal["providers"].as_array().unwrap().iter().find(|v| v["agent_type"]==name).unwrap();
+            assert_eq!(entry["can_run"], true, "{name}");
+            assert_eq!(entry["development"], true, "{name}");
+            assert_eq!(entry["inherit"], true, "{name}");
+        }
+        // A parent/source change is never admitted using another entry's token.
+        let mut changed_source = parent.clone();
+        changed_source.provider_policy["launch_context"]["permission_sources"][0]["revision"] = json!(format!("sha256:{}", "0".repeat(64)));
+        let sources_refused = catalogue(&mut st, &changed_source);
+        for name in ["claude", "project-discovery-claude"] { refused(&sources_refused, name); }
+        // Effective environments are separate bindings; HOME changes the native
+        // settings selection and cannot reuse the original parent's recheck.
+        let previous_home = st.source_env.get("HOME").unwrap().clone();
+        let other_home = scratch.join("different-home");fs::create_dir(&other_home).unwrap();
+        fs::set_permissions(&other_home, fs::Permissions::from_mode(0o700)).unwrap();
+        st.source_env.insert("HOME".into(), other_home.into_os_string());
+        let environment_refused = catalogue(&mut st, &parent);
+        for name in ["claude", "project-discovery-claude"] { refused(&environment_refused, name); }
+        st.source_env.insert("HOME".into(), previous_home);
+        // A foreign configured executable remains refused, including its
+        // project-discovery variant; no Ok is shared between definitions.
+        let mut foreign = registry.clone();foreign["agents"]["claude"]["command"] = json!("/usr/bin/true");
+        fs::write(&registry_path, serde_json::to_vec(&foreign).unwrap()).unwrap();
+        st.registry = AgentRegistry::load_from_path(registry_path.clone()).unwrap();
+        let definition_refused = catalogue(&mut st, &parent);
+        for name in ["claude", "project-discovery-claude"] { refused(&definition_refused, name); }
+        fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
+        st.registry = AgentRegistry::load_from_path(registry_path.clone()).unwrap();
+        let definition = st.registry.get("claude").unwrap().clone();
+        let scope = std::cell::RefCell::new(CataloguePermissionRead171::new(Some(&parent), Some(&cwd)));
+        let (policy, posture) = child_policy_reader_for_catalogue171(&parent, &definition, &cwd, &st.source_env, Some(&scope))(Some(SpawnPosture::Development)).unwrap();
+        assert_eq!(posture, SpawnPosture::Development);
+        assert_eq!(policy["allowed_tools"], parent.provider_policy["allowed_tools"]);
+        assert_eq!(policy["additional_directories"], parent.provider_policy["additional_directories"]);
+        assert_eq!(policy["launch_context"], parent.provider_policy["launch_context"]);
+        let mut other_definition = definition.clone();other_definition.command = "/usr/bin/true".into();
+        assert!(child_policy_reader_for_catalogue171(&parent, &other_definition, &cwd, &st.source_env, Some(&scope))(Some(SpawnPosture::Development)).is_err());
+        let mut other_owner = parent.clone();other_owner.revision += 1;
+        assert!(child_policy_reader_for_catalogue171(&other_owner, &definition, &cwd, &st.source_env, Some(&scope))(Some(SpawnPosture::Development)).is_err());
+        // Publication must fail if the actual private manifest changes AFTER
+        // the entry result, even while the earlier policy was favourable.
+        let mut changed_bytes = profile_bytes.clone();changed_bytes.push(b' ');
+        fs::write(&private_profile, &changed_bytes).unwrap();
+        assert!(scope.into_inner().finish(json!({"can_run":true})).is_err());
+        // A second Catalogue request has no token from the first request.
+        let second_request = catalogue(&mut st, &parent);
+        for name in ["claude", "project-discovery-claude"] { refused(&second_request, name); }
+        // A changed declared dependency is refused even with a matching new
+        // private-manifest digest; no live dependency is modified by the case.
+        let mut dependency = profile.clone();
+        let row = dependency["files"].as_array_mut().unwrap().iter_mut().find(|r| r["variants"].get("origin").is_some()).unwrap();
+        row["variants"]["origin"]["revision"] = json!(format!("sha256:{}", "0".repeat(64)));
+        let dependency_bytes = serde_json::to_vec(&dependency).unwrap();fs::write(&private_profile, &dependency_bytes).unwrap();
+        let mut changed_dependency = parent.clone();
+        changed_dependency.provider_policy["launch_context"]["source_equivalence"]["profile"]["revision"] = json!(format!("sha256:{:x}", Sha256::digest(&dependency_bytes)));
+        let dependency_refused = catalogue(&mut st, &changed_dependency);
+        for name in ["claude", "project-discovery-claude"] { refused(&dependency_refused, name); }
+        fs::write(&private_profile, &profile_bytes).unwrap();
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err(), "no child/model/admission launched");
+        cleanup(&config);
+    }
+
     fn routing168_update(state: &Arc<Mutex<DaemonState>>, change: impl FnOnce(&mut Value)) {
         let mut st = state.lock().unwrap();
         let path = st.registry.source().to_owned();
@@ -11008,6 +11283,120 @@ mod tests {
             .auto_admission_receipt(OWNER, &request.request_id)
             .unwrap()
             .unwrap()
+    }
+
+    #[test]
+    fn incident171_routing_probe_refusals_reach_client_without_admission() {
+        use bridget_transport::protocol::*;
+        let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
+        state.lock().unwrap().host = "coordinator171".into();
+        request.request_id = "probe171-refused".into();
+        request.project_id = Some("project171".into());
+        request.machine_id = Some("cartae".into());
+        request.engine = Some("codex".into());
+        let host = state.lock().unwrap().host.clone();
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(b"worker171-fixture"));
+        routing168_update(&state, |value| {
+            value["routing_policy"]["connections"][0]["machine_id"] = json!("cartae");
+            value["routing_policy"]["machine_policies"]["cartae"] = json!({"enabled":true});
+            value["machines"] = json!({"cartae":{"enabled":true,"worker_id":"worker171",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project171":{
+                    "source_host":host,"source_root":request.cwd,
+                    "remote_root":root.join("remote171"),"expected_git_identity":"fixture171",
+                    "mapping_revision":1}}}});
+        });
+        let (writer, mut reader) = super::super::presence_tests::control_socket("probe171-refused");
+        {
+            let mut st = state.lock().unwrap();
+            st.connections.insert("worker171".into(), writer);
+            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+        }
+        assert!(matches!(handle_worker_message(&state, "worker171",
+            WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
+                hello: WorkerHello { version: REMOTE_WORKER_VERSION,
+                    identity: WorkerIdentity { machine_id:"cartae".into(),
+                        worker_id:"worker171".into(),provisioning_revision:1 },
+                    credential: IdentityCredential::new("worker171-fixture".into()),
+                    build:"fixture171".into(),capability:ClientCapability::RemoteWorkerV1 },
+                capabilities:vec![WorkerCapability::CandidateProbeV2] } }),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })));
+        let responder_state = Arc::clone(&state);
+        let responder = std::thread::spawn(move || {
+            let frame = super::super::presence_tests::read_control(&mut reader);
+            let DaemonToWrapper::CandidateProbeV2 { probe } = frame else {
+                panic!("only the existing probe is expected");
+            };
+            assert_eq!(probe.candidates.len(), 3);
+            let correlation = probe.correlation_id.clone();
+            let admission = probe.admission_id.clone();
+            let now = unix_timestamp();
+            let reasons = [CandidateProbeRefusal::MappingUnavailable,
+                CandidateProbeRefusal::PermissionsChanged, CandidateProbeRefusal::WorkspaceUnavailable];
+            let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
+                worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
+                    cpu_percent:None,available_memory_percent:None,normalized_load_percent:None,
+                    compilation_slots:None },
+                verdicts:probe.candidates.into_iter().zip(reasons).map(|(candidate,reason)|
+                    CandidateProbeV2Verdict::Ineligible { candidate_id:candidate.candidate_id,reason }).collect() };
+            assert!(handle_worker_message(&responder_state,"worker171",
+                WrapperToDaemon::CandidateProbeResultV2 { result }).is_none());
+            (correlation,admission)
+        });
+        let mut plan = routing168_plan(&state, &request);
+        assert_eq!(observe_routing_candidates("conn-1", &request, &mut plan, None, &state)
+            .unwrap_err(), "routing_candidate_unavailable");
+        let (correlation,admission) = responder.join().unwrap();
+        assert!(plan.candidates.is_empty());
+        assert_eq!(plan.decision_notes.len(), 3);
+        for (index,note) in plan.decision_notes.iter().enumerate() {
+            assert!(note.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES);
+            let value:Value = serde_json::from_str(note).unwrap();
+            assert_eq!(value.as_object().unwrap().len(), 6);
+            assert_eq!(value["correlation_id"], correlation);
+            assert_eq!(value["admission_id"], admission);
+            assert_eq!(value["candidate_id"], routing_candidate_id(index));
+            assert_eq!(value["code"], ["mapping_unavailable","permissions_changed",
+                "workspace_unavailable"][index]);
+        }
+        {
+            let st = state.lock().unwrap();
+            assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id)
+                .unwrap().is_none());
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+        }
+        assert!(rx.try_recv().is_err());
+        let refused = routing_probe_failure(&plan);
+        assert_eq!(refused["status"], "refused");
+        assert_eq!(refused["code"], "routing_candidate_unavailable");
+        assert_eq!(refused["detail"]["reasons"], json!([
+            {"kind":"candidate","code":"mapping_unavailable","candidates":1},
+            {"kind":"candidate","code":"permissions_changed","candidates":1},
+            {"kind":"candidate","code":"workspace_unavailable","candidates":1}
+        ]));
+        plan.decision_notes.push(json!({"event":"routing_probe_refused","kind":"worker","code":"SECRET /private/path"}).to_string());
+        assert_eq!(routing_probe_failure(&plan), refused);
+        plan.decision_notes.pop();
+        let before = plan.decision_notes.clone();
+        assert!(!record_routing_probe_refusal(&mut plan, "opaque secret", &admission, "c001",
+            RoutingProbeRefusalCode::Candidate(CandidateProbeRefusal::InvalidRequest)));
+        assert!(!record_routing_probe_refusal(&mut plan, &correlation, &"x".repeat(513), "c001",
+            RoutingProbeRefusalCode::Candidate(CandidateProbeRefusal::InvalidRequest)));
+        assert!(!record_routing_probe_refusal(&mut plan, &correlation, &admission, "not-a-candidate",
+            RoutingProbeRefusalCode::Candidate(CandidateProbeRefusal::InvalidRequest)));
+        assert_eq!(plan.decision_notes, before);
+        for _ in 0..130 {
+            record_routing_probe_refusal(&mut plan, &correlation, &admission, "c001",
+                RoutingProbeRefusalCode::Worker(WorkerRefusal::WorkerUnavailable));
+        }
+        assert_eq!(plan.decision_notes.len(), MAX_ROUTING_PROBE_REFUSAL_NOTES);
+        let last:Value = serde_json::from_str(plan.decision_notes.last().unwrap()).unwrap();
+        assert_eq!(last["kind"], "worker");
+        assert_eq!(last["code"], "worker_unavailable");
+        drop(state);
+        cleanup(&config);
     }
 
     fn routing168_observation() -> RoutingCandidateObservation {
@@ -11962,6 +12351,40 @@ mod tests {
         );
         drop(state);
         cleanup(&config);
+    }
+
+    #[test]
+    fn worktree171_routing_source_branch_not_parent_head() {
+        let (state, config, _rx, _reader, mut request, _root) = routing168_fixture(1);
+        let cwd = PathBuf::from(&request.cwd);
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git").arg("-C").arg(&cwd)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null"])
+                .args(args).output().unwrap();
+            assert!(out.status.success(), "{out:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        git(&["init", "-q", "--initial-branch=main"]);
+        std::fs::write(cwd.join("file"), "main").unwrap();
+        git(&["add", "."]); git(&["commit", "-qm", "main"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-qb", "feature171"]);
+        std::fs::write(cwd.join("file"), "feature").unwrap();
+        git(&["commit", "-qam", "feature"]);
+        let feature = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        git(&["config", "extensions.worktreeConfig", "true"]);
+        request.workspace = Some(WorkspaceRequest::Worktree { base_ref: Some("feature171".into()), branch: None });
+        request.expected_base_commit = Some(feature);
+        validate_routing_source(&request).unwrap();
+        request.expected_base_commit = Some(head.clone());
+        assert_eq!(validate_routing_source(&request).unwrap_err(), "expected_base_commit_mismatch");
+        request.workspace = Some(WorkspaceRequest::Shared {});
+        validate_routing_source(&request).unwrap();
+        assert_eq!(git(&["rev-parse", "HEAD"]), head);
+        let refused = "workspace_repo_unsupported: filtre, inclusion, clone partiel ou worktreeConfig";
+        assert_eq!(auto_terminal_refusal_code(refused), Some(refused));
+        drop(state); cleanup(&config);
     }
 
     #[test]
@@ -18399,6 +18822,66 @@ for frame in frames: print(json.dumps(frame),flush=True)
             "le journal couvre la pause depuis l'admission, même sans working"
         );
         assert_eq!(state, "open");
+    }
+
+    #[test]
+    fn native171_inflight_launch_waits_without_rehash_then_rechecks_before_mission() {
+        let (mut st, config, rx, _reader) = fixture("inflight171");
+        let mut task = tache_151(&mut st, "inflight171");
+        let source = st.fixture_root.as_ref().unwrap().0.join("settings171.json");
+        std::fs::write(&source, br#"{"permissions":{"deny":["Bash"]}}"#).unwrap();
+        let cli = Path::new("/bin/sh").canonicalize().unwrap();
+        let cli_revision = bridget_transport::protocol::permission_source_revision(&cli, 512 * 1024 * 1024).unwrap();
+        let context = json!({
+            "cli_path": cli, "cli_revision": cli_revision,
+            "resolved_cli_path": cli, "resolved_cli_revision": cli_revision,
+            "config_dir": st.fixture_root.as_ref().unwrap().0,
+            "settings_sources":"provider_default",
+            "permission_sources":[{"kind":"user","path":source,
+                "revision":bridget_transport::protocol::permission_source_revision(&source, 16 * 1024 * 1024).unwrap()}]
+        });
+        task.permission_snapshot = Some(serde_json::from_value(json!({
+            "version":1,"source":"native_wrapper","owner_agent_id":task.owner,
+            "owner_instance_id":task.owner_instance,"project_cwd":task.cwd,
+            "parent":{"version":1,"source":"native_wrapper","run_id":"run152",
+                "provider_session_id":"session152","provider_instance_id":"instance-1",
+                "revision":1,"driver":"claude_stream_json","cwd":task.cwd,
+                "runtime_mode":"full-access","interaction_mode":"default",
+                "provider_policy":{"kind":"claude","permission_mode":"bypassPermissions",
+                    "tools":{"type":"preset","preset":"claude_code"},
+                    "permission_callback":{"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"},
+                    "settings_sources":"provider_default","launch_context":context}},
+            "child_policy":{"kind":"codex","approval_policy":"never",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}
+        })).unwrap());
+        let original = std::fs::read(&source).unwrap();
+        spawn_task(&mut st, &mut task).unwrap();
+        let ManagedSupervisorCommand::Start { prepared, .. } = rx.try_recv().unwrap() else {
+            panic!("un seul lancement attendu");
+        };
+        assert_eq!(task.state, "starting");
+        std::fs::write(&source, b"changed").unwrap();
+        // En attente, aucune mission ni second lancement. La source changée
+        // prouve que le parcours de relecture n'est pas appelé ici.
+        spawn_task(&mut st, &mut task).unwrap();
+        assert_eq!(task.state, "starting");
+        assert!(task.mission_issued_at.is_none());
+        assert!(rx.try_recv().is_err());
+        let mut foreign = task.clone();
+        foreign.child_instance = Some(Uuid::new_v4().to_string());
+        assert_eq!(spawn_task(&mut st, &mut foreign).unwrap_err(), "native_restart_identity_mismatch");
+        assert!(matches!(st.fleet.register_connected(&prepared.lease,
+            &prepared.lease.instance_id, unix_timestamp()).unwrap(),
+            crate::idempotency::SpawnCommandIssue::Connected { .. }));
+        // Après Register, la même modification ferme toujours le lancement.
+        assert_eq!(spawn_task(&mut st, &mut task).unwrap_err(), "settings_revision_changed");
+        assert_eq!(task.state, "starting");
+        assert!(task.mission_issued_at.is_none());
+        std::fs::write(&source, original).unwrap();
+        spawn_task(&mut st, &mut task).unwrap();
+        assert_eq!(task.state, "mission_pending");
+        assert!(rx.try_recv().is_err());
+        cleanup(&config);
     }
 
     #[test]

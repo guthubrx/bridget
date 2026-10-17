@@ -467,11 +467,31 @@ pub(crate) fn execute(
             });
         }
     }
+    let recover_request_id = match &request {
+        NativeDelegationRequest::AutoDelegateV2(auto) => Some(auto.request_id.clone()),
+        NativeDelegationRequest::Delegate { request_id, .. } => Some(request_id.clone()),
+        _ => None,
+    };
     let message = match crate::t3code_mcp::private_proof() {
         Some(proof) => WrapperToDaemon::NativeDelegationT3 { request, proof },
         None => WrapperToDaemon::NativeDelegation { request },
     };
-    match connection.exchange(&message)? {
+    let response = if let Some(request_id) = recover_request_id {
+        recover_admission_reply171(&request_id, |response| {
+            matches!(response, DaemonToWrapper::NativeDelegationResult { result }
+                if result["status"] == "refused" && result["code"] == "admission_pending")
+        }, |recovery_deadline| {
+            if let Some(deadline) = recovery_deadline {
+                connection = registered_connection_until(&identity.name, &identity.instance_id, socket, deadline)?;
+            }
+            // Même commande, même preuve et même clé. Le maître récupère son
+            // reçu durable ; cette reprise ne crée pas une nouvelle mission.
+            connection.send_then_wait(&message)
+        })?
+    } else {
+        connection.exchange(&message)?
+    };
+    match response {
         DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
             Err(ClientError::Technical {
                 code: "native_delegation_refused",
@@ -501,6 +521,117 @@ pub(crate) fn execute(
             Ok(result)
         }
         other => unexpected_response(other),
+    }
+}
+
+fn recover_admission_reply171<T>(
+    request_id: &str,
+    is_pending: impl Fn(&T) -> bool,
+    exchange: impl FnMut(Option<Instant>) -> Result<T, ClientError>,
+) -> Result<T, ClientError> {
+    recover_admission_with_budget171(request_id, is_pending, exchange,
+        crate::communication::client::DAEMON_BUDGET)
+}
+
+fn recover_admission_with_budget171<T>(
+    request_id: &str,
+    is_pending: impl Fn(&T) -> bool,
+    mut exchange: impl FnMut(Option<Instant>) -> Result<T, ClientError>,
+    recovery_budget: Duration,
+) -> Result<T, ClientError> {
+    let first = exchange(None);
+    if !matches!(&first, Err(ClientError::Technical { code: "outcome_unknown", .. }))
+        && !first.as_ref().is_ok_and(&is_pending)
+    {
+        return first;
+    }
+    // Le même budget de récupération de 10 s couvre toutes les relectures.
+    // Même clé/enveloppe/preuve ; aucun nouveau choix ni lancement au rejeu.
+    let deadline = Instant::now() + recovery_budget;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(ClientError::Technical {
+                code: "outcome_unknown",
+                message: format!("Admission de la demande {request_id} toujours en cours. Conserver cette clé et les mêmes arguments pour récupérer son résultat ; ne pas créer de doublon."),
+            });
+        }
+        match exchange(Some(deadline)) {
+            Ok(value) if is_pending(&value) => {
+                std::thread::sleep(Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())));
+            }
+            Err(ClientError::Technical { code: "outcome_unknown" | "daemon_unreachable", .. }) => {
+                return Err(ClientError::Technical {
+                    code: "outcome_unknown",
+                    message: format!("Accusé de la demande {request_id} indisponible après récupération. La mission peut être admise. Conserver cette clé et les mêmes arguments ; ne pas créer une demande en doublon."),
+                });
+            }
+            other => return other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod admission_recovery171_tests {
+    use super::*;
+
+    #[test]
+    fn incident171_pending_admission_recovers_same_receipt_with_one_deadline() {
+        let pending = |value: &Value| value["status"] == "refused" && value["code"] == "admission_pending";
+        let mut calls = 0;
+        let mut recovery_deadline = None;
+        let result = recover_admission_reply171("real-key", pending, |deadline| {
+            calls += 1;
+            if calls == 1 {
+                assert!(deadline.is_none());
+                return Err(ClientError::Technical { code: "outcome_unknown", message: "lost reply".into() });
+            }
+            let observed = deadline.unwrap();
+            if let Some(previous) = recovery_deadline { assert_eq!(observed, previous); }
+            recovery_deadline = Some(observed);
+            Ok(if calls < 4 { json!({"status":"refused","code":"admission_pending"}) }
+                else { json!({"task_id":"same-task","status":"starting"}) })
+        }).unwrap();
+        assert_eq!(calls, 4);
+        assert_eq!(result["task_id"], "same-task");
+        let mut calls = 0;
+        let refusal = json!({"status":"refused","code":"permission_not_inherited"});
+        assert_eq!(recover_admission_reply171("real-key", pending, |_| {
+            calls += 1; Ok(refusal.clone())
+        }).unwrap(), refusal);
+        assert_eq!(calls, 1);
+        let mut calls = 0;
+        let result = recover_admission_with_budget171("real-key", pending, |_| {
+            calls += 1; Ok(json!({"status":"refused","code":"admission_pending"}))
+        }, Duration::ZERO);
+        assert_eq!(calls, 1);
+        assert!(matches!(result, Err(ClientError::Technical { code: "outcome_unknown", message })
+            if message.contains("real-key") && message.contains("doublon")));
+    }
+
+    #[test]
+    fn delivery171_lost_admission_reply_is_recovered_once_without_masking_refusals() {
+        let mut calls = Vec::new();
+        let result = recover_admission_reply171("same-key", |_| false, |deadline| {
+            calls.push(deadline.is_some());
+            if deadline.is_some() { Ok(json!({"task_id":"same-task","status":"starting"})) }
+            else { Err(ClientError::Technical { code:"outcome_unknown", message:"lecture interrompue".into() }) }
+        }).unwrap();
+        assert_eq!(calls, vec![false,true]);
+        assert_eq!(result["task_id"], "same-task");
+        let mut calls=0;
+        let result: Result<(),_> = recover_admission_reply171("same-key", |_| false, |_| {
+            calls+=1;
+            Err(ClientError::Technical { code:"outcome_unknown", message:"délai".into() })
+        });
+        assert_eq!(calls,2);
+        assert!(matches!(result,Err(ClientError::Technical {code:"outcome_unknown",message}) if message.contains("same-key") && message.contains("doublon")));
+        let mut calls=0;
+        let result: Result<(),_> = recover_admission_reply171("same-key", |_| false, |_| {
+            calls+=1;
+            Err(ClientError::Technical { code:"native_delegation_refused", message:"permission_not_inherited".into() })
+        });
+        assert_eq!(calls,1);
+        assert!(matches!(result,Err(ClientError::Technical {code:"native_delegation_refused",..})));
     }
 }
 

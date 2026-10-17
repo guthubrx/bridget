@@ -25,6 +25,164 @@ const STORE_VERSION: u16 = 1;
 const DRAIN_PROOF_RESERVATION: u64 = 4096;
 const MAX_DRAIN_PROOF_BYTES: usize = 2048;
 
+// SPEC171: bounded diagnostics for the existing V2 probe only. The same
+// UUID/admission/candidate filters and 128 notes / 512 bytes as the master.
+const MAX_PROBE_PERMISSION_NOTES: usize = 128;
+const MAX_PROBE_PERMISSION_NOTE_BYTES: usize = 512;
+
+#[derive(Clone, Copy)]
+enum ProbePermissionSite { Projection, ScopedConstructor, Refresh, Recheck, BatchFinish }
+impl ProbePermissionSite {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Projection => "projection",
+            Self::ScopedConstructor => "scoped-constructor",
+            Self::Refresh => "refresh",
+            Self::Recheck => "recheck",
+            Self::BatchFinish => "batch-finish",
+        }
+    }
+}
+
+struct ProbePermissionDiagnostics<'a> {
+    correlation_id: &'a str,
+    admission_id: &'a str,
+    emitted: std::cell::Cell<usize>,
+}
+impl<'a> ProbePermissionDiagnostics<'a> {
+    fn new(correlation_id: &'a str, admission_id: &'a str) -> Self {
+        Self { correlation_id, admission_id, emitted: std::cell::Cell::new(0) }
+    }
+    fn note(&self, candidate_id: &str, site: ProbePermissionSite, error: &str) -> Option<String> {
+        self.note_with_witness(candidate_id, site, error, None)
+    }
+    fn note_with_witness(&self, candidate_id: &str, site: ProbePermissionSite, error: &str,
+        detail: Option<(Option<crate::native_permissions::ProjectionGuard>,
+            &crate::native_permissions::ProjectionWitnessSummary171)>,
+    ) -> Option<String> {
+        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES
+            || self.correlation_id.len() != 36
+            || uuid::Uuid::parse_str(self.correlation_id).is_err()
+            || self.admission_id.len() != 34
+            || !self.admission_id.starts_with("a-")
+            || !self.admission_id[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            || !bridget_transport::protocol::is_routing_candidate_id(candidate_id)
+        { return None; }
+        // Exact closed codes only, never an error message or a prefix match.
+        let code = match error {
+            "effort_unavailable"
+            | "machine_path_unverifiable"
+            | "model_unavailable"
+            | "permission_attestation_unavailable"
+            | "permission_hook_capture_changed"
+            | "permission_hook_capture_unavailable"
+            | "permission_hook_command_unavailable"
+            | "permission_hook_control_changed"
+            | "permission_hook_dependencies_unavailable"
+            | "permission_hook_dependency_changed"
+            | "permission_hook_dependency_unavailable"
+            | "permission_hook_environment_unavailable"
+            | "permission_hook_equivalence_unavailable"
+            | "permission_hook_event_changed"
+            | "permission_hook_execution_unavailable"
+            | "permission_hook_git_config_changed"
+            | "permission_hook_git_state_unavailable"
+            | "permission_hook_input_budget"
+            | "permission_hook_input_outside_project"
+            | "permission_hook_input_unavailable"
+            | "permission_hook_matcher_changed"
+            | "permission_hook_path_program_changed"
+            | "permission_hook_permissions_changed"
+            | "permission_hook_permissions_unavailable"
+            | "permission_hook_platform_unavailable"
+            | "permission_hook_profile_budget"
+            | "permission_hook_profile_changed"
+            | "permission_hook_profile_incomplete"
+            | "permission_hook_profile_path"
+            | "permission_hook_profile_schema"
+            | "permission_hook_profile_timeout"
+            | "permission_hook_profile_unavailable"
+            | "permission_hook_prompt_changed"
+            | "permission_hook_recipe_source_changed"
+            | "permission_hook_recipe_unavailable"
+            | "permission_hook_selection_changed"
+            | "permission_hook_selection_unavailable"
+            | "permission_hook_settings_changed"
+            | "permission_hook_target_controls_changed"
+            | "permission_hook_target_controls_unavailable"
+            | "permission_hook_type_unavailable"
+            | "permission_hook_unattested_settings_input"
+            | "permission_hook_unknown_dynamic_dependency"
+            | "permission_hook_unknown_path_program"
+            | "permission_hook_unmapped_permission_path"
+            | "permission_hook_unported_ralph_state"
+            | "permission_hook_unported_skills_repository"
+            | "permission_hook_unported_skills_write"
+            | "permission_hook_unported_tmux_state"
+            | "permission_hook_unqualified_branch"
+            | "permission_hook_unqualified_html_branch"
+            | "permission_hook_unqualified_security_change"
+            | "permission_hook_unqualified_security_commit"
+            | "permission_hook_unqualified_security_edit"
+            | "permission_hook_wrapper_changed"
+            | "permission_hook_wrapper_unavailable"
+            | "permission_mapping_unavailable"
+            | "permission_not_inherited"
+            | "permission_revision_changed"
+            | "permission_session_start_sdk_dependency_unattested"
+            | "permission_source_unavailable"
+            | "settings_revision_changed" => error,
+            _ => "unknown",
+        };
+        let mut value = serde_json::json!({"event":"worker_probe_permission_refused",
+            "correlation_id":self.correlation_id,"admission_id":self.admission_id,
+            "candidate_id":candidate_id,"site":site.as_str(),"code":code});
+        if let Some((guard, summary)) = detail {
+            value["reason"] = serde_json::json!(guard.map(|g| g.as_str()).unwrap_or("unknown"));
+            value["witness"] = summary.json();
+        }
+        let note = value.to_string();
+        if note.len() > MAX_PROBE_PERMISSION_NOTE_BYTES { return None; }
+        self.emitted.set(self.emitted.get() + 1);
+        Some(note)
+    }
+}
+
+fn map_probe_permission_failure(
+    error: &str,
+    diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
+    site: ProbePermissionSite,
+    emit: impl FnOnce(&str),
+) -> WorkerRefusal {
+    if let Some((batch, candidate_id)) = diagnostics {
+        if let Some(note) = batch.note(candidate_id, site, error) { emit(&note); }
+    }
+    WorkerRefusal::PermissionsChanged
+}
+fn observe_probe_permission_failure(
+    error: &str, diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>, site: ProbePermissionSite,
+) -> WorkerRefusal {
+    map_probe_permission_failure(error, diagnostics, site,
+        |note| eprintln!("bridget_probe_permission_refusal {note}"))
+}
+
+// The internal reason augments the existing note; the external refusal is unchanged.
+fn map_probe_projection_failure171(
+    error: &str, diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
+    guard: Option<crate::native_permissions::ProjectionGuard>, parent_policy: &serde_json::Value,
+    emit: impl FnOnce(&str),
+) -> WorkerRefusal {
+    if error != "permission_hook_equivalence_unavailable" {
+        return map_probe_permission_failure(error, diagnostics, ProbePermissionSite::Projection, emit);
+    }
+    if let Some((batch, candidate_id)) = diagnostics {
+        let summary = crate::native_permissions::projection_witness_summary171(parent_policy);
+        if let Some(note) = batch.note_with_witness(candidate_id, ProbePermissionSite::Projection,
+            error, Some((guard, &summary))) { emit(&note); }
+    }
+    WorkerRefusal::PermissionsChanged
+}
+
 #[derive(Debug)]
 pub enum WorkerStoreError {
     Io(io::Error),
@@ -93,6 +251,10 @@ pub struct WorkerCommandReceipt {
     pub native_ready: bool,
     #[serde(default)]
     pub startup_failed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup_failure: Option<bridget_transport::protocol::WorkerStartupFailure>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_exit_code: Option<i32>,
     /// Canon préparé conservé avant bootstrap pour les rechecks après reprise.
     #[serde(default)]
     preparation: Option<(WorkerPrepare, WorkerPrepared)>,
@@ -362,6 +524,8 @@ impl WorkerStore {
             child_id: None,
             native_ready: false,
             startup_failed: false,
+            startup_failure: None,
+            terminal_exit_code: None,
             preparation: None,
             routing: None,
             created_at: now,
@@ -455,6 +619,29 @@ impl WorkerStore {
         }
         self.admit(bytes.len() as u64, 0)?;
         self.persist(&self.command_path(identity), &receipt)
+    }
+
+    fn record_startup_outcome(
+        &self,
+        identity: &WorkerCommandIdentity,
+        failure: Option<bridget_transport::protocol::WorkerStartupFailure>,
+        exit_code: Option<i32>,
+    ) -> Result<(), WorkerStoreError> {
+        let _guard = self.transition.lock().map_err(|_| WorkerStoreError::Quarantined)?;
+        self.health()?;
+        let mut receipt = self.read_command(identity)?.ok_or(WorkerStoreError::Unknown)?;
+        let before = (receipt.startup_failure, receipt.terminal_exit_code);
+        if receipt.startup_failure.is_none() { receipt.startup_failure = failure; }
+        if exit_code.is_some() { receipt.terminal_exit_code = exit_code; }
+        if before != (receipt.startup_failure, receipt.terminal_exit_code) {
+            self.persist(&self.command_path(identity), &receipt)?;
+            eprintln!("bridget_remote_start171 {}", serde_json::json!({
+                "task_id":identity.task_id,"command_id":identity.command_id,
+                "generation":identity.generation,"failure":receipt.startup_failure,
+                "exit_code":receipt.terminal_exit_code
+            }));
+        }
+        Ok(())
     }
 
     fn native_status(
@@ -1163,7 +1350,11 @@ impl WorkerStore {
         else {
             return Err(WorkerRefusal::InvalidEnvelope.into());
         };
-        let plan = crate::workspace_git::preflight(root, base_ref.as_deref(), branch.as_deref())
+        if let Some(commit) = request.base_commit.as_deref() {
+            crate::workspace_git::import_remote_commit(root, commit)
+                .map_err(|_| WorkerStoreError::Unknown)?;
+        }
+        let plan = crate::workspace_git::preflight_remote(root, base_ref.as_deref(), branch.as_deref())
             .map_err(|_| WorkerStoreError::Unknown)?;
         if request
             .base_commit
@@ -1970,6 +2161,8 @@ impl WorkerRuntime {
         request: &WorkerPrepare,
         mapping: &ProjectMapping,
         cwd: &Path,
+        operation: &mut crate::native_permissions::PermissionReadOperation,
+        diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
     ) -> Result<CandidateReadiness, WorkerRefusal> {
         let pinned = registry
             .clone()
@@ -1981,45 +2174,49 @@ impl WorkerRuntime {
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         crate::lifecycle::launch_preflight(&pinned, &request.agent_type, &self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        let (mut policy, effective_posture) =
-            crate::native_permissions::project_remote_permissions(
+        let projection_definition = pinned.get(&request.agent_type)
+            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
+        let (projection, projection_guard) = crate::native_permissions::observe_projection171(||
+            crate::native_permissions::project_remote_permissions_in_operation(
                 &request.parent,
-                pinned
-                    .get(&request.agent_type)
-                    .map_err(|_| WorkerRefusal::DefinitionChanged)?,
+                projection_definition,
                 mapping,
                 cwd,
                 &self.source,
                 request.posture,
-                &self.protected(),
-            )
-            .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+                &self.protected(), operation,
+            ));
+        let (mut policy, effective_posture) = projection.map_err(|code|
+            map_probe_projection_failure171(&code, diagnostics, projection_guard, &request.parent.provider_policy,
+                |note| eprintln!("bridget_probe_permission_refusal {note}")))?;
         let scoped = pinned
-            .for_inherited_delegation(
+            .for_inherited_delegation_in_operation(
                 &request.agent_type,
                 &request.model,
                 request.effort.as_deref(),
-                &policy,
+                &policy, operation,
             )
-            .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+            .map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::ScopedConstructor))?;
         let definition = scoped
             .get(&request.agent_type)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         // Les arguments effectivement contrôlés sont capturés avant le digest
         // de droits. La capture reste une lecture de configuration locale.
         if definition.protocol == "claude_stream_json" {
-            policy["launch_context"] =
-                crate::native_permissions::capture_context(definition, cwd, &self.source)
-                    .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+            crate::native_permissions::refresh_remote_permissions_context_in_operation(
+                &mut policy, definition, cwd, &self.source, mapping, operation,
+            ).map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Refresh))?;
         }
-        crate::native_permissions::recheck_remote_child_permissions(
+        crate::native_permissions::recheck_remote_child_permissions_in_operation(
             &policy,
             definition,
             cwd,
             &self.source,
             &self.protected(),
+            Some(mapping),
+            Some(&request.parent), operation,
         )
-        .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        .map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Recheck))?;
         let definition = scoped
             .resolved_definition(&request.agent_type)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
@@ -2066,15 +2263,38 @@ impl WorkerRuntime {
     /// Préconditions d'un worktree futur : Git reste strictement en lecture.
     /// La création et le cwd réel restent réservés à `prepare_workspace` du
     /// seul élu après admission.
+    /// Le worker traite ses commandes en série. Les préparations et reçus
+    /// durables couvrent aussi un redémarrage : aucune mission connue ne peut
+    /// changer de fichiers sous ses pieds, même si son état est incertain.
+    fn shared_refresh_allowed(&self, root: &Path, base: &str) -> Result<bool, CandidateProbeRefusal> {
+        if !crate::workspace_git::shared_refresh_needed(root, base)? { return Ok(false); }
+        let overlaps = |cwd: &Path| cwd.starts_with(root) || root.starts_with(cwd);
+        if self.prepared.values().any(|p| overlaps(Path::new(&p.prepared.placement.execution_cwd)))
+            || self.store.commands().map_err(|_| CandidateProbeRefusal::WorkspaceUnavailable)?.iter().any(|c|
+                !matches!(c.phase, WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused)
+                && overlaps(Path::new(&c.placement.execution_cwd))) {
+            return Err(CandidateProbeRefusal::WorkspaceBusy);
+        }
+        Ok(true)
+    }
+
+    fn refresh_shared_workspace(&self, root: &Path, base: &str) -> Result<(), WorkerRefusal> {
+        if self.shared_refresh_allowed(root, base).map_err(|_| WorkerRefusal::PlacementMismatch)? {
+            crate::workspace_git::refresh_shared(root, base).map_err(|_| WorkerRefusal::PlacementMismatch)?;
+        }
+        Ok(())
+    }
+
     fn probe_workspace_preconditions(
+        &self,
         request: &WorkerPrepare,
         mapping: &ProjectMapping,
-        cwd: &Path,
+        _cwd: &Path,
     ) -> Result<(), CandidateProbeRefusal> {
         if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
             &request.workspace
         {
-            let preflight = crate::workspace_git::preflight(
+            let preflight = crate::workspace_git::preflight_remote(
                 &mapping.remote_root,
                 base_ref.as_deref(),
                 branch.as_deref(),
@@ -2089,8 +2309,10 @@ impl WorkerRuntime {
             }
             return Ok(());
         }
-        Self::verify_base_commit(cwd, request.base_commit.as_deref())
-            .map_err(|_| CandidateProbeRefusal::WorkspaceUnavailable)
+        if let Some(base) = request.base_commit.as_deref() {
+            self.shared_refresh_allowed(&mapping.remote_root, base)?;
+        }
+        Ok(())
     }
 
     fn probe_one_candidate(
@@ -2099,7 +2321,12 @@ impl WorkerRuntime {
         candidate: &CandidateProbeCandidate,
         registry: &AgentRegistry,
     ) -> CandidateProbeVerdict {
-        self.probe_one_candidate_for(probe, candidate, registry, None, None)
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
+        let verdict = self.probe_one_candidate_for(probe, candidate, registry, None, None, &mut operation, None);
+        if operation.finish().is_err() {
+            return CandidateProbeVerdict::Ineligible { candidate_id: candidate.candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
+        }
+        verdict
     }
     fn probe_one_candidate_for(
         &self,
@@ -2108,6 +2335,8 @@ impl WorkerRuntime {
         registry: &AgentRegistry,
         workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
         git_facts: Option<&mut ProbeGitFacts>,
+        operation: &mut crate::native_permissions::PermissionReadOperation,
+        diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
     ) -> CandidateProbeVerdict {
         let mapping_revision =
             match registry.project_mapping(&self.identity.machine_id, &candidate.project_id) {
@@ -2141,7 +2370,7 @@ impl WorkerRuntime {
             let (mapping, cwd) = self
                 .mapping_paths_and_git(&request, mapping, workload)
                 .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
-            Self::probe_workspace_preconditions(&request, &mapping, &cwd)?;
+            self.probe_workspace_preconditions(&request, &mapping, &cwd)?;
             Ok((mapping, cwd))
         };
         let checked = if let Some(cache) = git_facts {
@@ -2183,7 +2412,7 @@ impl WorkerRuntime {
                 };
             }
         };
-        let readiness = match self.inspect_candidate(registry, &request, &mapping, &cwd) {
+        let readiness = match self.inspect_candidate(registry, &request, &mapping, &cwd, operation, diagnostics) {
             Ok(readiness) => readiness,
             Err(WorkerRefusal::DefinitionChanged) => {
                 return CandidateProbeVerdict::Ineligible {
@@ -2233,17 +2462,25 @@ impl WorkerRuntime {
             return Err(WorkerRefusal::StaleConnection);
         }
         let registry = self.registry();
-        let verdicts = probe
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
+        let mut verdicts: Vec<CandidateProbeVerdict> = probe
             .candidates
             .iter()
             .map(|candidate| match &registry {
-                Ok(registry) => self.probe_one_candidate(probe, candidate, registry),
+                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, &mut operation, None),
                 Err(_) => CandidateProbeVerdict::Ineligible {
                     candidate_id: candidate.candidate_id.clone(),
                     reason: CandidateProbeRefusal::CapabilityUnavailable,
                 },
             })
             .collect();
+        if operation.finish().is_err() {
+            for verdict in &mut verdicts {
+                if let CandidateProbeVerdict::Eligible { candidate_id, .. } = verdict {
+                    *verdict = CandidateProbeVerdict::Ineligible { candidate_id: candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
+                }
+            }
+        }
         Ok(CandidateProbeResult {
             version: WORKER_CANDIDATE_PROBE_VERSION,
             correlation_id: probe.correlation_id.clone(),
@@ -2296,7 +2533,9 @@ impl WorkerRuntime {
             })
             .collect::<std::collections::HashMap<_, _>>();
         let mut git_facts = ProbeGitFacts::new();
-        let verdicts = probe
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
+        let diagnostics = ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
+        let mut verdicts: Vec<CandidateProbeV2Verdict> = probe
             .candidates
             .iter()
             .map(|candidate| {
@@ -2355,7 +2594,8 @@ impl WorkerRuntime {
                     &legacy_probe.candidates[0],
                     &registry,
                     Some(candidate.workload),
-                    Some(&mut git_facts),
+                    Some(&mut git_facts), &mut operation,
+                    Some((&diagnostics, candidate.candidate_id.as_str())),
                 ) {
                     CandidateProbeVerdict::Eligible {
                         mapping_revision,
@@ -2379,6 +2619,14 @@ impl WorkerRuntime {
                 }
             })
             .collect();
+        if let Err(code) = operation.finish() {
+            for verdict in &mut verdicts {
+                if let CandidateProbeV2Verdict::Eligible { candidate_id, .. } = verdict {
+                    observe_probe_permission_failure(&code, Some((&diagnostics, candidate_id)), ProbePermissionSite::BatchFinish);
+                    *verdict = CandidateProbeV2Verdict::Ineligible { candidate_id: candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
+                }
+            }
+        }
         Ok(CandidateProbeV2Result {
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: probe.correlation_id.clone(),
@@ -2422,6 +2670,7 @@ impl WorkerRuntime {
             return Err(WorkerRefusal::ResourceLimit);
         }
         let expires = Instant::now() + Duration::from_secs(30);
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
         let registry = self.registry()?;
         if let Some((selection, _, _)) = &routing {
             self.check_routing_connection(&registry, request, selection)?;
@@ -2442,7 +2691,7 @@ impl WorkerRuntime {
             // par `base_ref`, pas le HEAD courant du dépôt source. Ce même
             // préflight est relu avant toute écriture, puis le cwd créé est
             // contrôlé une seconde fois ci-dessous.
-            let preflight = crate::workspace_git::preflight(
+            let preflight = crate::workspace_git::preflight_remote(
                 &mapping.remote_root,
                 base_ref.as_deref(),
                 branch.as_deref(),
@@ -2456,10 +2705,11 @@ impl WorkerRuntime {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
             inspected_base = Some(preflight.base_commit);
-        } else {
-            Self::verify_base_commit(&cwd, request.base_commit.as_deref())?;
+        } else if let Some(base) = request.base_commit.as_deref() {
+            self.shared_refresh_allowed(&mapping.remote_root, base)
+                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
         }
-        let initial = self.inspect_candidate(&registry, request, &mapping, &cwd)?;
+        let initial = self.inspect_candidate(&registry, request, &mapping, &cwd, &mut operation, None)?;
         if let Some((_, expected_definition, expected_permission)) = &routing {
             if initial.definition.digest != *expected_definition {
                 return Err(WorkerRefusal::DefinitionChanged);
@@ -2469,6 +2719,7 @@ impl WorkerRuntime {
             }
         }
         if inspect_only {
+            operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
             if Instant::now() >= expires {
                 return Err(WorkerRefusal::PrepareExpired);
             }
@@ -2524,10 +2775,16 @@ impl WorkerRuntime {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
         }
+        if !matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. }))
+            && let Some(base) = request.base_commit.as_deref()
+        {
+            self.refresh_shared_workspace(&mapping.remote_root, base)?;
+        }
         Self::verify_base_commit(&cwd, request.base_commit.as_deref())?;
         // Le second contrôle conserve le verdict exact du cwd de worktree
         // choisi, après que le premier a fermé toute création sur révocation.
-        let readiness = self.inspect_candidate(&registry, request, &mapping, &cwd)?;
+        let readiness = self.inspect_candidate(&registry, request, &mapping, &cwd, &mut operation, None)?;
+        operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
         if Instant::now() >= expires {
             return Err(WorkerRefusal::PrepareExpired);
         }
@@ -2576,6 +2833,7 @@ impl WorkerRuntime {
         prepared: &PreparedRuntime,
         before_release: bool,
     ) -> Result<AgentRegistry, WorkerRefusal> {
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
         let registry = self.registry()?;
         if let Some(routing) = &prepared.routing {
             self.check_routing_connection(&registry, &prepared.request, routing)?;
@@ -2638,11 +2896,11 @@ impl WorkerRuntime {
             return Err(WorkerRefusal::PlacementMismatch);
         }
         let scoped = registry
-            .for_inherited_delegation(
+            .for_inherited_delegation_in_operation(
                 &prepared.request.agent_type,
                 &prepared.request.model,
                 prepared.request.effort.as_deref(),
-                &prepared.prepared.child_policy,
+                &prepared.prepared.child_policy, &mut operation,
             )
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         if scoped
@@ -2654,7 +2912,7 @@ impl WorkerRuntime {
         }
         crate::lifecycle::launch_preflight(&scoped, &prepared.request.agent_type, &self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        crate::native_permissions::recheck_remote_child_permissions(
+        crate::native_permissions::recheck_remote_child_permissions_in_operation(
             &prepared.prepared.child_policy,
             scoped
                 .get(&prepared.request.agent_type)
@@ -2662,8 +2920,11 @@ impl WorkerRuntime {
             &cwd,
             &self.source,
             &self.protected(),
+            Some(&mapping),
+            Some(&prepared.request.parent), &mut operation,
         )
         .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
         Ok(scoped)
     }
 
@@ -2829,9 +3090,16 @@ impl WorkerRuntime {
                 cwd: launch.cwd,
                 env: launch.env,
             };
+            // Conserver le diagnostic privé du bootstrap et du fournisseur,
+            // comme pour un lancement local, sans le publier dans le protocole.
+            let (stderr, _) = crate::managed_process::ManagedStderrStore::at_directory(
+                self.store.root.join("managed-stderr"),
+            )
+            .open(&start.child_id, &managed.identity)
+            .map_err(refuse)?;
             let child = crate::managed_process::spawn_managed_bootstrap_with_stderr(
                 &managed,
-                std::process::Stdio::null(),
+                std::process::Stdio::from(stderr),
             )
             .map_err(refuse)?;
             Ok::<_, WorkerRefusal>((child, cancel_key))
@@ -3000,6 +3268,7 @@ impl WorkerRuntime {
     ) -> WorkerResponseOperation {
         WorkerResponseOperation::Observation {
             observation: WorkerObservation {
+                    startup_failure: None,
                 phase,
                 native_ready: native_ready && phase == WorkerCommandPhase::Released,
                 exit_code,
@@ -3010,6 +3279,21 @@ impl WorkerRuntime {
         }
     }
     fn reconcile(
+        &mut self,
+        command: &WorkerCommandIdentity,
+    ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        let mut response = self.reconcile_inner(command)?;
+        let receipt = self.store.command(command).map_err(refuse)?;
+        if let WorkerResponseOperation::Observation { observation } = &mut response {
+            observation.startup_failure = receipt.startup_failure;
+            if observation.phase == WorkerCommandPhase::Terminal {
+                observation.exit_code = receipt.terminal_exit_code.or(observation.exit_code);
+            }
+        }
+        Ok(response)
+    }
+
+    fn reconcile_inner(
         &mut self,
         command: &WorkerCommandIdentity,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
@@ -3036,6 +3320,21 @@ impl WorkerRuntime {
         }
         if let Some(child) = self.running.get_mut(&command.command_id) {
             let exit = child.try_wait().map_err(refuse)?;
+            let status = child.try_status();
+            use bridget_transport::protocol::WorkerStartupFailure as Failure;
+            let failure = match &status {
+                Ok(Some(crate::managed_process::ManagedStatus::StartupFailed {
+                    kind, instance_id, command_id, generation, ..
+                })) if instance_id == &command.instance_id && command_id == &command.command_id
+                    && *generation == command.generation => Some(match kind.as_str() {
+                        "command_missing" => Failure::CommandMissing,
+                        _ => Failure::NegotiationFailed,
+                    }),
+                Ok(Some(_)) | Err(_) => Some(Failure::InvalidStatus),
+                _ if exit.is_some() && !receipt.native_ready => Some(Failure::ExitedBeforeReady),
+                _ => None,
+            };
+            self.store.record_startup_outcome(command, failure, exit.and_then(|s| s.code())).map_err(refuse)?;
             // Lire la preuve après la fin : le wrapper la publie avant sa sortie.
             if exit.is_some() && !self.store.drainage_proven(&receipt).unwrap_or(false) {
                 self.store
@@ -3054,7 +3353,7 @@ impl WorkerRuntime {
             let mut failed = receipt.startup_failed;
             // Toute trame après BootstrapReady est un échec explicite
             // ou une seconde ready interdite, comme le superviseur local.
-            if matches!(child.try_status(), Ok(Some(_)) | Err(_)) {
+            if matches!(status, Ok(Some(_)) | Err(_)) {
                 failed = true;
             }
             let native_ready = !failed && !child.status_is_open() && exit.is_none();
@@ -3440,8 +3739,16 @@ impl WorkerRuntime {
             || marker.instance_id != command.instance_id
             || marker.generation != command.generation
             || self.markers.load(&marker_key(command)).map_err(refuse)? != marker
-            || crate::managed_process::process_birth(marker.pgid).ok() != Some(marker.birth)
         {
+            return Err(WorkerRefusal::UnknownExecution);
+        }
+        // Une annulation peut arriver après la sortie du wrapper. Reprendre la
+        // clôture durable avant de demander l'identité d'un processus disparu.
+        // reconcile conserve l'exigence de preuve de drainage après RELEASE.
+        if !crate::managed_process::group_exists(marker.pgid).map_err(refuse)? {
+            return self.reconcile(command);
+        }
+        if crate::managed_process::process_birth(marker.pgid).ok() != Some(marker.birth) {
             return Err(WorkerRefusal::UnknownExecution);
         }
         if let Some(child) = self.running.get_mut(&command.command_id) {
@@ -3935,6 +4242,199 @@ mod tests {
     use super::*;
     use bridget_transport::protocol::{RemoteResultDeferredReason, RemoteResultDisposition};
     use std::os::unix::fs::symlink;
+
+
+    #[test]
+    fn native171_probe_projection_guard_reasons_closed_bounded_same_refusal() {
+        use crate::native_permissions::{ProjectionGuard, equivalence_fail_at,
+            observe_projection171, projection_witness_summary171};
+        let correlation = "16679ded-7e80-4918-ad3e-7df3ebcdda5d";
+        let admission = "a-86a844fb3499046e4428fc09348a1e50";
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let policy = serde_json::json!({"launch_context":{"source_equivalence":{
+            "version":2,"scope":"origin","profile":{"revision":digest}}}});
+        let batch = ProbePermissionDiagnostics::new(correlation, admission);
+        let mut seen = std::collections::BTreeSet::new();
+        for guard in ProjectionGuard::ALL {
+            let (result, observed) = observe_projection171::<()>(|| Err(equivalence_fail_at(guard)));
+            assert_eq!(result, Err("permission_hook_equivalence_unavailable".into()));
+            assert_eq!(observed, Some(guard));
+            assert!(seen.insert(guard.as_str()));
+            let mut notes = Vec::new();
+            let refusal = map_probe_projection_failure171(result.as_ref().unwrap_err(),
+                Some((&batch,"c001")), observed, &policy, |note| notes.push(note.to_owned()));
+            assert!(matches!(refusal,WorkerRefusal::PermissionsChanged));
+            assert_eq!(notes.len(),1);
+            let note = &notes[0];
+            assert!(note.len() <= MAX_PROBE_PERMISSION_NOTE_BYTES);
+            let v: serde_json::Value = serde_json::from_str(note).unwrap();
+            assert_eq!(v.as_object().unwrap().len(),8);
+            assert_eq!(v["reason"],guard.as_str());
+            assert_eq!(v["code"],"permission_hook_equivalence_unavailable");
+            assert_eq!(v["site"],"projection");
+            assert_eq!(v["candidate_id"],"c001");
+            assert_eq!(v["correlation_id"],correlation);
+            assert_eq!(v["admission_id"],admission);
+            assert_eq!(v["witness"],serde_json::json!({"shape":"object","version":2,
+                "scope":"origin","profile":"object","revision":digest}));
+        }
+        assert_eq!(seen.len(),ProjectionGuard::ALL.len());
+        // No previous call's guard survives, including nested synchronous reads.
+        let (unknown, observed) = observe_projection171::<()>(|| Err("permission_hook_equivalence_unavailable".into()));
+        assert!(unknown.is_err());assert_eq!(observed,None);
+        let (success, observed) = observe_projection171(|| Ok(7));
+        assert_eq!(success,Ok(7));assert_eq!(observed,None);
+        let (_, observed) = observe_projection171::<()>(|| {
+            let _ = equivalence_fail_at(ProjectionGuard::G001);
+            let (_, inner) = observe_projection171::<()>(|| Err(equivalence_fail_at(ProjectionGuard::G002)));
+            assert_eq!(inner,Some(ProjectionGuard::G002));
+            Err("permission_hook_equivalence_unavailable".into())
+        });
+        assert_eq!(observed,Some(ProjectionGuard::G001));
+        let (_, observed) = observe_projection171::<()>(|| Err("permission_hook_equivalence_unavailable".into()));
+        assert_eq!(observed,None);
+        // Malformed and very large user-controlled witness values become type tags.
+        let secret = "SECRET /private/settings --token env=hidden STACK".repeat(2000);
+        for witness in [serde_json::Value::Null,serde_json::json!(secret),
+            serde_json::json!([secret]),serde_json::json!({"version":secret,"scope":secret,
+                "profile":{"revision":secret,"unexported":secret},"binding":secret}),
+            serde_json::json!({"version":999,"scope":"other","profile":{"revision":"sha256:BAD"}})] {
+            let bad = serde_json::json!({"launch_context":{"source_equivalence":witness}});
+            let mut note = None;
+            let refusal = map_probe_projection_failure171("permission_hook_equivalence_unavailable",
+                Some((&batch,"c001")),None,&bad,|v| note=Some(v.to_owned()));
+            assert!(matches!(refusal,WorkerRefusal::PermissionsChanged));
+            let note=note.unwrap();assert!(note.len()<=512);
+            for forbidden in ["SECRET","/private/","--token","hidden","STACK","unexported","binding"] {
+                assert!(!note.contains(forbidden));
+            }
+            let v:serde_json::Value=serde_json::from_str(&note).unwrap();assert_eq!(v["reason"],"unknown");
+            assert_eq!(v["witness"].as_object().unwrap().len(),5);
+        }
+        let missing=projection_witness_summary171(&serde_json::json!({})).json();
+        assert_eq!(missing,serde_json::json!({"shape":"absent","version":"absent",
+            "scope":"absent","profile":"absent","revision":"absent"}));
+        let cap=ProbePermissionDiagnostics::new(correlation,admission);
+        for n in 1..=128 {
+            let mut emitted=false;
+            let r=map_probe_projection_failure171("permission_hook_equivalence_unavailable",
+                Some((&cap,&format!("c{n:03}"))),Some(ProjectionGuard::G001),&policy,|v|{
+                    emitted=true;assert!(v.len()<=512);
+                });
+            assert!(emitted);assert!(matches!(r,WorkerRefusal::PermissionsChanged));
+        }
+        let mut emitted=false;
+        let r=map_probe_projection_failure171("permission_hook_equivalence_unavailable",
+            Some((&cap,"c001")),Some(ProjectionGuard::G001),&policy,|_|emitted=true);
+        assert!(!emitted);assert!(matches!(r,WorkerRefusal::PermissionsChanged));
+        for (corr,adm,candidate) in [("bad",admission,"c001"),(correlation,"a-bad","c001"),
+            (correlation,admission,"c01"),(correlation,admission,"c129")] {
+            let bad=ProbePermissionDiagnostics::new(corr,adm);let mut emitted=false;
+            let r=map_probe_projection_failure171("permission_hook_equivalence_unavailable",
+                Some((&bad,candidate)),Some(ProjectionGuard::G001),&policy,|_|emitted=true);
+            assert!(!emitted);assert!(matches!(r,WorkerRefusal::PermissionsChanged));
+        }
+        let mut emitted=false;
+        assert!(matches!(map_probe_projection_failure171("permission_hook_equivalence_unavailable",
+            None,Some(ProjectionGuard::G001),&policy,|_|emitted=true),WorkerRefusal::PermissionsChanged));
+        assert!(!emitted);
+        // Another error still uses the unchanged closed-code path, without witness fields.
+        let mut note=None;
+        let other=map_probe_projection_failure171("unknown SECRET",Some((&batch,"c001")),
+            None,&policy,|v|note=Some(v.to_owned()));
+        assert!(matches!(other,WorkerRefusal::PermissionsChanged));
+        let note=note.unwrap();assert!(!note.contains("SECRET"));
+        let value:serde_json::Value=serde_json::from_str(&note).unwrap();
+        assert_eq!(value["code"],"unknown");assert!(value.get("witness").is_none());
+    }
+
+    #[test]
+    fn native171_probe_permission_observation_closed_correlated_bounded_same_verdict() {
+        let correlation = "9c9608cf-5f4c-41d5-a6af-1e0a3f0c012c";
+        let admission = "a-7e51301c7e8dcfd3718419b98c7523a7";
+        let batch = ProbePermissionDiagnostics::new(correlation, admission);
+        let sites = [ProbePermissionSite::Projection, ProbePermissionSite::ScopedConstructor,
+            ProbePermissionSite::Refresh, ProbePermissionSite::Recheck, ProbePermissionSite::BatchFinish];
+        let codes = ["permission_hook_profile_unavailable", "permission_not_inherited",
+            "settings_revision_changed", "permission_hook_dependency_changed", "permission_hook_profile_timeout"];
+        let mut notes = Vec::new();
+        for (index, site) in sites.into_iter().enumerate() {
+            let candidate = format!("c{:03}", index + 1);
+            let refusal = map_probe_permission_failure(codes[index],
+                Some((&batch, &candidate)), site, |note| notes.push(note.to_owned()));
+            assert!(matches!(refusal, WorkerRefusal::PermissionsChanged));
+            let value: serde_json::Value = serde_json::from_str(notes.last().unwrap()).unwrap();
+            assert_eq!(value.as_object().unwrap().len(), 6);
+            assert_eq!(value["event"], "worker_probe_permission_refused");
+            assert_eq!(value["correlation_id"], correlation);
+            assert_eq!(value["admission_id"], admission);
+            assert_eq!(value["candidate_id"], candidate);
+            assert_eq!(value["site"], site.as_str());
+            assert_eq!(value["code"], codes[index]);
+            assert!(notes.last().unwrap().len() <= MAX_PROBE_PERMISSION_NOTE_BYTES);
+        }
+        for opaque in ["permission_source_unavailable SECRET", "--token=SECRET\nSTACK /private/settings",
+            "permission_hook_dependency_changed\n{\"env\":\"SECRET\"}", &"SECRET".repeat(100_000)] {
+            let refusal = map_probe_permission_failure(opaque, Some((&batch, "c001")),
+                ProbePermissionSite::Projection, |note| notes.push(note.to_owned()));
+            assert!(matches!(refusal, WorkerRefusal::PermissionsChanged));
+            let note = notes.last().unwrap();
+            assert!(!note.contains("SECRET") && !note.contains("STACK") && !note.contains("--token") && !note.contains("env"));
+            assert_eq!(serde_json::from_str::<serde_json::Value>(note).unwrap()["code"], "unknown");
+        }
+        for (bad_correlation, bad_admission, bad_candidate) in [
+            ("bad", admission, "c001"), (correlation, "a-not-hex", "c001"),
+            (correlation, admission, "c01"), (correlation, admission, "c129"),
+            ("9c9608cf-5f4c-41d5-a6af-1e0a3f0c012x", admission, "c001"),
+            (correlation, "a-gggggggggggggggggggggggggggggggg", "c001"),
+        ] {
+            let invalid = ProbePermissionDiagnostics::new(bad_correlation, bad_admission);
+            assert!(invalid.note(bad_candidate, ProbePermissionSite::Recheck, "settings_revision_changed").is_none());
+        }
+        let cap = ProbePermissionDiagnostics::new(correlation, admission);
+        for index in 0..MAX_PROBE_PERMISSION_NOTES {
+            assert!(cap.note(&format!("c{:03}", index + 1), ProbePermissionSite::BatchFinish,
+                "permission_hook_equivalence_unavailable").is_some());
+        }
+        assert!(cap.note("c001", ProbePermissionSite::BatchFinish, "settings_revision_changed").is_none());
+        let old_count = notes.len();
+        assert!(matches!(map_probe_permission_failure("opaque", None, ProbePermissionSite::Projection,
+            |note| notes.push(note.to_owned())), WorkerRefusal::PermissionsChanged));
+        assert_eq!(notes.len(), old_count);
+        let success: Result<u8, String> = Ok(7);
+        assert_eq!(success.map_err(|code| map_probe_permission_failure(&code, Some((&batch, "c001")),
+            ProbePermissionSite::Projection, |note| notes.push(note.to_owned()))).unwrap(), 7);
+        assert_eq!(notes.len(), old_count);
+    }
+
+    #[test]
+    fn incident171_startup_outcome_survives_terminal_and_reopen_without_raw_message() {
+        use bridget_transport::protocol::{WorkerStartupFailure as Failure, WorkerObservation};
+        let fixture = Fixture::new();
+        let store = fixture.open(); reserve(&store);
+        let before = store.command(&command()).unwrap();
+        store.record_startup_outcome(&command(), Some(Failure::CommandMissing), None).unwrap();
+        store.record_startup_outcome(&command(), Some(Failure::ExitedBeforeReady), Some(127)).unwrap();
+        let after = store.command(&command()).unwrap();
+        assert_eq!(after.phase, before.phase);
+        assert_eq!(after.native_ready, before.native_ready);
+        assert_eq!(after.startup_failed, before.startup_failed);
+        drop(store);
+        let store = fixture.open();
+        let receipt = store.command(&command()).unwrap();
+        assert_eq!(receipt.startup_failure, Some(Failure::CommandMissing));
+        assert_eq!(receipt.terminal_exit_code, Some(127));
+        let observation = WorkerObservation { startup_failure: receipt.startup_failure,
+            phase: WorkerCommandPhase::Terminal, native_ready:false, exit_code:receipt.terminal_exit_code,
+            observed_at:104, workspace:None, permission_digest:None };
+        let encoded=serde_json::to_value(&observation).unwrap();
+        let decoded:WorkerObservation=serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded,observation);
+        let mut foreign=encoded.clone();foreign["startup_failure"]=serde_json::json!("SECRET arbitrary stderr");
+        assert!(serde_json::from_value::<WorkerObservation>(foreign).is_err());
+        let mut legacy=encoded;legacy.as_object_mut().unwrap().remove("startup_failure");
+        assert!(serde_json::from_value::<WorkerObservation>(legacy).unwrap().startup_failure.is_none());
+    }
 
     struct Fixture(PathBuf);
     impl Fixture {
@@ -4461,6 +4961,65 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn incident171_cancel_after_exit_requires_matching_drain_and_closes_slots() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        reserve(&runtime.store);
+        let result_slot = slot(1);
+        runtime.store.reserve_result_slot(&result_slot, 101).unwrap();
+        let mut child = Command::new("/bin/cat")
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .process_group(0).spawn().unwrap();
+        let marker = ManagedMarker {
+            pgid: child.id(),
+            birth: crate::managed_process::process_birth(child.id()).unwrap(),
+            instance_id: command().instance_id,
+            command_id: command().command_id,
+            generation: command().generation,
+        };
+        runtime.store.mark_command(&command(), &marker, 101).unwrap();
+        write_json(&runtime.store.root.join("markers").join(format!("{}.json", marker_key(&command()))), &marker).unwrap();
+        let permit = WorkerReleasePermit {
+            permit_id: "cancel-after-exit171".into(), command_digest: "d".repeat(64),
+            permission_revision: 1, mapping_revision: 1, provisioning_revision: 1,
+            issued_at: 101, expires_at: 106,
+        };
+        runtime.store.authorize_release(&command(), &permit, "epoch", 101).unwrap();
+        drop(child.stdin.take());
+        assert!(child.wait().unwrap().success());
+        assert!(!crate::managed_process::group_exists(marker.pgid).unwrap());
+        assert!(matches!(runtime.cancel(&command()).unwrap(),
+            WorkerResponseOperation::Observation { observation }
+            if observation.phase == WorkerCommandPhase::Unknown));
+        assert!(!runtime.store.read_slot(&result_slot.identity).unwrap().unwrap().producer_terminal);
+        let receipt = runtime.store.command(&command()).unwrap();
+        let path = drain_proof_path(&runtime.store.root, &command());
+        let mut proof = WorkerDrainProof::expected(&receipt).unwrap();
+        proof.birth += 1;
+        write_json(&path, &proof).unwrap();
+        assert!(matches!(runtime.cancel(&command()).unwrap(),
+            WorkerResponseOperation::Observation { observation }
+            if observation.phase == WorkerCommandPhase::Unknown));
+        proof.birth -= 1;
+        write_json(&path, &proof).unwrap();
+        assert!(matches!(runtime.cancel(&command()).unwrap(),
+            WorkerResponseOperation::Observation { observation }
+            if observation.phase == WorkerCommandPhase::Terminal));
+        let closed = runtime.store.read_slot(&result_slot.identity).unwrap().unwrap();
+        assert!(closed.producer_terminal);
+        assert_eq!(closed.closed, Some(WorkerSlotClosureProof::Cancelled));
+        assert!(matches!(runtime.cancel(&command()).unwrap(),
+            WorkerResponseOperation::Observation { observation }
+            if observation.phase == WorkerCommandPhase::Terminal));
+        assert_eq!(runtime.store.read_slot(&result_slot.identity).unwrap().unwrap().finalized_at, closed.finalized_at);
+        let mut foreign = command(); foreign.generation += 1;
+        assert_eq!(runtime.cancel(&foreign).unwrap_err(), WorkerRefusal::CommandMismatch);
+    }
+
     #[test]
     fn worker162_runtime_rejeu_reserved_reste_unknown_sans_bootstrap() {
         let fixture = Fixture::new();
@@ -4824,6 +5383,67 @@ mod tests {
                     WorkerResponseOperation::Observation { observation }
                     if observation.phase == WorkerCommandPhase::Terminal));
             }
+        }
+    }
+
+    #[test]
+    fn incident171_shared_refresh_exact_commit_preserves_work_and_active_missions() {
+        use bridget_transport::protocol::CandidateProbeRefusal as R;
+        let fixture = Fixture::new();
+        let root = fixture.0.canonicalize().unwrap();
+        let origin = root.join("origin"); fs::create_dir(&origin).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git").current_dir(cwd)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false"])
+                .args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        git(&origin, &["init", "-q"]);
+        fs::write(origin.join("file"), "old\n").unwrap();
+        git(&origin, &["add", "."]); git(&origin, &["commit", "-qm", "old"]);
+        let before = git(&origin, &["rev-parse", "HEAD"]);
+        let project = root.join("project");
+        git(&root, &["clone", "-q", "--no-local", origin.to_str().unwrap(), project.to_str().unwrap()]);
+        fs::write(origin.join("file"), "new\n").unwrap();
+        git(&origin, &["commit", "-qam", "new"]);
+        let expected = git(&origin, &["rev-parse", "HEAD"]);
+        let runtime = runtime_fixture(&fixture);
+        assert_eq!(runtime.shared_refresh_allowed(&project, &expected), Ok(true));
+        assert_eq!(git(&project, &["rev-parse", "HEAD"]), before, "probe must not move HEAD");
+        assert!(!project.join(".git/FETCH_HEAD").exists());
+        fs::write(project.join("file"), "human work\n").unwrap();
+        assert_eq!(runtime.shared_refresh_allowed(&project, &expected), Err(R::WorkspaceDirty));
+        assert!(runtime.refresh_shared_workspace(&project, &expected).is_err());
+        assert_eq!(fs::read_to_string(project.join("file")).unwrap(), "human work\n");
+        fs::write(project.join("file"), "old\n").unwrap();
+        fs::write(project.join("untracked"), "keep\n").unwrap();
+        assert_eq!(runtime.shared_refresh_allowed(&project, &expected), Err(R::WorkspaceDirty));
+        fs::remove_file(project.join("untracked")).unwrap();
+        let busy_fixture = Fixture::new(); let busy = runtime_fixture(&busy_fixture);
+        let mut placement = placement(); placement.execution_cwd = project.to_string_lossy().into_owned();
+        busy.store.reserve_command(&command(), &"d".repeat(64), &placement, 1000, 100).unwrap();
+        assert_eq!(busy.shared_refresh_allowed(&project, &expected), Err(R::WorkspaceBusy));
+        assert!(busy.refresh_shared_workspace(&project, &expected).is_err());
+        assert_eq!(git(&project, &["rev-parse", "HEAD"]), before);
+        assert_eq!(runtime.shared_refresh_allowed(&project, &"a".repeat(40)), Err(R::WorkspaceBaseUnavailable));
+        let branch = git(&project, &["symbolic-ref", "HEAD"]);
+        runtime.refresh_shared_workspace(&project, &expected).unwrap();
+        assert_eq!(git(&project, &["rev-parse", "HEAD"]), expected);
+        assert_eq!(git(&project, &["symbolic-ref", "HEAD"]), branch);
+        assert_eq!(fs::read_to_string(project.join("file")).unwrap(), "new\n");
+        assert!(!project.join(".git/FETCH_HEAD").exists());
+        assert_eq!(runtime.shared_refresh_allowed(&project, &expected), Ok(false));
+        assert_eq!(runtime.shared_refresh_allowed(&project, &before), Err(R::WorkspaceDiverged));
+        fs::write(project.join("file"), "local commit\n").unwrap();
+        git(&project, &["commit", "-qam", "local"]);
+        assert_eq!(runtime.shared_refresh_allowed(&project, &expected), Err(R::WorkspaceDiverged));
+        assert!(runtime.refresh_shared_workspace(&project, &expected).is_err());
+        assert_eq!(fs::read_to_string(project.join("file")).unwrap(), "local commit\n");
+        // Les codes distincts traversent le protocole fermé existant.
+        for reason in [R::WorkspaceDirty, R::WorkspaceBusy, R::WorkspaceDiverged, R::WorkspaceBaseUnavailable] {
+            assert_eq!(serde_json::from_value::<R>(serde_json::to_value(&reason).unwrap()).unwrap(), reason);
         }
     }
 

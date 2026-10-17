@@ -15,7 +15,7 @@ mod tests;
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_OUTPUT: usize = 1024 * 1024;
-const HOSTILE_CONFIG: &str = "^(filter\\..*\\.(smudge|clean|process)|include\\..*|includeif\\..*|extensions\\.(partialclone|worktreeconfig)|remote\\..*\\.promisor)$";
+const HOSTILE_CONFIG: &str = "^(filter\\..*\\.(smudge|clean|process)|include\\..*|includeif\\..*|extensions\\.partialclone|remote\\..*\\.promisor)$";
 
 #[derive(Debug)]
 pub(crate) struct GitOutput {
@@ -158,7 +158,6 @@ fn allowed(args: &[&str]) -> bool {
             .is_some_and(|branch| validate_branch(branch).is_ok()),
         [
             "config",
-            "--local",
             "--no-includes",
             "--get-regexp",
             pattern,
@@ -170,6 +169,8 @@ fn allowed(args: &[&str]) -> bool {
             "--get",
             "remote.origin.url",
         ] => true,
+        ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin, commit] =>
+            Path::new(origin).is_absolute() && sha(commit),
         ["worktree", "list", "--porcelain"] | ["worktree", "list", "--porcelain", "-z"] => true,
         ["worktree", "add", "-b", branch, "--", path, base] => {
             validate_branch(branch).is_ok() && Path::new(path).is_absolute() && sha(base)
@@ -183,6 +184,8 @@ fn allowed(args: &[&str]) -> bool {
             commits,
         ] => range(commits),
         ["status", "--porcelain=v1", "--untracked-files=normal"] => true,
+        ["merge-base", "--is-ancestor", head, target] => sha(head) && sha(target),
+        ["merge", "--ff-only", "--no-edit", "--no-stat", "--no-overwrite-ignore", target] => sha(target),
         _ => false,
     }
 }
@@ -230,7 +233,7 @@ fn capture(
     timeout: Duration,
     anchor: Option<(&Path, &Path)>,
 ) -> Result<GitOutput, String> {
-    let timeout = timeout.min(if args.get(1) == Some(&"add") {
+    let timeout = timeout.min(if args.get(1) == Some(&"add") || args.first() == Some(&"fetch") {
         CREATE_TIMEOUT
     } else {
         READ_TIMEOUT
@@ -287,6 +290,15 @@ fn capture(
         ])
         .arg("-C")
         .arg(cwd);
+    if args.first() == Some(&"merge") {
+        command.args(["-c", "merge.autoStash=false"]);
+    }
+    if args.first() == Some(&"fetch") {
+        // Seule une origine locale canonique, déjà liée au mapping, est admise.
+        // Aucun transport réseau, helper remote, hook ou refspec fourni librement.
+        command.env("GIT_ALLOW_PROTOCOL", "file")
+            .args(["-c", "protocol.file.allow=always", "-c", "fetch.writeCommitGraph=false"]);
+    }
     if let Some((git_dir, work_tree)) = anchor {
         command.arg(format!("--git-dir={}", git_dir.display()));
         command.arg(format!("--work-tree={}", work_tree.display()));
@@ -394,13 +406,14 @@ fn capture(
     Ok(output)
 }
 
-/// O(B), B configuration locale bornée ; aucune inclusion n'est développée.
+/// O(B), configuration commune + config.worktree, bornée, sans inclusion.
+/// capture désactive les configurations globales/système ; l'extension Git
+/// worktreeConfig est normale, son contenu garde les mêmes contrôles.
 pub(crate) fn executable_configuration(cwd: &Path) -> Result<bool, String> {
     let output = run_git(
         cwd,
         &[
             "config",
-            "--local",
             "--no-includes",
             "--get-regexp",
             HOSTILE_CONFIG,
@@ -420,45 +433,13 @@ pub(crate) fn executable_configuration(cwd: &Path) -> Result<bool, String> {
     }
 }
 
-/// O(B+w), B configuration/sorties bornées, w worktrees listés. Aucune écriture.
-pub(crate) fn preflight(
+/// Résout uniquement la référence source. Aucune création ni lecture des
+/// préconditions du futur worktree sur cet hôte. Les commandes Git bornées
+/// désactivent hooks, filtres externes, fsmonitor et accès réseau implicites.
+pub(crate) fn resolve_source_commit(
     cwd: &Path,
     base_ref: Option<&str>,
-    branch: Option<&str>,
-) -> Result<WorkspacePreflight, String> {
-    preflight_classified(cwd, base_ref, branch).map_err(WorkspacePreflightError::into_legacy)
-}
-
-/// Variante interne : seul le puits d'admission auto consulte la classe de
-/// l'échec. Les autres appelants gardent la chaîne historique via `preflight`.
-pub(crate) fn preflight_classified(
-    cwd: &Path,
-    base_ref: Option<&str>,
-    branch: Option<&str>,
-) -> Result<WorkspacePreflight, WorkspacePreflightError> {
-    run_git(cwd, &["--version"], READ_TIMEOUT)?.complete()?;
-    let cwd = cwd
-        .canonicalize()
-        .map_err(|error| format!("workspace_not_git: {error}"))?;
-    let top = run_git(&cwd, &["rev-parse", "--show-toplevel"], READ_TIMEOUT)
-        .and_then(GitOutput::complete)
-        .map_err(|error| format!("workspace_not_git: {error}"))?;
-    let toplevel = PathBuf::from(top)
-        .canonicalize()
-        .map_err(|error| format!("workspace_not_git: {error}"))?;
-    let offset = cwd
-        .strip_prefix(&toplevel)
-        .map_err(|_| {
-            WorkspacePreflightError::Refused("workspace_path_unsafe: dossier hors dépôt".into())
-        })?
-        .to_path_buf();
-    if executable_configuration(&cwd)
-        .map_err(|error| format!("workspace_repo_unsupported: {error}"))?
-    {
-        return Err(
-            "workspace_repo_unsupported: filtre, inclusion, clone partiel ou worktreeConfig".into(),
-        );
-    }
+) -> Result<String, WorkspacePreflightError> {
     let base = base_ref.unwrap_or("HEAD");
     validate_base_ref(base).map_err(WorkspacePreflightError::Refused)?;
     let base = format!("{base}^{{commit}}");
@@ -493,6 +474,149 @@ pub(crate) fn preflight_classified(
             "workspace_base_unavailable: commit de base non SHA-1".into(),
         ));
     }
+    Ok(base_commit)
+}
+
+// Le miroir configuré est lu sans modifier le checkout pendant Probe.
+// Un origin réseau reste un prérequis explicite : aucune connexion cachée.
+fn local_origin(cwd: &Path) -> Result<PathBuf, String> {
+    let origin = run_git(cwd, &["config", "--local", "--no-includes", "--get", "remote.origin.url"], READ_TIMEOUT)?.complete()?;
+    let path = PathBuf::from(origin);
+    if !path.is_absolute() || path.canonicalize().map_err(|e| e.to_string())? != path || !path.is_dir() {
+        return Err("workspace_base_unavailable: commit absent et aucun miroir local configuré".into());
+    }
+    if executable_configuration(&path)? {
+        return Err("workspace_repo_unsupported: configuration du miroir local non prise en charge".into());
+    }
+    Ok(path)
+}
+
+fn remote_source_commit(cwd: &Path, base_ref: Option<&str>) -> Result<String, WorkspacePreflightError> {
+    match resolve_source_commit(cwd, base_ref) {
+        Err(WorkspacePreflightError::Refused(error)) if error == "workspace_base_unavailable: référence de base inconnue" => {
+            let origin = local_origin(cwd).map_err(WorkspacePreflightError::Refused)?;
+            resolve_source_commit(&origin, base_ref)
+        }
+        result => result,
+    }
+}
+
+/// Après sélection seulement : importer les objets exacts, sans modifier HEAD,
+/// branche, index, FETCH_HEAD, réglage Git ni contenu du checkout partagé.
+pub(crate) fn import_remote_commit(cwd: &Path, commit: &str) -> Result<(), String> {
+    if !sha(commit) { return Err("workspace_base_unavailable: commit invalide".into()); }
+    match resolve_source_commit(cwd, Some(commit)) {
+        Ok(actual) if actual == commit => return Ok(()),
+        Err(WorkspacePreflightError::Refused(error)) if error == "workspace_base_unavailable: référence de base inconnue" => {},
+        result => return Err(result.err().map_or_else(|| "expected_base_commit_mismatch".into(), WorkspacePreflightError::into_legacy)),
+    }
+    if executable_configuration(cwd)? { return Err("workspace_repo_unsupported: configuration cible non prise en charge".into()); }
+    let origin = local_origin(cwd)?;
+    let actual = resolve_source_commit(&origin, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
+    if actual != commit { return Err("expected_base_commit_mismatch".into()); }
+    run_git(cwd, &["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin.to_str().ok_or("workspace_path_unsafe")?, commit], CREATE_TIMEOUT)?.complete()?;
+    let actual = resolve_source_commit(cwd, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
+    if actual != commit { return Err("expected_base_commit_mismatch".into()); }
+    Ok(())
+}
+
+/// Préparation Shared : le probe reste en lecture. Un dossier déjà au bon
+/// commit conserve son comportement historique (y compris des edits locaux).
+/// Pour déplacer HEAD : dossier propre, racine entière autorisée et FF seulement.
+pub(crate) fn shared_refresh_needed(root: &Path, expected: &str) -> Result<bool, bridget_transport::protocol::CandidateProbeRefusal> {
+    use bridget_transport::protocol::CandidateProbeRefusal as R;
+    if !sha(expected) { return Err(R::WorkspaceBaseUnavailable); }
+    let head = resolve_source_commit(root, None).map_err(|_| R::WorkspaceUnavailable)?;
+    if head == expected { return Ok(false); }
+    let top = run_git(root, &["rev-parse", "--show-toplevel"], READ_TIMEOUT)
+        .and_then(GitOutput::complete).map_err(|_| R::WorkspaceUnavailable)?;
+    if Path::new(&top).canonicalize().ok().as_deref() != Some(root)
+        || executable_configuration(root).map_err(|_| R::WorkspaceUnavailable)? {
+        return Err(R::WorkspaceUnavailable);
+    }
+    let status = run_git(root, &["status", "--porcelain=v1", "--untracked-files=normal"], READ_TIMEOUT)
+        .and_then(GitOutput::complete).map_err(|_| R::WorkspaceUnavailable)?;
+    if !status.is_empty() { return Err(R::WorkspaceDirty); }
+    let source = match resolve_source_commit(root, Some(expected)) {
+        Ok(actual) if actual == expected => root.to_path_buf(),
+        Err(WorkspacePreflightError::Refused(_)) => local_origin(root).map_err(|_| R::WorkspaceBaseUnavailable)?,
+        _ => return Err(R::WorkspaceBaseUnavailable),
+    };
+    if resolve_source_commit(&source, Some(expected)).ok().as_deref() != Some(expected) {
+        return Err(R::WorkspaceBaseUnavailable);
+    }
+    let ancestor = run_git(&source, &["merge-base", "--is-ancestor", &head, expected], READ_TIMEOUT)
+        .map_err(|_| R::WorkspaceUnavailable)?;
+    match (ancestor.code, ancestor.truncated) {
+        (Some(0), false) => Ok(true),
+        (Some(1), false) => Err(R::WorkspaceDiverged),
+        _ => Err(R::WorkspaceBaseUnavailable),
+    }
+}
+
+/// Appelé seulement par Prepare du candidat élu, après ses droits et sous
+/// l'exclusion des missions connues du worker. Jamais reset/stash/clean.
+pub(crate) fn refresh_shared(root: &Path, expected: &str) -> Result<(), String> {
+    if !shared_refresh_needed(root, expected).map_err(|r| format!("{r:?}"))? { return Ok(()); }
+    import_remote_commit(root, expected)?;
+    // Relire après import : une écriture concurrente ne devient pas un reset.
+    if shared_refresh_needed(root, expected).map_err(|r| format!("{r:?}"))? {
+        run_git(root, &["merge", "--ff-only", "--no-edit", "--no-stat", "--no-overwrite-ignore", expected], READ_TIMEOUT)?.complete()?;
+    }
+    if resolve_source_commit(root, None).map_err(WorkspacePreflightError::into_legacy)? != expected {
+        return Err("expected_base_commit_mismatch".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn preflight_remote(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>) -> Result<WorkspacePreflight, String> {
+    preflight_on_host(cwd, base_ref, branch, true).map_err(WorkspacePreflightError::into_legacy)
+}
+
+/// O(B+w), B configuration/sorties bornées, w worktrees listés. Aucune écriture.
+pub(crate) fn preflight(
+    cwd: &Path,
+    base_ref: Option<&str>,
+    branch: Option<&str>,
+) -> Result<WorkspacePreflight, String> {
+    preflight_classified(cwd, base_ref, branch).map_err(WorkspacePreflightError::into_legacy)
+}
+
+/// Variante interne : seul le puits d'admission auto consulte la classe de
+/// l'échec. Les autres appelants gardent la chaîne historique via `preflight`.
+pub(crate) fn preflight_classified(
+    cwd: &Path,
+    base_ref: Option<&str>,
+    branch: Option<&str>,
+) -> Result<WorkspacePreflight, WorkspacePreflightError> {
+    preflight_on_host(cwd, base_ref, branch, false)
+}
+
+fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, remote: bool) -> Result<WorkspacePreflight, WorkspacePreflightError> {
+    run_git(cwd, &["--version"], READ_TIMEOUT)?.complete()?;
+    let cwd = cwd
+        .canonicalize()
+        .map_err(|error| format!("workspace_not_git: {error}"))?;
+    let top = run_git(&cwd, &["rev-parse", "--show-toplevel"], READ_TIMEOUT)
+        .and_then(GitOutput::complete)
+        .map_err(|error| format!("workspace_not_git: {error}"))?;
+    let toplevel = PathBuf::from(top)
+        .canonicalize()
+        .map_err(|error| format!("workspace_not_git: {error}"))?;
+    let offset = cwd
+        .strip_prefix(&toplevel)
+        .map_err(|_| {
+            WorkspacePreflightError::Refused("workspace_path_unsafe: dossier hors dépôt".into())
+        })?
+        .to_path_buf();
+    if executable_configuration(&cwd)
+        .map_err(|error| format!("workspace_repo_unsupported: {error}"))?
+    {
+        return Err(WorkspacePreflightError::Refused(
+            "workspace_repo_unsupported: filtre, inclusion ou clone partiel".into(),
+        ));
+    }
+    let base_commit = if remote { remote_source_commit(&cwd, base_ref)? } else { resolve_source_commit(&cwd, base_ref)? };
     if let Some(branch) = branch {
         validate_branch(branch)?;
         run_git(
@@ -609,6 +733,9 @@ pub(crate) fn create(
         Ok(_) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(residue("workspace_path_unsafe", error.to_string())),
+    }
+    if executable_configuration(&preflight.cwd)? {
+        return Err("workspace_repo_unsupported: filtre, inclusion ou clone partiel".into());
     }
     let path_text = path
         .to_str()
@@ -772,7 +899,6 @@ pub(crate) fn report(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord, Str
     let read = |args: &[&str]| capture(&path, args, READ_TIMEOUT, Some((&git_dir, &path)));
     let configuration = read(&[
         "config",
-        "--local",
         "--no-includes",
         "--get-regexp",
         HOSTILE_CONFIG,

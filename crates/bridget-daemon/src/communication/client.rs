@@ -18,6 +18,90 @@ use std::time::{Duration, Instant};
 mod lineage;
 pub(crate) use lineage::human_lineage;
 
+// BEGIN native171 closed catalogue observation. Diagnostic only, no protocol field.
+#[derive(Clone, Copy)]
+pub(crate) enum Native171ObservedCommand { RegisterAuxiliary, CallerScope, Catalogue, Other }
+impl Native171ObservedCommand {
+    fn label(self) -> &'static str { match self {
+        Self::RegisterAuxiliary => "RegisterAuxiliary", Self::CallerScope => "CallerScope",
+        Self::Catalogue => "Catalogue", Self::Other => "other",
+    } }
+    fn native(request: &bridget_transport::protocol::NativeDelegationRequest) -> Option<Self> {
+        use bridget_transport::protocol::NativeDelegationRequest;
+        match request { NativeDelegationRequest::CallerScope {} => Some(Self::CallerScope),
+            NativeDelegationRequest::Catalogue => Some(Self::Catalogue), _ => None }
+    }
+    fn wrapper(command: &WrapperToDaemon) -> Self { match command {
+        WrapperToDaemon::RegisterAuxiliary { .. } => Self::RegisterAuxiliary,
+        WrapperToDaemon::NativeDelegation { request }
+        | WrapperToDaemon::NativeDelegationT3 { request, .. } => Self::native(request).unwrap_or(Self::Other),
+        _ => Self::Other,
+    } }
+}
+#[derive(Clone, Copy)]
+pub(crate) enum Native171ObservedPhase { Connect, ReadReply, Port, Reattest, CallerScope, Catalogue, ParentFact, CatalogueEntry, ParentRecheck }
+impl Native171ObservedPhase {
+    fn label(self) -> &'static str { match self {
+        Self::Connect => "connect", Self::ReadReply => "read_reply", Self::Port => "port",
+        Self::Reattest => "reattest", Self::CallerScope => "caller_scope", Self::Catalogue => "catalogue",
+        Self::ParentFact => "parent_fact", Self::CatalogueEntry => "catalogue_entry", Self::ParentRecheck => "parent_recheck",
+    } }
+}
+pub(crate) struct Native171Observation {
+    side: &'static str, command: Native171ObservedCommand, phase: Native171ObservedPhase,
+    conn: Option<String>, instance_sha256: Option<String>, started: Instant,
+    deadline: Option<Instant>, caller_pid: Option<u32>,
+}
+impl Native171Observation {
+    fn begin(side: &'static str, command: Native171ObservedCommand, phase: Native171ObservedPhase,
+        conn: Option<&str>, instance: Option<&str>, deadline: Option<Instant>) -> Self {
+        use sha2::Digest as _;
+        let conn = conn.filter(|s| s.strip_prefix("conn-").is_some_and(|tail|
+            !tail.is_empty() && tail.len() <= 20 && tail.bytes().all(|b| b.is_ascii_digit()))).map(str::to_owned);
+        let instance_sha256 = instance.filter(|s| !s.is_empty() && s.len() <= 128)
+            .map(|s| format!("{:x}", sha2::Sha256::digest(s.as_bytes())));
+        let value = Self { side, command, phase, conn, instance_sha256, started: Instant::now(), deadline,
+            caller_pid: if side == "client" { Some(std::process::id()) } else { None } };
+        value.note("enter"); value
+    }
+    pub(crate) fn client_connect(deadline: Instant) -> Self {
+        Self::begin("client", Native171ObservedCommand::Other, Native171ObservedPhase::Connect, None, None, Some(deadline))
+    }
+    pub(crate) fn client_read(command: &WrapperToDaemon, deadline: Instant) -> Self {
+        let instance = match command { WrapperToDaemon::RegisterAuxiliary { instance_id, .. } => Some(instance_id.as_str()), _ => None };
+        Self::begin("client", Native171ObservedCommand::wrapper(command), Native171ObservedPhase::ReadReply, None, instance, Some(deadline))
+    }
+    pub(crate) fn master(command: Native171ObservedCommand, phase: Native171ObservedPhase,
+        conn: &str, instance: Option<&str>) -> Self {
+        Self::begin("master", command, phase, Some(conn), instance, None)
+    }
+    pub(crate) fn request(request: &bridget_transport::protocol::NativeDelegationRequest,
+        phase: Native171ObservedPhase, conn: &str) -> Option<Self> {
+        Native171ObservedCommand::native(request).map(|command| Self::master(command, phase, conn, None))
+    }
+    pub(crate) fn parent_recheck(instance: &str) -> Self {
+        Self::begin("native", Native171ObservedCommand::Other, Native171ObservedPhase::ParentRecheck, None, Some(instance), None)
+    }
+    fn note(&self, edge: &'static str) {
+        let now = Instant::now();
+        let elapsed_ms = now.saturating_duration_since(self.started).as_millis().min(u64::MAX as u128) as u64;
+        let remaining_ms = self.deadline.map(|d| d.saturating_duration_since(now).as_millis().min(u64::MAX as u128) as u64);
+        let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()
+            .map(|d| d.as_millis().min(u64::MAX as u128) as u64);
+        let body = serde_json::json!({"v":1,"side":self.side,"command":self.command.label(),"phase":self.phase.label(),
+            "edge":edge,"conn_id":self.conn,"instance_sha256":self.instance_sha256,"pid":std::process::id(),
+            "caller_pid":self.caller_pid,"at_ms":at_ms,"elapsed_ms":elapsed_ms,"remaining_ms":remaining_ms});
+        const PREFIX: &str = "bridget_catalogue_observation171 ";
+        const CLOSED: &str = "{\"v\":1,\"side\":\"unknown\",\"command\":\"other\",\"phase\":\"unknown\",\"edge\":\"unknown\",\"conn_id\":null,\"overflow\":true}";
+        let encoded = serde_json::to_string(&body).ok();
+        let line = encoded.as_deref().filter(|s| PREFIX.len() + s.len() + 1 <= 512).unwrap_or(CLOSED);
+        let mut sink = std::io::stderr().lock();
+        let _ = writeln!(sink, "{PREFIX}{line}");
+    }
+}
+impl Drop for Native171Observation { fn drop(&mut self) { self.note("finish"); } }
+// END native171 closed catalogue observation.
+
 pub(crate) const DAEMON_BUDGET: Duration = Duration::from_secs(10);
 
 /// Lecture locale publique du catalogue168. Cette connexion ne porte aucune
@@ -1074,6 +1158,7 @@ impl DaemonConnection {
     }
 
     pub(crate) fn connect_until(socket: &Path, deadline: Instant) -> Result<Self, ClientError> {
+        let _native171_connect_observation = Native171Observation::client_connect(deadline);
         let contextual = crate::mcp::check_tool_call(None)?;
         let connected = if contextual {
             let mut registered = false;
@@ -1196,6 +1281,7 @@ impl DaemonConnection {
             self.poison();
             return Err(error);
         }
+        let _native171_read_observation = Native171Observation::client_read(command, self.deadline);
         self.read_response(after_write)
     }
 

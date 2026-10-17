@@ -18584,6 +18584,20 @@ fn handle_worker_message(
                 {
                     return refused(WorkerRefusal::CommandMismatch);
                 }
+                if let Some(failure) = observation.startup_failure {
+                    if let Ok(Some(mut task)) = st.delegation_store.get(&response.command.task_id) {
+                        if task.state == "starting" && task.mission_issued_at.is_none() {
+                            let detail = match observation.exit_code {
+                                Some(code) => format!("remote_start_failed:{}:exit={code}", failure.code()),
+                                None => format!("remote_start_failed:{}", failure.code()),
+                            };
+                            task.error = Some(detail);
+                            if st.delegation_store.save(&task).is_err() {
+                                return refused(WorkerRefusal::StoreUnavailable);
+                            }
+                        }
+                    }
+                }
                 if matches!(
                     observation.phase,
                     WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
@@ -21478,6 +21492,7 @@ fn handle_wrapper_message_with_peer(
             instance_id,
             credential,
         } => {
+            let _native171_aux_observation = crate::communication::client::Native171Observation::master(crate::communication::client::Native171ObservedCommand::RegisterAuxiliary, crate::communication::client::Native171ObservedPhase::Port, conn_id, Some(&instance_id));
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             Some(register_auxiliary(
                 &mut st,
@@ -21711,12 +21726,18 @@ fn handle_wrapper_message_with_peer(
             peer,
             Duration::from_secs(5),
         )),
-        WrapperToDaemon::NativeDelegation { request } => Some(native_delegation::handle_with_peer(
+        WrapperToDaemon::NativeDelegation { request } => {
+            let _native171_port_observation = crate::communication::client::Native171Observation::request(&request, crate::communication::client::Native171ObservedPhase::Port, conn_id);
+            Some(native_delegation::handle_with_peer(
             conn_id, request, state, peer,
-        )),
-        WrapperToDaemon::NativeDelegationT3 { request, proof } => Some(
+        ))
+        },
+        WrapperToDaemon::NativeDelegationT3 { request, proof } => {
+            let _native171_port_observation = crate::communication::client::Native171Observation::request(&request, crate::communication::client::Native171ObservedPhase::Port, conn_id);
+            Some(
             native_delegation::handle_attested(conn_id, request, &proof, state, peer),
-        ),
+        )
+        },
         WrapperToDaemon::NativePermissionFact {
             fact,
             request_id,

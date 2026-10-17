@@ -438,6 +438,33 @@ pub struct ProjectMapping {
     pub remote_root: PathBuf,
     pub expected_git_identity: String,
     pub mapping_revision: u64,
+    #[serde(default)]
+    pub additional_root: Option<AdditionalDirectoryMapping171>,
+}
+
+/// One provisioned directory alias, not a content-transfer or permission grant.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdditionalDirectoryMapping171 {
+    pub source_root: PathBuf,
+    pub remote_root: PathBuf,
+    pub source_uid: u32,
+    pub source_mode: u32,
+    pub remote_uid: u32,
+    pub remote_mode: u32,
+    pub access: String,
+}
+
+pub(crate) fn validate_additional_mapping171(mapping: &ProjectMapping) -> Result<(), String> {
+    let Some(extra) = &mapping.additional_root else { return Ok(()); };
+    let overlaps = |a: &Path, b: &Path| a.starts_with(b) || b.starts_with(a);
+    if !mapping_root(&extra.source_root) || !mapping_root(&extra.remote_root)
+        || overlaps(&extra.source_root, &mapping.source_root)
+        || overlaps(&extra.remote_root, &mapping.remote_root)
+        || extra.access != "inherit" || extra.source_mode > 0o777 || extra.remote_mode != 0o700
+        || extra.source_mode & 0o700 != 0o700
+    { return Err("project_mapping_invalid".into()); }
+    Ok(())
 }
 
 impl MachineProvision {
@@ -1066,6 +1093,20 @@ impl AgentRegistry {
         effort: Option<&str>,
         policy: &serde_json::Value,
     ) -> Result<Self, String> {
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
+        let result = self.for_inherited_delegation_in_operation(agent_type, model, effort, policy, &mut operation)?;
+        operation.finish()?;
+        Ok(result)
+    }
+
+    pub(crate) fn for_inherited_delegation_in_operation(
+        &self,
+        agent_type: &str,
+        model: &str,
+        effort: Option<&str>,
+        policy: &serde_json::Value,
+        operation: &mut crate::native_permissions::PermissionReadOperation,
+    ) -> Result<Self, String> {
         let source = self.get(agent_type)?;
         let capabilities = source
             .capabilities
@@ -1077,10 +1118,8 @@ impl AgentRegistry {
         }
         let mut definition = source.clone();
         definition.permissions = "deny".into();
-        crate::native_permissions::apply_child_arguments(
-            &definition.protocol,
-            policy,
-            &mut definition.args,
+        crate::native_permissions::apply_child_arguments_in_operation(
+            &definition.protocol, policy, &mut definition.args, operation,
         )?;
         Self {
             agents: BTreeMap::from([(agent_type.into(), definition)]),
@@ -1749,6 +1788,7 @@ fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -> Result<()
             return Err("machine_agent_types_invalid".into());
         }
         for (project_id, mapping) in &machine.mappings {
+            validate_additional_mapping171(mapping)?;
             if !machine_label(project_id)
                 || !machine_label(&mapping.source_host)
                 || !mapping_root(&mapping.source_root)

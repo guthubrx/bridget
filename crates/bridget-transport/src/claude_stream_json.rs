@@ -1644,18 +1644,21 @@ fn spawn_reader(
                 }
             }
             if kind == "result" {
-                let denied = value
+                let tool_denials = value
                     .get("permission_denials")
                     .and_then(Value::as_array)
-                    .is_some_and(|denials| !denials.is_empty())
-                    || queue
+                    .map_or(0, Vec::len);
+                let interrupted_for_permission = queue
                         .0
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
                         .active
                         .as_ref()
                         .is_some_and(|active| active.permission_denied);
-                let terminal = if denied {
+                // Un outil bloqué par Claude ou un hook ne transforme pas un
+                // tour terminé en échec. Une interruption imposée par notre
+                // contrôle d'autorisation reste un refus terminal.
+                let terminal = if interrupted_for_permission {
                     ManagedTerminal::Failed {
                         detail: "provider_permission_denied".into(),
                     }
@@ -1681,6 +1684,23 @@ fn spawn_reader(
                             .to_string(),
                     }
                 };
+                if tool_denials > 0 {
+                    let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(active) = state.active.as_mut() {
+                        if active.response.is_empty() {
+                            if let Some(result) = value.get("result").and_then(Value::as_str) {
+                                active.response.push_str(result);
+                            }
+                        }
+                        if matches!(terminal, ManagedTerminal::Completed) {
+                            active.response.insert_str(0, &format!(
+                                "Bridget : {tool_denials} appel(s) d'outil refusé(s) par les permissions ou les hooks. Les refus sont conservés.\n\n"
+                            ));
+                        }
+                        record_or_terminal(&journal, &events, "permission_denied", Some(&active.message_id),
+                            json!({"code":"provider_permission_denied","count":tool_denials,"turn_completed":matches!(terminal,ManagedTerminal::Completed)}));
+                    }
+                }
                 // (C) Issue attestée : `terminal_reason` du résultat Claude
                 // (ex. "completed"), pas le champ stop_reason fournisseur
                 // (ex. "end_turn") — attach lit payload.stop_reason.
@@ -2758,6 +2778,43 @@ mod tests {
             "l'agent a été tué au lieu d'être interrompu"
         );
         transport.stop();
+    }
+
+    #[test]
+    fn delivery171_tool_refusal_preserves_report_and_control_refusal_stays_failed() {
+        for (interrupted, provider_error) in [(false, false), (true, false), (false, true)] {
+            let mut configured = options();
+            let control = if interrupted {
+                "printf '%s\\n' '{\"type\":\"control_request\",\"request_id\":\"denied171\",\"request\":{\"subtype\":\"can_use_tool\"}}'; IFS= read -r answer; "
+            } else { "" };
+            let result = json!({"type":"result","is_error":provider_error,
+                "terminal_reason":if provider_error {"api_error"} else {"completed"},
+                "permission_denials":[{"tool_name":"Bash"}],
+                "result":"HEAD correct. La seconde commande a été bloquée par le hook."});
+            configured.args[1] = format!("while IFS= read -r line; do {control}printf '%s\\n' '{result}'; done");
+            let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+            transport.deliver(&message("denial-report171")).unwrap();
+            let deadline=Instant::now()+Duration::from_secs(2);
+            let mut events=Vec::new();
+            while Instant::now()<deadline {
+                events.extend(transport.drain_events());
+                if events.iter().any(|event| matches!(&event.kind,
+                    ManagedEventKind::TurnFinished {..}|ManagedEventKind::DeliveryRejected {..})) {break;}
+                thread::sleep(Duration::from_millis(10));
+            }
+            transport.stop();
+            if !interrupted && !provider_error {
+                assert!(events.iter().any(|event| matches!(&event.kind,
+                    ManagedEventKind::TurnFinished {response,terminal:ManagedTerminal::Completed,..}
+                    if response.contains("HEAD correct") && response.contains("bloquée par le hook") && response.contains("1 appel(s) d'outil refusé(s)"))), "{events:?}");
+                assert!(!events.iter().any(|event| matches!(&event.kind,ManagedEventKind::DeliveryRejected {..})));
+            } else {
+                let expected=if interrupted {"provider_permission_denied"} else {"api_error"};
+                assert!(events.iter().any(|event| matches!(&event.kind,
+                    ManagedEventKind::DeliveryRejected {reason,..} if reason==expected)), "{events:?}");
+                assert!(!events.iter().any(|event| matches!(&event.kind,ManagedEventKind::TurnFinished {terminal:ManagedTerminal::Completed,..})));
+            }
+        }
     }
 
     #[test]
