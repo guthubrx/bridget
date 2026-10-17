@@ -754,6 +754,20 @@ pub(crate) fn create(
     let path_text = path
         .to_str()
         .ok_or_else(|| residue("workspace_path_unsafe", "chemin non UTF-8".into()))?;
+    // Deux `git worktree add` simultanés dans un même dépôt se gênent : l'un
+    // lit le dossier à moitié créé de l'autre (commondir absent). Un verrou
+    // par dépôt sérialise l'extraction sans bloquer les autres projets.
+    let lock = {
+        static LOCKS: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>,
+        > = std::sync::OnceLock::new();
+        let mut locks = LOCKS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
+    };
+    let _serialized = lock.lock().unwrap_or_else(|error| error.into_inner());
     if let Err(error) = run_git(
         &preflight.cwd,
         &[

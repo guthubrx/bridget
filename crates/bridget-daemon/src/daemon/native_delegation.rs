@@ -19605,14 +19605,20 @@ for frame in frames: print(json.dumps(frame),flush=True)
             if guard == "source_modifiee" {
                 std::fs::write(&source, br#"{"permissions":{"deny":["Bash"]}}"#).unwrap();
                 let cli = Path::new("/bin/sh").canonicalize().unwrap();
-                let cli_revision = crate::native_permissions::source_revision(&cli).unwrap();
+                // Contexte ancien (sans attestation_version) : révisions v1,
+                // celles que relit recheck_permission_context_sources.
+                let v1 = |path: &Path| {
+                    bridget_transport::protocol::permission_source_revision(path, 512 * 1024 * 1024)
+                        .unwrap()
+                };
+                let cli_revision = v1(&cli);
                 let context = json!({
                     "cli_path": cli, "cli_revision": cli_revision,
                     "resolved_cli_path": cli, "resolved_cli_revision": cli_revision,
                     "config_dir": st.fixture_root.as_ref().unwrap().0,
                     "settings_sources":"provider_default",
                     "permission_sources":[{"kind":"user","path":source,
-                        "revision":crate::native_permissions::source_revision(&source).unwrap()}]
+                        "revision":v1(&source)}]
                 });
                 task.permission_snapshot = Some(serde_json::from_value(json!({
                     "version":1,"source":"native_wrapper","owner_agent_id":task.owner,

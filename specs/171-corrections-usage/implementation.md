@@ -62,6 +62,10 @@
   `remote_start_failed:<cause>`, délai 154 sous `cfg(test)` à 20 s.
 - **Non modifié** : `spec168_permis_reste_detenu_apres_timeout_demandeur_jusqu_au_drain_reel`
   échoue aussi sur main lancé seul (démarrage de `/usr/bin/python3`).
+- **Course entre `git worktree add` simultanés** dans un même dépôt
+  (`commondir` absent) : extraction sérialisée par dépôt.
+- **Bancs alignés** : contexte ancien 152 en révisions v1, faux fournisseur e2e
+  sans `--permission-prompts`, réglage de délai socket tolérant (EINVAL Darwin).
 - Bancs 152/154/157 : à lancer avec un TMPDIR résolu (`/private/tmp/b.XXXX`) ;
   avec `/tmp`, main échoue aussi sur 16 d'entre eux.
 

@@ -558,7 +558,8 @@ if "--tools" in args:
     tools = [tool for tool in args[args.index("--tools") + 1].split(",") if tool]
 assert set(tools).issubset({"Read", "Glob", "Grep"})
 if "--restricted" not in args:
-    assert args[args.index("--permission-prompts") + 1] == "none"
+    # Lot 171 : sans contrat de hooks attesté, seul --permission-mode est transmis.
+    assert "--permission-prompts" not in args
     assert denied.issubset(set(args[args.index("--disallowedTools") + 1].split(",")))"#;
     let permissions = if complete152 {
         permissions

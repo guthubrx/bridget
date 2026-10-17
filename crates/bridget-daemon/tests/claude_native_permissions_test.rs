@@ -257,10 +257,11 @@ fn run_mission_with(
             let _ = writer.flush();
             // Comme le daemon, drainer jusqu'à Unregister/EOF : fermer avec des
             // frames non lues provoque un RST qui peut effacer Disconnect (Darwin).
-            reader
+            // Darwin renvoie EINVAL si le pair a déjà fermé la socket : la
+            // lecture suivante constate alors EOF, ce qui suffit ici.
+            let _ = reader
                 .get_ref()
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
+                .set_read_timeout(Some(Duration::from_secs(3)));
             loop {
                 line.clear();
                 match reader.read_line(&mut line) {
