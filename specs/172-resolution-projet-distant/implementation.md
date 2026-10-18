@@ -267,3 +267,40 @@ ancienne corrélation ; il vérifie maintenant qu’elle est ignorée et ne sati
 jamais la sonde courante. Les six autres échecs venaient du mutex Laya empoisonné
 par cette assertion. Reprises : oracle1PASS et Laya7PASS. Aucun GREEN global ni
 nouvelle FULL déduits. Protocole historique remote162 :9PASS.
+
+
+## Activation et recettes finales réussies
+Source124dc47a9fe2ad2717d06c53053b71d9f0f7dc26 intégrée et poussée.
+Build Linux101,11s RC0 ; Mac142,30s RC0, signé. Maître81018 et worker4049619
+actifs ; T3main637/serveur1068/pont898 inchangés. Aucun schéma changé.
+Avant arrêt du maître51581, aucune mission native active/cleanup en cours.
+Après redémarrage, les rejeux officiels de c5d2017b et e125950f ont rendu les
+mêmes résultats/Tasks/ACK malgré le changement de HEAD. Quick_check=ok.
+Le banc natif sans T3 sur le code courant est PASS :1test/2cas,25,57s.
+
+Nouvelle mission réelle Bridget : a62d8fb1-9fef-4c92-9d80-0d1e1b475790,
+SHA124dc47a, version0.4.1, résultat833octets, marqueur exact, ACK et rejeu
+identiques. La première sonde réelle est mesurée à4,426s pour dix candidats.
+
+Revue r7 : Task30a2525b-7d62-4be8-a3a6-b5b750382009, sans project_id,
+SHAd9d29fe69c9969af913cb99ce70fd249fc723b67, revue0.1.0,
+BRIDGET172_REVUE_FINAL_OK. Le parent Rapport a lu le résultat complet,
+confirmé ACK et comparé le rejeu strict : mêmes Task/résultat. Le dépôt géré
+initialement créé sans déclaration manuelle est actualisé au commit demandé.
+L’agent de recette a seulement lu package.json et .git/HEAD détaché.
+
+Opus2D r4 : Taskea8d9680-dd4e-4a71-a22d-1589ee028f9f, sans project_id,
+SHAed82547ff65fd23307f63ee6683c9e9e7b22d420, opus2d0.1.0,
+BRIDGET172_OPUS2D_CARTAE_OK. Le vrai parent trajets bus a lu le résultat,
+confirmé ACK et comparé le rejeu strict : mêmes Task/résultat1007octets.
+L’enfant a lu package.json, .git/HEAD et refs/heads/main sous le dossier Cartae.
+Les sondes initiales Revue et Opus2D ont pris4,317s et4,303s ; ces mesures
+n’attribuent pas rétrospectivement une durée précise à l’ancien refus r3.
+Contrôle durable : six clés de recettes réussies, chacune une seule Task,
+state=result_available, error=null, cleanup_done=true, acknowledged_at présent.
+
+Aucun autre serveur que Cartae testé. Les recettes actuelles partent du T3
+ancien encore chargé et prouvent Bridget corrigé ; le nouveau T3f3ddfca2
+reste installé/signé sur disque, non activé. La poursuite automatique de goal
+avec ce nouveau T3 reste à recetter après l’accord de redémarrage demandé.
+Les anciennes limites et échecs restent historiques, pas effacés ou comptés PASS.

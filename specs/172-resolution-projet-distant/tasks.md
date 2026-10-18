@@ -17,11 +17,11 @@
 
 - [x] T014 Corriger la durée de validité des droits T3 pendant les continuations natives.
 - [x] T015 Vérifier la source Git sur le worker du parent distant et réutiliser son mapping local.
-- [ ] T016 Valider les protections, activer et rejouer les recettes complètes.
+- [ ] T016 Activer le nouveau T3 et vérifier les continuations automatiques après accord de redémarrage ; Bridget et les recettes distantes sont validés.
 
 - [x] T017 Corriger les budgets du client natif T3, la récupération et les erreurs de sonde (cinq cas RED puis GREEN).
 - [x] T018 Aligner le délai des outils Codex sur le contrat natif Bridget, tests du montage T3 et configurations officielles.
-- [ ] T019 Achever les recettes finales depuis Revue et Opus2D après activation des corrections.
+- [x] T019 Réussir les recettes réelles Revue r7 et Opus2D r4 sur Bridget124dc47a actif, avec leurs parents T3 courants, ACK et rejeux identiques.
 
 - [x] T020 Borner la lecture d’attestation T3 aux exécutions, sans charger l’historique ; contrôles avant/après maintenus.
 - [x] T021 Corriger le délai des sondes worker, leur réponse tardive et leur libération à déconnexion.

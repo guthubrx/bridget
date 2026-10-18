@@ -6,16 +6,15 @@ T3 est installé sur disque ; son activation reste à faire selon la consigne ut
 
 ## Versions courantes et activation
 
-- Bridget source40e4d0c4dc2c7d493513a25508730ffd8c0be5ab, intégrée et poussée.
-- Client Mac installé : build172-40e4d0c4, signé, SHA256
-  a79e0f88f32312cd8f7ffdf66e06decf58130e720ef89fb289e1dc433e58a5de.
+- Bridget source124dc47a9fe2ad2717d06c53053b71d9f0f7dc26, intégrée et poussée.
+- Client Mac installé : build172-124dc47a, signé, SHA256
+  d960568d84d5a073cc08c44b62bfda5ee4b2b8f88160ba8fc806df7457a06f9b.
   /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget.
-- Maître Mac51581 conservé : build172-efeeb08f, source
-  efeeb08fad26d0a394390b1264493409fd7c8abc. Le dernier delta ne change que
-  les façades clientes ; aucun redémarrage du maître nécessaire pour ce delta.
-- Worker Cartae3988809 actif depuis11:17:27 CEST, build172-40e4d0c4.
-  /home/moi/.local/lib/bridget-communication/172-40e4d0c4dc2c/bin/bridget.
-  SHA256968f961841be9322d49419abc529f63946ed04d5c4c9bf1e108434ab1bd7a6f2.
+- Maître Mac81018 actif depuis11:53:40 CEST : build172-124dc47a. L’ancien
+  maître51581 a été identifié puis arrêté par SIGTERM, sans mission native active.
+- Worker Cartae4049619 actif depuis11:53:52 CEST, build172-124dc47a.
+  /home/moi/.local/lib/bridget-communication/172-124dc47a9fe2/bin/bridget.
+  SHA256cd62364093cd85820af50ac1af21f08c9879eaa1c15ecaa25aef1f6abc375569.
   Client /home/moi/.local/bin/bridget aligné. Aucune tâche native active au préflight.
 - T3 source f3ddfca24278ab1ebb689087e5c42c6bc00c6551, intégrée et poussée
   vers le fork. Paquet0.0.45-local.172 signé installé dans
@@ -76,35 +75,103 @@ T3 est installé sur disque ; son activation reste à faire selon la consigne ut
 - Les tests de conservation des droits T3 du complément précédent restent
   prouvés séparément : trois nouveaux cas, dix goals et onze permissions,
   contrôle de21cas sur les overlays171 conservés. Aucune nouvelle FULL.
-- Build Linux103,64s et build Mac127,23s, tous deuxRC0. Deux liens documentaires
+- Build Linux101,11s et build Mac142,30s, tous deuxRC0. Deux liens documentaires
   node_modules historiques exclus de l’extraction privée Mac ; sources compilées intactes.
-- Aucun autre serveur que Cartae testé. Activation T3 et recettes finales
-  des parents Revue/Opus2D restent ouvertes à ce checkpoint.
+- Aucun autre serveur que Cartae testé. Les recettes finales des parents
+  Revue/Opus2D sont réussies ci-dessous. Activation T3 et tours automatiques restent ouverts.
 
 ## Reçus du complément
 
 /Users/moi/.cache/bridget-delivery172/coding-model-final-task.json.
 /Users/moi/.cache/bridget-delivery172/native-model-final-tasks.json.
-/Users/moi/.cache/bridget-delivery172/mac172-transport.json.
+/Users/moi/.cache/bridget-delivery172/mac172-worker-probe.json.
 /Users/moi/.cache/bridget-delivery172/t3-install/bounded-attestation-install.json.
 /Users/moi/.cache/bridget-delivery172/config-timeouts/receipt.json.
-/home/moi/.cache/bridget-delivery172/linux172-transport.json.
+/home/moi/.cache/bridget-delivery172/linux172-worker-probe.json.
 Journaux de tests dans /home/moi/.cache/bridget-delivery172.
 Aucune base modifiée par les diagnostics. AGENTS.md étranger du Mac préservé.
 Correction technique, sans changement d’interface : pas de diaporama requis.
 
-## Complément de sondes prêt à activer
+## Complément de sondes activé
 
 Les défauts de réponse tardive, déconnexion V2 et verrou worker ont leur preuve
 RED/GREEN ; détails et logs dans implementation.md. Worker21PASS, protocole9PASS,
 client19PASS, banc de sonde retardée1PASS. Le lot initial de routage35 a donné
 28PASS/7FAIL ; oracle corrigé1PASS et Laya7PASS en reprises séparées.
 Le correctif T3 de lecture bornée ajoute16PASS, sans retirer les contrôles de droits.
-Les sources du nouveau daemon/worker restent à compiler et activer à ce checkpoint.
-Les versions40e4 ci-dessus décrivent encore les clients effectivement installés.
+Les sources124dc47a sont compilées et actives sur le maître et le worker.
+Le nouveau paquet T3 reste installé sur disque sans activation.
 Revue r6 a désormais rendu expected_base_commit_mismatch ; Opus2D r3 a rendu
-worker_unavailable. Ces refus ne sont pas transformés en succès. Aucun nouvel
-essai des projets demandé avant la correction du worker et l’activation T3.
+worker_unavailable. Ces refus ne sont pas transformés en succès. Après activation du worker, les nouvelles recettes Revue r7 et Opus2D r4 ont
+réussi sur leurs SHA courants. Elles restent distinctes des anciennes demandes refusées.
+
+## Recettes après activation124dc47a
+
+Le banc sans T3 a été rejoué sur le dernier code :1test/2cas PASS en25,57s,
+avec vrai daemon/worker/wrapper et fournisseur simulé. Pas de service T3.
+Les missions réelles de codagee125950f et parent natifc5d2017b ont été relues
+par rejeu strict après redémarrage du maître, alors que HEAD était passé à124dc47a.
+Mêmes Tasks, résultats exacts et ACK conservés ; aucun nouveau lancement.
+Base Bridget quick_check=ok. T3 et pont ont leurs mêmes PID et dates de naissance.
+
+Une nouvelle mission réelle a ensuite été lancée sur Cartae :
+request recette172-bridget-cartae-apres-sondes-20261018-r1 ;
+Task a62d8fb1-9fef-4c92-9d80-0d1e1b475790, modèle Haiku choisi automatiquement.
+Sans project_id, shared/discovery ; lectures .git/HEAD, refs/heads/main et Cargo.toml
+sous /home/moi/10.Scripts/64.bridget ; SHA124dc47a, version0.4.1,
+BRIDGET172_SONDES_CARTAE_OK. Résultat833octets lu via task_status, ACK, puis
+rejeu strict : mêmes Task et résultat, acknowledged. Aucun fichier modifié.
+La trace du worker mesure4,426s pour le premier lot de dix candidats, puis
+1,431s et1,419s pour les deux recontrôles. L’ancienne borne5s avait peu de marge
+même sur ce projet. Ces durées sont observées, pas extrapolées à Opus2D.
+Preuve privée complète :
+/Users/moi/.cache/bridget-delivery172/final-runtime-worker-probe172.json.
+Cette recette part de T3 encore ancien. Elle prouve Bridget actuel, pas le
+correctif T3 de continuation automatique ni sa nouvelle lecture bornée.
+
+## Revue et Opus2D : recettes finales réussies
+
+Les deux appels partent des vrais parents demandés par l’utilisateur, sans
+project_id, autres axes automatiques ; shared/discovery, échéance180s.
+
+Revue : request recette172-revue-cartae-controle-final-20261018-r7,
+Task30a2525b-7d62-4be8-a3a6-b5b750382009.
+SHA attendu et lu d9d29fe69c9969af913cb99ce70fd249fc723b67,
+nom revue/version0.1.0, BRIDGET172_REVUE_FINAL_OK.
+Lectures réelles :
+/home/moi/.local/share/bridget-projects/auto-5c29175617db400dab394fa74bc97948/repository/package.json
+/home/moi/.local/share/bridget-projects/auto-5c29175617db400dab394fa74bc97948/repository/.git/HEAD.
+HEAD détaché, pas de référence supplémentaire. Le projet initialement absent
+avait été créé automatiquement ; son dépôt géré a reçu le nouveau commit.
+Le parent Rapport a lu le résultat, ACK, puis comparé le rejeu : même Task et
+texte identique. Aucun travail de code demandé à l’enfant ; la préparation Git
+reste l’action du framework.
+
+Opus2D : request recette172-opus2d-trajets-cartae-20261018-r4,
+Taskea8d9680-dd4e-4a71-a22d-1589ee028f9f,
+SHA attendu et lu ed82547ff65fd23307f63ee6683c9e9e7b22d420,
+nom opus2d/version0.1.0, BRIDGET172_OPUS2D_CARTAE_OK.
+Lectures réelles :
+/home/moi/10.Scripts/69.opus2D/package.json
+/home/moi/10.Scripts/69.opus2D/.git/HEAD
+/home/moi/10.Scripts/69.opus2D/.git/refs/heads/main.
+Le parent trajets bus a lu le résultat1007octets, ACK, puis comparé son unique
+rejeu : même Task, même résultat textuel. Aucune modification demandée à l’enfant.
+
+Les sorties réelles worker sont exit_code0/failure=null ; générations557/558.
+Sondes initiales observées : Revue4,317s ; Opus2D4,303s pour dix candidats.
+SQL en lecture seule confirme pour les six clés réussies : une Task chacune,
+result_available, error=null, cleanup_done=true, ACK présent. Les rapports
+parents sont conservés dans :
+/Users/moi/.cache/bridget-delivery172/project-final-recipes172.json.
+Les deux rapports transportés sont bornés et leur fin est tronquée ; les
+résultats natifs complets et leurs états durables ont été relus séparément.
+
+Le correctif T3f3ddfca2 reste signé/installé sur disque et non activé. Les
+recettes ci-dessus prouvent le parcours standard depuis T3 courant. Elles
+ne prouvent pas encore la correction des tours automatiques dans le nouveau
+runtime T3. La consigne utilisateur d’attendre les autres conversations reste
+respectée ; aucun redémarrage de T3 n’est programmé.
 
 ## Premier reçu conservé pour l’historique
 

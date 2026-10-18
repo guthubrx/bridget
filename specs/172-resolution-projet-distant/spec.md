@@ -1,6 +1,6 @@
 # 172 — Préparation et résolution du projet distant
 
-Statut : In Progress — complément de correction. Parent natif et codage Cartae prouvés ; recettes finales Revue/Opus2D et activation T3 encore ouvertes. Périmètre élargi le 18 octobre 2026.
+Statut : In Progress — complément de correction. Parent natif, codage, Revue et Opus2D prouvés sur Cartae ; activation T3 et continuations automatiques encore ouvertes. Périmètre élargi le 18 octobre 2026.
 
 ## Défaut observé
 Le parent « trajets bus » indique Cartae et son dossier, sans project_id.
