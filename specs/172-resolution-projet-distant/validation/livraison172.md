@@ -120,3 +120,20 @@ Ancien binaire conservé :
 Unités et binaires précédents conservés sur Cartae ; aucun effacement de base.
 Worktree de correction conservé :
 /home/moi/10.Scripts/64.bridget/.worktrees/172-resolution-projet-distant.
+
+
+## Complément de preuve d'autonomie
+Le banc natif complet est désormais PASS : deux scénarios avec vrai maître,
+worker et wrapper, fournisseur simulé, sans service T3. La demande automatique
+omet project_id ; le dossier et le commit sont vérifiés, puis le résultat et
+l'unicité du rejeu. Le second scénario retarde Ready de6s et conserve le bail60s.
+Le banc historique garde son protocole antérieur et ses quatre cas passent.
+Commandes exécutées sur Cartae :
+cargo test -p bridget-daemon --features test-support --test native_delegation_e2e spec172_parent_natif_auto_sans_t3_resout_projet_et_attend_ready -- --nocapture
+cargo test -p bridget-daemon --features test-support --test native_delegation_e2e remote162_e2e_delegate_maitre_reel_resultat_unique_cwd_et_modele -- --nocapture
+Logs privés :
+/tmp/bridget172-native-e2e.log
+/tmp/bridget172-native-legacy-e2e.log
+La recette avec modèle parent natif réel reste distincte et non validée.
+Le tour automatique a aussi rencontré permission_attestation_unavailable
+dans l'adaptateur T3, avant toute admission ; aucun contournement effectué.

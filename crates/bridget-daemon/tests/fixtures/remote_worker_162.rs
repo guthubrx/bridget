@@ -123,19 +123,22 @@ struct Relay {
 
 impl Relay {
     fn new(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, false, false)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, false, false, false)
     }
     fn with_ready_delay(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
-        Self::with_worker_capability(front, daemon, ready_delay, false, false)
+        Self::with_worker_capability(front, daemon, ready_delay, false, false, false)
+    }
+    fn with_ready_delay_lease172(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
+        Self::with_worker_capability(front, daemon, ready_delay, true, true, true)
     }
     /// Force l'annonce de capacité sur ce relais de recette, sans modifier le
     /// daemon réel ni son build. Le worker doit négocier l'enveloppe distincte avant
     /// de recevoir le probe.
     fn with_candidate_probe(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true, false)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, false, false)
     }
     fn with_candidate_probe_v2(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true, false)
     }
     fn with_worker_capability(
         front: &Path,
@@ -143,6 +146,7 @@ impl Relay {
         ready_delay: Duration,
         candidate_probe_feature: bool,
         candidate_probe_v2_feature: bool,
+        release_lease_feature: bool,
     ) -> Self {
         let listener = UnixListener::bind(front).unwrap();
         fs::set_permissions(front, fs::Permissions::from_mode(0o600)).unwrap();
@@ -219,7 +223,8 @@ impl Relay {
                                     let DaemonToWrapper::DaemonIdentityReport { features, .. } = &mut identity else {
                                         return Err(io::Error::other("identité maître inattendue"));
                                     };
-                                    features.retain(|feature| feature != "worker_candidate_probe_v2");
+                                    features.retain(|feature| feature != "worker_candidate_probe_v2"
+                                        && (release_lease_feature || feature != "worker_release_lease_v2"));
                                     if candidate_probe_feature && !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
                                         features.push("worker_candidate_probe_v1".into());
                                     }
@@ -242,7 +247,7 @@ impl Relay {
                                 let worker = match serde_json::from_str::<WrapperToDaemon>(&first) {
                                     Ok(WrapperToDaemon::WorkerHello { hello }) => Some((hello, false, false)),
                                     Ok(WrapperToDaemon::WorkerHelloWithCapabilities { hello })
-                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2)) =>
+                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2|WorkerCapability::ReleaseLeaseV2)) =>
                                     {
                                         Some((hello.hello, hello.capabilities.contains(&WorkerCapability::CandidateProbeV1),
                                             hello.capabilities.contains(&WorkerCapability::CandidateProbeV2)))
@@ -1792,6 +1797,13 @@ fn remote162_e2e_delegate_maitre_reel_resultat_unique_cwd_et_modele() {
     }
 }
 
+#[test]
+fn spec172_parent_natif_auto_sans_t3_resout_projet_et_attend_ready() {
+    for case in ["worktree172", "late-ready172"] {
+        real_master_case(case);
+    }
+}
+
 fn real_master_case(case: &str) {
     let mut f = RemoteFixture::new();
     let socket = support::socket(&f.fixture.root);
@@ -1808,7 +1820,7 @@ fn real_master_case(case: &str) {
     f.relay.take();
     fs::remove_file(&f.front).unwrap();
     f.front = socket.clone();
-    let worktree_base = if case == "worktree168" {
+    let worktree_base = if matches!(case, "worktree168" | "worktree172" | "late-ready172") {
         Some(fixture168_routes(&f))
     } else {
         None
@@ -1869,6 +1881,11 @@ fn real_master_case(case: &str) {
             &f.front,
             socket.clone(),
             Duration::from_secs(6),
+        ));
+    } else if case == "late-ready172" {
+        f.front = f.fixture.root.join("state/worker.sock");
+        f.relay = Some(Relay::with_ready_delay_lease172(
+            &f.front, socket.clone(), Duration::from_secs(6),
         ));
     } else if case == "startup-failed" {
         support::private_write(&f.fixture.root.join("fail-init162"), b"fail").unwrap();
@@ -1949,6 +1966,11 @@ fn real_master_case(case: &str) {
             }))
             .unwrap(),
         );
+    }
+    if matches!(case, "worktree172" | "late-ready172") {
+        let NativeDelegationRequest::AutoDelegateV2(auto) = &mut request else { unreachable!() };
+        auto.project_id = None;
+        auto.request_id = format!("native172-{case}");
     }
     let deadline = Instant::now() + Duration::from_secs(12);
     let mut created = loop {
@@ -2126,6 +2148,14 @@ fn real_master_case(case: &str) {
     let marker = receipt.marker.unwrap();
     f.fixture.native_groups.push(marker.clone());
     assert!(receipt.permit.is_some());
+    if matches!(case, "worktree172" | "late-ready172") {
+        let permit = receipt.permit.as_ref().unwrap();
+        assert_eq!(permit.expires_at - permit.issued_at, WORKER_RELEASE_LEASE_SECS);
+        assert_eq!(task["remote_placement"]["project_id"], "project162");
+    }
+    if case == "late-ready172" {
+        assert!(f.relay.as_ref().unwrap().ready_delayed.load(Ordering::Acquire));
+    }
     assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
     // Le transport Codex crée son propre groupe : le wrapper attesté est
     // le parent du fournisseur, pas le chef de son groupe de processus.

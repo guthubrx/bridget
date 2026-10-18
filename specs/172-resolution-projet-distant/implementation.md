@@ -102,3 +102,30 @@ SHAac8f9295, revue0.1.0, marqueur exact, ACK et rejeu même tâche/résultat.
 Deux tâches finales cleanup_done=true, un lancement chacune.
 Recette supplémentaire parent natif local refusée resource_saturated avant
 reçu/tâche ; aucune autre route. Limite conservée au reçu de livraison.
+
+
+## Complément d'autonomie après livraison
+Le 18 octobre, nouvelle vérification : maître 172-a53b05c2 et worker PID3893226
+conservés, sources 65506609. La charge du Mac est 20,54 pour 16 cœurs,
+au-dessus du seuil normalisé100 ; aucun seuil ni processus n'est modifié.
+Les appels MCP du tour automatique échouent avant admission avec :
+t3_session_unavailable: permission_attestation_unavailable.
+Ce refus apparaît deux fois, sur bridget_status ; aucun lancement ni identité
+de substitution n'est tenté. La source T3 readMcpProviderPermissions refuse
+un fait absent, périmé ou lié à un autre tour. Sa cause précise reste inconnue.
+
+Ajout d'un test de bout en bout isolé, sans T3 :
+spec172_parent_natif_auto_sans_t3_resout_projet_et_attend_ready.
+Deux cas emploient un vrai maître, un vrai worker et un vrai wrapper, un parent
+natif avec NativePermissionFact, AutoDelegateV2 sans project_id et un fournisseur
+fermé simulé. Ils prouvent résolution, worktree au commit exact, délai Ready6s
+toléré avec le bail60s, résultat remis une fois et même tâche au rejeu.
+1 test / 2 cas PASS en25,59s. Pas de modèle externe ni d'appel T3 dans ce banc.
+
+Le relais ancien162 ne reconnaissait pas ReleaseLeaseV2. Il masque maintenant
+cette capacité pour ses cas historiques ; le nouveau cas négocie explicitement
+la capacité moderne. Contrôle ancien : 1 test / 4 cas PASS en39,36s,
+dont expiration du permis5s et libération de capacité après échec.
+Ce lot ne change que le banc et ses documents ; aucune compilation release ni
+activation supplémentaire. La recette avec un vrai modèle parent natif reste
+à réaliser après retour de la capacité et de l'attestation.

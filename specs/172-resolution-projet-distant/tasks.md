@@ -11,3 +11,6 @@
 - [x] T008 Construire et activer le correctif complet.
 - [x] T009 Vérifier projet connu et projet neuf par des délégations réelles Cartae.
 - [x] T010 Conserver les reçus, résultats et limites de validation.
+
+- [x] T012 Prouver le parcours natif complet sans T3 dans le banc isolé, y compris Ready retardé et rejeu.
+- [ ] T013 Complément de recette avec un modèle parent natif réel : capacité locale saturée et attestation du tour automatique indisponible.
