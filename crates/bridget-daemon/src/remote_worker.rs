@@ -456,7 +456,7 @@ pub struct WorkerStore {
     root: PathBuf,
     enrollment: PathBuf,
     worker: WorkerIdentity,
-    _lock: File,
+    _lock: WorkerFileLock,
     transition: Mutex<()>,
 }
 
@@ -1647,7 +1647,21 @@ fn private_dir(path: &Path) -> Result<(), WorkerStoreError> {
     }
 }
 
-fn lock_file(path: &Path, create: bool) -> Result<File, WorkerStoreError> {
+// Le verrou appartient à cette garde, même si un fork/dup garde le même
+// descripteur ouvert jusqu’à exec. Fermer le File seul ne suffit pas dans ce cas.
+struct WorkerFileLock(File);
+impl AsRawFd for WorkerFileLock {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd { self.0.as_raw_fd() }
+}
+impl Drop for WorkerFileLock {
+    fn drop(&mut self) {
+        while unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted { break; }
+        }
+    }
+}
+
+fn lock_file(path: &Path, create: bool) -> Result<WorkerFileLock, WorkerStoreError> {
     check_private(path.parent().ok_or(WorkerStoreError::Unknown)?, true)?;
     if fs::symlink_metadata(path).is_ok() {
         check_private(path, false)?;
@@ -1669,7 +1683,7 @@ fn lock_file(path: &Path, create: bool) -> Result<File, WorkerStoreError> {
         }
         return Err(error.into());
     }
-    Ok(file)
+    Ok(WorkerFileLock(file))
 }
 
 fn read_optional<T: DeserializeOwned>(
@@ -2548,13 +2562,12 @@ impl WorkerRuntime {
         probe: &CandidateProbeV2,
     ) -> Result<CandidateProbeV2Result, WorkerRefusal> {
         probe.validate_shape()?;
+        let started=Instant::now();
         if probe.worker != self.identity {
             return Err(WorkerRefusal::StaleConnection);
         }
         let registry = self.registry()?;
         let capacity = self.compilation_capacity(&registry);
-        let resources = self.host_resources.collect(worker_now(), capacity);
-        self.last_resource_refresh = Instant::now();
         let candidates = registry
             .routing_candidates()
             .ok_or(WorkerRefusal::CapabilityRequired)?;
@@ -2584,10 +2597,12 @@ impl WorkerRuntime {
         let mut git_facts = ProbeGitFacts::new();
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
         let diagnostics = ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
+        let mut timings=Vec::with_capacity(probe.candidates.len());
         let mut verdicts: Vec<CandidateProbeV2Verdict> = probe
             .candidates
             .iter()
             .map(|candidate| {
+                let candidate_started=Instant::now();
                 let registered = enabled
                     && index
                         .get(&(
@@ -2638,7 +2653,7 @@ impl WorkerRuntime {
                     parent: probe.parent.clone(),
                     candidates: vec![legacy],
                 };
-                match self.probe_one_candidate_for(
+                let verdict=match self.probe_one_candidate_for(
                     &legacy_probe,
                     &legacy_probe.candidates[0],
                     &registry,
@@ -2665,7 +2680,9 @@ impl WorkerRuntime {
                             reason,
                         }
                     }
-                }
+                };
+                timings.push((candidate.candidate_id.clone(),candidate_started.elapsed().as_millis() as u64));
+                verdict
             })
             .collect();
         if let Err(code) = operation.finish() {
@@ -2676,6 +2693,14 @@ impl WorkerRuntime {
                 }
             }
         }
+        // Les contrôles Git peuvent durer : observer la charge à la remise,
+        // pour ne pas rendre périmé un échantillon pris avant leur lecture.
+        let resources = self.host_resources.collect(worker_now(), capacity);
+        self.last_resource_refresh = Instant::now();
+        eprintln!("bridget_worker_probe172 {}",serde_json::json!({
+            "correlation_id":probe.correlation_id,"admission_id":probe.admission_id,
+            "candidates":probe.candidates.len(),"elapsed_ms":started.elapsed().as_millis() as u64,
+            "candidate_elapsed_ms":timings}));
         Ok(CandidateProbeV2Result {
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: probe.correlation_id.clone(),
@@ -4770,8 +4795,15 @@ mod tests {
         assert_eq!(store.command(&command()).unwrap().marker, Some(marker));
         assert!(!store.command(&command()).unwrap().native_ready);
         store.native_status(&command(), false).unwrap();
+        // Même description de fichier qu’un descripteur hérité entre fork et exec.
+        // CLOEXEC ne libère pas le verrou avant exec ; le propriétaire doit le faire.
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let inherited_fd=unsafe { libc::fcntl(store._lock.as_raw_fd(),libc::F_DUPFD_CLOEXEC,0) };
+        assert!(inherited_fd>=0);
+        let inherited=unsafe { OwnedFd::from_raw_fd(inherited_fd) };
         drop(store);
         let store = fixture.open();
+        drop(inherited);
         assert!(store.command(&command()).unwrap().native_ready);
         store.native_status(&command(), true).unwrap();
         store.native_status(&command(), false).unwrap();

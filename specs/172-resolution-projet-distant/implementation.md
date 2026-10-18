@@ -206,3 +206,64 @@ Régressions : 19 tests du client et 19 de délégation PASS. Les attentes MCP
 ont donné16 PASS/1 ancien oracle : il attendait wait_unsupported sur une socket
 absente. Cet oracle est aligné sur daemon_unreachable ; les cas anciens avec
 rapport de capacités valide restent distincts. HTTP/attestation : huit PASS.
+
+
+## Derniers défauts révélés par les vrais parents
+Après installation40e4, Revue r6 reprise strictement a répondu en une seconde
+expected_base_commit_mismatch : son HEAD avait changé depuis ac8f9295.
+C’est le refus attendu pour une demande ancienne non admise ; aucun nouveau
+SHA n’a été substitué dans sa clé. Opus2D r2 a été lu/ACK par son propriétaire.
+Opus2D r3, SHAe3bb4066fbb4513d682cf156049445c658c52cd8, a été refusé
+worker_unavailable pour dix candidats. Le service Cartae était actif et une
+reconnexion apparaît deux secondes après le refus. Aucun résultat Opus2D final
+n’est annoncé. Les rapports existent dans les demandes Bridget suivies ; deux
+lectures parallèles depuis notre vieux MCP ont ensuite échoué au HTTP3s.
+
+Le relevé de pile de T3 pendant une requête HTTP montre733/733échantillons
+sur sa boucle principale dans StatementExecutionHelper::All. sessionIdentity
+chargeait deux fois runs, messages, subagents, providerThreads, providerTurns,
+runtimeRequests, contextTransfers et turnItems. Seuls thread et runs servent
+aux contrôles. Référence T3 réutilisée : ThreadManagementService attend déjà
+une exécution avec getProjectThreadRecords(...,[runs]), sans historique.
+Le correctiff3ddfca24278ab1ebb689087e5c42c6bc00c6551 sélectionne runs
+avant et après la vérification source. Identité, exécution, tentative, montage,
+archivage et suppression restent contrôlés. Un test RED puis16PASS dont les
+refus et dérives ; format/lint0/0. Paquet signé construit et installé sur disque,
+ASAR4d57cee627d68079504e613cf93d532fa6399c7026a14c2b8f24fc26aa52a9b3.
+T3 conserve ses anciens processus. Aucun bénéfice de latence runtime n’est
+présumé avant son activation.
+
+La sonde worker V2 accordait5s alors que les lectures Git individuelles sont
+bornées à10s. Après expiration, son résultat valide tardif provoquait un
+WorkerRejected puis une reconnexion. Le banc de vrai RPC avec réponse à6s
+reproduit WorkerUnavailable et ce rejet, sans admission ni fournisseur.
+Correction : budget de sonde60s avant toute réservation ; expiration nommée
+probe_expired, différente d’un worker absent. Une réponse en lecture déjà
+consommée/expirée est ignorée après contrôle d’époque/identité/forme. T3 applique
+exactement cette règle dans effect-codex-app-server/protocol.ts resolvePending.
+Les contrôles d’admission et les résultats d’autres époques restent fermés.
+La déconnexion libère maintenant aussi pending_candidate_probes_v2 : test RED
+puis PASS. Le banc retardé PASS couvre refus précis, doublon ignoré, expiration
+courte, ancienne époque refusée et absence de Task/reçu.
+L’observation de charge est prise une seule fois, en fin de sonde, pour rester
+fraîche après les contrôles. Les admissions legacy/auto1/auto2 ont le même budget
+de préparation600s ; les échéances métier et les seuils de ressources restent
+inchangés. Un diagnostic du worker donne corrélation, nombre et durées des
+candidats, sans chemins, politiques ou credentials. La recette Opus2D reste
+nécessaire pour mesurer sa durée réelle avec ce diagnostic.
+
+Régressions : client natif19PASS ; déconnexion1PASS ; worker20PASS/1Locked au
+premier essai parallèle. Le Locked était déjà apparu une fois avant cette reprise.
+Un descripteur F_DUPFD_CLOEXEC partageant la même description de fichier rend
+le défaut déterministe : fermer le File propriétaire ne libérait pas flock tant
+que ce descripteur restait ouvert. T3 ne possède pas de WorkerStore/flock ;
+aucun équivalent direct de ce cas système n’a été trouvé. WorkerFileLock libère
+maintenant explicitement LOCK_UN à son Drop, puis ferme le File. La protection
+contre un propriétaire encore actif est conservée. RED déterministe puis PASS,
+et module worker21PASS en parallèle. Le PID exact d’un héritier lors du premier
+échec intermittent n’a pas été observé ; la reproduction établit le mécanisme.
+Routage35cas :28PASS/7FAIL initiaux. Un oracle attendait encore le rejet d’une
+ancienne corrélation ; il vérifie maintenant qu’elle est ignorée et ne satisfait
+jamais la sonde courante. Les six autres échecs venaient du mutex Laya empoisonné
+par cette assertion. Reprises : oracle1PASS et Laya7PASS. Aucun GREEN global ni
+nouvelle FULL déduits. Protocole historique remote162 :9PASS.

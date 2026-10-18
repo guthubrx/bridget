@@ -2594,6 +2594,7 @@ pub enum WorkerRefusal {
     ResourceLimit,
     StoreUnavailable,
     WorkerUnavailable,
+    ProbeExpired,
     JournalUnavailable,
     ResultConflict,
     UnknownExecution,

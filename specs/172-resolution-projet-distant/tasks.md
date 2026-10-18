@@ -22,3 +22,7 @@
 - [x] T017 Corriger les budgets du client natif T3, la récupération et les erreurs de sonde (cinq cas RED puis GREEN).
 - [x] T018 Aligner le délai des outils Codex sur le contrat natif Bridget, tests du montage T3 et configurations officielles.
 - [ ] T019 Achever les recettes finales depuis Revue et Opus2D après activation des corrections.
+
+- [x] T020 Borner la lecture d’attestation T3 aux exécutions, sans charger l’historique ; contrôles avant/après maintenus.
+- [x] T021 Corriger le délai des sondes worker, leur réponse tardive et leur libération à déconnexion.
+- [x] T022 Libérer explicitement les verrous worker à la fin du propriétaire, même avec un descripteur partagé.

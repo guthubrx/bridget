@@ -140,6 +140,10 @@ struct RoutingAdmissionPlan {
     decision_notes: Vec<String>,
 }
 
+// Un probe groupe plusieurs lectures Git (10 s chacune) et les politiques.
+// Aucune réservation ni lancement n’est pris pendant ce budget borné.
+const ROUTING_PROBE_BUDGET: Duration = Duration::from_secs(60);
+
 fn routing_snapshot(
     plan: &RoutingAdmissionPlan,
     decision: Option<bridget_transport::protocol::LineageDecisionV4>,
@@ -941,7 +945,7 @@ fn observe_routing_candidates(
         let result = match remote_candidate_probe_v2(
             state,
             probe,
-            Instant::now() + Duration::from_secs(5),
+            Instant::now() + ROUTING_PROBE_BUDGET,
         ) {
             Ok(result) => result,
             Err(reason) => {
@@ -2782,7 +2786,7 @@ fn filter_auto_candidates(
             candidates: probe_candidates,
         };
         let Ok(result) =
-            remote_candidate_probe(state, probe, Instant::now() + Duration::from_secs(5))
+            remote_candidate_probe(state, probe, Instant::now() + ROUTING_PROBE_BUDGET)
         else {
             continue;
         };
@@ -11559,6 +11563,103 @@ mod tests {
     }
 
     #[test]
+    fn spec172_probe_retarde_conserve_refus_sans_fermer_worker() {
+        use bridget_transport::protocol::*;
+        let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
+        state.lock().unwrap().host = "coordinator171".into();
+        request.request_id = "probe171-refused".into();
+        request.project_id = Some("project171".into());
+        request.machine_id = Some("cartae".into());
+        request.engine = Some("codex".into());
+        let host = state.lock().unwrap().host.clone();
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(b"worker171-fixture"));
+        routing168_update(&state, |value| {
+            value["routing_policy"]["connections"][0]["machine_id"] = json!("cartae");
+            value["routing_policy"]["machine_policies"]["cartae"] = json!({"enabled":true});
+            value["machines"] = json!({"cartae":{"enabled":true,"worker_id":"worker171",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project171":{
+                    "source_host":host,"source_root":request.cwd,
+                    "remote_root":root.join("remote171"),"expected_git_identity":"fixture171",
+                    "mapping_revision":1}}}});
+        });
+        let (writer, mut reader) = super::super::presence_tests::control_socket("probe171-refused");
+        {
+            let mut st = state.lock().unwrap();
+            st.connections.insert("worker171".into(), writer);
+            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+        }
+        assert!(matches!(handle_worker_message(&state, "worker171",
+            WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
+                hello: WorkerHello { version: REMOTE_WORKER_VERSION,
+                    identity: WorkerIdentity { machine_id:"cartae".into(),
+                        worker_id:"worker171".into(),provisioning_revision:1 },
+                    credential: IdentityCredential::new("worker171-fixture".into()),
+                    build:"fixture171".into(),capability:ClientCapability::RemoteWorkerV1 },
+                capabilities:vec![WorkerCapability::CandidateProbeV2] } }),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })));
+        let responder_state = Arc::clone(&state);
+        let responder = std::thread::spawn(move || {
+            let frame = super::super::presence_tests::read_control(&mut reader);
+            let DaemonToWrapper::CandidateProbeV2 { probe } = frame else {
+                panic!("only the existing probe is expected");
+            };
+            assert_eq!(probe.candidates.len(), 3);
+            std::thread::sleep(Duration::from_secs(6));
+            let correlation = probe.correlation_id.clone();
+            let admission = probe.admission_id.clone();
+            let now = unix_timestamp();
+            let reasons = [CandidateProbeRefusal::MappingUnavailable,
+                CandidateProbeRefusal::PermissionsChanged, CandidateProbeRefusal::WorkspaceUnavailable];
+            let saved_probe = probe.clone();
+            let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
+                worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
+                    cpu_percent:None,available_memory_percent:None,normalized_load_percent:None,
+                    compilation_slots:None },
+                verdicts:probe.candidates.into_iter().zip(reasons).map(|(candidate,reason)|
+                    CandidateProbeV2Verdict::Ineligible { candidate_id:candidate.candidate_id,reason }).collect() };
+            let saved_result=result.clone();
+            assert!(handle_worker_message(&responder_state,"worker171",
+                WrapperToDaemon::CandidateProbeResultV2 { result }).is_none());
+            assert!(handle_worker_message(&responder_state,"worker171",
+                WrapperToDaemon::CandidateProbeResultV2 { result:saved_result.clone() }).is_none(),
+                "un résultat déjà consommé ne ferme pas le worker");
+            (correlation,admission,reader,saved_probe,saved_result)
+        });
+        let mut plan = routing168_plan(&state, &request);
+        assert_eq!(observe_routing_candidates("conn-1", &request, &mut plan, None, &state)
+            .unwrap_err(), "routing_candidate_unavailable");
+        let (_correlation,_admission,_peer,mut timed_probe,mut late_result) = responder.join().unwrap();
+        assert_eq!(plan.decision_notes.len(),3);
+        for (note, expected) in plan.decision_notes.iter().zip(["mapping_unavailable","permissions_changed","workspace_unavailable"]) {
+            let value:Value=serde_json::from_str(note).unwrap(); assert_eq!(value["code"],expected);
+        }
+        timed_probe.correlation_id=Uuid::new_v4().to_string();
+        late_result.correlation_id=timed_probe.correlation_id.clone();
+        assert_eq!(remote_candidate_probe_v2(&state,timed_probe,Instant::now()+Duration::from_millis(30)),
+            Err(WorkerRefusal::ProbeExpired));
+        assert!(handle_worker_message(&state,"worker171",
+            WrapperToDaemon::CandidateProbeResultV2{result:late_result.clone()}).is_none(),
+            "un résultat expiré ne ferme pas le worker");
+        late_result.connection_epoch="stale-epoch".into();
+        assert!(matches!(handle_worker_message(&state,"worker171",
+            WrapperToDaemon::CandidateProbeResultV2{result:late_result}),
+            Some(DaemonToWrapper::WorkerRejected{reason:WorkerRefusal::StaleConnection})),
+            "une autre époque reste refusée");
+        {
+            let st=state.lock().unwrap();
+            assert_eq!(st.remote_workers["cartae"].contact,WorkerContactState::Connected);
+            assert!(st.pending_candidate_probes_v2.is_empty());
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+            assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().is_none());
+        }
+        assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
     fn spec172_implicit_project_reaches_remote_probe_and_frozen_delegate() {
         use bridget_transport::protocol::*;
         let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
@@ -13501,20 +13602,18 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 );
                 if let Some(previous) = &previous {
                     assert!(
-                        matches!(
-                            handle_worker_message(
-                                &worker_state,
-                                "worker168",
-                                WrapperToDaemon::CandidateProbeResultV2 {
-                                    result: previous.clone()
-                                },
-                            ),
-                            Some(DaemonToWrapper::WorkerRejected {
-                                reason: WorkerRefusal::CommandMismatch
-                            })
-                        ),
-                        "une ancienne corrélation ne rejoint pas le nouveau probe"
+                        handle_worker_message(
+                            &worker_state,
+                            "worker168",
+                            WrapperToDaemon::CandidateProbeResultV2 {
+                                result: previous.clone()
+                            },
+                        ).is_none(),
+                        "une ancienne corrélation est ignorée sans fermer le worker"
                     );
+                    assert!(worker_state.lock().unwrap().pending_candidate_probes_v2
+                        .contains_key(&probe.correlation_id),
+                        "l’ancienne réponse ne satisfait jamais la nouvelle sonde");
                 }
                 count.fetch_add(1, Ordering::SeqCst);
                 let now = unix_timestamp();

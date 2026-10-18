@@ -1,5 +1,5 @@
 # Plan 172 — parcours distant complet
-Statut : livré avec limites de validation consignées. Périmètre élargi explicitement par l'utilisateur le 18 octobre 2026.
+Statut : In Progress — complément correctif et recettes finales. Périmètre élargi explicitement par l'utilisateur le 18 octobre 2026.
 
 ## Référence T3 vérifiée
 - /Users/moi/11.Repositories/t3code-local/packages/provider-core/src/server/subagentProjection.ts :
@@ -47,4 +47,18 @@ La préparation automatique et le premier lancement Revue ont abouti.
 Les recettes suivantes ont montré les délais HTTP et le bootstrap expirant
 avant la réattestation. Corriger ces délais avec négociation de capacité ;
 activer maître et worker, puis reprendre les lectures compatibles discovery.
-T3 reste inchangé. Les droits sont relus juste avant libération.
+Ce premier ajustement conservait T3. Le complément suivant corrige aussi son
+montage Codex et le cycle de droits ; les droits sont toujours relus avant libération.
+
+
+## Complément final
+Les cinq reproductions de transport et les deux reproductions du délai Codex
+sont conservées avec leurs résultats après correction. Réserver le budget réel
+des trois échanges HTTP et de leur fermeture ; ne pas augmenter les droits.
+Conserver les erreurs réseau de la sonde au lieu d’inventer unsupported.
+Aligner le montage officiel T3 sur le timeout3700 déjà utilisé par le wrapper
+Codex natif Bridget, sans toucher aux serveurs étrangers ni aux opt-out.
+Installer les clients signés ; garder T3 ouvert selon la consigne utilisateur.
+Reprendre les demandes inconnues à l’identique. Les échecs terminaux restent
+consultables ; une nouvelle recette porte une clé neuve explicite.
+Les détails des causes et des sources T3 lues figurent dans implementation.md.

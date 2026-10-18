@@ -479,9 +479,11 @@ fn execute_with_proof(
             });
         }
     }
-    // T3 prépare avant de lancer ; le transfert d'un nouveau dépôt n'est pas
-    // une simple lecture du daemon. Garder le budget court pour les autres outils.
-    if matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)) {
+    // Une admission peut préparer un dépôt ou un worktree. Le délai métier
+    // de la mission reste distinct ; les lectures gardent leur budget court.
+    let admission = matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)
+        | NativeDelegationRequest::AutoDelegate(_) | NativeDelegationRequest::Delegate { .. });
+    if admission {
         connection.set_deadline(Instant::now() + Duration::from_secs(600));
     }
     let recover_request_id = match &request {
@@ -494,8 +496,7 @@ fn execute_with_proof(
     } else {
         Duration::ZERO
     };
-    if !attestation_budget.is_zero()
-        && !matches!(&request, NativeDelegationRequest::AutoDelegateV2(_))
+    if !attestation_budget.is_zero() && !admission
     {
         let wait = match &request {
             NativeDelegationRequest::Wait { wait_timeout, .. } =>

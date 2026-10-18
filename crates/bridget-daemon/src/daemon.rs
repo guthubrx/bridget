@@ -18365,6 +18365,8 @@ fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
         .retain(|_, pending| pending.conn_id != conn_id);
     st.pending_candidate_probes
         .retain(|_, pending| pending.conn_id != conn_id);
+    st.pending_candidate_probes_v2
+        .retain(|_, pending| pending.conn_id != conn_id);
 }
 
 fn remote_worker_contact_tick(state: &Arc<Mutex<DaemonState>>) {
@@ -18666,7 +18668,10 @@ fn handle_worker_message(
                 return refused(WorkerRefusal::StaleConnection);
             }
             let Some(pending) = st.pending_candidate_probes.get(&result.correlation_id) else {
-                return refused(WorkerRefusal::CommandMismatch);
+                // Sonde expirée ou déjà consommée : ignorer ce résultat en lecture,
+                // comme T3 résout une réponse dont l’attente a été retirée.
+                // L’époque, l’identité et la forme ont déjà été contrôlées.
+                return None;
             };
             let result_ids = result
                 .verdicts
@@ -18708,7 +18713,10 @@ fn handle_worker_message(
                 return refused(WorkerRefusal::StaleConnection);
             }
             let Some(pending) = st.pending_candidate_probes_v2.get(&result.correlation_id) else {
-                return refused(WorkerRefusal::CommandMismatch);
+                // Sonde expirée ou déjà consommée : ignorer ce résultat en lecture,
+                // comme T3 résout une réponse dont l’attente a été retirée.
+                // L’époque, l’identité et la forme ont déjà été contrôlées.
+                return None;
             };
             let result_ids = result
                 .verdicts
@@ -18951,9 +18959,12 @@ pub(super) fn remote_candidate_probe(
     .is_ok();
     let result = if written {
         rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .ok()
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => WorkerRefusal::ProbeExpired,
+                mpsc::RecvTimeoutError::Disconnected => WorkerRefusal::WorkerUnavailable,
+            })
     } else {
-        None
+        Err(WorkerRefusal::WorkerUnavailable)
     };
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     st.pending_candidate_probes.remove(&correlation_id);
@@ -18964,7 +18975,7 @@ pub(super) fn remote_candidate_probe(
     {
         return Err(WorkerRefusal::StaleConnection);
     }
-    result.ok_or(WorkerRefusal::WorkerUnavailable)
+    result
 }
 
 /// Sonde168 corrélée au worker. Elle ne passe jamais par Prepare et ne porte
@@ -19056,12 +19067,15 @@ fn remote_candidate_probe_v2(
         deadline,
     )
     .is_ok();
-    let result = written
-        .then(|| {
-            rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .ok()
-        })
-        .flatten();
+    let result = if written {
+        rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|error| match error {
+                mpsc::RecvTimeoutError::Timeout => WorkerRefusal::ProbeExpired,
+                mpsc::RecvTimeoutError::Disconnected => WorkerRefusal::WorkerUnavailable,
+            })
+    } else {
+        Err(WorkerRefusal::WorkerUnavailable)
+    };
     let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
     st.pending_candidate_probes_v2.remove(&correlation_id);
     if !st
@@ -19071,7 +19085,7 @@ fn remote_candidate_probe_v2(
     {
         return Err(WorkerRefusal::StaleConnection);
     }
-    result.ok_or(WorkerRefusal::WorkerUnavailable)
+    result
 }
 
 #[cfg(test)]
@@ -41841,11 +41855,19 @@ mod presence_tests {
             st.remote_workers.get_mut("cartae").unwrap().last_contact =
                 Instant::now() - Duration::from_secs(31);
         }
+        let (reply172, receiver172) = mpsc::sync_channel(1);
+        shared.lock().unwrap().pending_candidate_probes_v2.insert("probe172-disconnected".into(),
+            PendingCandidateProbeV2 { conn_id:"worker-b".into(), epoch:second.connection_epoch.clone(),
+                worker:second.identity.clone(), admission_id:"a-probe172".into(), policy_revision:1,
+                candidate_ids:std::collections::BTreeSet::from(["c001".into()]),reply:reply172 });
         remote_worker_contact_tick(&shared);
         assert_eq!(
             shared.lock().unwrap().remote_workers["cartae"].contact,
             WorkerContactState::Stale
         );
+        assert!(matches!(receiver172.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
+            "une sonde V2 doit finir dès que le worker est déconnecté");
+        assert!(shared.lock().unwrap().pending_candidate_probes_v2.is_empty());
         handle_worker_message(&shared, "worker-b", WrapperToDaemon::Heartbeat);
         assert_eq!(
             shared.lock().unwrap().remote_workers["cartae"].contact,

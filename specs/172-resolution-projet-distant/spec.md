@@ -1,6 +1,6 @@
 # 172 — Préparation et résolution du projet distant
 
-Statut : Implemented. Recettes Cartae validées ; limite du test parent natif consignée. Correction demandée et élargie le 18 octobre 2026.
+Statut : In Progress — complément de correction. Parent natif et codage Cartae prouvés ; recettes finales Revue/Opus2D et activation T3 encore ouvertes. Périmètre élargi le 18 octobre 2026.
 
 ## Défaut observé
 Le parent « trajets bus » indique Cartae et son dossier, sans project_id.
@@ -35,3 +35,14 @@ Bridget est déjà déclaré. Revue, situé dans
 /Volumes/8TB2/50-repos-archives/11.Repositories/revue, ne l'est pas.
 Le banc isolé couvre l'absence de dépôt publié et l'absence de T3. La recette
 réelle doit prouver le lancement et le résultat Cartae depuis un parent Revue.
+
+
+## Complément demandé après les recettes
+- Conserver les droits de la même exécution pendant les tours automatiques T3.
+- Vérifier le commit source sur la machine du parent natif distant.
+- Laisser au client le budget de réattestation, de transport et d’attente métier.
+- Distinguer une panne réseau d’une capacité absente.
+- Couvrir les attentes natives dans le montage Codex, comme dans le wrapper Bridget.
+- Vérifier une vraie tâche de codage isolée sur Cartae et les vrais parents des projets.
+Une installation sur disque n’est pas une preuve d’activation T3. Aucun succès
+global n’est déduit des seuls tests ciblés ou des recettes déjà réussies.
