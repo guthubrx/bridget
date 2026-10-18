@@ -939,6 +939,9 @@ fn observe_routing_candidates(
             candidates,
         };
         let correlation_id = probe.correlation_id.clone();
+        let candidate_connections = probe.candidates.iter()
+            .map(|candidate| (candidate.candidate_id.clone(), candidate.connection_id.clone()))
+            .collect::<HashMap<_, _>>();
         let candidate_projects = probe.candidates.iter()
             .map(|candidate| (candidate.candidate_id.clone(), candidate.project_id.clone()))
             .collect::<HashMap<_, _>>();
@@ -971,6 +974,7 @@ fn observe_routing_candidates(
                 },
             );
         }
+        let mut quota_seen = HashMap::new();
         for verdict in result.verdicts {
             if let CandidateProbeV2Verdict::Ineligible { candidate_id, reason } = &verdict {
                 if wanted.contains(candidate_id) {
@@ -991,6 +995,22 @@ fn observe_routing_candidates(
                     && observed_at > 0
                     && routing_fact_fresh(received_at, unix_timestamp(), ttl)
                 {
+                    let connection = &candidate_connections[&candidate_id];
+                    let blocked = *quota_seen.entry((connection.clone(), definition_digest.clone()))
+                        .or_insert_with(|| {
+                            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+                            let live = st.conn_instances.values().cloned().collect();
+                            let quota = st.provider_limits.routing_quota(connection, &definition_digest,
+                                st.coordinator_epoch, &live, received_at, ttl);
+                            plan.connections.push(RoutingDecisionFact {
+                                id: connection.clone(),
+                                observed_at: quota.as_ref().map(|q| q.observed_at),
+                                summary: quota.as_ref().and_then(|q| serde_json::to_string(q).ok())
+                                    .unwrap_or_else(|| "unknown".into()),
+                            });
+                            quota.as_ref().is_some_and(|q| q.launch_blocked)
+                        });
+                    if blocked { continue; }
                     observations.insert(
                         candidate_id.clone(),
                         RoutingCandidateObservation {
@@ -1036,6 +1056,14 @@ fn observe_routing_candidates(
             "worker_candidate_probe_v2_unsupported".into()
         } else if let Some(reason) = mapping_refusal {
             reason
+        } else if let Some(quota) = plan.connections.iter()
+            .filter_map(|fact| serde_json::from_str::<Value>(&fact.summary).ok())
+            .find(|quota| quota["launch_blocked"] == true)
+        {
+            format!("provider_quota_exhausted:{}", json!({
+                "message":"Le quota d’une connexion compatible est épuisé ; aucune autre cible n’est disponible.",
+                "detail":{"resets_at":quota["resets_at"]},
+            }))
         } else {
             "routing_candidate_unavailable".into()
         });
@@ -11715,28 +11743,29 @@ mod tests {
             Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })));
         let responder_state = Arc::clone(&state);
         let responder = std::thread::spawn(move || {
-            let frame = super::super::presence_tests::read_control(&mut reader);
-            let DaemonToWrapper::CandidateProbeV2 { probe } = frame else { panic!("probe expected"); };
-            assert_eq!(probe.candidates.len(), 3);
-            assert!(probe.candidates.iter().all(|c| c.project_id == "project171"));
-            let now = unix_timestamp();
-            let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
-                correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
-                worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
-                resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
-                    cpu_percent:None,available_memory_percent:None,normalized_load_percent:None,
-                    compilation_slots:None },
-                verdicts:probe.candidates.into_iter().map(|candidate|
-                    CandidateProbeV2Verdict::Eligible { candidate_id:candidate.candidate_id,
-                        mapping_revision:1, definition_digest:"a".repeat(64),
-                        permission_digest:"b".repeat(64),observed_at:now }).collect() };
-            assert!(handle_worker_message(&responder_state,"worker171",
-                WrapperToDaemon::CandidateProbeResultV2 { result }).is_none());
+            for _ in 0..2 {
+                let frame = super::super::presence_tests::read_control(&mut reader);
+                let DaemonToWrapper::CandidateProbeV2 { probe } = frame else { panic!("probe expected"); };
+                assert_eq!(probe.candidates.len(), 3);
+                assert!(probe.candidates.iter().all(|c| c.project_id == "project171"));
+                let now = unix_timestamp();
+                let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                    correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
+                    worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                    resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
+                        cpu_percent:None,available_memory_percent:None,normalized_load_percent:None,
+                        compilation_slots:None },
+                    verdicts:probe.candidates.into_iter().map(|candidate|
+                        CandidateProbeV2Verdict::Eligible { candidate_id:candidate.candidate_id,
+                            mapping_revision:1, definition_digest:"a".repeat(64),
+                            permission_digest:"b".repeat(64),observed_at:now }).collect() };
+                assert!(handle_worker_message(&responder_state,"worker171",
+                    WrapperToDaemon::CandidateProbeResultV2 { result }).is_none());
+            }
         });
         let canonical = serde_json::to_vec(&request).unwrap();
         let mut plan = routing168_plan(&state, &request);
         observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
-        responder.join().unwrap();
         assert_eq!(plan.candidates.len(),3);
         let frozen:RoutingAdmissionSnapshot = serde_json::from_slice(
             &serde_json::to_vec(&routing_snapshot(&plan,None)).unwrap()).unwrap();
@@ -11747,6 +11776,23 @@ mod tests {
         assert_eq!(machine_id.as_deref(),Some("cartae"));
         assert_eq!(project_id.as_deref(),Some("project171"));
         assert_eq!(serde_json::to_vec(&request).unwrap(),canonical,"replay envelope unchanged");
+        {
+            let mut st = state.lock().unwrap();
+            let epoch = st.coordinator_epoch;
+            st.provider_limits.record_scoped("native-test", "finished-child172",
+                RateLimitFact { window:"unknown".into(), status:"rejected".into(),
+                    resets_at:None,used_percent:None,credits:None },
+                RateLimitSource::ClaudeStreamJson, unix_timestamp());
+            st.provider_limits.bind_routing_instance("main", "native-test", "finished-child172", &"a".repeat(64), epoch);
+        }
+        let mut blocked = routing168_plan(&state, &request);
+        let refusal = observe_routing_candidates("conn-1", &request, &mut blocked, None, &state).unwrap_err();
+        assert!(refusal.starts_with("provider_quota_exhausted:"), "{refusal}");
+        responder.join().unwrap();
+        assert!(blocked.candidates.is_empty());
+        let quota:Value = serde_json::from_str(&blocked.connections.iter().find(|q| q.id=="main").unwrap().summary).unwrap();
+        assert_eq!(quota["launch_blocked"],true);
+        assert!(quota["resets_at"].is_null());
         assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
         assert!(rx.try_recv().is_err());
         drop(state);
@@ -22821,6 +22867,121 @@ for frame in frames: print(json.dumps(frame),flush=True)
         };
         result.digest = result.canonical_digest().unwrap();
         (st, config, task, result)
+    }
+
+    #[test]
+    fn spec172_remote_rate_limit_binds_only_current_managed_child_and_exact_definition() {
+        use bridget_transport::protocol::RateLimitSource;
+        let (mut st, config, mut task, _result) = remote162_capture_fixture();
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let value = json!({"agents":{"native-test":{"command":"/bin/sh","args":["app-server"],
+            "protocol":"codex_app_server","forbidden_env":[],"capabilities":{"execution_paths":["codex_app_server"],
+                "models":{"custom/model":{"efforts":["high"]}}}}},
+            "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],
+                "mappings":{"quota-project":{"source_host":st.host.clone(),"source_root":root,
+                    "remote_root":root.join("remote"),"expected_git_identity":"fixture172","mapping_revision":1}}}},
+            "routing_policy":{"version":2,"revision":1,"enabled":true,
+                "connections":[{"connection_id":"cartae-native","machine_id":"cartae",
+                    "engine":"codex","agent_type":"native-test","enabled":true}],
+                "model_catalog":{"cartae-native":[{"model":"custom/model","supported_efforts":["high"],
+                    "default_effort":"high","provenance":"operator_observation"}]},
+                "machine_policies":{"cartae":{"enabled":true}}}});
+        st.registry =
+            AgentRegistry::from_json(&value.to_string(), &root.join("quota172.json")).unwrap();
+        let instance = task.child_instance.clone().unwrap();
+        let response = handle_register_with_channel(
+            "quota-child172",
+            2,
+            "native-test".into(),
+            task.child.clone(),
+            Some("cartae".into()),
+            Some("codex_app_server".into()),
+            ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Cli),
+            None,
+            Some("linux".into()),
+            Some(instance.clone()),
+            None,
+            false,
+            Some(true),
+            &mut st,
+            false,
+        );
+        assert!(
+            matches!(response, DaemonToWrapper::Registered { .. }),
+            "{response:?}"
+        );
+        st.managed_by_instance
+            .insert(instance.clone(), task.task_id.clone());
+        let digest = task.definition.digest.clone();
+        task.remote_placement.as_mut().unwrap().definition_digest = digest.clone();
+        for (case, allowed) in [
+            ("current", true),
+            ("definition", false),
+            ("instance", false),
+            ("machine", false),
+            ("ambiguous", false),
+            ("managed", false),
+        ] {
+            let mut declared = value.clone();
+            if case == "ambiguous" {
+                let mut other = declared["routing_policy"]["connections"][0].clone();
+                other["connection_id"] = json!("other-account");
+                declared["routing_policy"]["connections"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(other);
+                declared["routing_policy"]["model_catalog"]["other-account"] =
+                    declared["routing_policy"]["model_catalog"]["cartae-native"].clone();
+            }
+            st.registry =
+                AgentRegistry::from_json(&declared.to_string(), &root.join("quota172.json")).unwrap();
+            st.managed_by_instance
+                .insert(instance.clone(), task.task_id.clone());
+            let mut candidate = task.clone();
+            if case == "definition" {
+                candidate
+                    .remote_placement
+                    .as_mut()
+                    .unwrap()
+                    .definition_digest = "f".repeat(64);
+            }
+            if case == "instance" {
+                candidate.child_instance = Some("foreign-instance".into());
+            }
+            if case == "machine" {
+                candidate.remote_placement.as_mut().unwrap().machine_id = "another-machine".into();
+            }
+            if case == "managed" {
+                st.managed_by_instance.remove(&instance);
+            }
+            st.delegation_store.save(&candidate).unwrap();
+            st.provider_limits = crate::provider_limits::ProviderLimits::default();
+            assert!(matches!(
+                handle_rate_limit(
+                    &task.child,
+                    "unknown".into(),
+                    "rejected".into(),
+                    None,
+                    None,
+                    None,
+                    RateLimitSource::ClaudeStreamJson,
+                    &mut st
+                ),
+                DaemonToWrapper::Ack { .. }
+            ));
+            let quota = st.provider_limits.routing_quota(
+                "cartae-native",
+                &digest,
+                st.coordinator_epoch,
+                &st.conn_instances.values().cloned().collect(),
+                unix_timestamp(),
+                30,
+            );
+            assert_eq!(quota.is_some_and(|q| q.launch_blocked), allowed, "{case}");
+        }
+        cleanup(&config);
     }
 
     #[test]

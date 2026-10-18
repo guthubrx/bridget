@@ -358,3 +358,62 @@ observé, puis ses droits ont été corrigés à0600 sans modifier la garde.
 Test nouveau1PASS. Module worker19PASS/3FAIL avec le mauvais Git du lanceur ;
 les trois cas ont été repris seuls avec Git2.56 et ont tous passé. Aucun GREEN
 global ni nouvelle FULL. L’installation worker doit encore être vérifiée.
+
+
+## Complément quota du 18 octobre — cause réelle de BUS et de la reprise VOITURES
+
+La Task BUS8dcb54b1 et la reprise VOITURESb9d8b49c ont échoué avec api_error.
+Les journaux natifs Claude donnent la cause structurée : error=rate_limit,
+isApiErrorMessage=true. Le texte annonce « resets 1:20pm (UTC) », soit15h20
+heure de Paris ce18octobre. Ce n’est ni une panne SSH ni un défaut de droits.
+La reprise b9d8b49c n’a pas produit de code ; son worktree propre reste conservé.
+
+Référence T3 lue :
+/Users/moi/11.Repositories/t3code/apps/server/src/provider/Layers/ClaudeAdapter.ts,
+handleAssistantMessage vers3233 et handleResultMessage vers3268.
+T3 conserve latestAssistantRateLimited à partir du code structuré rate_limit.
+Une réponse ultérieure remplace cette preuve. Le résultat générique api_error
+reçoit alors le diagnostic de limite d’usage. Bridget reprend ce mécanisme par tour.
+Il garde la priorité du refus de permissions et de l’annulation. Le texte seul
+ne déclenche pas cette classification. Une notice de quota n’est pas une réponse
+métier réussie ; si le fournisseur se rétablit, la vraie réponse la remplace.
+
+T3 ne possède pas le routage de flotte distante de Bridget. Adaptation nécessaire :
+le fait de limite passe par le flux natif existant, fenêtre unknown si elle manque,
+sans pourcentage, crédit ou date inventés depuis le texte. La remontée est liée à
+l’enfant géré courant, sa Task distante préparée et son digest de définition.
+Une seule connexion déclarée peut correspondre ; sinon le fait reste non lié.
+La sonde distante relit ce fait avant la décision de routage. Le refus récent reste
+restrictif après le nettoyage de l’enfant, pour la même connexion/définition/époque,
+durant le seul TTL de la politique. Aucun crédit ou capacité positive d’une
+instance morte n’est adopté. Sans autre cible, le port rend provider_quota_exhausted.
+Le rejeu d’une décision admise ne migre pas. Les autres axes libres restent libres.
+
+Limite explicite : aucune heure de retour n’est attestée par le code rate_limit seul.
+Le texte humain n’est pas converti en fait machine et n’ouvre aucun hold160.
+Une observation périmée redevient inconnue selon le TTL existant. L’authentification
+et l’acceptation d’une nouvelle mission restent à prouver par l’essai réel.
+
+Preuves ciblées privées, sous /home/moi/.cache/bridget-delivery172 :
+quota-classification-red172.log (rate_limit rendu api_error avant correction),
+quota-recovered-response-red172.log (notice incorrectement gardée comme réponse),
+quota-routing-red172.log (fait perdu après sortie de l’enfant),
+quota-remote-red172.log (sonde distante ignorant la limite), puis leurs GREEN.
+34tests du pilote Claude,14tests de mémoire quota,13tests de routage,
+1test de sonde distante,1test de liaison stricte et2tests de continuation PASS.
+Le test de liaison refuse digest, instance, machine, gestionnaire ou compte ambigu.
+Son cas artificiel qui tentait de remettre remote_prepared=false sur une Task déjà
+préparée a été retiré : le magasin conserve ce fait de façon monotone. Donnée lue
+avant retrait : valeur demandée false, valeur persistée true ; garde produit conservée.
+
+Le défaut de fixture hérité env_unfit est résolu sans modifier le produit :
+config-149 était créé0770 sous le masque réel du serveur, malgré le contrôle0700.
+La fixture fixe maintenant0700. Les14tests native153_ronde_ passent.
+Référence T3 lue : antigravityAuthSupport.ts361–375 fixe aussi explicitement0700
+après création ; ClaudeHome.ts20–36 isole le profil par CLAUDE_CONFIG_DIR.
+Aucun compte ni profil utilisateur n’a été modifié. Aucune nouvelle FULL.
+
+La relecture conserve les mêmes limites de stockage, d’identité et de fraîcheur.
+Aucun nouveau schéma, magasin, outil, paramètre ou dépendance. Le test adversarial
+ajoute des crédits synthétiques au même historique : ils restent absents du fait
+rendu après la sortie de l’instance. Les crédits Codex ne traversent pas ce cas.

@@ -160,11 +160,11 @@ impl ProviderLimits {
         let binding = self.routing_bindings.get(connection_id)?;
         if binding.coordinator_epoch != coordinator_epoch
             || binding.definition_digest != definition_digest
-            || !live_instances.contains(&binding.instance)
             || !(1..=300).contains(&max_age_secs)
         {
             return None;
         }
+        let instance_live = live_instances.contains(&binding.instance);
         let scoped = self
             .by_instance
             .get(&(binding.agent_type.clone(), binding.instance.clone()))?;
@@ -190,13 +190,26 @@ impl ProviderLimits {
         if let Some(credits) = scoped
             .codex_credits
             .get(&binding.agent_type)
-            .filter(|(_, at)| fresh(*at))
+            .filter(|(_, at)| instance_live && fresh(*at))
         {
             filtered
                 .codex_credits
                 .insert(binding.agent_type.clone(), credits.clone());
         }
-        filtered.quota_with_credits(&binding.agent_type, now, true)
+        let claude_rejected = filtered.by_agent_type.get(&binding.agent_type)
+            .into_iter().flat_map(|windows| windows.values())
+            .any(|seen| seen.source == RateLimitSource::ClaudeStreamJson
+                && seen.fact.status == "rejected");
+        // Le refus observé reste restrictif après le nettoyage de l'enfant,
+        // uniquement dans la même connexion/définition/époque et le TTL de la politique.
+        // Aucune capacité positive ni crédit n'est adopté depuis une instance morte.
+        if !instance_live && !claude_rejected {
+            return None;
+        }
+        let mut quota = filtered.quota_with_credits(&binding.agent_type, now, true)?;
+        quota.limit_reached |= claude_rejected;
+        quota.launch_blocked |= claude_rejected;
+        Some(quota)
     }
 
     pub(crate) fn scoped_quota(&self, agent_type: &str, instance: &str, now: i64) -> Option<Quota> {
@@ -326,6 +339,79 @@ impl ProviderLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec172_recent_claude_rejection_survives_child_exit_only_for_same_connection() {
+        let mut limits = ProviderLimits::default();
+        limits.record_scoped(
+            "claude",
+            "child",
+            RateLimitFact {
+                window: "unknown".into(),
+                status: "rejected".into(),
+                resets_at: None,
+                used_percent: None,
+                credits: None,
+            },
+            RateLimitSource::ClaudeStreamJson,
+            90,
+        );
+        limits.record_scoped("claude", "child", RateLimitFact {
+            window: "account/credits".into(), status: "available".into(),
+            resets_at: None, used_percent: None,
+            credits: Some(bridget_transport::protocol::CodexCredits {
+                has_credits: Some(true), unlimited: Some(true), spend_control_reached: false,
+            }),
+        }, RateLimitSource::CodexAppServer, 90);
+        limits.bind_routing_instance("cartae-claude", "claude", "child", "digest", 7);
+        let empty = std::collections::HashSet::new();
+        let quota = limits
+            .routing_quota("cartae-claude", "digest", 7, &empty, 100, 30)
+            .expect("recent observed rejection remains useful after failed child cleanup");
+        assert!(quota.launch_blocked && quota.limit_reached);
+        assert!(quota.credits.is_none(), "no positive credit carried from a dead instance");
+        assert!(
+            !quota.exhausted && quota.resets_at.is_none(),
+            "no window or reset invented"
+        );
+        for (connection, digest, epoch, now) in [
+            ("another-account", "digest", 7, 100),
+            ("cartae-claude", "changed", 7, 100),
+            ("cartae-claude", "digest", 8, 100),
+            ("cartae-claude", "digest", 7, 121),
+        ] {
+            assert!(
+                limits
+                    .routing_quota(connection, digest, epoch, &empty, now, 30)
+                    .is_none()
+            );
+        }
+        limits.record_scoped(
+            "claude",
+            "child",
+            RateLimitFact {
+                window: "unknown".into(),
+                status: "allowed".into(),
+                resets_at: None,
+                used_percent: None,
+                credits: None,
+            },
+            RateLimitSource::ClaudeStreamJson,
+            101,
+        );
+        assert!(
+            limits
+                .routing_quota("cartae-claude", "digest", 7, &empty, 102, 30)
+                .is_none()
+        );
+        let live = std::collections::HashSet::from(["child".into()]);
+        assert!(
+            !limits
+                .routing_quota("cartae-claude", "digest", 7, &live, 102, 30)
+                .unwrap()
+                .launch_blocked
+        );
+    }
 
     #[test]
     fn spec168_quota_connexion_instance_definition_epoque_ttl_et_credits_100() {

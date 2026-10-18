@@ -5334,7 +5334,7 @@ impl std::fmt::Display for RuntimeSource {
 /// inconnu ne puisse pas se faire passer pour une capacité attestée.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RateLimitSource {
-    /// Événement `rate_limit_event` effectivement lu du flux Claude natif.
+    /// Fait lu du flux Claude natif : `rate_limit_event` ou code assistant `rate_limit`.
     #[serde(rename = "claude-stream-json")]
     ClaudeStreamJson,
     /// Réponse ou notification `account/rateLimits/*` de Codex app-server.

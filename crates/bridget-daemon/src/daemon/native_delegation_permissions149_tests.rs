@@ -59,6 +59,7 @@ pub(in crate::daemon) fn fixture_with_reader(
     fs::create_dir_all(&project).unwrap();
     let config_dir = fleet_root.join("config-149");
     fs::create_dir_all(&config_dir).unwrap();
+    fs::set_permissions(&config_dir, fs::Permissions::from_mode(0o700)).unwrap();
     let config_dir_str = config_dir.to_string_lossy().into_owned();
     let mut env: crate::lifecycle::SourceEnvironment = Default::default();
     env.insert("HOME".into(), fleet_root.as_os_str().to_owned());

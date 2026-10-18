@@ -9043,6 +9043,24 @@ fn handle_rate_limit(
         // observation sans cette preuve reste disponible au chemin legacy,
         // mais ne devient pas un fait de compte pour le routage168.
         let binding = state.registry.routing_policy().and_then(|policy| {
+            // O(T+C), T<=4096 missions conservées, C<=128 connexions déclarées.
+            if let Some(task) = state.delegation_store.for_child(agent).ok().flatten()
+                && let Some(placement) = task.remote_placement.as_ref()
+            {
+                if !task.remote_prepared
+                    || task.child_instance.as_deref() != Some(instance.as_str())
+                    || task.definition.digest != placement.definition_digest
+                    || state.managed_by_instance.get(&instance) != Some(&task.task_id)
+                {
+                    return None;
+                }
+                let mut matches = policy.connections.iter().filter(|connection|
+                    connection.enabled && connection.agent_type == agent_type
+                        && connection.machine_id == placement.machine_id);
+                let connection = matches.next()?;
+                if matches.next().is_some() { return None; }
+                return Some((connection.connection_id.clone(), placement.definition_digest.clone()));
+            }
             let mut matches = policy.connections.iter().filter(|connection| {
                 connection.enabled
                     && connection.agent_type == agent_type

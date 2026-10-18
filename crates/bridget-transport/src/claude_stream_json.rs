@@ -111,6 +111,7 @@ struct ActiveTurn {
     /// Issue fournisseur (`end_turn`, …) — absente ⇒ le fil affiche « inconnu ».
     stop_reason: Option<String>,
     permission_denied: bool,
+    latest_assistant_rate_limited: bool,
 }
 
 struct QueueState {
@@ -1153,6 +1154,7 @@ fn spawn_worker(
                 text_updates: 0,
                 stop_reason: None,
                 permission_denied: false,
+                latest_assistant_rate_limited: false,
             });
             busy.store(true, Ordering::SeqCst);
             push_internal(
@@ -1591,7 +1593,19 @@ fn spawn_reader(
                 }
                 continue;
             }
+            let mut assistant_limit_observation = None;
             if kind == "assistant" {
+                // T3 conserve ce code structuré même si le résultat dit api_error.
+                // Une réponse ultérieure remplace le refus ; aucune date n'est déduite du texte.
+                let limited = value.get("error").and_then(Value::as_str) == Some("rate_limit");
+                let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
+                if let Some(active) = state.active.as_mut() {
+                    if limited || active.latest_assistant_rate_limited {
+                        assistant_limit_observation = Some(limited);
+                    }
+                    active.latest_assistant_rate_limited = limited;
+                }
+                drop(state);
                 // TOOL : le content_block_start arrive tôt avec name mais
                 // input={}. On journalise ici le bloc assistant qui porte
                 // name + input complet (mesure /tmp/flux-outil.jsonl L19).
@@ -1615,7 +1629,7 @@ fn spawn_reader(
                             .join("")
                     })
                     .unwrap_or_default();
-                if !assistant_text.is_empty() {
+                if !assistant_text.is_empty() && !limited {
                     let message_id = {
                         let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                         if let Some(active) = state.active.as_mut() {
@@ -1648,13 +1662,13 @@ fn spawn_reader(
                     .get("permission_denials")
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len);
-                let interrupted_for_permission = queue
-                        .0
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .active
-                        .as_ref()
-                        .is_some_and(|active| active.permission_denied);
+                let (interrupted_for_permission, rate_limited) = queue
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .active
+                    .as_ref()
+                    .map_or((false, false), |active| (active.permission_denied, active.latest_assistant_rate_limited));
                 // Un outil bloqué par Claude ou un hook ne transforme pas un
                 // tour terminé en échec. Une interruption imposée par notre
                 // contrôle d'autorisation reste un refus terminal.
@@ -1675,6 +1689,8 @@ fn spawn_reader(
                     // coupé à la demande. C'est une annulation, pas un échec —
                     // sans quoi bridget-idle classerait l'agent en bloqué.
                     ManagedTerminal::Cancelled
+                } else if rate_limited {
+                    ManagedTerminal::Failed { detail: "usage_limit".into() }
                 } else {
                     ManagedTerminal::Failed {
                         detail: value
@@ -1761,7 +1777,15 @@ fn spawn_reader(
                     let _ = active.completion.send(terminal);
                 }
             }
-            let managed_event = if kind == "rate_limit_event" {
+            let managed_event = if let Some(limited) = assistant_limit_observation {
+                ManagedEventKind::RateLimitObserved {
+                    window: "unknown".into(),
+                    status: if limited { "rejected" } else { "allowed" }.into(),
+                    resets_at: None,
+                    used_percent: None,
+                    credits: None,
+                }
+            } else if kind == "rate_limit_event" {
                 rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
                     detail: "événement Claude rate_limit_event incomplet".to_string(),
                 })
@@ -2852,6 +2876,110 @@ mod tests {
             )
         }));
         transport.stop();
+    }
+
+    #[test]
+    fn spec172_assistant_rate_limit_is_structured_and_recovery_replaces_it() {
+        for (error, recovery, terminal_reason, expected) in [
+            ("rate_limit", false, "api_error", "usage_limit"),
+            ("authentication_failed", false, "api_error", "api_error"),
+            ("", false, "api_error", "api_error"),
+            ("rate_limit", true, "api_error", "api_error"),
+            ("rate_limit", true, "completed", "completed"),
+        ] {
+            let mut frames = vec![json!({"type":"assistant","error":error,
+                "message":{"content":[{"type":"text","text":"You've hit your session limit · resets 1:20pm (UTC)"}]}})];
+            if recovery {
+                frames.push(json!({"type":"assistant","message":{"content":[{"type":"text","text":"Provider response recovered"}]}}));
+            }
+            frames.push(
+                json!({"type":"result","is_error":terminal_reason!="completed",
+                "terminal_reason":terminal_reason,"result":"Provider result"}),
+            );
+            let output = frames
+                .into_iter()
+                .map(|frame| {
+                    let quoted = frame.to_string().replace('\'', "'\\''");
+                    format!("printf '%s\\n' '{quoted}'; ")
+                })
+                .collect::<String>();
+            let mut configured = options();
+            configured.args[1] = format!("while IFS= read -r line; do {output}done");
+            let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+            transport.deliver(&message("quota172")).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut events = Vec::new();
+            while Instant::now() < deadline {
+                events.extend(transport.drain_events());
+                if events.iter().any(|event| {
+                    matches!(
+                        &event.kind,
+                        ManagedEventKind::TurnFinished { .. }
+                            | ManagedEventKind::DeliveryRejected { .. }
+                    )
+                }) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            transport.stop();
+            if expected == "completed" {
+                assert!(
+                    events.iter().any(|event| matches!(
+                        &event.kind,
+                        ManagedEventKind::TurnFinished {
+                            terminal: ManagedTerminal::Completed,
+                            ..
+                        }
+                    )),
+                    "{events:?}"
+                );
+                assert!(
+                    events.iter().any(|event| matches!(&event.kind,
+                    ManagedEventKind::TurnFinished {response,terminal:ManagedTerminal::Completed,..}
+                    if response == "Provider response recovered")),
+                    "successful response must replace the quota notice"
+                );
+            } else {
+                assert!(
+                    events.iter().any(|event| matches!(&event.kind,
+                    ManagedEventKind::DeliveryRejected {reason,..} if reason==expected)),
+                    "{events:?}"
+                );
+            }
+            let facts = events
+                .iter()
+                .filter_map(|event| match &event.kind {
+                    ManagedEventKind::RateLimitObserved {
+                        window,
+                        status,
+                        resets_at,
+                        used_percent,
+                        credits,
+                    } => {
+                        assert_eq!(window, "unknown");
+                        assert!(
+                            resets_at.is_none() && used_percent.is_none() && credits.is_none(),
+                            "no reset inferred from display text"
+                        );
+                        Some(status.as_str())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                facts,
+                if error == "rate_limit" {
+                    if recovery {
+                        vec!["rejected", "allowed"]
+                    } else {
+                        vec!["rejected"]
+                    }
+                } else {
+                    vec![]
+                }
+            );
+        }
     }
 
     #[test]

@@ -31,6 +31,11 @@
 - [ ] T024 Activer le correctif du maître sans interrompre BUS et vérifier la même continuation VOITURES.
 
 - [x] T025 Corriger la sortie fatale du worker sur EOF de sonde ; preuve RED/GREEN et refus permanents conservés.
-- [ ] T026 Activer le worker corrigé en l’absence de mission native active.
+- [x] T026 Activer le worker corrigé en l’absence de mission native active (527308bb, PID4164309 ; reçu privé).
 - [ ] T027 Reprendre explicitement le travail VOITURES après la perte de son ancien processus, sans présenter une nouvelle tâche comme la continuation ancienne.
-- [ ] T028 Corriger les deux fixtures de rondes héritées qui refusent l’admission env_unfit.
+- [x] T028 Corriger les deux fixtures de rondes héritées : profil0770 observé, permissions0700 explicites ; 14tests de rondes PASS.
+
+- [x] T029 Reconnaître le code Claude rate_limit malgré api_error et préserver une réponse ultérieure réussie.
+- [x] T030 Lier les refus observés à la connexion distante et les appliquer au routage avec définition/époque/TTL inchangés.
+- [ ] T031 Construire et activer le complément de quota, puis qualifier une vraie reprise VOITURES.
+- [ ] T032 Prouver la continuation réelle sur un enfant encore vivant après renouvellement du tour parent ; l’ancien processus54569150 est perdu.
