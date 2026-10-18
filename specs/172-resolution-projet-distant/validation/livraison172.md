@@ -603,3 +603,53 @@ de son travail métier. Maître50706, pont898 et worker13183 avec NRestarts0 con
 Le correctif Bridget72a8e8f8 reste préparé seulement. Aucun service n’a été relancé
 par ce contrôle. T016 reste ouverte pour la continuation automatique réelle.
 Reçu privé : /Users/moi/.cache/bridget-delivery172/store172/t3-user-restart.json.
+
+
+## Source72a8e8f8 active et parcours distant réel validé
+
+Le18octobre2026, après le signalement de clôture BUS :
+cleanup_done=true, guard_released=true, groupe320286vide, aucun autre mandat
+natif ni admission auto ouverts. Résultat BUS conservé. Activation réalisée
+depuis les paquets vérifiés, sans compilation supplémentaire et sans relance T3.
+
+- Maître Mac7825, naissance21:15:02CEST, build172-72a8e8f8.
+- Worker Cartae624845, NRestarts0, build172-72a8e8f8.
+- T330609/30660 et pont898 préservés.
+- SHA Mac2d9a543ade02f12e669d6a94e45ccc2cae8c843067ff00294712ef5f82d04485.
+- SHA Linux2d2df02dacb28e72cf25273f5e7d558ab2ed25e0c5add5029588b28b459b6a92.
+
+Un refus initial de rattachement primary_absent pendant la reconnexion du pont
+a disparu après la réinscription existante des fils. Les appels officiels ont
+ensuite réussi. Aucun réattachement forcé ni emprunt de preuve. Cette observation
+ne clôt pas le diagnostic historique T035 de la capture après quota Claude.
+
+Recette réelle sur Cartae : Task3a825355-37b1-45e1-8bdf-9aef6de39dd4,
+clérecette172-store72-cartae-live-20261018-r1, puis continuation-c2 sur le même
+enfant. Bridget a choisi claude/claude-haiku-5-5. Espace isolé créé par Bridget,
+sans project_id fourni. SHA exact et version lus, premier résultat891octets ;
+borne du store relue à la ronde2, second résultat853octets. Deux lectures complètes,
+deux ACK et deux rejeux stricts, Task/ronde/résultat identiques, sans doublon.
+Worktree propre, zéro commit métier. Les deux marqueurs sont conservés.
+
+La garde du test est fermée après le résultat : cleanup_done=true,
+guard_released=true, commande terminale et groupe626253absent.
+Le worktree de recette reste propre et conservé avec son reçu. Aucun espace
+ou produit Opus2D n’est supprimé. Le propriétaire a reçu la levée du blocage ;
+la remise de cette note est in_flight, sans preuve de lecture revendiquée.
+
+Après le premier résultat, le store garde74commandes/104slots/18préparations,
+619207octets physiques et1184455octets comptés avec les réserves. L’ancien
+plafond16Mio reste inchangé ; aucun reçu réel n’a été effacé pour faire réussir.
+Les125tests distincts déjà exécutés restent la base de validation du code.
+Aucune nouvelle FULL, aucun typecheck T3 global, aucune release supplémentaire.
+
+Preuves privées :
+/Users/moi/.cache/bridget-delivery172/store172/activation.json
+/home/moi/.cache/bridget-delivery172/store172/activation.json
+/Users/moi/.cache/bridget-delivery172/store172/live-delegation.json
+/Users/moi/.cache/bridget-delivery172/store172/CURRENT.json
+
+T036/T040 closes. T016/T032 restent ouvertes pour le cas exact du renouvellement
+automatique d’un tour parent distinct ; la continuation du tour courant est validée.
+T035 historique et la livraison métier VOITURES ne sont pas déclarés résolus par
+cette recette. L’objectif conserve son statut paused ; aucun réveil programmé.

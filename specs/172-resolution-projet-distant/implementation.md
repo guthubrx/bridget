@@ -538,3 +538,55 @@ complémentaires sont conservées dans les reçus de validation.
 La nouvelle source reste sans activation pendant BUS453c75be-503b-4934-9311-e382733498aa.
 Aucun redémarrage T3, aucune suppression de store ni intervention sur cette mission.
 Ce banc ne remplace pas une délégation réelle sur le nouveau binaire activé.
+
+
+## Activation après clôture BUS et contrôle réel
+
+Le propriétaire BUS a terminé la ronde2 et fermé sa garde. La lecture seule du
+maître confirme cleanup_done=true, guard_released=true et résultat conservé.
+Le groupe320286 est absent. Aucun autre mandat natif actif ni admission auto
+ouverte : le paquet préparé72a8e8f8 peut être activé sans interrompre un calcul.
+
+Maître7825 actif depuis21:15:02CEST ; worker624845 actif, NRestarts0.
+Source72a8e8f8823c5f23b463a45693bb9b27079e41f3, build172-72a8e8f8.
+Les PID T330609/30660 et pont898 restent inchangés. Les anciens binaires
+et l’unité worker sont conservés pour retour arrière. Aucun schéma modifié.
+
+Le premier appel officiel après la relance du maître refuse le rattachement
+avec le motif fermé primary_absent. Le pont existant se reconnecte puis réinscrit
+les26fils ; les appels officiels suivants status et capabilities réussissent.
+Aucun credential emprunté, aucune identité réécrite, aucune nouvelle route.
+Ce cas transitoire observé ne prouve pas la cause historique de la capture Claude.
+Le journal du nouveau maître conserve les avertissements avec RUST_LOG=warn.
+
+Recette officielle bridget_auto_delegate :
+request_id recette172-store72-cartae-live-20261018-r1,
+Task3a825355-37b1-45e1-8bdf-9aef6de39dd4,
+enfantb58e755e-920c-4be7-9a42-887c577079cf.
+Cartae est imposé ; les autres axes sont choisis par Bridget :
+claude/claude-haiku-5-5. Posturedevelopment pour conserver un enfant continuable,
+mission explicitement limitée aux lectures. Worktree demandé et créé par Bridget,
+sans project_id : /home/moi/10.Scripts/64.bridget/.worktrees/3a825355.
+Le SHA lu est5c2b4635e3bdeda78f3687f1b0a04b8bd6831744 ; Cargo.toml donne0.4.1.
+Marqueur BRIDGET172_STORE72_LIVE_OK ; résultat complet891octets lu puis ACK.
+Le rejeu exact garde TaskID et résultat byte-identique.
+
+La continuation officielle sur le même enfant, clé
+recette172-store72-cartae-live-20261018-c2, ouvre la ronde2 et lit la borne
+MAX_WORKER_STORE_BYTES=16*1024*1024. Marqueur BRIDGET172_STORE72_CONTINUE_OK,
+résultat complet853octets lu puis ACK. Le rejeu de cette continuation conserve
+la même Task, la ronde2 et le même résultat. Aucune nouvelle exécution au rejeu.
+Ce contrôle utilise le tour parent courant ; le renouvellement automatique
+d’un tour parent distinct n’est pas qualifié par ces deux rondes.
+
+Après la première ronde, le store réel conserve74commandes,104slots et18reçus
+de préparation :619207octets physiques,1184455octets comptés avec les réserves
+du nouveau calcul. Plafond inchangé16777216octets. L’admission et la publication
+réelles réussissent sans purge manuelle des anciens reçus.
+
+La garde du test est ensuite fermée par bridget_task_cancel. Résultat conservé,
+cleanup_done=true et guard_released=true ; commande terminale et groupe626253vide.
+BUS conserve aussi son résultat, ses deux preuves de clôture et son worktree.
+Le propriétaire a reçu l’information de levée du blocage, sans nouvelle recette
+demandée. La reprise métier VOITURES lui appartient et n’est pas une livraison
+de code revendiquée par cette recette de lecture.

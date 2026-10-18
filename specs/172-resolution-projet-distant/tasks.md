@@ -43,8 +43,10 @@
 - [x] T033 Conserver un refus Claude non levé au-delà du délai de décision, pour la même connexion et configuration attestées ; autres modèles du même compte écartés, comptes distincts protégés.
 - [x] T034 Lever ce refus sur réponse Claude réellement acceptée ou retour structuré ; aucune date ni capacité positive inventée.
 - [ ] T035 Diagnostiquer le refus de rattachement signalé après les tours Claude en limite, sans relancer T3 ni changer l'identité.
-- [ ] T036 Refaire le parcours réel après le complément, sans répéter les demandes r4/r5 terminées.
+- [x] T036 Source72a8e8f8 activée après clôture BUS ; recette réelle Cartae3a825355, deux rondes sur le même enfant, lectures/ACK et deux rejeux stricts identiques.
 
 - [x] T037 Corriger la réserve des reçus distants terminés sans supprimer les résultats ni affaiblir le plafond des résultats actifs.
 - [x] T038 Rendre le refus de capacité distinct d’une panne de stockage ; conserver l’identifiant après admission durable même si le démarrage échoue.
 - [x] T039 Vérifier les régressions du store et des admissions, préparer les paquets sans interrompre BUS.
+
+- [x] T040 Activer le correctif du store sur Mac/Cartae après cleanup_done et guard_released BUS ; préserver T3, résultats et anciens reçus ; nettoyer la garde de recette.
