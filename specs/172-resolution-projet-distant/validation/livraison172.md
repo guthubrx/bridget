@@ -196,6 +196,30 @@ L’utilisateur a explicitement choisi d’attendre la fin des autres conversati
 avant de redémarrer T3. Le défaut de latence et les tours automatiques restent
 à qualifier après activation du paquet déjà installé. Pas de relance programmée.
 
+## Mission VOITURES : refus réel puis reprise corrélée
+
+À10:24:04UTC, opus2d-voitures-route-cartae-20261018-r1 a rendu
+permission_attestation_unavailable dans le tour T3847, sans Task ni reçu
+automatique d’admission. BUS8dcb54b1 est restée working, sans erreur.
+L’hypothèse du tour848 en file a été écartée : ThreadManagementService.isActiveRun
+exclut queued. La source T3 de sessionIdentity et du fait de droits a été lue ;
+le refus générique du daemon ne suffit pas à isoler sa cause exacte.
+Un nouveau tour du même parent a relu le catalogue en4,261s : development et
+worktree autorisés. Une seule reprise a ensuite utilisé la même clé et tous
+les arguments d’origine, sans changement : admission52,195s, puis état working
+relu en1,391s. Task54569150-ebef-4f11-9053-f17775a5c909, error=null, sur :
+/home/moi/10.Scripts/69.opus2D/.worktrees/54569150.
+Base d01791b5b61d081dffde6ff1d234c67f5710be62. La comparaison du reçu automatique
+avec l’appel d’origine confirme zéro argument changé et une seule Task.
+La demande suivie mcp-16258-6ad49fed-9 a reçu le rapport complet, état answered.
+Aucun nouveau correctif ni service modifié, aucune interruption de BUS.
+Les deux missions métier poursuivent sous leur responsable. Leur lancement
+ne prouve pas encore leurs résultats métier, ni la correction définitive de
+l’attestation intermittente. T3 reste non redémarré selon la consigne utilisateur.
+Preuves privées :
+/Users/moi/.cache/bridget-delivery172/cars172-attestation.json
+/Users/moi/.cache/bridget-delivery172/cars172-resolution.json.
+
 ## Premier reçu conservé pour l’historique
 
 Les états et chemins ci-dessous décrivent le premier lot, avant les compléments
