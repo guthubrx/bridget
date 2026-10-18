@@ -173,6 +173,29 @@ ne prouvent pas encore la correction des tours automatiques dans le nouveau
 runtime T3. La consigne utilisateur d’attendre les autres conversations reste
 respectée ; aucun redémarrage de T3 n’est programmé.
 
+## Liaison intermittente après les recettes finales
+
+Le fil trajets bus a signalé le18octobre à10:08:13UTC un refus de
+bridget_capabilities : t3_session_unavailable/binding_transport_unavailable,
+avant toute mission métier. Ce refus reste un échec réel, distinct de la recette r4.
+Le nouvel appel depuis le même fil a réussi à10:21:26UTC en17,759s.
+La mission métier opus2d-bus-regressions-cartae-20261018-r1 a ensuite été
+admise sous Task8dcb54b1-bfae-4693-afe9-596b44b375e7 puis observée working,
+error=null, avec started_at1792319001. L’espace isolé est :
+/home/moi/10.Scripts/69.opus2D/.worktrees/8dcb54b1,
+base d01791b5b61d081dffde6ff1d234c67f5710be62.
+Le parent reste responsable des missions bus/voitures ; aucune mission en doublon.
+Ce démarrage ne prouve ni leur résultat métier ni la résolution définitive de
+l’incident intermittent. Aucun nouveau correctif ni redémarrage appliqué pour
+ce nouvel essai. Une capture du démon hors incident montre ses connexions au
+repos, sans verrou bloqué ; elle ne suffit pas à identifier la cause historique.
+La demande de retour mcp-16258-6ad49d80-7 a expiré pendant le travail du parent ;
+la reprise du catalogue et l’admission ont été vérifiées dans son activité T3,
+puis l’état de la Task a été lu séparément. Aucun silence transformé en succès.
+L’utilisateur a explicitement choisi d’attendre la fin des autres conversations
+avant de redémarrer T3. Le défaut de latence et les tours automatiques restent
+à qualifier après activation du paquet déjà installé. Pas de relance programmée.
+
 ## Premier reçu conservé pour l’historique
 
 Les états et chemins ci-dessous décrivent le premier lot, avant les compléments
