@@ -61,6 +61,8 @@ struct RoutingCandidateObservation {
     definition_digest: String,
     permission_digest: String,
     mapping_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    project_id: Option<String>,
     connection_epoch: String,
     observed_at: i64,
     received_at: i64,
@@ -579,6 +581,30 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
     result
 }
 
+/// O(M) sur les mappings de la machine, une fois par machine et par sonde.
+/// Une identité explicite reste stricte ; aucune priorité arbitraire entre racines.
+fn routing_project_mapping(
+    registry: &AgentRegistry,
+    machine: &str,
+    requested: Option<&str>,
+    origin_host: &str,
+    cwd: &Path,
+) -> Result<(String, crate::registry::ProjectMapping), String> {
+    let provision = registry.machine(machine)?;
+    let matches = |mapping: &&crate::registry::ProjectMapping| {
+        mapping.source_host == origin_host && cwd.starts_with(&mapping.source_root)
+    };
+    if let Some(id) = requested {
+        let mapping = provision.mappings.get(id).ok_or("project_mapping_unknown")?;
+        if !matches(&mapping) { return Err("project_mapping_mismatch".into()); }
+        return Ok((id.to_owned(), mapping.clone()));
+    }
+    let mut found = provision.mappings.iter().filter(|(_, mapping)| matches(mapping));
+    let (id, mapping) = found.next().ok_or("project_mapping_unknown")?;
+    if found.next().is_some() { return Err("project_mapping_ambiguous".into()); }
+    Ok((id.clone(), mapping.clone()))
+}
+
 /// O(C+P) hors probes groupés et gardes natives ; aucune réservation ni Task.
 /// Les refus d'une sonde ne deviennent pas des candidats inconnus admissibles.
 fn observe_routing_candidates(
@@ -593,6 +619,7 @@ fn observe_routing_candidates(
         .map_err(|error| error.to_string())?;
     let admission_id = auto_admission_id(&canonical);
     let now = unix_timestamp();
+    let mut mapping_refusal = None;
     let (parent, mut observations, batches, host) = {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         let (owner, instance) =
@@ -633,6 +660,7 @@ fn observe_routing_candidates(
         let mut batches: BTreeMap<String, (WorkerIdentity, Vec<CandidateProbeV2Candidate>)> =
             BTreeMap::new();
         let mut quota_seen = HashMap::new();
+        let mut mappings = HashMap::new();
         let declared_candidates = registry
             .routing_candidates()
             .unwrap_or_default()
@@ -719,6 +747,7 @@ fn observe_routing_candidates(
                             )
                         ),
                         mapping_revision: None,
+                        project_id: None,
                         connection_epoch: local_epoch.clone(),
                         observed_at: now,
                         received_at: now,
@@ -732,27 +761,25 @@ fn observe_routing_candidates(
                     });
                 continue;
             }
-            let Some(project_id) = request.project_id.as_deref() else {
-                continue;
-            };
             let Ok(provision) = registry.machine(&candidate.machine_id) else {
                 continue;
             };
             if !provision.permits_agent_type(&candidate.agent_type) {
                 continue;
             }
-            let Ok(mapping) = registry.project_mapping(&candidate.machine_id, project_id) else {
-                continue;
+            let resolved = mappings.entry(candidate.machine_id.clone()).or_insert_with(||
+                routing_project_mapping(&registry, &candidate.machine_id,
+                    request.project_id.as_deref(), &origin_host, source));
+            let (project_id, mapping) = match resolved {
+                Ok(mapping) => mapping,
+                Err(reason) => { mapping_refusal = Some(reason.clone()); continue; }
             };
-            if mapping.source_host != origin_host || !source.starts_with(&mapping.source_root) {
-                continue;
-            }
             let Ok(relative) = source.strip_prefix(&mapping.source_root) else {
                 continue;
             };
             let probe_candidate = CandidateProbeV2Candidate {
                 candidate_id,
-                project_id: project_id.into(),
+                project_id: project_id.clone(),
                 origin_host: mapping.source_host.clone(),
                 origin_cwd: request.cwd.clone(),
                 source_root: mapping.source_root.to_string_lossy().into_owned(),
@@ -809,6 +836,9 @@ fn observe_routing_candidates(
             candidates,
         };
         let correlation_id = probe.correlation_id.clone();
+        let candidate_projects = probe.candidates.iter()
+            .map(|candidate| (candidate.candidate_id.clone(), candidate.project_id.clone()))
+            .collect::<HashMap<_, _>>();
         let result = match remote_candidate_probe_v2(
             state,
             probe,
@@ -859,11 +889,12 @@ fn observe_routing_candidates(
                     && routing_fact_fresh(received_at, unix_timestamp(), ttl)
                 {
                     observations.insert(
-                        candidate_id,
+                        candidate_id.clone(),
                         RoutingCandidateObservation {
                             definition_digest,
                             permission_digest,
                             mapping_revision: Some(mapping_revision),
+                            project_id: candidate_projects.get(&candidate_id).cloned(),
                             connection_epoch: result.connection_epoch.clone(),
                             observed_at,
                             received_at,
@@ -899,11 +930,12 @@ fn observe_routing_candidates(
     }
     if plan.candidates.is_empty() {
         return Err(if unsupported_worker {
-            "worker_candidate_probe_v2_unsupported"
+            "worker_candidate_probe_v2_unsupported".into()
+        } else if let Some(reason) = mapping_refusal {
+            reason
         } else {
-            "routing_candidate_unavailable"
-        }
-        .into());
+            "routing_candidate_unavailable".into()
+        });
     }
     score_routing_candidates(request, plan, &host, unix_timestamp())
 }
@@ -1264,6 +1296,7 @@ fn routing_delegate(
     candidate: &RoutingCandidate,
     effort: Option<String>,
     host: &str,
+    mapped_project: Option<&str>,
 ) -> NativeDelegationRequest {
     let local = routing_is_local(&candidate.machine_id, host);
     let workspace = request.workspace.as_ref().map(|workspace| match workspace {
@@ -1278,7 +1311,7 @@ fn routing_delegate(
         project_id: if local {
             None
         } else {
-            request.project_id.clone()
+            mapped_project.map(str::to_owned).or_else(|| request.project_id.clone())
         },
         request_id: request.request_id.clone(),
         agent_type: candidate.agent_type.clone(),
@@ -1330,6 +1363,8 @@ fn refresh_routing_selected(
         || observed.permission_digest != previous.permission_digest
         || (!allow_epoch_change && observed.connection_epoch != previous.connection_epoch)
         || observed.mapping_revision != previous.mapping_revision
+        || observed.project_id.as_deref() != previous.project_id.as_deref()
+            .or_else(|| previous.mapping_revision.and(request.project_id.as_deref()))
     {
         return Err("routing_connection_changed".into());
     }
@@ -1348,6 +1383,7 @@ fn refresh_routing_selected(
         if selected.definition_digest != observed.definition_digest
             || selected.connection_epoch != observed.connection_epoch
             || selected.mapping_revision != observed.mapping_revision
+            || selected.project_id != observed.project_id
         {
             return Err("routing_connection_changed".into());
         }
@@ -1515,7 +1551,7 @@ fn route_selected_admission(
         state,
         recovering,
     )?;
-    let delegate = routing_delegate(request, candidate, decision.effort, &host);
+    let delegate = routing_delegate(request, candidate, decision.effort, &host, observed.project_id.as_deref());
     if receipt.delegate_canonical.as_deref()
         != Some(
             serde_json::to_vec(&delegate)
@@ -1657,7 +1693,8 @@ fn choose_routing_admission(
             if !recovering && st.coordinator_epoch != receipt.coordinator_epoch {
                 return Err("admission_pending".into());
             }
-            let delegate = routing_delegate(request, candidate, choice.effort.clone(), &st.host);
+            let delegate = routing_delegate(request, candidate, choice.effort.clone(), &st.host,
+                chosen_plan.observations[index].project_id.as_deref());
             st.delegation_store.choose_auto_admission_at(
                 receipt,
                 receipt.coordinator_epoch,
@@ -11409,11 +11446,126 @@ mod tests {
         cleanup(&config);
     }
 
+    #[test]
+    fn spec172_implicit_project_reaches_remote_probe_and_frozen_delegate() {
+        use bridget_transport::protocol::*;
+        let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
+        state.lock().unwrap().host = "coordinator171".into();
+        request.request_id = "probe171-refused".into();
+        assert!(request.project_id.is_none());
+        request.machine_id = Some("cartae".into());
+        request.engine = Some("codex".into());
+        let host = state.lock().unwrap().host.clone();
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(b"worker171-fixture"));
+        routing168_update(&state, |value| {
+            value["routing_policy"]["connections"][0]["machine_id"] = json!("cartae");
+            value["routing_policy"]["machine_policies"]["cartae"] = json!({"enabled":true});
+            value["machines"] = json!({"cartae":{"enabled":true,"worker_id":"worker171",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project171":{
+                    "source_host":host,"source_root":request.cwd,
+                    "remote_root":root.join("remote171"),"expected_git_identity":"fixture171",
+                    "mapping_revision":1}}}});
+        });
+        let (writer, mut reader) = super::super::presence_tests::control_socket("probe171-refused");
+        {
+            let mut st = state.lock().unwrap();
+            st.connections.insert("worker171".into(), writer);
+            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+        }
+        assert!(matches!(handle_worker_message(&state, "worker171",
+            WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
+                hello: WorkerHello { version: REMOTE_WORKER_VERSION,
+                    identity: WorkerIdentity { machine_id:"cartae".into(),
+                        worker_id:"worker171".into(),provisioning_revision:1 },
+                    credential: IdentityCredential::new("worker171-fixture".into()),
+                    build:"fixture171".into(),capability:ClientCapability::RemoteWorkerV1 },
+                capabilities:vec![WorkerCapability::CandidateProbeV2] } }),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })));
+        let responder_state = Arc::clone(&state);
+        let responder = std::thread::spawn(move || {
+            let frame = super::super::presence_tests::read_control(&mut reader);
+            let DaemonToWrapper::CandidateProbeV2 { probe } = frame else { panic!("probe expected"); };
+            assert_eq!(probe.candidates.len(), 3);
+            assert!(probe.candidates.iter().all(|c| c.project_id == "project171"));
+            let now = unix_timestamp();
+            let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
+                worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
+                    cpu_percent:None,available_memory_percent:None,normalized_load_percent:None,
+                    compilation_slots:None },
+                verdicts:probe.candidates.into_iter().map(|candidate|
+                    CandidateProbeV2Verdict::Eligible { candidate_id:candidate.candidate_id,
+                        mapping_revision:1, definition_digest:"a".repeat(64),
+                        permission_digest:"b".repeat(64),observed_at:now }).collect() };
+            assert!(handle_worker_message(&responder_state,"worker171",
+                WrapperToDaemon::CandidateProbeResultV2 { result }).is_none());
+        });
+        let canonical = serde_json::to_vec(&request).unwrap();
+        let mut plan = routing168_plan(&state, &request);
+        observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+        responder.join().unwrap();
+        assert_eq!(plan.candidates.len(),3);
+        let frozen:RoutingAdmissionSnapshot = serde_json::from_slice(
+            &serde_json::to_vec(&routing_snapshot(&plan,None)).unwrap()).unwrap();
+        assert!(frozen.observations.iter().all(|o| o.project_id.as_deref() == Some("project171")));
+        let delegated = routing_delegate(&request, &frozen.candidates[0], None,
+            "coordinator171", frozen.observations[0].project_id.as_deref());
+        let NativeDelegationRequest::Delegate { machine_id, project_id, .. } = delegated else { panic!(); };
+        assert_eq!(machine_id.as_deref(),Some("cartae"));
+        assert_eq!(project_id.as_deref(),Some("project171"));
+        assert_eq!(serde_json::to_vec(&request).unwrap(),canonical,"replay envelope unchanged");
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        drop(state);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec172_mapping_missing_ambiguous_explicit_and_origin_guards() {
+        let (state, config, _rx, _reader, request, root) = routing168_fixture(1);
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(b"worker172"));
+        routing168_update(&state, |v| {
+            v["machines"] = json!({"cartae":{"enabled":true,"worker_id":"worker172",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"opus2d":{
+                    "source_host":"mac172","source_root":request.cwd,
+                    "remote_root":root.join("remote172"),"expected_git_identity":"fixture172",
+                    "mapping_revision":1}}}});
+        });
+        {
+            let st = state.lock().unwrap();
+            let resolve = |id: Option<&str>,host: &str,cwd: &Path| routing_project_mapping(&st.registry,"cartae",id,host,cwd);
+            assert_eq!(resolve(None,"mac172",Path::new(&request.cwd)).unwrap().0,"opus2d");
+            assert_eq!(resolve(None,"other",Path::new(&request.cwd)).unwrap_err(),"project_mapping_unknown");
+            assert_eq!(resolve(None,"mac172",&root.join("source168-other")).unwrap_err(),"project_mapping_unknown");
+            assert_eq!(resolve(Some("unknown"),"mac172",Path::new(&request.cwd)).unwrap_err(),"project_mapping_unknown");
+            assert_eq!(resolve(Some("opus2d"),"other",Path::new(&request.cwd)).unwrap_err(),"project_mapping_mismatch");
+        }
+        routing168_update(&state, |v| {
+            v["machines"]["cartae"]["mappings"]["duplicate"] = v["machines"]["cartae"]["mappings"]["opus2d"].clone();
+        });
+        {
+            let st = state.lock().unwrap();
+            assert_eq!(routing_project_mapping(&st.registry,"cartae",None,"mac172",Path::new(&request.cwd))
+                .unwrap_err(),"project_mapping_ambiguous");
+            assert_eq!(routing_project_mapping(&st.registry,"cartae",Some("opus2d"),"mac172",Path::new(&request.cwd))
+                .unwrap().0,"opus2d");
+        }
+        let mut legacy = serde_json::to_value(routing168_observation()).unwrap();
+        legacy.as_object_mut().unwrap().remove("project_id");
+        assert!(serde_json::from_value::<RoutingCandidateObservation>(legacy).unwrap().project_id.is_none());
+        drop(state);
+        cleanup(&config);
+    }
+
     fn routing168_observation() -> RoutingCandidateObservation {
         RoutingCandidateObservation {
             definition_digest: "a".repeat(64),
             permission_digest: "b".repeat(64),
             mapping_revision: None,
+            project_id: None,
             connection_epoch: "epoch168".into(),
             observed_at: 100,
             received_at: 100,

@@ -1283,3 +1283,14 @@ libre au passage d'entretien qui suit ces 30 jours (1 h au plus de décalage).
 - Le lancement ordinaire (`bridget spawn`), ses postures et ses protections du
   terminal humain ne changent pas. Ce guide ne remplace pas leur tutoriel.
 - `bridget delegate-grant` reste une commande humaine de terminal.
+
+
+### Résolution du projet distant (172)
+
+Pour `bridget_auto_delegate`, `project_id` est facultatif. Quand il manque,
+le maître retrouve une correspondance unique pour la machine, l'hôte d'origine
+attesté et le dossier source. Il conserve l'identifiant résolu dans le reçu.
+Un identifiant explicite reste strict. Les refus `project_mapping_unknown`,
+`project_mapping_ambiguous` et `project_mapping_mismatch` signalent une préparation
+absente, ambiguë ou incohérente. Aucun projet distant nouveau n'est créé par cette
+résolution. Les contrôles Git, de droits et de disponibilité restent appliqués.
