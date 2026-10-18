@@ -47,6 +47,7 @@ mod native_permission_observer;
 pub(crate) mod native_permissions;
 mod observation;
 pub mod project_compat;
+pub(crate) mod project_preparation;
 pub(crate) mod provider_limits;
 pub mod reaper;
 pub mod receipt_store;

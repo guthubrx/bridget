@@ -1294,3 +1294,21 @@ Un identifiant explicite reste strict. Les refus `project_mapping_unknown`,
 `project_mapping_ambiguous` et `project_mapping_mismatch` signalent une préparation
 absente, ambiguë ou incohérente. Aucun projet distant nouveau n'est créé par cette
 résolution. Les contrôles Git, de droits et de disponibilité restent appliqués.
+
+
+### Préparation automatique du projet distant (172)
+
+Le maître résout le projet depuis le dossier attesté du parent. Un identifiant
+project_id omis ne bloque plus une correspondance connue. Un identifiant fourni
+reste strict. Sur une fédération SSH installée, un dépôt Git absent est préparé
+automatiquement au commit expected_base_commit, même si ce commit n'est pas
+publié sur un hébergeur. Le transport réutilise les clés locales sans les copier.
+Les correspondances sont publiées après préparation, relues à chaud et figées
+dans l'admission. Le worker garde ses contrôles habituels avant lancement.
+
+Le helper ne dépend d'aucune API T3. Il requiert Python 3 et Git sur les deux
+machines, et une fédération SSH installée valide. Les échecs project_preparation_*
+nomment la préparation ; ils ne deviennent pas une panne de modèle générique.
+Un rejeu reprend les mêmes chemins. Les fichiers distants existants ne sont
+jamais écrasés par le transfert ; le worker contrôle l'actualisation du checkout.
+Comme un worktree T3, le code transféré est celui du commit demandé.

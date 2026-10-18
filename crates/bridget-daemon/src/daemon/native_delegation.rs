@@ -605,6 +605,87 @@ fn routing_project_mapping(
     Ok((id.clone(), mapping.clone()))
 }
 
+/// Préparation d'infrastructure depuis le parent attesté, sans dépendance T3.
+/// Aucun mutex du daemon pendant Git/SSH. Les droits seront encore relus avant lancement.
+fn prepare_routing_projects(
+    conn: &str,
+    request: &AutoDelegateV2,
+    plan: &mut RoutingAdmissionPlan,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<(), String> {
+    let (registry, host, parent) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
+            .ok_or("permission_attestation_unavailable")?;
+        let source = Path::new(&request.cwd);
+        if !source.is_absolute() || source.components().any(|c| matches!(c, std::path::Component::ParentDir))
+            || !source.starts_with(&parent.cwd) {
+            return Err("cwd_outside_parent_project".into());
+        }
+        let control = crate::referent_control::read(st.store.connection())
+            .map_err(|_| "control_state_unavailable")?;
+        let halt = st.delegation_store.delegation_halt().map_err(|_| "control_state_unavailable")?;
+        if let crate::referent_control::Admission::Deferred { motif } =
+            crate::referent_control::admit_native_delegation(&control, &halt) {
+            return Err(if motif == "pause" { "referent_paused" } else { motif }.into());
+        }
+        // Un parent distant conserve son transport natif existant. Le maître ne
+        // lit jamais un chemin local homonyme appartenant à une autre machine.
+        if st.delegation_store.for_child(&owner)?
+            .is_some_and(|task| task.remote_placement.is_some()) {
+            return Ok(());
+        }
+        let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())?;
+        (registry, st.host.clone(), parent)
+    };
+    let has_link = registry.source().parent().is_some_and(crate::project_preparation::has_link);
+    if !has_link { return Ok(()); }
+    let mut machines = std::collections::BTreeSet::new();
+    for candidate in &plan.candidates {
+        if !routing_is_local(&candidate.machine_id, &host) {
+            machines.insert(candidate.machine_id.clone());
+        }
+    }
+    if machines.is_empty() { return Ok(()); }
+    // Contrôle réel du fait fournisseur avant toute copie. Pas de droit neuf.
+    crate::native_permissions::prove_parent_permissions(&parent, parent.revision)?;
+    let mut refused = HashMap::new();
+    for machine in machines {
+        match routing_project_mapping(&registry, &machine, request.project_id.as_deref(),
+            &host, Path::new(&request.cwd)) {
+            Err(code) if code != "project_mapping_unknown" || request.project_id.is_some() => {
+                refused.insert(machine, code);
+                continue;
+            }
+            _ => {}
+        }
+        let payload = json!({
+            "registry":registry.source(), "machine_id":machine, "origin_host":host,
+            "source_root":parent.cwd, "cwd":request.cwd, "commit":request.expected_base_commit,
+            "project_id":request.project_id
+        });
+        if let Err(code) = crate::project_preparation::prepare(&payload) {
+            refused.insert(machine, code);
+        }
+    }
+    plan.candidates.retain(|candidate| !refused.contains_key(&candidate.machine_id));
+    if plan.candidates.is_empty() {
+        return Err(refused.into_values().next().unwrap_or_else(|| "routing_candidate_unavailable".into()));
+    }
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    recheck_attested_thread(&st, conn, thread)?;
+    let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+    if parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?.as_ref() != Some(&parent) {
+        return Err("permission_not_inherited".into());
+    }
+    st.registry = AgentRegistry::load_from_path(registry.source().to_path_buf())?;
+    Ok(())
+}
+
 /// O(C+P) hors probes groupés et gardes natives ; aucune réservation ni Task.
 /// Les refus d'une sonde ne deviennent pas des candidats inconnus admissibles.
 fn observe_routing_candidates(
@@ -1793,6 +1874,7 @@ fn admit_auto_routing(
     };
     validate_routing_source(request)?;
     let mut plan = routing_admission_plan(&registry, &coordinator, request)?;
+    prepare_routing_projects(conn, request, &mut plan, attested, thread, state)?;
     if let Err(code) = observe_routing_candidates(conn, request, &mut plan, attested, state) {
         return if code == "routing_candidate_unavailable" {
             Ok(routing_probe_failure(&plan))

@@ -1,17 +1,37 @@
-# 172 — Résolution du projet distant
+# 172 — Préparation et résolution du projet distant
 
-Statut : In Progress. Correction demandée le 18 octobre 2026.
+Statut : In Progress. Correction demandée et élargie le 18 octobre 2026.
 
-Le fil « trajets bus » a demandé Cartae avec le cwd opus2D et le SHA
-9ecd0abeaec1a05511effd10376e041e097df206. Le champ project_id facultatif était
-absent. observe_routing_candidates écartait silencieusement toute cible distante.
-La correspondance opus2d était pourtant configurée sur le maître.
+## Défaut observé
+Le parent « trajets bus » indique Cartae et son dossier, sans project_id.
+Bridget écarte toutes les cibles malgré une correspondance opus2d existante.
+Un nouveau projet exige également une correspondance et un dépôt préparés
+manuellement. L'utilisateur demande le parcours automatique, autonome de T3.
 
-Le maître doit résoudre le projet depuis la machine, l'hôte d'origine attesté
-et le cwd déjà limité au projet parent. Une correspondance unique suffit.
-Un identifiant explicite reste strict. Une absence, une ambiguïté ou un
-décalage d'origine doit produire un refus nommé, sans lancement ni gain de droits.
-Le choix résolu est figé dans le reçu et conservé au rejeu.
+## Comportement attendu
+- Hériter du dossier et des droits attestés du parent, T3 ou fournisseur natif.
+- Résoudre une correspondance existante sans identifiant demandé au modèle.
+- Pour un nouveau dépôt Git, transférer le commit demandé sur la liaison SSH
+  déjà installée, préparer la destination et enregistrer la correspondance.
+- Accepter un commit local non publié. Réutiliser le dépôt distant et envoyer
+  uniquement les nouveaux objets lorsque le commit précédent est disponible.
+- Conserver les fichiers de travail distants. Leur actualisation partagée reste
+  contrôlée par le worker existant (propreté et absence de tâche concurrente).
+- Reprendre après interruption sans créer de second projet.
+- Passer ensuite par les contrôles de droits, le routage et l'admission existants.
+- Conserver l'identifiant résolu et le résultat au rejeu de la même demande.
+- Rendre un refus précis pour une destination occupée, une ambiguïté ou une
+  liaison indisponible. Aucun repli silencieux hors contrainte humaine.
 
-Hors périmètre : provisionner automatiquement les nouveaux projets,
-copier des données métier, modifier les droits ou substituer une autre machine.
+## Limites conservées
+Le transfert suit le commit demandé, comme la préparation Git de T3 : les
+modifications non commitées ne sont pas exportées. Aucun secret fournisseur,
+profil personnel ou contenu des répertoires additionnels n'est transféré.
+Les dossiers hors Git déjà déclarés gardent leur parcours existant ; la création
+automatique décrite ici concerne les dépôts Git. Aucun service T3 n'est requis.
+
+## Recettes
+Bridget est déjà déclaré. Revue, situé dans
+/Volumes/8TB2/50-repos-archives/11.Repositories/revue, ne l'est pas.
+Le banc isolé couvre l'absence de dépôt publié et l'absence de T3. La recette
+réelle doit prouver le lancement et le résultat Cartae depuis un parent Revue.
