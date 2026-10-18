@@ -1,10 +1,140 @@
 # Livraison 172 — préparation autonome des projets distants
 
-État courant du 18 octobre 2026, après le complément de sondes et de lecture bornée : **In Progress**.
+État courant du 18 octobre 2026, après continuation, reconnexion et quota : **In Progress**.
 Le complément corrige aussi les défauts rencontrés lors des vraies délégations.
 T3 est installé sur disque ; son activation reste à faire selon la consigne utilisateur.
 
-## Versions courantes et activation
+## Versions actives après le complément quota
+
+- Source commune1e5ddd076b3d610c864e5d37dbe66d28dc780edc, intégrée et poussée.
+  Build172-1e5ddd07 sur Mac et Cartae. Aucun tag ni release créé par ce complément.
+- Maître Mac50706 actif depuis13:56:22 CEST. Binaire signé, vérifié strict :
+  /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget.
+  SHA256d585bb22d60265b59133adcb451fa12ff5a9c20e687fd80744212d8537a38dd4.
+  Build254,41s, RC0 ; artefact issu d’une extraction privée du commit source.
+- Worker Cartae13183 actif depuis11:53:47 UTC, client aligné :
+  /home/moi/.local/lib/bridget-communication/172-1e5ddd076b3d/bin/bridget.
+  SHA256bc5daf985c5472e825291bb568596238463c544a2135fb367ac3168af1e2c97c.
+  Build62,35s, RC0. Aucun enfant vivant et aucune tâche native non nettoyée
+  au préflight de l’activation. Ce même PID13183 est resté actif pendant
+  la relance du maître ; systemd NRestarts=0 après cette relance.
+- Application T3637, serveur1068 et pont898 : mêmes PID et naissances08:40.
+  Aucun redémarrage T3. Le paquet172 reste signé sur disque, sourcef3ddfca24278ab1ebb689087e5c42c6bc00c6551,
+  ASAR4d57cee627d68079504e613cf93d532fa6399c7026a14c2b8f24fc26aa52a9b3.
+  Le code T3 chargé reste171.5. Son activation attend la fin des autres conversations.
+- Les modifications étrangères du Mac sont conservées. Empreinte AGENTS.md
+  inchangée f0eb89de95fbd0bccb2759b51b2612d3b97e73ace41769d6e6a2f3b826a037a1.
+
+## Continuation refusée et incident de reprise
+
+Le port de continuation comparait le fait parent entier, dont run_id et revision.
+Un nouveau tour T3 aux mêmes droits était donc refusé permission_not_inherited.
+Le correctif9957714f, inclus dans1e5ddd07, n’ignore que ces deux champs et seulement
+pour provider_turn. Identité, session, fournisseur, dossier, modes, politique,
+révocation et preuve worker restent contrôlés. Deux tests RED puis PASS ; neuf
+mutations d’identité/droits et le changement de mission native restent refusés.
+
+L’ancien processus VOITURES54569150-ebef-4f11-9053-f17775a5c909 est perdu.
+Sa ronde1, son résultat de diagnostic, son worktree et son commit de note sont conservés :
+/home/moi/10.Scripts/69.opus2D/.worktrees/54569150,
+c41780f4d8b27d01bda57774da27b639185bfdee. Cette note n’est pas une correction source.
+La vérification de conservation des anciens processus après activation995 a échoué.
+Le worker quittait sur EOF pendant sa sonde, avec worker_capability_unavailable.
+Ce défaut a été reproduit puis corrigé dans527308bb, inclus dans1e5ddd07.
+La reconnexion garde maintenant le même runtime ; un refus permanent reste fatal.
+Le maintien du PID13183 au redémarrage du maître est prouvé sans modèle actif.
+Il ne prouve pas la conservation d’un modèle en cours ni une continuation réelle.
+
+BUS8dcb54b1-bfae-4693-afe9-596b44b375e7 a échoué api_error à11:04:18 UTC,
+soit23s avant l’arrêt du maître995. Son journal Claude atteste error=rate_limit.
+Aucune relance BUS par ce lot. Le propriétaire garde ses travaux.
+
+Le propriétaire a confirmé qu’aucune consigne humaine applicable n’interdit une
+nouvelle admission VOITURES. Sa reprise distincte r3 a été admise, puis a échoué :
+Taskb9d8b49c-bf25-4c8b-be20-69d2fb1c128a, api_error, sans travail confirmé.
+Le journal Claude donne la même limite de session, annoncée jusqu’à13:20 UTC
+(15h20 Paris), et non une panne SSH ou un refus de droits. Son worktree est conservé :
+/home/moi/10.Scripts/69.opus2D/.worktrees/b9d8b49c.
+
+## Quota : correction, tests et limites
+
+T3 conserve le code structuré assistant rate_limit quand le résultat dit api_error.
+Ce mécanisme est repris dans Bridget : usage_limit, sans classer depuis le texte seul.
+Une réponse ultérieure remplace la notice de limite et peut terminer normalement.
+Le routage distant consulte désormais le refus lié à la même connexion, instance,
+définition et époque. Un refus récent reste restrictif après nettoyage de l’enfant,
+pendant le seul TTL de la politique. Aucun crédit positif d’une instance morte
+n’est repris. Sans autre cible compatible, le refus est provider_quota_exhausted.
+Aucune date de retour, fenêtre ou consommation n’est inventée depuis le texte humain.
+Un fait périmé redevient inconnu ; aucun hold160 sans heure de retour attestée.
+
+65tests concernés PASS : pilote Claude34, mémoire quota14, routage13,
+sonde distante1, liaison stricte1, continuation2. Les14tests de rondes hérités
+passent aussi après correction du profil temporaire0770→0700. Les deux anciens
+échecs env_unfit avaient été reproduits sur la baseline ; contrôle produit inchangé.
+Aucune FULL ni validation universelle déduite. Autres serveurs que Cartae non testés.
+
+## Essais métier après activation1e5 et complément en préparation
+
+r4 Task14c382ea-c831-4374-b6b8-c9f77fe456a7 et r5 Taskc9693bca-4304-4e72-abe2-442677bc8c14
+ont toutes deux fini usage_limit, puis ont été lues et acquittées. Pas de working
+confirmé ni de code produit. Les décisions ont choisi claude-cartae / claude-haiku-5-5.
+Le refus est mieux classé, mais le routage n'est pas débloqué par1e5 : le délai
+r4→sonde r5 de44–47secondes dépasse le TTL30. Aucun succès de routage déduit.
+
+Le complément source courant corrige cette perte. Un refus daté reste restrictif
+jusqu'au retour structuré. Un refus sans date conserve un délai de nouvelle tentative
+de5minutes ; il redevient ensuite inconnu, sans capacité positive inventée.
+Une vraie réponse assistant acceptée peut le lever avant ce délai. Les comptes
+restent séparés par connexion, définition de base, politique et identité worker.
+Les autres modèles du même compte sont écartés. Crédits et faits positifs gardent
+les contrôles du digest de mission, de présence vivante et du TTL. Une réponse
+vide ou une autre erreur ne lève pas le refus. Les fenêtres structurées gardent
+leur vraie date, sans ajout d'un refus unknown permanent par le code assistant.
+
+Tests finaux concernés : mémoire quota16PASS, sonde distante1PASS, pilote Claude35PASS
+(en série). Diagnostic du rattachement2PASS, liaison stricte1PASS, héritage/revocation
+auxiliaire1PASS, scope de connexion1PASS et continuation2PASS. Routage168 :35PASS.
+Les séries peuvent se recouvrir ; elles ne sont pas additionnées comme une FULL.
+La série Claude parallèle a eu34PASS/1FAIL Text file busy ; ce cas a été relu,
+rejoué seul PASS, puis la série entière exécutée en série35PASS. Cause système
+ponctuelle non établie ; aucun changement produit destiné à masquer ce cas.
+
+Une mission indépendante est désormais working sur Cartae : Taskc998d2d5-50b2-4ec8-ac51-e0d32767e02f,
+clé opus2d-vehicules-cartae-sol61-20261018-r1, propriétaire trajets bus, Codex/gpt-6.1-sol.
+Dossier /home/moi/10.Scripts/69.opus2D/.worktrees/c998d2d5,
+base d97a3db4a6015767c391a83cc86fff5836533c21. Elle ne qualifie pas le nouveau
+routage automatique Claude ; aucun doublon ni reprise r6/r7 lancé par ce lot.
+La préparation des binaires peut continuer. L'activation attend un préflight sans
+mission native non nettoyée ; aucun arrêt du maître ou du worker pendant ce travail.
+La continuation réelle sur un enfant gardé et l'activation T3 restent à qualifier.
+
+## Refus de rattachement après Claude
+
+Le fil17f50a6d-ec2f-494a-b9a3-0def5b14475b a rencontré usage_limit/api_error_429
+sur Claude (tours169–172), avec retour structuré13:20UTC/15:20Paris. Le message
+binding_registration_refused est apparu dans la reprise Codex (tour173,11:56:05UTC).
+Aucune limite de taille de contexte n'est établie par ces traces. Le rattachement
+local est distinct du quota. Son lien actuel est présent dans l'inventaire.
+L'unique demande d'une lecture depuis ce fil n'a pas obtenu de réponse dans son
+échéance ; ce n'est pas une preuve de succès ou de refus actuel.
+
+Le complément distingue cinq motifs fermés, sans changer les gardes ni imprimer
+de preuve privée. Les vieux clients MCP peuvent garder le libellé générique ;
+le maître journalise la cause utile. Ce diagnostic n'est pas présenté comme une
+cause historique établie ni comme une correction fonctionnelle déjà validée.
+Aucun redémarrage T3 ; son paquet172 reste prêt sur disque.
+
+## Reçus privés du complément
+
+/Users/moi/.cache/bridget-delivery172/quota172/build-receipt.json.
+/Users/moi/.cache/bridget-delivery172/quota172/activation.json.
+/home/moi/.cache/bridget-delivery172/quota172/build-receipt.json.
+/home/moi/.cache/bridget-delivery172/quota172/activation.json.
+/home/moi/.cache/bridget-delivery172/quota172/after-master.json.
+Les anciens checkpoints ci-dessous restent historiques.
+
+## Checkpoint124 — historique
 
 - Bridget source124dc47a9fe2ad2717d06c53053b71d9f0f7dc26, intégrée et poussée.
 - Client Mac installé : build172-124dc47a, signé, SHA256

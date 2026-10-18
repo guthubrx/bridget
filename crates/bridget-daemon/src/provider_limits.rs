@@ -3,6 +3,10 @@ use bridget_transport::protocol::{RateLimitFact, RateLimitSource};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
+// Sans retour attesté, réévaluation possible après cinq minutes. Ce délai
+// évite les relances immédiates et ne devient jamais une date de rétablissement.
+const CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS: i64 = 300;
+
 #[derive(Debug, Clone)]
 struct Seen {
     fact: RateLimitFact,
@@ -24,6 +28,7 @@ struct RoutingQuotaBinding {
     agent_type: String,
     instance: String,
     definition_digest: String,
+    connection_scope: String,
     coordinator_epoch: i64,
 }
 
@@ -130,6 +135,7 @@ impl ProviderLimits {
         instance: &str,
         definition_digest: &str,
         coordinator_epoch: i64,
+        connection_scope: &str,
     ) {
         if self.routing_bindings.len() >= 128 && !self.routing_bindings.contains_key(connection_id)
         {
@@ -141,30 +147,36 @@ impl ProviderLimits {
                 agent_type: agent_type.to_owned(),
                 instance: instance.to_owned(),
                 definition_digest: definition_digest.to_owned(),
+                connection_scope: connection_scope.to_owned(),
                 coordinator_epoch,
             },
         );
     }
 
-    /// O(log C + log I + F), F<=8 : seules les fenêtres fraîches du même
-    /// lanceur, instance et époque restent utilisables. Unknown reste None.
+    /// O(log C + log I + F), F<=8. Un refus reste jusqu'au retour attesté
+    /// ou à une réponse acceptée ; sans retour, réévaluation après cinq minutes.
+    /// Les faits positifs gardent définition, présence et TTL ; aucune date inventée.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn routing_quota(
         &self,
         connection_id: &str,
         definition_digest: &str,
         coordinator_epoch: i64,
+        connection_scope: &str,
         live_instances: &std::collections::HashSet<String>,
         now: i64,
         max_age_secs: u64,
     ) -> Option<Quota> {
         let binding = self.routing_bindings.get(connection_id)?;
         if binding.coordinator_epoch != coordinator_epoch
-            || binding.definition_digest != definition_digest
+            || connection_scope.is_empty()
+            || binding.connection_scope != connection_scope
             || !(1..=300).contains(&max_age_secs)
         {
             return None;
         }
         let instance_live = live_instances.contains(&binding.instance);
+        let same_definition = binding.definition_digest == definition_digest;
         let scoped = self
             .by_instance
             .get(&(binding.agent_type.clone(), binding.instance.clone()))?;
@@ -176,7 +188,16 @@ impl ProviderLimits {
             .into_iter()
             .flat_map(|v| v.values())
         {
-            if fresh(seen.observed_at) {
+            let rejection = seen.source == RateLimitSource::ClaudeStreamJson
+                && seen.fact.status == "rejected"
+                && seen.fact.resets_at.map_or_else(
+                    || now.saturating_sub(seen.observed_at) <= CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS,
+                    |at| at > now,
+                );
+            if seen.observed_at > 0
+                && seen.observed_at <= now
+                && (rejection || (same_definition && instance_live && fresh(seen.observed_at)))
+            {
                 filtered.record(
                     &binding.agent_type,
                     seen.fact.clone(),
@@ -185,24 +206,26 @@ impl ProviderLimits {
                 );
             }
         }
-        // Un crédit périmé n'est pas rafraîchi par une nouvelle fenêtre.
         filtered.codex_credits.remove(&binding.agent_type);
         if let Some(credits) = scoped
             .codex_credits
             .get(&binding.agent_type)
-            .filter(|(_, at)| instance_live && fresh(*at))
+            .filter(|(_, at)| same_definition && instance_live && fresh(*at))
         {
             filtered
                 .codex_credits
                 .insert(binding.agent_type.clone(), credits.clone());
         }
-        let claude_rejected = filtered.by_agent_type.get(&binding.agent_type)
-            .into_iter().flat_map(|windows| windows.values())
-            .any(|seen| seen.source == RateLimitSource::ClaudeStreamJson
-                && seen.fact.status == "rejected");
-        // Le refus observé reste restrictif après le nettoyage de l'enfant,
-        // uniquement dans la même connexion/définition/époque et le TTL de la politique.
-        // Aucune capacité positive ni crédit n'est adopté depuis une instance morte.
+        let claude_rejected = filtered
+            .by_agent_type
+            .get(&binding.agent_type)
+            .into_iter()
+            .flat_map(|windows| windows.values())
+            .any(|seen| {
+                seen.source == RateLimitSource::ClaudeStreamJson
+                    && seen.fact.status == "rejected"
+                    && seen.fact.resets_at.is_none_or(|at| at > now)
+            });
         if !instance_live && !claude_rejected {
             return None;
         }
@@ -341,6 +364,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn spec172_unresolved_claude_rejection_survives_routing_delay_until_recovery() {
+        let mut limits = ProviderLimits::default();
+        limits.record_scoped(
+            "claude",
+            "failed-child",
+            RateLimitFact {
+                window: "unknown".into(),
+                status: "rejected".into(),
+                resets_at: None,
+                used_percent: None,
+                credits: None,
+            },
+            RateLimitSource::ClaudeStreamJson,
+            90,
+        );
+        limits.bind_routing_instance(
+            "cartae-claude",
+            "claude",
+            "failed-child",
+            "digest",
+            7,
+            "scope",
+        );
+        let dead = std::collections::HashSet::new();
+        for now in [137, 390] {
+            let quota = limits
+                .routing_quota("cartae-claude", "digest", 7, "scope", &dead, now, 30)
+                .expect("an unresolved refusal is not a stale availability sample");
+            assert!(quota.launch_blocked && quota.limit_reached);
+            assert_eq!(
+                quota.observed_at, 90,
+                "the old observation is not made fresh"
+            );
+            assert!(quota.resets_at.is_none() && quota.credits.is_none());
+        }
+        assert!(limits.routing_quota("cartae-claude", "digest", 7, "scope", &dead, 391, 30).is_none(),
+            "unknown after the retry delay is not a positive availability fact");
+        limits.record_scoped(
+            "claude",
+            "recovered-child",
+            RateLimitFact {
+                window: "unknown".into(),
+                status: "allowed".into(),
+                resets_at: None,
+                used_percent: None,
+                credits: None,
+            },
+            RateLimitSource::ClaudeStreamJson,
+            5001,
+        );
+        limits.bind_routing_instance(
+            "cartae-claude",
+            "claude",
+            "recovered-child",
+            "digest",
+            7,
+            "scope",
+        );
+        let live = std::collections::HashSet::from(["recovered-child".into()]);
+        assert!(
+            !limits
+                .routing_quota("cartae-claude", "digest", 7, "scope", &live, 5002, 30)
+                .unwrap()
+                .launch_blocked
+        );
+    }
+
+    #[test]
+    fn spec172_dated_claude_refusal_expires_at_its_real_reset_without_positive_credit() {
+        let mut limits = ProviderLimits::default();
+        limits.record_scoped(
+            "claude",
+            "child",
+            RateLimitFact {
+                window: "five_hour".into(),
+                status: "rejected".into(),
+                resets_at: Some(200),
+                used_percent: None,
+                credits: None,
+            },
+            RateLimitSource::ClaudeStreamJson,
+            90,
+        );
+        limits.bind_routing_instance("cartae-claude", "claude", "child", "haiku", 7, "scope");
+        let dead = std::collections::HashSet::new();
+        let before = limits
+            .routing_quota("cartae-claude", "opus", 7, "scope", &dead, 199, 30)
+            .unwrap();
+        assert!(before.launch_blocked && before.exhausted);
+        assert_eq!(before.resets_at, Some(200));
+        assert!(before.credits.is_none());
+        assert!(
+            limits
+                .routing_quota("cartae-claude", "opus", 7, "scope", &dead, 200, 30)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn spec172_recent_claude_rejection_survives_child_exit_only_for_same_connection() {
         let mut limits = ProviderLimits::default();
         limits.record_scoped(
@@ -363,10 +485,10 @@ mod tests {
                 has_credits: Some(true), unlimited: Some(true), spend_control_reached: false,
             }),
         }, RateLimitSource::CodexAppServer, 90);
-        limits.bind_routing_instance("cartae-claude", "claude", "child", "digest", 7);
+        limits.bind_routing_instance("cartae-claude", "claude", "child", "digest", 7, "scope");
         let empty = std::collections::HashSet::new();
         let quota = limits
-            .routing_quota("cartae-claude", "digest", 7, &empty, 100, 30)
+            .routing_quota("cartae-claude", "digest", 7, "scope", &empty, 100, 30)
             .expect("recent observed rejection remains useful after failed child cleanup");
         assert!(quota.launch_blocked && quota.limit_reached);
         assert!(quota.credits.is_none(), "no positive credit carried from a dead instance");
@@ -376,16 +498,33 @@ mod tests {
         );
         for (connection, digest, epoch, now) in [
             ("another-account", "digest", 7, 100),
-            ("cartae-claude", "changed", 7, 100),
             ("cartae-claude", "digest", 8, 100),
-            ("cartae-claude", "digest", 7, 121),
         ] {
             assert!(
                 limits
-                    .routing_quota(connection, digest, epoch, &empty, now, 30)
+                    .routing_quota(connection, digest, epoch, "scope", &empty, now, 30)
                     .is_none()
             );
         }
+        assert!(
+            limits
+                .routing_quota("cartae-claude", "other-model", 7, "scope", &empty, 137, 30)
+                .unwrap()
+                .launch_blocked
+        );
+        assert!(
+            limits
+                .routing_quota(
+                    "cartae-claude",
+                    "digest",
+                    7,
+                    "changed-account",
+                    &empty,
+                    100,
+                    30
+                )
+                .is_none()
+        );
         limits.record_scoped(
             "claude",
             "child",
@@ -401,13 +540,13 @@ mod tests {
         );
         assert!(
             limits
-                .routing_quota("cartae-claude", "digest", 7, &empty, 102, 30)
+                .routing_quota("cartae-claude", "digest", 7, "scope", &empty, 102, 30)
                 .is_none()
         );
         let live = std::collections::HashSet::from(["child".into()]);
         assert!(
             !limits
-                .routing_quota("cartae-claude", "digest", 7, &live, 102, 30)
+                .routing_quota("cartae-claude", "digest", 7, "scope", &live, 102, 30)
                 .unwrap()
                 .launch_blocked
         );
@@ -445,11 +584,11 @@ mod tests {
             RateLimitSource::CodexAppServer,
             90,
         );
-        limits.bind_routing_instance("personal", "codex", "personal", "digest-a", 7);
-        limits.bind_routing_instance("work", "codex", "work", "digest-b", 7);
+        limits.bind_routing_instance("personal", "codex", "personal", "digest-a", 7, "scope");
+        limits.bind_routing_instance("work", "codex", "work", "digest-b", 7, "scope");
         let live = std::collections::HashSet::from(["personal".into(), "work".into()]);
         let personal = limits
-            .routing_quota("personal", "digest-a", 7, &live, 100, 30)
+            .routing_quota("personal", "digest-a", 7, "scope", &live, 100, 30)
             .unwrap();
         assert!(personal.exhausted);
         assert!(
@@ -458,18 +597,18 @@ mod tests {
         );
         assert!(
             limits
-                .routing_quota("work", "digest-b", 7, &live, 100, 30)
+                .routing_quota("work", "digest-b", 7, "scope", &live, 100, 30)
                 .unwrap()
                 .launch_blocked
         );
         assert!(
             limits
-                .routing_quota("personal", "digest-b", 7, &live, 100, 30)
+                .routing_quota("personal", "digest-b", 7, "scope", &live, 100, 30)
                 .is_none()
         );
         assert!(
             limits
-                .routing_quota("personal", "digest-a", 8, &live, 100, 30)
+                .routing_quota("personal", "digest-a", 8, "scope", &live, 100, 30)
                 .is_none()
         );
         assert!(
@@ -478,6 +617,7 @@ mod tests {
                     "personal",
                     "digest-a",
                     7,
+                    "scope",
                     &std::collections::HashSet::new(),
                     100,
                     30
@@ -486,17 +626,17 @@ mod tests {
         );
         assert!(
             limits
-                .routing_quota("personal", "digest-a", 7, &live, 121, 30)
+                .routing_quota("personal", "digest-a", 7, "scope", &live, 121, 30)
                 .is_none()
         );
         assert!(
             limits
-                .routing_quota("personal", "digest-a", 7, &live, 89, 30)
+                .routing_quota("personal", "digest-a", 7, "scope", &live, 89, 30)
                 .is_none()
         );
         assert!(
             limits
-                .routing_quota("unknown", "digest-a", 7, &live, 100, 30)
+                .routing_quota("unknown", "digest-a", 7, "scope", &live, 100, 30)
                 .is_none()
         );
     }

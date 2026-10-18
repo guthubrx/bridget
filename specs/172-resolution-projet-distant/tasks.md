@@ -36,6 +36,11 @@
 - [x] T028 Corriger les deux fixtures de rondes héritées : profil0770 observé, permissions0700 explicites ; 14tests de rondes PASS.
 
 - [x] T029 Reconnaître le code Claude rate_limit malgré api_error et préserver une réponse ultérieure réussie.
-- [x] T030 Lier les refus observés à la connexion distante et les appliquer au routage avec définition/époque/TTL inchangés.
-- [ ] T031 Construire et activer le complément de quota, puis qualifier une vraie reprise VOITURES.
+- [x] T030 Lier les refus observés à la connexion distante ; premier test réel r4/r5 : classification correcte, exclusion perdue après le TTL, complément T033 ouvert.
+- [ ] T031 Complément quota1e5ddd07 construit et actif sur Mac/Cartae ; qualification métier VOITURES en attente du propriétaire.
 - [ ] T032 Prouver la continuation réelle sur un enfant encore vivant après renouvellement du tour parent ; l’ancien processus54569150 est perdu.
+
+- [x] T033 Conserver un refus Claude non levé au-delà du délai de décision, pour la même connexion et configuration attestées ; autres modèles du même compte écartés, comptes distincts protégés.
+- [x] T034 Lever ce refus sur réponse Claude réellement acceptée ou retour structuré ; aucune date ni capacité positive inventée.
+- [ ] T035 Diagnostiquer le refus de rattachement signalé après les tours Claude en limite, sans relancer T3 ni changer l'identité.
+- [ ] T036 Refaire le parcours réel après le complément, sans répéter les demandes r4/r5 terminées.

@@ -409,11 +409,74 @@ avant retrait : valeur demandée false, valeur persistée true ; garde produit c
 Le défaut de fixture hérité env_unfit est résolu sans modifier le produit :
 config-149 était créé0770 sous le masque réel du serveur, malgré le contrôle0700.
 La fixture fixe maintenant0700. Les14tests native153_ronde_ passent.
-Référence T3 lue : antigravityAuthSupport.ts361–375 fixe aussi explicitement0700
-après création ; ClaudeHome.ts20–36 isole le profil par CLAUDE_CONFIG_DIR.
+Référence T3 lue : /Users/moi/11.Repositories/t3code/apps/server/src/provider/antigravityAuthSupport.ts
+361–375 fixe aussi explicitement0700 après création ;
+/Users/moi/11.Repositories/t3code/apps/server/src/provider/Drivers/ClaudeHome.ts20–36
+isole le profil par CLAUDE_CONFIG_DIR.
 Aucun compte ni profil utilisateur n’a été modifié. Aucune nouvelle FULL.
 
 La relecture conserve les mêmes limites de stockage, d’identité et de fraîcheur.
 Aucun nouveau schéma, magasin, outil, paramètre ou dépendance. Le test adversarial
 ajoute des crédits synthétiques au même historique : ils restent absents du fait
 rendu après la sortie de l’instance. Les crédits Codex ne traversent pas ce cas.
+
+
+## Complément après les essais réels r4 et r5
+
+r4 Task14c382ea-c831-4374-b6b8-c9f77fe456a7 et r5 Taskc9693bca-4304-4e72-abe2-442677bc8c14
+ont toutes deux fini usage_limit, puis ont été lues et acquittées par leur propriétaire.
+Aucun working confirmé, aucun code produit. La décision conservée prouve le choix
+claude-cartae / claude-haiku-5-5 dans les deux demandes. La sonde r5 a lu ses faits
+44 à47secondes après le refus r4 ; le TTL de30secondes avait déjà supprimé le refus.
+Les autres modèles du même compte ont aussi des digests de mission différents.
+
+Référence T3 courte : ClaudeAdapterV2.ts6455–6505 et7377–7387 conserve les fenêtres
+rejected jusqu'au retour structuré ou à l'événement allowed. Le TTL des mesures
+de charge ne constitue pas une preuve de rétablissement du compte. T3 ne couvre
+pas le choix d'une flotte distante ; Bridget doit lier le refus à sa connexion.
+Le nouveau test reproduit le refus oublié à137, après une observation à90 et un TTL30.
+RED exact conservé dans /home/moi/.cache/bridget-delivery172/quota-delay-red172.log.
+
+Correction en validation : empreinte privée de connexion issue du registre existant
+(connexion, définition de base, révision de politique, identité/provisionnement worker).
+Les modèles de la mission ne changent pas cette empreinte de compte. Un refus Claude
+non levé reste restrictif après nettoyage et délai de décision, sans rajeunir son
+observed_at. Les crédits et capacités positives restent soumis au digest complet,
+à une instance vivante et au TTL. Une nouvelle réponse assistant sans erreur est
+une preuve d'acceptation, sans prouver de crédit ou de pourcentage restant.
+Une fenêtre structurée ne reçoit pas en plus un refus unknown sans date depuis
+le code assistant. Aucun texte humain n'est transformé en date machine.
+La mémoire reste volatile et bornée, sans schéma ni outil public supplémentaire.
+
+La capture utilisateur concerne le fil17f50a6d-ec2f-494a-b9a3-0def5b14475b.
+Les tours Claude169–172 ont échoué sur usage_limit/api_error_429, et non sur une
+limite de taille du contexte. T3 a reçu un retour structuré13:20UTC/15:20Paris.
+Le message binding_registration_refused est publié à11:56:05UTC dans le tour173,
+qui avait repris avec Codex à11:52:21UTC. Ce refus distinct n'est pas attribué
+au quota par simple corrélation. Le lien actuel est présent et occupé dans
+l'inventaire ; une unique lecture de catalogue depuis ce fil a été demandée.
+Son absence de réponse avant échéance ne prouve ni succès ni refus actuel.
+Aucun redémarrage T3, aucune nouvelle admission métier à ce stade.
+
+
+Relecture du complément : un refus sans date ne doit pas bloquer indéfiniment
+un compte rétabli. Bridget conserve ce refus durant un délai de nouvelle tentative
+de5minutes, distinct du TTL des métriques30secondes. Après ce délai, le fait
+redevient inconnu, sans être présenté comme une capacité disponible. Une heure
+structurée prime ce délai ; une vraie réponse acceptée lève le refus avant.
+T3 n'a pas cette sélection distante automatique : cette borne de réévaluation
+est l'adaptation nécessaire, sans parsing du texte et sans nouvelle planification.
+Le test couvre137, la borne390, puis391 pour une observation à90 ; il garde
+observed_at90 et resets_atnull, sans crédit. Une réponse vide ou une nouvelle
+erreur d'authentification ne devient pas une preuve d'acceptation du compte.
+
+Le refus de rattachement garde t3_session_unavailable. Il distingue désormais
+primary_absent, credential_mismatch, instance_mismatch, primary_not_live et
+connection_already_registered. Les gardes sont identiques et les preuves privées
+ne sont jamais imprimées. Référence T3 : assertLiveCaller et bridgetSession dans
+/Users/moi/11.Repositories/t3code-local/apps/server/src/mcp/OrchestratorMcpService.ts,
+lecture de l'exécution vivante et contrôle du propriétaire de credential. T3 ne
+possède pas la liaison auxiliaire locale du démon Bridget. Le complément rend
+sa garde diagnostiquable ; il ne prétend pas avoir établi la cause historique
+du refus de la capture. Le vieux processus MCP peut garder le libellé générique ;
+le maître consigne alors la cause fermée, sans secret, dans son journal.

@@ -741,6 +741,27 @@ impl AgentRegistry {
         self.routing_policy.as_ref()
     }
 
+    /// Même connexion, lanceur, politique et worker ; le modèle de mission
+    /// ne change pas le compte. Aucun secret ni fait fournisseur n'est créé.
+    pub(crate) fn routing_connection_scope(&self, connection_id: &str) -> Option<String> {
+        let policy = self.routing_policy()?;
+        let connection = policy
+            .connections
+            .iter()
+            .find(|item| item.enabled && item.connection_id == connection_id)?;
+        let definition = self.resolved_definition(&connection.agent_type).ok()?;
+        let worker = self.machines.get(&connection.machine_id).map(|item| {
+            (
+                &item.worker_id,
+                item.provisioning_revision,
+                &item.credential_fingerprint,
+            )
+        });
+        let bytes =
+            serde_json::to_vec(&(connection, definition.digest, policy.revision, worker)).ok()?;
+        Some(format!("{:x}", Sha256::digest(bytes)))
+    }
+
     /// Matrice complète déclarée avant les filtres de demande. Les connexions
     /// désactivées restent comptées ici afin qu'un registre129 ne puisse pas
     /// devenir valide en masquant arbitrairement une partie du catalogue.

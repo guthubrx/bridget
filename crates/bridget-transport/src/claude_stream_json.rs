@@ -112,6 +112,7 @@ struct ActiveTurn {
     stop_reason: Option<String>,
     permission_denied: bool,
     latest_assistant_rate_limited: bool,
+    structured_rate_limit_observed: bool,
 }
 
 struct QueueState {
@@ -1155,6 +1156,7 @@ fn spawn_worker(
                 stop_reason: None,
                 permission_denied: false,
                 latest_assistant_rate_limited: false,
+                structured_rate_limit_observed: false,
             });
             busy.store(true, Ordering::SeqCst);
             push_internal(
@@ -1600,7 +1602,17 @@ fn spawn_reader(
                 let limited = value.get("error").and_then(Value::as_str) == Some("rate_limit");
                 let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                 if let Some(active) = state.active.as_mut() {
-                    if limited || active.latest_assistant_rate_limited {
+                    // Une vraie réponse sans erreur lève un refus sans fenêtre
+                    // d'une ancienne mission du même compte. Elle ne prouve aucun crédit.
+                    let accepted = value.get("error").is_none_or(Value::is_null)
+                        && value.get("isApiErrorMessage") != Some(&Value::Bool(true))
+                        && value
+                            .pointer("/message/content")
+                            .and_then(Value::as_array)
+                            .is_some_and(|content| !content.is_empty());
+                    if (limited && !active.structured_rate_limit_observed)
+                        || (!limited && accepted)
+                    {
                         assistant_limit_observation = Some(limited);
                     }
                     active.latest_assistant_rate_limited = limited;
@@ -1786,9 +1798,22 @@ fn spawn_reader(
                     credits: None,
                 }
             } else if kind == "rate_limit_event" {
-                rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
+                let event = rate_limit_event(&value).unwrap_or_else(|| ManagedEventKind::Update {
                     detail: "événement Claude rate_limit_event incomplet".to_string(),
-                })
+                });
+                if matches!(&event, ManagedEventKind::RateLimitObserved { status, .. } if status == "rejected")
+                    && let Some(active) = queue
+                        .0
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .active
+                        .as_mut()
+                {
+                    // Le code assistant ne doit pas ajouter un refus « unknown »
+                    // permanent à une fenêtre dont le fournisseur a donné le retour.
+                    active.structured_rate_limit_observed = true;
+                }
+                event
             } else if let Some(served) = served_model_from_claude(&value) {
                 maybe_record_mismatch(&journal, &events, pinned_model.as_deref(), &served);
                 ManagedEventKind::ModelObserved { model: served }
@@ -1864,7 +1889,11 @@ fn maybe_record_mismatch(
 
 fn rate_limit_event(value: &Value) -> Option<ManagedEventKind> {
     let info = value.get("rate_limit_info")?;
-    let window = info.get("rateLimitType")?.as_str()?.trim();
+    let window = info
+        .get("rateLimitType")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .trim();
     let status = info.get("status")?.as_str()?.trim();
     if window.is_empty() || status.is_empty() {
         return None;
@@ -2880,15 +2909,45 @@ mod tests {
 
     #[test]
     fn spec172_assistant_rate_limit_is_structured_and_recovery_replaces_it() {
-        for (error, recovery, terminal_reason, expected) in [
-            ("rate_limit", false, "api_error", "usage_limit"),
-            ("authentication_failed", false, "api_error", "api_error"),
-            ("", false, "api_error", "api_error"),
-            ("rate_limit", true, "api_error", "api_error"),
-            ("rate_limit", true, "completed", "completed"),
+        for (error, recovery, terminal_reason, expected, dated) in [
+            ("rate_limit", false, "api_error", "usage_limit", false),
+            (
+                "authentication_failed",
+                false,
+                "api_error",
+                "api_error",
+                false,
+            ),
+            ("", false, "api_error", "api_error", false),
+            ("rate_limit", true, "api_error", "api_error", false),
+            ("rate_limit", true, "completed", "completed", false),
+            ("absent", false, "completed", "completed", false),
+            ("rate_limit", false, "api_error", "usage_limit", true),
+            ("rate_then_auth", false, "api_error", "api_error", false),
+            ("rate_then_empty", false, "api_error", "api_error", false),
         ] {
             let mut frames = vec![json!({"type":"assistant","error":error,
                 "message":{"content":[{"type":"text","text":"You've hit your session limit · resets 1:20pm (UTC)"}]}})];
+            if error.starts_with("rate_then_") {
+                frames[0]["error"] = json!("rate_limit");
+                if error == "rate_then_auth" {
+                    frames.push(json!({"type":"assistant", "error":"authentication_failed",
+                        "message":{"content":[{"type":"text","text":"Connection refused"}]}}));
+                } else {
+                    frames.push(json!({"type":"assistant", "message":{"content":[]}}));
+                }
+            }
+            if error == "absent" {
+                frames[0].as_object_mut().unwrap().remove("error");
+                frames[0]["message"]["content"][0]["text"] = json!("Provider response recovered");
+            }
+            if dated {
+                frames.insert(
+                    0,
+                    json!({"type":"rate_limit_event", "rate_limit_info":{
+                    "status":"rejected", "rateLimitType":"five_hour", "resetsAt":200}}),
+                );
+            }
             if recovery {
                 frames.push(json!({"type":"assistant","message":{"content":[{"type":"text","text":"Provider response recovered"}]}}));
             }
@@ -2957,11 +3016,9 @@ mod tests {
                         used_percent,
                         credits,
                     } => {
-                        assert_eq!(window, "unknown");
-                        assert!(
-                            resets_at.is_none() && used_percent.is_none() && credits.is_none(),
-                            "no reset inferred from display text"
-                        );
+                        assert_eq!(window, if dated { "five_hour" } else { "unknown" });
+                        assert_eq!(*resets_at, dated.then_some(200));
+                        assert!(used_percent.is_none() && credits.is_none());
                         Some(status.as_str())
                     }
                     _ => None,
@@ -2969,17 +3026,32 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(
                 facts,
-                if error == "rate_limit" {
+                if error == "rate_limit" || error.starts_with("rate_then_") {
                     if recovery {
                         vec!["rejected", "allowed"]
                     } else {
                         vec!["rejected"]
                     }
+                } else if error == "absent" {
+                    vec!["allowed"]
                 } else {
                     vec![]
                 }
             );
         }
+    }
+
+    #[test]
+    fn spec172_rate_limit_window_is_optional_but_reset_is_structured() {
+        let event = rate_limit_event(&json!({"type":"rate_limit_event",
+            "rate_limit_info":{"status":"rejected","resetsAt":200}}))
+        .unwrap();
+        assert!(matches!(event, ManagedEventKind::RateLimitObserved {
+            window, status, resets_at: Some(200), credits: None, ..
+        } if window == "unknown" && status == "rejected"));
+        assert!(
+            rate_limit_event(&json!({"rate_limit_info":{"rateLimitType":"five_hour"}})).is_none()
+        );
     }
 
     #[test]

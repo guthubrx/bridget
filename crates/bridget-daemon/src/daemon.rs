@@ -9083,13 +9083,16 @@ fn handle_rate_limit(
             Some((connection.connection_id.clone(), declared.digest))
         });
         if let Some((connection_id, digest)) = binding {
-            state.provider_limits.bind_routing_instance(
-                &connection_id,
-                &agent_type,
-                &instance,
-                &digest,
-                state.coordinator_epoch,
-            );
+            if let Some(scope) = state.registry.routing_connection_scope(&connection_id) {
+                state.provider_limits.bind_routing_instance(
+                    &connection_id,
+                    &agent_type,
+                    &instance,
+                    &digest,
+                    state.coordinator_epoch,
+                    &scope,
+                );
+            }
         }
     }
     DaemonToWrapper::Ack {
@@ -11031,16 +11034,30 @@ fn register_auxiliary(
     instance_id: String,
     credential: bridget_transport::protocol::IdentityCredential,
 ) -> DaemonToWrapper {
-    let valid = st.router.get_agent(&agent_id).is_some_and(|route| {
-        route.connection_id != conn_id
-            && st.identity_credentials.get(&route.connection_id) == Some(&credential)
-            && live_connection_identity(st, &route.connection_id)
-                == Some((agent_id.clone(), instance_id.clone()))
-    });
-    if !valid || st.conn_names.contains_key(conn_id) {
+    let refusal = match st.router.get_agent(&agent_id) {
+        None => Some("primary_absent"),
+        Some(route) if route.connection_id == conn_id || st.conn_names.contains_key(conn_id) => {
+            Some("connection_already_registered")
+        }
+        Some(route) if st.identity_credentials.get(&route.connection_id) != Some(&credential) => {
+            Some("credential_mismatch")
+        }
+        Some(route) if st.conn_instances.get(&route.connection_id) != Some(&instance_id) => {
+            Some("instance_mismatch")
+        }
+        Some(route)
+            if live_connection_identity(st, &route.connection_id)
+                != Some((agent_id.clone(), instance_id.clone())) =>
+        {
+            Some("primary_not_live")
+        }
+        Some(_) => None,
+    };
+    if let Some(reason) = refusal {
+        warn!("rattachement auxiliaire refusé : agent={agent_id} cause={reason}");
         return DaemonToWrapper::Nack {
             id: "register-auxiliary".into(),
-            reason: "auxiliary_identity_unproven : preuve absente, invalide ou révoquée".into(),
+            reason: format!("auxiliary_identity_unproven : {reason}"),
         };
     }
     st.conn_names.insert(conn_id.into(), agent_id.clone());
@@ -50488,6 +50505,50 @@ fn spec099_preuve_auxiliaire_valide_bornee_et_revoquee() {
         }
     ));
     assert!(sender_is_authorized(&state, "aux", &agent));
+}
+
+#[cfg(test)]
+#[test]
+fn spec172_binding_refusal_preserves_guards_and_explains_failed_check() {
+    use bridget_transport::protocol::IdentityCredential;
+    let (mut state, _config) = presence_tests::state_with_registered_agent("spec172-binding");
+    let agent = state.presences["instance-1"].name.clone();
+    let _owner = spec094_live_test_connection(&mut state, "conn-1");
+    let credential = state.identity_credentials["conn-1"].clone();
+    for (name, instance, proof, reason) in [
+        (
+            Uuid::new_v4().to_string(),
+            "instance-1",
+            credential.clone(),
+            "primary_absent",
+        ),
+        (
+            agent.clone(),
+            "instance-1",
+            IdentityCredential::new("private-canary172".into()),
+            "credential_mismatch",
+        ),
+        (
+            agent.clone(),
+            "another-instance",
+            credential.clone(),
+            "instance_mismatch",
+        ),
+    ] {
+        let response = register_auxiliary(&mut state, "aux172", name, instance.into(), proof);
+        assert!(
+            matches!(&response, DaemonToWrapper::Nack { reason: detail, .. }
+            if detail == &format!("auxiliary_identity_unproven : {reason}"))
+        );
+        assert!(!format!("{response:?}").contains("private-canary172"));
+        assert!(!state.conn_names.contains_key("aux172"));
+    }
+    state.presences.get_mut("instance-1").unwrap().state = "unreachable".into();
+    assert!(
+        matches!(register_auxiliary(&mut state, "aux172", agent, "instance-1".into(), credential),
+        DaemonToWrapper::Nack { reason, .. } if reason.ends_with("primary_not_live"))
+    );
+    assert!(!state.conn_names.contains_key("aux172"));
 }
 
 #[cfg(test)]

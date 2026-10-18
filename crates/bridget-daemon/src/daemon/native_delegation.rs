@@ -797,10 +797,14 @@ fn observe_routing_candidates(
                 let blocked = *quota_seen
                     .entry(candidate.connection_id.clone())
                     .or_insert_with(|| {
+                        let scope = registry
+                            .routing_connection_scope(&candidate.connection_id)
+                            .unwrap_or_default();
                         let quota = st.provider_limits.routing_quota(
                             &candidate.connection_id,
                             &definition.digest,
                             st.coordinator_epoch,
+                            &scope,
                             &live_instances,
                             now,
                             ttl,
@@ -1000,8 +1004,19 @@ fn observe_routing_candidates(
                         .or_insert_with(|| {
                             let st = state.lock().unwrap_or_else(|error| error.into_inner());
                             let live = st.conn_instances.values().cloned().collect();
-                            let quota = st.provider_limits.routing_quota(connection, &definition_digest,
-                                st.coordinator_epoch, &live, received_at, ttl);
+                            let scope = st
+                                .registry
+                                .routing_connection_scope(connection)
+                                .unwrap_or_default();
+                            let quota = st.provider_limits.routing_quota(
+                                connection,
+                                &definition_digest,
+                                st.coordinator_epoch,
+                                &scope,
+                                &live,
+                                received_at,
+                                ttl,
+                            );
                             plan.connections.push(RoutingDecisionFact {
                                 id: connection.clone(),
                                 observed_at: quota.as_ref().map(|q| q.observed_at),
@@ -11475,6 +11490,60 @@ mod tests {
         st.registry = AgentRegistry::load_from_path(path).unwrap();
     }
 
+    #[test]
+    fn spec172_routing_connection_scope_changes_only_with_declared_account_authority() {
+        let (state, config, _rx, _reader, _request, _root) = routing168_fixture(1);
+        let scope = state
+            .lock()
+            .unwrap()
+            .registry
+            .routing_connection_scope("main")
+            .unwrap();
+        assert!(
+            state
+                .lock()
+                .unwrap()
+                .registry
+                .routing_connection_scope("absent")
+                .is_none()
+        );
+        // Une sélection de modèle de mission ne modifie pas le registre du compte.
+        let _candidates = state.lock().unwrap().registry.routing_candidates().unwrap();
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .registry
+                .routing_connection_scope("main")
+                .unwrap(),
+            scope
+        );
+        routing168_update(&state, |value| {
+            value["routing_policy"]["revision"] = json!(2)
+        });
+        let revised = state
+            .lock()
+            .unwrap()
+            .registry
+            .routing_connection_scope("main")
+            .unwrap();
+        assert_ne!(revised, scope);
+        routing168_update(&state, |value| {
+            value["agents"]["native-test"]["args"] = json!(["changed-account"])
+        });
+        assert_ne!(
+            state
+                .lock()
+                .unwrap()
+                .registry
+                .routing_connection_scope("main")
+                .unwrap(),
+            revised
+        );
+        drop(state);
+        cleanup(&config);
+    }
+
     fn routing168_plan(
         state: &Arc<Mutex<DaemonState>>,
         request: &AutoDelegateV2,
@@ -11783,7 +11852,15 @@ mod tests {
                 RateLimitFact { window:"unknown".into(), status:"rejected".into(),
                     resets_at:None,used_percent:None,credits:None },
                 RateLimitSource::ClaudeStreamJson, unix_timestamp());
-            st.provider_limits.bind_routing_instance("main", "native-test", "finished-child172", &"a".repeat(64), epoch);
+            let scope = st.registry.routing_connection_scope("main").unwrap();
+            st.provider_limits.bind_routing_instance(
+                "main",
+                "native-test",
+                "finished-child172",
+                &"a".repeat(64),
+                epoch,
+                &scope,
+            );
         }
         let mut blocked = routing168_plan(&state, &request);
         let refusal = observe_routing_candidates("conn-1", &request, &mut blocked, None, &state).unwrap_err();
@@ -12572,12 +12649,14 @@ mod tests {
                     RateLimitSource::CodexAppServer,
                     now,
                 );
+                let scope = st.registry.routing_connection_scope(connection).unwrap();
                 st.provider_limits.bind_routing_instance(
                     connection,
                     "native-test",
                     instance,
                     &digest,
                     epoch,
+                    &scope,
                 );
             }
             (digest, epoch)
@@ -12766,13 +12845,18 @@ mod tests {
         for (binding_digest, binding_epoch) in
             [("wrong-digest", epoch), (digest.as_str(), epoch + 1)]
         {
-            state.lock().unwrap().provider_limits.bind_routing_instance(
-                "other",
-                "native-test",
-                "instance-other",
-                binding_digest,
-                binding_epoch,
-            );
+            {
+                let mut st = state.lock().unwrap();
+                let scope = st.registry.routing_connection_scope("other").unwrap();
+                st.provider_limits.bind_routing_instance(
+                    "other",
+                    "native-test",
+                    "instance-other",
+                    binding_digest,
+                    binding_epoch,
+                    &scope,
+                );
+            }
             let mut invalid = routing168_plan(&state, &isolated_request);
             observe_routing_candidates("conn-1", &isolated_request, &mut invalid, None, &state)
                 .unwrap();
@@ -13283,12 +13367,14 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 RateLimitSource::CodexAppServer,
                 now,
             );
+            let scope = st.registry.routing_connection_scope("main").unwrap();
             st.provider_limits.bind_routing_instance(
                 "main",
                 "native-test",
                 "instance-1",
                 &digest,
                 epoch,
+                &scope,
             );
         }
         let admitted_view =
@@ -13945,12 +14031,14 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 RateLimitSource::CodexAppServer,
                 now,
             );
+            let scope = st.registry.routing_connection_scope("main").unwrap();
             st.provider_limits.bind_routing_instance(
                 "main",
                 "native-test",
                 "instance-1",
                 &digest,
                 epoch,
+                &scope,
             );
         }
         for (round, connection) in ["auth-a", "auth-b"].into_iter().enumerate() {
@@ -22975,6 +23063,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 "cartae-native",
                 &digest,
                 st.coordinator_epoch,
+                &st.registry
+                    .routing_connection_scope("cartae-native")
+                    .unwrap(),
                 &st.conn_instances.values().cloned().collect(),
                 unix_timestamp(),
                 30,

@@ -88,8 +88,27 @@ fn resolve_binding(
 fn binding_failure(error: crate::communication::client::ClientError) -> IdentityError {
     use crate::communication::client::ClientError;
     IdentityError::T3SessionUnavailableAt(match error {
-        ClientError::Technical { code: "auxiliary_identity_unproven", .. } =>
-            "binding_registration_refused : le démon refuse le rattachement de cette session",
+        ClientError::Technical {
+            code: "auxiliary_identity_unproven",
+            message,
+        } => match message.as_str() {
+            "auxiliary_identity_unproven : primary_absent" => {
+                "binding_registration_refused : primary_absent : le lien Bridget du fil est absent"
+            }
+            "auxiliary_identity_unproven : credential_mismatch" => {
+                "binding_registration_refused : credential_mismatch : la preuve locale ne correspond plus au lien du fil"
+            }
+            "auxiliary_identity_unproven : instance_mismatch" => {
+                "binding_registration_refused : instance_mismatch : le lien appartient à une autre instance"
+            }
+            "auxiliary_identity_unproven : primary_not_live" => {
+                "binding_registration_refused : primary_not_live : le lien du fil n’est plus actif"
+            }
+            "auxiliary_identity_unproven : connection_already_registered" => {
+                "binding_registration_refused : connection_already_registered : la connexion est déjà enregistrée"
+            }
+            _ => "binding_registration_refused : le démon refuse le rattachement de cette session",
+        },
         ClientError::Technical { code: "auxiliary_credential_required", .. } =>
             "binding_credential_unavailable : rattachement Bridget local absent ou invalide",
         ClientError::Technical { code: "daemon_protocol", .. } =>
@@ -360,6 +379,30 @@ mod tests {
             })
         }
     }
+    #[test]
+    fn spec172_binding_refusal_is_closed_and_never_prints_raw_proof() {
+        for reason in [
+            "primary_absent",
+            "credential_mismatch",
+            "instance_mismatch",
+            "primary_not_live",
+            "connection_already_registered",
+        ] {
+            let error = binding_failure(crate::communication::client::ClientError::Technical {
+                code: "auxiliary_identity_unproven",
+                message: format!("auxiliary_identity_unproven : {reason}"),
+            });
+            assert_eq!(error.code(), "t3_session_unavailable");
+            assert!(error.remediation().contains(reason));
+        }
+        let error = binding_failure(crate::communication::client::ClientError::Technical {
+            code: "auxiliary_identity_unproven",
+            message: "private-canary172".into(),
+        });
+        assert_eq!(error.code(), "t3_session_unavailable");
+        assert!(!error.remediation().contains("private-canary172"));
+    }
+
     #[test]
     fn session_is_revalidated_and_refusals_are_closed() {
         let thread = "11111111-1111-4111-8111-111111111111";
