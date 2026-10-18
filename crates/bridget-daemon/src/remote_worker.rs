@@ -3993,7 +3993,18 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         ));
         let mut reader = BufReader::new(stream);
         let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof) =
-            probe_worker_capability(&writer, &mut reader)?;
+            match probe_worker_capability(&writer, &mut reader) {
+                Ok(capabilities) => capabilities,
+                Err(code) if matches!(code.as_str(), "worker_connection_lost" | "worker_capability_unavailable") => {
+                    // Le même runtime garde ses enfants relâchés pendant la panne du maître.
+                    // Aucun credential ni Hello n'est envoyé sans preuve de capacité.
+                    drop(reader);
+                    drop(writer);
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+                Err(code) => return Err(code),
+            };
         let worker_hello = WorkerHello {
             version: REMOTE_WORKER_VERSION,
             identity: runtime.identity.clone(),
@@ -4554,6 +4565,64 @@ mod tests {
         assert!(serde_json::from_value::<WorkerObservation>(foreign).is_err());
         let mut legacy=encoded;legacy.as_object_mut().unwrap().remove("startup_failure");
         assert!(serde_json::from_value::<WorkerObservation>(legacy).unwrap().startup_failure.is_none());
+    }
+
+
+    #[test]
+    fn spec172_worker_reconnects_after_probe_eof_before_sending_credential() {
+        use std::io::BufRead;
+        use std::os::unix::net::UnixListener;
+        let fixture = Fixture::new();
+        let runtime = runtime_fixture(&fixture);
+        let config = WorkerRuntimeConfig {
+            machine_id: runtime.config.machine_id.clone(),
+            worker_id: runtime.config.worker_id.clone(),
+            provisioning_revision: runtime.config.provisioning_revision,
+            credential_path: runtime.config.credential_path.clone(),
+            state_root: runtime.config.state_root.clone(),
+            registry_path: runtime.config.registry_path.clone(),
+            master_socket: runtime.config.master_socket.clone(),
+        };
+        let listener = UnixListener::bind(&config.master_socket).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&config.master_socket,fs::Permissions::from_mode(0o600)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        drop(runtime);
+        let running = std::thread::spawn(move || run_worker(config));
+        fn accept(listener: &UnixListener, running: &std::thread::JoinHandle<Result<(),String>>) -> Option<UnixStream> {
+            let until = Instant::now()+Duration::from_secs(4);
+            loop {
+                match listener.accept() {
+                    Ok((stream,_)) => return Some(stream),
+                    Err(error) if error.kind()==std::io::ErrorKind::WouldBlock => {},
+                    Err(error) => panic!("accept: {error}"),
+                }
+                if running.is_finished() || Instant::now()>=until { return None; }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let Some(first) = accept(&listener,&running) else {
+            panic!("pas de première connexion : {:?}",running.join().unwrap());
+        };
+        first.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut reader = BufReader::new(first);
+        let mut line = String::new();reader.read_line(&mut line).unwrap();
+        assert!(matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::DaemonIdentityRequest));
+        drop(reader); // Coupure pendant le redémarrage du maître, avant capacité/credential.
+        let Some(mut second) = accept(&listener,&running) else {
+            panic!("le worker est sorti au lieu de se reconnecter : {:?}",running.join().unwrap());
+        };
+        second.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut reader = BufReader::new(second.try_clone().unwrap());
+        line.clear();reader.read_line(&mut line).unwrap();
+        assert!(matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::DaemonIdentityRequest));
+        let report = DaemonToWrapper::DaemonIdentityReport {host:"host".into(),db_path:"db".into(),instance_id:"daemon".into(),features:vec!["remote_worker_v1".into()]};
+        writeln!(second,"{}",serde_json::to_string(&report).unwrap()).unwrap();
+        line.clear();reader.read_line(&mut line).unwrap();
+        assert!(matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::WorkerHello{..}));
+        // Un refus de protocole permanent reste fatal, sans boucle ni downgrade.
+        writeln!(second,"{}",serde_json::to_string(&DaemonToWrapper::Nack{id:"stop-test".into(),reason:"closed".into()}).unwrap()).unwrap();
+        assert_eq!(running.join().unwrap(),Err("worker_handshake_invalid".into()));
     }
 
     struct Fixture(PathBuf);

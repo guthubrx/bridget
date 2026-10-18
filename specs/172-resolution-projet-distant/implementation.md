@@ -333,3 +333,28 @@ Régressions distantes162 :46PASS, y compris reprise et recontrôle des sources.
 L’activation ne concerne que le maître Mac. Worker et wrapper disposent de leur
 reconnexion existante ; les processus des deux missions seront relevés avant/après.
 Aucune relance T3 ou worker demandée. La continuation réelle garde sa Task et sa clé.
+
+## Sortie fatale du worker pendant une reconnexion
+
+L’activation995 du maître a respecté les PID T3/pont. BUS a échoué api_error
+à1792321458, avant le SIGTERM du maître vers1792321481. Cet échec est distinct.
+Le worker4049619 a ensuite quitté sur worker_capability_unavailable, puis systemd
+l’a relancé. Le processus gardé VOITURES est devenu terminal à1792321486.
+La promesse de conservation de ce processus n’est donc pas prouvée et n’est pas
+présentée comme réussie. Le résultat, le commit et le worktree restent conservés.
+Cause : le point d’interrogation après probe_worker_capability faisait sortir
+de run_worker sur une coupure réseau pendant sa sonde, au lieu de conserver
+le runtime et ses enfants pendant la reconnexion. La garde du protocole reste
+fermée : worker_capability_required et les refus de handshake restent fatals.
+Référence T3 : packages/client-runtime/src/rpc/session.ts et client.ts séparent
+les pannes de transport des refus métier. Bridget réessaie le même socket et
+la même identité seulement pour les deux codes transport fermés, sans Hello ni
+credential avant l’annonce de capacité. Attente bornée de1s entre connexions.
+Un test de la vraie boucle reproduit exactement EOF puis sortie fatale avant
+correction. Après correction il observe la deuxième connexion, sa sonde sans
+secret, puis le Hello après capacité ; un refus de protocole arrête toujours.
+Une fixture initiale avait un socket non privé : le refus de sécurité a été
+observé, puis ses droits ont été corrigés à0600 sans modifier la garde.
+Test nouveau1PASS. Module worker19PASS/3FAIL avec le mauvais Git du lanceur ;
+les trois cas ont été repris seuls avec Git2.56 et ont tous passé. Aucun GREEN
+global ni nouvelle FULL. L’installation worker doit encore être vérifiée.

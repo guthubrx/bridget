@@ -29,3 +29,8 @@
 
 - [x] T023 Corriger la continuation distante après renouvellement du tour parent, sans changement de droits.
 - [ ] T024 Activer le correctif du maître sans interrompre BUS et vérifier la même continuation VOITURES.
+
+- [x] T025 Corriger la sortie fatale du worker sur EOF de sonde ; preuve RED/GREEN et refus permanents conservés.
+- [ ] T026 Activer le worker corrigé en l’absence de mission native active.
+- [ ] T027 Reprendre explicitement le travail VOITURES après la perte de son ancien processus, sans présenter une nouvelle tâche comme la continuation ancienne.
+- [ ] T028 Corriger les deux fixtures de rondes héritées qui refusent l’admission env_unfit.
