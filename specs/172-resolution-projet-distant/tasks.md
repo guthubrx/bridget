@@ -17,7 +17,7 @@
 
 - [x] T014 Corriger la durée de validité des droits T3 pendant les continuations natives.
 - [x] T015 Vérifier la source Git sur le worker du parent distant et réutiliser son mapping local.
-- [ ] T016 Activer le nouveau T3 et vérifier les continuations automatiques après accord de redémarrage ; Bridget et les recettes distantes sont validés.
+- [ ] T016 T3 172 activé par relance utilisateur le 18 octobre à 20 h 39 ; rattachement et catalogue du fil courant vérifiés. Continuation automatique réelle encore à prouver.
 
 - [x] T017 Corriger les budgets du client natif T3, la récupération et les erreurs de sonde (cinq cas RED puis GREEN).
 - [x] T018 Aligner le délai des outils Codex sur le contrat natif Bridget, tests du montage T3 et configurations officielles.

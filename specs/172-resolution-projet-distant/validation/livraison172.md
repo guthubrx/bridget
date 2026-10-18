@@ -583,3 +583,23 @@ L’objectif reste paused et aucun réveil ni redémarrage automatique n’est p
 T037/T038/T039 sont closes pour le code, ses tests et ses paquets.
 T036 reste ouverte pour l’activation puis le parcours réel. Aucun succès métier
 sur cette nouvelle source n’est déduit de ses tests ou de sa compilation.
+
+
+## Relance T3 effectuée par l’utilisateur à 20 h 39
+
+Application30609 et serveur30660 démarrés depuis le paquet0.0.45-local.172.
+Serveur né à18:39:56UTC. ASAR inchangé :
+4d57cee627d68079504e613cf93d532fa6399c7026a14c2b8f24fc26aa52a9b3.
+L’appel officiel bridget_status puis bridget_capabilities réussit depuis le fil
+courant après la relance : rattachement, attestation, développement et worktree
+autorisés sur le projet Bridget. Ce catalogue ne teste pas l’authentification des
+fournisseurs et ne prouve pas une nouvelle délégation ou une continuation métier.
+
+BUS453c75be-503b-4934-9311-e382733498aa reste working, ronde2,
+cleanup_done=false. Observation directe Cartae : commande released/native_ready,
+PGID320286 présent, naissance185163502 identique au marqueur durable.
+Cette observation prouve la survie de son processus, sans conclure à la progression
+de son travail métier. Maître50706, pont898 et worker13183 avec NRestarts0 conservés.
+Le correctif Bridget72a8e8f8 reste préparé seulement. Aucun service n’a été relancé
+par ce contrôle. T016 reste ouverte pour la continuation automatique réelle.
+Reçu privé : /Users/moi/.cache/bridget-delivery172/store172/t3-user-restart.json.
