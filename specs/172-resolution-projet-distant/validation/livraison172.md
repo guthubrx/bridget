@@ -125,6 +125,40 @@ le maître journalise la cause utile. Ce diagnostic n'est pas présenté comme u
 cause historique établie ni comme une correction fonctionnelle déjà validée.
 Aucun redémarrage T3 ; son paquet172 reste prêt sur disque.
 
+## Paquets du complément prêts, activation différée
+
+Source codebb83316c68b828fe4ae0c747d81830ac34ee9eea, publiée sur main.
+Build172-bb83316c, sans nouvelle release ni changement de version commerciale.
+93noms de tests distincts PASS dans9séries ciblées, dédupliqués dans le reçu privé ;
+aucune FULL. Le correctif de quota a d'abord reproduit le défaut en RED.
+
+- Artefact Mac : /Users/moi/.cache/bridget-delivery172/quota-delay172/bridget.
+  SHA256d5281180383ddaf9d886de276a52c93084a06c3ae9c7482c54cb0a16f40ac9ea.
+  Compilation71,81s RC0, signature ad hoc vérifiée strictement.
+- Artefact Cartae : /home/moi/.cache/bridget-delivery172/quota-delay172/bridget.
+  SHA2564a6164d0bdce8b58c033dd079c2f1294b6c1ba1e580625897e666f51d4117ead.
+  Compilation64,82s RC0. Copie privée vérifiée, distincte du cache de compilation.
+
+Le préflight à1792326544 conserve l'activation différée : la Taskc998d2d5 est
+working, cleanup_done=false. Aucun binaire actif remplacé, aucun service relancé.
+Maître50706, worker13183, T3637/1068 et pont898 conservés. Le statut officiel
+annonce toujours172-1e5ddd07, en ligne. Le propriétaire a reçu une demande unique
+de signalement après clôture complète, sans polling ni GO pour son travail.
+La remise de cette note est in_flight ; aucune réponse ou lecture n'est supposée.
+
+Reçus Mac :
+/Users/moi/.cache/bridget-delivery172/quota-delay172/build-receipt.json
+/Users/moi/.cache/bridget-delivery172/quota-delay172/activation-preflight.json
+/Users/moi/.cache/bridget-delivery172/quota-delay172/CURRENT.json
+Reçus Cartae :
+/home/moi/.cache/bridget-delivery172/quota-delay172/build-receipt.json
+/home/moi/.cache/bridget-delivery172/quota-delay172/tests.json
+
+Ces paquets ne constituent pas une activation ni une preuve du nouveau parcours
+réel. La prochaine intervention vérifie d'abord la clôture native et les admissions
+en cours. Elle conserve la consigne d'attendre la fin des conversations avant T3.
+La source documentaire ultérieure reste distincte de la source compilée bb83316c.
+
 ## Reçus privés du complément
 
 /Users/moi/.cache/bridget-delivery172/quota172/build-receipt.json.

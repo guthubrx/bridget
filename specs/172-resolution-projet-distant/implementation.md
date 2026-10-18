@@ -430,7 +430,7 @@ claude-cartae / claude-haiku-5-5 dans les deux demandes. La sonde r5 a lu ses fa
 44 à47secondes après le refus r4 ; le TTL de30secondes avait déjà supprimé le refus.
 Les autres modèles du même compte ont aussi des digests de mission différents.
 
-Référence T3 courte : ClaudeAdapterV2.ts6455–6505 et7377–7387 conserve les fenêtres
+Référence T3 courte : /Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts, vers6455–6505 et7377–7387, conserve les fenêtres
 rejected jusqu'au retour structuré ou à l'événement allowed. Le TTL des mesures
 de charge ne constitue pas une preuve de rétablissement du compte. T3 ne couvre
 pas le choix d'une flotte distante ; Bridget doit lier le refus à sa connexion.
