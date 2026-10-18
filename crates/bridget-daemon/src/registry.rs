@@ -442,6 +442,24 @@ pub struct ProjectMapping {
     pub additional_root: Option<AdditionalDirectoryMapping171>,
 }
 
+impl ProjectMapping {
+    /// Une commande sur la machine cible utilise les racines déjà provisionnées
+    /// comme origine. Cela ne crée ni nouvelle correspondance ni droit.
+    pub(crate) fn for_origin(&self, machine: &str, origin: &str) -> Option<Self> {
+        if self.source_host == origin { return Some(self.clone()); }
+        if machine != origin { return None; }
+        let mut mapping = self.clone();
+        mapping.source_host = origin.to_owned();
+        mapping.source_root = mapping.remote_root.clone();
+        if let Some(extra) = &mut mapping.additional_root {
+            extra.source_root = extra.remote_root.clone();
+            extra.source_uid = extra.remote_uid;
+            extra.source_mode = extra.remote_mode;
+        }
+        Some(mapping)
+    }
+}
+
 /// One provisioned directory alias, not a content-transfer or permission grant.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

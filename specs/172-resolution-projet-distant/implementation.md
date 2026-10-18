@@ -129,3 +129,26 @@ dont expiration du permis5s et libération de capacité après échec.
 Ce lot ne change que le banc et ses documents ; aucune compilation release ni
 activation supplémentaire. La recette avec un vrai modèle parent natif reste
 à réaliser après retour de la capacité et de l'attestation.
+
+
+## Reprise du correctif : droits et parents distants
+Les trois tours natifs de l’exécution T3 311 sont liés à la même tentative.
+CodexAdapterV2 retirait le fait de droits au premier terminal natif, tandis
+que goalHolds continuait la même exécution. Trois tests reproduisent le refus
+puis passent : deux continuations et fin completed/interrupted/failed.
+Référence T3 : goalHolds/registerRootTurn/emitRootTerminal dans le fork actif.
+Le checkout upstream possède seulement le cycle de session Codex, sans notre
+attestation Bridget. On conserve l’autorité par exécution et on transfère
+son propriétaire vers le contexte suivant, sans nouvelle révision ni droit.
+
+Recette parent natif réel Cartae : request recette172-parent-natif-cartae-20261018-r2,
+task7ed49c85-2860-4ef3-ad31-8d63d1a3184b. Parent lancé ; enfant refusé
+workspace_base_preflight_failed avant création. Résultat lu et acquitté.
+Cause dans validate_routing_source : lecture locale inconditionnelle du chemin
+/home/moi/10.Scripts/64.bridget par le maître Mac. La source est sur Cartae.
+Référence T3 : préparation Git dans l’environnement de ThreadLaunchService ;
+la différence Bridget est le transport SSH entre coordinateur et exécutant.
+Correction : preuve de source en lecture sur le worker de la commande parent
+attestée, avant admission et après décision. Capacité négociée, aucun repli
+vers un ancien worker. Mapping source=destination dérivé du projet déjà
+provisionné sur cette machine ; protections, SHA, révision et droits conservés.

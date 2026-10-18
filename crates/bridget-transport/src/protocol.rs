@@ -2634,6 +2634,7 @@ pub enum WorkerCapability {
     CandidateProbeV1,
     CandidateProbeV2,
     ReleaseLeaseV2,
+    ParentSourceProofV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3169,6 +3170,16 @@ fn worker_is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Lecture Git bornée sur la machine du parent natif, sans transfert ni lancement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerSourceBase {
+    pub cwd: String,
+    pub expected_base_commit: Option<String>,
+    pub workspace: Option<WorkspaceRequest>,
+    pub workload: AutoDelegateWorkload,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequestOperation {
@@ -3191,6 +3202,10 @@ pub enum WorkerRequestOperation {
     ParentProof {
         parent: ProviderPermissions,
         expected_revision: u64,
+    },
+    ParentSourceProof {
+        parent: ProviderPermissions,
+        source: WorkerSourceBase,
     },
     Start {
         start: WorkerStart,
@@ -3223,6 +3238,10 @@ pub enum WorkerResponseOperation {
     ParentProof {
         parent: ProviderPermissions,
         permission_digest: String,
+    },
+    ParentSourceProof {
+        permission_digest: String,
+        source_error: Option<String>,
     },
     ReadyToRelease {
         ready_at: i64,
@@ -3608,6 +3627,14 @@ impl WorkerRequest {
                 validate_permissions(parent, parent.source == "provider_turn")
                     .map_err(|_| WorkerRefusal::PermissionsChanged)
             }
+            WorkerRequestOperation::ParentSourceProof { parent, source } => {
+                validate_permissions(parent, parent.source == "provider_turn")
+                    .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+                worker_require(worker_absolute_path(&source.cwd)
+                    && std::path::Path::new(&source.cwd).starts_with(&parent.cwd)
+                    && worker_base_commit(source.expected_base_commit.as_deref()))?;
+                worker_serialized_size(&source.workspace, 4096)
+            }
             WorkerRequestOperation::Start { start } => {
                 start.validate()?;
                 worker_require(start.placement.matches_worker(&self.worker))
@@ -3680,6 +3707,10 @@ impl WorkerResponse {
                 worker_require(worker_digest(permission_digest))?;
                 validate_permissions(parent, parent.source == "provider_turn")
                     .map_err(|_| WorkerRefusal::PermissionsChanged)
+            }
+            WorkerResponseOperation::ParentSourceProof { permission_digest, source_error } => {
+                worker_require(worker_digest(permission_digest)
+                    && source_error.as_ref().is_none_or(|code| !code.is_empty() && code.len() <= 1024))
             }
             WorkerResponseOperation::ReadyToRelease { ready_at } => worker_require(*ready_at >= 0),
             WorkerResponseOperation::ResultSlotReserved { slot, slot_id } => {
@@ -6787,6 +6818,31 @@ mod tests {
             execution_id: "execution-mission".into(),
             execution_generation: 1,
         }
+    }
+
+    #[test]
+    fn remote172_source_proof_shape_bornee_et_parent_historique_intact() {
+        let parent = ProviderPermissions {
+            version: 1, source: "native_wrapper".into(), run_id: "mission".into(),
+            provider_session_id: "session".into(), provider_instance_id: "instance".into(),
+            revision: 1, driver: "codex_app_server".into(), cwd: "/remote/project".into(),
+            runtime_mode: "full-access".into(), interaction_mode: "default".into(),
+            provider_policy: serde_json::json!({"kind":"codex","approval_policy":"never", "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}),
+        };
+        let source = WorkerSourceBase { cwd: parent.cwd.clone(), expected_base_commit: Some("a".repeat(40)),
+            workspace: Some(WorkspaceRequest::Shared {}), workload: AutoDelegateWorkload::General };
+        let mut request = WorkerRequest { version: REMOTE_WORKER_VERSION, correlation_id: "source-proof".into(),
+            connection_epoch: "epoch".into(), worker: worker162_identity(), command: worker162_command(),
+            request: WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: source.clone() } };
+        assert_eq!(request.validate(), Ok(()));
+        for invalid in ["/other", "/remote/project/../other"] {
+            if let WorkerRequestOperation::ParentSourceProof { source, .. } = &mut request.request { source.cwd = invalid.into(); }
+            assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        }
+        request.request = WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: WorkerSourceBase { expected_base_commit: Some("x".repeat(40)), ..source } };
+        assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        let old = WorkerRequestOperation::ParentProof { parent: parent.clone(), expected_revision: 1 };
+        assert_eq!(serde_json::to_value(&old).unwrap(), serde_json::json!({"operation":"parent_proof","parent":parent,"expected_revision":1}));
     }
 
     #[test]

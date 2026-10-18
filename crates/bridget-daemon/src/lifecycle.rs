@@ -432,6 +432,41 @@ pub(crate) fn prepare_spawn_parts(
     })
 }
 
+pub(crate) fn validate_source_base(request: &bridget_transport::protocol::WorkerSourceBase) -> Result<(), String> {
+    use bridget_transport::protocol::AutoDelegateWorkload;
+    // La branche demandée est la source d'un worktree. Le checkout du parent
+    // reste intact et peut être sur une autre branche. Les contraintes de
+    // création sont vérifiées sur la machine qui crée réellement le worktree.
+    if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) = &request.workspace {
+        let expected = request.expected_base_commit.as_ref()
+            .ok_or("expected_base_commit_required")?;
+        if let Some(branch) = branch { crate::workspace_git::validate_branch(branch)?; }
+        let actual = crate::workspace_git::resolve_source_commit(
+            Path::new(&request.cwd), base_ref.as_deref(),
+        ).map_err(|error| error.into_admission(true))?;
+        if &actual != expected { return Err("expected_base_commit_mismatch".into()); }
+        return Ok(());
+    }
+    let actual = crate::lifecycle::source_base_commit(Path::new(&request.cwd))?;
+    match (&actual, &request.expected_base_commit) {
+        (Some(_), None) => return Err("expected_base_commit_required".into()),
+        (None, Some(_)) => return Err("expected_base_commit_outside_git".into()),
+        (None, None)
+            if request.workload == AutoDelegateWorkload::Compilation
+                || matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })) =>
+        {
+            return Err("workspace_git_required".into());
+        }
+        (Some(actual), Some(expected)) if actual != expected => {
+            return Err("expected_base_commit_mismatch".into());
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+
 /// Preuve168 de la source Git. O(d+B), d ancêtres du cwd, B sortie Git bornée.
 /// Une absence Git exige des métadonnées absentes sur tous les ancêtres.
 /// Une erreur E/S, un dépôt nu ou une sortie Git invalide reste technique.

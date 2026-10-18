@@ -438,36 +438,54 @@ fn routing_auto_receipt(
 /// Git168 reste en lecture. Le SHA de l'appelant est une contrainte exacte,
 /// jamais une invitation à prendre le HEAD de la machine choisie.
 fn validate_routing_source(request: &AutoDelegateV2) -> Result<(), String> {
-    use bridget_transport::protocol::AutoDelegateWorkload;
-    // La branche demandée est la source d'un worktree. Le checkout du parent
-    // reste intact et peut être sur une autre branche. Les contraintes de
-    // création sont vérifiées sur la machine qui crée réellement le worktree.
-    if let Some(WorkspaceRequest::Worktree { base_ref, branch }) = &request.workspace {
-        let expected = request.expected_base_commit.as_ref()
-            .ok_or("expected_base_commit_required")?;
-        if let Some(branch) = branch { crate::workspace_git::validate_branch(branch)?; }
-        let actual = crate::workspace_git::resolve_source_commit(
-            Path::new(&request.cwd), base_ref.as_deref(),
-        ).map_err(|error| error.into_admission(true))?;
-        if &actual != expected { return Err("expected_base_commit_mismatch".into()); }
-        return Ok(());
-    }
-    let actual = crate::lifecycle::source_base_commit(Path::new(&request.cwd))?;
-    match (&actual, &request.expected_base_commit) {
-        (Some(_), None) => return Err("expected_base_commit_required".into()),
-        (None, Some(_)) => return Err("expected_base_commit_outside_git".into()),
-        (None, None)
-            if request.workload == AutoDelegateWorkload::Compilation
-                || matches!(request.workspace, Some(WorkspaceRequest::Worktree { .. })) =>
-        {
-            return Err("workspace_git_required".into());
-        }
-        (Some(actual), Some(expected)) if actual != expected => {
-            return Err("expected_base_commit_mismatch".into());
-        }
-        _ => {}
-    }
+    crate::lifecycle::validate_source_base(&routing_source_base(request))
+}
 
+fn routing_source_base(request: &AutoDelegateV2) -> bridget_transport::protocol::WorkerSourceBase {
+    bridget_transport::protocol::WorkerSourceBase {
+        cwd: request.cwd.clone(),
+        expected_base_commit: request.expected_base_commit.clone(),
+        workspace: request.workspace.clone(),
+        workload: request.workload,
+    }
+}
+
+/// Le chemin appartient à la machine du parent attesté. Jamais au disque
+/// homonyme du coordinateur. La preuve distante est liée à la commande active.
+fn validate_routing_parent_source(
+    conn: &str,
+    request: &AutoDelegateV2,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<(), String> {
+    use bridget_transport::protocol::*;
+    let remote = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let parent = parent_fact(&st, &owner, &instance, Some(&request.request_id), attested)?
+            .ok_or("permission_attestation_unavailable")?;
+        st.delegation_store.for_child(&owner)?
+            .filter(|task| task.remote_placement.is_some())
+            .map(|task| {
+                let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
+                if !st.remote_workers.get(&worker.machine_id).is_some_and(|session|
+                    session.capabilities.contains(&WorkerCapability::ParentSourceProofV1)) {
+                    return Err("remote_source_probe_unsupported".to_owned());
+                }
+                Ok((worker, remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))?, parent))
+            }).transpose()?
+    };
+    let Some((worker, command, parent)) = remote else { return validate_routing_source(request); };
+    let response = remote_worker_roundtrip(state, &worker, &command,
+        WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: routing_source_base(request) },
+        Instant::now() + Duration::from_secs(30))
+        .map_err(|e| format!("remote_source_preflight:{e:?}"))?;
+    let WorkerResponseOperation::ParentSourceProof { permission_digest, source_error } = response else {
+        return Err("remote_source_proof_invalid".into());
+    };
+    let expected = format!("{:x}", sha2::Sha256::digest(serde_json::to_vec(&parent).map_err(|e| e.to_string())?));
+    if permission_digest != expected { return Err("remote_parent_proof_changed".into()); }
+    if let Some(code) = source_error { return Err(code); }
     Ok(())
 }
 
@@ -591,18 +609,18 @@ fn routing_project_mapping(
     cwd: &Path,
 ) -> Result<(String, crate::registry::ProjectMapping), String> {
     let provision = registry.machine(machine)?;
-    let matches = |mapping: &&crate::registry::ProjectMapping| {
-        mapping.source_host == origin_host && cwd.starts_with(&mapping.source_root)
+    let resolve = |mapping: &crate::registry::ProjectMapping| {
+        mapping.for_origin(machine, origin_host).filter(|mapping| cwd.starts_with(&mapping.source_root))
     };
     if let Some(id) = requested {
         let mapping = provision.mappings.get(id).ok_or("project_mapping_unknown")?;
-        if !matches(&mapping) { return Err("project_mapping_mismatch".into()); }
-        return Ok((id.to_owned(), mapping.clone()));
+        return resolve(mapping).map(|mapping| (id.to_owned(), mapping))
+            .ok_or_else(|| "project_mapping_mismatch".into());
     }
-    let mut found = provision.mappings.iter().filter(|(_, mapping)| matches(mapping));
+    let mut found = provision.mappings.iter().filter_map(|(id, mapping)| resolve(mapping).map(|mapping| (id, mapping)));
     let (id, mapping) = found.next().ok_or("project_mapping_unknown")?;
     if found.next().is_some() { return Err("project_mapping_ambiguous".into()); }
-    Ok((id.clone(), mapping.clone()))
+    Ok((id.clone(), mapping))
 }
 
 /// Préparation d'infrastructure depuis le parent attesté, sans dépendance T3.
@@ -1614,7 +1632,7 @@ fn route_selected_admission(
     let decision = snapshot.decision.ok_or("auto_admission_invalid")?;
     let index = routing_choice_index(plan, &decision.candidate_id)?;
     let candidate = &plan.candidates[index];
-    validate_routing_source(request)?;
+    validate_routing_parent_source(conn, request, attested, state)?;
     let (host, recovering) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         (
@@ -1872,7 +1890,7 @@ fn admit_auto_routing(
         let coordinator = routing_coordinator(&registry, &st.host);
         (registry, coordinator)
     };
-    validate_routing_source(request)?;
+    validate_routing_parent_source(conn, request, attested, state)?;
     let mut plan = routing_admission_plan(&registry, &coordinator, request)?;
     prepare_routing_projects(conn, request, &mut plan, attested, thread, state)?;
     if let Err(code) = observe_routing_candidates(conn, request, &mut plan, attested, state) {
@@ -4335,15 +4353,14 @@ fn delegate_remote_with_routing(
         if !provision.permits_agent_type(agent_type) {
             return Err("remote_agent_type_forbidden".into());
         }
-        let mapping = st.registry.project_mapping(machine, project_id)?;
+        let original_mapping = st.registry.project_mapping(machine, project_id)?;
         let origin_host = st
             .delegation_store
             .for_child(&owner)?
             .and_then(|task| task.remote_placement)
             .map_or_else(|| st.host.clone(), |placement| placement.machine_id);
-        if mapping.source_host != origin_host {
-            return Err("remote_origin_host_mismatch".into());
-        }
+        let mapping = original_mapping.for_origin(machine, &origin_host)
+            .ok_or("remote_origin_host_mismatch")?;
         let source = Path::new(cwd);
         if !source.is_absolute()
             || source
@@ -11632,6 +11649,15 @@ mod tests {
         {
             let st = state.lock().unwrap();
             let resolve = |id: Option<&str>,host: &str,cwd: &Path| routing_project_mapping(&st.registry,"cartae",id,host,cwd);
+            let remote = root.join("remote172");
+            let own = resolve(None, "cartae", &remote).unwrap();
+            assert_eq!(own.0, "opus2d");
+            assert_eq!(own.1.source_host, "cartae");
+            assert_eq!(own.1.source_root, remote);
+            assert_eq!(own.1.remote_root, remote);
+            assert_eq!(resolve(Some("opus2d"), "cartae", &remote.join("nested")).unwrap().0, "opus2d");
+            assert_eq!(resolve(None, "other", &remote).unwrap_err(), "project_mapping_unknown");
+            assert_eq!(resolve(Some("opus2d"), "cartae", Path::new(&request.cwd)).unwrap_err(), "project_mapping_mismatch");
             assert_eq!(resolve(None,"mac172",Path::new(&request.cwd)).unwrap().0,"opus2d");
             assert_eq!(resolve(None,"other",Path::new(&request.cwd)).unwrap_err(),"project_mapping_unknown");
             assert_eq!(resolve(None,"mac172",&root.join("source168-other")).unwrap_err(),"project_mapping_unknown");

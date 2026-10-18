@@ -247,7 +247,7 @@ impl Relay {
                                 let worker = match serde_json::from_str::<WrapperToDaemon>(&first) {
                                     Ok(WrapperToDaemon::WorkerHello { hello }) => Some((hello, false, false)),
                                     Ok(WrapperToDaemon::WorkerHelloWithCapabilities { hello })
-                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2|WorkerCapability::ReleaseLeaseV2)) =>
+                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2|WorkerCapability::ReleaseLeaseV2|WorkerCapability::ParentSourceProofV1)) =>
                                     {
                                         Some((hello.hello, hello.capabilities.contains(&WorkerCapability::CandidateProbeV1),
                                             hello.capabilities.contains(&WorkerCapability::CandidateProbeV2)))

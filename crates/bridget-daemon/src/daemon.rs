@@ -18397,11 +18397,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 3
+                && capabilities.len() <= 4
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18797,6 +18797,10 @@ fn remote_worker_roundtrip(
                 .capabilities
                 .contains(&WorkerCapability::CandidateProbeV2)
         {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if matches!(&operation, WorkerRequestOperation::ParentSourceProof { .. })
+            && !session.capabilities.contains(&WorkerCapability::ParentSourceProofV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         let writer = st
@@ -23387,6 +23391,7 @@ fn handle_wrapper_message_with_peer(
                     "auto_delegate_v2".to_string(),
                     "worker_candidate_probe_v2".to_string(),
                     "worker_release_lease_v2".to_string(),
+                    "worker_parent_source_proof_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })
@@ -41882,6 +41887,7 @@ mod presence_tests {
             WorkerCapability::CandidateProbeV1,
             WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,
+            WorkerCapability::ParentSourceProofV1,
         ];
         assert!(matches!(
             handle_worker_message(&shared, "worker-lease",

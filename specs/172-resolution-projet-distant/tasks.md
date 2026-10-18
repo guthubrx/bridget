@@ -14,3 +14,7 @@
 
 - [x] T012 Prouver le parcours natif complet sans T3 dans le banc isolé, y compris Ready retardé et rejeu.
 - [ ] T013 Complément de recette avec un modèle parent natif réel : capacité locale saturée et attestation du tour automatique indisponible.
+
+- [ ] T014 Corriger la durée de validité des droits T3 pendant les continuations natives.
+- [ ] T015 Vérifier la source Git sur le worker du parent distant et réutiliser son mapping local.
+- [ ] T016 Valider les protections, activer et rejouer les recettes complètes.

@@ -2020,7 +2020,8 @@ impl WorkerRuntime {
         let mapping = registry
             .project_mapping(&request.machine_id, &request.project_id)
             .map_err(|_| WorkerRefusal::PlacementMismatch)?
-            .clone();
+            .for_origin(&request.machine_id, &request.origin_host)
+            .ok_or(WorkerRefusal::PlacementMismatch)?;
         if mapping.mapping_revision != request.mapping_revision
             || mapping.source_host != request.origin_host
             || mapping.source_root != Path::new(&request.source_root)
@@ -3773,6 +3774,26 @@ impl WorkerRuntime {
                     permission_digest,
                 })
             }
+            WorkerRequestOperation::ParentSourceProof { parent, source } => {
+                let receipt = self.store.command(&request.command).map_err(refuse)?;
+                if receipt.phase != WorkerCommandPhase::Released || receipt.placement.execution_cwd != parent.cwd {
+                    return Err(WorkerRefusal::Unauthorized);
+                }
+                let permission_digest = crate::native_permissions::prove_parent_permissions(parent, parent.revision)
+                    .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+                let source_error = (|| {
+                    let root = fs::canonicalize(&parent.cwd).map_err(|_| "workspace_base_preflight_failed")?;
+                    let cwd = fs::canonicalize(&source.cwd).map_err(|_| "workspace_base_preflight_failed")?;
+                    if !cwd.starts_with(&root) { return Err("cwd_outside_parent_project".to_owned()); }
+                    let mut canonical_source = source.clone();
+                    canonical_source.cwd = cwd.to_string_lossy().into_owned();
+                    crate::lifecycle::validate_source_base(&canonical_source)
+                })().err().map(|mut code| { code.truncate(code.floor_char_boundary(1024)); code });
+                let after = crate::native_permissions::prove_parent_permissions(parent, parent.revision)
+                    .map_err(|_| WorkerRefusal::PermissionsChanged)?;
+                if after != permission_digest { return Err(WorkerRefusal::PermissionsChanged); }
+                Ok(WorkerResponseOperation::ParentSourceProof { permission_digest, source_error })
+            }
             WorkerRequestOperation::JournalPage { after_seq, limit } => {
                 self.journal(&request.command, *after_seq, *limit)
             }
@@ -3893,7 +3914,7 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<(bool, bool, bool), String> {
+) -> Result<(bool, bool, bool, bool), String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -3914,6 +3935,7 @@ fn probe_worker_capability(
                     .iter()
                     .any(|feature| feature == "worker_candidate_probe_v2"),
                 features.iter().any(|feature| feature == "worker_release_lease_v2"),
+                features.iter().any(|feature| feature == "worker_parent_source_proof_v1"),
             ))
         }
         _ => Err("worker_capability_required".into()),
@@ -3945,7 +3967,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease) =
+        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof) =
             probe_worker_capability(&writer, &mut reader)?;
         let worker_hello = WorkerHello {
             version: REMOTE_WORKER_VERSION,
@@ -3965,6 +3987,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         ),
                         (master_supports_probe_v2, WorkerCapability::CandidateProbeV2),
                         (master_supports_release_lease, WorkerCapability::ReleaseLeaseV2),
+                        (master_supports_source_proof, WorkerCapability::ParentSourceProofV1),
                     ]
                     .into_iter()
                     .filter_map(|(supported, capability)| supported.then_some(capability))
@@ -4018,12 +4041,14 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             .contains(&WorkerCapability::CandidateProbeV2)
                             || master_supports_probe_v2)
                         && (!accepted.capabilities.contains(&WorkerCapability::ReleaseLeaseV2) || master_supports_release_lease)
+                        && (!accepted.capabilities.contains(&WorkerCapability::ParentSourceProofV1) || master_supports_source_proof)
                         && accepted.capabilities.iter().all(|capability| {
                             matches!(
                                 capability,
                                 WorkerCapability::CandidateProbeV1
                                     | WorkerCapability::CandidateProbeV2
                                     | WorkerCapability::ReleaseLeaseV2
+                                    | WorkerCapability::ParentSourceProofV1
                             )
                         }) =>
                 {
@@ -5831,6 +5856,46 @@ mod tests {
                 permission_digest: json_digest(&parent).unwrap()
             }
         );
+        // Source172 : vrai dépôt sur le worker, jamais lu sur le coordinateur.
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git").arg("-C").arg(&cwd)
+                .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false"])
+                .args(args).output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        git(&["init", "-q", "--initial-branch=main"]);
+        fs::write(cwd.join("source172"), "base").unwrap();
+        git(&["add", "source172"]); git(&["commit", "-qm", "Base172"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-qb", "feature172"]);
+        fs::write(cwd.join("source172"), "feature").unwrap();
+        git(&["commit", "-qam", "Feature172"]);
+        let feature = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        let mut source = bridget_transport::protocol::WorkerSourceBase {
+            cwd: parent.cwd.clone(), expected_base_commit: Some(head.clone()),
+            workspace: Some(bridget_transport::protocol::WorkspaceRequest::Shared {}),
+            workload: bridget_transport::protocol::AutoDelegateWorkload::General,
+        };
+        let prove = |runtime: &mut WorkerRuntime, source| {
+            let mut source_request = request.clone();
+            source_request.request = WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source };
+            runtime.handle(&source_request, "epoch", &disconnected).unwrap()
+        };
+        let valid = WorkerResponseOperation::ParentSourceProof { permission_digest: json_digest(&parent).unwrap(), source_error: None };
+        assert_eq!(prove(&mut runtime, source.clone()), valid);
+        source.expected_base_commit = Some("b".repeat(40));
+        assert!(matches!(prove(&mut runtime, source.clone()), WorkerResponseOperation::ParentSourceProof { source_error: Some(code), .. } if code == "expected_base_commit_mismatch"));
+        source.expected_base_commit = None;
+        assert!(matches!(prove(&mut runtime, source.clone()), WorkerResponseOperation::ParentSourceProof { source_error: Some(code), .. } if code == "expected_base_commit_required"));
+        source.workspace = Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref: Some("feature172".into()), branch: None });
+        source.expected_base_commit = Some(feature);
+        assert_eq!(prove(&mut runtime, source.clone()), valid);
+        source.expected_base_commit = Some(head.clone());
+        assert!(matches!(prove(&mut runtime, source), WorkerResponseOperation::ParentSourceProof { source_error: Some(code), .. } if code == "expected_base_commit_mismatch"));
+        assert_eq!(git(&["rev-parse", "HEAD"]), head);
+        assert!(runtime.running.is_empty() && runtime.held.is_empty());
         let receipt_before = fs::read(runtime.store.command_path(&command())).unwrap();
         let mut stale = request.clone();
         stale.command.generation += 1;
