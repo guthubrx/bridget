@@ -4544,120 +4544,121 @@ fn delegate_remote_with_routing(
             _ => return Err("remote_admission_invalid".into()),
         }
     }
-    if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
-        prepare.workspace = workspace.clone();
-        let response = remote_worker_roundtrip(
-            state,
-            &worker,
-            &provisional,
-            routing_prepare_operation(prepare, routing.as_ref(), false),
-            Instant::now() + Duration::from_secs(30) + crate::workspace_git::WORKTREE_ADD_TIMEOUT,
-        )
-        .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
-        let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
-            return Err("remote_prepare_invalid".into());
-        };
-        prepared = isolated;
-    }
-    if remote_parent_proof(state, &owner, &parent)? != proof {
-        return Err("permission_changed".into());
-    }
-    {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        recheck_attested_thread(&st, conn, thread)?;
-        let mut task = st
-            .delegation_store
-            .get(&task_id)?
-            .ok_or("task_unavailable")?;
-        if task.state != "queued" || task.child_instance.is_some() {
-            return Err("remote_admission_changed".into());
+    let outcome = (|| -> Result<(), String> {
+        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+            prepare.workspace = workspace.clone();
+            let response = remote_worker_roundtrip(
+                state,
+                &worker,
+                &provisional,
+                routing_prepare_operation(prepare, routing.as_ref(), false),
+                Instant::now() + Duration::from_secs(30) + crate::workspace_git::WORKTREE_ADD_TIMEOUT,
+            )
+            .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
+            let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
+                return Err("remote_prepare_invalid".into());
+            };
+            prepared = isolated;
         }
-        let current = parent_fact(
-            &st,
-            &task.owner,
-            &task.owner_instance,
-            Some(request_id),
-            attested,
-        )?;
-        if current.as_ref() != Some(&parent) {
+        if remote_parent_proof(state, &owner, &parent)? != proof {
             return Err("permission_changed".into());
         }
-        let mapping = st.registry.project_mapping(machine, project_id)?;
-        if mapping.mapping_revision != prepared.placement.mapping_revision
-            || !prepared.placement.matches_worker(&worker)
-            || prepared.placement.origin_cwd != *cwd
-            || prepared.placement.project_id != *project_id
         {
-            return Err("remote_placement_changed".into());
-        }
-        let record = prepared
-            .workspace
-            .as_ref()
-            .map(|value| {
-                serde_json::from_value::<WorkspaceRecord>(value.clone())
-                    .map_err(|_| "remote_workspace_invalid")
-            })
-            .transpose()?;
-        if let Some(record) = &record {
-            let expected_branch = match workspace {
-                Some(WorkspaceRequest::Worktree { branch, .. }) => branch
-                    .clone()
-                    .unwrap_or_else(|| format!("bridget/{}", &task_id[..8])),
-                _ => return Err("remote_workspace_unexpected".into()),
-            };
-            if record.branch != expected_branch
-                || prepared.placement.base_commit.as_deref() != Some(record.base_commit.as_str())
-                || !Path::new(&prepared.placement.execution_cwd).starts_with(&record.path)
-                || !Path::new(&record.path).starts_with(&mapping.remote_root)
-                || !record.path.ends_with(&task_id[..8])
-            {
-                return Err("remote_workspace_invalid".into());
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            recheck_attested_thread(&st, conn, thread)?;
+            let mut task = st
+                .delegation_store
+                .get(&task_id)?
+                .ok_or("task_unavailable")?;
+            if task.state != "queued" || task.child_instance.is_some() {
+                return Err("remote_admission_changed".into());
             }
-        } else if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
-            return Err("remote_workspace_missing".into());
+            let current = parent_fact(
+                &st,
+                &task.owner,
+                &task.owner_instance,
+                Some(request_id),
+                attested,
+            )?;
+            if current.as_ref() != Some(&parent) {
+                return Err("permission_changed".into());
+            }
+            let mapping = st.registry.project_mapping(machine, project_id)?;
+            if mapping.mapping_revision != prepared.placement.mapping_revision
+                || !prepared.placement.matches_worker(&worker)
+                || prepared.placement.origin_cwd != *cwd
+                || prepared.placement.project_id != *project_id
+            {
+                return Err("remote_placement_changed".into());
+            }
+            let record = prepared
+                .workspace
+                .as_ref()
+                .map(|value| {
+                    serde_json::from_value::<WorkspaceRecord>(value.clone())
+                        .map_err(|_| "remote_workspace_invalid")
+                })
+                .transpose()?;
+            if let Some(record) = &record {
+                let expected_branch = match workspace {
+                    Some(WorkspaceRequest::Worktree { branch, .. }) => branch
+                        .clone()
+                        .unwrap_or_else(|| format!("bridget/{}", &task_id[..8])),
+                    _ => return Err("remote_workspace_unexpected".into()),
+                };
+                if record.branch != expected_branch
+                    || prepared.placement.base_commit.as_deref() != Some(record.base_commit.as_str())
+                    || !Path::new(&prepared.placement.execution_cwd).starts_with(&record.path)
+                    || !Path::new(&record.path).starts_with(&mapping.remote_root)
+                    || !record.path.ends_with(&task_id[..8])
+                {
+                    return Err("remote_workspace_invalid".into());
+                }
+            } else if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+                return Err("remote_workspace_missing".into());
+            }
+            task.workspace = record;
+            task.remote_placement = Some(prepared.placement.clone());
+            task.cwd = prepared.placement.execution_cwd.clone();
+            task.definition = prepared.definition.clone();
+            task.permission_snapshot = Some(crate::native_permissions::snapshot(
+                &task.owner,
+                &task.owner_instance,
+                parent.clone(),
+                prepared.child_policy.clone(),
+                Path::new(&task.cwd),
+            ));
+            task.effective_posture = Some(prepared.effective_posture);
+            task.remote_prepared = true;
+            st.delegation_store.save(&task)?;
         }
-        task.workspace = record;
-        task.remote_placement = Some(prepared.placement.clone());
-        task.cwd = prepared.placement.execution_cwd.clone();
-        task.definition = prepared.definition.clone();
-        task.permission_snapshot = Some(crate::native_permissions::snapshot(
-            &task.owner,
-            &task.owner_instance,
-            parent.clone(),
-            prepared.child_policy.clone(),
-            Path::new(&task.cwd),
-        ));
-        task.effective_posture = Some(prepared.effective_posture);
-        task.remote_prepared = true;
+        start_remote_task(
+            state, &task_id, &prepared, &parent, conn, thread, permission_proof,
+        )?;
+        Ok(())
+    })();
+    remote_admission_outcome(state, &task_id, outcome)
+}
+
+fn remote_admission_outcome(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    outcome: Result<(), String>,
+) -> Result<Value, String> {
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut task) = st.delegation_store.get(task_id)? else {
+        return Err(outcome.err().unwrap_or_else(|| "task_unavailable".into()));
+    };
+    if let Err(code) = outcome
+        && matches!(task.state.as_str(), "queued" | "starting")
+        && task.mission_issued_at.is_none()
+    {
+        // L’admission et la clé sont déjà durables. Rendre leur reçu avec
+        // l’erreur de démarrage, comme au rejeu ; aucun nouveau lancement.
+        task.error = Some(format!("remote_start_failed:{code}"));
         st.delegation_store.save(&task)?;
     }
-    if let Err(code) = start_remote_task(
-        state, &task_id, &prepared, &parent, conn, thread, permission_proof,
-    ) {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(mut task) = st.delegation_store.get(&task_id)? {
-            if task.state == "starting" && task.mission_issued_at.is_none() {
-                let reason = match code.as_str() {
-                    "permission_attestation_unavailable" | "permission_changed" => Some(code.as_str()),
-                    "remote_release:ReleaseExpired" | "remote_release:UnknownExecution" => Some(code.as_str()),
-                    _ => None,
-                };
-                if let Some(reason) = reason {
-                    task.error = Some(format!("remote_start_failed:{reason}"));
-                    st.delegation_store.save(&task)?;
-                }
-            }
-        }
-        return Err(code);
-    }
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
-    current_task_view(
-        &st,
-        &st.delegation_store
-            .get(&task_id)?
-            .ok_or("task_unavailable")?,
-        true,
-    )
+    current_task_view(&st, &task, true)
 }
 
 /// Les sources sont relues sur leur hôte ; aucun chemin distant n'est ouvert ici.
@@ -22861,6 +22862,40 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(serde_json::to_value(state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before,
             "le worker absent interdit toute nouvelle ronde ou mutation de tâche");
         drop(state);drop(shared);cleanup(&config);
+    }
+
+    #[test]
+    fn spec172_remote_admission_error_conserve_identifiant_erreur_et_rejeu() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let task_id = admitted["task_id"].as_str().unwrap().to_owned();
+        {
+            let st = state.lock().unwrap();
+            let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            task.state = "starting".into();
+            task.mission_issued_at = None;
+            st.delegation_store.save(&task).unwrap();
+        }
+        let result = remote_admission_outcome(&state, &task_id,
+            Err("remote_result_slot:ResourceLimit".into())).unwrap();
+        assert_eq!(result["task_id"], task_id);
+        assert_eq!(result["status"], "starting");
+        assert_eq!(result["error"], "remote_start_failed:remote_result_slot:ResourceLimit");
+        let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        assert_eq!(replay, result, "le rejeu rend le reçu durable, sans nouveau lancement");
+        let mut divergent = request.clone();
+        divergent.task.push_str(" autre consigne");
+        assert_eq!(admit_auto_routing("conn-1", &divergent, None, None, None, None, &state),
+            Err("envelope_mismatch".into()));
+        assert_eq!(remote_admission_outcome(&state, "absent",
+            Err("permission_changed".into())), Err("permission_changed".into()),
+            "un refus sans admission ne crée aucune tâche");
+        let st = state.lock().unwrap();
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+        assert_eq!(st.delegation_store.get(&task_id).unwrap().unwrap().error,
+            Some("remote_start_failed:remote_result_slot:ResourceLimit".into()));
+        assert!(rx.try_recv().is_err(), "aucun appel de fournisseur dans ce test du reçu");
+        drop(st); drop(state); cleanup(&config);
     }
 
     fn remote162_capture_fixture() -> (

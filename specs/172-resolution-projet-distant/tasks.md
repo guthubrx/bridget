@@ -44,3 +44,7 @@
 - [x] T034 Lever ce refus sur réponse Claude réellement acceptée ou retour structuré ; aucune date ni capacité positive inventée.
 - [ ] T035 Diagnostiquer le refus de rattachement signalé après les tours Claude en limite, sans relancer T3 ni changer l'identité.
 - [ ] T036 Refaire le parcours réel après le complément, sans répéter les demandes r4/r5 terminées.
+
+- [x] T037 Corriger la réserve des reçus distants terminés sans supprimer les résultats ni affaiblir le plafond des résultats actifs.
+- [x] T038 Rendre le refus de capacité distinct d’une panne de stockage ; conserver l’identifiant après admission durable même si le démarrage échoue.
+- [ ] T039 Vérifier les régressions du store et des admissions, préparer les paquets sans interrompre BUS.

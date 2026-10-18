@@ -526,3 +526,33 @@ Logs privés :
 La recette avec modèle parent natif réel reste distincte et non validée.
 Le tour automatique a aussi rencontré permission_attestation_unavailable
 dans l'adaptateur T3, avant toute admission ; aucun contournement effectué.
+
+
+## Correctif du store distant préparé le 18 octobre 2026
+
+Incident réel : remote_result_slot:StoreUnavailable sur la demande voitures r7.
+Cause confirmée par lecture seule du store Cartae : 612964 octets réels contre
+15788644 octets réservés. Les anciens reçus soldés retenaient chacun 64 Kio.
+La Task350d5c53-3b0d-4b1e-90b2-150002b6f51a avait pourtant été admise ;
+son identifiant a été transmis au propriétaire pour consultation de l’existant.
+
+Trois tests RED prouvent le défaut avant correction. Après correction :
+série172 23 PASS ; module worker 24 PASS ; résultats distants 46 PASS ;
+routage168 35 PASS. Ces séries se recouvrent :
+125 noms de tests distincts PASS, sans suite complète.
+Reçu privé : /home/moi/.cache/bridget-delivery172/store-admission172-tests.json.
+Les tests sont en série, avec un seul thread, sur Cartae. Une première commande
+sans dossier Cargo et une erreur de syntaxe de fixture n’ont lancé aucun test ;
+la première compilation du séparateur typé a nécessité de distinguer les erreurs
+techniques des erreurs du store. Les trois échecs RED produits restent séparés
+de ces erreurs de préparation du banc.
+
+Le store conserve 120 résultats et reçus, leur relecture après réouverture et le
+rejeu du premier. Sept résultats actifs restent possibles et le huitième est
+refusé. Les gardes des orphelins, des liens symboliques, des identités, des
+permissions et des rejeux passent dans les régressions. La réponse après
+admission garde désormais TaskID et erreur ; une modification d’enveloppe reste refusée.
+
+Aucun résultat réel sur ce nouveau binaire n’est encore revendiqué.
+Paquets à préparer avant activation. BUS453c75be-503b-4934-9311-e382733498aa
+et les processus T3/Bridget sont préservés. Aucun redémarrage n’est programmé.

@@ -480,3 +480,61 @@ possède pas la liaison auxiliaire locale du démon Bridget. Le complément rend
 sa garde diagnostiquable ; il ne prétend pas avoir établi la cause historique
 du refus de la capture. Le vieux processus MCP peut garder le libellé générique ;
 le maître consigne alors la cause fermée, sans secret, dans son journal.
+
+
+## Complément du refus remote_result_slot:StoreUnavailable
+
+Le signalement métier r7 porte la clé
+opus2d-voitures-cartae-sol61-reprise-pietons-20261018-r7.
+La lecture seule du maître retrouve pourtant une admission durable :
+Task350d5c53-3b0d-4b1e-90b2-150002b6f51a, puis failed/remote_start_failed,
+cleanup_done=true et guard_released=true. Le premier appel ne rendait pas
+cet identifiant. Le propriétaire a reçu cet identifiant pour relire l’existant ;
+aucune nouvelle admission métier n’a été créée.
+
+Le store réel contient 73 commandes, 103 slots et 17 reçus de préparation.
+Ses fichiers occupent 612964 octets. Le calcul ancien compte 15788644 octets
+avec les réservations ; ajouter un slot exige 2228224 octets et dépasse
+le plafond inchangé de 16777216 octets. Les anciens reçus soldés continuent
+de réserver chacun 64 Kio, même après collecte de leur blob. La collecte existe
+déjà et garde les reçus sept jours : la supprimer ou vider le store aurait
+détruit des preuves de rejeu sans corriger ce calcul.
+
+Référence T3 lue pour ce défaut : les fonctions getAgentReplayStats/getReplayStats
+dans /Users/moi/11.Repositories/t3code-local/apps/server/src/persistence/OrchestrationEventStore.ts
+mesurent les octets réels avec octet_length(payload_json). T3 ne possède pas
+de réservation équivalente pour un résultat de worker distant. Bridget conserve
+donc sa réserve de publication de 2 Mio par résultat actif, sa réserve de croissance
+pour les métadonnées en cours, et ses deux remplacements globaux sérialisés.
+Une commande Terminal/Refused libère les 64 Kio de croissance ; ses 4 Kio
+de drainage et de détails de sortie tardifs restent réservés. Un slot clôturé
+dont le producteur est terminé libère cette croissance si son résultat est
+définitif ou absent. Une préparation achevée et immutable la libère également.
+Tous les fichiers, y compris les temporaires et les orphelins, gardent leur poids réel.
+Les plafonds d’octets et d’entrées restent inchangés. Aucun reçu réel n’est supprimé.
+
+Le worker distingue maintenant le refus typé WorkerStoreError::Quota :
+WorkerRefusal::ResourceLimit, au lieu de StoreUnavailable. Les erreurs techniques
+conservent leur refus fermé sans publier leur détail privé. Aucun nouveau champ
+de protocole, schéma de base ou outil n’est ajouté.
+
+Référence T3 lue pour la perte d’identifiant :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/CommandReceiptStore.ts
+conserve commandId, status et error, et retrouve ce reçu par sa clé.
+Bridget réutilise ce principe après son admission durable. Une erreur de préparation,
+de contrôle ou de démarrage rend le reçu de la même Task avec son erreur conservée.
+Le statut reste queued/starting pendant la résolution du lancement ; il ne prouve
+pas un travail métier. Les gardes de droits et de libération ne changent pas.
+Le rejeu exact retrouve la Task ; une enveloppe différente reste refusée.
+Un refus avant admission ne crée toujours aucune Task.
+
+Trois régressions RED sont conservées avant correction : saturation au 106e reçu
+terminé, quota masqué par StoreUnavailable, et perte de la réponse après admission.
+Les premiers contrôles GREEN172 donnent 23 PASS. Le test du store conserve
+120 résultats et reçus, vérifie leur relecture après réouverture et leur rejeu,
+puis admet sept résultats actifs et refuse le huitième. Les séries de régression
+complémentaires sont conservées dans les reçus de validation.
+
+La nouvelle source reste sans activation pendant BUS453c75be-503b-4934-9311-e382733498aa.
+Aucun redémarrage T3, aucune suppression de store ni intervention sur cette mission.
+Ce banc ne remplace pas une délégation réelle sur le nouveau binaire activé.

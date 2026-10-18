@@ -1288,8 +1288,10 @@ impl WorkerStore {
         Ok(())
     }
 
-    /// Chaque payload actif compte au moins 2 Mio, y compris le temporaire de
-    /// son unique producteur. Chaque metadata réserve 64 Kio de remplacement.
+    /// Chaque payload actif réserve 2 Mio, temporaire de publication inclus.
+    /// Les reçus en cours gardent 64 Kio pour leur croissance ; les reçus
+    /// soldés comptent leurs octets réels. Deux remplacements de métadonnées
+    /// sont réservés globalement, car les transitions sont sérialisées.
     /// Les fichiers orphelins comptent leurs octets, jamais zéro.
     fn inventory(
         &self,
@@ -1309,7 +1311,12 @@ impl WorkerStore {
                 return Err(WorkerStoreError::Quarantined);
             }
             self.read_command(&command.identity)?;
-            used = used.saturating_add(MAX_METADATA_BYTES as u64 + DRAIN_PROOF_RESERVATION);
+            // Terminal/Refused ne peut plus recevoir de préparation ni de permis.
+            // Les 4 Kio gardent la preuve de drainage et les détails de sortie tardifs.
+            used = used.saturating_add(DRAIN_PROOF_RESERVATION);
+            if !matches!(command.phase, WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused) {
+                used = used.saturating_add(MAX_METADATA_BYTES as u64);
+            }
             commands.push(command);
         }
         for entry in fs::read_dir(self.root.join("slots"))? {
@@ -1333,7 +1340,12 @@ impl WorkerStore {
                     (MAX_WORKER_RESULT_ENVELOPE_BYTES as u64).saturating_sub(payload_bytes),
                 );
             }
-            used = used.saturating_add(MAX_METADATA_BYTES as u64);
+            let settled = slot.closed.is_some()
+                && slot.producer_terminal
+                && (final_disposition || self.read_blob(&slot)?.is_none());
+            if !settled {
+                used = used.saturating_add(MAX_METADATA_BYTES as u64);
+            }
             slots.push(slot);
         }
         let mut workspaces = 0;
@@ -1355,7 +1367,10 @@ impl WorkerStore {
                     return Err(WorkerStoreError::Quarantined);
                 }
                 workspaces += 1;
-                used = used.saturating_add(MAX_METADATA_BYTES as u64);
+                // Une préparation achevée est immutable ; son rejeu ne fait que la lire.
+                if receipt.record.is_none() {
+                    used = used.saturating_add(MAX_METADATA_BYTES as u64);
+                }
             }
         }
         let count = commands.len() + slots.len() + workspaces;
@@ -1839,8 +1854,14 @@ fn worker_now() -> i64 {
         .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or(0)
 }
-fn refuse(_: impl std::fmt::Display) -> WorkerRefusal {
+fn unavailable(_: impl std::fmt::Display) -> WorkerRefusal {
     WorkerRefusal::StoreUnavailable
+}
+fn refuse(error: WorkerStoreError) -> WorkerRefusal {
+    match error {
+        WorkerStoreError::Quota => WorkerRefusal::ResourceLimit,
+        _ => WorkerRefusal::StoreUnavailable,
+    }
 }
 fn marker_key(command: &WorkerCommandIdentity) -> String {
     digest_bytes(command.command_id.as_bytes())
@@ -2844,7 +2865,7 @@ impl WorkerRuntime {
                 .prepare_workspace(command, request, &mapping.remote_root)
                 .map_err(refuse)?;
             worktree_base = Some(record.base_commit.clone());
-            workspace = Some(serde_json::to_value(&record).map_err(refuse)?);
+            workspace = Some(serde_json::to_value(&record).map_err(unavailable)?);
             let root_offset = mapping
                 .remote_root
                 .strip_prefix(&record.toplevel)
@@ -3120,7 +3141,7 @@ impl WorkerRuntime {
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
             launch.env.insert(
                 crate::native_permissions::CHILD_POLICY_ENV.into(),
-                OsString::from(serde_json::to_string(&start.child_policy).map_err(refuse)?),
+                OsString::from(serde_json::to_string(&start.child_policy).map_err(unavailable)?),
             );
             let sources = start
                 .child_policy
@@ -3129,7 +3150,7 @@ impl WorkerRuntime {
                 .unwrap_or_default();
             launch.env.insert(
                 crate::native_permissions::CHILD_SOURCES_ENV.into(),
-                OsString::from(serde_json::to_string(&sources).map_err(refuse)?),
+                OsString::from(serde_json::to_string(&sources).map_err(unavailable)?),
             );
             launch.env.insert(
                 crate::wrapper::NATIVE_MISSION_BOOTSTRAP_ENV.into(),
@@ -3138,7 +3159,7 @@ impl WorkerRuntime {
                         instance_id: command.instance_id.clone(),
                         mission_id: start.mission_id.clone(),
                     })
-                    .map_err(refuse)?,
+                    .map_err(unavailable)?,
                 ),
             );
             launch.env.remove(crate::wrapper::NATIVE_CHILD_REQUESTS_ENV);
@@ -3153,10 +3174,10 @@ impl WorkerRuntime {
                 OsString::from(
                     serde_json::to_string(&serde_json::json!({
             "worker":self.identity,"command":command,"store_root":self.store.root }))
-                    .map_err(refuse)?,
+                    .map_err(unavailable)?,
                 ),
             );
-            let executable = std::env::current_exe().map_err(refuse)?;
+            let executable = std::env::current_exe().map_err(unavailable)?;
             let managed = ManagedLaunch {
                 bootstrap_executable: executable.clone(),
                 wrapper_executable: executable,
@@ -3169,7 +3190,7 @@ impl WorkerRuntime {
                     "managed-wrapper".into(),
                     prepared.request.agent_type.clone(),
                     start.child_id.clone(),
-                    serde_json::to_string(&start.definition).map_err(refuse)?,
+                    serde_json::to_string(&start.definition).map_err(unavailable)?,
                 ],
                 cwd: launch.cwd,
                 env: launch.env,
@@ -3180,12 +3201,12 @@ impl WorkerRuntime {
                 self.store.root.join("managed-stderr"),
             )
             .open(&start.child_id, &managed.identity)
-            .map_err(refuse)?;
+            .map_err(unavailable)?;
             let child = crate::managed_process::spawn_managed_bootstrap_with_stderr(
                 &managed,
                 std::process::Stdio::from(stderr),
             )
-            .map_err(refuse)?;
+            .map_err(unavailable)?;
             Ok::<_, WorkerRefusal>((child, cancel_key))
         })();
         let (child, cancel_key) = match launch_result {
@@ -3212,7 +3233,7 @@ impl WorkerRuntime {
             Ok(ready) => ready,
             Err((error, child)) => {
                 self.abandoned.insert(command.command_id.clone(), child);
-                return Err(refuse(error));
+                return Err(unavailable(error));
             }
         };
         let Some(ready) = ready else {
@@ -3233,7 +3254,7 @@ impl WorkerRuntime {
             Ok(marked) => marked,
             Err((error, child)) => {
                 self.abandoned.insert(command.command_id.clone(), child);
-                return Err(refuse(error));
+                return Err(unavailable(error));
             }
         };
         if let Err(error) = self
@@ -3332,9 +3353,9 @@ impl WorkerRuntime {
             // fermeture ne peut pas devenir NativeReady si le store échoue.
             let stopped = child.request_group_termination();
             let persisted = self.store.native_status(command, true);
-            stopped.map_err(refuse)?;
+            stopped.map_err(unavailable)?;
             persisted.map_err(refuse)?;
-            return Err(refuse(error));
+            return Err(unavailable(error));
         }
         self.store
             .set_phase(command, WorkerCommandPhase::Released, worker_now())
@@ -3403,7 +3424,7 @@ impl WorkerRuntime {
             ));
         }
         if let Some(child) = self.running.get_mut(&command.command_id) {
-            let exit = child.try_wait().map_err(refuse)?;
+            let exit = child.try_wait().map_err(unavailable)?;
             let status = child.try_status();
             use bridget_transport::protocol::WorkerStartupFailure as Failure;
             let failure = match &status {
@@ -3426,7 +3447,7 @@ impl WorkerRuntime {
                     .map_err(refuse)?;
                 return Ok(Self::observation(WorkerCommandPhase::Unknown, None));
             }
-            if exit.is_some() && child.reap_terminated_group().map_err(refuse)? {
+            if exit.is_some() && child.reap_terminated_group().map_err(unavailable)? {
                 self.running.remove(&command.command_id);
                 self.finish_command(command)?;
                 return Ok(Self::observation(
@@ -3444,7 +3465,7 @@ impl WorkerRuntime {
             if failed && !receipt.startup_failed {
                 let stopped = child.request_group_termination();
                 let persisted = self.store.native_status(command, true);
-                stopped.map_err(refuse)?;
+                stopped.map_err(unavailable)?;
                 persisted.map_err(refuse)?;
             } else if native_ready && !receipt.native_ready {
                 self.store.native_status(command, false).map_err(refuse)?;
@@ -3456,7 +3477,7 @@ impl WorkerRuntime {
             ));
         }
         if let Some(child) = self.abandoned.get_mut(&command.command_id) {
-            if child.try_wait().map_err(refuse)?.is_some() {
+            if child.try_wait().map_err(unavailable)?.is_some() {
                 if !self.store.drainage_proven(&receipt).unwrap_or(false) {
                     self.store
                         .set_phase(command, WorkerCommandPhase::Unknown, worker_now())
@@ -3480,7 +3501,7 @@ impl WorkerRuntime {
                 .map_err(refuse)?;
             return Ok(Self::observation(WorkerCommandPhase::Unknown, None));
         };
-        let live = crate::managed_process::group_exists(marker.pgid).map_err(refuse)?;
+        let live = crate::managed_process::group_exists(marker.pgid).map_err(unavailable)?;
         if !live {
             // Enveloppe tuée avant sa preuve (incident 171, c3b80e27) : sans
             // autre preuve, l'annulation restait « unknown » pour toujours.
@@ -3600,7 +3621,7 @@ impl WorkerRuntime {
         // Index en O(c log c), jointure en O(s log c), aucune relecture globale
         // par commande terminale. Les transitions actives gardent leur preuve fraîche.
         let (commands, slots, _, _) = {
-            let _guard = self.store.transition.lock().map_err(refuse)?;
+            let _guard = self.store.transition.lock().map_err(unavailable)?;
             self.store.health().map_err(refuse)?;
             self.store.inventory().map_err(refuse)?
         };
@@ -3849,21 +3870,21 @@ impl WorkerRuntime {
         if marker.command_id != command.command_id
             || marker.instance_id != command.instance_id
             || marker.generation != command.generation
-            || self.markers.load(&marker_key(command)).map_err(refuse)? != marker
+            || self.markers.load(&marker_key(command)).map_err(unavailable)? != marker
         {
             return Err(WorkerRefusal::UnknownExecution);
         }
         // Une annulation peut arriver après la sortie du wrapper. Reprendre la
         // clôture durable avant de demander l'identité d'un processus disparu.
         // reconcile conserve l'exigence de preuve de drainage après RELEASE.
-        if !crate::managed_process::group_exists(marker.pgid).map_err(refuse)? {
+        if !crate::managed_process::group_exists(marker.pgid).map_err(unavailable)? {
             return self.reconcile(command);
         }
         if crate::managed_process::process_birth(marker.pgid).ok() != Some(marker.birth) {
             return Err(WorkerRefusal::UnknownExecution);
         }
         if let Some(child) = self.running.get_mut(&command.command_id) {
-            child.request_group_termination().map_err(refuse)?;
+            child.request_group_termination().map_err(unavailable)?;
         } else {
             self.markers
                 .stop_current_group(
@@ -3871,7 +3892,7 @@ impl WorkerRuntime {
                     Duration::from_millis(100),
                     Duration::from_millis(10),
                 )
-                .map_err(refuse)?;
+                .map_err(unavailable)?;
         }
         self.reconcile(command)
     }
@@ -3908,7 +3929,7 @@ impl WorkerRuntime {
                         .ok_or(WorkerRefusal::JournalUnavailable)?,
                     offset: 0,
                     final_fragment: true,
-                    bytes: serde_json::to_vec(event).map_err(refuse)?,
+                    bytes: serde_json::to_vec(event).map_err(unavailable)?,
                 })
             })
             .collect::<Result<Vec<_>, WorkerRefusal>>()?;
@@ -4960,6 +4981,65 @@ mod tests {
             WorkerStore::open(&fixture.root(), worker()),
             Err(WorkerStoreError::Quarantined)
         ));
+    }
+
+    #[test]
+    fn spec172_worker_store_conserve_replays_sans_reserver_les_recus_termines() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let mut first = slot(0);
+        first.identity.command.command_id = "completed-0".into();
+        first.identity.command.task_id = "completed-task-0".into();
+        let expected_result = result(&first, "résultat conservé");
+        let mut first_receipt = Vec::new();
+        for index in 0..120 {
+            let mut slot = slot(index);
+            slot.identity.command.command_id = format!("completed-{index}");
+            slot.identity.command.task_id = format!("completed-task-{index}");
+            let command = &slot.identity.command;
+            store.reserve_command(command, &"d".repeat(64), &placement(), 1000, 100)
+                .unwrap();
+            let reservation = store.reserve_result_slot(&slot, 101)
+                .unwrap_or_else(|error| panic!("ancien reçu {index}: {error}"));
+            let result = result(&slot, "résultat conservé");
+            publish_result_blob(&reservation, &result).unwrap();
+            store.record_disposition(&WorkerResultDisposition {
+                identity: slot.identity.clone(),
+                result_digest: result.digest,
+                disposition: RemoteResultDisposition::Accepted {},
+            }, 102).unwrap();
+            store.mark_result_producer_terminal(&slot.identity).unwrap();
+            store.close_result_slot(&slot, WorkerSlotClosureProof::Cancelled, 103).unwrap();
+            store.set_phase(command, WorkerCommandPhase::Terminal, 104).unwrap();
+            if index == 0 {
+                first_receipt = fs::read(store.slot_dir(&slot.identity).unwrap().join("receipt.json")).unwrap();
+            }
+        }
+        // Les anciens résultats et leurs reçus restent présents, byte pour byte.
+        assert_eq!(store.read_result(&first.identity).unwrap(), Some(expected_result.clone()));
+        assert_eq!(first_receipt, fs::read(store.slot_dir(&first.identity).unwrap().join("receipt.json")).unwrap());
+        assert_eq!(store.inventory().unwrap().3, 240);
+        drop(store);
+        let store = fixture.open();
+        assert_eq!(store.read_result(&first.identity).unwrap(), Some(expected_result));
+        assert!(matches!(
+            store.reserve_command(&first.identity.command, &"d".repeat(64), &placement(), 1000, 100).unwrap(),
+            CommandReservation::Existing(_)
+        ));
+        // Les résultats vivants continuent de réserver leur enveloppe complète.
+        reserve(&store);
+        for index in 0..7 {
+            store.reserve_result_slot(&slot(index), 101).unwrap();
+        }
+        assert!(matches!(store.reserve_result_slot(&slot(7), 101), Err(WorkerStoreError::Quota)));
+    }
+
+    #[test]
+    fn spec172_worker_store_quota_distincte_dune_panne_de_stockage() {
+        assert_eq!(refuse(WorkerStoreError::Quota), WorkerRefusal::ResourceLimit);
+        assert_eq!(refuse(WorkerStoreError::Quarantined), WorkerRefusal::StoreUnavailable);
+        assert_eq!(refuse(WorkerStoreError::Io(io::Error::other("détail privé"))),
+            WorkerRefusal::StoreUnavailable);
     }
 
     #[test]
