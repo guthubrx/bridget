@@ -13,8 +13,12 @@
 - [x] T010 Conserver les reçus, résultats et limites de validation.
 
 - [x] T012 Prouver le parcours natif complet sans T3 dans le banc isolé, y compris Ready retardé et rejeu.
-- [ ] T013 Complément de recette avec un modèle parent natif réel : capacité locale saturée et attestation du tour automatique indisponible.
+- [x] T013 Recette parent natif réel Cartae → enfant Cartae, sans T3, résultat et rejeu prouvés (r3).
 
-- [ ] T014 Corriger la durée de validité des droits T3 pendant les continuations natives.
-- [ ] T015 Vérifier la source Git sur le worker du parent distant et réutiliser son mapping local.
+- [x] T014 Corriger la durée de validité des droits T3 pendant les continuations natives.
+- [x] T015 Vérifier la source Git sur le worker du parent distant et réutiliser son mapping local.
 - [ ] T016 Valider les protections, activer et rejouer les recettes complètes.
+
+- [x] T017 Corriger les budgets du client natif T3, la récupération et les erreurs de sonde (cinq cas RED puis GREEN).
+- [x] T018 Aligner le délai des outils Codex sur le contrat natif Bridget, tests du montage T3 et configurations officielles.
+- [ ] T019 Achever les recettes finales depuis Revue et Opus2D après activation des corrections.

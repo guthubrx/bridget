@@ -992,7 +992,7 @@ fn execute_request_wait(
             ToolError::InvalidParams("request_id doit être une chaîne non vide".into())
         })?;
     let wait_timeout = crate::delegation_mcp::parse_wait_timeout(arguments)?;
-    if !crate::communication::client::daemon_supports_wait(socket) {
+    if !crate::communication::client::daemon_supports_wait(socket)? {
         return Err(ToolError::Technical {
             code: "native_delegation_refused",
             message: "wait_unsupported".into(),
@@ -3481,8 +3481,8 @@ mod tests {
             let args = json!({"task_ids":(0..count).map(|index|format!("task-{index}")).collect::<Vec<_>>()});
             assert!(
                 matches!(crate::delegation_mcp::execute(&identity,"bridget_task_ack",&args,Path::new("/missing-ack151")),
-                Err(ToolError::Technical {code:"native_delegation_refused",message}) if message=="wait_unsupported"),
-                "borne {count} valide, refus uniquement de compatibilité"
+                Err(ToolError::Technical {code:"daemon_unreachable", ..})),
+                "borne {count} valide, socket absent donc erreur de transport"
             );
         }
     }
@@ -8888,5 +8888,31 @@ print(json.dumps({"same_project":len(local),"global":len(global_agents),
                 "deux projections initiales et une remise Loop ; aucun dépôt au refus ni au rejeu"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod spec172_wait_probe_tests {
+    use super::*;
+    #[test]
+    fn spec172_request_wait_sonde_en_panne_reste_transport() {
+        let socket = crate::mcp_identity::mock_socket("172-missing-request-probe");
+        let identity = crate::mcp_identity::ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let args = serde_json::json!({"request_id":"existing-message","wait_timeout":1});
+        let result = execute_request_wait(&identity, args.as_object().unwrap(), &socket);
+        assert!(
+            matches!(
+                result,
+                Err(ToolError::Technical {
+                    code: "daemon_unreachable",
+                    ..
+                })
+            ),
+            "une panne de transport ne prouve pas l'absence de capacité"
+        );
     }
 }

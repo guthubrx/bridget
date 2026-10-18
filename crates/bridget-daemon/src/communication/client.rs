@@ -65,14 +65,14 @@ pub(crate) fn routing_catalogue(socket: &Path) -> Result<serde_json::Value, Clie
 }
 
 /// Sonde sans identité auxiliaire : budget propre, avant toute trame 151.
-pub(crate) fn daemon_supports_wait(socket: &Path) -> bool {
-    let Ok(mut connection) =
-        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(3))
-    else {
-        return false;
-    };
-    matches!(connection.exchange(&WrapperToDaemon::DaemonIdentityRequest),
-        Ok(DaemonToWrapper::DaemonIdentityReport { features, .. }) if features.iter().any(|feature| feature == "wait_v1"))
+pub(crate) fn daemon_supports_wait(socket: &Path) -> Result<bool, ClientError> {
+    let mut connection =
+        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(3))?;
+    match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
+        DaemonToWrapper::DaemonIdentityReport { features, .. } =>
+            Ok(features.iter().any(|feature| feature == "wait_v1")),
+        other => unexpected_response(other),
+    }
 }
 
 pub(crate) fn deserialize_project_reason<'de, D: serde::Deserializer<'de>>(
@@ -1385,7 +1385,7 @@ mod security_tests {
             let supported = daemon_supports_wait(&path);
             server.join().unwrap();
             std::fs::remove_file(path).unwrap();
-            assert_eq!(supported, supports_wait);
+            assert_eq!(supported.unwrap(), supports_wait);
         }
     }
 
@@ -1408,7 +1408,7 @@ mod security_tests {
         let supported = daemon_supports_wait(&path);
         server.join().unwrap();
         std::fs::remove_file(path).unwrap();
-        assert!(!supported);
+        assert!(matches!(supported, Err(ClientError::Technical { code: "daemon_unreachable", .. })));
         assert!((Duration::from_secs(2)..Duration::from_secs(5)).contains(&start.elapsed()));
     }
 

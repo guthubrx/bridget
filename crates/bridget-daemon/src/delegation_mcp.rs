@@ -89,6 +89,16 @@ pub(crate) fn execute(
     args: &Value,
     socket: &Path,
 ) -> Result<Value, ClientError> {
+    execute_with_proof(identity, name, args, socket, crate::t3code_mcp::private_proof())
+}
+
+fn execute_with_proof(
+    identity: &ResolvedIdentity,
+    name: &str,
+    args: &Value,
+    socket: &Path,
+    proof: Option<bridget_transport::protocol::NativePermissionProof>,
+) -> Result<Value, ClientError> {
     let object = args
         .as_object()
         .ok_or_else(|| ClientError::InvalidParams("arguments objet requis".into()))?;
@@ -422,7 +432,7 @@ pub(crate) fn execute(
     if matches!(
         &request,
         NativeDelegationRequest::Wait { .. } | NativeDelegationRequest::Ack { .. }
-    ) && !daemon_supports_wait(socket)
+    ) && !daemon_supports_wait(socket)?
     {
         return Err(ClientError::Technical {
             code: "native_delegation_refused",
@@ -457,9 +467,11 @@ pub(crate) fn execute(
         _ => None,
     };
     if let Some((feature, refusal)) = required_feature {
-        let supported = matches!(connection.exchange(&WrapperToDaemon::DaemonIdentityRequest),
-            Ok(DaemonToWrapper::DaemonIdentityReport { features, .. })
-                if features.iter().any(|candidate| candidate == feature));
+        let supported = match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
+            DaemonToWrapper::DaemonIdentityReport { features, .. } =>
+                features.iter().any(|candidate| candidate == feature),
+            other => return unexpected_response(other),
+        };
         if !supported {
             return Err(ClientError::Technical {
                 code: "native_delegation_refused",
@@ -477,22 +489,45 @@ pub(crate) fn execute(
         NativeDelegationRequest::Delegate { request_id, .. } => Some(request_id.clone()),
         _ => None,
     };
-    let message = match crate::t3code_mcp::private_proof() {
+    let attestation_budget = if proof.is_some() {
+        crate::t3code_mcp::ATTESTATION_MAX_BUDGET
+    } else {
+        Duration::ZERO
+    };
+    if !attestation_budget.is_zero()
+        && !matches!(&request, NativeDelegationRequest::AutoDelegateV2(_))
+    {
+        let wait = match &request {
+            NativeDelegationRequest::Wait { wait_timeout, .. } =>
+                Duration::from_secs(wait_timeout.unwrap_or(WAIT_TIMEOUT_DEFAULT_SECS)),
+            _ => Duration::ZERO,
+        };
+        connection.set_deadline(Instant::now()
+            + crate::communication::client::DAEMON_BUDGET + attestation_budget + wait);
+    }
+    let message = match proof {
         Some(proof) => WrapperToDaemon::NativeDelegationT3 { request, proof },
         None => WrapperToDaemon::NativeDelegation { request },
     };
     let response = if let Some(request_id) = recover_request_id {
-        recover_admission_reply171(&request_id, |response| {
+        let is_pending = |response: &DaemonToWrapper| {
             matches!(response, DaemonToWrapper::NativeDelegationResult { result }
                 if result["status"] == "refused" && result["code"] == "admission_pending")
-        }, |recovery_deadline| {
+        };
+        let exchange = |recovery_deadline| {
             if let Some(deadline) = recovery_deadline {
                 connection = registered_connection_until(&identity.name, &identity.instance_id, socket, deadline)?;
             }
             // Même commande, même preuve et même clé. Le maître récupère son
             // reçu durable ; cette reprise ne crée pas une nouvelle mission.
             connection.send_then_wait(&message)
-        })?
+        };
+        if attestation_budget.is_zero() {
+            recover_admission_reply171(&request_id, is_pending, exchange)?
+        } else {
+            recover_admission_with_budget171(&request_id, is_pending, exchange,
+                crate::communication::client::DAEMON_BUDGET + attestation_budget)?
+        }
     } else {
         connection.exchange(&message)?
     };
@@ -550,7 +585,7 @@ fn recover_admission_with_budget171<T>(
     {
         return first;
     }
-    // Le même budget de récupération de 10 s couvre toutes les relectures.
+    // Le même budget de récupération couvre toutes les relectures.
     // Même clé/enveloppe/preuve ; aucun nouveau choix ni lancement au rejeu.
     let deadline = Instant::now() + recovery_budget;
     loop {
@@ -1091,7 +1126,7 @@ mod tests {
                 args["wait_timeout"] = value;
             }
             assert!(
-                matches!(execute(&identity, "bridget_task_wait", &args, Path::new("/missing")), Err(ClientError::Technical { code: "native_delegation_refused", message }) if message == "wait_unsupported")
+                matches!(execute(&identity, "bridget_task_wait", &args, Path::new("/missing")), Err(ClientError::Technical { code: "daemon_unreachable", .. }))
             );
         }
     }
@@ -1418,5 +1453,283 @@ mod tests {
                 .unwrap_err(),
             "model_unavailable"
         );
+    }
+}
+
+#[cfg(test)]
+mod spec172_transport_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    fn attested_response_after_legacy_deadline(wait: bool) {
+        let socket = crate::mcp_identity::mock_socket("172-attested-deadline");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let backend = std::thread::spawn(move || {
+            if wait {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["type"],
+                    "DaemonIdentityRequest"
+                );
+                writeln!(stream, "{}", json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture","instance_id":"fixture","features":["wait_v1"]})).unwrap();
+            }
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(15)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "RegisterAuxiliary"
+            );
+            writeln!(
+                stream,
+                "{}",
+                json!({"type":"Registered","agent_id":"owner","credential":null})
+            )
+            .unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["type"], "NativeDelegationT3");
+            assert_eq!(
+                request["request"]["operation"],
+                if wait { "wait" } else { "status" }
+            );
+            // Trois échanges HTTP peuvent dépasser 10 s sans dépasser leur budget individuel.
+            std::thread::sleep(Duration::from_secs(12));
+            let result = if wait {
+                json!({"status":"refused","code":"permission_attestation_unavailable"})
+            } else {
+                json!({"task_id":"task","status":"result_available","result":"résultat".repeat(2048)})
+            };
+            let sent = writeln!(
+                stream,
+                "{}",
+                json!({"type":"NativeDelegationResult","result":result})
+            );
+            line.clear();
+            let remaining = reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                remaining, 0,
+                "aucun rejeu, changement de clé ou deuxième lancement"
+            );
+            sent.is_ok()
+        });
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let proof = bridget_transport::protocol::NativePermissionProof {
+            endpoint: "http://127.0.0.1:12345/mcp".into(),
+            authorization: bridget_transport::protocol::IdentityCredential::new(format!(
+                "Bearer {}",
+                "a".repeat(43)
+            )),
+        };
+        let result = execute_with_proof(
+            &identity,
+            if wait {
+                "bridget_task_wait"
+            } else {
+                "bridget_task_status"
+            },
+            &if wait {
+                json!({"task_ids":["task"],"wait_timeout":1})
+            } else {
+                json!({"task_id":"task"})
+            },
+            &socket,
+            Some(proof),
+        );
+        let sent = backend.join().unwrap();
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+        if wait {
+            assert!(
+                matches!(result, Err(ClientError::Technical { code:"native_delegation_refused", message }) if message=="permission_attestation_unavailable"),
+                "le refus doit rester explicite après la réattestation"
+            );
+        } else {
+            let result = result.expect("le client ne doit pas expirer avant la réattestation");
+            assert_eq!(result["task_id"], "task");
+            assert_eq!(
+                result["result"].as_str().unwrap().len(),
+                "résultat".repeat(2048).len()
+            );
+        }
+        assert!(sent, "la réponse complète doit être consommée");
+    }
+
+    #[test]
+    fn spec172_status_atteste_attend_la_reponse_complete() {
+        attested_response_after_legacy_deadline(false);
+    }
+
+    #[test]
+    fn spec172_wait_atteste_preserve_le_refus_tardif() {
+        attested_response_after_legacy_deadline(true);
+    }
+
+    #[test]
+    fn spec172_reprise_attestee_garde_la_cle_et_le_budget() {
+        let socket = crate::mcp_identity::mock_socket("172-attested-recovery");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let backend = std::thread::spawn(move || {
+            let mut first = None;
+            for index in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(15)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Value>(&line).unwrap()["type"],
+                    "RegisterAuxiliary"
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"type":"Registered","agent_id":"owner","credential":null})
+                )
+                .unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["type"], "NativeDelegationT3");
+                assert_eq!(request["request"]["request_id"], "same-key-172");
+                if index == 0 {
+                    first = Some(request);
+                } else {
+                    assert_eq!(
+                        Some(request),
+                        first,
+                        "même enveloppe, même preuve, même clé"
+                    );
+                }
+                if index == 1 {
+                    std::thread::sleep(Duration::from_secs(12));
+                }
+                let result = if index == 0 {
+                    json!({"status":"refused","code":"admission_pending"})
+                } else {
+                    json!({"task_id":"same-task","status":"starting"})
+                };
+                let _ = writeln!(
+                    stream,
+                    "{}",
+                    json!({"type":"NativeDelegationResult","result":result})
+                );
+            }
+        });
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let proof = bridget_transport::protocol::NativePermissionProof {
+            endpoint: "http://127.0.0.1:12345/mcp".into(),
+            authorization: bridget_transport::protocol::IdentityCredential::new(format!(
+                "Bearer {}",
+                "a".repeat(43)
+            )),
+        };
+        let result = execute_with_proof(
+            &identity,
+            "bridget_delegate",
+            &json!({"request_id":"same-key-172","agent_type":"codex","model":"fixture","task":"mission","cwd":"/tmp"}),
+            &socket,
+            Some(proof),
+        );
+        backend.join().unwrap();
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+        assert_eq!(
+            result.expect("la reprise doit aussi couvrir la réattestation")["task_id"],
+            "same-task"
+        );
+    }
+
+    #[test]
+    fn spec172_sonde_admission_en_panne_reste_transport() {
+        let socket = crate::mcp_identity::mock_socket("172-admission-probe");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let backend = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            writeln!(
+                stream,
+                "{}",
+                json!({"type":"Registered","agent_id":"owner","credential":null})
+            )
+            .unwrap();
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(&line).unwrap()["type"],
+                "DaemonIdentityRequest"
+            );
+            // Fermer sans annonce de capacité, avant toute demande de lancement.
+        });
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        let result = execute_with_proof(
+            &identity,
+            "bridget_auto_delegate",
+            &json!({"request_id":"not-admitted","task":"mission","cwd":"/tmp"}),
+            &socket,
+            None,
+        );
+        backend.join().unwrap();
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+        assert!(matches!(
+            result,
+            Err(ClientError::Technical {
+                code: "daemon_unreachable",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn spec172_sonde_en_panne_ne_devient_pas_unsupported() {
+        let socket = crate::mcp_identity::mock_socket("172-missing-probe");
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for (name, args) in [
+            ("bridget_task_wait", json!({"task_ids":["task"]})),
+            ("bridget_task_ack", json!({"task_ids":["task"]})),
+        ] {
+            let result = execute_with_proof(&identity, name, &args, &socket, None);
+            assert!(
+                matches!(
+                    result,
+                    Err(ClientError::Technical {
+                        code: "daemon_unreachable",
+                        ..
+                    })
+                ),
+                "une panne de transport ne prouve pas l'absence de capacité"
+            );
+        }
     }
 }

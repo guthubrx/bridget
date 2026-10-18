@@ -4,10 +4,17 @@ use crate::t3code_contract::{ServerRuntime, base_dir, read_runtime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::Read;
+use std::time::Duration;
 
 const MAX_RESPONSE: u64 = 64 * 1024;
 // Même preuve stricte ; budget réseau indépendant de la validité des droits.
 const ATTESTATION_HTTP_TIMEOUT_SECS: u64 = 10;
+const ATTESTATION_CLEANUP_TIMEOUT_SECS: u64 = 3;
+// initialize, initialized, bridget_session, puis fermeture du transport.
+// Le client natif doit couvrir toute cette vérification, pas un seul POST.
+pub(crate) const ATTESTATION_MAX_BUDGET: Duration = Duration::from_secs(
+    3 * ATTESTATION_HTTP_TIMEOUT_SECS + ATTESTATION_CLEANUP_TIMEOUT_SECS,
+);
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -124,7 +131,7 @@ fn attest_http(url: &str, authorization: &str) -> Result<SessionProof, IdentityE
             .with_header("MCP-Protocol-Version", "2025-06-18")
             .with_header("Mcp-Session-Id", session_id)
             .with_max_redirects(0)
-            .with_timeout(3)
+            .with_timeout(ATTESTATION_CLEANUP_TIMEOUT_SECS)
             .send_lazy()
             .map_err(|_| IdentityError::T3SessionUnavailable)
             .and_then(|response| {

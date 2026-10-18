@@ -152,3 +152,57 @@ Correction : preuve de source en lecture sur le worker de la commande parent
 attestée, avant admission et après décision. Capacité négociée, aucun repli
 vers un ancien worker. Mapping source=destination dérivé du projet déjà
 provisionné sur cette machine ; protections, SHA, révision et droits conservés.
+
+
+## Retour de résultat et délai de l’hôte (18 octobre)
+Une vraie tâche de codage Cartae a produit un test, dix tests Python PASS et
+le marqueur BRIDGET172_CODAGE_CARTAE_OK dans son worktree isolé e125950f.
+Task e125950f-9ceb-4dc3-92e6-2841e0566f05. Deux lectures MCP ont d’abord
+expiré (« budget JSONL dépassé »). Le résultat complet est ensuite arrivé
+par task_status ; ACK puis rejeu strict : même Task, même résultat, aucun doublon.
+Ce succès différé n’a pas été présenté comme une correction de la panne.
+
+Le relevé de piles du daemon montre handle_attested → reattest → attest_http
+attendant T3. Le client accordait 10 s pour l’opération, contre trois échanges
+HTTP de 10 s et une fermeture de 3 s autorisés au daemon. La récupération
+d’admission conservait aussi un budget de 10 s. Le client réserve maintenant
+ces 33 s, plus son budget de transport, avant l’éventuelle attente métier.
+Aucun droit n’est mis en cache ou élargi ; les refus tardifs restent des refus.
+Le JSONL reste borné à 16 Mio ; la réponse test dépasse le tampon de 8 Kio.
+
+Autre défaut reproduit : daemon_supports_wait convertissait toute panne de
+transport en false, donc en wait_unsupported. Les outils d’attente, ACK et
+la sonde d’admission conservent maintenant les erreurs techniques. Un rapport
+de capacités valide reste nécessaire pour annoncer l’absence d’une capacité.
+Cinq nouveaux cas RED sur l’ancien comportement, puis neuf cas172 PASS,
+y compris la variante d’admission ; 19 régressions du client PASS.
+
+Référence T3 examinée : packages/effect-codex-app-server/src/protocol.ts,
+request/Deferred et lecture JSONL ; réponse corrélée et erreur de transport
+séparées. Le module upstream ne porte pas l’attestation HTTP Bridget : son
+budget supplémentaire est une adaptation nécessaire. Le fork actif T3,
+OrchestratorMcpService.sessionIdentity, vérifie le fait et le run avant/après I/O.
+Ces contrôles sont conservés.
+
+Les essais des vrais parents ont révélé une autre coupure, côté hôte Codex :
+Revue r6 a expiré deux fois à 30 s, sans reçu. Aucun reçu Revue r6 en base au
+contrôle suivant. Opus2D r2 a été admis sous Task b00ae037-ed93-4106-9e4b-68fbee5af3d2,
+puis a terminé failed avec remote_start_failed:permission_attestation_unavailable.
+Ces essais ne sont pas comptés comme réussis. Les deux profils Codex du Mac
+configuraient réellement le serveur Bridget à 30 s.
+
+Référence T3 examinée pour ce cas : provider/Drivers/CodexMcp.ts et
+bridget/BridgetMcp.ts. Le montage officiel reprenait ce délai court tel quel.
+L’adaptateur fournit désormais un minimum de 3700 s, comme le wrapper Codex
+natif déjà présent dans Bridget ; un délai supérieur reste conservé. Les
+missions gardent leurs propres échéances. Les serveurs étrangers, opt-out,
+identités et configurations lues restent inchangés. Deux cas RED (absent/30 s),
+puis les 42 tests du montage PASS ; lint des deux fichiers : zéro erreur/warning.
+Les deux profils locaux utilisent le même fichier de configuration (le profil
+cx-pro est lié au fichier Codex). Ce fichier commun a reçu ce seul changement,
+avec sauvegarde privée et comparaison de tous les autres champs.
+
+Régressions : 19 tests du client et 19 de délégation PASS. Les attentes MCP
+ont donné16 PASS/1 ancien oracle : il attendait wait_unsupported sur une socket
+absente. Cet oracle est aligné sur daemon_unreachable ; les cas anciens avec
+rapport de capacités valide restent distincts. HTTP/attestation : huit PASS.
