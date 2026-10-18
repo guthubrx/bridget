@@ -556,3 +556,30 @@ admission garde désormais TaskID et erreur ; une modification d’enveloppe res
 Aucun résultat réel sur ce nouveau binaire n’est encore revendiqué.
 Paquets à préparer avant activation. BUS453c75be-503b-4934-9311-e382733498aa
 et les processus T3/Bridget sont préservés. Aucun redémarrage n’est programmé.
+
+
+Les deux paquets sont désormais construits depuis la source
+72a8e8f8823c5f23b463a45693bb9b27079e41f3, build172-72a8e8f8, sans activation.
+Mac : compilation76,28s, signature adhoc et vérification stricte conformes.
+Binaire /Users/moi/.cache/bridget-delivery172/store172/bridget,
+SHA256 2d9a543ade02f12e669d6a94e45ccc2cae8c843067ff00294712ef5f82d04485.
+Cartae : compilation99,96s,
+binaire /home/moi/.cache/bridget-delivery172/store172/bridget,
+SHA256 2d2df02dacb28e72cf25273f5e7d558ab2ed25e0c5add5029588b28b459b6a92.
+Le paquet intègre aussi le complément quota bb83316c préparé précédemment.
+
+Reçu courant : /Users/moi/.cache/bridget-delivery172/store172/CURRENT.json.
+Pointeur de préparation : /Users/moi/.cache/bridget-delivery172/prepared-current.json.
+Le paquet quota-delay172 est signalé comme remplacé par cette préparation.
+
+Le dernier contrôle en lecture seule trouve encore BUS453c75be-503b-4934-9311-e382733498aa
+working, cleanup_done=false. La garde interdit donc l’activation.
+Maître50706, worker13183 avec NRestarts0, pont898 et T3637/1068 inchangés.
+Le binaire actif Mac garde le SHA d585bb22d60265b59133adcb451fa12ff5a9c20e687fd80744212d8537a38dd4.
+Le binaire actif Cartae garde le SHA bc5daf985c5472e825291bb568596238463c544a2135fb367ac3168af1e2c97c.
+La source active reste1e5ddd076b3d610c864e5d37dbe66d28dc780edc.
+L’objectif reste paused et aucun réveil ni redémarrage automatique n’est programmé.
+
+T037/T038/T039 sont closes pour le code, ses tests et ses paquets.
+T036 reste ouverte pour l’activation puis le parcours réel. Aucun succès métier
+sur cette nouvelle source n’est déduit de ses tests ou de sa compilation.

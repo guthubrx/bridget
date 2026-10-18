@@ -47,4 +47,4 @@
 
 - [x] T037 Corriger la réserve des reçus distants terminés sans supprimer les résultats ni affaiblir le plafond des résultats actifs.
 - [x] T038 Rendre le refus de capacité distinct d’une panne de stockage ; conserver l’identifiant après admission durable même si le démarrage échoue.
-- [ ] T039 Vérifier les régressions du store et des admissions, préparer les paquets sans interrompre BUS.
+- [x] T039 Vérifier les régressions du store et des admissions, préparer les paquets sans interrompre BUS.
