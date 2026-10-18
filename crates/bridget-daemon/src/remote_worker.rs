@@ -7,6 +7,7 @@ use crate::managed_process::ManagedMarker;
 use bridget_transport::fsutil::{create_private_dir, write_private_file_atomic};
 use bridget_transport::protocol::{
     MAX_WORKER_RESULT_ENVELOPE_BYTES, MAX_WORKER_STORE_BYTES, MAX_WORKER_STORE_ENTRIES,
+    WORKER_RELEASE_LEASE_SECS,
     RemotePlacement, RemoteResultEnvelope, WORKER_RECEIPT_RETENTION_SECS, WorkerCommandIdentity,
     WorkerCommandPhase, WorkerIdentity, WorkerRefusal, WorkerReleasePermit,
     WorkerResultDisposition, WorkerResultIdentity, WorkerResultSlot, WorkerSlotClosureProof,
@@ -3230,7 +3231,7 @@ impl WorkerRuntime {
                 mission_id: start.mission_id.clone(),
                 child: marked,
                 ready_at,
-                expires: Instant::now() + Duration::from_secs(5),
+                expires: Instant::now() + Duration::from_secs(WORKER_RELEASE_LEASE_SECS as u64),
             },
         );
         Ok(WorkerResponseOperation::ReadyToRelease { ready_at })
@@ -3255,7 +3256,7 @@ impl WorkerRuntime {
             .ok_or(WorkerRefusal::UnknownExecution)?;
         let decision = (|| {
             if Instant::now() >= held.expires
-                || permit.expires_at > held.ready_at.saturating_add(5)
+                || permit.expires_at > held.ready_at.saturating_add(WORKER_RELEASE_LEASE_SECS)
                 || permit.issued_at < held.ready_at
                 || permit.permission_revision != held.prepared.request.parent.revision
             {
@@ -3892,7 +3893,7 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<(bool, bool), String> {
+) -> Result<(bool, bool, bool), String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -3912,6 +3913,7 @@ fn probe_worker_capability(
                 features
                     .iter()
                     .any(|feature| feature == "worker_candidate_probe_v2"),
+                features.iter().any(|feature| feature == "worker_release_lease_v2"),
             ))
         }
         _ => Err("worker_capability_required".into()),
@@ -3943,7 +3945,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let (master_supports_candidate_probe, master_supports_probe_v2) =
+        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease) =
             probe_worker_capability(&writer, &mut reader)?;
         let worker_hello = WorkerHello {
             version: REMOTE_WORKER_VERSION,
@@ -3952,7 +3954,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             build: crate::build_info::BUILD_ID.to_owned(),
             capability: ClientCapability::RemoteWorkerV1,
         };
-        let hello = if master_supports_candidate_probe || master_supports_probe_v2 {
+        let hello = if master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease {
             WrapperToDaemon::WorkerHelloWithCapabilities {
                 hello: WorkerHelloWithCapabilities {
                     hello: worker_hello,
@@ -3962,6 +3964,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             WorkerCapability::CandidateProbeV1,
                         ),
                         (master_supports_probe_v2, WorkerCapability::CandidateProbeV2),
+                        (master_supports_release_lease, WorkerCapability::ReleaseLeaseV2),
                     ]
                     .into_iter()
                     .filter_map(|(supported, capability)| supported.then_some(capability))
@@ -3996,13 +3999,14 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 Ok(DaemonToWrapper::WorkerAccepted { accepted })
                     if !master_supports_candidate_probe
                         && !master_supports_probe_v2
+                        && !master_supports_release_lease
                         && accepted.validate().is_ok()
                         && accepted.identity == runtime.identity =>
                 {
                     (accepted.connection_epoch, false, false)
                 }
                 Ok(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
-                    if (master_supports_candidate_probe || master_supports_probe_v2)
+                    if (master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease)
                         && (!accepted
                             .capabilities
                             .contains(&WorkerCapability::CandidateProbeV1)
@@ -4013,11 +4017,13 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             .capabilities
                             .contains(&WorkerCapability::CandidateProbeV2)
                             || master_supports_probe_v2)
+                        && (!accepted.capabilities.contains(&WorkerCapability::ReleaseLeaseV2) || master_supports_release_lease)
                         && accepted.capabilities.iter().all(|capability| {
                             matches!(
                                 capability,
                                 WorkerCapability::CandidateProbeV1
                                     | WorkerCapability::CandidateProbeV2
+                                    | WorkerCapability::ReleaseLeaseV2
                             )
                         }) =>
                 {
@@ -4659,6 +4665,31 @@ mod tests {
             WorkerStore::open(&fixture.root(), worker()),
             Err(WorkerStoreError::Quarantined)
         ));
+    }
+
+    #[test]
+    fn worker172_release_apres_attestation_lente_garde_revision_et_expiration() {
+        for (now, mapping_revision, accepted) in [(112, 1, true), (162, 1, false), (112, 2, false)] {
+            let fixture = Fixture::new();
+            let store = fixture.open();
+            reserve(&store);
+            store.mark_command(&command(), &ManagedMarker {
+                pgid:42, birth:7, instance_id:command().instance_id,
+                command_id:command().command_id, generation:command().generation,
+            }, 101).unwrap();
+            let permit = WorkerReleasePermit {
+                permit_id:"slow-proof172".into(), command_digest:"d".repeat(64),
+                permission_revision:1, mapping_revision, provisioning_revision:1,
+                issued_at:102, expires_at:102 + WORKER_RELEASE_LEASE_SECS,
+            };
+            let result = store.authorize_release(&command(), &permit, "epoch172", now);
+            assert_eq!(result.is_ok(), accepted, "{now}/{mapping_revision}: {result:?}");
+            assert_eq!(store.command(&command()).unwrap().phase,
+                if accepted { WorkerCommandPhase::ReleaseAuthorized } else { WorkerCommandPhase::Marked });
+            if accepted {
+                assert!(store.authorize_release(&command(), &permit, "other-epoch", now).is_err());
+            }
+        }
     }
 
     #[test]

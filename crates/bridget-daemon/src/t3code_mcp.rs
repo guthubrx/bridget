@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use std::io::Read;
 
 const MAX_RESPONSE: u64 = 64 * 1024;
+// Même preuve stricte ; budget réseau indépendant de la validité des droits.
+const ATTESTATION_HTTP_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -154,13 +156,13 @@ fn post(
         .with_header("Content-Type", "application/json")
         .with_header("MCP-Protocol-Version", "2025-06-18")
         .with_max_redirects(0)
-        .with_timeout(3)
+        .with_timeout(ATTESTATION_HTTP_TIMEOUT_SECS)
         .with_body(body.to_string());
     if let Some(session_id) = session_id.as_ref() {
         request = request.with_header("Mcp-Session-Id", session_id);
     }
     let response = request.send_lazy().map_err(|_| IdentityError::T3SessionUnavailableAt(
-        "attestation_transport_unavailable : transport T3 indisponible ou délai HTTP de 3 s dépassé"))?;
+        "attestation_transport_unavailable : transport T3 indisponible ou délai HTTP de 10 s dépassé"))?;
     if !(200..300).contains(&response.status_code) {
         return Err(IdentityError::T3SessionUnavailableAt(match response.status_code {
             401 | 403 => "attestation_http_unauthorized : T3 refuse l’authentification de cette session",
@@ -381,6 +383,39 @@ mod tests {
             json!({"id":2})
         );
         assert!(decode_response(b"data: {}\ndata: {}\n").is_err());
+    }
+
+    #[test]
+    fn spec172_http_attestation_supporte_reponse_apres_trois_secondes() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/mcp", server.local_addr().unwrap());
+        let peer = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+                if let Some((key, value)) = line.split_once(':') {
+                    if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>().unwrap(); }
+                }
+            }
+            reader.read_exact(&mut vec![0; length]).unwrap();
+            std::thread::sleep(Duration::from_millis(3500));
+            let body = r#"{"jsonrpc":"2.0","id":2,"result":{}}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+        });
+        let start = Instant::now();
+        let response = post(&url, &format!("Bearer {}", "a".repeat(43)), &mut None,
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/call"}));
+        peer.join().unwrap();
+        assert_eq!(response.unwrap()["id"], 2);
+        assert!(start.elapsed() >= Duration::from_millis(3500));
     }
 
     #[test]

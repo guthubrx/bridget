@@ -40,3 +40,11 @@ projet. La sonde authentifiée habituelle et l'admission restent obligatoires.
 - Recette réelle Cartae, statut terminal et résultat dans le fil parent.
 La compilation du correctif partiel est conservée hors activation. Aucune
 nouvelle livraison avant les contrôles du parcours complet.
+
+
+## Ajustement issu des recettes réelles
+La préparation automatique et le premier lancement Revue ont abouti.
+Les recettes suivantes ont montré les délais HTTP et le bootstrap expirant
+avant la réattestation. Corriger ces délais avec négociation de capacité ;
+activer maître et worker, puis reprendre les lectures compatibles discovery.
+T3 reste inchangé. Les droits sont relus juste avant libération.

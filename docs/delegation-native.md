@@ -1312,3 +1312,13 @@ nomment la préparation ; ils ne deviennent pas une panne de modèle générique
 Un rejeu reprend les mêmes chemins. Les fichiers distants existants ne sont
 jamais écrasés par le transfert ; le worker contrôle l'actualisation du checkout.
 Comme un worktree T3, le code transféré est celui du commit demandé.
+
+
+### Délai de préparation distante (172)
+L'admission automatique V2 dispose d'un budget client de 600 secondes pour la
+préparation Git et SSH. Les autres lectures conservent leur budget court.
+Le worker annonce ReleaseLeaseV2 seulement à un maître compatible. Après Ready,
+la libération reste bornée à 60 secondes avec cette capacité, à 5 secondes pour
+un worker ancien. Chaque revalidation des droits demeure obligatoire.
+L'adaptateur T3 tolère 10 secondes par requête HTTP d'attestation. Cela ne crée
+aucune dépendance T3 pour les parents natifs Bridget.

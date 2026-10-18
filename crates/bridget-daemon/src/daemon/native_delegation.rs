@@ -4548,15 +4548,25 @@ fn delegate_remote_with_routing(
         task.remote_prepared = true;
         st.delegation_store.save(&task)?;
     }
-    start_remote_task(
-        state,
-        &task_id,
-        &prepared,
-        &parent,
-        conn,
-        thread,
-        permission_proof,
-    )?;
+    if let Err(code) = start_remote_task(
+        state, &task_id, &prepared, &parent, conn, thread, permission_proof,
+    ) {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(mut task) = st.delegation_store.get(&task_id)? {
+            if task.state == "starting" && task.mission_issued_at.is_none() {
+                let reason = match code.as_str() {
+                    "permission_attestation_unavailable" | "permission_changed" => Some(code.as_str()),
+                    "remote_release:ReleaseExpired" | "remote_release:UnknownExecution" => Some(code.as_str()),
+                    _ => None,
+                };
+                if let Some(reason) = reason {
+                    task.error = Some(format!("remote_start_failed:{reason}"));
+                    st.delegation_store.save(&task)?;
+                }
+            }
+        }
+        return Err(code);
+    }
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
     current_task_view(
         &st,
@@ -5115,7 +5125,10 @@ fn start_remote_task(
             mapping_revision: mapping.mapping_revision,
             provisioning_revision: worker.provisioning_revision,
             issued_at: ready_at,
-            expires_at: ready_at + WORKER_RELEASE_TTL_SECS,
+            expires_at: ready_at + if st.remote_workers.get(&worker.machine_id)
+                .is_some_and(|peer| peer.capabilities.contains(&WorkerCapability::ReleaseLeaseV2)) {
+                    WORKER_RELEASE_LEASE_SECS
+                } else { WORKER_RELEASE_TTL_SECS },
         }
     };
     let response = remote_worker_roundtrip(

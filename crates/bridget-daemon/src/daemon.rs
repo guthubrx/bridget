@@ -18397,14 +18397,14 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 2
+                && capabilities.len() <= 3
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2
                     )
                 })
-                && !(capabilities.len() == 2 && capabilities[0] == capabilities[1]))
+                && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
                 .then(|| (hello.hello.clone(), capabilities))
         }
         _ => None,
@@ -23386,6 +23386,7 @@ fn handle_wrapper_message_with_peer(
                     "auto_delegate_v1".to_string(),
                     "auto_delegate_v2".to_string(),
                     "worker_candidate_probe_v2".to_string(),
+                    "worker_release_lease_v2".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })
@@ -41874,6 +41875,31 @@ mod presence_tests {
                 &shared
             ),
             Some(DaemonToWrapper::WorkerAccepted { .. })
+        ));
+        assert!(shared.lock().unwrap().remote_workers["cartae"].capabilities.is_empty());
+        shared.lock().unwrap().peer_uids.insert("worker-lease".into(), unsafe { libc::geteuid() });
+        let capabilities = vec![
+            WorkerCapability::CandidateProbeV1,
+            WorkerCapability::CandidateProbeV2,
+            WorkerCapability::ReleaseLeaseV2,
+        ];
+        assert!(matches!(
+            handle_worker_message(&shared, "worker-lease",
+                WrapperToDaemon::WorkerHelloWithCapabilities {
+                    hello: WorkerHelloWithCapabilities { hello: hello.clone(), capabilities: capabilities.clone() }
+                }),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
+                if accepted.capabilities == capabilities
+        ));
+        assert!(matches!(
+            handle_worker_message(&shared, "worker-lease",
+                WrapperToDaemon::WorkerHelloWithCapabilities {
+                    hello: WorkerHelloWithCapabilities {
+                        hello: hello.clone(),
+                        capabilities: vec![WorkerCapability::ReleaseLeaseV2, WorkerCapability::ReleaseLeaseV2]
+                    }
+                }),
+            Some(DaemonToWrapper::WorkerRejected { .. })
         ));
         assert!(
             !matches!(

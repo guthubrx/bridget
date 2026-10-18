@@ -467,6 +467,11 @@ pub(crate) fn execute(
             });
         }
     }
+    // T3 prépare avant de lancer ; le transfert d'un nouveau dépôt n'est pas
+    // une simple lecture du daemon. Garder le budget court pour les autres outils.
+    if matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)) {
+        connection.set_deadline(Instant::now() + Duration::from_secs(600));
+    }
     let recover_request_id = match &request {
         NativeDelegationRequest::AutoDelegateV2(auto) => Some(auto.request_id.clone()),
         NativeDelegationRequest::Delegate { request_id, .. } => Some(request_id.clone()),

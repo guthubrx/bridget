@@ -2534,6 +2534,8 @@ pub const MAX_WORKER_STORE_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_WORKER_STORE_ENTRIES: usize = 4096;
 pub const WORKER_PREPARE_TTL_SECS: i64 = 30;
 pub const WORKER_RELEASE_TTL_SECS: i64 = 5;
+/// Fenêtre négociée172 : revalidation native et réservation après Ready.
+pub const WORKER_RELEASE_LEASE_SECS: i64 = 60;
 pub const WORKER_HEARTBEAT_SECS: u64 = 10;
 pub const WORKER_STALE_SECS: i64 = 30;
 pub const WORKER_RECEIPT_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
@@ -2631,6 +2633,7 @@ pub struct WorkerAccepted {
 pub enum WorkerCapability {
     CandidateProbeV1,
     CandidateProbeV2,
+    ReleaseLeaseV2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3539,7 +3542,7 @@ impl WorkerReleasePermit {
                 && worker_revision(self.provisioning_revision)
                 && self.issued_at >= 0
                 && self.expires_at > self.issued_at
-                && self.expires_at.saturating_sub(self.issued_at) <= WORKER_RELEASE_TTL_SECS,
+                && self.expires_at.saturating_sub(self.issued_at) <= WORKER_RELEASE_LEASE_SECS,
         )
     }
 }
@@ -6968,7 +6971,9 @@ mod tests {
             expires_at: 105,
         };
         assert_eq!(permit.validate(), Ok(()));
-        permit.expires_at = 106;
+        permit.expires_at = 100 + WORKER_RELEASE_LEASE_SECS;
+        assert_eq!(permit.validate(), Ok(()));
+        permit.expires_at += 1;
         assert_eq!(permit.validate(), Err(WorkerRefusal::InvalidEnvelope));
         permit.issued_at = i64::MAX;
         permit.expires_at = i64::MIN;
