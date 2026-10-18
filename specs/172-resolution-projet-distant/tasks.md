@@ -26,3 +26,6 @@
 - [x] T020 Borner la lecture d’attestation T3 aux exécutions, sans charger l’historique ; contrôles avant/après maintenus.
 - [x] T021 Corriger le délai des sondes worker, leur réponse tardive et leur libération à déconnexion.
 - [x] T022 Libérer explicitement les verrous worker à la fin du propriétaire, même avec un descripteur partagé.
+
+- [x] T023 Corriger la continuation distante après renouvellement du tour parent, sans changement de droits.
+- [ ] T024 Activer le correctif du maître sans interrompre BUS et vérifier la même continuation VOITURES.

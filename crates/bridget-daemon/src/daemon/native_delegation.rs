@@ -4045,11 +4045,10 @@ fn handle_with_fact(
                 return Err("task_unavailable".into());
             }
             let current = parent_fact(&st, &owner, &instance, Some(request_id), fact.as_ref())?;
-            if task
-                .permission_snapshot
-                .as_ref()
-                .map(|snapshot| &snapshot.parent)
-                != current.as_ref()
+            if !continuation_parent_matches(
+                task.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent),
+                current.as_ref(),
+            )
             {
                 return Err("permission_not_inherited".into());
             }
@@ -4135,6 +4134,26 @@ fn routing_catalogue_view(st: &DaemonState, conn: &str) -> Result<Value, String>
     }
     serde_json::to_value(st.registry.routing_catalogue(unix_timestamp())?)
         .map_err(|_| "routing_catalogue_unavailable".into())
+}
+
+/// O(B), B octets du fait : le même propriétaire est contrôlé par can_own_task.
+/// T3 réatteste chaque tour. Son run_id et sa révision ne changent pas les droits.
+/// L'identité fournisseur, la session, la source et toute la politique restent figées.
+fn continuation_parent_matches(
+    frozen: Option<&bridget_transport::protocol::ProviderPermissions>,
+    current: Option<&bridget_transport::protocol::ProviderPermissions>,
+) -> bool {
+    match (frozen, current) {
+        (Some(frozen), Some(current))
+            if frozen.source == "provider_turn" && current.source == "provider_turn" =>
+        {
+            let mut comparable = frozen.clone();
+            comparable.run_id.clone_from(&current.run_id);
+            comparable.revision = current.revision;
+            comparable == *current
+        }
+        _ => frozen == current,
+    }
 }
 
 fn recheck_attested_thread(
@@ -6997,11 +7016,10 @@ fn handle_locked_with_remote_proof(
                     &saved,
                     remote_proof.ok_or("remote_permission_proof_required")?,
                 )?;
-                if saved
-                    .permission_snapshot
-                    .as_ref()
-                    .map(|snapshot| &snapshot.parent)
-                    != fact.as_ref()
+                if !continuation_parent_matches(
+                    saved.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent),
+                    fact.as_ref(),
+                )
                 {
                     return Err("permission_not_inherited".into());
                 }
@@ -22637,6 +22655,80 @@ for frame in frames: print(json.dumps(frame),flush=True)
             workspace: None,
         }
     }
+    fn continuation172_parent() -> bridget_transport::protocol::ProviderPermissions {
+        serde_json::from_value(json!({
+            "version":1,"source":"provider_turn","run_id":"run:850",
+            "provider_session_id":"session-172","provider_instance_id":"codex",
+            "revision":17,"driver":"codex_app_server","cwd":"/source/project",
+            "runtime_mode":"full-access","interaction_mode":"default",
+            "provider_policy":{"kind":"codex","approval_policy":"never",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}
+        })).unwrap()
+    }
+
+    #[test]
+    fn spec172_continuation_parent_turn_renewal_preserves_permission_ceiling() {
+        let frozen = continuation172_parent();
+        let mut current = frozen.clone();
+        current.run_id = "run:851".into();
+        current.revision = 18;
+        assert!(continuation_parent_matches(Some(&frozen), Some(&current)),
+            "un nouveau tour attesté avec les mêmes droits doit continuer la tâche");
+        for (field,value) in [
+            ("version",json!(2)), ("source",json!("native_wrapper")),
+            ("provider_session_id",json!("foreign-session")),
+            ("provider_instance_id",json!("foreign-provider")),
+            ("driver",json!("claude_stream_json")), ("cwd",json!("/other/project")),
+            ("runtime_mode",json!("approval-required")), ("interaction_mode",json!("plan")),
+            ("provider_policy",json!({"kind":"codex","approval_policy":"on-request",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})),
+        ] {
+            let mut changed = serde_json::to_value(&current).unwrap();
+            changed[field] = value;
+            let changed = serde_json::from_value(changed).unwrap();
+            assert!(!continuation_parent_matches(Some(&frozen),Some(&changed)),
+                "la modification de {field} ne doit pas hériter du droit figé");
+        }
+        assert!(!continuation_parent_matches(Some(&frozen),None));
+        let mut native = frozen.clone();
+        native.source = "native_wrapper".into();
+        let mut other_native = native.clone();
+        other_native.run_id = "other-native-mission".into();
+        other_native.revision += 1;
+        assert!(!continuation_parent_matches(Some(&native),Some(&other_native)),
+            "le renouvellement T3 ne s’étend pas à une autre mission native");
+    }
+
+    #[test]
+    fn spec172_continuation_renewed_turn_reaches_worker_proof_without_mutating_task() {
+        let (mut st,config,mut task,_result) = remote162_capture_fixture();
+        let mut parent = continuation172_parent();
+        parent.cwd.clone_from(&task.cwd);
+        task.permission_snapshot = Some(crate::native_permissions::snapshot(
+            &task.owner,&task.owner_instance,parent.clone(),json!({"kind":"claude"}),
+            Path::new(&task.cwd),
+        ));
+        st.delegation_store.save(&task).unwrap();
+        let before = serde_json::to_value(&task).unwrap();
+        let mut current = parent;
+        current.run_id = "run:851".into();
+        current.revision += 1;
+        let shared = Arc::new(Mutex::new(st));
+        let response = handle_with_fact("conn-1",NativeDelegationRequest::Continue {
+            task_id:task.task_id.clone(),request_id:"continuation172-r2".into(),
+            task:"Achever la correction, même enfant.".into(),brief:None,
+        },Some(current),None,None,&shared,None);
+        let DaemonToWrapper::NativeDelegationResult { result } = response else {
+            panic!("résultat de continuation requis");
+        };
+        assert!(result["code"].as_str().is_some_and(|code|code.starts_with("remote_permissions:")),
+            "les droits renouvelés passent le premier contrôle, puis exigent le worker : {result}");
+        let state = shared.lock().unwrap();
+        assert_eq!(serde_json::to_value(state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before,
+            "le worker absent interdit toute nouvelle ronde ou mutation de tâche");
+        drop(state);drop(shared);cleanup(&config);
+    }
+
     fn remote162_capture_fixture() -> (
         DaemonState,
         DaemonConfig,

@@ -304,3 +304,32 @@ ancien encore chargé et prouvent Bridget corrigé ; le nouveau T3f3ddfca2
 reste installé/signé sur disque, non activé. La poursuite automatique de goal
 avec ce nouveau T3 reste à recetter après l’accord de redémarrage demandé.
 Les anciennes limites et échecs restent historiques, pas effacés ou comptés PASS.
+
+## Continuation distante après renouvellement du tour parent
+
+Incident réel VOITURES : la tâche54569150 garde une attestation du tour850,
+révision17. Les deux contrôles de Continue comparaient le fait entier avec celui
+du tour courant. Un renouvellement valide pouvait donc produire
+permission_not_inherited sans changement de droits.
+Référence T3 : le dépôt amont /Users/moi/11.Repositories/t3code ne possède pas
+ce port de continuation distante. Dans le fork actif, OrchestratorMcpService.sendToThread
+relit le parent vivant puis contrôle les plafonds runtime/interaction, sans
+exiger le numéro de son ancien tour. Bridget conserve une règle plus stricte :
+seuls run_id et revision sont neutralisés pour une source provider_turn fraîche.
+Session, fournisseur, pilote, cwd, modes et politique restent strictement égaux.
+Les faits native_wrapper restent entièrement égaux. Les contrôles du même
+propriétaire, de révocation, de sources et du worker restent inchangés.
+Le helper partagé évite une divergence entre le contrôle avant RPC et le puits
+de création de ronde. Coût O(B), copie bornée du fait ; aucun stockage ni schéma neuf.
+Deux tests ont reproduit le refus avant correction. Après correction, deux PASS,
+dont le franchissement du contrôle et le refus sans mutation en l’absence du worker.
+Neuf mutations de droits/identité et le changement de mission native restent refusés.
+Le test de RPC a d’abord utilisé un cwd fictif ; la garde source l’a refusé.
+La fixture a été corrigée vers son vrai dossier, sans changer la garde.
+Régressions de rondes :12PASS/2FAIL env_unfit lors de l’admission initiale.
+Les deux échecs sont reproduits séparément sur la source de base6e250e63.
+Ils ne concernent pas la continuation modifiée ; aucun GREEN global.
+Régressions distantes162 :46PASS, y compris reprise et recontrôle des sources.
+L’activation ne concerne que le maître Mac. Worker et wrapper disposent de leur
+reconnexion existante ; les processus des deux missions seront relevés avant/après.
+Aucune relance T3 ou worker demandée. La continuation réelle garde sa Task et sa clé.
