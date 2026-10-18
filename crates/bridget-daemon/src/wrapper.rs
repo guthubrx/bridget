@@ -2042,8 +2042,10 @@ pub(crate) fn connect_and_register_at(
     set_cloexec(&stream);
     let read_stream = stream.try_clone().map_err(|e| e.to_string())?;
     set_cloexec(&read_stream);
+    // L’enregistrement traverse aussi SSH. Son budget ne doit pas être celui
+    // de la lecture de session, qui reste courte pour observer un arrêt.
     read_stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .map_err(|e| e.to_string())?;
     let write_stream = stream.try_clone().map_err(|e| e.to_string())?;
     set_cloexec(&write_stream);
@@ -2075,12 +2077,15 @@ pub(crate) fn connect_and_register_at(
     writer.flush().map_err(|e| e.to_string())?;
 
     let mut line = String::new();
-    reader.read_line(&mut line).map_err(|e| e.to_string())?;
+    reader.read_line(&mut line)
+        .map_err(|e| format!("réponse d’enregistrement indisponible après attente bornée à 10 s: {e}"))?;
     match decode(line.trim()).map_err(|_| "réponse d'enregistrement invalide".to_string())? {
         DaemonToWrapper::Registered {
             agent_id,
             credential,
         } => {
+            reader.get_ref().set_read_timeout(Some(Duration::from_secs(1)))
+                .map_err(|e| e.to_string())?;
             if let Some(credential) = credential {
                 let root = socket.parent().ok_or("socket sans répertoire privé")?;
                 crate::mcp_identity::save_credential(root, &agent_id, instance_id, credential)?;
@@ -10169,6 +10174,8 @@ mod reconnect_tests {
                 WrapperToDaemon::Register { agent_id, domain, .. }
                     if agent_id == identity && domain == expected_derived_for_server
             ));
+            // SPEC172 : une réponse distante peut dépasser la lecture de session à 1 s.
+            std::thread::sleep(Duration::from_millis(1500));
             writeln!(
                 primary,
                 "{}",
@@ -10238,6 +10245,7 @@ mod reconnect_tests {
         )
         .unwrap();
         assert_eq!(registered_name, identity);
+        assert_eq!(reader.get_ref().read_timeout().unwrap(), Some(Duration::from_secs(1)));
         let mut deferred = String::new();
         reader.read_line(&mut deferred).unwrap();
         assert!(matches!(

@@ -65,3 +65,25 @@ Négociation ancienne/nouvelle capacité et refus des doublons : 1 PASS.
 Le premier ajout au test réutilisait une connexion déjà authentifiée ;
 la garde StaleConnection l'a refusée. Le scénario utilise désormais une
 nouvelle connexion, comme lors d'un remplacement réel du worker.
+
+
+## Enregistrement distant après libération
+Bridget r3 réussit : 68f69ce3-62bb-4b17-8bbc-853399a6346f, SHA a53b05c2,
+version 0.4.1, marqueur reçu ; rejeu strict même tâche et résultat, ACK effectué.
+Le permis durable confirme 60 s, native_ready=true et nettoyage terminé.
+Revue r2 ancien est clôturé au redémarrage (07:59:07), avant son rejeu.
+Revue r3 : 9cbc539d-264f-4ac6-a753-bfb91553003e, permis 60 s effectivement
+accordé, puis negotiation_failed. Le stderr privé contient exactement
+Resource temporarily unavailable (os error 11). Le maître enregistre l'enfant
+à 08:01:37, au moment où le wrapper quitte ; aucun manque de mémoire ou de PID.
+La lecture de Registered dans connect_and_register_at n'accorde qu'une seconde.
+Reproduction : réponse Registered retardée de 1,5 s -> même os error 11 à 1,01 s.
+Correction : 10 s pour ce premier accusé, retour à 1 s après Registered.
+Le test vérifie aussi le maintien de la réponse suivante dans le lecteur.
+T3 n'a pas ce Register à travers notre tunnel SSH. Référence examinée :
+ClaudeMcp.ts préparation bornée à 6 s, distincte de la boucle de session.
+L'adaptation Bridget garde une attente initiale bornée sans modifier les droits.
+Ce changement de wrapper est utilisé sur Cartae ; seule sa version sera
+réactivée pour la recette, le maître a53b05c2 reste suffisant et inchangé.
+
+Validation : 69 tests de reconnexion PASS, 1 ignoré ; reproduction RED puis GREEN.
