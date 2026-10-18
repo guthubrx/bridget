@@ -1,6 +1,6 @@
 # 172 — Préparation et résolution du projet distant
 
-Statut : In Progress. Correction demandée et élargie le 18 octobre 2026.
+Statut : Implemented. Recettes Cartae validées ; limite du test parent natif consignée. Correction demandée et élargie le 18 octobre 2026.
 
 ## Défaut observé
 Le parent « trajets bus » indique Cartae et son dossier, sans project_id.

@@ -1,5 +1,5 @@
 # Plan 172 — parcours distant complet
-Statut : en cours. Périmètre élargi explicitement par l'utilisateur le 18 octobre 2026.
+Statut : livré avec limites de validation consignées. Périmètre élargi explicitement par l'utilisateur le 18 octobre 2026.
 
 ## Référence T3 vérifiée
 - /Users/moi/11.Repositories/t3code-local/packages/provider-core/src/server/subagentProjection.ts :

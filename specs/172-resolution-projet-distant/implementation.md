@@ -87,3 +87,18 @@ Ce changement de wrapper est utilisé sur Cartae ; seule sa version sera
 réactivée pour la recette, le maître a53b05c2 reste suffisant et inchangé.
 
 Validation : 69 tests de reconnexion PASS, 1 ignoré ; reproduction RED puis GREEN.
+
+
+Worker final 780d5df4ebfd5bb72f38fce509310b5ebb2523c9 compilé en 47,59 s,
+activé à 08:06:07 UTC, PID3893226. Maître Mac a53b05c2 PID53473 conservé.
+T3 637/1068 et pont898 conservés.
+Revue r4 refusé avant reçu : expected_base_commit_mismatch.
+Lecture source : fusion ac8f9295b89d1475f32af85f9e3e9d12d3f89008 à 10:04:57,
+faite par une autre session pendant la recette. Aucun fichier Revue modifié ici.
+La recette r5 utilise ce nouveau SHA exact, mêmes contraintes restantes.
+
+Recette Revue r5 réussie, task800dae46-f45a-4e7c-bc51-9d1e7dabba7d,
+SHAac8f9295, revue0.1.0, marqueur exact, ACK et rejeu même tâche/résultat.
+Deux tâches finales cleanup_done=true, un lancement chacune.
+Recette supplémentaire parent natif local refusée resource_saturated avant
+reçu/tâche ; aucune autre route. Limite conservée au reçu de livraison.
