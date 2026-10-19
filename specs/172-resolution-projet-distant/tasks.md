@@ -52,4 +52,4 @@
 - [x] T040 Activer le correctif du store sur Mac/Cartae après cleanup_done et guard_released BUS ; préserver T3, résultats et anciens reçus ; nettoyer la garde de recette.
 
 - [x] T041 Reproduire le rejeu d’un incident fournisseur sur l’auxiliaire MCP ; réserver ce flux au parent primaire sans perdre ni acquitter l’avis.
-- [ ] T042 Vérifier les plafonds et le rejeu primaire, activer le correctif maître hors mission active, puis obtenir la lecture officielle de la Task623 depuis trajets bus.
+- [x] T042 Vérifier les plafonds et le rejeu primaire, activer le correctif maître hors mission active, puis obtenir la lecture officielle de la Task623 depuis trajets bus.

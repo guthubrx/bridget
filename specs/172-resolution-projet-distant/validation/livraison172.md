@@ -676,3 +676,49 @@ Aucun credential d’un autre fil n’est utilisé.
 Une tâche locale indépendante46fd5bd7 est working pendant la préparation.
 Aucune activation ni interruption de celle-ci à ce checkpoint.
 Le maître actif reste72a8e8f8, worker624845 et T3 préservés.
+
+
+## Plafond MCP — correctif actif et lecture du cas réel réussie
+
+Source7085b77c21d7c94460d2fabbe1e62d04b9938bd2 publiée et build172-7085b77c
+construit en96,69s, signé ad hoc et vérifié strictement.
+Binaire préparé /Users/moi/.cache/bridget-delivery172/scope172/bridget,
+SHA25609da2c026677ac6789a65a323fa8644ef9e73eed83a82e0dd50e4fef545c4a3e.
+Le correctif est propre au maître ; worker Cartae624845/source72a8e8f8 conservé.
+
+La tâche locale46fd5bd7 a fini avant l’arrêt du maître. Préflight frais :
+aucune tâche active/non nettoyée gardée, aucune admission auto ouverte.
+Binaire remplacé atomiquement puis ancien maître7825 arrêté par SIGTERM.
+Le mécanisme de démarrage existant a déjà lancé le nouveau maître16326 ;
+la tentative manuelle suivante a été refusée par le verrou exclusif.
+Le PID, la commande, le binaire et le build ont ensuite été vérifiés.
+Aucun second démon lancé ni nouvelle relance nécessaire.
+T330609/30660 et pont898 gardent leurs PID et dates de naissance ;
+worker624845 actif avec NRestarts0. Le statut MCP officiel confirme172-7085b77c.
+
+Vérification du cas réel depuis le parent trajets bus, une seule lecture officielle
+de62363500-c0cf-409b-b669-5549f33cfa7b demandée après activation.
+Réponse à mcp-95175-6ad56373-3 : lecture réussie, status/work_state failed,
+error terminal Codex:failed, round4, continuablefalse, resultnull.
+Le dossier reste propre et conservé, HEAD396cd40d4d84a2cc46ed31d5d0841fda89b87a2c,
+chemin /home/moi/10.Scripts/69.opus2D/.worktrees/62363500.
+Aucune admission, continuation, relance ni ACK métier créés par cette vérification.
+
+L’événement provider_failed initial reste présent et non acquitté :
+la correction rétablit le bon canal sans effacer l’incident. Elle ne transforme
+pas l’échec Codex en succès. Le propriétaire a reçu la décision de reprendre
+ses acquis dans une nouvelle mission identifiée, dans son mandat existant.
+Aucun autre test Bridge n’a été demandé. La cause fine de l’échec du fournisseur
+reste hors de cette preuve et n’est attribuée ni au quota ni au contexte.
+
+Preuves privées :
+/Users/moi/.cache/bridget-delivery172/scope172/build-receipt.json
+/Users/moi/.cache/bridget-delivery172/scope172/activation.json
+/Users/moi/.cache/bridget-delivery172/scope172/diagnostic.json
+/Users/moi/.cache/bridget-delivery172/scope172/tests.json
+/Users/moi/.cache/bridget-delivery172/scope172/live-owner-read.json
+/Users/moi/.cache/bridget-delivery172/scope172/CURRENT.json
+
+T041/T042 closes pour ce défaut ;17tests ciblés et lecture réelle validés.
+Aucune FULL, aucun changement de schéma ou T3, aucun réveil programmé.
+Le statut de l’objectif reste paused. Les autres limites historiques restent distinctes.
