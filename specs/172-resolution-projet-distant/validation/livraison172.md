@@ -653,3 +653,26 @@ T036/T040 closes. T016/T032 restent ouvertes pour le cas exact du renouvellement
 automatique d’un tour parent distinct ; la continuation du tour courant est validée.
 T035 historique et la livraison métier VOITURES ne sont pas déclarés résolus par
 cette recette. L’objectif conserve son statut paused ; aucun réveil programmé.
+
+
+## Complément plafond MCP du19octobre — code validé, activation à suivre
+
+Cause reproduite : un avis provider_failed non acquitté du parent trajets bus
+est rejoué sur la connexion auxiliaire MCP après Registered. CallerScope attend
+son objet de droits et reçoit cette notification. Correction côté maître :
+réserver le rejeu au parent primaire, comme la remise en direct.
+
+17 tests distincts PASS : nouvelle reproduction1, événements0687,
+plafondsMCP1587, diagnostics de rattachement1722. Aucun ancien résultat
+n’est additionné pour fabriquer une suite complète.
+Reçu : /home/moi/.cache/bridget-delivery172/scope172-tests.json.
+La reproduction RED et les contrôles GREEN restent séparés.
+
+Task623 est failed/terminal Codex:failed, garde et nettoyage terminés.
+La tâche n’est pas relancée par ce correctif de lecture. Le résultat à obtenir
+après activation est la vraie réponse officielle depuis son parent trajets bus.
+Aucun credential d’un autre fil n’est utilisé.
+
+Une tâche locale indépendante46fd5bd7 est working pendant la préparation.
+Aucune activation ni interruption de celle-ci à ce checkpoint.
+Le maître actif reste72a8e8f8, worker624845 et T3 préservés.

@@ -3659,6 +3659,11 @@ fn delegated_runtime_frame(
 fn replay_delegated_runtime_events_for_connection(state: &Arc<Mutex<DaemonState>>, conn_id: &str) {
     let (parent_instance_id, writer, fleet) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        // Comme la remise en direct, le rejeu appartient au parent primaire.
+        // Un auxiliaire MCP attend une réponse RPC, jamais cet avis asynchrone.
+        if st.auxiliary_connections.contains(conn_id) {
+            return;
+        }
         let Some(parent_instance_id) = st.conn_instances.get(conn_id).cloned() else {
             return;
         };
@@ -50304,6 +50309,91 @@ fn spec_068_register_rejoue_apres_registered_les_incidents_delegues_en_ordre() {
     drop(shared);
     let _ = std::fs::remove_file(config.socket_path);
     let _ = std::fs::remove_file(config.db_path);
+}
+
+#[cfg(test)]
+#[test]
+fn spec172_auxiliary_scope_excludes_runtime_replay_without_losing_parent_notice() {
+    use crate::idempotency::{AgentLinkRecord, AgentLinkState, DelegatedRuntimeEventInput};
+    use bridget_transport::protocol::{DelegatedRuntimeEventKind, NativeDelegationRequest};
+    for kind in [DelegatedRuntimeEventKind::Warning, DelegatedRuntimeEventKind::Failed] {
+        let (mut state, config) = presence_tests::state_with_registered_agent("spec172-scope-replay");
+        state.conn_counter = 1;
+        let agent = state.conn_names["conn-1"].clone();
+        let credential = state.identity_credentials["conn-1"].clone();
+        state.idempotency.create_agent_link(&AgentLinkRecord {
+            link_id: "link-scope172".into(),
+            parent_instance_id: "instance-1".into(),
+            child_instance_id: "child-scope172".into(),
+            parent_execution_id: None, objective_id: None, delegation_id: None,
+            project: None, role: "worker".into(),
+            agent_path: "instance-1/child-scope172".into(),
+            state: AgentLinkState::Reserved, created_at: 1_700_000_000,
+            closed_at: None, revision: 0,
+        }).unwrap();
+        let event = state.fleet.record_delegated_runtime_event(DelegatedRuntimeEventInput {
+            child_instance_id: "child-scope172".into(),
+            child_execution_id: "execution-scope172".into(),
+            kind, code: if kind == DelegatedRuntimeEventKind::Failed {
+                "provider_failed".into()
+            } else { "unsupported_provider_request".into() },
+            reference: format!("sha256:{}", "e".repeat(64)), observed_at: 1_700_000_001,
+        }).unwrap();
+        let (parent_writer, parent_peer) = UnixStream::pair().unwrap();
+        parent_peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        state.connections.insert("conn-1".into(),
+            Arc::new(Mutex::new(BufWriter::new(parent_writer))));
+        let shared = Arc::new(Mutex::new(state));
+        let listener = UnixListener::bind(&config.socket_path).unwrap();
+        let serving = Arc::clone(&shared);
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream, serving).unwrap();
+        });
+        let stream = UnixStream::connect(&config.socket_path).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        writeln!(writer, "{}", encode(&WrapperToDaemon::RegisterAuxiliary {
+            agent_id: agent, instance_id: "instance-1".into(), credential,
+        }).unwrap()).unwrap();
+        writer.flush().unwrap();
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(matches!(decode(line.trim()).unwrap(), DaemonToWrapper::Registered { .. }));
+        writeln!(writer, "{}", encode(&WrapperToDaemon::NativeDelegation {
+            request: NativeDelegationRequest::CallerScope {},
+        }).unwrap()).unwrap();
+        writer.flush().unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let response = decode(line.trim()).unwrap();
+        assert!(matches!(response, DaemonToWrapper::NativeDelegationResult { ref result }
+            if result == &serde_json::json!({"version":1,"caller_read_only":false})),
+            "CallerScope reçoit un avis au lieu du plafond : {response:?}");
+        // Le correctif ne lit ni n’acquitte l’avis à la place du parent.
+        {
+            let st = shared.lock().unwrap();
+            let pending = st.fleet.delegated_runtime_events_for_parent("instance-1").unwrap();
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].event_id, event.event_id);
+        }
+        replay_delegated_runtime_events_for_connection(&shared, "conn-1");
+        let mut parent_reader = BufReader::new(parent_peer);
+        line.clear(); parent_reader.read_line(&mut line).unwrap();
+        assert!(matches!(decode(line.trim()).unwrap(),
+            DaemonToWrapper::DelegatedRuntimeEvent { event: ref actual }
+            if actual.event_id == event.event_id && actual.kind == kind));
+        assert!(matches!(handle_wrapper_message("conn-1",
+            WrapperToDaemon::DelegatedRuntimeEventAcknowledged { event_id: event.event_id },
+            &shared), Some(DaemonToWrapper::Ack { .. })));
+        assert!(shared.lock().unwrap().fleet
+            .delegated_runtime_events_for_parent("instance-1").unwrap().is_empty());
+        drop(reader);drop(writer);server.join().unwrap();
+        drop(parent_reader);drop(shared);
+        let _ = std::fs::remove_file(config.socket_path);
+        let _ = std::fs::remove_file(config.db_path);
+    }
 }
 
 #[cfg(test)]

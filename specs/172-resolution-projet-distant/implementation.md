@@ -590,3 +590,45 @@ BUS conserve aussi son résultat, ses deux preuves de clôture et son worktree.
 Le propriétaire a reçu l’information de levée du blocage, sans nouvelle recette
 demandée. La reprise métier VOITURES lui appartient et n’est pas une livraison
 de code revendiquée par cette recette de lecture.
+
+
+## Incident du 19 octobre — plafond MCP invalide après échec fournisseur
+
+Trajets bus a conservé le refus de bridget_task_status sur la Task
+62363500-c0cf-409b-b669-5549f33cfa7b. L’appel exact est daté du18octobre à
+23:45:35.364UTC, refus à23:45:35.604UTC. Le constat a ensuite été consigné à
+23:46:17.781388UTC dans le reçu métier externe. Les outils send et status du
+même fil ont aussi rencontré ce refus. Aucune nouvelle admission n’a été créée.
+
+La lecture seule du maître retrouve un événement durable provider_failed,
+non acquitté, à22:48:29UTC, pour l’instance du parent trajets bus. Sa Task est
+déjà failed/terminal Codex:failed, cleanup_done=true et guard_released=true.
+L’erreur de plafond est distincte de cet échec fournisseur, dont la cause fine
+n’est pas attribuée à un quota ou au contexte sans autre preuve.
+
+Le serveur rejoue les avis DelegatedRuntimeEvent après tout Registered,
+y compris RegisterAuxiliary. Le client MCP ouvre une connexion auxiliaire pour
+CallerScope et attend un objet fermé version/caller_read_only. Il reçoit donc
+cet avis d’incident avant la réponse à sa requête et refuse le protocole.
+La présence du fait durable et le code du rejeu expliquent le défaut réel.
+
+Référence T3 lue pour ce cas : le runtime
+/Users/moi/11.Repositories/t3code-local/packages/provider-acp/src/server/AcpSessionRuntime.ts
+expose request via acp.raw.request, notify via acp.raw.notify et getEvents via
+sa file dédiée. Le test buffers root metadata while session startup is still pending
+dans /Users/moi/11.Repositories/t3code-local/apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts
+vérifie aussi la coexistence des événements et de la réponse de démarrage.
+T3 ne possède pas la paire primaire/auxiliaire Unix de Bridget ; le mécanisme
+réutilisable est la séparation des notifications et des réponses de requête.
+
+Le correctif reprend la garde déjà utilisée pour la remise d’incident en direct :
+seule la connexion primaire reçoit le rejeu ; l’auxiliaire MCP n’en reçoit aucun.
+Il ne supprime ni n’acquitte l’avis durable, ne saute aucun contrôle de droits,
+et ne change aucun protocole ou schéma. La modification concerne le maître seul.
+
+Le nouveau test utilise le véritable handle_connection avec des sockets Unix et
+une inscription auxiliaire attestée. Avant correction il reçoit bien
+DelegatedRuntimeEvent au lieu de CallerScope (RED). Après correction il vérifie
+le plafond exact pour Warning et Failed, puis la remise et l’ACK par le parent
+primaire. L’avis reste en attente tant que ce parent ne l’acquitte pas.
+Reçu RED : /home/moi/.cache/bridget-delivery172/auxiliary-scope172-red.log.
