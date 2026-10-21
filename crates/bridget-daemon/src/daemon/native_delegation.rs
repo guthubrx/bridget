@@ -3543,7 +3543,16 @@ fn parent_fact(
 }
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
-fn remote_workspace_error_message(error: &str) -> Option<&'static str> {
+fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    if let Some(reason) = error.strip_prefix("remote_start_failed:remote_result_slot:") {
+        return Some(match reason {
+            "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le démarrage de la mission n’est pas confirmé.",
+            "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de réserver le retour du résultat. Le démarrage de la mission n’est pas confirmé.",
+            "DiskFull" => "Le retour du résultat ne peut pas être réservé : espace disque insuffisant sur la machine distante.",
+            "FilesystemAccessDenied" => "Le retour du résultat ne peut pas être réservé : accès au stockage distant refusé.",
+            _ => "Le retour du résultat n’a pas pu être réservé. Le service distant n’a pas fourni de cause précise.",
+        });
+    }
     let reason = error.strip_prefix("remote_start_failed:remote_workspace_prepare:")?;
     Some(match reason {
         "DiskFull" => "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée.",
@@ -3551,7 +3560,7 @@ fn remote_workspace_error_message(error: &str) -> Option<&'static str> {
         "WorkspacePrepareFailed" => "Git n’a pas pu préparer ou vérifier le dossier de travail distant. La tâche reste enregistrée.",
         "WorkspacePrepareIncomplete" => "Le reçu d’une préparation précédente est incomplet. Vérifiez l’espace disque et le dossier de travail. La tâche est conservée.",
         "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de préparer un dossier supplémentaire. La tâche reste enregistrée.",
-        "WorkerUnavailable" | "StaleConnection" => "Le service Bridget de la machine distante est indisponible. La tâche reste enregistrée.",
+        "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la préparation du dossier de travail. La tâche reste enregistrée.",
         _ => "La préparation du dossier de travail distant a échoué. Le service distant n’a pas fourni de cause précise. La tâche reste enregistrée.",
     })
 }
@@ -3593,7 +3602,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         && task.error.as_deref().is_some_and(|error| {
             error.starts_with("remote_start_failed:remote_workspace_prepare:")
         });
-    let work_state = if preparation_failed {
+    let result_reservation_failed = task.mission_issued_at.is_none()
+        && task.error.as_deref().is_some_and(|error| {
+            error.starts_with("remote_start_failed:remote_result_slot:")
+        });
+    let work_state = if result_reservation_failed
+        && matches!(task.state.as_str(), "queued" | "starting" | "cancelling")
+    {
+        "waiting_for_children"
+    } else if preparation_failed {
         "failed"
     } else if !workspace_report_ready(task) && task.terminal() {
         "waiting_for_children"
@@ -3617,9 +3634,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "result_bytes":body.map(str::len),
         "detail":(workspace_report_ready(task) && matches!(task.state.as_str(),"result_available"|"failed")).then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
         "mailbox":mailbox});
-    if let Some(message) = task.projected_error().as_deref().and_then(remote_workspace_error_message) {
+    if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
-        if preparation_failed {
+        if result_reservation_failed {
+            view["error_recovery"] = if task.terminal() && task.cleanup_done {
+                json!("L’arrêt du démarrage est terminé. Après correction de la cause, une nouvelle demande peut être créée. Rejouer la même demande ne la redémarre pas.")
+            } else {
+                json!("Attendez la confirmation de l’arrêt et du nettoyage de cette tâche avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas.")
+            };
+        } else if preparation_failed {
             view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
         }
     }
@@ -22919,9 +22942,62 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
             assert_eq!(replay, result, "même reçu, sans admission supplémentaire");
         }
-        assert!(remote_workspace_error_message("permission_not_inherited").is_none());
+        assert!(remote_start_error_message("permission_not_inherited").is_none());
         assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
         assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec172_remote_result_reservation_error_messages_wait_for_cleanup() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let task_id = admitted["task_id"].as_str().unwrap().to_owned();
+        for (reason, fragment) in [
+            ("WorkerUnavailable", "n’a pas confirmé la réservation"),
+            ("StaleConnection", "n’a pas confirmé la réservation"),
+            ("ResourceLimit", "capacité réservée"),
+            ("StoreUnavailable", "n’a pas fourni de cause précise"),
+            ("WorkerUnavailable:private-secret", "n’a pas fourni de cause précise"),
+        ] {
+            {
+                let st = state.lock().unwrap();
+                let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+                task.state = "starting".into();
+                task.child_instance = Some(Uuid::new_v4().to_string());
+                task.mission_issued_at = None;
+                task.guarded = true;
+                task.cleanup_done = false;
+                task.guard_released = false;
+                st.delegation_store.save(&task).unwrap();
+            }
+            let result = remote_admission_outcome(&state, &task_id,
+                Err(format!("remote_result_slot:{reason}"))).unwrap();
+            assert_eq!(result["task_id"], task_id);
+            assert_eq!(result["status"], "starting");
+            assert_eq!(result["work_state"], "waiting_for_children");
+            assert_eq!(result["error"], format!("remote_start_failed:remote_result_slot:{reason}"));
+            assert!(result["error_message"].as_str().unwrap().contains(fragment));
+            assert!(!result["error_message"].as_str().unwrap().contains("private-secret"));
+            assert!(result["error_recovery"].as_str().unwrap().contains("Attendez"));
+            assert_eq!(admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap(), result);
+            {
+                let st = state.lock().unwrap();
+                let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+                task.state = "failed".into();
+                task.cleanup_done = true;
+                task.guard_released = true;
+                st.delegation_store.save(&task).unwrap();
+            }
+            let settled = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+            assert_eq!(settled["status"], "failed");
+            assert_eq!(settled["work_state"], "failed");
+            let recovery = settled["error_recovery"].as_str().unwrap();
+            assert!(recovery.contains("terminé") && recovery.contains("nouvelle demande"));
+            assert!(!recovery.contains("annulez"));
+        }
+        assert!(rx.try_recv().is_err(), "aucune remise métier ni relance au rejeu");
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
         drop(state); cleanup(&config);
     }
 

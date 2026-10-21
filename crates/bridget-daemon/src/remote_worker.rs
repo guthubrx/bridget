@@ -1916,6 +1916,28 @@ enum WorkerInbound {
     CandidateProbeV2(CandidateProbeV2),
 }
 
+// La file reste bornée. Une saturation attend le consommateur ; l'arrêt
+// interrompt aussi cette attente avant la jonction du lecteur réseau.
+fn enqueue_worker_inbound<T>(
+    sender: &mpsc::SyncSender<T>,
+    mut value: T,
+    disconnected: &AtomicBool,
+) -> bool {
+    loop {
+        if disconnected.load(Ordering::Acquire) {
+            return false;
+        }
+        match sender.try_send(value) {
+            Ok(()) => return true,
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+            Err(mpsc::TrySendError::Full(pending)) => {
+                value = pending;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 struct HeldRuntime {
     prepared: PreparedRuntime,
     mission_id: String,
@@ -4197,9 +4219,23 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         {
                             WorkerInbound::CandidateProbeV2(probe)
                         }
-                        _ => break,
+                        _ => {
+                            log::warn!("worker_channel_reader_closed reason=unexpected_frame");
+                            break;
+                        }
                     },
-                    _ => break,
+                    Ok(None) => {
+                        if !read_disconnected.load(Ordering::Acquire) {
+                            log::warn!("worker_channel_reader_closed reason=eof");
+                        }
+                        break;
+                    }
+                    Err(_) => {
+                        if !read_disconnected.load(Ordering::Acquire) {
+                            log::warn!("worker_channel_reader_closed reason=frame_read_failed");
+                        }
+                        break;
+                    }
                 };
                 if matches!(
                     &inbound,
@@ -4224,7 +4260,10 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         }
                     }
                 }
-                if sender.try_send(inbound).is_err() {
+                if !enqueue_worker_inbound(&sender, inbound, &read_disconnected) {
+                    if !read_disconnected.load(Ordering::Acquire) {
+                        log::warn!("worker_channel_reader_closed reason=inbound_receiver_closed");
+                    }
                     break;
                 }
             }
@@ -4417,6 +4456,55 @@ mod tests {
     use bridget_transport::protocol::{RemoteResultDeferredReason, RemoteResultDisposition};
     use std::os::unix::fs::symlink;
 
+
+    #[test]
+    fn worker172_inbound_backpressure_preserves_all_requests() {
+        let (sender, receiver) = mpsc::sync_channel(8);
+        for value in 0..8 {
+            sender.send(value).unwrap();
+        }
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let stop = disconnected.clone();
+        let (done, completed) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            done.send(enqueue_worker_inbound(&sender, 8, &stop)).unwrap();
+        });
+        assert!(
+            matches!(completed.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)),
+            "une file pleine doit attendre, pas couper le canal ni perdre la neuvième demande"
+        );
+        for value in 0..9 {
+            assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), value);
+        }
+        assert!(completed.recv_timeout(Duration::from_secs(2)).unwrap());
+        reader.join().unwrap();
+        assert!(!disconnected.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn worker172_inbound_backpressure_stops_during_shutdown() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(1).unwrap();
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let stop = disconnected.clone();
+        let (done, completed) = mpsc::sync_channel(1);
+        let reader = std::thread::spawn(move || {
+            done.send(enqueue_worker_inbound(&sender, 2, &stop)).unwrap();
+        });
+        assert!(matches!(completed.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)));
+        disconnected.store(true, Ordering::Release);
+        assert!(!completed.recv_timeout(Duration::from_secs(2)).unwrap(),
+            "l'arrêt doit débloquer le lecteur même si la file reste pleine");
+        reader.join().unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), 1);
+        assert!(receiver.try_recv().is_err(), "pas de remise après arrêt");
+
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        assert!(!enqueue_worker_inbound(&sender, 3, &AtomicBool::new(false)));
+    }
 
     #[test]
     fn native171_probe_projection_guard_reasons_closed_bounded_same_refusal() {

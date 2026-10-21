@@ -56,3 +56,6 @@
 
 - [x] T043 Distinguer disque plein, accès disque refusé, échec Git et reçu de préparation incomplet ; ajouter un message français sans modifier le code technique ni le rejeu.
 - [ ] T044 Activer sans interrompre les missions ni relancer T3, puis obtenir la lecture MCP officielle du reçu historique ; 14 tests ciblés, revue du code et paquets r2 déjà validés. Reçu : validation/erreurs-preparation172.md.
+
+- [ ] T045 Reproduire et corriger la fermeture du canal worker à saturation de sa file bornée ; vérifier l’arrêt du lecteur et conserver des diagnostics fermés.
+- [ ] T046 Rendre lisible un refus de réservation du résultat, sans annoncer un démarrage ni supprimer la réconciliation ; tests et revue indépendante.

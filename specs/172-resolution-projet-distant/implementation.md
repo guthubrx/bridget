@@ -748,3 +748,74 @@ partiel n’a été ajouté. Le retrait conditionnel d’une branche demeure int
 si un worktree l’utilise ; les données et résidus sont conservés. Le nouveau test
 ENOSPC prouve uniquement le retrait de sa branche créée et inutilisée, sans
 prétendre valider la suppression d’un worktree partiel.
+
+
+## Canal worker et réservation du résultat — 21 octobre 2026
+
+Cas réel : Task837972ad-ad58-4512-9a71-fd2843ab5be5, clé
+opus158-facades-production-cartae-20261021-03. Le dossier distant a été créé.
+Le journal maître constate la fermeture du canal à 07:32:38 UTC puis un nouveau
+rattachement à 07:32:39. Le service worker n’a pas redémarré : PID624845,
+NRestarts=0. La cause fine de cette coupure n’est pas prouvée.
+
+La réconciliation existante a terminé l’échec : état failed, cleanup_done=true,
+guard_released=true ; reçu worker terminal, permit=null, native_ready=false.
+PID416678 absent et groupe416678 vide au contrôle. Aucun fournisseur n’a reçu
+la mission. Le worktree et sa base f9db3810812a7369808cf930d5a4de5e999ed5dc
+restent conservés. Aucun cancel, rejeu ou remplacement effectué par ce lot.
+
+Défaut distinct trouvé dans le lecteur : sa file bornée contient huit demandes.
+try_send(...).is_err() confondait saturation et disparition du consommateur.
+La neuvième demande fermait donc le canal et provoquait abandon_held.
+Deux tests ont reproduit ce comportement avant correction (RED2FAIL attendus).
+
+Référence T3 lue pour ce défaut :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+(lignes1244 et1480), une file propre à chaque flux et Queue.offer pour remettre
+la demande. Ce chemin ne jette pas la demande sur une saturation arbitraire.
+T3 y utilise une file non bornée. Bridget garde sa borne de huit demandes
+distantes et une seule trame en attente chez le lecteur. La remise attend par
+pas de10ms et vérifie le drapeau d’arrêt à chaque pas. Les tests vérifient
+l’ordre des neuf demandes et la sortie rapide si l’arrêt intervient à file pleine,
+ainsi que le consommateur déjà fermé. Aucun fournisseur lancé par ces tests.
+
+Les fins de lecture du canal reçoivent des diagnostics fermés : eof,
+frame_read_failed, unexpected_frame, inbound_receiver_closed. Aucun corps de
+trame, jeton, stderr ou configuration n’est imprimé. Ces diagnostics aideront
+à distinguer les prochaines coupures ; ils ne reconstruisent pas celle de837972ad.
+
+Autre défaut concret : le nouveau texte lisible couvrait la préparation du
+dossier, mais pas remote_result_slot. Ce refus dispose maintenant de son message
+et de son action. WorkerUnavailable/StaleConnection signifient que la réservation
+n’a pas été confirmée ; le texte ne prétend plus prouver une panne du service.
+Un refus ResourceLimit reste distinct d’un défaut du disque.
+
+Référence T3 lue pour le cas de transport :
+ClaudeAdapterV2.ts, finalizeActiveTurnAfterQueryExit (autour de7064), termine le
+tour en failed avec failure.class=transport_error après la fermeture du flux.
+Bridget conserve son étape supplémentaire de réconciliation du processus distant :
+pendant un démarrage en échec non réconcilié, work_state=waiting_for_children et
+l’action demande d’attendre l’arrêt et le nettoyage. Quand la tâche est terminale
+et cleanup_done=true, elle indique que cet arrêt est terminé et explique le
+besoin d’une nouvelle demande. La clé et le code technique restent inchangés.
+Aucune annulation ni relance automatique ajoutée. La tâche métier initiale
+n’est pas redémarrée par le correctif.
+
+Validation GREEN :17 tests distincts PASS, soit les14 contrôles précédents
+rejoués et trois nouveaux tests. Aucune suite complète. Les deux nouveaux tests
+de file sont worker172_inbound_backpressure_preserves_all_requests et
+worker172_inbound_backpressure_stops_during_shutdown. Le troisième est
+spec172_remote_result_reservation_error_messages_wait_for_cleanup.
+La liste exacte, les12 filtres et leurs résumés réels sont conservés dans
+/home/moi/.cache/bridget-channel172/tests.json.
+Le RED est dans /home/moi/.cache/bridget-channel172/queue-red.log.
+
+Une première sélection GREEN s’est arrêtée sur un filtre vide après un renommage
+involontaire du nom du test existant. Son nom initial est conservé ; le filtre
+vide ne compte pas comme résultat. La sélection complète17PASS est celle
+du reçu tests.json.
+
+Code validé par les tests ; revue indépendante et paquets encore à préparer
+à ce checkpoint. Aucune activation pendant les autres missions Cartae.
+Le défaut de file est reproduit, mais il n’est pas présenté comme la cause
+prouvée de l’incident837972ad.
