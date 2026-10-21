@@ -3542,12 +3542,28 @@ fn parent_fact(
     Ok(first)
 }
 
+fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
+    let detail = error.strip_prefix("remote_start_failed:")?;
+    if let Some(reason) = detail.strip_prefix("remote_result_slot:") {
+        return Some(reason);
+    }
+    match detail {
+        "remote_result_slot_limit" => Some("ResourceLimit"),
+        "remote_result_slot_mismatch" => Some("InvalidEnvelope"),
+        "remote_result_slot_stale" => Some("StaleConnection"),
+        _ => None,
+    }
+}
+
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
-    if let Some(reason) = error.strip_prefix("remote_start_failed:remote_result_slot:") {
+    if let Some(reason) = remote_result_slot_error_reason(error) {
         return Some(match reason {
             "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le démarrage de la mission n’est pas confirmé.",
             "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de réserver le retour du résultat. Le démarrage de la mission n’est pas confirmé.",
+            "Unauthorized" | "PermissionsChanged" => "Le service distant a refusé les droits de cette demande. La réservation du résultat n’est pas confirmée.",
+            "PlacementMismatch" | "DefinitionChanged" | "CommandMismatch" => "L’identité ou la configuration de la demande distante ne correspond plus. La réservation du résultat n’est pas confirmée.",
+            "InvalidEnvelope" => "L’échange de réservation du résultat n’est pas conforme. Le démarrage de la mission n’est pas confirmé.",
             "DiskFull" => "Le retour du résultat ne peut pas être réservé : espace disque insuffisant sur la machine distante.",
             "FilesystemAccessDenied" => "Le retour du résultat ne peut pas être réservé : accès au stockage distant refusé.",
             _ => "Le retour du résultat n’a pas pu être réservé. Le service distant n’a pas fourni de cause précise.",
@@ -3603,9 +3619,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             error.starts_with("remote_start_failed:remote_workspace_prepare:")
         });
     let result_reservation_failed = task.mission_issued_at.is_none()
-        && task.error.as_deref().is_some_and(|error| {
-            error.starts_with("remote_start_failed:remote_result_slot:")
-        });
+        && task.error.as_deref().and_then(remote_result_slot_error_reason).is_some();
     let work_state = if result_reservation_failed
         && matches!(task.state.as_str(), "queued" | "starting" | "cancelling")
     {
@@ -3637,8 +3651,10 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
-            view["error_recovery"] = if task.terminal() && task.cleanup_done {
+            view["error_recovery"] = if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
                 json!("L’arrêt du démarrage est terminé. Après correction de la cause, une nouvelle demande peut être créée. Rejouer la même demande ne la redémarre pas.")
+            } else if task.terminal() && task.cleanup_done {
+                json!("Attendez la vérification du dossier de travail avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas.")
             } else {
                 json!("Attendez la confirmation de l’arrêt et du nettoyage de cette tâche avant toute nouvelle demande. Rejouer la même demande ne la redémarre pas.")
             };
@@ -22953,12 +22969,17 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
         let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
         let task_id = admitted["task_id"].as_str().unwrap().to_owned();
-        for (reason, fragment) in [
-            ("WorkerUnavailable", "n’a pas confirmé la réservation"),
-            ("StaleConnection", "n’a pas confirmé la réservation"),
-            ("ResourceLimit", "capacité réservée"),
-            ("StoreUnavailable", "n’a pas fourni de cause précise"),
-            ("WorkerUnavailable:private-secret", "n’a pas fourni de cause précise"),
+        for (code, fragment) in [
+            ("remote_result_slot:WorkerUnavailable", "n’a pas confirmé la réservation"),
+            ("remote_result_slot:StaleConnection", "n’a pas confirmé la réservation"),
+            ("remote_result_slot:ResourceLimit", "capacité réservée"),
+            ("remote_result_slot:Unauthorized", "refusé les droits"),
+            ("remote_result_slot:PlacementMismatch", "ne correspond plus"),
+            ("remote_result_slot_limit", "capacité réservée"),
+            ("remote_result_slot_mismatch", "n’est pas conforme"),
+            ("remote_result_slot_stale", "n’a pas confirmé la réservation"),
+            ("remote_result_slot:StoreUnavailable", "n’a pas fourni de cause précise"),
+            ("remote_result_slot:WorkerUnavailable:private-secret", "n’a pas fourni de cause précise"),
         ] {
             {
                 let st = state.lock().unwrap();
@@ -22972,11 +22993,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 st.delegation_store.save(&task).unwrap();
             }
             let result = remote_admission_outcome(&state, &task_id,
-                Err(format!("remote_result_slot:{reason}"))).unwrap();
+                Err(code.into())).unwrap();
             assert_eq!(result["task_id"], task_id);
             assert_eq!(result["status"], "starting");
             assert_eq!(result["work_state"], "waiting_for_children");
-            assert_eq!(result["error"], format!("remote_start_failed:remote_result_slot:{reason}"));
+            assert_eq!(result["error"], format!("remote_start_failed:{code}"));
             assert!(result["error_message"].as_str().unwrap().contains(fragment));
             assert!(!result["error_message"].as_str().unwrap().contains("private-secret"));
             assert!(result["error_recovery"].as_str().unwrap().contains("Attendez"));
@@ -22996,6 +23017,30 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert!(recovery.contains("terminé") && recovery.contains("nouvelle demande"));
             assert!(!recovery.contains("annulez"));
         }
+        {
+            let st = state.lock().unwrap();
+            let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            task.workspace = Some(serde_json::from_value(json!({
+                "strategy":"worktree","state":"kept","toplevel":"/project","path":"/project/worktree",
+                "branch":"branch","base_commit":"a".repeat(40),"head_commit":"a".repeat(40),
+                "branch_commit":"a".repeat(40),"head_on_branch":true,"commit_count":0,
+                "commits":[],"truncated":false,"dirty":false
+            })).unwrap());
+            task.workspace_report_mission = None;
+            st.delegation_store.save(&task).unwrap();
+        }
+        let reporting = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        assert_eq!(reporting["work_state"], "waiting_for_children");
+        assert!(reporting["error_recovery"].as_str().unwrap().contains("vérification du dossier"));
+        {
+            let st = state.lock().unwrap();
+            let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            task.workspace_report_mission = Some(task.mission.clone());
+            st.delegation_store.save(&task).unwrap();
+        }
+        let reported = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        assert_eq!(reported["work_state"], "failed");
+        assert!(reported["error_recovery"].as_str().unwrap().contains("terminé"));
         assert!(rx.try_recv().is_err(), "aucune remise métier ni relance au rejeu");
         assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
         drop(state); cleanup(&config);

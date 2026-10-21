@@ -6,7 +6,7 @@
 use crate::managed_process::ManagedMarker;
 use bridget_transport::fsutil::{create_private_dir, write_private_file_atomic};
 use bridget_transport::protocol::{
-    MAX_WORKER_RESULT_ENVELOPE_BYTES, MAX_WORKER_STORE_BYTES, MAX_WORKER_STORE_ENTRIES,
+    MAX_WORKER_RESULT_ENVELOPE_BYTES, MAX_WORKER_STORE_BYTES, MAX_WORKER_STORE_ENTRIES, HostResourceSnapshotV1,
     WORKER_RELEASE_LEASE_SECS,
     RemotePlacement, RemoteResultEnvelope, WORKER_RECEIPT_RETENTION_SECS, WorkerCommandIdentity,
     WorkerCommandPhase, WorkerIdentity, WorkerRefusal, WorkerReleasePermit,
@@ -1916,25 +1916,82 @@ enum WorkerInbound {
     CandidateProbeV2(CandidateProbeV2),
 }
 
-// La file reste bornée. Une saturation attend le consommateur ; l'arrêt
-// interrompt aussi cette attente avant la jonction du lecteur réseau.
-fn enqueue_worker_inbound<T>(
-    sender: &mpsc::SyncSender<T>,
-    mut value: T,
-    disconnected: &AtomicBool,
-) -> bool {
-    loop {
-        if disconnected.load(Ordering::Acquire) {
-            return false;
-        }
-        match sender.try_send(value) {
-            Ok(()) => return true,
-            Err(mpsc::TrySendError::Disconnected(_)) => return false,
-            Err(mpsc::TrySendError::Full(pending)) => {
-                value = pending;
-                std::thread::sleep(Duration::from_millis(10));
+// Une file pleine produit une réponse corrélée et ne coupe pas les autres
+// missions. La demande refusée n'entre jamais dans la file du consommateur.
+fn worker_inbound_busy(inbound: WorkerInbound) -> WrapperToDaemon {
+    match inbound {
+        WorkerInbound::Request(request) => WrapperToDaemon::WorkerResponse {
+            response: WorkerResponse {
+                version: REMOTE_WORKER_VERSION,
+                correlation_id: request.correlation_id,
+                connection_epoch: request.connection_epoch,
+                worker: request.worker,
+                command: request.command,
+                response: WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResourceLimit },
+            },
+        },
+        WorkerInbound::CandidateProbe(probe) => WrapperToDaemon::CandidateProbeResult {
+            result: CandidateProbeResult {
+                version: probe.version,
+                correlation_id: probe.correlation_id,
+                connection_epoch: probe.connection_epoch,
+                worker: probe.worker,
+                admission_id: probe.admission_id,
+                policy_revision: probe.policy_revision,
+                verdicts: probe.candidates.into_iter().map(|candidate| CandidateProbeVerdict::Ineligible {
+                    candidate_id: candidate.candidate_id, reason: CandidateProbeRefusal::ResourceLimit,
+                }).collect(),
+            },
+        },
+        WorkerInbound::CandidateProbeV2(probe) => {
+            let now = worker_now();
+            WrapperToDaemon::CandidateProbeResultV2 {
+                result: CandidateProbeV2Result {
+                    version: probe.version,
+                    correlation_id: probe.correlation_id,
+                    connection_epoch: probe.connection_epoch,
+                    worker: probe.worker,
+                    admission_id: probe.admission_id,
+                    policy_revision: probe.policy_revision,
+                    resources: HostResourceSnapshotV1 {
+                        source_observed_at: now, received_at: now,
+                        cpu_percent: None, available_memory_percent: None,
+                        normalized_load_percent: None, compilation_slots: None,
+                    },
+                    verdicts: probe.candidates.into_iter().map(|candidate| CandidateProbeV2Verdict::Ineligible {
+                        candidate_id: candidate.candidate_id, reason: CandidateProbeRefusal::ResourceLimit,
+                    }).collect(),
+                },
             }
         }
+    }
+}
+
+fn dispatch_worker_inbound(
+    sender: &mpsc::SyncSender<WorkerInbound>,
+    inbound: WorkerInbound,
+    writer: &Arc<Mutex<UnixStream>>,
+    disconnected: &AtomicBool,
+    cancelled: &Mutex<BTreeSet<String>>,
+) -> Result<(), String> {
+    if disconnected.load(Ordering::Acquire) {
+        return Err("worker_channel_stopping".into());
+    }
+    // L'annulation est vue avant la mise en file, même si celle-ci est pleine.
+    if let WorkerInbound::Request(WorkerRequest {
+        command, request: WorkerRequestOperation::Cancel { target: WorkerCancelScope::Command {} }, ..
+    }) = &inbound {
+        let key = json_digest(command).map_err(|_| "worker_cancel_invalid")?;
+        let mut cancelled = cancelled.lock().map_err(|_| "worker_cancel_poisoned")?;
+        if cancelled.len() >= MAX_WORKER_STORE_ENTRIES {
+            return Err("worker_cancel_capacity".into());
+        }
+        cancelled.insert(key);
+    }
+    match sender.try_send(inbound) {
+        Ok(()) => Ok(()),
+        Err(mpsc::TrySendError::Full(inbound)) => send_worker_frame(writer, &worker_inbound_busy(inbound)),
+        Err(mpsc::TrySendError::Disconnected(_)) => Err("worker_inbound_receiver_closed".into()),
     }
 }
 
@@ -4182,6 +4239,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let cancelled = runtime.cancelled.clone();
         let read_epoch = epoch.clone();
         let read_worker = runtime.identity.clone();
+        let writer_for_reader = writer.clone();
         let reader_thread = std::thread::spawn(move || {
             while !read_disconnected.load(Ordering::Acquire) {
                 let frame = bridget_transport::jsonl::read_unix_line(
@@ -4237,32 +4295,11 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         break;
                     }
                 };
-                if matches!(
-                    &inbound,
-                    WorkerInbound::Request(WorkerRequest {
-                        request: WorkerRequestOperation::Cancel {
-                            target: WorkerCancelScope::Command {}
-                        },
-                        ..
-                    })
-                ) {
-                    let WorkerInbound::Request(request) = &inbound else {
-                        unreachable!();
-                    };
-                    if let Ok(key) = json_digest(&request.command) {
-                        if let Ok(mut cancelled) = cancelled.lock() {
-                            if cancelled.len() >= MAX_WORKER_STORE_ENTRIES {
-                                break;
-                            }
-                            cancelled.insert(key);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                if !enqueue_worker_inbound(&sender, inbound, &read_disconnected) {
+                if dispatch_worker_inbound(&sender, inbound, &writer_for_reader,
+                    &read_disconnected, &cancelled).is_err()
+                {
                     if !read_disconnected.load(Ordering::Acquire) {
-                        log::warn!("worker_channel_reader_closed reason=inbound_receiver_closed");
+                        log::warn!("worker_channel_reader_closed reason=inbound_dispatch_failed");
                     }
                     break;
                 }
@@ -4453,57 +4490,161 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bridget_transport::protocol::{AutoDelegateWorkload, CandidateProbeV2Candidate, ProviderPermissions};
     use bridget_transport::protocol::{RemoteResultDeferredReason, RemoteResultDisposition};
     use std::os::unix::fs::symlink;
 
 
-    #[test]
-    fn worker172_inbound_backpressure_preserves_all_requests() {
-        let (sender, receiver) = mpsc::sync_channel(8);
-        for value in 0..8 {
-            sender.send(value).unwrap();
-        }
-        let disconnected = Arc::new(AtomicBool::new(false));
-        let stop = disconnected.clone();
-        let (done, completed) = mpsc::sync_channel(1);
-        let reader = std::thread::spawn(move || {
-            done.send(enqueue_worker_inbound(&sender, 8, &stop)).unwrap();
-        });
-        assert!(
-            matches!(completed.recv_timeout(Duration::from_millis(100)),
-                Err(mpsc::RecvTimeoutError::Timeout)),
-            "une file pleine doit attendre, pas couper le canal ni perdre la neuvième demande"
-        );
-        for value in 0..9 {
-            assert_eq!(receiver.recv_timeout(Duration::from_secs(2)).unwrap(), value);
-        }
-        assert!(completed.recv_timeout(Duration::from_secs(2)).unwrap());
-        reader.join().unwrap();
-        assert!(!disconnected.load(Ordering::Acquire));
+    fn inbound172(correlation: &str, request: WorkerRequestOperation) -> WorkerInbound {
+        WorkerInbound::Request(WorkerRequest {
+            version: REMOTE_WORKER_VERSION, correlation_id: correlation.into(),
+            connection_epoch: "epoch".into(), worker: worker(), command: command(), request,
+        })
+    }
+
+    fn read_inbound172(reader: &mut std::io::BufReader<UnixStream>) -> WrapperToDaemon {
+        let bytes = bridget_transport::jsonl::read_unix_line(reader, MAX_WORKER_FRAME_BYTES,
+            bridget_transport::jsonl::LineDeadline::Absolute(Instant::now() + Duration::from_secs(1)))
+            .unwrap().unwrap();
+        serde_json::from_slice(&bytes).unwrap()
     }
 
     #[test]
-    fn worker172_inbound_backpressure_stops_during_shutdown() {
-        let (sender, receiver) = mpsc::sync_channel(1);
-        sender.send(1).unwrap();
-        let disconnected = Arc::new(AtomicBool::new(false));
-        let stop = disconnected.clone();
-        let (done, completed) = mpsc::sync_channel(1);
-        let reader = std::thread::spawn(move || {
-            done.send(enqueue_worker_inbound(&sender, 2, &stop)).unwrap();
-        });
-        assert!(matches!(completed.recv_timeout(Duration::from_millis(100)),
-            Err(mpsc::RecvTimeoutError::Timeout)));
-        disconnected.store(true, Ordering::Release);
-        assert!(!completed.recv_timeout(Duration::from_secs(2)).unwrap(),
-            "l'arrêt doit débloquer le lecteur même si la file reste pleine");
-        reader.join().unwrap();
-        assert_eq!(receiver.try_recv().unwrap(), 1);
-        assert!(receiver.try_recv().is_err(), "pas de remise après arrêt");
+    fn worker172_inbound_saturation_refuses_slot_without_late_effect() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        reserve(&runtime.store);
+        let (sender, receiver) = mpsc::sync_channel(8);
+        for index in 0..8 {
+            sender.send(inbound172(&format!("queued-{index}"), WorkerRequestOperation::Reconcile {})).ok().unwrap();
+        }
+        let (socket, peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(socket));
+        let mut reader = std::io::BufReader::new(peer);
+        let disconnected = AtomicBool::new(false);
+        let cancelled = Mutex::new(BTreeSet::new());
+        let slot = slot(17);
+        dispatch_worker_inbound(&sender,
+            inbound172("refused-slot", WorkerRequestOperation::ReserveResultSlot { slot }),
+            &writer, &disconnected, &cancelled).unwrap();
+        let WrapperToDaemon::WorkerResponse { response } = read_inbound172(&mut reader) else { panic!("réponse attendue"); };
+        response.validate().unwrap();
+        assert_eq!(response.correlation_id, "refused-slot");
+        assert_eq!(response.connection_epoch, "epoch");
+        assert_eq!(response.command, command());
+        assert_eq!(response.response, WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResourceLimit });
+        assert!(!disconnected.load(Ordering::Acquire));
+        // Le consommateur reste bloqué au-delà du délai maître de trois secondes.
+        std::thread::sleep(Duration::from_millis(3100));
+        for index in 0..8 {
+            let WorkerInbound::Request(request) = receiver.try_recv().unwrap() else { panic!("requête attendue"); };
+            assert_eq!(request.correlation_id, format!("queued-{index}"));
+            let _ = runtime.handle(&request, "epoch", &disconnected);
+        }
+        assert!(receiver.try_recv().is_err(), "la réservation refusée ne peut être exécutée plus tard");
+        assert!(runtime.store.inventory().unwrap().1.is_empty(), "aucun slot orphelin");
+        dispatch_worker_inbound(&sender, inbound172("after-saturation", WorkerRequestOperation::Reconcile {}),
+            &writer, &disconnected, &cancelled).unwrap();
+        let WorkerInbound::Request(request) = receiver.try_recv().unwrap() else { panic!("requête attendue"); };
+        assert_eq!(request.correlation_id, "after-saturation", "le canal reste utilisable");
+    }
 
+    #[test]
+    fn worker172_inbound_saturation_refuses_probes_and_observes_cancel() {
         let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(inbound172("queued", WorkerRequestOperation::Reconcile {})).ok().unwrap();
+        let (socket, peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(socket));
+        let mut reader = std::io::BufReader::new(peer);
+        let disconnected = AtomicBool::new(false);
+        let cancelled = Mutex::new(BTreeSet::new());
+        let parent = ProviderPermissions {
+            version: 1, source: "provider_turn".into(), run_id: "inbound-run".into(),
+            provider_session_id: "session".into(), provider_instance_id: "codex".into(),
+            revision: 1, driver: "codex_app_server".into(), cwd: "/project".into(),
+            runtime_mode: "full-access".into(), interaction_mode: "default".into(),
+            provider_policy: serde_json::json!({"kind":"codex","approval_policy":"never","sandbox_policy":{"type":"readOnly"}}),
+        };
+        let candidate = CandidateProbeCandidate {
+            candidate_id: "c01".into(), project_id: "project-162".into(), origin_host: "mac".into(),
+            origin_cwd: "/project".into(), source_root: "/project".into(), remote_root: "/remote".into(),
+            source_root_identity: "repo".into(), relative_cwd: ".".into(), base_commit: None,
+            agent_type: "codex".into(), model: "model".into(), effort: None,
+            posture: Some(SpawnPosture::Discovery), workspace: None,
+        };
+        let probe = CandidateProbe {
+            version: WORKER_CANDIDATE_PROBE_VERSION, correlation_id: "probe-v1".into(),
+            connection_epoch: "epoch".into(), worker: worker(), admission_id: "admission".into(),
+            policy_revision: 1, parent: parent.clone(), candidates: vec![candidate.clone()],
+        };
+        dispatch_worker_inbound(&sender, WorkerInbound::CandidateProbe(probe.clone()), &writer, &disconnected, &cancelled).unwrap();
+        let WrapperToDaemon::CandidateProbeResult { result } = read_inbound172(&mut reader) else { panic!("sonde v1 attendue"); };
+        result.validate_shape().unwrap();
+        assert_eq!(result.correlation_id, probe.correlation_id);
+        assert_eq!(result.connection_epoch, probe.connection_epoch);
+        assert_eq!(result.admission_id, probe.admission_id);
+        assert_eq!(result.policy_revision, probe.policy_revision);
+        assert!(matches!(result.verdicts[0], CandidateProbeVerdict::Ineligible { reason: CandidateProbeRefusal::ResourceLimit, .. }));
+        let probe = CandidateProbeV2 {
+            version: WORKER_CANDIDATE_PROBE_V2_VERSION, correlation_id: "probe-v2".into(),
+            connection_epoch: "epoch".into(), worker: worker(), admission_id: "admission".into(),
+            policy_revision: 1, parent,
+            candidates: vec![CandidateProbeV2Candidate {
+                candidate_id: "c001".into(), project_id: candidate.project_id, origin_host: candidate.origin_host,
+                origin_cwd: candidate.origin_cwd, source_root: candidate.source_root, remote_root: candidate.remote_root,
+                source_root_identity: candidate.source_root_identity, relative_cwd: candidate.relative_cwd,
+                expected_base_commit: None, engine: "codex".into(), connection_id: "codex-cartae".into(),
+                agent_type: candidate.agent_type, model: candidate.model, effort: None,
+                workload: AutoDelegateWorkload::General, posture: candidate.posture, workspace: None,
+            }],
+        };
+        dispatch_worker_inbound(&sender, WorkerInbound::CandidateProbeV2(probe.clone()), &writer, &disconnected, &cancelled).unwrap();
+        let WrapperToDaemon::CandidateProbeResultV2 { result } = read_inbound172(&mut reader) else { panic!("sonde v2 attendue"); };
+        result.validate_shape().unwrap();
+        assert_eq!(result.correlation_id, probe.correlation_id);
+        assert_eq!(result.connection_epoch, probe.connection_epoch);
+        assert_eq!(result.admission_id, probe.admission_id);
+        assert_eq!(result.policy_revision, probe.policy_revision);
+        assert!(matches!(result.verdicts[0], CandidateProbeV2Verdict::Ineligible { reason: CandidateProbeRefusal::ResourceLimit, .. }));
+        assert!(result.resources.cpu_percent.is_none() && result.resources.available_memory_percent.is_none());
+        dispatch_worker_inbound(&sender, inbound172("cancel", WorkerRequestOperation::Cancel { target: WorkerCancelScope::Command {} }),
+            &writer, &disconnected, &cancelled).unwrap();
+        assert!(cancelled.lock().unwrap().contains(&json_digest(&command()).unwrap()), "annulation observée sans attendre le consommateur");
+        let WrapperToDaemon::WorkerResponse { response } = read_inbound172(&mut reader) else { panic!("refus corrélé attendu"); };
+        assert_eq!(response.correlation_id, "cancel");
+        assert!(!disconnected.load(Ordering::Acquire));
+        assert!(matches!(receiver.try_recv().unwrap(), WorkerInbound::Request(_)));
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn worker172_inbound_shutdown_never_blocks_or_delivers() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (socket, _peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(socket));
+        let stopped = AtomicBool::new(true);
+        let cancelled = Mutex::new(BTreeSet::new());
+        assert!(dispatch_worker_inbound(&sender, inbound172("stopped", WorkerRequestOperation::Reconcile {}),
+            &writer, &stopped, &cancelled).is_err());
+        assert!(receiver.try_recv().is_err());
         drop(receiver);
-        assert!(!enqueue_worker_inbound(&sender, 3, &AtomicBool::new(false)));
+        assert!(dispatch_worker_inbound(&sender, inbound172("closed", WorkerRequestOperation::Reconcile {}),
+            &writer, &AtomicBool::new(false), &cancelled).is_err());
+    }
+
+    #[test]
+    fn worker172_inbound_late_slot_is_closed_by_terminal_reconciliation() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        reserve(&runtime.store);
+        let late = slot(18);
+        runtime.store.reserve_result_slot(&late, 101).unwrap();
+        runtime.store.set_phase(&command(), WorkerCommandPhase::Terminal, 102).unwrap();
+        runtime.reconcile(&command()).unwrap();
+        let slots = runtime.store.inventory().unwrap().1;
+        assert_eq!(slots.len(), 1);
+        assert!(slots[0].producer_terminal);
+        assert_eq!(slots[0].closed, Some(WorkerSlotClosureProof::Cancelled));
     }
 
     #[test]

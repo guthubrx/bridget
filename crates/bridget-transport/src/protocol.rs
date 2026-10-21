@@ -2707,6 +2707,7 @@ pub enum CandidateProbeRefusal {
     WorkspaceDiverged,
     WorkspaceBaseUnavailable,
     CapabilityUnavailable,
+    ResourceLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

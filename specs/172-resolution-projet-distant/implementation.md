@@ -807,7 +807,7 @@ de file sont worker172_inbound_backpressure_preserves_all_requests et
 worker172_inbound_backpressure_stops_during_shutdown. Le troisième est
 spec172_remote_result_reservation_error_messages_wait_for_cleanup.
 La liste exacte, les12 filtres et leurs résumés réels sont conservés dans
-/home/moi/.cache/bridget-channel172/tests.json.
+/home/moi/.cache/bridget-channel172/tests-r3.json.
 Le RED est dans /home/moi/.cache/bridget-channel172/queue-red.log.
 
 Une première sélection GREEN s’est arrêtée sur un filtre vide après un renommage
@@ -819,3 +819,68 @@ Code validé par les tests ; revue indépendante et paquets encore à préparer
 à ce checkpoint. Aucune activation pendant les autres missions Cartae.
 Le défaut de file est reproduit, mais il n’est pas présenté comme la cause
 prouvée de l’incident837972ad.
+
+
+### Contre-revue r3 et correction de la surcharge
+
+La revue r3 (Task6bddf1b0-88e8-45c7-ac5d-c4ac098bb137) a interdit
+l’activation de1c5d8b6e. Son résultat complet a été lu et acquitté.
+Les paquets Mac/Linux1c5d8b6e sont marqués non activables. Aucun service changé.
+
+L’attente de10ms est retirée. La file conserve huit demandes. Une neuvième
+demande reçoit immédiatement un refus ResourceLimit corrélé, sans entrer dans
+la file et sans fermer le canal. Le lecteur continue donc à lire les annulations.
+Le marqueur d’annulation est posé avant la remise ou le refus, comme auparavant.
+
+Les sondes v1/v2 disposent elles aussi d’un refus ResourceLimit, avec leurs
+identifiants d’origine et des ressources inconnues (None). Ce nouveau motif
+fermé de CandidateProbeRefusal impose la même activation maître avant worker.
+Retour arrière : worker/client/unité anciens avant ancien maître.
+Aucune compatibilité ancien maître/nouveau worker n’est annoncée.
+T3 ne possède pas l’équivalent de cette file distante assortie d’un délai RPC
+de trois secondes. Sa file locale a été lue ; ce refus explicite est l’adaptation
+nécessaire à la borne du transport Bridget, sans file non bornée ni délai muet.
+
+Le test de saturation utilise la vraie sérialisation et une paire de sockets Unix.
+Huit demandes sont retenues, la réservation supplémentaire est refusée ; le
+consommateur reste bloqué au-delà de trois secondes, puis sa file est drainée.
+Aucun slot n’a été créé et la même connexion accepte ensuite une autre demande.
+Les retours des sondes v1/v2 et une annulation passent aussi par ce canal réel.
+
+Réserve r3 sur une réservation déjà exécutée mais inconnue du maître :
+le code existant finish_result_slots ferme tous les slots de la commande lors
+de la réconciliation terminale, y compris ceux absents de Task.remote_result_slots.
+Il est conservé. Un test direct d’un slot tardif puis d’un reçu terminal prouve
+producer_terminal=true et closed=Cancelled. La saturation n’est donc pas traitée
+par un effacement de reçu, un élargissement du quota ou une fausse disposition.
+Cela ne transforme pas l’incident837972ad en cause de saturation prouvée.
+
+Réserve r3 sur le dossier non encore vérifié : une tâche terminale avec
+cleanup_done=true mais sans rapport de dossier reste waiting_for_children.
+Le message demande maintenant d’attendre cette vérification. Il n’autorise
+la nouvelle demande qu’après ce rapport. Le nouveau test pose un vrai
+WorkspaceRecord dans le reçu, puis la correspondance workspace_report_mission.
+La garde de rapport existante n’est pas retirée.
+
+Les refus locaux remote_result_slot_limit, _mismatch et _stale reçoivent aussi
+un texte et une action. Les refus connus de droits ou d’identité ne sont plus
+présentés comme une cause inconnue. Le champ error reste volontairement inchangé :
+son producteur WorkerRefusal est un enum Copy fermé, sans texte libre. Le suffixe
+private-secret du test est une entrée artificielle pour vérifier le texte
+générique ; le correctif n’ajoute aucune source de texte privé au code durable.
+
+Validation r4 :19 tests distincts du démon PASS, dont14 régressions précédentes,
+quatre tests du lecteur et un test des messages/rapports/rejeux. Un test ciblé
+du protocole PASS séparément : routing168_ids_et_probe_v2_sont_fermes.
+Aucune suite complète. Les noms et comptes exacts sont conservés dans :
+/home/moi/.cache/bridget-channel172/tests-r4.json
+/home/moi/.cache/bridget-channel172/transport-test.json
+
+Le premier appel de revue r3 avait renvoyé workspace_base_unavailable avant
+toute tâche ou admission durable. Le commit était présent et une lecture Git
+durcie a réussi. L’unique reprise strictement identique a admis la revue ; la
+cause fine de ce refus ponctuel n’est pas reproduite. Aucune nouvelle clé, aucun
+autre moteur et aucune CLI de délégation utilisés pour contourner ce refus.
+
+Code et tests r4 prêts pour contre-revue ; ni activation ni nouvelle mission
+métier ni qualification réelle du correctif actif revendiquées à ce checkpoint.
