@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -175,6 +176,32 @@ class PreparationTests(unittest.TestCase):
         remote = json.loads((remote_ns / "agents.json").read_text())["machines"]["test"]["mappings"]
         self.assertEqual(local, remote)
         self.assertIn(result["project_id"], local)
+
+    def test_new_project_preparation_never_runs_source_hooks(self):
+        marker = self.base / "hook-marker.txt"
+        script = "#!/bin/sh\nprintf '%s\\n' \"$0\" >> " + shlex.quote(str(marker)) + "\n"
+        for name in ("post-checkout", "post-commit"):
+            hook = self.source / ".git/hooks" / name
+            hook.write_text(script)
+            hook.chmod(0o700)
+        empty_config = self.base / "empty.gitconfig"
+        empty_config.write_text("")
+        with patch.dict(os.environ, GIT_CONFIG_GLOBAL=str(empty_config), GIT_CONFIG_NOSYSTEM="1"):
+            hooked = self.base / "hooked"
+            hooked.mkdir()
+            bundle_path = hooked / "source.bundle"
+            prep.export_bundle(self.source, self.sha, bundle_path)
+            self.assertTrue(self.inspect()["needs_bundle"])
+            with bundle_path.open("rb") as stream:
+                result = self.receive(stream)
+            root = Path(result["mapping"]["remote_root"])
+            self.assertEqual(prep.git(root, "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
+            self.assertEqual((root / "code.txt").read_text(), "première version\n")
+            self.assertFalse(marker.exists())
+            subprocess.run(["git", "-C", str(self.source), "-c", "user.name=Test",
+                            "-c", "user.email=test@example.invalid", "commit", "-q",
+                            "--allow-empty", "-m", "test: contrôle"], check=True)
+            self.assertTrue(marker.exists())
 
 if __name__ == "__main__":
     unittest.main()
