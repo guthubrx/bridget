@@ -678,3 +678,27 @@ privés exclus. Le test de reçu maître vérifie les messages, le même TaskID 
 le rejeu strict sans nouveau lancement. Les régressions d’extraction, de
 préparation/rejeu d’un vrai worktree, d’admission et de réserve du store passent.
 Un filtre vide a été exclu du compte, puis remplacé par les deux tests du store.
+
+
+Complément après revue indépendante r1 : l’import local du commit utilise lui
+aussi la classification Git. Les motifs doivent terminer la ligne de diagnostic,
+ce qui évite de prendre un nom de fichier pour une erreur système. Le test ENOSPC
+crée maintenant réellement sa branche avant l’échec et prouve son retrait.
+
+Références T3 supplémentaires lues : GitVcsDriverCore.ts collecte stdout et
+stderr séparément (lignes982–1024) ; Bridget reprend cette séparation avec un
+maximum de 1 Mio par flux et drainage du surplus. Orchestrator.ts, autour de
+Workspace preparation failed (lignes8275–8334), présente une préparation échouée
+comme telle. Bridget projette désormais work_state=failed lorsqu’une préparation
+a échoué avant toute création d’enfant, sans modifier status ni le reçu durable.
+error_recovery précise que le rejeu ne relance rien et qu’il faut corriger la
+cause puis annuler la tâche avant une nouvelle demande. Le reçu incomplet invite
+à vérifier le disque et le dossier. Aucun nettoyage ou redémarrage implicite.
+
+14 tests distincts PASS après ce complément. La première exécution d’un nouveau
+test de flux a refusé une forme status incomplète ; le test emploie maintenant
+la forme déjà autorisée. La liste blanche Git n’a pas changé. Les paquets161df06a
+préparés avant cette revue ne seront pas activés. Les nouveaux motifs du protocole
+fermé imposent d’activer le maître corrigé avant le worker corrigé ; le retour
+arrière doit suivre l’ordre inverse. Les anciens workers restent lisibles par le
+nouveau maître. Aucune compatibilité ancien maître/nouveau worker n’est annoncée.

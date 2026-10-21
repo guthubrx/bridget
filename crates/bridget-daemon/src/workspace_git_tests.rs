@@ -26,14 +26,30 @@ fn isolated(case: &str, name: &str, check: impl FnOnce(&Path)) {
         "large" => "/usr/bin/awk 'BEGIN { for (i=0;i<262144;i++) { print \"abcdefgh\"; print \"ijklmnop\" > \"/dev/stderr\" } }'".into(),
         "slow" => format!("printf '%s' \"$$\" > '{}/git.pid'; exec /bin/sleep 2", root.display()),
         "disk-full" => format!(r#"previous=
+repository=
+branch=
+checkout=no
 for argument in "$@"; do
- if [ "$previous" = worktree ] && [ "$argument" = add ]; then
-  printf '%s\n' 'fatal: unable to write a file: No space left on device' >&2
-  exit 128
- fi
+ [ "$previous" = -C ] && repository=$argument
+ [ "$previous" = -b ] && branch=$argument
+ [ "$previous" = worktree ] && [ "$argument" = add ] && checkout=yes
  previous=$argument
 done
+if [ "$checkout" = yes ]; then
+ '{}' -c core.hooksPath=/dev/null -C "$repository" branch "$branch" HEAD || exit 1
+ printf '%s' "$branch" > "$BRIDGET_GIT154_TEST_ROOT/branch-created"
+ printf '%s\n' 'fatal: unable to write a file: No space left on device' >&2
+ exit 128
+fi
+exec '{}' "$@""#, real_git.display(), real_git.display()),
+        "fetch-full" => format!(r#"for argument in "$@"; do
+ if [ "$argument" = fetch ]; then
+  printf '%s\n' 'fatal: unable to create temporary file: No space left on device' >&2
+  exit 128
+ fi
+done
 exec '{}' "$@""#, real_git.display()),
+        "large-out-no-space" => "/usr/bin/awk 'BEGIN { for (i=0;i<262144;i++) print \"abcdefgh\" }'; printf '%s\n' 'fatal: No space left on device' >&2; exit 128".into(),
         "forbidden" => format!("printf launched > '{}/launched'", root.display()),
         _ => panic!("fixture inconnue"),
     };
@@ -208,7 +224,8 @@ fn native154_git_sorties_cumulees_bornees() {
             .unwrap();
             assert!(output.success());
             assert!(output.truncated);
-            assert_eq!(output.stdout.len() + output.stderr.len(), MAX_OUTPUT);
+            assert_eq!(output.stdout.len(), MAX_OUTPUT);
+            assert_eq!(output.stderr.len(), MAX_OUTPUT);
             assert!(matches!(
                 preflight_classified(&root.join("repo"), None, None),
                 Err(WorkspacePreflightError::Technical(error))
@@ -798,12 +815,14 @@ fn worktree171_failed_extraction_releases_only_its_unused_branch() {
 
 #[test]
 fn worktree172_disk_full_keeps_a_distinct_reason() {
-    isolated("disk-full", "workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason", |_| {
+    isolated("disk-full", "workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason", |fixture| {
         with_repo(|repo| {
             let plan = preflight_classified(repo, None, Some("disk-full172")).unwrap();
             let task = uuid::Uuid::new_v4().to_string();
             let error = create(&plan, &task).unwrap_err();
             assert!(error.starts_with("workspace_disk_full:"), "{error}");
+            assert_eq!(fs::read_to_string(fixture.join("branch-created")).unwrap(), "disk-full172");
+            assert!(error.contains("branche retirée : true"), "{error}");
             assert!(!repo.join(".worktrees").join(&task[..8]).exists());
             assert!(!run_git(repo, &["show-ref", "--verify", "--quiet", "refs/heads/disk-full172"], READ_TIMEOUT).unwrap().success());
         });
@@ -821,7 +840,38 @@ fn worktree172_failure_classification_uses_only_git_diagnostics() {
         ("remote: fatal: No space left on device", "workspace_create_failed"),
         ("warning: example No space left on device", "workspace_create_failed"),
         ("fatal: unknown checkout failure", "workspace_create_failed"),
+        ("fatal: bad path 'No space left on device'", "workspace_create_failed"),
+        ("error: cannot read file 'Permission denied'", "workspace_create_failed"),
     ] {
         assert_eq!(worktree_failure_code(stderr), expected);
     }
+}
+
+#[test]
+fn worktree172_fetch_disk_full_is_classified_without_moving_checkout() {
+    isolated("fetch-full", "workspace_git::tests::worktree172_fetch_disk_full_is_classified_without_moving_checkout", |_| {
+        with_repo(|repo| {
+            let base = resolve_source_commit(repo, None).unwrap();
+            let target = repo.parent().unwrap().join("target");
+            fixture_git(repo, &["clone", "--quiet", repo.to_str().unwrap(), target.to_str().unwrap()]);
+            fs::write(repo.join("sub/tracked"), "new commit\n").unwrap();
+            fixture_git(repo, &["commit", "-qam", "new"]);
+            let commit = resolve_source_commit(repo, None).unwrap();
+            let error = import_remote_commit(&target, &commit).unwrap_err();
+            assert!(error.starts_with("workspace_disk_full:"), "{error}");
+            assert_eq!(resolve_source_commit(&target, None).unwrap(), base);
+            assert!(!target.join(".git/FETCH_HEAD").exists());
+        });
+    });
+}
+
+#[test]
+fn worktree172_stdout_flood_does_not_hide_stderr_reason() {
+    isolated("large-out-no-space", "workspace_git::tests::worktree172_stdout_flood_does_not_hide_stderr_reason", |fixture| {
+        let output = run_git(&fixture.join("repo"), &["status", "--porcelain=v1", "--untracked-files=normal"], READ_TIMEOUT).unwrap();
+        assert!(output.truncated);
+        assert_eq!(output.stdout.len(), MAX_OUTPUT);
+        assert!(output.stderr.len() <= MAX_OUTPUT);
+        assert_eq!(worktree_failure_code(&output.stderr), "workspace_disk_full");
+    });
 }

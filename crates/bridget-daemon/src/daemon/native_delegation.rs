@@ -3549,7 +3549,7 @@ fn remote_workspace_error_message(error: &str) -> Option<&'static str> {
         "DiskFull" => "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée.",
         "FilesystemAccessDenied" => "Préparation distante impossible : accès au disque refusé ou système de fichiers en lecture seule. La tâche reste enregistrée.",
         "WorkspacePrepareFailed" => "Git n’a pas pu préparer ou vérifier le dossier de travail distant. La tâche reste enregistrée.",
-        "WorkspacePrepareIncomplete" => "Le reçu d’une préparation précédente est incomplet. La tâche est conservée ; sa reprise doit être vérifiée avant toute nouvelle mission.",
+        "WorkspacePrepareIncomplete" => "Le reçu d’une préparation précédente est incomplet. Vérifiez l’espace disque et le dossier de travail. La tâche est conservée.",
         "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de préparer un dossier supplémentaire. La tâche reste enregistrée.",
         "WorkerUnavailable" | "StaleConnection" => "Le service Bridget de la machine distante est indisponible. La tâche reste enregistrée.",
         _ => "La préparation du dossier de travail distant a échoué. Le service distant n’a pas fourni de cause précise. La tâche reste enregistrée.",
@@ -3587,7 +3587,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         json!({"state":state})
     });
-    let work_state = if !workspace_report_ready(task) && task.terminal() {
+    let preparation_failed = matches!(task.state.as_str(), "queued" | "starting")
+        && task.child_instance.is_none()
+        && task.mission_issued_at.is_none()
+        && task.error.as_deref().is_some_and(|error| {
+            error.starts_with("remote_start_failed:remote_workspace_prepare:")
+        });
+    let work_state = if preparation_failed {
+        "failed"
+    } else if !workspace_report_ready(task) && task.terminal() {
         "waiting_for_children"
     } else {
         match task.state.as_str() {
@@ -3611,6 +3619,9 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "mailbox":mailbox});
     if let Some(message) = task.projected_error().as_deref().and_then(remote_workspace_error_message) {
         view["error_message"] = json!(message);
+        if preparation_failed {
+            view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
+        }
     }
     view["quota_wait"] = task.quota_waits.last().filter(|wait| task.state == "working" && wait.phase != QuotaWaitPhase::Done)
         .map(|wait| json!({"round":wait.round,"phase":wait.phase,"resumes_at":wait.reset_at.saturating_add(30)}))
@@ -22899,6 +22910,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let result = remote_admission_outcome(&state, &task_id, Err(code)).unwrap();
             assert_eq!(result["task_id"], task_id);
             assert_eq!(result["error"], format!("remote_start_failed:remote_workspace_prepare:{reason}"));
+            assert_eq!(result["work_state"], "failed");
+            assert_eq!(result["status"], admitted["status"], "aucune mutation de l’état durable pour un libellé");
+            assert!(result["error_recovery"].as_str().unwrap().contains("annulez cette tâche"));
             let message = result["error_message"].as_str().unwrap();
             assert!(message.contains(fragment), "{result}");
             assert!(!message.contains("private-secret"));

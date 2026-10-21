@@ -35,6 +35,11 @@ impl GitOutput {
         self.code == Some(0)
     }
 
+    fn workspace_complete(self) -> Result<String, String> {
+        let code = worktree_failure_code(&self.stderr);
+        self.complete().map_err(|error| format!("{code}: {error}"))
+    }
+
     fn complete(self) -> Result<String, String> {
         if self.truncated {
             return Err("sortie Git tronquée à 1 Mio".into());
@@ -346,7 +351,6 @@ fn capture(
     let mut out = Vec::new();
     let mut err = Vec::new();
     let mut truncated = false;
-    let mut retained = 0_usize;
     let mut eof = [false; 2];
     let mut status = None;
     loop {
@@ -361,11 +365,10 @@ fn capture(
             match reader.read(&mut buffer) {
                 Ok(0) => eof[index] = true,
                 Ok(count) => {
-                    // La somme est recalculée avant chaque lecture, avec un seul
-                    // budget pour stdout ET stderr. Le surplus est drainé.
-                    let remaining = MAX_OUTPUT.saturating_sub(retained);
+                    // Comme T3, chaque flux garde son budget : stdout ne peut
+                    // pas effacer le diagnostic stderr. Total borné à 2 Mio.
+                    let remaining = MAX_OUTPUT.saturating_sub(bytes.len());
                     bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-                    retained += count.min(remaining);
                     truncated |= count > remaining;
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
@@ -528,7 +531,7 @@ pub(crate) fn import_remote_commit(cwd: &Path, commit: &str) -> Result<(), Strin
     let origin = local_origin(cwd)?;
     let actual = resolve_source_commit(&origin, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
     if actual != commit { return Err("expected_base_commit_mismatch".into()); }
-    run_git(cwd, &["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin.to_str().ok_or("workspace_path_unsafe")?, commit], CREATE_TIMEOUT)?.complete()?;
+    run_git(cwd, &["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin.to_str().ok_or("workspace_path_unsafe")?, commit], CREATE_TIMEOUT)?.workspace_complete()?;
     let actual = resolve_source_commit(cwd, Some(commit)).map_err(WorkspacePreflightError::into_legacy)?;
     if actual != commit { return Err("expected_base_commit_mismatch".into()); }
     Ok(())
@@ -712,14 +715,14 @@ fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, r
 // O(B), B sortie Git déjà bornée. Comme T3, seuls les diagnostics Git
 // classés sortent vers le parent ; aucun chemin, URL ou stderr brut transmis.
 fn worktree_failure_code(stderr: &str) -> &'static str {
-    for line in stderr.lines().map(str::trim_start) {
+    for line in stderr.lines().map(str::trim) {
         if !line.starts_with("fatal:") && !line.starts_with("error:") {
             continue;
         }
-        if line.contains("No space left on device") || line.contains("Disk quota exceeded") {
+        if line.ends_with("No space left on device") || line.ends_with("Disk quota exceeded") {
             return "workspace_disk_full";
         }
-        if line.contains("Permission denied") || line.contains("Read-only file system") {
+        if line.ends_with("Permission denied") || line.ends_with("Read-only file system") {
             return "workspace_access_denied";
         }
     }
