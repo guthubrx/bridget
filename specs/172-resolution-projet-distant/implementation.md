@@ -662,8 +662,8 @@ plafonds de réservation ResourceLimit. Les erreurs de stockage non classées
 restent StoreUnavailable ; aucune cause n’est inventée depuis ce seul code.
 
 La réponse native ajoute error_message en français pour un échec de préparation.
-Le champ error, l’identifiant de tâche, l’état, la clé et le rejeu restent
-inchangés. Les vieux refus StoreUnavailable reçoivent une explication qui dit
+Le champ error, l’identifiant de tâche, le status durable, la clé et le rejeu
+restent inchangés. Les vieux refus StoreUnavailable reçoivent une explication qui dit
 explicitement que la cause précise manque. Aucun stderr brut n’est transmis.
 
 Tests et activation : voir le reçu de livraison et les journaux privés sous
@@ -671,7 +671,7 @@ Tests et activation : voir le reçu de livraison et les journaux privés sous
 worktree existant de la session172 ; les services restent inchangés pendant
 les tests et la préparation.
 
-Validation ciblée : 10 tests distincts PASS, aucune suite complète. La simulation
+Validation initiale avant revue r1 : 10 tests distincts PASS, aucune suite complète. La simulation
 Git ENOSPC passe par le vrai exécuteur Git et le nettoyage conditionnel de branche.
 Les tests du worker couvrent les refus OS, les codes sérialisés et les détails
 privés exclus. Le test de reçu maître vérifie les messages, le même TaskID et
@@ -702,3 +702,49 @@ préparés avant cette revue ne seront pas activés. Les nouveaux motifs du prot
 fermé imposent d’activer le maître corrigé avant le worker corrigé ; le retour
 arrière doit suivre l’ordre inverse. Les anciens workers restent lisibles par le
 nouveau maître. Aucune compatibilité ancien maître/nouveau worker n’est annoncée.
+
+
+Revue r2 (Task832e891b) : APPROVE pour le code, avec précision documentaire.
+Le total 14 désigne les tests exécutés, nouveaux tests et régressions ciblées,
+et non le nombre de fonctions ajoutées. Liste exacte des 14 résultats PASS :
+- workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason : PASS.
+- workspace_git::tests::worktree172_failure_classification_uses_only_git_diagnostics : PASS.
+- workspace_git::tests::worktree172_fetch_disk_full_is_classified_without_moving_checkout : PASS.
+- workspace_git::tests::worktree172_stdout_flood_does_not_hide_stderr_reason : PASS.
+- remote_worker::tests::worker172_workspace_refusals_preserve_cause_without_private_details : PASS.
+- daemon::native_delegation::tests::spec172_remote_workspace_error_message_preserves_receipt_and_replay : PASS.
+- workspace_git::tests::worktree171_failed_extraction_releases_only_its_unused_branch : PASS.
+- remote_worker::tests::worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications : PASS.
+- daemon::native_delegation::tests::spec172_remote_admission_error_conserve_identifiant_erreur_et_rejeu : PASS.
+- workspace_git::tests::native154_git_environnement_et_options_effectives : PASS.
+- remote_worker::tests::spec172_worker_store_conserve_replays_sans_reserver_les_recus_termines : PASS.
+- remote_worker::tests::spec172_worker_store_quota_distincte_dune_panne_de_stockage : PASS.
+- workspace_git::tests::native154_git_sorties_cumulees_bornees : PASS.
+- workspace_git::tests::worktree171_branch_mirror_import_isolation_and_refusals : PASS.
+
+Les commandes cargo compilent les tests une seule fois ; le même binaire de
+bibliothèque exécute ensuite les dix filtres du reçu tests-r2.json. Les noms ont
+été relus via --list et chaque compte comparé au résumé réel de son exécution.
+Le journal complet et la liste calculée se trouvent dans
+/home/moi/.cache/bridget-message-errors172/test-proof-r2.json.
+
+Choix demandé par la revue sur les statuts : status reste l’état durable v1.
+Le client lit work_state et error_message pour connaître l’échec de préparation.
+Après cet échec dans le reçu d’admission, aucun résultat enfant n’est à attendre :
+il faut corriger la cause et annuler cette tâche avant une nouvelle demande.
+Le correctif ne transforme pas une erreur de préparation en relance automatique
+et ne modifie pas les données durables pour corriger un libellé. Ce choix est
+couvert par spec172_remote_workspace_error_message_preserves_receipt_and_replay.
+
+Choix demandé sur le retour arrière : remettre d’abord le worker ET son client
+sur l’ancien binaire, restaurer son unité, puis seulement l’ancien maître.
+Un ancien maître ne sait pas décoder les quatre nouveaux motifs fermés.
+Aucun mélange ancien maître/nouveau worker n’est annoncé comme compatible.
+Les scripts d’activation et les sauvegardes de ce lot restent privés.
+
+Réserves faibles r2 : les noms Debug existants restent le code technique v1 ;
+les valeurs inconnues reçoivent un texte générique. Aucun nettoyage de répertoire
+partiel n’a été ajouté. Le retrait conditionnel d’une branche demeure interdit
+si un worktree l’utilise ; les données et résidus sont conservés. Le nouveau test
+ENOSPC prouve uniquement le retrait de sa branche créée et inutilisée, sans
+prétendre valider la suppression d’un worktree partiel.

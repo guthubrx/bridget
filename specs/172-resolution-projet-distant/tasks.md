@@ -55,4 +55,4 @@
 - [x] T042 Vérifier les plafonds et le rejeu primaire, activer le correctif maître hors mission active, puis obtenir la lecture officielle de la Task623 depuis trajets bus.
 
 - [x] T043 Distinguer disque plein, accès disque refusé, échec Git et reçu de préparation incomplet ; ajouter un message français sans modifier le code technique ni le rejeu.
-- [ ] T044 Vérifier les erreurs sur un Git contrôlé et le reçu MCP ; préparer puis activer sans interrompre les missions ni relancer T3.
+- [ ] T044 Activer sans interrompre les missions ni relancer T3, puis obtenir la lecture MCP officielle du reçu historique ; 14 tests ciblés, revue du code et paquets r2 déjà validés. Reçu : validation/erreurs-preparation172.md.
