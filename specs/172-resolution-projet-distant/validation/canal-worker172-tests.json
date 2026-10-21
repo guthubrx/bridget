@@ -1,0 +1,60 @@
+{
+  "source_base": "3524fc2c8bac0131dfd238519186b336ce0910b4",
+  "source_files_sha256": {
+    "crates/bridget-daemon/src/daemon.rs": "750204e09e14bd3af82f9dfce5ce3919cac6477a39f3634702d206b990f443d7",
+    "crates/bridget-daemon/src/daemon/native_delegation.rs": "6ab5e90b8a8151532ef6338b3c4e7db8a49e189edfc3a25e814c217309dce69f",
+    "crates/bridget-daemon/src/remote_worker.rs": "1e4f697760838d38cccb75ab16e9490480cfd6d94e662bcfb341b736715dfb3e",
+    "crates/bridget-transport/src/protocol.rs": "674451b70e65eb780df00082898fa62e53ccbf4d0fffe69f880dd2bc8bd65336"
+  },
+  "daemon_distinct_pass": 29,
+  "daemon_test_names": [
+    "daemon::native_delegation::tests::spec172_remote_result_reservation_negotiates_deadline_on_wire",
+    "remote_worker::tests::worker162_maitre_ancien_refuse_avant_hello_et_credential",
+    "remote_worker::tests::spec172_worker_reconnects_after_probe_eof_before_sending_credential",
+    "daemon::presence_tests::remote162_worker_auth_epoch_et_contact_sans_presence_fournisseur",
+    "workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason",
+    "workspace_git::tests::worktree172_failure_classification_uses_only_git_diagnostics",
+    "workspace_git::tests::worktree172_fetch_disk_full_is_classified_without_moving_checkout",
+    "workspace_git::tests::worktree172_stdout_flood_does_not_hide_stderr_reason",
+    "remote_worker::tests::worker172_workspace_refusals_preserve_cause_without_private_details",
+    "daemon::native_delegation::tests::spec172_remote_workspace_error_message_preserves_receipt_and_replay",
+    "workspace_git::tests::worktree171_failed_extraction_releases_only_its_unused_branch",
+    "remote_worker::tests::worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications",
+    "daemon::native_delegation::tests::spec172_remote_admission_error_conserve_identifiant_erreur_et_rejeu",
+    "workspace_git::tests::native154_git_environnement_et_options_effectives",
+    "remote_worker::tests::spec172_worker_store_conserve_replays_sans_reserver_les_recus_termines",
+    "remote_worker::tests::spec172_worker_store_quota_distincte_dune_panne_de_stockage",
+    "workspace_git::tests::native154_git_sorties_cumulees_bornees",
+    "workspace_git::tests::worktree171_branch_mirror_import_isolation_and_refusals",
+    "remote_worker::tests::worker172_inbound_cancel_maintenance_keeps_other_commands_alive",
+    "remote_worker::tests::worker172_inbound_cancel_maintenance_signals_once_and_waits_for_drain",
+    "remote_worker::tests::worker172_inbound_cancelled_reservation_is_refused",
+    "remote_worker::tests::worker172_inbound_deadline_is_checked_after_queueing",
+    "remote_worker::tests::worker172_inbound_deadline_is_checked_after_store_lock",
+    "remote_worker::tests::worker172_inbound_expired_reservation_has_no_store_effect",
+    "remote_worker::tests::worker172_inbound_late_slot_is_closed_by_terminal_reconciliation",
+    "remote_worker::tests::worker172_inbound_saturation_refuses_probes_and_observes_cancel",
+    "remote_worker::tests::worker172_inbound_saturation_refuses_slot_without_late_effect",
+    "remote_worker::tests::worker172_inbound_shutdown_never_blocks_or_delivers",
+    "daemon::native_delegation::tests::spec172_remote_result_reservation_error_messages_wait_for_cleanup"
+  ],
+  "transport_distinct_pass": 2,
+  "transport": [
+    {
+      "test": "routing168_ids_et_probe_v2_sont_fermes",
+      "rc": 0,
+      "passed": 1,
+      "failed": 0
+    },
+    {
+      "test": "routing172_result_slot_deadline_wire_preserves_legacy",
+      "rc": 0,
+      "passed": 1,
+      "failed": 0
+    }
+  ],
+  "full_suite_run": false,
+  "providers_started": false,
+  "daemon_command": "cargo test --offline -p bridget-daemon --lib --no-run --message-format=json, puis les 16 filtres du reçu privé sur le binaire compilé",
+  "note_transport": "Tests r5 conservés : le fichier du protocole est inchangé entre r5 et r6."
+}

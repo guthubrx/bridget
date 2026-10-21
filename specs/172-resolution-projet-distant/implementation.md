@@ -953,3 +953,66 @@ ne garantissent pas un mélange ancien maître/nouveau worker. Les paquets1c5d8b
 restent non activables. Aucune nouvelle compilation de livraison avant le verdict
 de la revue r5. Aucun redémarrage T3, aucun nettoyage Cartae par ce lot.
 La cause fine de la coupure historique837972ad reste non prouvée.
+
+
+### Contre-revue r5 et annulation supervisée — état courant r6
+
+La revue r5 (Taskc22c8591-96c4-4785-9090-a9525678d231) a confirmé les
+corrections de réservation, mais refusé l'activation pour deux défauts du
+nouveau chemin d'entretien. Son résultat complet est lu et acquitté.
+
+Les deux cas ont été reproduits avant correction. Un reçu sans son fichier de
+marqueur provoquait StoreUnavailable au tick et empêchait la commande suivante
+d'être réconciliée. Un processus de test qui conserve son groupe après SIGTERM
+recevait trois signaux pendant trois ticks. Le reçu et son slot restaient ouverts,
+ce qui était correct ; la répétition du signal ne l'était pas.
+Preuves RED : /home/moi/.cache/bridget-channel172/cancel-red.log et cancel-red.json.
+La première compilation du test a signalé un nom de type erroné dans l'assertion ;
+la preuve RED retenue est l'exécution suivante,0PASS/2FAIL, pas cette compilation.
+
+L'erreur d'annulation reste maintenant limitée à sa commande. Elle ne fait
+plus échouer l'entretien des autres commandes. Les erreurs globales de santé
+ou d'inventaire du store gardent leur refus fermé existant. Une identité vérifiée
+reçoit une seule tentative de signal pendant la vie du worker. Les appels
+suivants observent son drainage. Cette mémoire est bornée par les commandes
+encore présentes dans le store et n'accorde jamais une clôture fictive.
+Une erreur ou un processus encore vivant reste en attente, sans SIGKILL.
+
+Référence T3 relue pour ces deux défauts :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+(lignes3197–3228) : gestionnaire d'arrêt enregistré avec once:true et attente
+résolue par course d'événements. Bridget reprend le traitement unique de
+l'arrêt, puis observe séparément le groupe distant. T3 ne possède pas ce
+parcours de drainage fédéré. Aucune boucle d'agents ou surveillance ajoutée.
+
+Les deux tests de maintenance passent maintenant par runtime.tick, pas seulement
+runtime.reconcile. Ils prouvent que la seconde commande continue après l'erreur,
+qu'un seul SIGTERM est envoyé, que le slot reste ouvert tant que le groupe vit,
+puis que le reçu et le slot ne ferment qu'après sortie et preuve de drainage.
+Le processus de test est fini par fermeture de son entrée, sans signal forcé.
+
+Le test maître supplémentaire appelle réellement reserve_remote_result_slot.
+Il lit la trame sur socket et vérifie les deux couples de versions : ancien
+worker → ReserveResultSlot inchangé ; capacité négociée → ReserveResultSlotUntil
+avec une échéance future en millisecondes, bornée à3s. Un refus corrélé est
+rendu au maître sans ajout de slot. Les anciens reçus sont préservés.
+Deux essais de montage du test ont révélé les contraintes existantes :
+registre privé0600 et interdiction de retirer un ancien slot. La fixture respecte
+ces règles ; aucun droit ni invariant de production n'a été assoupli.
+
+Précision sur starting (réserve r5 non revérifiée par le relecteur) : après
+l'échec de réservation, l'arrêt explicite de la même commande est demandé
+dans start_remote_task. Une Observation terminale est traitée par
+handle_worker_message, qui appelle fleet.invalidate_for_stop. L'entretien natif
+reconnaît ensuite DesiredLifecycleState::Stopped et passe la tâche starting
+sans mission remise à failed, avant la clôture habituelle. Ce chemin ne dépend
+pas du délai métier réservé à working. Sans preuve d'arrêt, l'attente demeure
+volontaire : aucun état terminé n'est inventé.
+
+Validation r6 :29 tests distincts du démon PASS,2 tests du protocole PASS
+conservés (protocole inchangé depuis r5), aucune suite complète.
+La preuve durable liste les noms exacts et les empreintes des quatre fichiers
+Rust compilés : validation/canal-worker172-tests.json. Les résumés complets
+des16 filtres se trouvent dans /home/moi/.cache/bridget-channel172/tests-r6.json.
+La revue indépendante r6 et les paquets restent à produire à ce checkpoint.
+Aucun service changé, aucun redémarrage T3 ni nouvelle mission métier.

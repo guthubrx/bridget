@@ -22985,6 +22985,66 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(state); cleanup(&config);
     }
 
+
+    #[test]
+    fn spec172_remote_result_reservation_negotiates_deadline_on_wire() {
+        use bridget_transport::protocol::*;
+        use std::os::unix::fs::PermissionsExt;
+        for bounded in [false, true] {
+            let (mut st, config, mut task, _result) = remote162_capture_fixture();
+            let root = st.fixture_root.as_ref().unwrap().0.clone();
+            let registry = root.join("slot-deadline-registry.json");
+            std::fs::write(&registry, serde_json::to_vec(&json!({"agents":{},"machines":{"cartae":{
+                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+            }}})).unwrap()).unwrap();
+            std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600)).unwrap();
+            st.registry = AgentRegistry::load_from_path(registry).unwrap();
+            task.state = "starting".into();
+            task.mission = Uuid::new_v4().to_string();
+            let previous_slots = task.remote_result_slots.clone();
+            eprintln!("{}", json!({"case":"reservation_wire_fixture","bounded":bounded,"retained_slots":previous_slots.len(),"mission":task.mission}));
+            st.delegation_store.save(&task).unwrap();
+            let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
+            let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+            st.connections.insert("slot-worker".into(), Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
+            st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection {
+                identity: worker, conn_id: "slot-worker".into(), epoch: "slot-epoch".into(),
+                capabilities: if bounded { vec![WorkerCapability::ResultSlotDeadlineV1] } else { vec![] },
+                last_contact: Instant::now(), last_contact_at: unix_timestamp(), contact: WorkerContactState::Connected,
+            });
+            let state = Arc::new(Mutex::new(st));
+            let responder = state.clone();
+            let listener = std::thread::spawn(move || {
+                let mut reader = std::io::BufReader::new(peer);
+                let mut line = String::new();
+                std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                let DaemonToWrapper::WorkerRequest { request } = serde_json::from_str(&line).unwrap() else {
+                    panic!("une requête worker doit être réellement écrite");
+                };
+                request.validate().unwrap();
+                match &request.request {
+                    WorkerRequestOperation::ReserveResultSlotUntil { expires_at_ms, .. } if bounded => {
+                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+                        assert!(*expires_at_ms > now && *expires_at_ms <= now + 3000,
+                            "échéance en millisecondes encore valide et bornée à trois secondes");
+                    }
+                    WorkerRequestOperation::ReserveResultSlot { .. } if !bounded => {}
+                    other => panic!("opération incompatible avec la capacité négociée : {other:?}"),
+                }
+                let reply = responder.lock().unwrap().pending_worker_responses
+                    .get(&request.correlation_id).unwrap().reply.clone();
+                reply.send(WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResourceLimit }).unwrap();
+            });
+            let outcome = reserve_remote_result_slot(&state, &task.task_id);
+            listener.join().unwrap();
+            assert_eq!(outcome.unwrap_err(), "remote_result_slot:ResourceLimit");
+            assert_eq!(state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap().remote_result_slots, previous_slots);
+            drop(state); cleanup(&config);
+        }
+    }
+
     #[test]
     fn spec172_remote_result_reservation_error_messages_wait_for_cleanup() {
         let (state, config, rx, _reader, request, _root) = routing168_fixture(1);

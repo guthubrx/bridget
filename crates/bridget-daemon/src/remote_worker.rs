@@ -2030,6 +2030,7 @@ struct WorkerRuntime {
     abandoned: BTreeMap<String, std::process::Child>,
     last_maintenance: Instant,
     cancelled: Arc<Mutex<BTreeSet<String>>>,
+    cancel_signal_issued: BTreeSet<String>,
     host_resources: crate::host_resources::HostResourceCollector,
     last_resource_refresh: Instant,
 }
@@ -2113,6 +2114,7 @@ impl WorkerRuntime {
             abandoned: BTreeMap::new(),
             last_maintenance: Instant::now() - Duration::from_secs(1),
             cancelled: Arc::new(Mutex::new(BTreeSet::new())),
+            cancel_signal_issued: BTreeSet::new(),
             host_resources: crate::host_resources::HostResourceCollector::default(),
             last_resource_refresh: Instant::now(),
         };
@@ -3760,6 +3762,9 @@ impl WorkerRuntime {
             }
         }
         drop(terminal);
+        let retained_commands = commands.iter().map(|command| json_digest(&command.identity))
+            .collect::<Result<BTreeSet<_>, _>>().map_err(unavailable)?;
+        self.cancel_signal_issued.retain(|key| retained_commands.contains(key));
         for command in commands {
             if matches!(
                 command.phase,
@@ -3770,11 +3775,12 @@ impl WorkerRuntime {
             let cancel_key = json_digest(&command.identity).map_err(unavailable)?;
             let cancel_requested = self.cancelled.lock().map_err(unavailable)?.contains(&cancel_key);
             if cancel_requested {
-                match self.cancel(&command.identity) {
-                    Ok(_) => continue,
-                    Err(WorkerRefusal::UnknownExecution) => {}
-                    Err(reason) => return Err(reason),
+                // L'erreur reste propre à cette commande. Aucune clôture n'est
+                // déduite d'un arrêt non prouvé, ni coupure des autres missions.
+                if let Err(reason) = self.cancel(&command.identity) {
+                    log::warn!("worker_cancel_pending reason={reason:?}");
                 }
+                continue;
             }
             let bootstrap_expired = matches!(
                 command.phase,
@@ -3991,8 +3997,10 @@ impl WorkerRuntime {
             WorkerStoreError::Unknown => WorkerRefusal::UnknownExecution,
             error => refuse(error),
         })?;
+        let cancel_key = json_digest(command).map_err(unavailable)?;
         self.prepared.remove(&command.command_id);
         if let Some(held) = self.held.remove(&command.command_id) {
+            self.cancel_signal_issued.insert(cancel_key);
             self.abandoned
                 .insert(command.command_id.clone(), held.child.abandon().0);
             return self.reconcile(command);
@@ -4001,6 +4009,9 @@ impl WorkerRuntime {
             receipt.phase,
             WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
         ) {
+            return self.reconcile(command);
+        }
+        if self.cancel_signal_issued.contains(&cancel_key) {
             return self.reconcile(command);
         }
         let marker = receipt.marker.ok_or(WorkerRefusal::UnknownExecution)?;
@@ -4020,6 +4031,9 @@ impl WorkerRuntime {
         if crate::managed_process::process_birth(marker.pgid).ok() != Some(marker.birth) {
             return Err(WorkerRefusal::UnknownExecution);
         }
+        // Une seule tentative de signal pour cette identité vérifiée. Les
+        // appels suivants observent le drainage ; ils ne simulent pas son succès.
+        self.cancel_signal_issued.insert(cancel_key);
         if let Some(child) = self.running.get_mut(&command.command_id) {
             child.request_group_termination().map_err(unavailable)?;
         } else {
@@ -4539,6 +4553,92 @@ mod tests {
     use bridget_transport::protocol::{RemoteResultDeferredReason, RemoteResultDisposition};
     use std::os::unix::fs::symlink;
 
+
+
+    #[test]
+    fn worker172_inbound_cancel_maintenance_keeps_other_commands_alive() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let now = worker_now();
+        let first = command();
+        let mut second = first.clone();
+        second.command_id = "other-command".into();
+        second.task_id = "other-task".into();
+        for identity in [&first, &second] {
+            runtime.store.reserve_command(identity, &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        }
+        let result_slot = slot(24);
+        runtime.store.reserve_result_slot(&result_slot, now).unwrap();
+        let marker = ManagedMarker {
+            pgid: 9999999, birth: 1, instance_id: first.instance_id.clone(),
+            command_id: first.command_id.clone(), generation: first.generation,
+        };
+        runtime.store.mark_command(&first, &marker, now).unwrap();
+        // Le reçu est valide, mais le fichier de marqueur manque : cancel renvoie
+        // StoreUnavailable avant tout signal. Ce défaut doit rester à cette commande.
+        runtime.cancelled.lock().unwrap().insert(json_digest(&first).unwrap());
+        let tick = runtime.tick();
+        eprintln!("{}", serde_json::json!({"case":"cancel_maintenance_error",
+            "tick_ok":tick.is_ok(),"first_phase":runtime.store.command(&first).unwrap().phase,
+            "second_phase":runtime.store.command(&second).unwrap().phase}));
+        assert_eq!(tick, Ok(()));
+        assert_eq!(runtime.store.command(&second).unwrap().phase, WorkerCommandPhase::Unknown);
+        assert!(!matches!(runtime.store.command(&first).unwrap().phase, WorkerCommandPhase::Terminal));
+        assert!(runtime.store.read_slot(&result_slot.identity).unwrap().unwrap().closed.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker172_inbound_cancel_maintenance_signals_once_and_waits_for_drain() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) { drop(self.0.stdin.take()); let _ = self.0.wait(); }
+        }
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let trace = fixture.0.join("term-count");
+        let script = "import signal,sys\ndef stop(sig,frame):\n with open(sys.argv[1],'a') as f: f.write('TERM\\n')\nsignal.signal(signal.SIGTERM,stop)\nprint('ready',flush=True)\nsys.stdin.buffer.read()\n";
+        let mut child = ChildGuard(Command::new("python3").args(["-u","-c",script])
+            .arg(&trace).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
+            .process_group(0).spawn().unwrap());
+        let mut ready = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(child.0.stdout.take().unwrap()), &mut ready).unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let now = worker_now();
+        runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        let result_slot = slot(25);
+        runtime.store.reserve_result_slot(&result_slot, now).unwrap();
+        let marker = ManagedMarker {
+            pgid: child.0.id(), birth: crate::managed_process::process_birth(child.0.id()).unwrap(),
+            instance_id: command().instance_id, command_id: command().command_id, generation: command().generation,
+        };
+        runtime.store.mark_command(&command(), &marker, now).unwrap();
+        write_json(&runtime.store.root.join("markers").join(format!("{}.json", marker_key(&command()))), &marker).unwrap();
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command()).unwrap());
+        for _ in 0..3 {
+            runtime.last_maintenance = Instant::now() - Duration::from_secs(2);
+            runtime.tick().unwrap();
+        }
+        let signals = fs::read_to_string(&trace).unwrap().lines().count();
+        let phase = runtime.store.command(&command()).unwrap().phase;
+        let open = runtime.store.read_slot(&result_slot.identity).unwrap().unwrap().closed.is_none();
+        let live = crate::managed_process::group_exists(marker.pgid).unwrap();
+        eprintln!("{}", serde_json::json!({"case":"cancel_signal_once","signals":signals,
+            "group_live":live,"phase":phase,"slot_open":open}));
+        drop(child.0.stdin.take());
+        child.0.wait().unwrap();
+        let receipt = runtime.store.command(&command()).unwrap();
+        write_json(&drain_proof_path(&runtime.store.root, &command()), &WorkerDrainProof::expected(&receipt).unwrap()).unwrap();
+        runtime.last_maintenance = Instant::now() - Duration::from_secs(2);
+        runtime.tick().unwrap();
+        let closed = runtime.store.read_slot(&result_slot.identity).unwrap().unwrap();
+        assert_eq!(signals, 1, "un même arrêt ne doit pas envoyer SIGTERM à chaque tick");
+        assert!(live && open && phase != WorkerCommandPhase::Terminal, "pas de clôture fictive tant que le groupe vit");
+        assert_eq!(runtime.store.command(&command()).unwrap().phase, WorkerCommandPhase::Terminal);
+        assert!(closed.producer_terminal && closed.closed == Some(WorkerSlotClosureProof::Cancelled));
+    }
 
     #[test]
     fn worker172_inbound_expired_reservation_has_no_store_effect() {
