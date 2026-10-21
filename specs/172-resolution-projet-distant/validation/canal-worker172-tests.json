@@ -3,7 +3,7 @@
   "source_files_sha256": {
     "crates/bridget-daemon/src/daemon.rs": "750204e09e14bd3af82f9dfce5ce3919cac6477a39f3634702d206b990f443d7",
     "crates/bridget-daemon/src/daemon/native_delegation.rs": "6ab5e90b8a8151532ef6338b3c4e7db8a49e189edfc3a25e814c217309dce69f",
-    "crates/bridget-daemon/src/remote_worker.rs": "0c0ba3e15bd1d4d48a4e680c3286007203a56a065ce7be7963edad6fed240d92",
+    "crates/bridget-daemon/src/remote_worker.rs": "59fa3658bcd003d5bc4fa6030b99721139c2bafc4ff9091c9961941100ad0c7a",
     "crates/bridget-transport/src/protocol.rs": "674451b70e65eb780df00082898fa62e53ccbf4d0fffe69f880dd2bc8bd65336"
   },
   "daemon_distinct_pass": 34,
@@ -61,5 +61,21 @@
   "full_suite_run": false,
   "providers_started": false,
   "note_transport": "Protocole inchangé depuis r5.",
-  "note_source": "Empreintes des fichiers compilés ; une attestation privée post-commit cite le commit exact."
+  "note_source": "Empreintes des fichiers compilés ; une attestation privée post-commit cite le commit exact.",
+  "review_source": "95c6ec4c74e38687892d66a1289b429055d17292",
+  "test_rounds": [
+    {
+      "phase": "r7",
+      "distinct_pass": 34,
+      "summary": "tests-r7.json"
+    },
+    {
+      "phase": "guard_after_review",
+      "pass": 1,
+      "overlaps_previous_test": true,
+      "test": "worker172_inbound_r7_held_abandon_does_not_hide_stop_signal",
+      "rc": 0
+    }
+  ],
+  "production_unchanged_after_review": true
 }

@@ -1067,3 +1067,27 @@ opus158-20261021-bus-arches-reprise-v1, encore chosen sans Task après le rejeu
 strict de son propriétaire. Il n'autorise ni écriture manuelle du reçu ni
 nouvelle clé. Sa récupération réelle après activation n'est pas encore prouvée.
 Aucun service ni T3 redémarré à ce checkpoint. Paquets et contre-revue à suivre.
+
+
+### Revue r7 approuvée et condition de test levée
+
+Task717dcdea-1c6f-4b11-baa5-792feffc1327 : APPROVE sur le code de production,
+aucune régression trouvée. Résultat complet lu et acquitté. Le relecteur demande
+une garde de sortie pour le processus held en cas de panic du test. Cette garde
+Drop écrit maintenant le fichier de sortie avant tout retour de la fonction.
+Le test held seul a été recompilé et rejoué :1PASS. Il recoupe les34 tests
+précédents et n'augmente donc pas le total distinct.
+
+Le code avant le module cfg(test) est byte-identique à95c6ec4c, source approuvée.
+Aucun nouveau changement de production après cette revue. La couverture D4
+reste un défaut de signal injecté dans le callback ; aucun refus réel de killpg
+sur un processus étranger n'est revendiqué.
+
+Politique confirmée (réserve3) : l'erreur propre à une commande la laisse non
+terminale ou Unknown et reste visible aux lectures explicites et dans le journal.
+Elle ne ferme plus le canal des autres tâches. La santé, l'inventaire et la
+clôture globale du store continuent à échouer de façon fermée. Aucune corruption
+n'est traitée comme un reçu Terminal ou un signal réussi.
+
+T045/T046 sont closes sur source, tests et revue. T044 reste ouverte pour
+l'activation réelle et sa lecture MCP. Aucun paquet refusé n'a été activé.

@@ -4618,6 +4618,11 @@ mod tests {
         let script_path = fixture.0.join("held-bootstrap.py");
         let trace = fixture.0.join("held-term");
         let stop = fixture.0.join("held-stop");
+        struct StopGuard(PathBuf);
+        impl Drop for StopGuard {
+            fn drop(&mut self) { let _ = fs::write(&self.0, b"stop"); }
+        }
+        let _stop_guard = StopGuard(stop.clone());
         let script = format!(r#"#!/usr/bin/python3
 import json,os,signal,sys,time
 from pathlib import Path
