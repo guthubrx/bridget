@@ -2017,6 +2017,18 @@ struct HeldRuntime {
     ready_at: i64,
     expires: Instant,
 }
+fn worker_stop_once(
+    issued: &mut BTreeSet<String>,
+    key: &str,
+    stop: impl FnOnce() -> Result<(), WorkerRefusal>,
+) -> Result<(), WorkerRefusal> {
+    if !issued.contains(key) {
+        stop()?;
+        issued.insert(key.to_owned());
+    }
+    Ok(())
+}
+
 struct WorkerRuntime {
     config: WorkerRuntimeConfig,
     identity: WorkerIdentity,
@@ -3774,32 +3786,23 @@ impl WorkerRuntime {
             }
             let cancel_key = json_digest(&command.identity).map_err(unavailable)?;
             let cancel_requested = self.cancelled.lock().map_err(unavailable)?.contains(&cancel_key);
-            if cancel_requested {
-                // L'erreur reste propre à cette commande. Aucune clôture n'est
-                // déduite d'un arrêt non prouvé, ni coupure des autres missions.
-                if let Err(reason) = self.cancel(&command.identity) {
-                    log::warn!("worker_cancel_pending reason={reason:?}");
-                }
-                continue;
-            }
             let bootstrap_expired = matches!(
                 command.phase,
                 WorkerCommandPhase::Reserved
                     | WorkerCommandPhase::Marked
                     | WorkerCommandPhase::ReleaseAuthorized
             ) && command.deadline_at <= worker_now();
-            if (command.startup_failed || bootstrap_expired)
-                && !matches!(
-                    command.phase,
-                    WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-                )
-            {
+            if cancel_requested || command.startup_failed || bootstrap_expired {
                 match self.cancel(&command.identity) {
-                    Ok(_) | Err(WorkerRefusal::UnknownExecution) => {}
-                    Err(error) => return Err(error),
+                    Ok(_) => continue,
+                    Err(reason) => log::warn!("worker_cancel_pending reason={reason:?}"),
                 }
             }
-            self.reconcile(&command.identity)?;
+            // L'absence de preuve de signal n'empêche pas l'observation : une
+            // commande sans marqueur devient Unknown, jamais Terminal par défaut.
+            if let Err(reason) = self.reconcile(&command.identity) {
+                log::warn!("worker_reconcile_pending reason={reason:?}");
+            }
         }
         Ok(())
     }
@@ -4000,7 +4003,6 @@ impl WorkerRuntime {
         let cancel_key = json_digest(command).map_err(unavailable)?;
         self.prepared.remove(&command.command_id);
         if let Some(held) = self.held.remove(&command.command_id) {
-            self.cancel_signal_issued.insert(cancel_key);
             self.abandoned
                 .insert(command.command_id.clone(), held.child.abandon().0);
             return self.reconcile(command);
@@ -4031,20 +4033,19 @@ impl WorkerRuntime {
         if crate::managed_process::process_birth(marker.pgid).ok() != Some(marker.birth) {
             return Err(WorkerRefusal::UnknownExecution);
         }
-        // Une seule tentative de signal pour cette identité vérifiée. Les
-        // appels suivants observent le drainage ; ils ne simulent pas son succès.
-        self.cancel_signal_issued.insert(cancel_key);
-        if let Some(child) = self.running.get_mut(&command.command_id) {
-            child.request_group_termination().map_err(unavailable)?;
-        } else {
-            self.markers
-                .stop_current_group(
-                    &marker_key(command),
-                    Duration::from_millis(100),
-                    Duration::from_millis(10),
-                )
-                .map_err(unavailable)?;
-        }
+        // Un échec ne mémorise pas un signal réussi. Après envoi, les appels
+        // suivants observent le drainage sans répéter le signal.
+        let running = &mut self.running;
+        let markers = &self.markers;
+        worker_stop_once(&mut self.cancel_signal_issued, &cancel_key, || {
+            if let Some(child) = running.get_mut(&command.command_id) {
+                child.request_group_termination().map_err(unavailable)?;
+            } else {
+                markers.stop_current_group(&marker_key(command),
+                    Duration::from_millis(100), Duration::from_millis(10)).map_err(unavailable)?;
+            }
+            Ok(())
+        })?;
         self.reconcile(command)
     }
     fn journal(
@@ -4555,8 +4556,148 @@ mod tests {
 
 
 
+
+    #[test]
+    fn worker172_inbound_r7_failed_signal_can_be_retried() {
+        let mut issued = BTreeSet::new();
+        let attempts = std::cell::Cell::new(0);
+        let first = worker_stop_once(&mut issued, "command", || {
+            attempts.set(attempts.get() + 1);
+            Err(WorkerRefusal::StoreUnavailable)
+        });
+        assert_eq!(first, Err(WorkerRefusal::StoreUnavailable));
+        assert!(issued.is_empty(), "un refus de signal ne vaut pas envoi");
+        worker_stop_once(&mut issued, "command", || {
+            attempts.set(attempts.get() + 1);
+            Ok(())
+        }).unwrap();
+        worker_stop_once(&mut issued, "command", || panic!("signal déjà envoyé")).unwrap();
+        assert_eq!(attempts.get(), 2);
+        assert!(issued.contains("command"));
+    }
+
+    #[test]
+    fn worker172_inbound_r7_expired_marker_error_is_scoped() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let now = worker_now();
+        let first = command();
+        let mut second = first.clone();
+        second.command_id = "other-expired-command".into();
+        second.task_id = "other-expired-task".into();
+        runtime.store.reserve_command(&first, &"d".repeat(64), &placement(), now - 1, now - 2).unwrap();
+        runtime.store.reserve_command(&second, &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        let marker = ManagedMarker { pgid: 9999999, birth: 1, instance_id: first.instance_id.clone(),
+            command_id: first.command_id.clone(), generation: first.generation };
+        runtime.store.mark_command(&first, &marker, now - 2).unwrap();
+        let outcome = runtime.tick();
+        eprintln!("{}", serde_json::json!({"case":"expired_marker_error","tick_ok":outcome.is_ok(),
+            "other_phase":runtime.store.command(&second).unwrap().phase}));
+        assert_eq!(outcome, Ok(()));
+        assert_eq!(runtime.store.command(&second).unwrap().phase, WorkerCommandPhase::Unknown);
+    }
+
+    #[test]
+    fn worker172_inbound_r7_cancel_before_marker_reconciles_unknown() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let now = worker_now();
+        runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command()).unwrap());
+        runtime.tick().unwrap();
+        let phase = runtime.store.command(&command()).unwrap().phase;
+        eprintln!("{}", serde_json::json!({"case":"cancel_before_marker","phase":phase}));
+        assert_eq!(phase, WorkerCommandPhase::Unknown);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn worker172_inbound_r7_held_abandon_does_not_hide_stop_signal() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let script_path = fixture.0.join("held-bootstrap.py");
+        let trace = fixture.0.join("held-term");
+        let stop = fixture.0.join("held-stop");
+        let script = format!(r#"#!/usr/bin/python3
+import json,os,signal,sys,time
+from pathlib import Path
+trace=Path({trace:?})
+stop=Path({stop:?})
+def term(sig,frame):
+ trace.write_text("TERM\n")
+ sys.exit(0)
+signal.signal(signal.SIGTERM,term)
+os.setpgid(0,0)
+args=sys.argv
+birth=int(Path("/proc/self/stat").read_text().rsplit(")",1)[1].split()[19])
+ready={{"event":"bootstrap_ready","pid":os.getpid(),"pgid":os.getpid(),"birth":birth,
+ "instance_id":args[args.index("--instance-id")+1],"command_id":args[args.index("--command-id")+1],
+ "generation":int(args[args.index("--generation")+1])}}
+os.write(101,(json.dumps(ready)+"\n").encode())
+while not stop.exists(): time.sleep(.01)
+"#, trace=trace.to_string_lossy(),stop=stop.to_string_lossy());
+        fs::write(&script_path,script).unwrap();
+        fs::set_permissions(&script_path,fs::Permissions::from_mode(0o700)).unwrap();
+        let launch = crate::managed_process::ManagedLaunch {
+            bootstrap_executable: script_path, wrapper_executable: "/bin/true".into(), wrapper_args: vec![],
+            identity: crate::managed_process::ManagedIdentity { instance_id: command().instance_id,
+                command_id: command().command_id, generation: command().generation },
+            cwd: fixture.0.clone(), env: BTreeMap::new(),
+        };
+        let mut bootstrap = crate::managed_process::spawn_managed_bootstrap(&launch).unwrap();
+        bootstrap.set_ready_timeout(Duration::from_secs(2)).unwrap();
+        let marked = bootstrap.wait_ready().unwrap().persist_marker(&runtime.markers,&marker_key(&command())).unwrap();
+        let marker = marked.marker().marker().clone();
+        let now = worker_now();
+        runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        runtime.store.mark_command(&command(),&marker,now).unwrap();
+        let parent = ProviderPermissions {
+            version:1, source:"native_wrapper".into(),run_id:"run".into(),provider_session_id:"session".into(),
+            provider_instance_id:"parent".into(),revision:1,driver:"codex_app_server".into(),
+            cwd:"/origin".into(),runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+            provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never","sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+        };
+        let request = WorkerPrepare {
+            machine_id:"cartae".into(),project_id:"project".into(),provisioning_revision:1,mapping_revision:1,
+            origin_host:"origin".into(),origin_cwd:"/origin".into(),source_root:"/origin".into(),remote_root:"/remote".into(),
+            source_root_identity:"git:held".into(),relative_cwd:".".into(),base_commit:None,agent_type:"codex".into(),
+            model:"fixture".into(),effort:None,posture:None,workspace:None,parent,
+        };
+        let definition = ResolvedAgentDefinition {
+            command:"/bin/true".into(),args:vec![],protocol:"codex_app_server".into(),forbidden_env:vec![],
+            pass_env:vec![],permissions:"plan".into(),claude_config_dir:None,queue_capacity:1,notify_timeout_secs:60,
+            mcp:bridget_transport::protocol::ResolvedMcpDefinition{interactive:"off".into(),acp_session:false},
+            capabilities:Default::default(),digest:"a".repeat(64),
+        };
+        let prepared = PreparedRuntime { routing:None,command:command(),request,
+            prepared:WorkerPrepared { token:"held".into(),placement:placement(),definition,child_policy:serde_json::json!({}),
+                effective_posture:SpawnPosture::Discovery,prepared_at:now,workspace:None },
+            expires:Instant::now()+Duration::from_secs(300) };
+        runtime.held.insert(command().command_id,HeldRuntime { prepared,mission_id:"held-mission".into(),
+            child:marked,ready_at:now,expires:Instant::now()+Duration::from_secs(300) });
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command()).unwrap());
+        for _ in 0..3 {
+            runtime.last_maintenance=Instant::now()-Duration::from_secs(2);
+            runtime.tick().unwrap();
+        }
+        let signalled = trace.exists();
+        eprintln!("{}",serde_json::json!({"case":"held_stop","signal_observed":signalled}));
+        // Sortie garantie même sur RED : le processus de test observe ce fichier.
+        fs::write(&stop,b"stop").unwrap();
+        if let Some(child)=runtime.abandoned.get_mut(&command().command_id) { child.wait().unwrap(); }
+        assert!(signalled,"fermer RELEASE n'est pas une preuve d'envoi de SIGTERM");
+    }
+
     #[test]
     fn worker172_inbound_cancel_maintenance_keeps_other_commands_alive() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) { drop(self.0.stdin.take()); let _ = self.0.wait(); }
+        }
+        let child = ChildGuard(Command::new("/bin/cat").stdin(Stdio::piped())
+            .stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn().unwrap());
         let fixture = Fixture::new();
         let mut runtime = runtime_fixture(&fixture);
         let now = worker_now();
@@ -4570,7 +4711,7 @@ mod tests {
         let result_slot = slot(24);
         runtime.store.reserve_result_slot(&result_slot, now).unwrap();
         let marker = ManagedMarker {
-            pgid: 9999999, birth: 1, instance_id: first.instance_id.clone(),
+            pgid: child.0.id(), birth: crate::managed_process::process_birth(child.0.id()).unwrap(), instance_id: first.instance_id.clone(),
             command_id: first.command_id.clone(), generation: first.generation,
         };
         runtime.store.mark_command(&first, &marker, now).unwrap();

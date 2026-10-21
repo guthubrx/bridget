@@ -1016,3 +1016,54 @@ Rust compilés : validation/canal-worker172-tests.json. Les résumés complets
 des16 filtres se trouvent dans /home/moi/.cache/bridget-channel172/tests-r6.json.
 La revue indépendante r6 et les paquets restent à produire à ce checkpoint.
 Aucun service changé, aucun redémarrage T3 ni nouvelle mission métier.
+
+
+### Contre-revue r6 et régressions de l'arrêt — état courant r7
+
+La revue r6 (Taskfaa1352b-4f40-48d1-9d15-69af985084d5) est lue et acquittée.
+Elle confirme le chemin starting vers failed après Observation terminale.
+Elle a trouvé trois défauts réels restants, reproduits avant modification :
+échéance du préparateur avec marqueur absent provoquant un tick en erreur ;
+annulation avant marqueur laissant Reserved ; préparateur retenu abandonné sans
+signal alors que sa clé était déjà marquée. RED0PASS/3FAIL observé :
+/home/moi/.cache/bridget-channel172/stop-r7-red.log et stop-r7-red.json.
+
+La même branche supervise maintenant l'annulation demandée, l'échec de démarrage
+et l'échéance du préparateur. Une erreur de cette commande est journalisée puis
+son observation reste tentée. UnknownExecution ne supprime plus cette observation.
+Les erreurs globales de santé, d'inventaire et de clôture des résultats gardent
+le refus fermé antérieur ; elles ne sont pas présentées comme un succès local.
+
+La fermeture du canal RELEASE n'est plus mémorisée comme un signal. Le
+préparateur abandonné reste supervisé et peut recevoir SIGTERM au passage suivant.
+La clé du signal n'est mémorisée qu'après succès de l'appel d'arrêt. Un refus
+permet donc une nouvelle tentative ; après un envoi accepté, seule l'observation
+du drainage continue. Le test d'un échec d'envoi utilise un callback contrôlé ;
+il ne tente jamais de signaler un processus d'un autre utilisateur.
+
+Le test retenu lance un vrai préparateur de test par spawn_managed_bootstrap,
+avec groupe et statut Ready réels. Il ignore la fermeture du canal et écrit la
+preuve du signal reçu. Son fichier d'arrêt garantit la fin du test, même en RED.
+La fixture d'erreur de marqueur utilise désormais un groupe de test réellement
+vivant : le groupe fictif absent pouvait légitimement être clos par la preuve
+de groupe de contrôle vide existante. Aucun invariant de production n'a changé
+pour adapter cette fixture.
+
+Référence T3 inchangée, relue avant ce correctif : ClaudeAdapterV2.ts,
+gestionnaire d'arrêt once:true et observation séparée de l'attente. L'abandon
+du canal et la preuve d'envoi ne sont pas confondus. T3 ne couvre pas le groupe
+de processus fédéré. Les garanties de drainage Bridget restent nécessaires.
+
+Validation :34 tests distincts du démon PASS (17 filtres non vides),2 tests du
+protocole conservés, aucune suite complète. Tous les noms et empreintes des
+quatre fichiers Rust sont actualisés dans validation/canal-worker172-tests.json.
+La preuve privée post-commit rattache ces mêmes octets au commit exact.
+Le test existant spec168_rollback_admission_sql_garde_chosen_puis_reprise_sans_decideur
+passe également : après changement d'époque du maître, le choix durable est
+repris sans nouvelle décision et crée exactement une Task.
+
+Ce mécanisme de récupération existant est pertinent pour l'admission
+opus158-20261021-bus-arches-reprise-v1, encore chosen sans Task après le rejeu
+strict de son propriétaire. Il n'autorise ni écriture manuelle du reçu ni
+nouvelle clé. Sa récupération réelle après activation n'est pas encore prouvée.
+Aucun service ni T3 redémarré à ce checkpoint. Paquets et contre-revue à suivre.
