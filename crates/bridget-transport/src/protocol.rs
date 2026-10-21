@@ -2601,6 +2601,7 @@ pub enum WorkerRefusal {
     ProbeExpired,
     JournalUnavailable,
     ResultConflict,
+    ResultSlotExpired,
     UnknownExecution,
 }
 
@@ -2640,6 +2641,7 @@ pub enum WorkerCapability {
     CandidateProbeV2,
     ReleaseLeaseV2,
     ParentSourceProofV1,
+    ResultSlotDeadlineV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3219,6 +3221,10 @@ pub enum WorkerRequestOperation {
     ReserveResultSlot {
         slot: WorkerResultSlot,
     },
+    ReserveResultSlotUntil {
+        slot: WorkerResultSlot,
+        expires_at_ms: i64,
+    },
     Release {
         permit: WorkerReleasePermit,
     },
@@ -3645,7 +3651,11 @@ impl WorkerRequest {
                 start.validate()?;
                 worker_require(start.placement.matches_worker(&self.worker))
             }
-            WorkerRequestOperation::ReserveResultSlot { slot } => {
+            WorkerRequestOperation::ReserveResultSlot { slot }
+            | WorkerRequestOperation::ReserveResultSlotUntil { slot, .. } => {
+                if let WorkerRequestOperation::ReserveResultSlotUntil { expires_at_ms, .. } = &self.request {
+                    worker_require(*expires_at_ms > 0)?;
+                }
                 slot.validate()?;
                 worker_require(slot.identity.command == self.command)
             }
@@ -10938,6 +10948,42 @@ mod wake158b_protocol_tests {
 #[cfg(test)]
 mod routing168_protocol_tests {
     use super::*;
+
+    #[test]
+    fn routing172_result_slot_deadline_wire_preserves_legacy() {
+        let command = WorkerCommandIdentity {
+            command_id: "command".into(), task_id: "task".into(), instance_id: "instance".into(), generation: 1,
+        };
+        let slot = WorkerResultSlot {
+            identity: WorkerResultIdentity {
+                command: command.clone(), mission_id: "mission".into(), round: 1,
+                execution_id: "execution".into(), execution_generation: 1,
+            },
+            admission_digest: "c".repeat(64),
+        };
+        let legacy = WorkerRequest {
+            version: REMOTE_WORKER_VERSION, correlation_id: "correlation".into(),
+            connection_epoch: "epoch".into(),
+            worker: WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 },
+            command, request: WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() },
+        };
+        legacy.validate().unwrap();
+        let old_wire = serde_json::to_value(&legacy).unwrap();
+        assert_eq!(old_wire["request"]["operation"], "reserve_result_slot");
+        assert!(old_wire["request"].get("expires_at_ms").is_none());
+        let mut bounded = legacy.clone();
+        bounded.request = WorkerRequestOperation::ReserveResultSlotUntil { slot: slot.clone(), expires_at_ms: 1234 };
+        bounded.validate().unwrap();
+        let wire = serde_json::to_value(&bounded).unwrap();
+        assert_eq!(wire["request"]["operation"], "reserve_result_slot_until");
+        assert_eq!(wire["request"]["expires_at_ms"], 1234);
+        assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), bounded);
+        bounded.request = WorkerRequestOperation::ReserveResultSlotUntil { slot, expires_at_ms: 0 };
+        assert_eq!(bounded.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        assert_eq!(serde_json::to_value(WorkerCapability::ResultSlotDeadlineV1).unwrap(), "result_slot_deadline_v1");
+        assert_eq!(serde_json::to_value(WorkerRefusal::ResultSlotExpired).unwrap(), "result_slot_expired");
+        assert_eq!(serde_json::to_value(&legacy).unwrap(), old_wire);
+    }
 
     #[test]
     fn routing168_ids_et_probe_v2_sont_fermes() {

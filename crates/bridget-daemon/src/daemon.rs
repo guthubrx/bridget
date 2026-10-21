@@ -18439,11 +18439,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 4
+                && capabilities.len() <= 5
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18818,6 +18818,7 @@ fn remote_worker_roundtrip(
                     | WorkerRequestOperation::Start { .. }
                     | WorkerRequestOperation::Release { .. }
                     | WorkerRequestOperation::ReserveResultSlot { .. }
+                    | WorkerRequestOperation::ReserveResultSlotUntil { .. }
             )
         {
             return Err(WorkerRefusal::Unauthorized);
@@ -18849,6 +18850,10 @@ fn remote_worker_roundtrip(
         }
         if matches!(&operation, WorkerRequestOperation::ParentSourceProof { .. })
             && !session.capabilities.contains(&WorkerCapability::ParentSourceProofV1) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if matches!(&operation, WorkerRequestOperation::ReserveResultSlotUntil { .. })
+            && !session.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         let writer = st
@@ -23446,6 +23451,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_candidate_probe_v2".to_string(),
                     "worker_release_lease_v2".to_string(),
                     "worker_parent_source_proof_v1".to_string(),
+                    "worker_result_slot_deadline_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })
@@ -41944,12 +41950,28 @@ mod presence_tests {
             Some(DaemonToWrapper::WorkerAccepted { .. })
         ));
         assert!(shared.lock().unwrap().remote_workers["cartae"].capabilities.is_empty());
+        let deadline_command = WorkerCommandIdentity {
+            command_id: "deadline-command".into(), task_id: "deadline-task".into(),
+            instance_id: "deadline-instance".into(), generation: 1,
+        };
+        let deadline_slot = WorkerResultSlot {
+            identity: WorkerResultIdentity {
+                command: deadline_command.clone(), mission_id: "deadline-mission".into(),
+                round: 1, execution_id: "deadline-execution".into(), execution_generation: 1,
+            }, admission_digest: "c".repeat(64),
+        };
+        assert_eq!(remote_worker_roundtrip(&shared, &hello.identity, &deadline_command,
+            WorkerRequestOperation::ReserveResultSlotUntil { slot: deadline_slot, expires_at_ms: 1234 },
+            Instant::now() + Duration::from_secs(1)), Err(WorkerRefusal::CapabilityRequired),
+            "aucune nouvelle opération ne part vers un worker sans capacité négociée");
+
         shared.lock().unwrap().peer_uids.insert("worker-lease".into(), unsafe { libc::geteuid() });
         let capabilities = vec![
             WorkerCapability::CandidateProbeV1,
             WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,
             WorkerCapability::ParentSourceProofV1,
+            WorkerCapability::ResultSlotDeadlineV1,
         ];
         assert!(matches!(
             handle_worker_message(&shared, "worker-lease",

@@ -3559,11 +3559,12 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
     if let Some(reason) = remote_result_slot_error_reason(error) {
         return Some(match reason {
-            "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le démarrage de la mission n’est pas confirmé.",
-            "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de réserver le retour du résultat. Le démarrage de la mission n’est pas confirmé.",
+            "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le travail métier n’a pas été remis à l’agent.",
+            "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de réserver le retour du résultat. Le travail métier n’a pas été remis à l’agent.",
+            "ResultSlotExpired" => "Le délai de réservation du résultat distant est dépassé. Le travail métier n’a pas été remis à l’agent.",
             "Unauthorized" | "PermissionsChanged" => "Le service distant a refusé les droits de cette demande. La réservation du résultat n’est pas confirmée.",
             "PlacementMismatch" | "DefinitionChanged" | "CommandMismatch" => "L’identité ou la configuration de la demande distante ne correspond plus. La réservation du résultat n’est pas confirmée.",
-            "InvalidEnvelope" => "L’échange de réservation du résultat n’est pas conforme. Le démarrage de la mission n’est pas confirmé.",
+            "InvalidEnvelope" => "L’échange de réservation du résultat n’est pas conforme. Le travail métier n’a pas été remis à l’agent.",
             "DiskFull" => "Le retour du résultat ne peut pas être réservé : espace disque insuffisant sur la machine distante.",
             "FilesystemAccessDenied" => "Le retour du résultat ne peut pas être réservé : accès au stockage distant refusé.",
             _ => "Le retour du résultat n’a pas pu être réservé. Le service distant n’a pas fourni de cause précise.",
@@ -4858,7 +4859,7 @@ fn reserve_remote_result_slot(
     task_id: &str,
 ) -> Result<Option<Task>, String> {
     use bridget_transport::protocol::*;
-    let (worker, command, slot, original, existing) = {
+    let (worker, command, slot, original, existing, deadline_supported) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let task = st
             .delegation_store
@@ -4907,12 +4908,15 @@ fn reserve_remote_result_slot(
         {
             return Err("remote_result_slot_limit".into());
         }
+        let deadline_supported = st.remote_workers.get(&placement.machine_id).is_some_and(|session|
+            session.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1));
         (
             remote_worker_identity(placement),
             command,
             slot,
             task,
             existing,
+            deadline_supported,
         )
     };
     let proof = if original.state == "starting" {
@@ -4923,12 +4927,19 @@ fn reserve_remote_result_slot(
     if existing {
         return Ok(proof);
     }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let operation = if deadline_supported {
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64).unwrap_or(0);
+        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis().min(i64::MAX as u128) as i64;
+        WorkerRequestOperation::ReserveResultSlotUntil {
+            slot: slot.clone(), expires_at_ms: now_ms.saturating_add(remaining),
+        }
+    } else {
+        WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() }
+    };
     let response = remote_worker_roundtrip(
-        state,
-        &worker,
-        &command,
-        WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() },
-        Instant::now() + Duration::from_secs(3),
+        state, &worker, &command, operation, deadline,
     )
     .map_err(|e| format!("remote_result_slot:{e:?}"))?;
     if !matches!(response, WorkerResponseOperation::ResultSlotReserved { slot:ref confirmed, .. } if confirmed == &slot)
@@ -5197,7 +5208,17 @@ fn start_remote_task(
     let WorkerResponseOperation::ReadyToRelease { ready_at } = response else {
         return Err("remote_start_not_ready".into());
     };
-    reserve_remote_result_slot(state, task_id)?;
+    if let Err(reason) = reserve_remote_result_slot(state, task_id) {
+        // ReadyToRelease garde encore le bootstrap : aucune mission n'a été
+        // remise. Demander son arrêt sans prétendre que le nettoyage est acquis.
+        if remote_worker_roundtrip(state, &worker, &command,
+            WorkerRequestOperation::Cancel { target: WorkerCancelScope::Command {} },
+            Instant::now() + Duration::from_secs(3)).is_err()
+        {
+            log::warn!("remote_start_cleanup_pending stage=result_slot");
+        }
+        return Err(reason);
+    }
     // La preuve HTTP reste sur la pile d'admission ; aucun secret n'est persisté.
     // Réattester après Start, hors mutex, interdit un permis fondé sur un ancien tour.
     let fresh_attested = match (thread, permission_proof) {
@@ -22979,6 +23000,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             ("remote_result_slot_mismatch", "n’est pas conforme"),
             ("remote_result_slot_stale", "n’a pas confirmé la réservation"),
             ("remote_result_slot:StoreUnavailable", "n’a pas fourni de cause précise"),
+            ("remote_result_slot:ResultSlotExpired", "délai de réservation"),
             ("remote_result_slot:WorkerUnavailable:private-secret", "n’a pas fourni de cause précise"),
         ] {
             {

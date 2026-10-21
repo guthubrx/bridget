@@ -884,3 +884,72 @@ autre moteur et aucune CLI de délégation utilisés pour contourner ce refus.
 
 Code et tests r4 prêts pour contre-revue ; ni activation ni nouvelle mission
 métier ni qualification réelle du correctif actif revendiquées à ce checkpoint.
+
+
+### Contre-revue r4 et échéance de réservation — état courant r5
+
+La revue r4 (Task31923c1f-074c-4e2d-84a6-669735cf5227) refuse l'activation
+de6da8857c. La réponse complète est lue et acquittée. Les états r3/r4 ci-dessus
+sont des checkpoints historiques, pas la définition du code courant.
+
+Deux reproductions ciblées avant correction ont observé les données réelles
+du WorkerStore : une réservation expirée était acceptée et écrivait un slot ;
+un rejeu après marqueur d'annulation était aussi accepté. Ces deux tests RED
+échouaient comme attendu. Journaux :
+/home/moi/.cache/bridget-channel172/deadline-red.log
+/home/moi/.cache/bridget-channel172/deadline-red.json
+
+La file continue à refuser immédiatement sa neuvième demande avec ResourceLimit.
+Une demande admise dans la file porte maintenant une échéance explicite pour
+la réservation : ReserveResultSlotUntil. La capacité ResultSlotDeadlineV1 est
+annoncée seulement si le maître propose worker_result_slot_deadline_v1, puis
+confirmée au rattachement. Le maître ne transmet jamais cette opération à un
+worker qui n'a pas négocié cette capacité. L'ancien message ReserveResultSlot
+reste byte-compatible ; il sert pendant la mise à jour progressive. La
+protection contre une réservation expirée exige les deux composants corrigés.
+
+Le worker vérifie l'échéance après sortie de file, après acquisition du verrou
+du store et après son contrôle de capacité, avant la création du reçu. Le
+nouveau refus fermé ResultSlotExpired ne contient aucun texte système. Une
+annulation déjà observée interdit toute réservation, y compris le rejeu d'un
+slot existant. L'entretien existant traite aussi le marqueur d'annulation si
+la demande Cancel n'a pas pu entrer dans la file saturée.
+
+ReadyToRelease signifie que le préparateur est prêt mais encore retenu :
+la mission métier n'est remise qu'après Release. Si la réservation échoue à
+cet endroit, le maître demande l'arrêt de cette même commande. Il conserve
+l'erreur initiale. Une absence de confirmation laisse le nettoyage en attente ;
+aucun cleanup_done ou arrêt fictif n'est écrit. Aucun nouvel identifiant métier,
+rejeu automatique ni fournisseur de remplacement n'est créé.
+
+Le texte français dit maintenant « Le travail métier n'a pas été remis à
+l'agent ». Il ne confond plus ce fait avec le démarrage du préparateur.
+Le chemin de réservation des rondes ultérieures conserve sa réconciliation
+existante. Un état inconnu ne libère ni garde ni résultat.
+
+Référence T3 lue avant ce choix :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+(lignes1297–1327, Effect.timeoutOrElse sur l'enregistrement MCP ; lignes3197–3220,
+arrêt par signal). T3 arrête une préparation dont le délai est dépassé et utilise
+un signal d'arrêt. Il ne couvre pas cette réservation sur worker fédéré.
+Bridget adapte ce mécanisme avec une échéance vérifiée au destinataire, une
+capacité négociée et un arrêt de la commande préparée. L'horloge UTC est la même
+base que les baux Start/Release existants ; aucune configuration horaire modifiée.
+
+Validation ciblée r5 :26 tests distincts du démon PASS et2 du protocole PASS.
+Les23 premiers figurent dans /home/moi/.cache/bridget-channel172/tests-r5.json.
+Les3 contrôles supplémentaires et les2 tests du protocole sont listés dans
+/home/moi/.cache/bridget-channel172/proof-r5.json. Cette preuve conserve les
+noms exacts et les résumés réels ; ce n'est pas le nombre de tests ajoutés.
+Les scénarios incluent la vraie sérialisation sur socket, une demande reçue
+avant échéance puis consommée après celle-ci, le verrou du store retenu au-delà
+du délai, une saturation de plus de3s sans slot créé, la même connexion réutilisée,
+l'annulation et les sondes v1/v2. Aucun fournisseur ni service lancé par les tests.
+Aucune suite complète exécutée.
+
+Déploiement obligatoire : maître corrigé avant worker corrigé. Retour arrière :
+worker/client/unité anciens avant maître ancien. Les nouveaux motifs fermés
+ne garantissent pas un mélange ancien maître/nouveau worker. Les paquets1c5d8b6e
+restent non activables. Aucune nouvelle compilation de livraison avant le verdict
+de la revue r5. Aucun redémarrage T3, aucun nettoyage Cartae par ce lot.
+La cause fine de la coupure historique837972ad reste non prouvée.

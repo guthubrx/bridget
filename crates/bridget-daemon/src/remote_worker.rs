@@ -839,15 +839,22 @@ impl WorkerStore {
     }
 
     pub fn reserve_result_slot(
-        &self,
-        slot: &WorkerResultSlot,
-        now: i64,
+        &self, slot: &WorkerResultSlot, now: i64,
+    ) -> Result<WorkerResultReservation, WorkerStoreError> {
+        self.reserve_result_slot_before(slot, now, None)
+    }
+
+    pub fn reserve_result_slot_before(
+        &self, slot: &WorkerResultSlot, now: i64, expires_at_ms: Option<i64>,
     ) -> Result<WorkerResultReservation, WorkerStoreError> {
         let _guard = self
             .transition
             .lock()
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
+        if expires_at_ms.is_some_and(|deadline| worker_now_millis() >= deadline) {
+            return Err(WorkerStoreError::Invalid(WorkerRefusal::ResultSlotExpired));
+        }
         slot.validate()?;
         let command = self
             .read_command(&slot.identity.command)?
@@ -875,6 +882,9 @@ impl WorkerStore {
             MAX_WORKER_RESULT_ENVELOPE_BYTES as u64 + 2 * MAX_METADATA_BYTES as u64,
             1,
         )?;
+        if expires_at_ms.is_some_and(|deadline| worker_now_millis() >= deadline) {
+            return Err(WorkerStoreError::Invalid(WorkerRefusal::ResultSlotExpired));
+        }
         let directory = self.slot_dir(&slot.identity)?;
         // Le reçu est d'abord durable ; une création partielle reste inconnue,
         // jamais une nouvelle admission au prochain démarrage.
@@ -1858,6 +1868,10 @@ fn worker_now() -> i64 {
         .map(|duration| duration.as_secs().min(i64::MAX as u64) as i64)
         .unwrap_or(0)
 }
+fn worker_now_millis() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64).unwrap_or(0)
+}
 fn unavailable(_: impl std::fmt::Display) -> WorkerRefusal {
     WorkerRefusal::StoreUnavailable
 }
@@ -1872,6 +1886,7 @@ fn refuse(error: WorkerStoreError) -> WorkerRefusal {
     match error {
         WorkerStoreError::Quota => WorkerRefusal::ResourceLimit,
         WorkerStoreError::Workspace(reason) => reason,
+        WorkerStoreError::Invalid(WorkerRefusal::ResultSlotExpired) => WorkerRefusal::ResultSlotExpired,
         WorkerStoreError::Io(ref error)
             if matches!(error.raw_os_error(), Some(libc::ENOSPC | libc::EDQUOT)) =>
         {
@@ -3752,6 +3767,15 @@ impl WorkerRuntime {
             ) {
                 continue;
             }
+            let cancel_key = json_digest(&command.identity).map_err(unavailable)?;
+            let cancel_requested = self.cancelled.lock().map_err(unavailable)?.contains(&cancel_key);
+            if cancel_requested {
+                match self.cancel(&command.identity) {
+                    Ok(_) => continue,
+                    Err(WorkerRefusal::UnknownExecution) => {}
+                    Err(reason) => return Err(reason),
+                }
+            }
             let bootstrap_expired = matches!(
                 command.phase,
                 WorkerCommandPhase::Reserved
@@ -3856,7 +3880,19 @@ impl WorkerRuntime {
             WorkerRequestOperation::Release { permit } => {
                 self.release(&request.command, permit, epoch, disconnected)
             }
-            WorkerRequestOperation::ReserveResultSlot { slot } => {
+            WorkerRequestOperation::ReserveResultSlot { slot }
+            | WorkerRequestOperation::ReserveResultSlotUntil { slot, .. } => {
+                let key = json_digest(&request.command).map_err(unavailable)?;
+                if self.cancelled.lock().map_or(true, |cancelled| cancelled.contains(&key)) {
+                    return Err(WorkerRefusal::UnknownExecution);
+                }
+                let expires_at_ms = match &request.request {
+                    WorkerRequestOperation::ReserveResultSlotUntil { expires_at_ms, .. } => Some(*expires_at_ms),
+                    _ => None,
+                };
+                if expires_at_ms.is_some_and(|deadline| worker_now_millis() >= deadline) {
+                    return Err(WorkerRefusal::ResultSlotExpired);
+                }
                 // Un reçu existant peut être relu après désactivation. Une nouvelle
                 // ronde exige toujours une route active avec la révision admise.
                 if self
@@ -3876,7 +3912,7 @@ impl WorkerRuntime {
                 }
                 let reservation = self
                     .store
-                    .reserve_result_slot(slot, worker_now())
+                    .reserve_result_slot_before(slot, worker_now(), expires_at_ms)
                     .map_err(refuse)?;
                 Ok(WorkerResponseOperation::ResultSlotReserved {
                     slot: slot.clone(),
@@ -4061,7 +4097,7 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<(bool, bool, bool, bool), String> {
+) -> Result<(bool, bool, bool, bool, bool), String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -4083,6 +4119,7 @@ fn probe_worker_capability(
                     .any(|feature| feature == "worker_candidate_probe_v2"),
                 features.iter().any(|feature| feature == "worker_release_lease_v2"),
                 features.iter().any(|feature| feature == "worker_parent_source_proof_v1"),
+                features.iter().any(|feature| feature == "worker_result_slot_deadline_v1"),
             ))
         }
         _ => Err("worker_capability_required".into()),
@@ -4114,7 +4151,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof) =
+        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof, master_supports_slot_deadline) =
             match probe_worker_capability(&writer, &mut reader) {
                 Ok(capabilities) => capabilities,
                 Err(code) if matches!(code.as_str(), "worker_connection_lost" | "worker_capability_unavailable") => {
@@ -4134,7 +4171,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             build: crate::build_info::BUILD_ID.to_owned(),
             capability: ClientCapability::RemoteWorkerV1,
         };
-        let hello = if master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease {
+        let hello = if master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline {
             WrapperToDaemon::WorkerHelloWithCapabilities {
                 hello: WorkerHelloWithCapabilities {
                     hello: worker_hello,
@@ -4146,6 +4183,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         (master_supports_probe_v2, WorkerCapability::CandidateProbeV2),
                         (master_supports_release_lease, WorkerCapability::ReleaseLeaseV2),
                         (master_supports_source_proof, WorkerCapability::ParentSourceProofV1),
+                        (master_supports_slot_deadline, WorkerCapability::ResultSlotDeadlineV1),
                     ]
                     .into_iter()
                     .filter_map(|(supported, capability)| supported.then_some(capability))
@@ -4175,19 +4213,20 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 continue;
             }
         };
-        let (epoch, candidate_probe_negotiated, candidate_probe_v2_negotiated) =
+        let (epoch, candidate_probe_negotiated, candidate_probe_v2_negotiated, slot_deadline_negotiated) =
             match serde_json::from_slice::<DaemonToWrapper>(&line) {
                 Ok(DaemonToWrapper::WorkerAccepted { accepted })
                     if !master_supports_candidate_probe
                         && !master_supports_probe_v2
                         && !master_supports_release_lease
+                        && !master_supports_slot_deadline
                         && accepted.validate().is_ok()
                         && accepted.identity == runtime.identity =>
                 {
-                    (accepted.connection_epoch, false, false)
+                    (accepted.connection_epoch, false, false, false)
                 }
                 Ok(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
-                    if (master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease)
+                    if (master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline)
                         && (!accepted
                             .capabilities
                             .contains(&WorkerCapability::CandidateProbeV1)
@@ -4200,6 +4239,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             || master_supports_probe_v2)
                         && (!accepted.capabilities.contains(&WorkerCapability::ReleaseLeaseV2) || master_supports_release_lease)
                         && (!accepted.capabilities.contains(&WorkerCapability::ParentSourceProofV1) || master_supports_source_proof)
+                        && (!accepted.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1) || master_supports_slot_deadline)
                         && accepted.capabilities.iter().all(|capability| {
                             matches!(
                                 capability,
@@ -4207,6 +4247,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                     | WorkerCapability::CandidateProbeV2
                                     | WorkerCapability::ReleaseLeaseV2
                                     | WorkerCapability::ParentSourceProofV1
+                                    | WorkerCapability::ResultSlotDeadlineV1
                             )
                         }) =>
                 {
@@ -4219,6 +4260,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         accepted
                             .capabilities
                             .contains(&WorkerCapability::CandidateProbeV2),
+                        accepted.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1),
                     )
                 }
                 Ok(DaemonToWrapper::WorkerRejected { .. }) => {
@@ -4257,7 +4299,10 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                     || !matches!(
                                         &request.request,
                                         WorkerRequestOperation::PrepareV2 { .. }
-                                    )) =>
+                                    ))
+                                && (slot_deadline_negotiated || !matches!(
+                                    &request.request, WorkerRequestOperation::ReserveResultSlotUntil { .. }
+                                )) =>
                         {
                             WorkerInbound::Request(request)
                         }
@@ -4494,6 +4539,96 @@ mod tests {
     use bridget_transport::protocol::{RemoteResultDeferredReason, RemoteResultDisposition};
     use std::os::unix::fs::symlink;
 
+
+    #[test]
+    fn worker172_inbound_expired_reservation_has_no_store_effect() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let now = worker_now();
+        store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        let result = store.reserve_result_slot_before(&slot(20), now, Some((now - 1) * 1000));
+        let slots = store.inventory().unwrap().1;
+        eprintln!("{}", serde_json::json!({"case":"expired_reservation","request_deadline_ms":(now-1)*1000,
+            "worker_now":now,"command_deadline":now+300,"accepted":result.is_ok(),"slots_written":slots.len()}));
+        assert!(result.is_err(), "une réservation déjà expirée doit être refusée");
+        assert!(slots.is_empty(), "aucune écriture après échéance");
+    }
+
+    #[test]
+    fn worker172_inbound_cancelled_reservation_is_refused() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let now = worker_now();
+        runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        let reserved = slot(21);
+        runtime.store.reserve_result_slot(&reserved, now).unwrap();
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command()).unwrap());
+        let WorkerInbound::Request(request) = inbound172("cancelled-slot", WorkerRequestOperation::ReserveResultSlot { slot: reserved }) else { unreachable!() };
+        let result = runtime.handle(&request, "epoch", &AtomicBool::new(false));
+        eprintln!("{}", serde_json::json!({"case":"cancelled_reservation","cancel_marker":true,"accepted":result.is_ok(),
+            "open_slots":runtime.store.inventory().unwrap().1.iter().filter(|s|s.closed.is_none()).count()}));
+        assert!(result.is_err(), "une annulation déjà observée interdit une réservation");
+    }
+
+    #[test]
+    fn worker172_inbound_deadline_is_checked_after_queueing() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let now = worker_now();
+        runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let mut input = std::io::BufReader::new(socket.try_clone().unwrap());
+        let writer = Arc::new(Mutex::new(socket));
+        let expires_at_ms = worker_now_millis() + 100;
+        let request = WorkerRequest {
+            version: REMOTE_WORKER_VERSION, correlation_id: "queued-deadline".into(),
+            connection_epoch: "epoch".into(), worker: worker(), command: command(),
+            request: WorkerRequestOperation::ReserveResultSlotUntil { slot: slot(22), expires_at_ms },
+        };
+        request.validate().unwrap();
+        writeln!(peer, "{}", serde_json::to_string(&DaemonToWrapper::WorkerRequest { request }).unwrap()).unwrap();
+        let bytes = bridget_transport::jsonl::read_unix_line(&mut input, MAX_WORKER_FRAME_BYTES,
+            bridget_transport::jsonl::LineDeadline::Absolute(Instant::now() + Duration::from_secs(1)))
+            .unwrap().unwrap();
+        let DaemonToWrapper::WorkerRequest { request } = serde_json::from_slice(&bytes).unwrap() else { unreachable!() };
+        let (sender, receiver) = mpsc::sync_channel(8);
+        let disconnected = AtomicBool::new(false);
+        dispatch_worker_inbound(&sender, WorkerInbound::Request(request), &writer, &disconnected, &runtime.cancelled).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        let WorkerInbound::Request(request) = receiver.try_recv().unwrap() else { unreachable!() };
+        let response = runtime.handle(&request, "epoch", &disconnected);
+        let slots = runtime.store.inventory().unwrap().1;
+        eprintln!("{}", serde_json::json!({"case":"queued_deadline","request_deadline_ms":expires_at_ms,
+            "worker_now_ms":worker_now_millis(),"accepted":response.is_ok(),"slots_written":slots.len()}));
+        assert_eq!(response.unwrap_err(), WorkerRefusal::ResultSlotExpired);
+        assert!(slots.is_empty());
+        send_worker_frame(&writer, &WrapperToDaemon::WorkerResponse { response: WorkerResponse {
+            version: REMOTE_WORKER_VERSION, correlation_id: request.correlation_id.clone(),
+            connection_epoch: request.connection_epoch.clone(), worker: request.worker.clone(),
+            command: request.command.clone(),
+            response: WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResultSlotExpired },
+        }}).unwrap();
+        let WrapperToDaemon::WorkerResponse { response } = read_inbound172(&mut std::io::BufReader::new(peer)) else { unreachable!() };
+        response.validate().unwrap();
+        assert_eq!(response.correlation_id, "queued-deadline");
+        assert_eq!(response.response, WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResultSlotExpired });
+    }
+
+    #[test]
+    fn worker172_inbound_deadline_is_checked_after_store_lock() {
+        let fixture = Fixture::new();
+        let store = Arc::new(fixture.open());
+        let now = worker_now();
+        store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+        let guard = store.transition.lock().unwrap();
+        let delayed = store.clone();
+        let expires_at_ms = worker_now_millis() + 100;
+        let waiting = std::thread::spawn(move || delayed.reserve_result_slot_before(&slot(23), now, Some(expires_at_ms)));
+        std::thread::sleep(Duration::from_millis(150));
+        drop(guard);
+        assert!(matches!(waiting.join().unwrap(), Err(WorkerStoreError::Invalid(WorkerRefusal::ResultSlotExpired))));
+        assert!(store.inventory().unwrap().1.is_empty());
+    }
 
     fn inbound172(correlation: &str, request: WorkerRequestOperation) -> WorkerInbound {
         WorkerInbound::Request(WorkerRequest {
