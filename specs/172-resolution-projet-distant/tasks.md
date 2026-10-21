@@ -53,3 +53,6 @@
 
 - [x] T041 Reproduire le rejeu d’un incident fournisseur sur l’auxiliaire MCP ; réserver ce flux au parent primaire sans perdre ni acquitter l’avis.
 - [x] T042 Vérifier les plafonds et le rejeu primaire, activer le correctif maître hors mission active, puis obtenir la lecture officielle de la Task623 depuis trajets bus.
+
+- [x] T043 Distinguer disque plein, accès disque refusé, échec Git et reçu de préparation incomplet ; ajouter un message français sans modifier le code technique ni le rejeu.
+- [ ] T044 Vérifier les erreurs sur un Git contrôlé et le reçu MCP ; préparer puis activer sans interrompre les missions ni relancer T3.

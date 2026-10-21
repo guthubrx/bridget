@@ -194,6 +194,7 @@ pub enum WorkerStoreError {
     Quota,
     Unknown,
     InvalidTransition,
+    Workspace(WorkerRefusal),
 }
 
 impl From<io::Error> for WorkerStoreError {
@@ -219,6 +220,7 @@ impl std::fmt::Display for WorkerStoreError {
             Self::Quota => f.write_str("worker_store_quota"),
             Self::Unknown => f.write_str("worker_store_unknown"),
             Self::InvalidTransition => f.write_str("worker_store_transition"),
+            Self::Workspace(_) => f.write_str("worker_workspace_failure"),
         }
     }
 }
@@ -1404,8 +1406,10 @@ impl WorkerStore {
             {
                 return Err(WorkerStoreError::Conflict);
             }
-            let record = receipt.record.ok_or(WorkerStoreError::Unknown)?;
-            crate::workspace_git::report(&record).map_err(|_| WorkerStoreError::Unknown)?;
+            let record = receipt.record.ok_or(WorkerStoreError::Workspace(
+                WorkerRefusal::WorkspacePrepareIncomplete,
+            ))?;
+            crate::workspace_git::report(&record).map_err(workspace_failure)?;
             return Ok(record);
         }
         let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
@@ -1415,10 +1419,10 @@ impl WorkerStore {
         };
         if let Some(commit) = request.base_commit.as_deref() {
             crate::workspace_git::import_remote_commit(root, commit)
-                .map_err(|_| WorkerStoreError::Unknown)?;
+                .map_err(workspace_failure)?;
         }
         let plan = crate::workspace_git::preflight_remote(root, base_ref.as_deref(), branch.as_deref())
-            .map_err(|_| WorkerStoreError::Unknown)?;
+            .map_err(workspace_failure)?;
         if request
             .base_commit
             .as_ref()
@@ -1445,7 +1449,7 @@ impl WorkerStore {
         // Le maître a réservé sa Task avant ce second Prepare. Aucun bootstrap
         // n'existe encore et aucun verrou métier ne traverse cette E/S Git.
         let record = crate::workspace_git::create(&plan, &command.task_id)
-            .map_err(|_| WorkerStoreError::Unknown)?;
+            .map_err(workspace_failure)?;
         receipt.record = Some(record.clone());
         self.persist(&path, &receipt)?;
         Ok(record)
@@ -1857,9 +1861,27 @@ fn worker_now() -> i64 {
 fn unavailable(_: impl std::fmt::Display) -> WorkerRefusal {
     WorkerRefusal::StoreUnavailable
 }
+fn workspace_failure(error: String) -> WorkerStoreError {
+    WorkerStoreError::Workspace(match error.split(':').next() {
+        Some("workspace_disk_full") => WorkerRefusal::DiskFull,
+        Some("workspace_access_denied") => WorkerRefusal::FilesystemAccessDenied,
+        _ => WorkerRefusal::WorkspacePrepareFailed,
+    })
+}
 fn refuse(error: WorkerStoreError) -> WorkerRefusal {
     match error {
         WorkerStoreError::Quota => WorkerRefusal::ResourceLimit,
+        WorkerStoreError::Workspace(reason) => reason,
+        WorkerStoreError::Io(ref error)
+            if matches!(error.raw_os_error(), Some(libc::ENOSPC | libc::EDQUOT)) =>
+        {
+            WorkerRefusal::DiskFull
+        }
+        WorkerStoreError::Io(ref error)
+            if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM | libc::EROFS)) =>
+        {
+            WorkerRefusal::FilesystemAccessDenied
+        }
         _ => WorkerRefusal::StoreUnavailable,
     }
 }
@@ -4805,6 +4827,32 @@ mod tests {
             WorkerStore::open(&fixture.root(), worker()),
             Err(WorkerStoreError::Quarantined)
         ));
+    }
+
+    #[test]
+    fn worker172_workspace_refusals_preserve_cause_without_private_details() {
+        for (error, expected) in [
+            ("workspace_disk_full: fatal: private/path secret-token", WorkerRefusal::DiskFull),
+            ("workspace_access_denied: private/path secret-token", WorkerRefusal::FilesystemAccessDenied),
+            ("workspace_create_failed: private/path secret-token", WorkerRefusal::WorkspacePrepareFailed),
+            ("workspace_create_failed: workspace_disk_full: private/path", WorkerRefusal::WorkspacePrepareFailed),
+        ] {
+            let refusal = refuse(workspace_failure(error.into()));
+            assert_eq!(refusal, expected);
+            let encoded = serde_json::to_string(&refusal).unwrap();
+            assert!(!encoded.contains("private") && !encoded.contains("secret"));
+            assert_eq!(serde_json::from_str::<WorkerRefusal>(&encoded).unwrap(), expected);
+        }
+        for errno in [libc::ENOSPC, libc::EDQUOT] {
+            assert_eq!(refuse(io::Error::from_raw_os_error(errno).into()), WorkerRefusal::DiskFull);
+        }
+        for errno in [libc::EACCES, libc::EPERM, libc::EROFS] {
+            assert_eq!(refuse(io::Error::from_raw_os_error(errno).into()), WorkerRefusal::FilesystemAccessDenied);
+        }
+        assert_eq!(refuse(io::Error::other("private secret").into()), WorkerRefusal::StoreUnavailable);
+        assert_eq!(refuse(WorkerStoreError::Workspace(WorkerRefusal::WorkspacePrepareIncomplete)), WorkerRefusal::WorkspacePrepareIncomplete);
+        assert_eq!(refuse(WorkerStoreError::Quota), WorkerRefusal::ResourceLimit);
+        assert_eq!(refuse(WorkerStoreError::Quarantined), WorkerRefusal::StoreUnavailable);
     }
 
     #[test]

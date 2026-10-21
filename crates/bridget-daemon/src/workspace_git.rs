@@ -276,6 +276,7 @@ fn capture(
         command.env_remove(name);
     }
     command
+        .env("LC_ALL", "C")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -708,6 +709,23 @@ fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, r
     })
 }
 
+// O(B), B sortie Git déjà bornée. Comme T3, seuls les diagnostics Git
+// classés sortent vers le parent ; aucun chemin, URL ou stderr brut transmis.
+fn worktree_failure_code(stderr: &str) -> &'static str {
+    for line in stderr.lines().map(str::trim_start) {
+        if !line.starts_with("fatal:") && !line.starts_with("error:") {
+            continue;
+        }
+        if line.contains("No space left on device") || line.contains("Disk quota exceeded") {
+            return "workspace_disk_full";
+        }
+        if line.contains("Permission denied") || line.contains("Read-only file system") {
+            return "workspace_access_denied";
+        }
+    }
+    "workspace_create_failed"
+}
+
 /// O(f), f fichiers extraits par Git. Seule une extraction échouée retire sa
 /// branche neuve inutilisée ; aucun retrait sur échec tardif.
 pub(crate) fn create(
@@ -768,7 +786,7 @@ pub(crate) fn create(
         std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
     };
     let _serialized = lock.lock().unwrap_or_else(|error| error.into_inner());
-    if let Err(error) = run_git(
+    let checkout = run_git(
         &preflight.cwd,
         &[
             "worktree",
@@ -780,16 +798,18 @@ pub(crate) fn create(
             &preflight.base_commit,
         ],
         WORKTREE_ADD_TIMEOUT,
-    )
-    .and_then(GitOutput::complete)
-    {
+    );
+    let code = checkout.as_ref().map_or("workspace_create_failed", |output| {
+        worktree_failure_code(&output.stderr)
+    });
+    if let Err(error) = checkout.and_then(GitOutput::complete) {
         // Git crée la branche avant l'extraction. Sans retrait, la reprise de
         // la même demande serait refusée (workspace_branch_exists). Le retrait
         // est conditionnel : la branche doit encore désigner la base exacte et
         // aucun worktree enregistré ne doit l'utiliser. Aucun commit n'est perdu.
         let released = release_unused_branch(&preflight.cwd, &branch, &preflight.base_commit);
         return Err(residue(
-            "workspace_create_failed",
+            code,
             format!("{error}; branche retirée : {released}"),
         ));
     }

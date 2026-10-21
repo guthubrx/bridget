@@ -632,3 +632,49 @@ DelegatedRuntimeEvent au lieu de CallerScope (RED). Après correction il vérifi
 le plafond exact pour Warning et Failed, puis la remise et l’ACK par le parent
 primaire. L’avis reste en attente tant que ce parent ne l’acquitte pas.
 Reçu RED : /home/moi/.cache/bridget-delivery172/auxiliary-scope172-red.log.
+
+
+## Erreurs de préparation distante lisibles — 21 octobre 2026
+
+Demande utilisateur : laisser le nettoyage Cartae à son responsable et rendre le
+refus de préparation compréhensible. Aucun fichier de cache distant supprimé par
+ce correctif ; aucun dossier métier, reçu ou résultat modifié.
+
+Cas réel : Task ba369015-da43-45c4-b70a-dae9509ea2db, reçue durablement avant
+l’échec `remote_workspace_prepare:StoreUnavailable`. Son reçu de préparation
+contient record=null ; aucun worktree ni enfant n’existe. À l’observation,
+Cartae offrait environ 1,1 Go pour une extraction de 7 981 663 707 octets.
+L’ancien code avait jeté le diagnostic Git ; cette erreur historique ne sera
+pas réécrite en un nouveau diagnostic présenté comme observé.
+
+Référence T3 lue avant modification :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/vcs/GitVcsDriverCore.ts,
+classifyGitFailure et executeGit : classifier les lignes de diagnostic Git en
+raisons fermées, sans transmettre stderr ni ses chemins/URL éventuels.
+GitManager délègue createWorktree à ce service. T3 ne possède pas le reçu
+WorkerStore distant ; Bridget conserve cette différence nécessaire pour son rejeu.
+
+Adaptation : Git est lancé avec LC_ALL=C. Les diagnostics fatals/error de
+l’extraction distinguent espace insuffisant et accès disque refusé. Le worker
+transmet seulement DiskFull, FilesystemAccessDenied, WorkspacePrepareFailed ou
+WorkspacePrepareIncomplete. Les erreurs OS ENOSPC/EDQUOT sont distinguées des
+plafonds de réservation ResourceLimit. Les erreurs de stockage non classées
+restent StoreUnavailable ; aucune cause n’est inventée depuis ce seul code.
+
+La réponse native ajoute error_message en français pour un échec de préparation.
+Le champ error, l’identifiant de tâche, l’état, la clé et le rejeu restent
+inchangés. Les vieux refus StoreUnavailable reçoivent une explication qui dit
+explicitement que la cause précise manque. Aucun stderr brut n’est transmis.
+
+Tests et activation : voir le reçu de livraison et les journaux privés sous
+/home/moi/.cache/bridget-message-errors172. Le travail s’effectue dans le
+worktree existant de la session172 ; les services restent inchangés pendant
+les tests et la préparation.
+
+Validation ciblée : 10 tests distincts PASS, aucune suite complète. La simulation
+Git ENOSPC passe par le vrai exécuteur Git et le nettoyage conditionnel de branche.
+Les tests du worker couvrent les refus OS, les codes sérialisés et les détails
+privés exclus. Le test de reçu maître vérifie les messages, le même TaskID et
+le rejeu strict sans nouveau lancement. Les régressions d’extraction, de
+préparation/rejeu d’un vrai worktree, d’admission et de réserve du store passent.
+Un filtre vide a été exclu du compte, puis remplacé par les deux tests du store.

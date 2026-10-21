@@ -3542,6 +3542,20 @@ fn parent_fact(
     Ok(first)
 }
 
+// Texte fermé : conserver le code technique et ne jamais recopier stderr.
+fn remote_workspace_error_message(error: &str) -> Option<&'static str> {
+    let reason = error.strip_prefix("remote_start_failed:remote_workspace_prepare:")?;
+    Some(match reason {
+        "DiskFull" => "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée.",
+        "FilesystemAccessDenied" => "Préparation distante impossible : accès au disque refusé ou système de fichiers en lecture seule. La tâche reste enregistrée.",
+        "WorkspacePrepareFailed" => "Git n’a pas pu préparer ou vérifier le dossier de travail distant. La tâche reste enregistrée.",
+        "WorkspacePrepareIncomplete" => "Le reçu d’une préparation précédente est incomplet. La tâche est conservée ; sa reprise doit être vérifiée avant toute nouvelle mission.",
+        "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de préparer un dossier supplémentaire. La tâche reste enregistrée.",
+        "WorkerUnavailable" | "StaleConnection" => "Le service Bridget de la machine distante est indisponible. La tâche reste enregistrée.",
+        _ => "La préparation du dossier de travail distant a échoué. Le service distant n’a pas fourni de cause précise. La tâche reste enregistrée.",
+    })
+}
+
 fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     let (agent_type, model, effort, posture) = match &task.request {
         NativeDelegationRequest::Delegate {
@@ -3595,6 +3609,9 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "result_bytes":body.map(str::len),
         "detail":(workspace_report_ready(task) && matches!(task.state.as_str(),"result_available"|"failed")).then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
         "mailbox":mailbox});
+    if let Some(message) = task.projected_error().as_deref().and_then(remote_workspace_error_message) {
+        view["error_message"] = json!(message);
+    }
     view["quota_wait"] = task.quota_waits.last().filter(|wait| task.state == "working" && wait.phase != QuotaWaitPhase::Done)
         .map(|wait| json!({"round":wait.round,"phase":wait.phase,"resumes_at":wait.reset_at.saturating_add(30)}))
         .unwrap_or(Value::Null);
@@ -22862,6 +22879,36 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(serde_json::to_value(state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before,
             "le worker absent interdit toute nouvelle ronde ou mutation de tâche");
         drop(state);drop(shared);cleanup(&config);
+    }
+
+    #[test]
+    fn spec172_remote_workspace_error_message_preserves_receipt_and_replay() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let task_id = admitted["task_id"].as_str().unwrap().to_owned();
+        for (reason, fragment) in [
+            ("DiskFull", "espace disque insuffisant"),
+            ("FilesystemAccessDenied", "accès au disque refusé"),
+            ("WorkspacePrepareFailed", "Git n’a pas pu"),
+            ("WorkspacePrepareIncomplete", "reçu d’une préparation précédente est incomplet"),
+            ("StoreUnavailable", "n’a pas fourni de cause précise"),
+            ("ResourceLimit", "capacité réservée par Bridget"),
+            ("DiskFull:private-secret", "n’a pas fourni de cause précise"),
+        ] {
+            let code = format!("remote_workspace_prepare:{reason}");
+            let result = remote_admission_outcome(&state, &task_id, Err(code)).unwrap();
+            assert_eq!(result["task_id"], task_id);
+            assert_eq!(result["error"], format!("remote_start_failed:remote_workspace_prepare:{reason}"));
+            let message = result["error_message"].as_str().unwrap();
+            assert!(message.contains(fragment), "{result}");
+            assert!(!message.contains("private-secret"));
+            let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+            assert_eq!(replay, result, "même reçu, sans admission supplémentaire");
+        }
+        assert!(remote_workspace_error_message("permission_not_inherited").is_none());
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
     }
 
     #[test]

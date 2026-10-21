@@ -25,6 +25,15 @@ fn isolated(case: &str, name: &str, check: impl FnOnce(&Path)) {
         "env" => "printf 'global=%s\\nsystem=%s\\nlazy=%s\\nallow=%s\\nDIR=%s\\nTREE=%s\\nCOMMON=%s\\n' \"$GIT_CONFIG_GLOBAL\" \"$GIT_CONFIG_NOSYSTEM\" \"$GIT_NO_LAZY_FETCH\" \"$GIT_ALLOW_PROTOCOL\" \"${GIT_DIR-unset}\" \"${GIT_WORK_TREE-unset}\" \"${GIT_COMMON_DIR-unset}\"; printf 'arg=%s\\n' \"$@\"".into(),
         "large" => "/usr/bin/awk 'BEGIN { for (i=0;i<262144;i++) { print \"abcdefgh\"; print \"ijklmnop\" > \"/dev/stderr\" } }'".into(),
         "slow" => format!("printf '%s' \"$$\" > '{}/git.pid'; exec /bin/sleep 2", root.display()),
+        "disk-full" => format!(r#"previous=
+for argument in "$@"; do
+ if [ "$previous" = worktree ] && [ "$argument" = add ]; then
+  printf '%s\n' 'fatal: unable to write a file: No space left on device' >&2
+  exit 128
+ fi
+ previous=$argument
+done
+exec '{}' "$@""#, real_git.display()),
         "forbidden" => format!("printf launched > '{}/launched'", root.display()),
         _ => panic!("fixture inconnue"),
     };
@@ -769,7 +778,7 @@ fn worktree171_failed_extraction_releases_only_its_unused_branch() {
         let plan = preflight_classified(repo, None, Some("failed-extraction")).unwrap();
         let error = create(&plan, &uuid::Uuid::new_v4().to_string()).unwrap_err();
         fs::set_permissions(&worktrees, fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(error.starts_with("workspace_create_failed:"), "{error}");
+        assert!(error.starts_with("workspace_access_denied:"), "{error}");
         assert!(error.contains("branche retirée : true"), "{error}");
         assert!(!branch_exists("failed-extraction"));
         // La reprise de la même demande n'est plus bloquée par la branche.
@@ -785,4 +794,34 @@ fn worktree171_failed_extraction_releases_only_its_unused_branch() {
         assert!(!release_unused_branch(repo, "moved", &plan.base_commit));
         assert!(branch_exists("moved"));
     });
+}
+
+#[test]
+fn worktree172_disk_full_keeps_a_distinct_reason() {
+    isolated("disk-full", "workspace_git::tests::worktree172_disk_full_keeps_a_distinct_reason", |_| {
+        with_repo(|repo| {
+            let plan = preflight_classified(repo, None, Some("disk-full172")).unwrap();
+            let task = uuid::Uuid::new_v4().to_string();
+            let error = create(&plan, &task).unwrap_err();
+            assert!(error.starts_with("workspace_disk_full:"), "{error}");
+            assert!(!repo.join(".worktrees").join(&task[..8]).exists());
+            assert!(!run_git(repo, &["show-ref", "--verify", "--quiet", "refs/heads/disk-full172"], READ_TIMEOUT).unwrap().success());
+        });
+    });
+}
+
+#[test]
+fn worktree172_failure_classification_uses_only_git_diagnostics() {
+    for (stderr, expected) in [
+        ("fatal: unable to write: No space left on device", "workspace_disk_full"),
+        ("error: unable to create: Disk quota exceeded", "workspace_disk_full"),
+        ("fatal: cannot mkdir: Permission denied", "workspace_access_denied"),
+        ("error: Read-only file system", "workspace_access_denied"),
+        ("No space left on device", "workspace_create_failed"),
+        ("remote: fatal: No space left on device", "workspace_create_failed"),
+        ("warning: example No space left on device", "workspace_create_failed"),
+        ("fatal: unknown checkout failure", "workspace_create_failed"),
+    ] {
+        assert_eq!(worktree_failure_code(stderr), expected);
+    }
 }
