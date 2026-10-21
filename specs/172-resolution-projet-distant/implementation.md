@@ -1091,3 +1091,17 @@ n'est traitée comme un reçu Terminal ou un signal réussi.
 
 T045/T046 sont closes sur source, tests et revue. T044 reste ouverte pour
 l'activation réelle et sa lecture MCP. Aucun paquet refusé n'a été activé.
+
+
+### Activation et qualification réelle du lot
+
+Sourcee5195b7de80341170196bfd92def8277b2f0df3a construite une fois par plateforme, signée sur Mac,
+puis active sur maître3688 et worker589872.
+Aucune mission native ni commande worker active au préflight ; T3[91019, 91105, 898]
+préservés avec leurs dates de naissance. T044 close sur lecture MCP officielle
+du propriétaire837 et recette réellee05fd619-83fd-4056-9bea-5a42615783b0, résultat lu/ACK,
+rejeu strict même Task et même résultat. cleanup_done=true, aucune garde acquise.
+L'admission figée bus-arches est soldée en refus de droits, sans Task.
+Cette livraison ne prétend pas relancer une mission métier.
+Reçu complet :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/canal-worker172.md

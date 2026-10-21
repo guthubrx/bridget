@@ -55,7 +55,7 @@
 - [x] T042 Vérifier les plafonds et le rejeu primaire, activer le correctif maître hors mission active, puis obtenir la lecture officielle de la Task623 depuis trajets bus.
 
 - [x] T043 Distinguer disque plein, accès disque refusé, échec Git et reçu de préparation incomplet ; ajouter un message français sans modifier le code technique ni le rejeu.
-- [ ] T044 Activer sans interrompre les missions ni relancer T3, puis obtenir la lecture MCP officielle du reçu historique ; 14 tests ciblés, revue du code et paquets r2 déjà validés. Reçu : validation/erreurs-preparation172.md.
+- [x] T044 Activer erreurs de préparation et canal sur Mac/Cartae hors mission active, sans relancer T3 ; lecture MCP officielle Task837 par chargement et recette réelle e05 avec ACK/rejeu identique. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/canal-worker172.md.
 
 - [x] T045 Reproduire et corriger la fermeture du canal worker à saturation de sa file bornée ; vérifier l’arrêt du lecteur et conserver des diagnostics fermés.
 - [x] T046 Rendre lisible un refus de réservation du résultat, sans annoncer un démarrage ni supprimer la réconciliation ; tests et revue indépendante.
