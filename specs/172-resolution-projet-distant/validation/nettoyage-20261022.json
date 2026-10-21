@@ -1,0 +1,848 @@
+{
+  "date": "2026-10-22",
+  "integration": {
+    "source_commit": "ba3cea393c3227b5bcfa7107b41c88cb74407b3e",
+    "merge_commit": "6b0bae2300aa3965e4599ab47300a7d7fcb29f9b",
+    "test_rc": 0,
+    "production_delta": ""
+  },
+  "review": {
+    "request_id": "cleanup172-hooks-review-cartae-20261022-r1",
+    "task_id": "69e564de-5ac7-4d16-99b2-71f2146df8fd",
+    "child_agent_id": "495ae75b-7ede-46d6-85f9-6cec07895585",
+    "source": "6b0bae2300aa3965e4599ab47300a7d7fcb29f9b",
+    "verdict": "APPROVE",
+    "result_fully_read": true,
+    "result_acknowledged": true,
+    "cleanup_done": true,
+    "production_changes": false,
+    "limitations": [
+      "Le contrôle positif prouve post-commit, sans vérification séparée de post-checkout.",
+      "Le test protège les futurs effets sur le dépôt source ; il ne prouve pas à lui seul core.hooksPath=/dev/null."
+    ],
+    "date": "2026-10-22"
+  },
+  "worktrees_removed_before_receipt_commit": {
+    "mac": [
+      {
+        "path": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/92c41589",
+        "head": "c48c30fbbfaa62562ce4a9ff03e31b92444fb533"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-channel172/source-mac",
+        "head": "e5195b7de80341170196bfd92def8277b2f0df3a"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-delivery172/source",
+        "head": "e8f1149f3de42ddda757d6bec983e5c848731bf6"
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-delivery172/source-full",
+        "head": "a53b05c23426160dd34c5987613e7d0d878e273f"
+      }
+    ],
+    "cartae": [
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte",
+        "head": "db46c7816777199da7c41bb9bc10063cd361dae7",
+        "branch": "session-168-routage-flotte"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/169-priorite-bridget",
+        "head": "203f330ea673c86bc18624d2c75201e9d1cb3b7f",
+        "branch": "session-169-priorite-bridget"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/31923c1f",
+        "head": "6da8857cf59cfbe17838f8403b36431c6252650b",
+        "branch": "bridget/31923c1f"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/3a825355",
+        "head": "5c2b4635e3bdeda78f3687f1b0a04b8bd6831744",
+        "branch": "recette172-store72-cartae-20261018"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/42ba7b03",
+        "head": "57f2fff31b1c23d015a483a5a97754130b1e44bc",
+        "branch": "bridget/42ba7b03"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/533592b7",
+        "head": "161df06a27a729a6bf0d2b89794f662b14a6df35",
+        "branch": "bridget/533592b7"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/6bddf1b0",
+        "head": "1c5d8b6e3a5bf9d6d14afa10bb52a6b9319b5a13",
+        "branch": "bridget/6bddf1b0"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/717dcdea",
+        "head": "95c6ec4c74e38687892d66a1289b429055d17292",
+        "branch": "bridget/717dcdea"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/832e891b",
+        "head": "b633e17d8cd56dcc88c1fd719ecf6ba4fe9f5c6c",
+        "branch": "bridget/832e891b"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/c22c8591",
+        "head": "3524fc2c8bac0131dfd238519186b336ce0910b4",
+        "branch": "bridget/c22c8591"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/e05fd619",
+        "head": "e5195b7de80341170196bfd92def8277b2f0df3a",
+        "branch": "bridget/e05fd619"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/e125950f",
+        "head": "ba3cea393c3227b5bcfa7107b41c88cb74407b3e",
+        "branch": "recette172-codage-isole-cartae-20261018"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/f0950059",
+        "head": "f9b9b384bd9754ebb72b0895f64f85064ed869af",
+        "branch": "session-170-delais-reponses-distantes-r2"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/faa1352b",
+        "head": "bba42d1218c3af00a80b9ccf1b8a063f10dcf6a8",
+        "branch": "bridget/faa1352b"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/69e564de",
+        "head": "6b0bae2300aa3965e4599ab47300a7d7fcb29f9b",
+        "branch": "bridget/69e564de",
+        "cleanup_done_before_removal": true
+      }
+    ]
+  },
+  "durably_kept_with_uncommitted_work": [
+    "/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/171-corrections-usage-2",
+    "/home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission",
+    "/home/moi/10.Scripts/64.bridget/.worktrees/8a8f5934",
+    "/home/moi/10.Scripts/64.bridget/.worktrees/c933dd39"
+  ],
+  "last_receipt_worktree": "/home/moi/10.Scripts/64.bridget/.worktrees/172-resolution-projet-distant",
+  "post_commit_final_receipt": "/Users/moi/.cache/bridget-cleanup-20261022/final.json",
+  "cache_removal": {
+    "mac": [
+      {
+        "profile": "/Users/moi/.cache/bridget-message-errors172/target-mac/release",
+        "removed_logical_bytes": 374184834,
+        "executable_kept": true,
+        "process_restart": false
+      },
+      {
+        "profile": "/Users/moi/.cache/bridget171-diag/t2-target/release",
+        "removed_logical_bytes": 1128307975,
+        "executable_kept": true,
+        "process_restart": false
+      }
+    ],
+    "cartae": [
+      {
+        "profile": "/home/moi/.cache/bridget-message-errors172/target/debug",
+        "removed_logical_bytes": 469161134,
+        "executable_preserved": true
+      },
+      {
+        "profile": "/home/moi/.cache/bridget-message-errors172/target/release",
+        "removed_logical_bytes": 433815736,
+        "executable_preserved": true
+      },
+      {
+        "profile": "/home/moi/10.Scripts/64.bridget/.worktrees/8a8f5934/target/debug",
+        "removed_logical_bytes": 2637457447,
+        "executable_preserved": true
+      }
+    ]
+  },
+  "source_snapshots": [
+    {
+      "source": "/Users/moi/.cache/bridget-delivery169/build-preparation/t3-final169.ej_jh3hv/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/21ba2e01bc74941b.tar.gz",
+      "archive_sha256": "bb935fd22d78f2564d48094faf63c521e77ed4c823e3283110287dc2f6b611c3",
+      "archive_bytes": 137369835,
+      "source_logical_bytes": 350956055,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/21ba2e01bc74941b.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624681.738106
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/plugin-context-build/t3-launch-context171.us117_fz/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/93519c19cee7f9e9.tar.gz",
+      "archive_sha256": "90eda60a94491bc1e37a87d22c2ff3a4b328daa97e8e639faee2e876f81a9aad",
+      "archive_bytes": 137390120,
+      "source_logical_bytes": 351032704,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/93519c19cee7f9e9.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624686.3293052
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/launch-context-runtime171/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/60f11266e76b8de7.tar.gz",
+      "archive_sha256": "bcd9ef2e865b01a0c1874db33715a426708e5fd2f9828a32517da1b17733c5e9",
+      "archive_bytes": 129268402,
+      "source_logical_bytes": 322159220,
+      "entries": 31705,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/60f11266e76b8de7.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624691.3949409
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/native-context-fix/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/cb27708fd251da73.tar.gz",
+      "archive_sha256": "e468256113986d1c22066b8b14788f3c2c381e2d31700dad9ef18cc5dfac740b",
+      "archive_bytes": 3309222,
+      "source_logical_bytes": 13012253,
+      "entries": 292,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/cb27708fd251da73.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624691.459774
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/build-preparation/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/2f00fa6e01ee67df.tar.gz",
+      "archive_sha256": "ad8989d44d7cbc4f4b9487795edf1768e7f9b0fcbb3fd20827f893234226e95d",
+      "archive_bytes": 3329024,
+      "source_logical_bytes": 13076598,
+      "entries": 294,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/2f00fa6e01ee67df.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624691.534851
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/worker-projection-observation171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/dfaaeb853d58297e.tar.gz",
+      "archive_sha256": "5762fc5be0aa7f53addf0cc761919090cf915a3a377426519ddc37ca20c75bba",
+      "archive_bytes": 3394114,
+      "source_logical_bytes": 13246780,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/dfaaeb853d58297e.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624691.596195
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/origin-recheck171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/208c757ea8d65d3e.tar.gz",
+      "archive_sha256": "a264d64e37e963e59151a0e61c77caf49014e2c39b1d578ffa12c4304c78bd27",
+      "archive_bytes": 3396227,
+      "source_logical_bytes": 13254660,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/208c757ea8d65d3e.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624691.653079
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/optimized-build171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/40e7af331ff7049a.tar.gz",
+      "archive_sha256": "893555aab6055eb55d756fbf0949aff069feeae0b51530913d37fe9d6d2210b7",
+      "archive_bytes": 3337323,
+      "source_logical_bytes": 13109124,
+      "entries": 294,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/40e7af331ff7049a.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624691.718581
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/optimized-build171-r1/t3/t3-launch-context171.xhm_ak0a/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/a4d6f5aee34054f3.tar.gz",
+      "archive_sha256": "145d16ece571bde0f1864f990ff3d9a49d3bd84164610617404d290dec164972",
+      "archive_bytes": 137391668,
+      "source_logical_bytes": 351045549,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/a4d6f5aee34054f3.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624696.353319
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/worker-observation171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/6c172c76ecb9fe93.tar.gz",
+      "archive_sha256": "7b6053f9f16b68fdc249af49c2e98e11b9a90b0c78ff69788a6cc2d75e21c97b",
+      "archive_bytes": 3389026,
+      "source_logical_bytes": 13228001,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/6c172c76ecb9fe93.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624696.4132411
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/t3-profile-root171-r1/t3-build/t3-launch-context171.w9jk2qz_/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/2074859ee8c4a7fa.tar.gz",
+      "archive_sha256": "c12da4521d02018fc41feacd71035975e1f791541d507da3c251a9bb76ccb1dc",
+      "archive_bytes": 137392721,
+      "source_logical_bytes": 351051096,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/2074859ee8c4a7fa.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.506975
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/additional-root171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/2fdc6f562eaca13a.tar.gz",
+      "archive_sha256": "2f4fde07da08f67d16ae23039bf58ecdb05e0d01f7cc2f46d1944d5dd0578518",
+      "archive_bytes": 3405396,
+      "source_logical_bytes": 13289046,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/2fdc6f562eaca13a.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.561995
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/additional-root171-r1/configured-cli-resolution171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/d4536cb241c57e89.tar.gz",
+      "archive_sha256": "307eaa7a5feccc796da97766ee596ea5d6b97a54b07b2f269e485a746bf5b858",
+      "archive_bytes": 3407050,
+      "source_logical_bytes": 13295882,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/d4536cb241c57e89.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.611221
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/additional-root171-r1/configured-cli-resolution171-r1/catalogue-observation171-r1/catalogue-operation171-r2/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/9e3b0cbae056708c.tar.gz",
+      "archive_sha256": "2c8f609dc21fa0024c8bb814a191c31089f369e2630625d26c918de10202ed40",
+      "archive_bytes": 3413583,
+      "source_logical_bytes": 13319561,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/9e3b0cbae056708c.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.665767
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/additional-root171-r1/configured-cli-resolution171-r1/catalogue-observation171-r1/catalogue-operation171-r3/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/95ac1a67618f9857.tar.gz",
+      "archive_sha256": "9b8ef6d23302e08e449cba28ca84f262a1cb8f82a4084ee41c3fa77bb3ce2491",
+      "archive_bytes": 3413681,
+      "source_logical_bytes": 13319862,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/95ac1a67618f9857.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.714402
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/additional-root171-r1/configured-cli-resolution171-r1/catalogue-observation171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/58b35b4d93ab0c23.tar.gz",
+      "archive_sha256": "81dd3d92ecb89bb11a7c03c70d9154b0bb8f4948fdf6fae7dfced653756b8289",
+      "archive_bytes": 3409487,
+      "source_logical_bytes": 13303725,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/58b35b4d93ab0c23.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.774273
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/additional-root171-r1/configured-cli-resolution171-r1/catalogue-observation171-r1/catalogue-operation171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/c6f6e4c46e2b0bc7.tar.gz",
+      "archive_sha256": "5e2ca513aba66e8964432b34d4c5ccf71f7f7c57ef6e7ce56fa0655354fcbf68",
+      "archive_bytes": 3413588,
+      "source_logical_bytes": 13319540,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/c6f6e4c46e2b0bc7.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.843147
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/real-hook-port171/sdk-permissions171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/8411f4b715664ccc.tar.gz",
+      "archive_sha256": "28ec703ad30c7cf24758163b653a871afa38122b037aed4ffff97f4842769d2d",
+      "archive_bytes": 3401327,
+      "source_logical_bytes": 13271283,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/8411f4b715664ccc.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.899582
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/probe-diagnostics171/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/26eaa18768c0b787.tar.gz",
+      "archive_sha256": "b95ff8adafc624ee62de12c5692ea419f5292ee6a5e3332198ddb4ce9ba38890",
+      "archive_bytes": 3848223,
+      "source_logical_bytes": 15266759,
+      "entries": 294,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/26eaa18768c0b787.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624700.953059
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/launch-context-build/t3-launch-context171.sfhz_slj/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3ba2aa670ce90560.tar.gz",
+      "archive_sha256": "451ab08e1168d9cce1fd26e78ffe3e25d4a43c3b57f55bf01fd2caa234d30804",
+      "archive_bytes": 137386245,
+      "source_logical_bytes": 351028584,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3ba2aa670ce90560.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.371765
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/remote-worktree171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/7e44b81760d3a94b.tar.gz",
+      "archive_sha256": "c5bcd5a636a30cc980810107d1c3c7bab18147c361bdee66a06d1dc64ed1f7c7",
+      "archive_bytes": 3424795,
+      "source_logical_bytes": 13356829,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/7e44b81760d3a94b.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.42374
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/pending-reply171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/73c68b0f303e37fc.tar.gz",
+      "archive_sha256": "626f89a4cbf2ef533b48666b39645889c3cb5413bc524a0e8e3ed3dd3eeee88e",
+      "archive_bytes": 3434927,
+      "source_logical_bytes": 13394145,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/73c68b0f303e37fc.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.468213
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/routing-refusal171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/768b5f8ab6e073c8.tar.gz",
+      "archive_sha256": "522a9efb210416f5d8694ad393668a70ba631655505a482502b787bd32ff3c23",
+      "archive_bytes": 3429906,
+      "source_logical_bytes": 13374732,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/768b5f8ab6e073c8.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.505358
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/worktree-config171-r2/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/0f4ffc3e90d7ea96.tar.gz",
+      "archive_sha256": "320b29b816163ac6212b97a61e4b53b2f3a382113cabf37c1511876128b6e846",
+      "archive_bytes": 3435631,
+      "source_logical_bytes": 13397053,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/0f4ffc3e90d7ea96.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.589615
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/native-parent-fact171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/7c193e4f612ed301.tar.gz",
+      "archive_sha256": "9764a4d571769c78112dfe876d94033cd6230b32ce4e93cb1d496a464ee767f9",
+      "archive_bytes": 3434024,
+      "source_logical_bytes": 13390875,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/7c193e4f612ed301.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.6344042
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/remote-stderr171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/99c3df8b63e0e347.tar.gz",
+      "archive_sha256": "0a6581d892e75ed21719d683bf3c77dc908101a2b2d4c89e10c8c3518c63287a",
+      "archive_bytes": 3429212,
+      "source_logical_bytes": 13372434,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/99c3df8b63e0e347.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624704.6787672
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/claude-fixes171-r2/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3819e1efbc734111.tar.gz",
+      "archive_sha256": "a6fe48f1e85bb259378186448cb6d8d6994e1d8a5d4192edc6e6422be2fce4af",
+      "archive_bytes": 35040201,
+      "source_logical_bytes": 95507779,
+      "entries": 4009,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3819e1efbc734111.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.117101
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/cancellation-recovery171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/c433c411f12d3bdb.tar.gz",
+      "archive_sha256": "13cd5cb7f9787aa38bb9e2b5a5487f8b30da481c441c8f4f9574c41b0e155611",
+      "archive_bytes": 3428782,
+      "source_logical_bytes": 13371081,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/c433c411f12d3bdb.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.155078
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/startup-diagnostics171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/7695db0c59e55795.tar.gz",
+      "archive_sha256": "ab09532ef0080da4fd48cc3ccde633b7daa717eaac565f861311781db1a5142d",
+      "archive_bytes": 3427950,
+      "source_logical_bytes": 13367295,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/7695db0c59e55795.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.2120478
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/native-host171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/ba818cdd781c05c3.tar.gz",
+      "archive_sha256": "43a4a7fc9655b3a0516cb299c198c16fa6175973ff4ea4595724cfacbc84fc04",
+      "archive_bytes": 3413238,
+      "source_logical_bytes": 13316443,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/ba818cdd781c05c3.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.2585
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/result-delivery171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/95d7f07d34b8e8f5.tar.gz",
+      "archive_sha256": "a5c6f5e14a039a62aedbdbed9e9b98a65e245d57044f9b9bbc5757f70edf8836",
+      "archive_bytes": 3421821,
+      "source_logical_bytes": 13346277,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/95d7f07d34b8e8f5.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.369236
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/worktree-config171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/420ccece56d42af0.tar.gz",
+      "archive_sha256": "60fea99afa2a1d54724eabad6284e0517205431851f9446f69caff684df40d87",
+      "archive_bytes": 3435625,
+      "source_logical_bytes": 13396974,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/420ccece56d42af0.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.418668
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/local-start-inflight-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3e3cfebd05b40837.tar.gz",
+      "archive_sha256": "b1a9ee302a5329e84b1a5659aaf68d85a3db0956a97732e80a28b753bd0052be",
+      "archive_bytes": 3410956,
+      "source_logical_bytes": 13308497,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3e3cfebd05b40837.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.457252
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/session-resilience171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/ea9b58a9b9c013e6.tar.gz",
+      "archive_sha256": "c83283cd679ed33494f1b31b5e79884351392a6a95b57ad7ec6d145e280f0a54",
+      "archive_bytes": 3429059,
+      "source_logical_bytes": 13372026,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/ea9b58a9b9c013e6.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624705.4941618
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/session-resilience171-r1/t3-build/t3-launch-context171.mm7bdkgd/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/1ab9b815e66ded1c.tar.gz",
+      "archive_sha256": "6bbcafe260ff17466fbcb479eff4d815ce3910b423ac95d8aa7230ed3614464f",
+      "archive_bytes": 137392484,
+      "source_logical_bytes": 351052905,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/1ab9b815e66ded1c.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624708.7760372
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/native-t3-tools171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/be52aba73c8dfb9d.tar.gz",
+      "archive_sha256": "36544fc2bf77578937ed171aa76e515bc9c2091a9035c4099a9057dfee5c4732",
+      "archive_bytes": 3433523,
+      "source_logical_bytes": 13388202,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/be52aba73c8dfb9d.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624708.818393
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/native-host171-r4/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3d313729a1125342.tar.gz",
+      "archive_sha256": "6b5f96d93174b12733d9270c2c6b953c363db2b84c466b41a9a7fffdf14028c4",
+      "archive_bytes": 3414667,
+      "source_logical_bytes": 13321633,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3d313729a1125342.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624708.868452
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/native-host171-r3/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/4cb1a81929eb71e5.tar.gz",
+      "archive_sha256": "a841808eabbbc307c66ef233b9d8cd7680b928f07243668e39c9c3577c292db3",
+      "archive_bytes": 3413519,
+      "source_logical_bytes": 13317359,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/4cb1a81929eb71e5.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624708.907012
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/shared-refresh171-r1/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/131ac58713234ff5.tar.gz",
+      "archive_sha256": "44fcfa48a6ccaa12580dbc8c8e2f2d6770c99ce7a118da669869196d16bae7b4",
+      "archive_bytes": 3432709,
+      "source_logical_bytes": 13384023,
+      "entries": 319,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/131ac58713234ff5.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624708.9436522
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/own-usage171/native-host171-r2/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/1c4467ac0833cf9d.tar.gz",
+      "archive_sha256": "bf6f513a477d90cf41aa10dc8215487cd7cfb0368e8b888e1057df81a8e4def1",
+      "archive_bytes": 3413369,
+      "source_logical_bytes": 13316956,
+      "entries": 309,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/1c4467ac0833cf9d.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624708.983701
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/mac-build/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/6151416c7d2c2907.tar.gz",
+      "archive_sha256": "da1fb7ec490dd107c8aaa04e6e5d9198c98230d875e22f1aaedd3421ee40367e",
+      "archive_bytes": 35190410,
+      "source_logical_bytes": 95663934,
+      "entries": 4031,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/6151416c7d2c2907.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624709.4436412
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery171/t3-build/t3-final171.5vbij_qd/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/b3e42e98bf6735b8.tar.gz",
+      "archive_sha256": "d5dc1e0fc3bb5e3bcbcd5f4dcaa952511dd8e098354361c42226da467ff2a13b",
+      "archive_bytes": 137386323,
+      "source_logical_bytes": 351026683,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/b3e42e98bf6735b8.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624712.680309
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/source-parent-proof",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/97e4af571904eaff.tar.gz",
+      "archive_sha256": "94ecec1d5c2f927da3dd1180a7d1bf17360426c11ad0e7087dea701e73a6ae85",
+      "archive_bytes": 35320330,
+      "source_logical_bytes": 96061647,
+      "entries": 4045,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/97e4af571904eaff.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624713.032512
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/store172/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/babf0b7ca3c6c435.tar.gz",
+      "archive_sha256": "7526c928f41624ca7a40e0c439c82a7f9b0ac03bc4ed40ab3cdbe905ddfba5aa",
+      "archive_bytes": 35137633,
+      "source_logical_bytes": 95738616,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/babf0b7ca3c6c435.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624713.563127
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/source-worker-probe",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/50a54cd9681ece3b.tar.gz",
+      "archive_sha256": "6924d66921b4172133b2afa75d9775b81684da2cf481b0518700ac6759cb00e3",
+      "archive_bytes": 35100534,
+      "source_logical_bytes": 95645993,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/50a54cd9681ece3b.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624713.965226
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/quota-delay172/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/8dd92ad6c1639c86.tar.gz",
+      "archive_sha256": "72b7d1efb5afe5c265a71238ba973f196ae7627b6c5ebdef624bfba40a3a9f75",
+      "archive_bytes": 35126304,
+      "source_logical_bytes": 95723784,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/8dd92ad6c1639c86.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624714.440184
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/quota172/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/bbec19bb7b954ab5.tar.gz",
+      "archive_sha256": "44865e868c94aae73d29dbf29b6ab596a602b784fce769328ed13fb6f3941bb4",
+      "archive_bytes": 35125713,
+      "source_logical_bytes": 95693039,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/bbec19bb7b954ab5.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624714.799385
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/continuation172/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/5a700e531e0ad42a.tar.gz",
+      "archive_sha256": "558839f2f63bea54a580cea62d97cc85193a59ebe60559c99ef5859266258bd2",
+      "archive_bytes": 35091357,
+      "source_logical_bytes": 95663070,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/5a700e531e0ad42a.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624715.246946
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/t3-build/t3-launch-context171.gh7z4fc8/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/fef32189e1a8bb08.tar.gz",
+      "archive_sha256": "d2de5b00ee766fa2d2e7b79b5fa3c2871eb14584dc6cf449d70f1aa27f6afd1a",
+      "archive_bytes": 137394416,
+      "source_logical_bytes": 351059902,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/fef32189e1a8bb08.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624718.238057
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/t3-build/t3-launch-context171.q29zzgx3/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/1ce201e97f0f1c56.tar.gz",
+      "archive_sha256": "c2d653d169ab0bb0d9f8ab7cb60fb2c31b9aab51e7310b645d2a55ce076c63b0",
+      "archive_bytes": 137397046,
+      "source_logical_bytes": 351058414,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/1ce201e97f0f1c56.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624721.2399979
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/t3-build/t3-launch-context171.ydtw5nj8/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/6bb934ea14bd57a1.tar.gz",
+      "archive_sha256": "99dee23858c49e8ce264f29eebb8afe4409fa66e40c7978d940e8f04f8fc30d7",
+      "archive_bytes": 137405732,
+      "source_logical_bytes": 351061549,
+      "entries": 31782,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/6bb934ea14bd57a1.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624724.217151
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/source-transport-proof",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/d363a1145b7ab50c.tar.gz",
+      "archive_sha256": "e3a2e46d5325e23fc350ebedd92212dc6815371b23c57ddd8e0517f26aa4132b",
+      "archive_bytes": 35099214,
+      "source_logical_bytes": 95622618,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/d363a1145b7ab50c.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624724.624264
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-delivery172/scope172/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/d8595f98b2d0cf8a.tar.gz",
+      "archive_sha256": "bd24bdd0044e45889bc1c940c6fbb6f964e81cf2f234ac86100d6ef9286c0f5f",
+      "archive_bytes": 35152593,
+      "source_logical_bytes": 95757208,
+      "entries": 4017,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/d8595f98b2d0cf8a.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624725.0868878
+    },
+    {
+      "source": "/Users/moi/.cache/bridget-message-errors172/source",
+      "archive": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3e6cb3ebd6a8e1a0.tar.gz",
+      "archive_sha256": "3af6ef7a887d771559cd6059a60e6e241108b8a58b168b187ccc9c32733efc0d",
+      "archive_bytes": 35131253,
+      "source_logical_bytes": 95777185,
+      "entries": 4016,
+      "manifest": "/Users/moi/.cache/bridget-cleanup-20261022/snapshots/3e6cb3ebd6a8e1a0.json",
+      "verified": true,
+      "removed": true,
+      "removed_at": 1792624725.568321
+    }
+  ],
+  "preservation": {
+    "mac": {
+      "agents_sha256": "f0eb89de95fbd0bccb2759b51b2612d3b97e73ace41769d6e6a2f3b826a037a1",
+      "old_worktree_patch_unchanged": true,
+      "processes": "898 Sun Oct 18 08:40:54 2026     /Users/moi/.local/bin/bridget\n 1372 Thu Oct 22 00:51:39 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Beta)\n 1435 Thu Oct 22 00:51:41 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Beta)\n 3688 Wed Oct 21 12:01:38 2026     /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget",
+      "binary_sha256": "20a44e11b74ebbe92e118fee4152cec6874270542aa5d6a895bd31e01860511c"
+    },
+    "cartae": {
+      "preserved": [
+        {
+          "path": "/home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission",
+          "status_unchanged": true,
+          "tracked_diff_unchanged": true
+        },
+        {
+          "path": "/home/moi/10.Scripts/64.bridget/.worktrees/8a8f5934",
+          "status_unchanged": true,
+          "tracked_diff_unchanged": true
+        },
+        {
+          "path": "/home/moi/10.Scripts/64.bridget/.worktrees/c933dd39",
+          "status_unchanged": true,
+          "tracked_diff_unchanged": true
+        }
+      ],
+      "binary_sha256": "2b3f36fc577a08fa41ac55cbb6c69b6e4f925463d688077f6188cb486dc4574c",
+      "worker": "MainPID=589872\nNRestarts=0\nActiveState=active\n"
+    }
+  },
+  "full_suite_run": false,
+  "compilation_run": false,
+  "service_restart": false,
+  "raw_evidence_mac": "/Users/moi/.cache/bridget-cleanup-20261022",
+  "raw_evidence_cartae": "/home/moi/.cache/bridget-cleanup-20261022"
+}
