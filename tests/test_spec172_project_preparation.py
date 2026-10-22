@@ -293,6 +293,8 @@ class PreparationTests(unittest.TestCase):
         request = dict(self.request, project_id="known",
                        linked_checkout=str(checkout.relative_to(self.source)))
         registry = self.home / "namespace/agents.json"
+        for receipt in (registry.parent / "linked-checkouts").glob("*.json"):
+            receipt.unlink()
         with patch.object(Path, "home", return_value=self.home):
             prep.remote_receive(request, registry, io.BytesIO())
         self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
@@ -303,6 +305,63 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(prep.Refused, "expected_base_commit_invalid"):
             self.receive()
         self.assertFalse((self.registry.parent / "linked-checkouts").exists())
+
+    def test_linked_checkout_clean_failure_can_be_replayed(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        prep.git(remote, "fetch", str(checkout), self.request["commit"])
+        self.request["linked_checkout"] = str(checkout.relative_to(self.source))
+        original = prep.git
+        def failed(root, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "add"):
+                raise prep.Refused("project_preparation_git_failed")
+            return original(root, *arguments, **kwargs)
+        with patch.object(prep, "git", side_effect=failed):
+            with self.assertRaisesRegex(prep.Refused, "git_failed"):
+                self.receive()
+        self.assertFalse(target.exists())
+        self.assertEqual(list((self.registry.parent / "linked-checkouts").glob("*.json")), [])
+        self.receive(io.BytesIO())
+        self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), self.request["commit"])
+
+    def test_linked_checkout_missing_directory_with_registration_stays_incomplete(self):
+        import shutil
+        checkout, remote, target = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        prep.git(remote, "fetch", str(checkout), self.request["commit"])
+        self.request["linked_checkout"] = str(checkout.relative_to(self.source))
+        original = prep.git
+        def failed(root, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "add"):
+                original(root, *arguments[:2], "--no-checkout", *arguments[2:], **kwargs)
+                shutil.rmtree(target)
+                raise prep.Refused("project_preparation_git_failed")
+            return original(root, *arguments, **kwargs)
+        with patch.object(prep, "git", side_effect=failed):
+            with self.assertRaisesRegex(prep.Refused, "git_failed"):
+                self.receive()
+        self.assertFalse(target.exists())
+        self.assertEqual(len(list((self.registry.parent / "linked-checkouts").glob("*.json"))), 1)
+        with self.assertRaisesRegex(prep.Refused, "checkout_incomplete"):
+            self.receive(io.BytesIO())
+
+    def test_linked_checkout_timeout_without_directory_remains_unconfirmed(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        prep.git(remote, "fetch", str(checkout), self.request["commit"])
+        self.request["linked_checkout"] = str(checkout.relative_to(self.source))
+        original = prep.git
+        def expired(root, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "add"):
+                raise subprocess.TimeoutExpired("git", prep.TIMEOUT)
+            return original(root, *arguments, **kwargs)
+        with patch.object(prep, "git", side_effect=expired):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.receive()
+        self.assertFalse(target.exists())
+        self.assertEqual(len(list((self.registry.parent / "linked-checkouts").glob("*.json"))), 1)
+        with self.assertRaisesRegex(prep.Refused, "checkout_incomplete"):
+            self.receive(io.BytesIO())
 
     def test_nested_repository_is_not_a_linked_worktree(self):
         checkout, _, _ = self.mapped_linked_worktree()

@@ -1279,3 +1279,8 @@ Reçu : validation/worktrees-lies-20261022.md.
 ### Contre-revue worktrees : bornage au checkout reel
 
 Revue 0043865a : le worker visait encore le principal. Correction de la sonde, du Prepare et de la projection du worktree isole pour utiliser le checkout reel, sous le meme depot commun et les droits existants. Recu avant extraction pour refuser les residus incomplets. T3 refreshCheckedOutBranch et WorktreeMcpService relus, differences distantes expliquees dans le recu. Qualification finale 18 Python + 4 Rust PASS ; RED/ GREEN meme fixture. Git Cartae 2.56 durable verifie dans SSH et shell de connexion neufs, sans PATH temporaire. Contre-revue et activation a suivre.
+
+
+### Worktrees r4 — refus propre rejouable et avance du checkout lie
+
+Objections c51603b8 traitees : retirer le recu uniquement sur absence prouvee de dossier ET inscription apres refus synchrone ; garder les issues inconnues fermees. 21 Python PASS, nouveau RED discriminant, test worker etendu a cinq cas dont avance rapide C0 vers B sans toucher le principal. Les trois autres Rust de r3 sont conserves, production worker identique. Contre-revue finale avant activation.

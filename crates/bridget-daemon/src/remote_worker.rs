@@ -6442,7 +6442,9 @@ while not stop.exists(): time.sleep(.01)
     #[test]
     fn spec172_linked_checkout_prepare_preserves_main() {
         use bridget_transport::protocol::{ProviderPermissions, WorkspaceRequest, CandidateProbeRefusal as R};
-        for (diverged, isolated) in [(false, false), (true, false), (false, true), (true, true)] {
+        for (diverged, isolated, refresh) in [
+            (false, false, false), (true, false, false), (false, true, false), (true, true, false), (false, false, true)
+        ] {
             let fixture = Fixture::new();
             let project_fixture = Fixture::new();
             let project = project_fixture.0.canonicalize().unwrap();
@@ -6471,6 +6473,11 @@ while not stop.exists(): time.sleep(.01)
                 git(&project, &["add", "main-only"]); git(&project, &["commit", "-qm", "main"]);
             }
             let main_head = git(&project, &["rev-parse", "HEAD"]);
+            if refresh {
+                git(&linked, &["checkout", "--detach", &base]);
+                assert_eq!(git(&linked, &["rev-parse", "HEAD"]), base);
+                assert_ne!(base, expected);
+            }
             let mut runtime = runtime_fixture(&fixture);
             write_json(&runtime.config.registry_path, &serde_json::json!({
                 "agents":{"codex":{"command":"/bin/echo","args":["app-server"],"protocol":"codex_app_server",

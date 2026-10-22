@@ -207,7 +207,19 @@ def prepare_linked_checkout(root, mapping, request, registry_path):
         previous = private_read(receipt)
         target.parent.mkdir(parents=True, exist_ok=True)
         no_links(target.parent)
-        git(root, "worktree", "add", "--detach", str(target), request["commit"])
+        try:
+            git(root, "worktree", "add", "--detach", str(target), request["commit"])
+        except Refused:
+            try:
+                if not os.path.lexists(target):
+                    listed = git(root, "worktree", "list", "--porcelain", "-z", check=False)
+                    entry = b"worktree " + os.fsencode(target)
+                    if listed.returncode == 0 and entry not in listed.stdout.split(b"\0"):
+                        require(private_read(receipt) == previous, "project_preparation_registry_changed")
+                        receipt.unlink()
+            except (Refused, OSError, subprocess.TimeoutExpired):
+                pass
+            raise
         check_linked_checkout(root, target)
     atomic_json(receipt, dict(identity=identity, ready=True), previous)
 

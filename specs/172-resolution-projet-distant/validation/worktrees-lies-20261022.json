@@ -1,54 +1,15 @@
 {
-  "base": "4c23fcc07ffa3cbbd4c0849913714663cdf58b75",
-  "python": {
-    "rc": 0,
-    "summary": [
-      "Ran 18 tests in 1.681s"
-    ],
-    "full_suite": false,
-    "script_sha256": "abb4b00fd823a3ab87d4f8fb98276974880bcc854582714b0fef99a4f5d2f2eb",
-    "test_sha256": "fe218303721b650cbd0aa1b93a82e7ea8e03572b23cb96021401ab7a27f01956"
-  },
-  "rust": {
-    "tests": [
-      {
-        "test": "spec172_linked_checkout_prepare_preserves_main",
-        "rc": 0
-      },
-      {
-        "test": "incident171_shared_refresh_exact_commit_preserves_work_and_active_missions",
-        "rc": 0
-      },
-      {
-        "test": "worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications",
-        "rc": 0
-      },
-      {
-        "test": "spec172_mapping_missing_ambiguous_explicit_and_origin_guards",
-        "rc": 0
-      }
-    ],
-    "git": "git version 2.56.0",
-    "no_path_override": true,
-    "full_suite": false,
-    "fixture_sha256": "2321f6ff073e75db2b3a13b63d0986fec7bed2b95e5c6347b7bda0fbea7aeb08",
-    "source_sha256": "20991262d4b8bc414c7e807169060ca7622a85b12a35ee9da30657f00e932ec9"
-  },
-  "worker_red": {
-    "rc": 101,
-    "git": "git version 2.56.0",
-    "fixture_sha256": "2321f6ff073e75db2b3a13b63d0986fec7bed2b95e5c6347b7bda0fbea7aeb08",
-    "production_base": "ad980493d7bb0369f6e467798d330bacddb3c504"
-  },
-  "git_environment": {
-    "fresh_ssh_git": "/home/moi/.local/lib/bridget-tools/git-current/bin/git",
-    "fresh_ssh_version": "git version 2.56.0",
-    "login_version": "git version 2.56.0"
-  },
+  "base": "fadd74df2176b9bc91ca386be0775b59ee3030a0",
+  "python_passed": 21,
+  "worker_test": "spec172_linked_checkout_prepare_preserves_main",
+  "worker_passed": 1,
+  "worker_scenarios": 5,
+  "historical_unchanged_rust_passed": 3,
+  "worker_production_unchanged": true,
+  "full_suite": false,
   "files_sha256": {
-    "scripts/prepare-project.py": "abb4b00fd823a3ab87d4f8fb98276974880bcc854582714b0fef99a4f5d2f2eb",
-    "crates/bridget-daemon/src/remote_worker.rs": "20991262d4b8bc414c7e807169060ca7622a85b12a35ee9da30657f00e932ec9",
-    "tests/test_spec172_project_preparation.py": "fe218303721b650cbd0aa1b93a82e7ea8e03572b23cb96021401ab7a27f01956"
-  },
-  "activated": false
+    "scripts/prepare-project.py": "9ca19e1c74266b0c075c47b32fcbc4ed9df72a7889f6831b079b58f608c0d2ba",
+    "tests/test_spec172_project_preparation.py": "15d59268cc78084634f29510530af91bfa33ee2f83977f5e27278fc3c84e105e",
+    "crates/bridget-daemon/src/remote_worker.rs": "419d9b46177a8f3a1bc66abc4121d574dfdd9a94557d00788af272bb8f21a254"
+  }
 }

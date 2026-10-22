@@ -116,3 +116,16 @@ Le checkpoint final des tests, la revue et les activations doivent suivre.
 RED final du worker : meme fixture, code de production ad980493. L assertion main must not move echoue sur deux HEAD differents. Le GREEN final utilise exactement la meme fixture. Aucun fournisseur reel dans ces tests, aucune suite complete. Les deux shells frais choisissent Git 2.56.0 ; les quatre tests finaux ne forcent pas PATH.
 
 Preuves privees : /home/moi/.cache/bridget-worktrees172/rust-r3.json, /home/moi/.cache/bridget-worktrees172/python-r3.json, /home/moi/.cache/bridget-worktrees172/worker-red-final.json et leurs journaux. Empreintes source dans le JSON public voisin. Activation et recette MCP reelle encore non qualifiees a ce checkpoint.
+
+
+## Levee des deux objections moyennes de c51603b8
+
+Echec synchrone de creation : le recu est retire uniquement si Git a termine avec un refus et si la cible et son inscription dans l inventaire Git sont toutes deux absentes. Un delai expire, un inventaire illisible ou une inscription residuelle conserve le recu incomplet. Aucun retry automatique ni suppression de travail.
+
+21 tests Python PASS. RED cible avec le script fadd74df : la liste des recus n est pas vide apres un echec propre, donc le test echoue. GREEN sur la meme fixture avec le correctif. Tests supplementaires sur inscription sans dossier, delai sans dossier et adoption sans recu. Le test du worker passe sur cinq scenarios, dont HEAD lie C0 vers descendant B : seule la cible avance, principal inchange, recheck reussi. Les trois autres tests Rust de r3 restent valides : code de production worker byte-identique, seul le test est etendu.
+
+mapping.source_root n est pas une ecriture morte : inspect_candidate et recheck transmettent le mapping a native_permissions, qui lit source_root pour traduire le cwd du parent. Le registre reste inchange. Les fichiers ignore du projet ne sont pas modifies ; la proprete du principal reste une garde quand on demande son rafraichissement.
+
+Reference T3 pour ce delta : WorktreeMcpService arme une transaction apres creation reussie et un rollback. Bridget exige une preuve d absence de toute creation avant de retirer son recu distant ; une issue inconnue reste fermee. Pas de nouveau parcours T3 equivalent pour un worker distant.
+
+Preuves : /home/moi/.cache/bridget-worktrees172/tests-r4.json, /home/moi/.cache/bridget-worktrees172/clean-failure-red.log, /home/moi/.cache/bridget-worktrees172/python-r4.log, /home/moi/.cache/bridget-worktrees172/worker-green-r4.log.
