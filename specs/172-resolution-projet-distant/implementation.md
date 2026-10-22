@@ -1355,4 +1355,4 @@ La comparaison provider_turn ignore désormais la session technique comme elle i
 
 RED : le renouvellement de session avec politique identique échoue sur le code précédent. Contrôles ciblés et revue en cours ; aucune reprise métier à la place de Monuments.
 
-GREEN : cinq tests ciblés de renouvellement PASS ; trois gardes de liaison T3 et deux contrôles de ronde/preuve distante PASS. La preuve distante du test de nouvelle ronde est fournie par la fixture ; ce test ne simule pas un vrai redémarrage de Codex ou un fournisseur distant. Snapshot et enfant restent inchangés, un rejeu ne crée pas de seconde ronde. Revue avant activation.
+GREEN : cinq tests ciblés de renouvellement PASS ; deux gardes de liaison T3 et deux contrôles de ronde/preuve distante PASS. La preuve distante du test de nouvelle ronde est fournie par la fixture ; ce test ne simule pas un vrai redémarrage de Codex ou un fournisseur distant. Snapshot et enfant restent inchangés, un rejeu ne crée pas de seconde ronde. Revue avant activation.
