@@ -1,0 +1,41 @@
+{
+  "source": "31f42307efd5c3d490a2fdb8e2c09c49f0b0a30b",
+  "build_id": "172-31f42307",
+  "build_sha256": "6f53d2601ff8aac635cffd93612a4bf39c4f0c0e7bdc43e593dda6c4679ae486",
+  "activated_at": "2026-10-22T09:36:59.188552+02:00",
+  "master_pid": 82087,
+  "tests": {
+    "passed": 7,
+    "full_suite": false,
+    "source_sha256": "38622599c2c7eeabf533f453c39f883d537edb0a0b29c2264ba0c99e7c708843"
+  },
+  "review": {
+    "task_id": "65b3fdfb-431c-40af-a5e1-e6b00d473bc4",
+    "verdict": "APPROVE"
+  },
+  "protected_processes_preserved": true,
+  "worker_pid": 589872,
+  "worker_restarts": 0,
+  "remote_tasks_preserved": [
+    {
+      "task_id": "d7ddb20c-ac72-4f88-aad4-040acf30625e",
+      "state": "result_available",
+      "child_instance": "02af470d-3e79-4b0d-a848-485fafbc6ded",
+      "restart_resumes": 0
+    },
+    {
+      "task_id": "1ff9a4d5-88c6-46f8-b6e1-f251869ee92f",
+      "state": "working",
+      "child_instance": "bbebfe2b-8b4d-4370-89e9-0c5aea7126cc",
+      "restart_resumes": 0
+    }
+  ],
+  "opaque_context_recipe": "pending_one_official_capabilities_read",
+  "old_facades_task": {
+    "task_id": "837972ad-ad58-4512-9a71-fd2843ab5be5",
+    "state": "failed",
+    "cleanup_done": true,
+    "guard_released": true,
+    "recreated": false
+  }
+}

@@ -1145,3 +1145,10 @@ opaques admis et caractères invisibles refusés. Le commentaire distingue la bo
 de SessionProof de son filtre, plus permissif ; aucune modification hors liaison.
 Revue r2 et activation encore à qualifier. Preuves :
 /home/moi/.cache/bridget-identifiants172/tests-r2.json
+
+
+Checkpoint de livraison du 22 octobre : contre-revue r2 APPROVE, 7 tests PASS,
+source 31f42307 fusionnée/poussée et build 172-31f42307 actif sur le maître.
+T3/pont/worker préservés ; tâches distantes inchangées, zéro reprise.
+Recette du contexte opaque encore attendue à ce checkpoint. Reçu :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/identifiants-t3-20261022.md
