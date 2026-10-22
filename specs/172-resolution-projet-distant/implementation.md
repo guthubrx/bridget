@@ -1301,3 +1301,6 @@ Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219
 - Lecture réelle Opus2D : base e89b8430c17fc7f5ba2917346a7bbf36b43b3446, cible fd4cad3b5e3be49bc56f866ece6c695ed1b2d3c5, 43 commits exclusifs sur 6 914. Aucune mission Notre-Dame rejouée.
 - Documentation Git : https://git-scm.com/docs/git-bundle (prérequis et vérification), https://git-scm.com/docs/git-merge-base.
 - Revue et livraison : en cours.
+
+- Auto-revue : le nouveau refus nommé de délai passait dans le nettoyage des refus synchrones. Test RED par TimeoutExpired injecté au vrai subprocess.run : reçu supprimé. Correction : conserver tout reçu après un refus de délai ; test GREEN via le vrai wrapper Git. Les erreurs Git et SSH testées restent des codes exacts sans argument privé.
+- Qualification sans mission métier : export réel fd4 ^e89, 7 610 389 octets en 0,504 s ; bundle verify réel sur Cartae réussi, HEAD distant inchangé. Aucun import dans le projet ni agent Notre-Dame lancé par cette qualification.

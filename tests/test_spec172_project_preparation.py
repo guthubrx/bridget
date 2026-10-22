@@ -226,10 +226,11 @@ class PreparationTests(unittest.TestCase):
     def test_preparation_timeouts_identify_operation(self):
         timeout = subprocess.TimeoutExpired(["private-argument"], prep.TIMEOUT)
         with patch.object(subprocess, "run", side_effect=timeout):
-            with self.assertRaisesRegex(prep.Refused, "project_preparation_git_timeout"):
-                prep.git(self.source, "rev-parse", "HEAD")
-            with self.assertRaisesRegex(prep.Refused, "project_preparation_bundle_export_timeout"):
-                prep.git(self.source, "bundle", "create", "ignored", phase="bundle_export")
+            for phase in ("git", "bundle_base", "bundle_export", "bundle_verify", "bundle_import"):
+                with self.subTest(phase=phase):
+                    with self.assertRaises(prep.Refused) as error:
+                        prep.git(self.source, "rev-parse", "HEAD", phase=phase)
+                    self.assertEqual(str(error.exception), "project_preparation_" + phase + "_timeout")
             link = dict(remote_root=str(self.home), known_hosts="/private-hosts",
                         identity="/private-key", port="22", user="moi", host="test")
             for operation in ("inspect", "prepare"):
@@ -411,13 +412,13 @@ class PreparationTests(unittest.TestCase):
         prep.atomic_json(self.registry, self.config)
         prep.git(remote, "fetch", str(checkout), self.request["commit"])
         self.request["linked_checkout"] = str(checkout.relative_to(self.source))
-        original = prep.git
-        def expired(root, *arguments, **kwargs):
-            if arguments[:2] == ("worktree", "add"):
-                raise subprocess.TimeoutExpired("git", prep.TIMEOUT)
-            return original(root, *arguments, **kwargs)
-        with patch.object(prep, "git", side_effect=expired):
-            with self.assertRaises(subprocess.TimeoutExpired):
+        original = subprocess.run
+        def expired(command, *args, **kwargs):
+            if "worktree" in command and command[command.index("worktree") + 1] == "add":
+                raise subprocess.TimeoutExpired(command, prep.TIMEOUT)
+            return original(command, *args, **kwargs)
+        with patch.object(subprocess, "run", side_effect=expired):
+            with self.assertRaisesRegex(prep.Refused, "project_preparation_git_timeout"):
                 self.receive()
         self.assertFalse(target.exists())
         self.assertEqual(len(list((self.registry.parent / "linked-checkouts").glob("*.json"))), 1)

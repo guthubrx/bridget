@@ -219,7 +219,9 @@ def prepare_linked_checkout(root, mapping, request, registry_path):
         no_links(target.parent)
         try:
             git(root, "worktree", "add", "--detach", str(target), request["commit"])
-        except Refused:
+        except Refused as error:
+            if str(error).endswith("_timeout"):
+                raise
             try:
                 if not os.path.lexists(target):
                     listed = git(root, "worktree", "list", "--porcelain", "-z", check=False)
