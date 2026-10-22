@@ -316,16 +316,16 @@ def remote_receive(request, registry_path, bundle_stream):
                         atomic_json(marker, expected)
                     mirror = no_links(mapping["expected_git_identity"])
                     if not mirror.exists():
-                        git(base, "clone", "--bare", str(bundle), str(mirror))
+                        git(base, "clone", "--bare", str(bundle), str(mirror), phase="bundle_import")
                     else:
-                        git(mirror, "fetch", "--no-tags", str(bundle), "refs/heads/source")
+                        git(mirror, "fetch", "--no-tags", str(bundle), "refs/heads/source", phase="bundle_import")
                     require(commit_present(mirror, commit), "project_preparation_commit_missing")
                     # Clone dans un dossier temporaire puis publication. Aucune suppression
                     # d'un checkout étranger ou réinitialisation d'un checkout existant.
                     with tempfile.TemporaryDirectory(prefix=".checkout-", dir=base) as stage:
                         checkout = Path(stage) / "repository"
-                        git(base, "clone", "--no-checkout", str(mirror), str(checkout))
-                        git(checkout, "checkout", "--detach", commit)
+                        git(base, "clone", "--no-checkout", str(mirror), str(checkout), phase="bundle_import")
+                        git(checkout, "checkout", "--detach", commit, phase="bundle_import")
                         require(not root.exists(), "project_preparation_destination_occupied")
                         os.rename(checkout, root)
                 require(commit_present(root, commit), "project_preparation_commit_missing")

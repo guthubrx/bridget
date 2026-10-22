@@ -1304,3 +1304,6 @@ Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219
 
 - Auto-revue : le nouveau refus nommé de délai passait dans le nettoyage des refus synchrones. Test RED par TimeoutExpired injecté au vrai subprocess.run : reçu supprimé. Correction : conserver tout reçu après un refus de délai ; test GREEN via le vrai wrapper Git. Les erreurs Git et SSH testées restent des codes exacts sans argument privé.
 - Qualification sans mission métier : export réel fd4 ^e89, 7 610 389 octets en 0,504 s ; bundle verify réel sur Cartae réussi, HEAD distant inchangé. Aucun import dans le projet ni agent Notre-Dame lancé par cette qualification.
+
+- Revue r1 : Task daab8723-2447-4de9-8c58-1d818a91a81d, APPROVE sur 10eaa0e7, trois remarques non bloquantes traitées avant livraison : tous les imports du miroir et du nouveau checkout utilisent bundle_import ; les sept codes de délai sont vérifiés à l'égalité ; la source doit connaître le HEAD distant pour calculer la base. Sans ce fait, le comportement sûr préexistant reste un bundle complet et le gain ne peut pas être promis.
+- Le délai Notre-Dame initial reste sans phase rétrospective. Le transfert réduit est mesuré ; sa causalité avec le délai initial n'est pas démontrée.

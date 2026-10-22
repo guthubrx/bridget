@@ -235,8 +235,9 @@ class PreparationTests(unittest.TestCase):
                         identity="/private-key", port="22", user="moi", host="test")
             for operation in ("inspect", "prepare"):
                 with self.subTest(operation=operation):
-                    with self.assertRaisesRegex(prep.Refused, "project_preparation_ssh_" + operation + "_timeout"):
+                    with self.assertRaises(prep.Refused) as error:
                         prep.ssh(link, self.request, operation)
+                    self.assertEqual(str(error.exception), "project_preparation_ssh_" + operation + "_timeout")
 
     def test_master_to_remote_without_t3_or_project_mapping(self):
         result, local, remote = self.prepare_via_federation()
