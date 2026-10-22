@@ -1177,7 +1177,7 @@ fournisseur et réutiliser reconnect_managed_session, sans nouvelle admission ni
 métier. Différence requise par la séparation maître Mac / fournisseur Cartae.
 Seul un WorkerResultContext validé utilise cette reconnexion. Les natifs locaux gardent
 leur contrat152 ; Disconnect explicite et signal d'arrêt continuent d'arrêter la mission.
-Aucune modification de politique, de droits ni de protocole worker.
+Les droits fournisseur et le protocole worker sont inchangés. La gestion de panne évolue.
 
 Preuve isolée : vrai daemon, worker, wrapper et fournisseur fermé sans réseau.
 Nouveau test spec172_remote_wrapper_survives_master_restart_without_second_provider :
@@ -1219,3 +1219,24 @@ réel dans ces sept tests. Source et journaux :
 Le remplacement du worker préserve donc ses fournisseurs déjà relâchés ; le maître
 reste en place pendant cette livraison. Une nouvelle validation MCP réelle en lecture
 seule est prévue après activation, sans fabrication métier. Revue r2 attendue.
+
+
+Contre-revue r2 9d063b81 : APPROVE avec réserves mineures, aucun défaut bloquant
+sur le code. Résultat complet lu puis ACK. Avant activation : commentaires de grâce
+précisés ; assertion daemon.is_none tautologique et assertion sur is_alive constant
+du mock retirées. Ces changements ne changent pas la décision de production testée.
+
+Décision du responsable de cette correction : grâce distante de300s retenue dans
+le périmètre autorisé. Le redémarrage réel observé du maître a pris environ4s ;
+cette marge tolère son démarrage et la reconnexion réseau sans attente infinie.
+Ce n'est pas une garantie de continuité pendant une panne prolongée. Une tentative
+bloquante déjà engagée peut dépasser l'échéance d'environ20s ; chaque coupure
+réinitialise la grâce. Après expiration, la sortie existante arrête le fournisseur.
+Cela change le comportement de panne ; aucun droit fournisseur n'est ajouté.
+
+Limites de preuve conservées : le RED/GREEN porte sur le tour actif ; la fin de tour
+pendant coupure est GREEN, sans RED séparé. L'annulation durant une coupure et l'arrêt
+du fournisseur après300s ne sont pas qualifiés par un modèle réel. Aucun succès global
+ni preuve de tous les scénarios. Le paquet reprend la source de production50b0673f
+revue et testée ; le commit suivant précise des commentaires et retire deux assertions
+inertes seulement. Compilation et activation doivent être vérifiées par leur reçu.

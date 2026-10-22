@@ -4748,8 +4748,8 @@ fn launch_session_with_status(
         match read_result {
             Ok(0) => {
                 // Le worker distant conserve le processus et le résultat durable.
-                // Une coupure du maître ne ferme pas cette mission ; un arrêt
-                // explicite et le signal natif conservent leur effet.
+                // Une coupure brève bénéficie de la grâce distante ; son
+                // expiration, un arrêt explicite ou le signal natif l'arrêtent.
                 if native_bootstrap.is_some()
                     && !forward_child_requests
                     && remote_result_context.is_none()
@@ -5096,8 +5096,8 @@ fn launch_session_with_status(
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
                 // Le worker distant conserve le processus et le résultat durable.
-                // Une coupure du maître ne ferme pas cette mission ; un arrêt
-                // explicite et le signal natif conservent leur effet.
+                // Une coupure brève bénéficie de la grâce distante ; son
+                // expiration, un arrêt explicite ou le signal natif l'arrêtent.
                 if native_bootstrap.is_some()
                     && !forward_child_requests
                     && remote_result_context.is_none()
@@ -11885,7 +11885,6 @@ mod native_child_requests155_tests {
         );
         assert!(result.is_none());
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(session.is_alive(), "la reconnexion ne remplace ni ne stoppe elle-même le fournisseur");
         assert!(writer.lock().unwrap().is_none());
         assert!(!absent.exists());
     }

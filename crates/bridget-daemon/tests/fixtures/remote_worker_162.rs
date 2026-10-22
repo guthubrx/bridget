@@ -2229,7 +2229,6 @@ fn real_master_case(case: &str) {
             assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
             support::private_write(&execution_cwd.join("release162"), b"go").unwrap();
             wait_evidence152(&f.fixture, "completed162", &command.instance_id);
-            assert!(f.fixture.daemon.is_none(), "la fin fournisseur doit précéder le retour du maître");
         }
         f.start_master_with_one_slot();
         parent = real_master_parent(&mut f, &socket, &host, &origin);

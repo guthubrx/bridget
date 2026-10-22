@@ -47,5 +47,7 @@
     "cleanup_done": true,
     "guard_released": true,
     "recreated": false
-  }
+  },
+  "remote_execution_preserved": false,
+  "erratum": "Les identités persistées ont été conservées, mais le journal fournisseur prouve un arrêt sur coupure du maître ; la continuité d’exécution n’était pas validée."
 }

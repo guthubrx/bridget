@@ -35,7 +35,9 @@ Le premier préflight a refusé une tâche locale encore active. Elle a ensuite 
 avec `cleanup_done=true`, sans intervention. L'activation a repris après constat de
 zéro descendant local. Les commandes distantes déjà `released/native_ready` restent
 exécutées par le même runtime worker ; `prepare_restart` conserve leurs identités.
-L'attente de leur fin n'était donc pas nécessaire.
+Le contrôle ne prouvait pas la survie des fournisseurs. Le journal ultérieur a révélé
+leur arrêt sur coupure du maître ; cette affirmation de continuité est retirée.
+Le correctif du wrapper et sa recette complète sont suivis dans le lot suivant.
 
 ## Parcours réel et limites
 
