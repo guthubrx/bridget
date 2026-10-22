@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-22",
+  "source": "dbec83e64c8cccfa8b228d2e82ea3156855a0538",
+  "build_id": "172-dbec83e6",
+  "sha256": "7bd41314c7b8318ad3155f383f8b6fac48824a4df8a1063844119dc978edca32",
+  "master_pid": 47204,
+  "worker_pid": 2219043,
+  "targeted_tests": 9,
+  "full_suite": false,
+  "review": "APPROVE",
+  "review_task": "9e5b4b1c-cfbb-449a-9f8b-5809f2b69f7f",
+  "live_task": "492cf951-4ad6-4f1e-97e8-32a2b3cb9706",
+  "live_child": "0e3a0548-eb6c-44dc-9d88-8fab529eca4d",
+  "rounds": 2,
+  "replay_same_task_child_round_result": true,
+  "closed": true,
+  "real_codex_session_rotation_exercised": false,
+  "terminal_plain_codex_enrollment_changed": false,
+  "business_task_preserved": "becec88c-197d-4653-8452-0b936d04945e",
+  "business_provider_processes_preserved": true,
+  "t3_restarted": false,
+  "worker_restarted": false,
+  "abandoned_admission": {
+    "request_id": "monuments-notre-dame-qualification-intrants-reels-20261022-01",
+    "state": "refused",
+    "refusal_code": "permission_not_inherited",
+    "task_id": null
+  }
+}

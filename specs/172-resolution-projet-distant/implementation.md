@@ -1356,3 +1356,15 @@ La comparaison provider_turn ignore désormais la session technique comme elle i
 RED : le renouvellement de session avec politique identique échoue sur le code précédent. Contrôles ciblés et revue en cours ; aucune reprise métier à la place de Monuments.
 
 GREEN : cinq tests ciblés de renouvellement PASS ; deux gardes de liaison T3 et deux contrôles de ronde/preuve distante PASS. La preuve distante du test de nouvelle ronde est fournie par la fixture ; ce test ne simule pas un vrai redémarrage de Codex ou un fournisseur distant. Snapshot et enfant restent inchangés, un rejeu ne crée pas de seconde ronde. Revue avant activation.
+
+
+## Reprise après renouvellement de session — 22 octobre 2026
+
+Source dbec83e6 intégrée et build 172-dbec83e6 actif sur le seul maître Mac.
+Neuf tests ciblés PASS et revue 9e5b4b1c APPROVE. Recette Cartae 492cf951 :
+deux rondes sur le même enfant, résultats lus/ACK, rejeu strict identique puis
+clôture. La rotation Codex réelle reste non forcée ; variante couverte par fixtures.
+T3 et worker préservés, mission becec88c inchangée pendant activation.
+Ancienne admission Monuments abandonnée : refus natif sans Task, aucun rejeu.
+Le refus identity_not_found d'un Codex terminal direct reste un cas distinct.
+Reçu : /home/moi/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md.
