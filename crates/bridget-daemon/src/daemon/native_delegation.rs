@@ -4256,8 +4256,8 @@ fn routing_catalogue_view(st: &DaemonState, conn: &str) -> Result<Value, String>
 }
 
 /// O(B), B octets du fait : le même propriétaire est contrôlé par can_own_task.
-/// T3 réatteste chaque tour. Son run_id et sa révision ne changent pas les droits.
-/// L'identité fournisseur, la session, la source et toute la politique restent figées.
+/// T3 réatteste le même propriétaire ; tour et session technique peuvent être renouvelés.
+/// Le fournisseur, la source, le dossier et toute la politique restent figés.
 fn continuation_parent_matches(
     frozen: Option<&bridget_transport::protocol::ProviderPermissions>,
     current: Option<&bridget_transport::protocol::ProviderPermissions>,
@@ -4268,6 +4268,7 @@ fn continuation_parent_matches(
         {
             let mut comparable = frozen.clone();
             comparable.run_id.clone_from(&current.run_id);
+            comparable.provider_session_id.clone_from(&current.provider_session_id);
             comparable.revision = current.revision;
             comparable == *current
         }
@@ -22920,7 +22921,6 @@ for frame in frames: print(json.dumps(frame),flush=True)
             "un nouveau tour attesté avec les mêmes droits doit continuer la tâche");
         for (field,value) in [
             ("version",json!(2)), ("source",json!("native_wrapper")),
-            ("provider_session_id",json!("foreign-session")),
             ("provider_instance_id",json!("foreign-provider")),
             ("driver",json!("claude_stream_json")), ("cwd",json!("/other/project")),
             ("runtime_mode",json!("approval-required")), ("interaction_mode",json!("plan")),
@@ -22944,6 +22944,129 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec172_continuation_provider_session_renewal_keeps_the_same_policy() {
+        let frozen = continuation172_parent();
+        let mut current = frozen.clone();
+        current.provider_session_id = "renewed-session-172".into();
+        current.run_id = "run:852".into();
+        current.revision = 1;
+        assert!(continuation_parent_matches(Some(&frozen), Some(&current)),
+            "la session technique renouvelée du même parent attesté conserve ses droits");
+        for (field, value) in [
+            ("provider_instance_id", json!("other-provider")),
+            ("driver", json!("claude_stream_json")),
+            ("cwd", json!("/other/project")),
+            ("runtime_mode", json!("approval-required")),
+            ("interaction_mode", json!("plan")),
+            ("provider_policy", json!({"kind":"codex","approval_policy":"on-request",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})),
+        ] {
+            let mut changed = serde_json::to_value(&current).unwrap();
+            changed[field] = value;
+            let changed = serde_json::from_value(changed).unwrap();
+            assert!(!continuation_parent_matches(Some(&frozen), Some(&changed)),
+                "le changement de session ne masque pas une modification de {field}");
+        }
+        let mut native = frozen.clone();
+        native.source = "native_wrapper".into();
+        let mut renewed_native = native.clone();
+        renewed_native.provider_session_id = current.provider_session_id.clone();
+        assert!(!continuation_parent_matches(Some(&native), Some(&renewed_native)),
+            "aucun assouplissement pour une identité wrapper native");
+    }
+
+    #[test]
+    fn spec172_continuation_rotated_session_cannot_take_another_owner_task() {
+        let (mut st,config,mut task,_result) = remote162_capture_fixture();
+        let mut parent = continuation172_parent();
+        parent.cwd.clone_from(&task.cwd);
+        task.permission_snapshot = Some(crate::native_permissions::snapshot(
+            &task.owner,&task.owner_instance,parent.clone(),json!({"kind":"claude"}),
+            Path::new(&task.cwd),
+        ));
+        task.owner = "different-owner-172".into();
+        st.delegation_store.save(&task).unwrap();
+        let before = serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        parent.provider_session_id = "renewed-session-172".into();
+        parent.run_id = "run:852".into();
+        parent.revision = 1;
+        let shared = Arc::new(Mutex::new(st));
+        let response = handle_with_fact("conn-1",NativeDelegationRequest::Continue {
+            task_id:task.task_id.clone(),request_id:"rotated-owner172-r2".into(),
+            task:"Achever la correction.".into(),brief:None,
+        },Some(parent),None,None,&shared,None);
+        let DaemonToWrapper::NativeDelegationResult { result } = response else { panic!("résultat attendu"); };
+        assert_eq!(result["code"], "task_unavailable");
+        assert_eq!(serde_json::to_value(shared.lock().unwrap().delegation_store
+            .get(&task.task_id).unwrap().unwrap()).unwrap(), before);
+        drop(shared);cleanup(&config);
+    }
+
+    #[test]
+    fn spec172_continuation_rotated_parent_begins_one_round_on_same_child() {
+        let mut value = serde_json::to_value(request("session172-first")).unwrap();
+        value["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(value).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("session172-parent");
+        let mut st = shared.lock().unwrap();
+        st.connections.insert("conn-1".into(), parent_writer);
+        let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        st.registry = AgentRegistry::from_json(&json!({
+            "agents":{},
+            "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae",
+                "provisioning_revision":1,"credential_fingerprint":"c".repeat(64),
+                "allowed_agent_types":["native-test"],
+                "mappings":{"session172":{"source_host":st.host.clone(),"source_root":task.cwd,
+                    "remote_root":task.cwd,"expected_git_identity":"fixture-session172","mapping_revision":1}}
+            }}
+        }).to_string(), &root.join("session172-registry.json")).unwrap();
+        let mut parent = continuation172_parent();
+        parent.cwd.clone_from(&task.cwd);
+        task.permission_snapshot = Some(crate::native_permissions::snapshot(
+            &task.owner,&task.owner_instance,parent.clone(),json!({"kind":"claude"}),
+            Path::new(&task.cwd),
+        ));
+        task.remote_placement = Some(bridget_transport::protocol::RemotePlacement {
+            machine_id:"cartae".into(),worker_id:"worker-cartae".into(),provisioning_revision:1,
+            project_id:"session172".into(),mapping_revision:1,origin_host:st.host.clone(),
+            origin_cwd:task.cwd.clone(),source_root_identity:"git:session172".into(),
+            relative_cwd:".".into(),execution_cwd:task.cwd.clone(),base_commit:None,
+            definition_digest:"a".repeat(64),permission_digest:"b".repeat(64),
+        });
+        task.state = "result_available".into();
+        task.result = Some("premier résultat".into());
+        task.result_sent = true;
+        task.idle_deadline_at = Some(unix_timestamp() + 120);
+        st.delegation_store.save(&task).unwrap();
+        let frozen = st.delegation_store.get(&id).unwrap().unwrap();
+        let mut current = parent;
+        current.provider_session_id = "renewed-session-172".into();
+        current.run_id = "run:852".into();
+        current.revision = 1;
+        let next = NativeDelegationRequest::Continue {
+            task_id:id.clone(),request_id:"session172-next".into(),
+            task:"Même enfant, seconde ronde.".into(),brief:None,
+        };
+        let view = handle_locked_with_remote_proof("conn-1",next.clone(),None,
+            Some(&current),Some(&frozen),&mut st).unwrap();
+        assert_eq!(view["round"], 2);
+        let after = st.delegation_store.get(&id).unwrap().unwrap();
+        assert_eq!(after.task_id, frozen.task_id);
+        assert_eq!(after.child, frozen.child);
+        assert_eq!(after.child_instance, frozen.child_instance);
+        assert_eq!(after.permission_snapshot, frozen.permission_snapshot);
+        assert_eq!(after.rounds.len(), 1);
+        let replay = handle_locked_with_remote_proof("conn-1",next,None,
+            Some(&current),Some(&frozen),&mut st).unwrap();
+        assert_eq!(replay, view);
+        assert_eq!(st.delegation_store.get(&id).unwrap().unwrap().rounds.len(), 1);
+        drop(st);drop(shared);cleanup(&config);
+    }
+
+    #[test]
     fn spec172_continuation_renewed_turn_reaches_worker_proof_without_mutating_task() {
         let (mut st,config,mut task,_result) = remote162_capture_fixture();
         let mut parent = continuation172_parent();
@@ -22956,7 +23079,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let before = serde_json::to_value(&task).unwrap();
         let mut current = parent;
         current.run_id = "run:851".into();
-        current.revision += 1;
+        current.provider_session_id = "renewed-session-172".into();
+        current.revision = 1;
         let shared = Arc::new(Mutex::new(st));
         let response = handle_with_fact("conn-1",NativeDelegationRequest::Continue {
             task_id:task.task_id.clone(),request_id:"continuation172-r2".into(),

@@ -1343,3 +1343,16 @@ GREEN : le même test E2E termine avec résultat unique et rejeu strict identiqu
 
 
 Livraison réservation : source cbc034bd intégrée/poussée, build signé172-cbc034bd actif maître13340 ; 17tests ciblésPASS et revue74f5eb18 APPROVE. RED sur même fixture, GREEN avec réservation4s et résultat/rejeu uniques. Recette réelle9d13c023 Cartae réussie, constante15s lue, marqueur reçu, ACK/rejeu strict/fermeture confirmés. Worker2219043, T3 50681/50799 et pont898 préservés ; deux missions métier gardent les mêmes identités/processus et rendent leurs résultats sans erreur. Ancienne tâche e6283066 non relancée. Les réserves de boucle de rappel et de saturation prolongée sont conservées dans le reçu ; aucune causalité historique inventée. Archive source Mac nettoyée, rollback/preuves/cache Cargo préservés ; deux worktrees Cartae conservés sur inventaire lsof incomplet. Notifications envoyées à l’intégrateur et à Monuments, reçus initiaux en remise en vol. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/reservation-budget-20261022.md et JSON voisin.
+
+
+## Correction du 22 octobre — session du parent renouvelée
+
+Le propriétaire Monuments conserve sa conversation et sa politique exacte, mais son provider_session_id passe de56926afc àb9f0f5d0. run_id/révision changent aussi. La continuation28da9844 ronde3 est refusée avant toute admission. Le refus de réservation aaba664f est antérieur au build172-cbc034bd ; il est terminal, nettoyé et sans remise.
+
+Référence T3 lue : /Users/moi/11.Repositories/t3code/apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts,1483–1503,1530–1532,1581–1585,1630–1643 sur ef86c2bbc3388be8fc593db23a323e3d80b58509. T3 conserve thread.id quand la session fournisseur démarre ou est remplacée. Bridget conserve l’autorité de cette conversation, avec réattestation HTTP et contrôle du même propriétaire avant puis après la preuve distante.
+
+La comparaison provider_turn ignore désormais la session technique comme elle ignore déjà run_id et révision. Le fournisseur/driver, les modes, le dossier et la politique restent identiques. NativePermissionFact ne peut pas déclarer provider_turn : validate_permissions(fact,false) exige native_wrapper ; ce chemin garde son égalité stricte. La politique enfant, sa preuve distante et le snapshot durable ne sont pas modifiés.
+
+RED : le renouvellement de session avec politique identique échoue sur le code précédent. Contrôles ciblés et revue en cours ; aucune reprise métier à la place de Monuments.
+
+GREEN : cinq tests ciblés de renouvellement PASS ; trois gardes de liaison T3 et deux contrôles de ronde/preuve distante PASS. La preuve distante du test de nouvelle ronde est fournie par la fixture ; ce test ne simule pas un vrai redémarrage de Codex ou un fournisseur distant. Snapshot et enfant restent inchangés, un rejeu ne crée pas de seconde ronde. Revue avant activation.
