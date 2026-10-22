@@ -1248,3 +1248,14 @@ et session fournisseur. Recette réelle508c947f : deux rondes, même fournisseur
 rejeu identique et garde close/cleanup_done. Sept tests isolés PASS, revue r2 approuvée.
 Anciennes instances conservées, aucun nouveau travail métier, maître non redémarré.
 Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/reconnexion-wrapper-20261022.md
+
+
+### 22 octobre 2026 — Refus de continuation lié à un processus distant terminé
+
+Le signalement Notre-Dame d7ddb20c révèle un diagnostic trompeur dans `remote_dispatch_proof` : `Terminal` était converti en `permission_not_inherited`. Le worker enregistre cette fin à 07:36:56 UTC ; la continuation refusée date de 07:45:42 UTC. L’ancienne rupture du wrapper explique l’exécution terminée ; elle ne justifie pas de présenter cet état comme un nouveau besoin de droits.
+
+Correction isolée : codes `remote_execution_ended` et `remote_execution_unconfirmed`, messages constants, contrôle de condensat inchangé. Trois tests ciblés PASS, dont six réponses sur le vrai canal Unix maître-worker et un contrôle de non-mutation du reçu. Pas de FULL ni de fournisseur dans ces tests. Revue indépendante et activation encore en attente à ce checkpoint.
+
+Référence T3 lue : `OrchestratorMcpService.ts`, `interruptThread` (état actif/terminal séparé des modes) et `delegateTask` (checkout du parent). T3 ne couvre pas les phases de commande du worker Bridget.
+
+Preuve : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.md.

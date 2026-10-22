@@ -3272,6 +3272,14 @@ impl ParentPermission {
 }
 
 fn failure(code: &str) -> Value {
+    let message = match code {
+        "remote_execution_ended" => Some("Le service distant confirme que ce processus est terminé. Cette demande ne peut pas le poursuivre. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite."),
+        "remote_execution_unconfirmed" => Some("Le service distant n’a pas confirmé que ce processus est prêt à recevoir du travail. Vérifiez l’état de la tâche sans créer de doublon."),
+        _ => None,
+    };
+    if let Some(message) = message {
+        return json!({"status":"refused","code":code,"message":message});
+    }
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
     }
@@ -4756,10 +4764,17 @@ pub(super) fn remote_dispatch_proof(
         Instant::now() + Duration::from_secs(5),
     )
     .map_err(|e| format!("remote_permissions:{e:?}"))?;
-    if !matches!(response, WorkerResponseOperation::Observation { observation }
-        if observation.phase == WorkerCommandPhase::Released && observation.native_ready
-        && observation.permission_digest.as_ref() == Some(&placement.permission_digest))
-    {
+    let WorkerResponseOperation::Observation { observation } = response else {
+        return Err("remote_execution_unconfirmed".into());
+    };
+    // Une commande terminée ne prouve aucune modification des droits.
+    if matches!(observation.phase, WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused) {
+        return Err("remote_execution_ended".into());
+    }
+    if observation.phase != WorkerCommandPhase::Released || !observation.native_ready {
+        return Err("remote_execution_unconfirmed".into());
+    }
+    if observation.permission_digest.as_ref() != Some(&placement.permission_digest) {
         return Err("permission_not_inherited".into());
     }
     Ok(task.clone())
@@ -22950,6 +22965,84 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(serde_json::to_value(state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before,
             "le worker absent interdit toute nouvelle ronde ou mutation de tâche");
         drop(state);drop(shared);cleanup(&config);
+    }
+
+
+    #[test]
+    fn spec172_remote_continuation_distinguishes_execution_state_from_permissions() {
+        use bridget_transport::protocol::*;
+        use std::os::unix::fs::PermissionsExt;
+        for (phase, native_ready, digest, expected) in [
+            (WorkerCommandPhase::Terminal, true, Some("b".repeat(64)), Some("remote_execution_ended")),
+            (WorkerCommandPhase::Refused, false, None, Some("remote_execution_ended")),
+            (WorkerCommandPhase::Unknown, true, Some("b".repeat(64)), Some("remote_execution_unconfirmed")),
+            (WorkerCommandPhase::Released, false, Some("b".repeat(64)), Some("remote_execution_unconfirmed")),
+            (WorkerCommandPhase::Released, true, Some("c".repeat(64)), Some("permission_not_inherited")),
+            (WorkerCommandPhase::Released, true, Some("b".repeat(64)), None),
+        ] {
+            let (mut st, config, mut task, _result) = remote162_capture_fixture();
+            let root = st.fixture_root.as_ref().unwrap().0.clone();
+            let registry = root.join("continuation-state-registry.json");
+            std::fs::write(&registry, serde_json::to_vec(&json!({"agents":{},"machines":{"cartae":{
+                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+            }}})).unwrap()).unwrap();
+            std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600)).unwrap();
+            st.registry = AgentRegistry::load_from_path(registry).unwrap();
+            let mut parent = continuation172_parent();
+            parent.cwd.clone_from(&task.cwd);
+            task.permission_snapshot = Some(crate::native_permissions::snapshot(
+                &task.owner, &task.owner_instance, parent, json!({"kind":"claude"}),
+                Path::new(&task.cwd),
+            ));
+            task.state = "result_available".into();
+            st.delegation_store.save(&task).unwrap();
+            let task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            let before = serde_json::to_value(&task).unwrap();
+            let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
+            let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+            st.connections.insert("continuation-worker".into(),
+                Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
+            st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection {
+                identity: worker, conn_id: "continuation-worker".into(), epoch: "continuation-epoch".into(),
+                capabilities: vec![], last_contact: Instant::now(), last_contact_at: unix_timestamp(),
+                contact: WorkerContactState::Connected,
+            });
+            let state = Arc::new(Mutex::new(st));
+            let responder = state.clone();
+            let listener = std::thread::spawn(move || {
+                let mut reader = std::io::BufReader::new(peer);
+                let mut line = String::new();
+                std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+                let DaemonToWrapper::WorkerRequest { request } = serde_json::from_str(&line).unwrap() else {
+                    panic!("requête worker attendue");
+                };
+                request.validate().unwrap();
+                assert!(matches!(request.request, WorkerRequestOperation::Reconcile {}));
+                let reply = responder.lock().unwrap().pending_worker_responses
+                    .get(&request.correlation_id).unwrap().reply.clone();
+                reply.send(WorkerResponseOperation::Observation { observation: WorkerObservation {
+                    startup_failure: None, workspace: None, permission_digest: digest,
+                    phase, native_ready, exit_code: None, observed_at: unix_timestamp(),
+                }}).unwrap();
+            });
+            let outcome = remote_dispatch_proof(&state, &task);
+            listener.join().unwrap();
+            assert_eq!(outcome.as_ref().err().map(String::as_str), expected,
+                "l’état distant et les droits doivent rester distincts pour {phase:?}");
+            assert_eq!(serde_json::to_value(state.lock().unwrap().delegation_store
+                .get(&task.task_id).unwrap().unwrap()).unwrap(), before,
+                "aucune nouvelle ronde, mutation de tâche ou relance");
+            drop(state);
+            cleanup(&config);
+        }
+        let ended = failure("remote_execution_ended");
+        assert!(ended["message"].as_str().unwrap().contains("terminé"));
+        let unconfirmed = failure("remote_execution_unconfirmed");
+        assert!(unconfirmed["message"].as_str().unwrap().contains("pas confirmé"));
+        assert!(unconfirmed["message"].as_str().unwrap().contains("sans créer de doublon"));
+        assert_eq!(failure("permission_not_inherited")["code"], "permission_not_inherited");
     }
 
     #[test]
