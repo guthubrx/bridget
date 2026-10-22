@@ -1368,3 +1368,8 @@ T3 et worker préservés, mission becec88c inchangée pendant activation.
 Ancienne admission Monuments abandonnée : refus natif sans Task, aucun rejeu.
 Le refus identity_not_found d'un Codex terminal direct reste un cas distinct.
 Reçu : /home/moi/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md.
+
+
+### Parent à la racine et délégation depuis un worktree lié — 22 octobre 2026
+
+Le refus de préparation c67ba253 est reproduit : le remap réduisait la correspondance au checkout lié et rejetait le parent attesté à la racine. Pour un checkout contenu, la correspondance projet reste maintenant stable et seul le cwd d’exécution change. Référence T3 : createWorktree(input.cwd) et séparation project.workspaceRoot/thread.worktreePath. Deux tests distincts PASS, dont sept combinaisons dans le test lié ; RED préalable sur PermissionsChanged, aucun fournisseur ni métier lancé. Revue et activation non acquises à ce checkpoint. Détails : validation/worktree-portee-parent-20261022.md.

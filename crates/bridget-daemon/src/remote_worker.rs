@@ -2513,12 +2513,11 @@ impl WorkerRuntime {
                 .map_err(|_| WorkerRefusal::PlacementMismatch)?);
             mapping.remote_root = Path::new(&record.path).join(offset);
         } else {
-            let offset = top.strip_prefix(&mapping.remote_root)
+            top.strip_prefix(&mapping.remote_root)
                 .map_err(|_| WorkerRefusal::PlacementMismatch)?;
             next = Path::new(&record.path).join(cwd.strip_prefix(top)
                 .map_err(|_| WorkerRefusal::PlacementMismatch)?);
-            mapping.source_root = mapping.source_root.join(offset);
-            mapping.remote_root = PathBuf::from(&record.path);
+            // Un worktree contenu conserve la correspondance projet attestée.
         }
         let next = crate::registry::validate_unprotected_local_path(&next, &self.protected())
             .map_err(|_| WorkerRefusal::PlacementMismatch)?;
@@ -6442,8 +6441,11 @@ while not stop.exists(): time.sleep(.01)
     #[test]
     fn spec172_linked_checkout_prepare_preserves_main() {
         use bridget_transport::protocol::{ProviderPermissions, WorkspaceRequest, CandidateProbeRefusal as R};
-        for (diverged, isolated, refresh) in [
-            (false, false, false), (true, false, false), (false, true, false), (true, true, false), (false, false, true)
+        for (diverged, isolated, refresh, parent_at_project_root, native_claude) in [
+            (false, false, false, false, false), (true, false, false, false, false),
+            (false, true, false, false, false), (true, true, false, false, false),
+            (false, false, true, false, false), (false, true, false, true, false),
+            (false, true, false, true, true)
         ] {
             let fixture = Fixture::new();
             let project_fixture = Fixture::new();
@@ -6479,11 +6481,15 @@ while not stop.exists(): time.sleep(.01)
                 assert_ne!(base, expected);
             }
             let mut runtime = runtime_fixture(&fixture);
+            fs::create_dir(fixture.0.join(".claude")).unwrap();
+            let agent = if native_claude { "claude" } else { "codex" };
+            let protocol = if native_claude { "claude_stream_json" } else { "codex_app_server" };
+            let args = if native_claude { vec!["--dangerously-skip-permissions"] } else { vec!["app-server"] };
             write_json(&runtime.config.registry_path, &serde_json::json!({
-                "agents":{"codex":{"command":"/bin/echo","args":["app-server"],"protocol":"codex_app_server",
-                    "capabilities":{"execution_paths":["codex_app_server"],"models":{"fixture-model":{"efforts":["high"]}}}}},
+                "agents":{(agent):{"command":"/bin/echo","args":args,"protocol":protocol,
+                    "capabilities":{"execution_paths":[protocol],"models":{"fixture-model":{"efforts":["high"]}}}}},
                 "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
-                    "credential_fingerprint":digest_bytes(b"worker162-test-secret"),"allowed_agent_types":["codex"],
+                    "credential_fingerprint":digest_bytes(b"worker162-test-secret"),"allowed_agent_types":[agent],
                     "mappings":{"linked172":{"source_host":"origin172","source_root":"/origin172",
                         "remote_root":project,"expected_git_identity":"fixture:linked172","mapping_revision":1}}}}
             })).unwrap();
@@ -6499,23 +6505,38 @@ while not stop.exists(): time.sleep(.01)
                 origin_host:"origin172".into(),origin_cwd:"/origin172/.worktrees/linked172".into(),
                 source_root:"/origin172".into(),remote_root:project.to_string_lossy().into_owned(),
                 source_root_identity:"fixture:linked172".into(),relative_cwd:".worktrees/linked172".into(),
-                base_commit:Some(expected.clone()),agent_type:"codex".into(),model:"fixture-model".into(),
+                base_commit:Some(expected.clone()),agent_type:agent.into(),model:"fixture-model".into(),
                 effort:Some("high".into()),posture:None,workspace:Some(if isolated {
                     WorkspaceRequest::Worktree { base_ref:Some(expected.clone()), branch:None }
                 } else { WorkspaceRequest::Shared {} }),
                 parent:ProviderPermissions {
                     version:1,source:"native_wrapper".into(),run_id:"run172".into(),
                     provider_session_id:"session172".into(),provider_instance_id:"parent172".into(),revision:1,
-                    driver:"codex_app_server".into(),cwd:"/origin172/.worktrees/linked172".into(),
+                    driver:"codex_app_server".into(),cwd:if parent_at_project_root {
+                        "/origin172".into()
+                    } else { "/origin172/.worktrees/linked172".into() },
                     runtime_mode:"full-access".into(),interaction_mode:"default".into(),
                     provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user",
-                        "sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+                        "sandbox_policy":if native_claude { serde_json::json!({"type":"dangerFullAccess"}) }
+                        else { serde_json::json!({"type":"readOnly","networkAccess":false}) }}),
                 },
             };
             let registry = runtime.registry().unwrap();
             let (mapping, cwd) = runtime.mapping_for(&request, &registry, None).unwrap();
             assert_eq!(runtime.probe_workspace_preconditions(&request, &mapping, &cwd), Ok(()));
+            if parent_at_project_root {
+                let mut outside = request.clone();
+                outside.parent.cwd = "/origin172-sibling".into();
+                assert!(matches!(runtime.prepare(&identity, &outside),
+                    Err(WorkerRefusal::PermissionsChanged)));
+                assert!(!linked.join(".worktrees").exists());
+            }
             let ready = runtime.prepare(&identity, &request).unwrap();
+            if native_claude {
+                assert_eq!(ready.child_policy["permission_mode"], "bypassPermissions");
+            } else {
+                assert_eq!(ready.child_policy["sandbox_policy"], request.parent.provider_policy["sandbox_policy"]);
+            }
             if isolated {
                 let record: crate::delegation::WorkspaceRecord =
                     serde_json::from_value(ready.workspace.clone().unwrap()).unwrap();
