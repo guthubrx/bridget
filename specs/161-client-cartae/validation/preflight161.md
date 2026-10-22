@@ -15,7 +15,7 @@ Les quatre JSON sont lisibles et valides. Aucun secret de connexion n'est recopi
 
 ## État Git et propriété
 
-Checkout durable : /Users/moi/Nextcloud/10.Scripts/64.bridget, main, HEAD1663cb61301e69ccf7294a567f01266be44558e7. initial-local.json daté08:17:31 confirme git status vide sur ce checkout. Le worktree161 existe alors sur session-161-client-cartae, mêmeHEADinitial. Identité relevée parROOT : guthubrx / githubrx@runbox.com, inchangée. Remote autorisé : github, https://github.com/guthubrx/bridget.git.
+Checkout durable : /Users/moi/Nextcloud/10.Scripts/64.bridget, main, HEAD1663cb61301e69ccf7294a567f01266be44558e7. initial-local.json daté08:17:31 confirme git status vide sur ce checkout. Le worktree161 existe alors sur session-161-client-cartae, mêmeHEADinitial. Identité relevée parROOT : guthubrx / maintainer@example.invalid, inchangée. Remote autorisé : github, https://github.com/guthubrx/bridget.git.
 
 Source à compiler distincte : e6812e3e7b2d051d630192857cc3f440180d51fa. Le runner161 sera identifié séparément après commit ; aucune identité de runner final n'est encore prouvée.
 

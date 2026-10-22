@@ -57,7 +57,7 @@ faire échouer proprement un banc bloqué.
 - **Isolement** : daemon de test lancé avec `HOME=/tmp/bg-attach` et socket
   `/tmp/bg-attach/.cache/bridget/bridget.sock`. Le tunnel SSH manuel publiait
   ce socket uniquement à `/home/moi/.cache/bridget/bridget.sock` sur
-  `cartae.app:2222`; le daemon de production local est resté intact.
+  `worker.example.net:2222`; le daemon de production local est resté intact.
 - **US1 et US2 observés** : le client distant a affiché `t809-acp ... acp ...
   connected` dans `bridget who`. `bridget attach t809-acp` a négocié
   l'abonnement, rejoué le journal (`historique rattrapé jusqu'à 796` puis 852),
@@ -90,7 +90,7 @@ La reprise de la connexion attach après coupure est ainsi démontrée.
 - **Topologie isolée** : le daemon de gate et son équipier ACP déterministe
   tournaient avec `HOME=/tmp/bg-t809-local`; le tunnel SSH `-R` temporaire
   publiait seulement son socket vers
-  `/tmp/bg-t809-remote/.cache/bridget/bridget.sock` sur `cartae.app`. La vue
+  `/tmp/bg-t809-remote/.cache/bridget/bridget.sock` sur `worker.example.net`. La vue
   distante utilisait `HOME=/tmp/bg-t809-remote`; aucun socket, daemon ou
   répertoire de production n'a été utilisé.
 - **Méthode** : 600 appels `bridget send` locaux, cadencés toutes les 100 ms,

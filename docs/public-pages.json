@@ -1,0 +1,55 @@
+{
+  "pairs": [
+    {
+      "en": "README.md",
+      "fr": "README.fr.md"
+    },
+    {
+      "en": "CHANGELOG.md",
+      "fr": "CHANGELOG.fr.md"
+    },
+    {
+      "en": "SECURITY.md",
+      "fr": "SECURITY.fr.md"
+    },
+    {
+      "en": "docs/README.md",
+      "fr": "docs/README.fr.md"
+    },
+    {
+      "en": "docs/communication-installation.md",
+      "fr": "docs/communication-installation.fr.md"
+    },
+    {
+      "en": "docs/delegation-native.md",
+      "fr": "docs/delegation-native.fr.md"
+    },
+    {
+      "en": "docs/reference-communication.md",
+      "fr": "docs/reference-communication.fr.md"
+    },
+    {
+      "en": "docs/federation-services.md",
+      "fr": "docs/federation-services.fr.md"
+    },
+    {
+      "en": "docs/build-cache.md",
+      "fr": "docs/build-cache.fr.md"
+    },
+    {
+      "en": "docs/DEPRECATIONS.md",
+      "fr": "docs/DEPRECATIONS.fr.md"
+    },
+    {
+      "en": "docs/security-audit.md",
+      "fr": "docs/security-audit.fr.md"
+    }
+  ],
+  "additional": [
+    "README.en.md",
+    "docs/decisions/README.md",
+    "docs/rapports/README.md",
+    "docs/cartes-reprise-28-08/README.md",
+    "specs/README.md"
+  ]
+}

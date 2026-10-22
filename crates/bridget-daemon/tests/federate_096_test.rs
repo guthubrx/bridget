@@ -64,7 +64,7 @@ fn spec096_invalid_destination_preserves_argument_error() {
     let binary = isolated_binary(&root);
     fs::create_dir(root.join("home")).unwrap();
     fs::create_dir(root.join("tmp")).unwrap();
-    let output = run(&binary, &root, &["federate", "http://cartae.app"]);
+    let output = run(&binary, &root, &["federate", "http://worker.example.net"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("ssh://"));
     assert_eq!(fs::read_dir(root.join("tmp")).unwrap().count(), 0);

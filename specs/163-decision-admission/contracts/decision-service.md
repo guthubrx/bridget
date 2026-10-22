@@ -28,7 +28,7 @@ Gate avant activation : recette du checkpoint exact avec template et huit descri
 
 ## Préflight observé, sans configuration implicite
 
-Le13octobre, le préflight délégué observe Mac8790 sain sans révision exposée et Mac8792 sain via tunnel vers CaddyCartae8790 puis serveurHTTPS88.190.8.167:50002. Cartae8792 est absent. Ces chemins ne deviennent pas des defaults. Aucun endpoint décision n’est présent dans les registres Bridget. Le champ machine_id décrit l’hébergement déclaré du décideur ; la route via un proxy ne prouve pas que le modèle tourne sur le relais. La politique doit choisir explicitement service/protocole/endpoint. Aucun POST n’a été effectué et Jev n’est pas attesté. Détails et limites dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/research.md.
+Le13octobre, le préflight délégué observe Mac8790 sain sans révision exposée et Mac8792 sain via tunnel vers CaddyCartae8790 puis serveurHTTPS192.0.2.20:50002. Cartae8792 est absent. Ces chemins ne deviennent pas des defaults. Aucun endpoint décision n’est présent dans les registres Bridget. Le champ machine_id décrit l’hébergement déclaré du décideur ; la route via un proxy ne prouve pas que le modèle tourne sur le relais. La politique doit choisir explicitement service/protocole/endpoint. Aucun POST n’a été effectué et Jev n’est pas attesté. Détails et limites dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/research.md.
 
 ## Précision publique du wire — candidate_id et reason
 

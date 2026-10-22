@@ -6,5 +6,5 @@
   "remote_main": "59da3968c7d14dbd7acd1370875dd9d135ba7dcb",
   "integration": "ff-only",
   "integrated_sources_match_214_test_hashes": true,
-  "commit_author": "guthubrx <githubrx@runbox.com>"
+  "commit_author": "guthubrx <maintainer@example.invalid>"
 }

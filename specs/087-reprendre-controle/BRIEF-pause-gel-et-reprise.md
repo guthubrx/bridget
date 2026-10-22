@@ -36,8 +36,8 @@ Deux corrections indépendantes s'ajoutent, trouvées à la relecture du lot :
 | Rôle | Chemin |
 |---|---|
 | Édition locale (le seul endroit où tu édites) | `/Users/moi/Nextcloud/10.Scripts/bridget` (branche à créer, voir §3) |
-| Serveur, checkout principal (compilation release, services) | `cartae.app:/home/moi/bridget-referent/bridget` (`main`) |
-| Serveur, worktree du lot (compilation et tests) | `cartae.app:/home/moi/bridget-referent/.worktrees/087b-pause-gel` (à créer, §3) |
+| Serveur, checkout principal (compilation release, services) | `worker.example.net:/home/moi/bridget-referent/bridget` (`main`) |
+| Serveur, worktree du lot (compilation et tests) | `worker.example.net:/home/moi/bridget-referent/.worktrees/087b-pause-gel` (à créer, §3) |
 | Cache de compilation partagé sur le serveur | `CARGO_TARGET_DIR=/home/moi/bridget-referent/bridget/target` |
 
 Le serveur est la machine de compilation. Ne compile pas en local le daemon Rust : c'est lent et le cache est sur le serveur. Les tests d'interface (Node) se lancent en local.
@@ -47,14 +47,14 @@ Le serveur est la machine de compilation. Ne compile pas en local le daemon Rust
 ```bash
 # 1. envoyer le local vers le worktree serveur
 rsync -az --exclude target --exclude .git --exclude .worktrees --exclude .claude --exclude .gstack --exclude 'watch_*' --exclude node_modules \
-  /Users/moi/Nextcloud/10.Scripts/bridget/ cartae.app:/home/moi/bridget-referent/.worktrees/087b-pause-gel/
+  /Users/moi/Nextcloud/10.Scripts/bridget/ worker.example.net:/home/moi/bridget-referent/.worktrees/087b-pause-gel/
 
 # 2. sur le serveur : formater puis tester
-ssh cartae.app 'export PATH=$HOME/.cargo/bin:$PATH CARGO_TARGET_DIR=/home/moi/bridget-referent/bridget/target; cd /home/moi/bridget-referent/.worktrees/087b-pause-gel && cargo fmt -p bridget-transport -p bridget-daemon -p maicie && <commande de test>'
+ssh worker.example.net 'export PATH=$HOME/.cargo/bin:$PATH CARGO_TARGET_DIR=/home/moi/bridget-referent/bridget/target; cd /home/moi/bridget-referent/.worktrees/087b-pause-gel && cargo fmt -p bridget-transport -p bridget-daemon -p maicie && <commande de test>'
 
 # 3. rapatrier le formatage (sinon le prochain rsync l'écrase)
-rsync -az cartae.app:/home/moi/bridget-referent/.worktrees/087b-pause-gel/crates/ /Users/moi/Nextcloud/10.Scripts/bridget/crates/
-rsync -az cartae.app:/home/moi/bridget-referent/.worktrees/087b-pause-gel/plugins/ /Users/moi/Nextcloud/10.Scripts/bridget/plugins/
+rsync -az worker.example.net:/home/moi/bridget-referent/.worktrees/087b-pause-gel/crates/ /Users/moi/Nextcloud/10.Scripts/bridget/crates/
+rsync -az worker.example.net:/home/moi/bridget-referent/.worktrees/087b-pause-gel/plugins/ /Users/moi/Nextcloud/10.Scripts/bridget/plugins/
 ```
 
 `cargo` n'est pas dans le PATH par défaut sur le serveur : l'`export PATH=$HOME/.cargo/bin:$PATH` est obligatoire dans chaque commande ssh.
@@ -78,7 +78,7 @@ git status --short          # doit ne montrer que .claude/ .gstack/ watch_* (non
 git fetch origin && git checkout -b 087b-pause-gel origin/main
 git push -u origin 087b-pause-gel
 
-ssh cartae.app 'cd /home/moi/bridget-referent/bridget && git fetch origin && git worktree add /home/moi/bridget-referent/.worktrees/087b-pause-gel origin/087b-pause-gel && cd /home/moi/bridget-referent/.worktrees/087b-pause-gel && git checkout -B 087b-pause-gel origin/087b-pause-gel'
+ssh worker.example.net 'cd /home/moi/bridget-referent/bridget && git fetch origin && git worktree add /home/moi/bridget-referent/.worktrees/087b-pause-gel origin/087b-pause-gel && cd /home/moi/bridget-referent/.worktrees/087b-pause-gel && git checkout -B 087b-pause-gel origin/087b-pause-gel'
 ```
 
 Ensuite, à chaque étape terminée : un commit local, un `git push`, et sur le serveur le worktree se remet à jour par le rsync (le `.git` du worktree n'a pas besoin d'être à jour pour compiler ; il servira seulement au merge final depuis le checkout principal).
@@ -315,7 +315,7 @@ Puis, seulement quand TOUS les gates du §7 sont verts :
 # local
 cd /Users/moi/Nextcloud/10.Scripts/bridget && git push
 # serveur, checkout principal
-ssh cartae.app 'cd /home/moi/bridget-referent/bridget && git fetch origin && git checkout main && git pull --ff-only && git merge --no-ff origin/087b-pause-gel -m "merge(087): Pause = gel immediat et reprise a la levee" && git push origin main'
+ssh worker.example.net 'cd /home/moi/bridget-referent/bridget && git fetch origin && git checkout main && git pull --ff-only && git merge --no-ff origin/087b-pause-gel -m "merge(087): Pause = gel immediat et reprise a la levee" && git push origin main'
 ```
 
 Mise en service (procédure T046, déjà jouée une fois le 2026-09-03 à 03:12 UTC) :
@@ -328,7 +328,7 @@ Mise en service (procédure T046, déjà jouée une fois le 2026-09-03 à 03:12 
 6. Vérifier : `bridget who` (ligne `Contrôle :` en pied, aucun avertissement `identity_version`), `journalctl --user -u bridget-daemon -n 50`.
 7. **Essai réel** : avec un agent en plein tour (envoie-lui une tâche courte mais de plusieurs minutes), `bridget control pause --reason "essai gel"` ; attendu : l'agent passe en `interrupting` puis `interrupted` dans `bridget who`. Puis `bridget control resume` ; attendu : l'agent repart sur le même message (journal du daemon : `reprise` / `control_resume`). Faire l'essai sur un agent de chaque type présent (§6.5). Écrire le résultat par type dans le rapport et dans `quickstart.md`.
 
-Ensuite supprimer le worktree serveur : `ssh cartae.app 'cd /home/moi/bridget-referent/bridget && lsof +D /home/moi/bridget-referent/.worktrees/087b-pause-gel | head ; git worktree remove /home/moi/bridget-referent/.worktrees/087b-pause-gel'` (si `lsof` montre un processus, ne supprime pas, dis-le).
+Ensuite supprimer le worktree serveur : `ssh worker.example.net 'cd /home/moi/bridget-referent/bridget && lsof +D /home/moi/bridget-referent/.worktrees/087b-pause-gel | head ; git worktree remove /home/moi/bridget-referent/.worktrees/087b-pause-gel'` (si `lsof` montre un processus, ne supprime pas, dis-le).
 
 ## 10. Rapport final attendu (format)
 

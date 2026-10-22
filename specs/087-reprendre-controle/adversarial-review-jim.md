@@ -1,7 +1,7 @@
 # Contre-revue adverse du plan — Jim (Codex, gpt-5.6-terra)
 
 - Date : 2026-09-02, demande 04:26 UTC, réponse 04:31 UTC (5 min)
-- Agent : Jim, fournisseur Codex, UUID `437b3175-…`, connecté sur cartae.app
+- Agent : Jim, fournisseur Codex, UUID `437b3175-…`, connecté sur worker.example.net
 - Canal : `bridget send` depuis un client CLI éphémère, réponse adressée au fil humain, lue sur une copie du ledger
 - Question posée : cohérence de l'attestation humaine fabriquée par le daemon avec `human_request` et forgeabilité ; complétude de l'inventaire R8 des producteurs autonomes ; conformité de la boîte daemon avec relève pull aux ADR-003 et 015 ; changement minimal prioritaire
 - Verdict reçu : **BLOCKED**

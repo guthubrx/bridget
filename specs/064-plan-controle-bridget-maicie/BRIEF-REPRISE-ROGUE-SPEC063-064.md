@@ -9,7 +9,7 @@ correctif attendu de la SPEC-063.
 
 ## État vérifié au handoff
 
-- Serveur : `cartae.app`, SSH port `2222`.
+- Serveur : `worker.example.net`, SSH port `2222`.
 - Worktree exclusif :
   `/home/moi/bridget-referent/.worktrees/session-064-plan-controle-bridget-maicie`
 - Branche : `session-064-plan-controle-bridget-maicie`.

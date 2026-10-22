@@ -24,7 +24,7 @@ Tu n'en fais pas partie. Tu ne t'y connectes pas. Tu agis par accès distant.
 
 ## Accès
 
-Machine : `moi@cartae.app`, port `2222`, par clé.
+Machine : `moi@worker.example.net`, port `2222`, par clé.
 Dépôt sur le poste : `/Users/moi/Nextcloud/10.Scripts/bridget`
 Dépôt sur la machine : `/home/moi/bridget-referent/bridget` (celui du référent,
 souvent en tête gelée) et `/home/moi/bridget-registre` (clone dédié, toujours

@@ -13,7 +13,7 @@ Donner au référent quatre leviers durables sur le coordinateur : une pause de 
 **Primary Dependencies**: `rusqlite`, `serde`, `sha2` déjà présents ; aucun ajout
 **Storage**: `~/.cache/bridget/bridget.db` (table `control_state`, table `human_inbox`), base Maicie (migration v24 : table `focus_queue`, table `human_origin_consumptions`)
 **Testing**: `cargo test` par crate et par périmètre déclaré, `node --test` pour `app.js`, scénarios Gherkin dans `tests/features/`
-**Target Platform**: Linux serveur (cartae.app) et macOS (poste), même binaire
+**Target Platform**: Linux serveur (worker.example.net) et macOS (poste), même binaire
 **Project Type**: daemon + CLI + plugin CLI + relais HTTP loopback + front embarqué
 **Performance Goals**: aucun objectif chiffré nouveau ; la lecture de l'état de contrôle par Maicie est une trame par relève, soit une toutes les deux minutes
 **Constraints**: additif sur le fil ET à la source (tout initialiseur de `ServiceRequestPayload::Delegate` mis à jour) ; aucune lecture directe de `bridget.db` par l'interface ; l'attestation d'origine humaine n'est jamais acceptée d'un client, seulement fabriquée par le daemon

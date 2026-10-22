@@ -14,5 +14,5 @@ Worktree: `/home/moi/bridget-referent/.worktrees/session-073-actions-agent-ui`
 
 La premiere execution locale de la commande Node a vise le poste client par
 erreur et n'a trouve aucun fichier. Elle n'a touche aucun code. Les trois
-preuves ci-dessus ont ensuite ete executees sur `cartae.app` dans le worktree
+preuves ci-dessus ont ensuite ete executees sur `worker.example.net` dans le worktree
 dedie, conformement aux regles du projet.

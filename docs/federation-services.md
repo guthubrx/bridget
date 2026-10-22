@@ -1,193 +1,162 @@
-# Fédération SSH permanente — services 095
+# SSH federation
 
-Une fédération Bridget est un **daemon maître unique** dont une socket cliente est publiée sur une autre machine par SSH inverse. Les clients voient le même annuaire et le même ledger. Ce n'est pas une réplication de bases ni une sélection automatique de secours.
+[English](federation-services.md) · [Français](federation-services.fr.md) · [Documentation](README.md)
 
-## Installer depuis le binaire
+A Bridget federation has **one master daemon**. Reverse SSH forwarding exposes
+a client socket on another machine. Clients share the master's directory and
+ledger. This is neither database replication nor automatic failover.
 
-La commande `bridget federate` de la version 096 embarque le script canonique.
-Elle le matérialise dans une copie privée propre à l'invocation, puis le retire ;
-le script `scripts/federate-ssh.sh` reste l'unique implémentation. Lors d'une
-installation, il copie son lanceur dans un emplacement utilisateur stable : le
-service ne dépend ensuite ni du binaire appelant, ni du paquet source, de Git,
-d'un worktree ou de l'ancien Bridget.
+The hostnames, IP addresses and paths below are examples. Supply your actual
+authorized settings locally; do not publish them or your private key.
+
+## Install from the binary
+
+`bridget federate` embeds the canonical SSH script. It materializes a private
+invocation copy and removes that copy afterward. Installation places a stable
+runner in the user's installation directory. The resulting service does not
+depend on the source checkout or the binary used to install it.
 
 ```sh
-bridget federate ssh://cartae.app -p 2222
+bridget federate ssh://worker.example.net -p 2222
 bridget federate status
 ```
 
-La destination accepte `ssh://[utilisateur@]hôte[:port]`. Le port vaut 22 par
-défaut ; un port dans l'URL et `-p` doivent être identiques. Pour une liaison
-existante, le nom exact est comparé avant toute résolution. Un alias DNS peut
-retrouver une IP enregistrée pour une réutilisation non mutante, sans réécrire
-la cible SSH ni contourner `known_hosts`. Une résolution dure au plus cinq
-secondes et 64 adresses ; l'inventaire est limité à 128 installations. Tout
-dépassement ou toute ambiguïté est refusé, `--label` permettant de départager.
+Destinations use `ssh://[user@]host[:port]`; the default port is 22. A URL port
+and `-p` must agree. An existing installation is matched by its exact name
+before DNS lookup. A DNS alias can find a recorded address for non-mutating
+reuse; it does not rewrite the SSH target or bypass `known_hosts`.
 
-Pour une nouvelle destination, les options avancées sont `--label`, `--user`,
-`--identity`, `--known-hosts`, `--root`, `--socket`, `--remote-root` et
-`--remote-socket`. Les valeurs absentes ne sont demandées que si stdin et stdout
-sont tous deux des terminaux. En automatisation, la commande échoue en listant
-les options manquantes ; elle ne lit jamais le pipeline comme des réponses.
+Lookup is bounded to five seconds and 64 addresses. The inventory is bounded
+to 128 installations. Ambiguous or oversized results are refused; `--label`
+can disambiguate an installation.
 
-Les options de liaison sont identiques pour `run` et `install` : `--label`, `--host`, `--user`, `--port`, `--identity`, `--known-hosts`, `--root`, `--socket`, `--remote-root`, `--remote-socket`. Tous les chemins sont absolus et validés. La clé et le fichier de clés d'hôtes doivent déjà exister et être privés ; aucune acceptation automatique d'une nouvelle clé d'hôte.
+New destinations can require `--label`, `--user`, `--identity`,
+`--known-hosts`, `--root`, `--socket`, `--remote-root` and
+`--remote-socket`. Missing values are prompted only when both input and output
+are terminals. Automation gets an explicit list of missing options; piped
+input is not consumed as answers.
 
-- Sur macOS, `install` crée un LaunchAgent utilisateur ; sur Linux, une unité `systemd --user`.
-- Le service supervise le processus SSH au premier plan. Une déconnexion déclenche une relance à cadence bornée, pas une boucle applicative.
-- `status --label NOM` rapporte l'état natif du service, qui ne suffit pas à prouver une livraison : vérifier aussi `bridget who` depuis le client distant.
-- `remove --label NOM` arrête et retire uniquement l'installation reconnue. Après arrêt confirmé, la même sonde nettoie son endpoint périmé pour permettre une réinstallation. Si l'arrêt ou le nettoyage reste incertain, les fichiers sont conservés pour une nouvelle tentative. Les clés SSH et les données Bridget sont conservées.
-- La reprise d'une socket périmée est réservée au service installé, après contrôle de type, propriétaire, droits et refus de connexion explicite. Une socket vivante ou une erreur ambiguë reste un refus.
+## Connection and service behavior
 
-Sous Linux, pour survivre à la dernière déconnexion utilisateur, le gestionnaire utilisateur doit rester actif (`loginctl show-user NOM -p Linger`). Le script ne réclame pas sudo et ne modifie pas cette politique implicitement. Sur macOS, un LaunchAgent démarre à l'ouverture de session, pas avant login ; la machine maître doit rester allumée.
+The script's `run` and `install` commands share the connection options:
+`--label`, `--host`, `--user`, `--port`, `--identity`,
+`--known-hosts`, `--root`, `--socket`, `--remote-root`,
+`--remote-socket`.
 
-## Cartae client, Mac maître
+Paths must be absolute and validated. The identity key and host-key file must
+already exist with private permissions. Unknown host keys are never accepted
+automatically.
 
-Le namespace par défaut du nouveau binaire est `.cache/bridget-core` dans le HOME fournisseur, et sa socket `bridget.sock`. Le client peut donc employer le même binaire sans wrapper de shell ni modification globale du HOME. Un `federation.env` privé dans ce namespace contenant `channel=ssh-unix` atteste le canal.
+- macOS uses a user LaunchAgent; Linux uses a `systemd --user` unit.
+- The service supervises foreground SSH and reconnects at a bounded cadence.
+- `status --label NAME` reports service state, not message delivery.
+- `remove --label NAME` removes only a recognized installation.
+- A stale socket is reclaimed only after type, owner, permission and connection
+  checks. A live socket or ambiguous failure remains a refusal.
+- Removal retains SSH keys and Bridget data. If shutdown or endpoint cleanup
+  cannot be proved, files remain for diagnosis.
 
-Un client fédéré ne doit pas démarrer un daemon concurrent. Les agents lancés localement sur Cartae rejoignent le maître ; `spawn` adressé au daemon Mac lance un processus sur le **Mac**, pas sur Cartae. SSH ne crée pas un ordonnanceur distant.
+On Linux, check `loginctl show-user USER -p Linger` if the user manager must
+survive logout. The script does not change this policy or request sudo.
+A macOS LaunchAgent starts at login, not before it. The master must remain on.
 
-La migration historique doit sauvegarder les unités, alias et bases, arrêter les anciennes autorités autorisées puis activer le nouveau client. Ne jamais réutiliser le script historique qui supprimait la socket avant le bind. Une coupure du tunnel ne justifie pas un fallback vers l'ancienne base.
+## Client and master are different roles
 
-## Commandes avancées et compatibilité du script
+The default communication namespace is `.cache/bridget-core` under the
+provider's home, with socket `bridget.sock`. A private `federation.env`
+containing `channel=ssh-unix` records the channel.
 
-Chemin de distribution Mac : /Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/federate-ssh.sh.
-Chemin de distribution Linux : /home/moi/.local/lib/bridget-communication/scripts/federate-ssh.sh.
-La copie du runner utilisée par le service est distincte et stable sous le répertoire utilisateur d'installation.
+A federated client must not start another daemon in that namespace.
+A `spawn` request handled by the master launches on the master's host.
+Use [native remote delegation](delegation-native.md) to select a worker host.
+A tunnel does not turn ordinary spawn into a remote scheduler.
 
-L'interface recommandée pour la liaison Cartae déjà installée est :
+During migration, preserve old units, aliases, databases and a rollback record.
+Stop only the authorities authorized for replacement. Do not delete a socket
+before binding it, and do not fall back to an old database after a tunnel failure.
 
-```sh
-bridget federate ssh://cartae.app -p 2222
-bridget federate status
-```
+## Explicit installation example
 
-La première commande reconnaît `cartae-core` enregistré avec l'IP
-`37.59.185.67` sans modifier ses fichiers ni relancer son service. L'état actif
-du service ne suffit toujours pas à prouver la connectivité : vérifier aussi
-`bridget who` depuis le client distant.
-
-Le script reste disponible pour le diagnostic avancé et la compatibilité 095.
-Installation explicite du tunnel sur le Mac maître :
-
-```sh
-bash /Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/federate-ssh.sh install \
-  --label cartae-core --host 37.59.185.67 --user moi --port 2222 \
-  --identity /Users/moi/.ssh/id_ed25519 --known-hosts /Users/moi/.ssh/known_hosts \
-  --root /Users/moi/.cache/bridget-core --socket /Users/moi/.cache/bridget-core/bridget.sock \
-  --remote-root /home/moi/.cache/bridget-core --remote-socket /home/moi/.cache/bridget-core/bridget.sock
-```
-
-L'IP est celle de cartae.app, déjà attestée dans le fichier de clés d'hôtes ; le script ignore volontairement la configuration SSH implicite. La machine maître ne change pas avec le choix du nom de service.
+From a source checkout on the master, with all paths replaced by real absolute
+paths:
 
 ```sh
-bridget federate status --label cartae-core
-ssh -p 2222 moi@cartae.app /home/moi/.local/bin/bridget who
+bash /absolute/path/to/bridget/scripts/federate-ssh.sh install \
+  --label worker-core --host worker.example.net --user user --port 2222 \
+  --identity /absolute/path/to/private/key --known-hosts /absolute/path/to/known_hosts \
+  --root /absolute/path/to/master/state --socket /absolute/path/to/master/state/bridget.sock \
+  --remote-root /absolute/path/to/client/state --remote-socket /absolute/path/to/client/state/bridget.sock
 ```
 
-Le retrait est volontaire et coupe les communications distantes. La forme la
-plus sûre nomme explicitement l'installation :
+The script intentionally avoids implicit SSH configuration. Verify host keys
+before running it. Start with the script's documented dry-run mode when preparing
+a new deployment.
 
 ```sh
-bridget federate remove ssh://cartae.app -p 2222 --label cartae-core
+bridget federate status --label worker-core
+ssh -p 2222 user@worker.example.net /absolute/path/to/bridget who
 ```
 
-Une correspondance textuelle exacte avec l'hôte enregistré peut être retirée
-sans confirmation supplémentaire. Si la destination ne correspond que par DNS,
-un appel non interactif exige `--label`. Dans un double terminal, Bridget affiche
-le label, l'hôte réellement enregistré et le port, puis exige la réponse littérale
-`oui`. Une destination et un label divergents sont refusés sans mutation.
+The second command checks the communication endpoint from the client.
+An active service alone does not establish that endpoint's health.
 
-## Recette et limites
+## Remove a connection
 
-Les tests de scripts couvrent les contrats des deux gestionnaires aux frontières système. La recette réseau `scripts/tests/federation_095_roundtrip.py` utilise deux clients de test distincts, pas deux modèles : elle vérifie inscription, annuaire et messages dans les deux sens. Les résultats de service réels, chemins d'installation et procédure de retour arrière sont consignés dans `specs/095-federation-services/implementation.md` lors du déploiement.
+Removal intentionally interrupts remote communication:
 
-Installation du 7 septembre 2026 : launchd Mac actif, annuaire commun et échanges
-réels dans les deux sens validés avant et après interruption du tunnel. Les 22
-tests de gestionnaires doublés passent sur macOS et Linux ; aucun maître Linux
-avec tunnel sortant réel n'est revendiqué, faute d'authentification SSH déjà
-autorisée pour cette recette. Aucun service vide n'est installé sur Cartae :
-Cartae est le client du tunnel, le Mac en supervise la connexion.
+```sh
+bridget federate remove ssh://worker.example.net -p 2222 --label worker-core
+```
 
-## Mise à jour du client Cartae — procédure 161
+An exact textual host match can be removed directly. If the match exists only
+through DNS, non-interactive use requires `--label`. Interactive use displays
+the recorded target and asks for the literal confirmation `oui`. A conflicting
+destination and label are refused without mutation.
 
-Cette mise à jour conserve le maître Mac et le tunnel déjà actif. Elle prépare
-uniquement un client Linux ; elle ne rend pas `spawn` distant. Ne relancer ni T3,
-ni le maître, ni son pont, ni le service de fédération pour cette opération.
+## Update a remote client
 
-Le runner versionné est
-/Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/deploy-remote.sh.
-L'exécuter depuis la livraison161, avec `--source` pointant sur une copie Git
-isolée et propre de e6812e3e7b2d051d630192857cc3f440180d51fa, et
-`--expect-commit e6812e3e7b2d051d630192857cc3f440180d51fa`.
-Le commit du runner161, le commit des documents et la source compilée160 sont
-trois identités distinctes à consigner dans le reçu. Sans `--expect-commit`, le
-mode historique accepte encore les modifications suivies et ajoute `-dirty` à
-l'identité ; il ne doit pas servir à attester une source160 exacte.
+The versioned `scripts/deploy-remote.sh` prepares a client-only Linux candidate.
+It does not restart T3, the master, its bridge or the existing tunnel, and does
+not make ordinary spawn remote.
 
-Utiliser un préfixe neuf, par exemple
-/home/moi/.local/lib/bridget-communication/161-e6812e3e7b2d.
-Un préfixe occupé est refusé. Après un échec, relever et conserver ses preuves,
-puis utiliser une nouvelle réservation suffixée `-r2` si la reprise est justifiée.
-La toolchain explicite est
-/home/moi/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin/cargo.
-Aucun outil ou paquet n'est téléchargé implicitement. Le build impose
-`--locked --offline --jobs 2`, un target dans le préfixe et `nice -n 10` :
-l'incrément de priorité est relatif, donc le nice observé peut dépasser10 si
-le processus appelant avait déjà une priorité réduite. Un seul build est autorisé
-à la fois par le livreur.
+Use a clean isolated Git source and `--expect-commit` with its full commit SHA.
+Record the runner revision, documentation revision and compiled source
+separately. Without an expected commit, legacy dirty-source operation cannot
+prove an exact release source.
 
-La même liste Git filtrée sert au transfert et au manifest SHA-256. Les liens,
-entrées Git non régulières, composants `.git`/`target` et fichiers de base/socket
-sont exclus avec une trace. Les noms ASCII avec espaces sont permis ; les noms
-avec retour à la ligne ou barre inverse sont refusés. Le distant vérifie le hash
-du manifest, les octets de chaque fichier, leur ensemble exact et l'absence de
-liens avant Cargo. Le manifest reste dans le préfixe sous
-`SOURCE-MANIFEST.sha256`. Le script ne modifie jamais la commande globale.
+Use a new installation prefix and an explicitly installed Cargo toolchain.
+The runner builds with `--locked --offline --jobs 2`, a target directory inside
+the prefix and `nice -n 10`. It does not download missing tools. Run only one
+delivery build at a time. Keep a failed prefix's evidence before choosing a
+separate retry prefix.
 
-Avant activation, contrôler architecture, permissions, empreinte et Build ID du
-candidat, puis exécuter `status` et `who` avec son chemin absolu. La référence
-historique attendue est /home/moi/.local/bin/bridget vers
-/home/moi/.local/lib/bridget-communication/096/bridget ; la relever à nouveau,
-car cette documentation ne prouve pas son état actuel. Conserver le binaire096.
+The transfer and SHA-256 manifest use the same filtered Git file list.
+Symlinks, non-regular entries, Git internals, build output, databases and sockets
+are excluded with a record. ASCII filenames with spaces are supported;
+newlines and backslashes in names are refused. The target verifies the
+manifest, exact file set, bytes and absence of links before compilation.
 
-La seule primitive de bascule et de rollback est l'extrait Python versionné dans
-/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/contracts/client-delivery.md.
-Son test exécute exactement ce bloc. Il exige un lien temporaire voisin libre,
-compare la référence attendue puis utilise `os.replace`. Il refuse une référence
-étrangère. Cette comparaison n'est pas un verrou contre un processus tiers : une
-seule bascule autorisée sur cet alias doit être organisée pendant l'opération.
-Ne pas changer les droits du parent partagé /home/moi/.local/bin.
+Before activation, verify architecture, permissions, hash and build identity.
+Run the candidate's `status` and `who` by absolute path. Keep the current
+binary available for rollback. Switch only the explicitly owned alias, checking
+its expected target first; do not overwrite a reference changed by another
+operator.
 
-Après bascule, relire la cible puis exécuter `status` et `who` via la commande
-courante. Exécuter séparément la recette transport095 décrite dans
-/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/quickstart.md.
-Elle inscrit deux agents synthétiques et échange deux messages ; elle ne lance
-aucun modèle et ne prouve pas, à elle seule, l'exécution du binaire candidat.
-Si la recette échoue, inverser les cibles avec le même extrait uniquement si la
-référence courante appartient encore à161 ; relire le lien et `status` après
-restauration. Un rollback réussi ne constitue pas une livraison161 réussie.
+After activation, resolve the alias again and repeat the status/directory
+checks. A two-client transport recipe verifies registration and bidirectional
+messages, not the behavior of a real model.
 
-Le reçu et l'inventaire du nettoyage sont conservés dans
-/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/161-client-cartae/validation/livraison161.md.
-Cette section décrit la procédure. Seul le reçu final attestera les opérations
-réellement exécutées. Conserver la cible active, le rollback096 et les preuves ;
-nettoyer seulement les ressources privées devenues inutiles avec les gardes du
-projet, sans toucher les bases ni les travaux étrangers.
+## Validation and rollback
 
-## Retour arrière de la bascule Cartae
+The historical service tests cover launchd and systemd boundaries using doubles.
+The network recipe `scripts/tests/federation_095_roundtrip.py` uses two test
+clients, not two models. The original deployment receipts are historical and
+do not establish the state of your installation.
 
-Sauvegarde : /home/moi/.local/state/bridget-migration-095-20260907.
-Les bases historiques n'ont pas été déplacées ni modifiées par une migration.
-Les unités historiques restent présentes mais désactivées ; les anciens skills
-se trouvent sous `retired-skills` dans cette sauvegarde, avec les copies et
-empreintes initiales sous `skills` et `MANIFEST.sha256`.
+To roll back, first reconcile active sessions. Remove only the new tunnel and
+restore the preserved alias, service definitions and profiles intentionally.
+Never copy a SQLite backup over an open database. Restoring a separate old
+daemon restores a separate directory, not the federation.
 
-Pour revenir volontairement à l'ancien produit : arrêter d'abord les nouvelles
-sessions distantes, retirer le tunnel par `remove --label cartae-core` sur le Mac,
-rétablir l'alias et les skills depuis la sauvegarde, puis réactiver explicitement
-les anciennes unités daemon, UI et timers sur Cartae. Ne pas démarrer l'ancien
-daemon avec le nouvel alias. Cette opération restaure un annuaire Cartae séparé,
-pas une fédération. Ne pas recopier une sauvegarde SQLite sur une base ouverte.
-
-L'ancienne session `rc1` n'a pas été arrêtée. Elle reste attachée à son ancien
-runtime ; seule une relance humaine via le nouveau binaire peut la faire basculer.
+Keep the active binary, compatible rollback, source manifest and receipts.
+Remove only build/worktree resources confirmed unused by the operation.

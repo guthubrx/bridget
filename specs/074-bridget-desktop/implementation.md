@@ -34,14 +34,14 @@
 
 - Statut : Complété
 - Fichiers créés : `apps/bridget-desktop/.gitignore`, `apps/bridget-desktop/src-tauri/{Cargo.toml,build.rs,tauri.conf.json,capabilities/main.json,src/lib.rs,src/main.rs}`, `apps/bridget-desktop/ui/{index.html,app.js,theme.css}`.
-- Vérification : `/home/moi/.cargo/bin/cargo fmt --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --check` - OK. La compilation Linux s'arrête avant le code Bridget Desktop parce que `pkg-config` et `dbus-1` sont absents sur cartae.app; cette preuve environnementale est conservée pour T005 et la validation cible macOS T037.
+- Vérification : `/home/moi/.cargo/bin/cargo fmt --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --check` - OK. La compilation Linux s'arrête avant le code Bridget Desktop parce que `pkg-config` et `dbus-1` sont absents sur worker.example.net; cette preuve environnementale est conservée pour T005 et la validation cible macOS T037.
 - Self-review Article XIX/XX : nécessaire car aucun client desktop n'existe. Le client est un workspace Cargo imbriqué, explicitement séparé du workspace serveur, ce qui évite d'imposer Tauri aux tests Bridget. La capability ne vise que `main`; aucun label `panel-*` n'est permis. Hypothèse: l'API multiwebview Tauri est disponible avec le feature `unstable`. Non vérifié: compilation et bundle macOS, réservés à T037. Code évité: aucun framework frontend, aucun plugin shell, aucun serveur local supplémentaire.
 
 ### T005 - Compilation isolée sur le serveur
 
 - Statut : Complété
 - Fichiers modifiés : `apps/bridget-desktop/src-tauri/{Cargo.toml,build.rs,src/lib.rs}`.
-- Vérification : `/home/moi/.cargo/bin/cargo check --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml` - OK sur cartae.app.
+- Vérification : `/home/moi/.cargo/bin/cargo check --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml` - OK sur worker.example.net.
 - Décision de portabilité : la dépendance `tauri` est ciblée macOS. Le coeur Rust des profils reste donc testable sur le serveur Linux, qui n'a volontairement ni `pkg-config` ni les en-têtes DBus requis par le moteur WebKit. `tauri-build` n'est invoqué que sur macOS. La compilation du client graphique et le paquet sont toujours exigés par T037 sur le Mac cible.
 - Self-review Article XIX/XX : cette séparation est nécessaire pour prouver le coeur sans installer de dépendance GUI sur le serveur de production. Elle n'ajoute pas de mode d'exécution Linux ni de second client : `run()` y échoue explicitement. Complexité inchangée et workspace Bridget non modifié.
 
@@ -65,7 +65,7 @@
 - Fichiers : `apps/bridget-desktop/ui/{index.html,app.js,theme.css}`, `apps/bridget-desktop/src-tauri/src/{lib.rs,ssh.rs,host_identity.rs,connection.rs}` et `apps/bridget-desktop/src-tauri/tests/{desktop_commands.rs,remote_connection.rs}`.
 - Fonctionnement : la coque crée, édite et retire explicitement des profils. Elle demande l'empreinte SSH, utilise uniquement l'agent SSH ou un chemin de clé existante, exécute la commande distante constante `bridget ui endpoint --json`, ouvre un forward loopback possédé et vérifie HTTP avant `connected`.
 - Sécurité : aucune commande, URL de relais ou secret venant de la WebView n'est accepté. Le jeton reste dans `RelayEndpoint`, non sérialisable et redacted par `Debug`.
-- Vérification : tests Desktop puis tunnel réel temporaire vers cartae.app avec HTTP 200, jeton redacted.
+- Vérification : tests Desktop puis tunnel réel temporaire vers worker.example.net avec HTTP 200, jeton redacted.
 
 ### T020-T023 - Etats et cycle de vie
 
@@ -109,7 +109,7 @@
 - Modèle : un profil ne mémorise désormais que la destination SSH, le compte et une référence d'identité déjà présente sur le Mac. Bridget Desktop ouvre son propre forward loopback au début de sa session et le ferme avec elle. Aucun endpoint direct, port de relais ou jeton n'est demandé à l'opérateur.
 - Migration : le stockage passe à la version 2. Les anciens profils SSH sont conservés. Les anciens profils d'endpoint direct sont écartés de façon atomique car ils ne peuvent pas devenir un tunnel possédé sans coordonnées SSH.
 - Secret : la commande distante constante prépare uniquement `~/.local/bin` dans le `PATH`, puis exécute `bridget ui endpoint --json`. Elle est contrôlée par le client natif, ne reçoit aucune donnée de la WebView et le jeton reste seulement dans la session mémoire.
-- Vérification : 30 tests Desktop, contrôle de format Rust, contrôle de syntaxe JavaScript, contrôle de diff, contrat réel du daemon actif sur cartae.app et paquet macOS signé ad hoc ont tous réussi.
+- Vérification : 30 tests Desktop, contrôle de format Rust, contrôle de syntaxe JavaScript, contrôle de diff, contrat réel du daemon actif sur worker.example.net et paquet macOS signé ad hoc ont tous réussi.
 
 ### Correctif T041 - Approbation visible de l'identité SSH
 

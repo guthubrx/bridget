@@ -12,7 +12,7 @@ Le runner doit vérifier le manifest distant avant build et imposer offline/lock
 
 ```bash
 bash /Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/deploy-remote.sh \
-  --label cartae161 --host 37.59.185.67 --user moi --port 2222 \
+  --label cartae161 --host 192.0.2.10 --user moi --port 2222 \
   --identity /Users/moi/.ssh/id_ed25519 \
   --known-hosts /Users/moi/.ssh/known_hosts \
   --source /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/161-source160 \
@@ -44,7 +44,7 @@ bridget161_ssh=(ssh -F /dev/null -p 2222 -i /Users/moi/.ssh/id_ed25519
   -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no
   -o ControlMaster=no -o ControlPath=none -o ControlPersist=no
   -o ForwardAgent=no -o ForwardX11=no -o RequestTTY=no
-  -o ConnectTimeout=10 -o ConnectionAttempts=1 moi@37.59.185.67)
+  -o ConnectTimeout=10 -o ConnectionAttempts=1 moi@192.0.2.10)
 ```
 
 Avant toute commande du candidat, relever les processusBridget de l'utilisateur distant. RC1 de pgrep signifie absence, pas panne de la sonde. Une présence se compare au relevé initial ; ne jamais tuer un processus pour obtenir un état vide.
@@ -131,7 +131,7 @@ Cette recette utilise deux sondesPython et les sockets ; elle ne lance pas le bi
 
 ```bash
 python3 /Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/tests/federation_095_roundtrip.py \
-  --host 37.59.185.67 --user moi --port 2222 \
+  --host 192.0.2.10 --user moi --port 2222 \
   --identity /Users/moi/.ssh/id_ed25519 \
   --known-hosts /Users/moi/.ssh/known_hosts \
   --local-socket /Users/moi/.cache/bridget-core/bridget.sock \

@@ -16,7 +16,7 @@ activés et émet une occurrence idempotente par projet.
 
 | Gate | Décision |
 |---|---|
-| Travail serveur | worktree isolé sur cartae.app |
+| Travail serveur | worktree isolé sur worker.example.net |
 | Réutilisation | WorkSubmission, Execution, DeliveryExecutionLink, ContinuationMode et ProjectBinding |
 | Identité projet | `ProjectReference` 065, aucune inférence par chemin |
 | Test avant code | tests store, protocole, wrapper et daemon ajoutés avant les branches productives |

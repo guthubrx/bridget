@@ -8,7 +8,7 @@ L'objet `agents[]` conserve tous ses champs actuels et ajoute :
 {
   "name": "cartae0-flux",
   "type": "codex",
-  "host": "cartae.app",
+  "host": "worker.example.net",
   "transport": "codex_app_server",
   "mode": "cli",
   "model": "gpt-5.6-terra",

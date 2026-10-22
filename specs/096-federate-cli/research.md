@@ -4,4 +4,4 @@ Lecture locale : cli.rs n'a pas d'entrée federate ; script095 fournit déjà to
 
 Réécrire launchd/systemd en Rust doublerait validations et tests. Chercher un script adjacent au binaire ou dans le dépôt créerait une dépendance d'installation et une ambiguïté d'autorité. Décision : source canonique embarquée, adaptateur étroit, matérialisation privée uniquement pour l'exécution qui doit pouvoir recopier son runner.
 
-Cartae095 est enregistré avec IP37.59.185.67, port2222, labelcartae-core. L'URL DNS doit retrouver ce candidat sans réécrire sa cible ni choisir par simple préfixe de label. Le statut global ne nécessite aucune résolution DNS ni réseau.
+Cartae095 est enregistré avec IP192.0.2.10, port2222, labelcartae-core. L'URL DNS doit retrouver ce candidat sans réécrire sa cible ni choisir par simple préfixe de label. Le statut global ne nécessite aucune résolution DNS ni réseau.

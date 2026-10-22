@@ -4,7 +4,7 @@
 
 Créer le premier client Bridget séparé dans `apps/bridget-desktop`. Il conserve le modèle de sécurité actuel : les relais restent en boucle locale sur chaque serveur. Le client macOS ouvre et supervise lui-même un tunnel SSH pour chaque profil, récupère le jeton du relais par une commande Bridget fixe dans ce canal, puis rend l'UI existante de chaque relais dans un panneau sans lui donner de privilèges Tauri.
 
-Le développement des sources et des tests serveur reste sur cartae.app. La génération et la validation du paquet `.app` sont une étape cible macOS, car le serveur Linux ne possède ni WebKit ni Xcode.
+Le développement des sources et des tests serveur reste sur worker.example.net. La génération et la validation du paquet `.app` sont une étape cible macOS, car le serveur Linux ne possède ni WebKit ni Xcode.
 
 ## Décisions de planification
 
@@ -61,7 +61,7 @@ Le développement des sources et des tests serveur reste sur cartae.app. La gén
 
 1. Tester les profils, la validation d'arguments, les erreurs SSH, le contrat d'endpoint, la séparation d'origine et l'absence de secrets.
 2. Ajouter une checklist de diagnostic redacted et les parcours opérateur manuel.
-3. Construire le binaire serveur sur cartae.app et le paquet macOS sur le Mac, sans déployer ni redémarrer Bridget serveur pour le client seul.
+3. Construire le binaire serveur sur worker.example.net et le paquet macOS sur le Mac, sans déployer ni redémarrer Bridget serveur pour le client seul.
 4. Vérifier l'accessibilité clavier et le comportement à deux panneaux sur macOS.
 
 ## Stratégie de tests
@@ -83,7 +83,7 @@ Le développement des sources et des tests serveur reste sur cartae.app. La gén
 
 ## Critères de sortie
 
-- Bridget Desktop se connecte à cartae.app via SSH sans ouvrir le port UI du serveur.
+- Bridget Desktop se connecte à worker.example.net via SSH sans ouvrir le port UI du serveur.
 - Aucun endpoint manuel ni jeton de relais n'est proposé dans l'interface opérateur.
 - Deux serveurs peuvent être ouverts sans confusion de messages, agents ou notification.
 - Les tests ne révèlent ni clé privée ni jeton d'endpoint.

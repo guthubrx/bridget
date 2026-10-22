@@ -28,3 +28,19 @@ crates/bridget-daemon/assets/ui/node_modules/
 # Dépôt public généré (passe de confidentialité), non versionné ici
 /.publish/
 .gstack/
+
+# Private credentials and local audit output
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+/gitleaks-report.*
+/privacy-report.*
+**/node_modules/

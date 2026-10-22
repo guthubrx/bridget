@@ -1,9 +1,9 @@
 # Contrat CLI096
 
 ```
-bridget federate ssh://cartae.app -p 2222
+bridget federate ssh://worker.example.net -p 2222
 bridget federate status
-bridget federate remove ssh://cartae.app -p 2222
+bridget federate remove ssh://worker.example.net -p 2222
 bridget federate --help
 ```
 

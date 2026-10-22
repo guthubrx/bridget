@@ -1,7 +1,7 @@
 # Analyse de cohérence - SPEC-074 Bridget Desktop
 
 Date: 2026-08-30
-Mode: fallback manuel, car le runtime SpecKit officiel et ses scripts `.specify/` ne sont pas installés sur cartae.app.
+Mode: fallback manuel, car le runtime SpecKit officiel et ses scripts `.specify/` ne sont pas installés sur worker.example.net.
 
 ## Specification Analysis Report
 

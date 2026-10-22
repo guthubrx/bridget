@@ -231,7 +231,7 @@ SHA-256 : `f3b7b4ee7dbd034ec55277fe1c9bb454d537abde34b2b3493e5ff0ff9d937b3d`.
 
 Le reçu privé des anciens workers de recette a aussi été relu : /Users/moi/.cache/bridget-delivery168/cleanup/private-workers-after-recipes.json ; SHA-256 `2b0fff6c5dec9c13cee04e425bea5a2934315fb832b5868aa42bcbb1a8b7aa19`. Il ne couvre pas la dernière topologie Haiku sur Cartae.
 
-L’accès SSH a d’abord rendu Linux sur une sonde simple, puis la lecture distante nécessaire a échoué : `ssh: connect to host 37.59.185.67 port 2222: Operation not permitted`. Le contrôle local des processus a aussi été refusé : `zsh: operation not permitted: ps`. Le profil courant interdit l’écriture dans .git et dans les caches hors dépôt. Aucun contournement, signal de processus, commit ou publication n’a été exécuté pendant cette reprise.
+L’accès SSH a d’abord rendu Linux sur une sonde simple, puis la lecture distante nécessaire a échoué : `ssh: connect to host 192.0.2.10 port 2222: Operation not permitted`. Le contrôle local des processus a aussi été refusé : `zsh: operation not permitted: ps`. Le profil courant interdit l’écriture dans .git et dans les caches hors dépôt. Aucun contournement, signal de processus, commit ou publication n’a été exécuté pendant cette reprise.
 
 ### Ordre exact de reprise
 

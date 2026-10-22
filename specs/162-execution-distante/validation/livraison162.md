@@ -249,7 +249,7 @@ Ne pas exécuter avec une variable vide. Relever commit source, sortie Cargo, du
 Réemployer le runner livré161, depuis un checkout propre du SHA intégré 162. Choisir un préfixe neuf ; ne pas écraser /home/moi/.local/lib/bridget-communication/161-e6812e3e7b2d. Les variables ci-dessous doivent recevoir leurs valeurs absolues et le SHA complet réellement vérifié :
 
 ```bash
-bash /Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/deploy-remote.sh --label cartae162 --host 37.59.185.67 --user moi --port 2222 --identity /Users/moi/.ssh/id_ed25519 --known-hosts /Users/moi/.ssh/known_hosts --source "$SOURCE162" --remote-prefix "$REMOTE_PREFIX162" --remote-cargo /home/moi/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin/cargo --expect-commit "$SHA162"
+bash /Users/moi/Nextcloud/10.Scripts/64.bridget/scripts/deploy-remote.sh --label cartae162 --host 192.0.2.10 --user moi --port 2222 --identity /Users/moi/.ssh/id_ed25519 --known-hosts /Users/moi/.ssh/known_hosts --source "$SOURCE162" --remote-prefix "$REMOTE_PREFIX162" --remote-cargo /home/moi/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin/cargo --expect-commit "$SHA162"
 ```
 
 Le runner contrôle manifest, ensemble exact de sources, préfixe neuf, locked/offline, jobs2/nice10 et installe dans PREFIX/bin/bridget. Enregistrer manifest et SHA avant tout nettoyage du target. `--version` ne prouve pas le BuildID client ; `status` rapporte le maître. Réemployer la preuve Cargo/chaîne embarquée/SHA de 161.

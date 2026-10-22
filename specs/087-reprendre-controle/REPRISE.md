@@ -38,9 +38,9 @@ Puis sur le serveur, dans le worktree, `git fetch origin && git reset --hard ori
 ## 3. Méthode de travail (ne pas improviser)
 
 - Éditer en local. Ne jamais éditer directement sur le serveur.
-- Envoyer : `rsync -az --exclude target --exclude .git --exclude .worktrees --exclude .claude --exclude .gstack --exclude 'watch_*' --exclude node_modules /Users/moi/Nextcloud/10.Scripts/bridget/ cartae.app:/home/moi/bridget-referent/.worktrees/087-reprendre-controle/`
+- Envoyer : `rsync -az --exclude target --exclude .git --exclude .worktrees --exclude .claude --exclude .gstack --exclude 'watch_*' --exclude node_modules /Users/moi/Nextcloud/10.Scripts/bridget/ worker.example.net:/home/moi/bridget-referent/.worktrees/087-reprendre-controle/`
 - Sur le serveur : `export PATH=$HOME/.cargo/bin:$PATH CARGO_TARGET_DIR=/home/moi/bridget-referent/bridget/target` (cache chaud) ; `cargo fmt -p bridget-transport -p bridget-daemon -p maicie` ; puis les tests.
-- Rapatrier le formatage : `rsync -az cartae.app:/home/moi/bridget-referent/.worktrees/087-reprendre-controle/crates/ /Users/moi/Nextcloud/10.Scripts/bridget/crates/` et de même pour `plugins/`.
+- Rapatrier le formatage : `rsync -az worker.example.net:/home/moi/bridget-referent/.worktrees/087-reprendre-controle/crates/ /Users/moi/Nextcloud/10.Scripts/bridget/crates/` et de même pour `plugins/`.
 - Tests d'interface en local : `cd crates/bridget-daemon/assets/ui && node --test app.js` (attendu 135 passés).
 - Gates de périmètre : `cargo test -p bridget-transport` (242 passés attendus) ; `cargo test -p bridget-daemon --lib --features test-support -- ui:: project_ referent_control human_inbox spec_087 focus_priority control_pause` (144 passés attendus) ; `cargo test -p maicie --lib` et `plugins/maicie/tests/controle_referent_087.rs`.
 - Toujours annoncer le compte `passed/failed`, jamais un code retour derrière un `grep`.

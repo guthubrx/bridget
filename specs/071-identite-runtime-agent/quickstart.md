@@ -3,7 +3,7 @@
 ## Préconditions
 
 - Worktree : `/home/moi/bridget-referent/.worktrees/session-071-identite-runtime-agent`
-- Node et Cargo disponibles sur `cartae.app`.
+- Node et Cargo disponibles sur `worker.example.net`.
 - Aucun redémarrage du relais UI nécessaire pour les tests statiques.
 
 ## Tests rapides

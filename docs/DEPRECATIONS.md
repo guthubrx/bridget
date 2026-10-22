@@ -1,55 +1,41 @@
-# Registre des dépréciations
+# Deprecation register
 
-Ce registre recense les chemins maintenus temporairement pendant une migration.
-Une entrée est supprimée avec son chemin dès que la condition indiquée est
-atteinte.
+[English](DEPRECATIONS.md) · [Français](DEPRECATIONS.fr.md) · [Documentation](README.md)
 
-| Chemin | Remplacé par | Supprimable quand |
-|---|---|---|
-| Champ fil `AgentInfo.rate_limit` (Option mono-fenêtre) | `AgentInfo.rate_limits` (Vec par fenêtre) ; lecture wire : l'ancien champ se relit en Vec d'un élément | Dès que tous les consommateurs who/UI/MCP lisent `rate_limits` |
-| Liste blanche de binaires dans `crates/bridget-daemon/src/wrapper.rs` | Registre `~/.config/bridget/agents.json` | Supprimée en T703 |
-| Affichage stderr sans transport dans `crates/bridget-daemon/src/wrapper.rs` | Livraison structurée ACP ou log applicatif | Supprimé en T705 |
-| Micro-banc SC-005 ignoré dans `crates/bridget-transport/src/acp.rs` | Banc à deux vues attach réelles dans `crates/bridget-daemon/tests/sc005_attach_budget.rs` | Après suppression de la couverture historique ACP au prochain cycle de nettoyage des tests |
-| Pont npm `@zed-industries/codex-acp` et `@zed-industries/claude-code-acp` (lancement via `npx` / binaire du paquet) | Pilotes natifs `codex app-server` et `claude_stream_json` (défauts registre + ADR 010) | **Retiré le 2026-08-24 (G10)** : refus `SpawnRefusal::EnvUnfit` sur **tout** chemin d'entrée (spawn géré + `--equipier` / `launch_acp_with_status`), après normalisation basename + retrait `@version`. L'ACP générique **reste** pour Cursor (`cursor-agent acp`) et Gemini (`gemini --acp`). |
-| Protocole ACP comme chemin d'investissement pour Codex/Claude | Ponts natifs uniquement pour nouvelles capacités (modèle, quota, coût) | Dès G10 : aucune nouvelle capacité ne passe par ACP pour ces deux fournisseurs. ACP reste le chemin vivant de Cursor/Gemini ; retirable le jour où Gemini (et éventuellement Cursor) exposent un accès natif, ou sortent du périmètre. |
+This register records paths retained during a migration and historical removals.
+A dated decision is not evidence that a running service has been upgraded.
 
-Relecture T711 : ces deux chemins hérités sont les seuls retirés par la
-migration ACP ; ils restent étiquetés ici jusqu'à la suppression de leur
-référence historique.
+| Path | Replacement | Removal condition or status |
+| --- | --- | --- |
+| Wire field `AgentInfo.rate_limit` (one optional window) | `AgentInfo.rate_limits` (a vector); legacy wire input is read as one element | After every who/UI/MCP consumer reads `rate_limits`. |
+| Executable allowlist in `wrapper.rs` | Private `agents.json` registry | Removed in T703. |
+| Untransported stderr rendering in `wrapper.rs` | Structured ACP delivery or application log | Removed in T705. |
+| Ignored SC-005 microbenchmark in `acp.rs` | Two real attach views in `tests/sc005_attach_budget.rs` | At removal of the historical ACP coverage in a test cleanup cycle. |
+| npm bridges `@zed-industries/codex-acp` and `@zed-industries/claude-code-acp` | Native `codex app-server` and `claude_stream_json` drivers | Removed on 2026-08-24 (G10); refused as `SpawnRefusal::EnvUnfit` on managed and wrapper entry points. |
+| ACP as the investment path for Codex/Claude features | Native drivers for model, quota and cost support | No new Codex/Claude features through ACP after G10. Generic ACP remains for supported Cursor/Gemini paths. |
 
-Relecture G10 (2026-08-24) : le pont Zed n'était pas une couche de code
-distincte — c'était le protocole ACP générique pointé vers des paquets npm
-tiers figés. Le retrait consiste donc à (1) garder les défauts natifs déjà
-posés pour `codex`/`claude`, (2) refuser explicitement les paquets Zed au
-spawn géré **et** au wrapper `--equipier`, (3) laisser `acp.rs` et le chemin
-ACP pour les fournisseurs qui le maintiennent. Les specs 007/009/010 qui
-documentent l'ancien pin npm restent en archive historique et ne sont pas
-réécrites.
+The deprecated Zed bridges were third-party npm packages reached through generic
+ACP, not a separate internal transport implementation. Removal preserves native
+Codex/Claude registry defaults and rejects those packages in managed spawn and
+`--equipier` / `launch_acp_with_status`. Matching normalizes basenames and
+`@version` suffixes, including absolute executable paths.
 
-Durcissement revue G10 (2026-08-24) : la comparaison porte sur le basename
-normalisé (chemins absolus / relatifs, suffixe `@version`) pour que
-l'annonce « refuse toute définition » soit vraie aussi pour le style vivant
-du projet (`/opt/homebrew/bin/codex-acp`, etc.).
+Generic `acp.rs` remains. The historical specifications 007/009/010 and ADR 010
+retain the original package-pin context.
 
-Recensement AVANT retrait (G10, 2026-08-24, tête main `3dcca2c`) — aucun
-appelant vivant du pont dans le code de lancement ni dans
-`~/.config/bridget/agents.json` (seule entrée : `cursor-agent` + `acp`).
+## Historical migration inventory
 
-| Lieu | Nature | Décision |
-|---|---|---|
-| `registry.rs` `default_agents()` | Déjà `codex app-server` / `claude_stream_json` | Conservé |
-| `acp.rs` + protocole ACP | Couche générique Cursor/Gemini (ADR 010) | Conservé |
-| Fixtures le service compagnon `codex-acp` / `claude-code-acp` | Définitions de test encore zed | Remplacées par les pilotes natifs |
-| `daemon.rs` test runtime géré `npx`+`codex-acp` | Fixture ACP, pas un pont | Remplacée par `fixture-acp` |
-| `npx` + `fixture-acp` (fleet, cli, parity, protocol) | Adaptateur ACP de test | Conservé (pas Zed) |
-| `managed_process` / `mcp_identity` tests `npx` | Cycle de vie du groupe, pas le paquet | Conservé |
-| Specs 007/009/010, catalogue, ADR 010 (contexte) | Archive historique du pin npm | Conservée, non réécrite |
-| `attach.rs` noms `claude-acp`,`codex-acp` | Libellés d'erreur, pas une commande | Renommés pour ne plus coller au pont |
+| Area | Decision |
+| --- | --- |
+| Native defaults in `registry.rs` | Retained. |
+| Generic ACP protocol | Retained for providers still using it. |
+| Companion-service test definitions using the old bridges | Replaced with native drivers. |
+| Managed runtime `npx` test | Replaced with `fixture-acp`. |
+| `npx` plus `fixture-acp` in fleet/CLI/parity/protocol tests | Retained as a test adapter, not a Zed bridge. |
+| Managed-process and MCP-identity `npx` tests | Retained for process-group lifecycle. |
+| Historical specifications and ADR context | Retained without rewriting the old decision. |
+| `attach.rs` error labels naming old bridges | Renamed; they were labels, not launch commands. |
 
-Relecture T911 : la gestion du cycle de vie par le daemon est additive. Le
-lancement historique par wrapper-terminal reste supporté et aucun nouveau
-chemin n'est déprécié par la session 009.
-
-Relecture T1305 : le rendu compact de `attach` est sélectionné uniquement sur
-stdout TTY. Le rendu historique non-TTY reste le chemin de compatibilité et
-n'est pas déprécié ; aucune nouvelle entrée n'est donc ajoutée au registre.
+Daemon-managed lifecycle is additive: terminal-wrapper launch remains supported.
+Compact `attach` rendering applies only to TTY output. Non-TTY rendering
+remains the compatibility path and is not deprecated.

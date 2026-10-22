@@ -22,7 +22,7 @@ Rouges observés avant implémentation : 4/4 tests binaires096 et 7/7 tests shel
 
 Revue indépendante APPROVE sur le script SHA256 996b1e437c08727b72700788c636f856d0a536baac0ad492b1f5c8b437a0c186 et la façade Rust. Corrections de revue intégrées : port zéro/contrôles bruts refusés ; sélection DNS par label ; options explicites contradictoires refusées ; un label neuf ne permet pas de cloner une destination connue ; retrait label seul fermé aux autres options.
 
-Tests shell Mac :096 12/12 (39,769 s),095 22/22 (41,059 s),089 23/23 (3,404 s). Bash syntaxe et diffcheck verts. Paquet final autonome vérifié à /private/tmp/b89-package-test.NZVDUD. La recette du script final reconnaît cartae.app:2222 comme cartae-core, sans réinstallation ; who distant voit toujours les cinq agents du Mac. Compilation finale et installation encore en cours à ce jalon.
+Tests shell Mac :096 12/12 (39,769 s),095 22/22 (41,059 s),089 23/23 (3,404 s). Bash syntaxe et diffcheck verts. Paquet final autonome vérifié à /private/tmp/b89-package-test.NZVDUD. La recette du script final reconnaît worker.example.net:2222 comme cartae-core, sans réinstallation ; who distant voit toujours les cinq agents du Mac. Compilation finale et installation encore en cours à ce jalon.
 
 ## Publication Mac
 
@@ -30,7 +30,7 @@ Build-id explicite commun :096-9571d3eb2b32 (empreinte du manifeste des quatre f
 
 Binaire installé atomiquement : /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget ; Mach-O arm64, mode0700, SHA256 07dc720a985d6cc10ca24fe4799e057adfde2e0e103f9c4d3916cabd6915f395. L'alias /Users/moi/.local/bin/bridget reste inchangé. Sauvegarde du binaire précédent et des sources remplacées : /Users/moi/.local/state/bridget-migration-096-20260907.
 
-Le binaire candidat puis le binaire installé exécutent `federate ssh://cartae.app -p 2222` et `federate status` avec succès. Les quatre empreintes du service ci-dessus restent identiques ; PID tunnel95403 et daemon73764 inchangés. L'état natif du service ne revendique pas une connectivité ; celle-ci est vérifiée séparément par `who` depuis Cartae. Aucun retrait de production, redémarrage ou commit réalisé.
+Le binaire candidat puis le binaire installé exécutent `federate ssh://worker.example.net -p 2222` et `federate status` avec succès. Les quatre empreintes du service ci-dessus restent identiques ; PID tunnel95403 et daemon73764 inchangés. L'état natif du service ne revendique pas une connectivité ; celle-ci est vérifiée séparément par `who` depuis Cartae. Aucun retrait de production, redémarrage ou commit réalisé.
 
 Le répertoire de distribution contenait encore des sources antérieures aux binaires094 (notamment attach, MCP et transport). Pour ne pas publier un arbre mixte, crates et Cargo.lock ont été alignés sur la source cumulative effectivement compilée ; comparaison des contenus sans différence restante. Sauvegarde préalable : /Users/moi/.local/state/bridget-migration-096-20260907/cumulative-source-before-sync.tar. Aucun fichier tiers absent de la source n'a été supprimé ; les worktrees antérieurs sont conservés.
 

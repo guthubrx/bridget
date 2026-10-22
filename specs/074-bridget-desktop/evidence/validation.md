@@ -6,11 +6,11 @@ Date : 2026-08-30.
 
 - `/home/moi/.cargo/bin/cargo test -p bridget-daemon` dans le worktree de session a terminé avec 676 tests passants et 7 ignorés.
 - `/home/moi/.cargo/bin/cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml` a terminé avec 30 tests passants : profils, stockage atomique, identité SSH, arguments SSH, découverte, relais HTTP, capacités, deux panneaux, arrêt d'enfant possédé, cycle de vie, perte de tunnel et diagnostics sans secrets.
-- Le contrat réel `bridget ui endpoint --json` a été relu sur cartae.app. Sa forme était `version=1`, port non nul, jeton présent mais jamais affiché.
+- Le contrat réel `bridget ui endpoint --json` a été relu sur worker.example.net. Sa forme était `version=1`, port non nul, jeton présent mais jamais affiché.
 
-## Trajet réel cartae.app
+## Trajet réel worker.example.net
 
-Depuis le Mac, un tunnel de vérification possédé par la commande a relié un port loopback temporaire au relais `127.0.0.1:17888` de cartae.app. La requête HTTP authentifiée à travers ce tunnel a renvoyé `200`.
+Depuis le Mac, un tunnel de vérification possédé par la commande a relié un port loopback temporaire au relais `127.0.0.1:17888` de worker.example.net. La requête HTTP authentifiée à travers ce tunnel a renvoyé `200`.
 
 - Port local temporaire : `39174`.
 - Port de relais distant : `17888`.
@@ -33,7 +33,7 @@ Depuis le Mac, un tunnel de vérification possédé par la commande a relié un 
 
 ## Limite restante de validation humaine
 
-Le paquet macOS est compilé et signé ad hoc, mais l'ouverture graphique manuelle reste à effectuer par l'opérateur : créer un profil, confirmer l'empreinte connue de cartae.app et observer le panneau. Aucun faux verdict visuel n'est consigné à la place de cette interaction.
+Le paquet macOS est compilé et signé ad hoc, mais l'ouverture graphique manuelle reste à effectuer par l'opérateur : créer un profil, confirmer l'empreinte connue de worker.example.net et observer le panneau. Aucun faux verdict visuel n'est consigné à la place de cette interaction.
 
 ## Smoke macOS
 
@@ -49,7 +49,7 @@ L'application installée a été ouverte en arrière-plan sur le Mac, son binair
 - Vérification réelle depuis le Mac : la commande SSH constante `PATH="$HOME/.local/bin:$PATH"; exec bridget ui endpoint --json` résout Bridget et le JSON de l'endpoint est valide sans journaliser ni afficher le jeton. Le daemon est actif, PID `122945`, démarré le `2026-08-30 15:50:08 UTC`.
 - `/Users/moi/.cargo/bin/cargo tauri build --bundles app` : succès. Paquet produit : `/tmp/bridget-desktop-managed-ssh-package.khBcgR/source/src-tauri/target/release/bundle/macos/Bridget Desktop.app`.
 
-Le parcours graphique final reste une acceptation opérateur : à la première connexion, confirmer l'empreinte SSH de cartae.app. Après cette confirmation, le profil se reconnecte automatiquement à chaque lancement de Bridget Desktop et le jeton reste transparent.
+Le parcours graphique final reste une acceptation opérateur : à la première connexion, confirmer l'empreinte SSH de worker.example.net. Après cette confirmation, le profil se reconnecte automatiquement à chaque lancement de Bridget Desktop et le jeton reste transparent.
 
 ## Correctif T041 - Dialogue d'empreinte SSH
 

@@ -5,7 +5,7 @@ Fonctionnalité: Administrer une fédération depuis le binaire Bridget
 
   Scénario: Réutiliser sans mutation une liaison connue par son nom DNS
     Étant donné la liaison attestée "cartae-core" enregistrée avec l'adresse IP de Cartae
-    Quand l'humain lance "bridget federate ssh://cartae.app -p 2222"
+    Quand l'humain lance "bridget federate ssh://worker.example.net -p 2222"
     Alors la liaison existante est reconnue sans second service ni réinstallation
 
   Scénario: Refuser une destination ambiguë

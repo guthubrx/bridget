@@ -260,12 +260,12 @@ l'état `unreachable`. Ce contrôle ne teste **pas** l'arrêt propre vers
 - **Isolement** : daemon de test local lancé avec `HOME=/tmp/bg-gate` et socket
   `/tmp/bg-gate/.cache/bridget/bridget.sock`; aucun daemon ou agent de
   production n'a été arrêté. Le client distant a été déployé depuis le commit
-  `c0964e7` (client-only) sur `cartae.app:2222`.
+  `c0964e7` (client-only) sur `worker.example.net:2222`.
 - **Tunnel** : commande manuelle, équivalente à `federate-ssh.sh` mais avec le
   socket de gate isolé :
 
 ```text
-ssh -N -p 2222 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -R /home/moi/.cache/bridget/bridget.sock:/tmp/bg-gate/.cache/bridget/bridget.sock moi@cartae.app
+ssh -N -p 2222 -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -R /home/moi/.cache/bridget/bridget.sock:/tmp/bg-gate/.cache/bridget/bridget.sock moi@worker.example.net
 ```
 
 - **Échange observé** : `bridget who` exécuté à distance a affiché
@@ -297,7 +297,7 @@ réponse ACP.
 ### Correction validée
 
 Le protocole fournit désormais une projection bornée du ledger depuis le store
-du daemon. Après déploiement client-only sur `cartae.app:2222`, les deux
+du daemon. Après déploiement client-only sur `worker.example.net:2222`, les deux
 commandes `bridget ledger` (maître isolé et client distant à travers le tunnel)
 ont affiché octet pour octet la même entrée :
 

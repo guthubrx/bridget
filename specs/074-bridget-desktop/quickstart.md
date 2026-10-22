@@ -11,8 +11,8 @@ Le client n'expose aucun nouveau port serveur. Les agents, le daemon et le relai
 ## Ajouter un serveur SSH géré
 
 1. Ouvrir Bridget Desktop sur le Mac.
-2. Ajouter un profil nommé, par exemple `cartae.app`.
-3. Renseigner `cartae.app`, le port SSH `2222`, le compte, puis choisir l'agent SSH du Mac ou un chemin de clé déjà existant. Ne jamais coller une clé privée.
+2. Ajouter un profil nommé, par exemple `worker.example.net`.
+3. Renseigner `worker.example.net`, le port SSH `2222`, le compte, puis choisir l'agent SSH du Mac ou un chemin de clé déjà existant. Ne jamais coller une clé privée.
 4. Vérifier l'empreinte affichée à la première connexion avant de l'accepter.
 5. Vérifier que la vue affiche le relais vérifié puis ouvre le panneau du serveur. Aucun jeton Bridget, port de relais local ou tunnel manuel n'est demandé.
 6. Quitter complètement l'application, la rouvrir et vérifier que le tunnel du profil approuvé est recréé automatiquement puis que le panneau réapparaît.

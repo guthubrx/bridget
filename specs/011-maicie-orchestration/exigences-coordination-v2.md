@@ -547,8 +547,8 @@ ont été créés directement dans ce fichier le 24/08.
 
 **Bloc K — déployer ailleurs**
 - [x] K1 installateur bi-plateforme (macOS launchd + Linux systemd, rustup
-      sur place, idempotent, --verify-guichet ; prouvé Mac + cartae.app) —
-      🔄 rejeu au niveau du jour en cours sur cartae.app (coder2)
+      sur place, idempotent, --verify-guichet ; prouvé Mac + worker.example.net) —
+      🔄 rejeu au niveau du jour en cours sur worker.example.net (coder2)
 - [x] K2 ronde portable (mergée, unité active, sidecars prouvés intacts)
 - [ ] K3 séparer projet/outil — ⬜ non commencé, **mais tranché le
       2026-08-25 après-midi** (décision utilisateur). Ce n'est PAS séparer
@@ -1586,7 +1586,7 @@ ce qui existe ici :
   **État 2026-08-24** : `scripts/install-k1.sh` + `make install-k1`.
   Cibles : Darwin (launchd) et Linux (systemd --user) ; Windows refusé
   proprement. Voie Rust : rustup + compilation sur place (autoportant).
-  Preuves Mac — idempotence ici + pose bac à sable. Preuve Linux cartae.app
+  Preuves Mac — idempotence ici + pose bac à sable. Preuve Linux worker.example.net
   — **attestée** : daemon systemd actif, spawn/stop fixture, dépôt guichet
   `queued` puis relève Maicie sans panne (`--verify-guichet`).
 - **K2 — Rendre la ronde portable.** Elle doit vivre dans le dépôt, pas dans
@@ -1770,7 +1770,7 @@ rst 13:30 · 7d … » + fait par fenêtre + hook référent (coder4, sérialis�
 règle 17 avec le précédent) ; attestabilité des limites Cursor
 (fable-reviewer, investigation) ; L4 coût par mission (cursor4) ;
 reconnexion cursor (cursor5) ; garde M1 des migrations (cursorbridget) ;
-vérification G11 (coder3, délégation liée) ; K1 rejoué sur cartae.app au
+vérification G11 (coder3, délégation liée) ; K1 rejoué sur worker.example.net au
 niveau du jour (coder2). K2 (ronde portable) : LIVRÉ, mergé (ca592ab),
 unité com.bridget.ronde ACTIVE sur le Mac, premier rapport daté écrit,
 sidecars de la base de prod prouvés intacts.
@@ -1810,7 +1810,7 @@ CE QUE ÇA AJOUTE, et qui n'était pas dans le périmètre instruit :
 ORDRE PROPOSÉ : la page locale d'abord (elle fait la projection et le
 relais, communs aux trois vues), puis le distant en lecture, puis les
 actions à distance avec leur propre arbitrage de sécurité.
-- **Une machine d'essai réelle existe : cartae.app (ssh -p 2222) — offerte
+- **Une machine d'essai réelle existe : worker.example.net (ssh -p 2222) — offerte
   par l'utilisateur le 24/08.** Reconnaissance faite : Ubuntu Linux x86_64,
   accès sudo sans mot de passe, git présent, PAS de toolchain Rust.
   L'ancienne version de Bridget (0.1.0 du 15/08, lien /usr/local/bin vers un
@@ -1837,7 +1837,7 @@ actions à distance avec leur propre arbitrage de sécurité.
   plateforme, launchd OU systemd selon la cible, et prise en charge de
   l'absence de Rust — amorcer la toolchain ou livrer des binaires, au choix
   argumenté du lot. Critère d'acceptation : l'installateur prouvé sur LES
-  DEUX plateformes — le Mac de l'utilisateur et cartae.app.
+  DEUX plateformes — le Mac de l'utilisateur et worker.example.net.
 
 ## Bloc M — Le référent géré : plus personne hors du flux structuré
 
@@ -1969,7 +1969,7 @@ ouverture), puis N1-N4.
   sandbox NATIFS des CLI par profil (codex sandbox, claude permission-mode
   — les flags qu'on débraye aujourd'hui, remis à l'endroit pour les agents
   « supervisés ») ; (2) conteneurs pour les déploiements Linux
-  (cartae.app) ; (3) VM par équipe seulement si hébergement pour tiers.
+  (worker.example.net) ; (3) VM par équipe seulement si hébergement pour tiers.
   MÊME CHANTIER que M3 + second facteur + sortie du bypass : une seule
   phase sécurité, pas quatre.
 
@@ -1980,7 +1980,7 @@ L'utilisateur tenait au troisième axe de définition des agents : TYPE
 penser). Retrouvé par fouille d'archive (cursor4) : « Les Veilleurs » de
 Cartae V2 — 15 fiches complètes de caractères nommés, avec rôle, fonction,
 biographie et citation. Sources d'autorité :
-- cartae.app:/home/moi/20.cartae/specs/015-swarm-the-hive/agents_registry.md
+- worker.example.net:/home/moi/20.cartae/specs/015-swarm-the-hive/agents_registry.md
 - seed DB s088_agents_veilleurs.py ; rapatriement local
   ~/Documents/MAICompany/coordination/cartae-agents-personas-exploration-20260707/
 - miroir lentilles : 00.Generic/MAICompany/40-registry/review-lenses.json

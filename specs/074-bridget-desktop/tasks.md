@@ -28,7 +28,7 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 
 ## Phase 3 - User Story 1 - Ajouter et ouvrir un serveur distant (P1)
 
-**Objectif** : l'opérateur ajoute `cartae.app`, vérifie son identité SSH, puis ouvre l'UI Bridget distante sans que le relais serveur soit public.
+**Objectif** : l'opérateur ajoute `worker.example.net`, vérifie son identité SSH, puis ouvre l'UI Bridget distante sans que le relais serveur soit public.
 
 **Critère indépendant** : avec un faux SSH et un faux relais, l'état devient `connected` seulement après réponse HTTP à travers un forward `127.0.0.1`; un serveur inconnu requiert une approbation humaine et un changement de clé bloque.
 
@@ -88,7 +88,7 @@ US5 ne crée pas de navigateur: elle prouve que la frontière future reste docum
 - [x] T033 Ajouter dans `apps/bridget-desktop/src-tauri/tests/secrets_and_diagnostics.rs` des sentinelles qui prouvent que profils, diagnostics, erreurs et traces de test ne contiennent ni clé privée, ni jeton UI, ni URL signée.
 - [x] T034 Exécuter les suites Rust pertinentes: `cargo test -p bridget-daemon` et `cargo test --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml`, puis corriger tout échec attribuable à SPEC-074 avant de cocher.
 - [x] T035 Vérifier les surfaces créées avec `rg` dans `apps/bridget-desktop` et mettre à jour `specs/074-bridget-desktop/reuse-audit.md` pour tout nouveau module, dépendance ou arbitrage créé pendant l'implémentation.
-- [ ] T036 Exécuter les scénarios opérateur de `specs/074-bridget-desktop/quickstart.md` avec cartae.app et un faux serveur, mesurer un ajout distant sans secret en moins de trois minutes, vérifier tout le parcours clavier, puis consigner commandes, résultats et éléments macOS vérifiés dans `specs/074-bridget-desktop/evidence/validation.md`.
+- [ ] T036 Exécuter les scénarios opérateur de `specs/074-bridget-desktop/quickstart.md` avec worker.example.net et un faux serveur, mesurer un ajout distant sans secret en moins de trois minutes, vérifier tout le parcours clavier, puis consigner commandes, résultats et éléments macOS vérifiés dans `specs/074-bridget-desktop/evidence/validation.md`.
 - [x] T037 Construire sur macOS avec `cargo build --manifest-path apps/bridget-desktop/src-tauri/Cargo.toml --release` puis `cargo tauri build --config apps/bridget-desktop/src-tauri/tauri.conf.json`, consigner le chemin du paquet ou l'obstacle environnemental vérifiable dans `specs/074-bridget-desktop/evidence/macos-package.md`.
 - [x] T038 Mettre à jour `specs/074-bridget-desktop/spec.md`, `specs/074-bridget-desktop/quickstart.md` et `specs/074-bridget-desktop/implementation.md` avec les preuves réelles, les limites résiduelles et le statut exact de la SPEC.
 - [x] T039 Correctif d'acceptation : activer explicitement l'API globale Tauri requise par la coque statique, renommer le profil local en relais Bridget direct avec hôte loopback et port, demander son jeton uniquement pour la connexion en mémoire, et réaligner l'habillage sur `crates/bridget-daemon/assets/ui/theme.css`.

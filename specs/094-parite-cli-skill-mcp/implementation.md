@@ -65,7 +65,7 @@ sans changement de production. Logs : /tmp/b94.LcIxfV/review-red-lib2.log et
 Oracles finaux à compléter : contention réellement rencontrée (pas fenêtre
 250 ms), DND échéance expirée, runtime blanc, messages différés pré-ready.
 
-Demande additionnelle humaine à 06:29 : réinstaller sur cartae.app port2222.
+Demande additionnelle humaine à 06:29 : réinstaller sur worker.example.net port2222.
 SSH vérifié en lecture seule : Linux x86_64, ancien build4efa0549, services
 daemon/UI actifs et timers Maicie/ronde actifs, deux gérés visibles. Aucun
 changement distant. Arbitrage asynchrone demandé : remplacer ancien ensemble
@@ -156,7 +156,7 @@ isolé, puis republié atomiquement après le dernier delta test-only :
 SHA-256 : 8b41fa7ad83cd33ba2158dcc347dc43aaca971021305ba62604dfd371475e976.
 Build-id : ea52cd048915-dirty ; le manifeste de contenu complète cette identité.
 
-Recette via cartae.app:2222, daemon privé et vrai tunnel Unix SSH : deux clients,
+Recette via worker.example.net:2222, daemon privé et vrai tunnel Unix SSH : deux clients,
 message b94-ssh-probe-1788757027, livraison accusée, rejeu identique sans doublon.
 Après coupure, erreur Connection refused sans repli vers un daemon de production.
 Preuves conservées : /private/tmp/b94ssh.MrkwtD. Les processus et sockets de la

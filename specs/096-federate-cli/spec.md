@@ -1,7 +1,7 @@
 # Spécification 096 — Fédération depuis le binaire
 
 **Branche** : session-096-federate-cli · **Date** : 2026-09-07 · **Statut** : Validée par l'utilisateur
-**Demande** : `bridget federate ssh://cartae.app -p 2222`, statut et retrait depuis la même interface, sans chemin de script à connaître.
+**Demande** : `bridget federate ssh://worker.example.net -p 2222`, statut et retrait depuis la même interface, sans chemin de script à connaître.
 **Tests** : à exécuter.
 
 ## Scénarios utilisateur et tests

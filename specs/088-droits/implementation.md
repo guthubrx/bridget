@@ -5,7 +5,7 @@
 - **Branche** : `088-droits` (depuis `origin/main` `a931a8ac`)
 - **Démarré** : 2026-09-03 13:58 CEST
 - **Terminé** : En cours (voir statut en fin de fichier)
-- **Méthode** : édition locale, `rsync` vers `cartae.app:/home/moi/bridget-referent/.worktrees/088-droits`, compilation et tests avec `CARGO_TARGET_DIR=/home/moi/bridget-referent/bridget/target`. Aucun commit automatique : le diff est à relire par le référent.
+- **Méthode** : édition locale, `rsync` vers `worker.example.net:/home/moi/bridget-referent/.worktrees/088-droits`, compilation et tests avec `CARGO_TARGET_DIR=/home/moi/bridget-referent/bridget/target`. Aucun commit automatique : le diff est à relire par le référent.
 
 ## Contre-revue adverse
 - Plan : Jim (Codex), verdict BLOCKED à 14:16, sept objections vérifiées et toutes retenues (`adversarial-review-jim.md`). Conception révisée : état dans `control_state`, `Option<bool>` sans défaut permissif, signalement conditionné à la fin en échec, tentative de test corrélée, geste local réservé au rendu local.

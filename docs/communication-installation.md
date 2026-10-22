@@ -1,115 +1,146 @@
-# Installer Bridget communication à côté de l'existant
+# Install Bridget
 
-Cette procédure ne remplace aucun binaire global, service, registre, profil de
-fournisseur, skill globale ni base existante. Elle ne démarre pas le service compagnon ni GUI.
-Les recettes Claude/GLM et le gate final restent soumis aux résultats consignés
-dans la session 089 ; un paquet construit n'est pas une validation de compte.
+[English](communication-installation.md) · [Français](communication-installation.fr.md) · [Documentation](README.md)
 
-## 1. Sources indépendantes et construction
+Build and try Bridget in a private namespace before replacing an existing
+installation. A built binary does not update a running daemon, MCP server,
+worker or T3 application.
 
-Depuis le chantier actuel :
+## Prerequisites
+
+Use macOS or Linux, Git and the Rust toolchain in `rust-toolchain.toml`
+(currently 1.92.0). The build wrapper needs Python 3.11 or later. Cache
+maintenance uses `lsof`. Remote project preparation also needs Python and Git
+on the target machine. Install and authenticate each provider on the machine
+where it will run; Bridget does not copy provider accounts.
+
+## Build from source
 
 ```sh
-cd /Users/moi/Nextcloud/10.Scripts/64.bridget
+git clone https://github.com/guthubrx/bridget.git
+cd bridget
+python3 scripts/build.py cargo build --locked --release -p bridget-daemon
+bridget_bin="$(pwd -P)/target/release/bridget"
+```
+
+The release profile is the operational build. Debug builds are for development;
+their performance does not qualify production timeout behavior.
+See [build caches](build-cache.md) for the wrapper's maintenance policy.
+
+For an independently packaged core, from a Git checkout:
+
+```sh
 package_parent=$(mktemp -d /tmp/bgpackage.XXXXXX)
 package_parent=$(cd "$package_parent" && pwd -P)
 bash scripts/package-089-core.sh "$package_parent/source"
 cd "$package_parent/source"
 shasum -a 256 -c SOURCE-MANIFEST.sha256
-PATH=/Users/moi/.cargo/bin:$PATH BRIDGET_BUILD_ID="$(cat BUILD_ID)" \
-  cargo build --locked --offline --release -p bridget-daemon
+BRIDGET_BUILD_ID="$(cat BUILD_ID)" cargo build --locked --offline --release -p bridget-daemon
 ```
 
-Rust 1.92.0 et les dépendances verrouillées doivent déjà être disponibles.
-Un cache incomplet échoue hors ligne : aucune installation implicite. L'archive
-contient les trois crates, les fixtures nécessaires, la skill, les deux scripts
-SSH audités et cette documentation, pas les sources le service compagnon/UI/runtime.
-BUILD_ID identifie la source ; le manifeste SHA-256 identifie les octets précis,
-y compris un paquet de travail marqué `-dirty`. Sans BUILD_ID à la compilation,
-le binaire d'une archive sans Git annonce honnêtement `unknown`.
+Offline mode requires the toolchain and locked dependencies to be cached.
+The source manifest identifies the packaged bytes. `BUILD_ID` identifies the
+source, including a `-dirty` marker when applicable. An archive without Git or
+an explicit build identity may report `unknown`.
 
-## 2. Une instance privée, explicite
+## Run a private instance
+
+In the build checkout, keep `bridget_bin` set to the absolute candidate path:
 
 ```sh
 umask 077
 bridget_state=$(mktemp -d /tmp/bgcomm.XXXXXX)
 export BRIDGET_HOME="$bridget_state"
 export BRIDGET_SOCKET="$bridget_state/bridget.sock"
-bridget_bin="$package_parent/source/target/release/bridget"
 "$bridget_bin" daemon
 ```
 
-Conserver les trois valeurs affichées/résolues par le shell (`bridget_bin`,
-`BRIDGET_HOME`, `BRIDGET_SOCKET`). Les reprendre **à l'identique** dans un autre
-terminal, puis `"$bridget_bin" status` et `"$bridget_bin" agents --json --global`.
-Ne pas refaire `mktemp` pour un client : il interrogerait une autre instance.
-La racine doit être privée 0700, les fichiers privés 0600, sans lien symbolique.
-Le chemin socket est court pour rester compatible macOS/Linux.
+Keep the resolved binary, state and socket paths. Set the **same** values in
+another terminal before running:
 
-L'identité et l'annuaire sont interrogés sur la socket avec des budgets bornés.
-Un inventaire inaccessible est une erreur explicite, pas une liste vide.
-`status` ne lit pas SQLite côté client et ne prétend pas connaître un total des
-messages absent du protocole ; `ledger --limit 20` consulte le maître.
+```sh
+"$bridget_bin" status
+"$bridget_bin" agents --json --global
+```
 
-L'annuaire de communication est local au projet par défaut (138). Le diagnostic
-`agents --json --global` est volontaire et n'autorise aucun envoi extérieur.
-Depuis un client autonome, donner la racine explicite du projet à consulter :
-`"$bridget_bin" who --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget`.
-Sans racine attestée, le projet est inconnu : liste locale vide et avertissement,
-pas panne d'inventaire. Les agents T3/wrapper héritent de leur contexte.
-Pour envoyer vers un autre projet connu, porter `--cross-project-reason 'motif'`
-sur send/thread, ou `cross_project_reason` en MCP. Les clients vérifient
-`communication_projects_v1` ; mettre à jour les composants ensemble, sans
-retirer le motif ni contourner le refus d'un serveur ancien. Un envoi legacy
-inconnu reste possible avec avertissement. Aucun second accord humain obligatoire.
-Les fils mixtes exigent le motif même en silence : tous leurs membres lisent.
-Ces recettes ne prouvent pas qu'un daemon ou catalogue MCP déjà vivant est actualisé.
+Do not run `mktemp` again for a client: that would select a different instance.
+Keep the state directory private (0700), private files 0600 and the socket path
+short enough for Unix sockets on both platforms. Do not substitute symlinks.
 
-Consommateurs Python legacy : `bridget_agents()` sans racine n'est plus un
-annuaire global. Pour vérifier un UUID ou un rôle déjà mandaté, choisir
-explicitement `global_scope=True` ou le helper `bridget_agents_by_id` du moteur
-Agent Loop. Cette consultation n'est ni recrutement, ni suggestion, ni motif
-d'envoi. Transmettre toujours la racine de contexte et le motif requis à l'envoi.
-Le moteur canonique et les nouvelles boucles utilisent déjà la consultation
-adéquate ; un wrapper Psychologie ancien nécessitait l'adaptation de son seul
-appel d'inventaire. Aucun contenu de mission n'est nécessaire à ce contrôle.
+An inaccessible directory is an error, not an empty fleet. A standalone CLI
+client with no project context may legitimately have an empty same-project
+view. Supply its real absolute project path when needed:
 
-## 3. Fournisseurs et permissions
+```sh
+"$bridget_bin" who --project-root /absolute/path/to/project
+```
 
-Le HOME du fournisseur porte son abonnement ; ne pas le remplacer ou copier
-ses secrets par défaut. Une recette automatisée emploie un profil privé et une
-autorisation explicite. GLM via Claude Code reste possible par configuration
-déclarée ; aucun repli vers une API facturée n'est autorisé.
+## Register a terminal agent
 
-Un registre propre à cette instance peut être placé dans
-`$BRIDGET_HOME/agents.json` (variable à résoudre avant toute manipulation).
-Commande absolue, protocole, modèle et effort doivent correspondre à la matrice
-de capacités déclarée ; ne pas ajouter une capacité pour contourner un refus.
-La politique de lancement restrictive reste conservée : l'extraction retire le
-runtime de projet, pas les droits ni les contrôles de facturation. Un refus est
-à instruire, jamais à transformer automatiquement en lancement permissif.
-La skill fournie reste un fichier à installer volontairement dans le profil
-choisi, pas une écriture automatique dans tous les profils.
+From the intended project directory, using the same namespace:
 
-### Déclarer un fournisseur compatible Claude ou un second compte Codex
+```sh
+"$bridget_bin" codex
+# Or:
+"$bridget_bin" claude
+```
 
-Les types par défaut sont `codex`, `claude`, `cursor` et `gemini`. Un autre
-fournisseur se déclare dans `$BRIDGET_HOME/agents.json` (fichier 0600, sans lien
-symbolique), lu au démarrage du daemon. Chaque type déclaré reçoit
-automatiquement sa variante lecture seule `project-discovery-<type>`, utilisée
-sous la posture `discovery`. Exemple pour GLM servi par Claude Code, avec un
-lanceur qui fixe l'environnement du fournisseur et lit sa clé dans le trousseau
-du système plutôt que dans un fichier :
+A provider started as plain `codex` or `claude` is not automatically a Bridget
+agent. A compatible host can mount Bridget with a separate attestation, but
+an MCP tool declaration alone does not establish identity.
+
+Codex must support the app-server and remote-resume interfaces required by the
+installed Bridget driver. The historical interactive validation used Codex
+0.153.4; check your actual driver and provider versions rather than treating
+that test version as a current compatibility guarantee.
+
+To resume an existing Codex conversation at launch:
+
+```sh
+bridget codex --name reviewer resume '<codex_thread_uuid>'
+```
+
+A resume refusal does not mean that a replacement conversation was created.
+Read the provider error. Do not repeatedly resume a conversation that still
+has an unresolved writer. Start a separate session only as an explicit choice.
+
+The interactive session closes its TUI, private server and presence when it
+exits. Managed persistent sessions use a different lifecycle. Preserve the
+provider's normal home, account and permission policy. Use permissive provider
+options only when the user explicitly wants them.
+
+## Provider registry and accounts
+
+The private registry for this namespace can live at
+`$BRIDGET_HOME/agents.json`. The path is a shell template; resolve it locally.
+Keep the file private and without symlinks.
+
+Each definition supplies its executable, protocol, supported models and
+capabilities. A declared type receives a corresponding
+`project-discovery-<type>` read-only variant. Custom names are local registry
+names, not portable provider names.
+
+For a Claude-compatible service, use a dedicated launcher and profile. The
+launcher should read credentials from an appropriate private mechanism, not
+from a committed example. A separate Codex account can use a launcher setting
+`CODEX_HOME`. A Claude profile uses `claude_config_dir` and must be private
+(0700). Keep the model in the launch arguments consistent with the declared
+model catalog.
+
+Example shape for a dedicated Claude-compatible connection. The launcher and
+profile paths must be real absolute paths on the selected machine. The
+permissive managed flags shown here are appropriate only for an already
+compatible, authorized parent policy; do not add them to bypass a refusal.
 
 ```json
 {
   "agents": {
     "glm": {
-      "command": "/chemin/absolu/lanceur-glm",
+      "command": "/absolute/path/to/glm-launcher",
       "args": ["--model", "glm-5.3", "--dangerously-skip-permissions", "--permission-mode", "bypassPermissions"],
       "protocol": "claude_stream_json",
       "forbidden_env": ["ANTHROPIC_API_KEY"],
-      "claude_config_dir": "/chemin/absolu/profil-claude-glm",
+      "claude_config_dir": "/absolute/path/to/private/glm-profile",
       "mcp": {"interactive": "claude", "acp_session": false},
       "capabilities": {"execution_paths": ["claude_stream_json"], "models": {"glm-5.3": {}}}
     }
@@ -117,117 +148,53 @@ du système plutôt que dans un fichier :
 }
 ```
 
-Le dossier `claude_config_dir` doit être en 0700, sinon le lancement est refusé
-« profil Claude invalide ». Un fournisseur lent à démarrer se lance avec
-`--timeout <secondes>` : la commande attend alors cette durée.
+This is a declared example, not proof that this model/account is available.
+The catalog does not test authentication. Verify a selected account through
+an authorized real task. A slow managed launch can use its explicit
+`--timeout` budget; do not infer success from a connected presence alone.
 
-Un second compte Codex se déclare de la même façon avec le protocole
-`codex_app_server` et un lanceur qui fixe `CODEX_HOME`. Le modèle de `args` doit
-figurer dans `capabilities.models`. Vérifier ensuite par un vrai lancement :
-`bridget spawn glm --no-persistent --agent-id <UUID> --cwd <chemin>`, puis
-`bridget stop <UUID>`.
+## T3 integration
 
-## Codex interactif (090)
+T3 attests the calling conversation. Bridget still owns its native tasks.
+Installing files does not reload an already running T3, bridge or MCP process.
 
-Les sources de cette évolution se trouvent dans
-`/Users/moi/Nextcloud/10.Scripts/64.bridget`.
-Pour construire un binaire de test sans remplacer l'installation release :
+For `t3_session_unavailable`, inspect the specific binding/transport reason and
+the loaded versions. Compatible T3 resume handling remounts the current private
+proof before a new turn; a failed remount must not borrow another thread's
+identity. Do not loop through uninstall/reinstall operations.
 
-```sh
-cd /Users/moi/Nextcloud/10.Scripts/64.bridget
-PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
-```
+For `identity_not_found`, first determine how the agent was started. Missing
+wrapper registration and a lost T3 binding are different faults.
 
-Employer ensuite ce binaire avec le daemon privé et les variables de la section 2.
-Dans un vrai terminal, depuis le répertoire de travail choisi :
+For `permission_attestation_unavailable`, an identity exists but the required
+permission proof is unavailable. A successful catalog or session call does
+not grant development rights.
 
-```sh
-/Users/moi/Nextcloud/10.Scripts/64.bridget/target/debug/bridget codex
-```
+For `Too many open files`, check connection lifecycle and loaded bridge code.
+Raising the file-descriptor limit does not close abandoned links.
 
-Le Codex déclaré doit prendre en charge `app-server --listen unix://…` et
-`resume --remote unix://…` ; la recette porte sur 0.153.4. Le registre choisit
-le chemin du binaire ; l'utilisateur garde son HOME et son abonnement. Les
-permissions viennent de sa configuration native et de ses options explicites,
-pas des arguments permissifs du mode géré. Une racine Bridget privée et courte
-est nécessaire pour la socket de contrôle locale. Aucun service public ajouté.
+## SSH federation
 
-Cette session n'est pas persistante : quitter ferme la TUI, le serveur privé
-et sa présence. `spawn --persistent` reste le parcours d'arrière-plan. Une
-commande de navigation vers un autre fil doit fermer l'intégration, jamais
-laisser les prochains messages arriver invisiblement dans l'ancien fil.
-Lancer une autre session explicitement pour changer de fil.
+Use [the federation guide](federation-services.md). The supplied SSH scripts
+require explicit connection settings and a verified host-key file. They do not
+copy private keys, enable agent forwarding or accept unknown host keys.
 
-Pour reprendre dès le lancement un fil identifié et nommer sa présence :
+A federated client joins one master. It must not start a competing daemon
+against that namespace. Federation alone does not make ordinary `spawn`
+execute on a different host; remote tasks use the worker/delegation path.
 
-```sh
-bridget codex --name coderBridget resume <UUID-du-fil-Codex>
-```
+## Stop, upgrade and roll back
 
-Ajouter `--yolo` uniquement si le contournement natif des approbations et du
-sandbox est voulu. Le nom passe par le service partagé de profils ; l'identité
-reste l'UUID Bridget, réutilisable explicitement avec `--agent-id`.
+For a private trial, stop only its agents, daemon and tunnel. Identify the exact
+process and namespace before stopping anything. Keep its state for diagnosis
+if needed. The production installation is unchanged.
 
-Après adoption de la release, la commande habituelle est simplement
-`bridget codex`, depuis le répertoire de travail souhaité. Le lien
-`/Users/moi/.local/bin/bridget` vise
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget`.
-Les skills Codex, Claude et agents partagent la source canonique
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/skills/bridget/SKILL.md`.
+For an operational upgrade, record the source commit, binary hash, build
+identity and current service commands. Preserve a compatible rollback binary
+and any required stopped-state backup. Verify the candidate, activate only
+the intended component, then inspect its loaded identity.
 
-L'adoption explicitement demandée le 2026-09-06 sauvegarde la release et l'état
-du daemon sous `/Users/moi/.cache/bridget-adoptions/` avant remplacement.
-L'arrêt gracieux de com.bridget.daemon n'est permis qu'après vérification de
-l'annuaire ; aucune session active ne doit être interrompue implicitement.
-Le reçu d'adoption local indique les chemins exacts, versions et vérifications.
-Le retour arrière de cette adoption consiste à arrêter le seul daemon, restaurer
-le binaire sauvegardé (et l'état arrêté sauvegardé si nécessaire), puis relancer
-son plist inchangé. Ce n'est pas la procédure d'installation isolée ci-dessous.
-
-### Dépanner le pont T3
-
-`t3_session_unavailable` signifie que la preuve privée présentée par le fil n'est
-plus acceptée. Avec T3 Code `0.0.45-local.166` ou plus récent, une reprise Codex
-remonte automatiquement la preuve courante avant son premier tour. Si le remontage
-échoue, T3 bloque ce tour. Il ne faut pas enchaîner les désinstallations et les
-réinstallations. Vérifier d'abord les versions réellement chargées, puis relancer
-T3 une fois seulement si l'application ouverte exécute encore une ancienne version.
-
-`Too many open files` indique un défaut de cycle de vie des liens ou un ancien
-pont encore chargé. Le pont corrigé ferme les liens des sous-agents terminés après
-leur drain et limite à 32 les reprises simultanées. La limite souple normale de
-4 096 fichiers suffit. L'augmenter masque le symptôme sans fermer les ressources.
-
-## 4. Fédération SSH
-
-`scripts/federate-ssh.sh --help` décrit le transfert maître → client ;
-`scripts/deploy-remote.sh --help` décrit le déploiement **client-only**.
-Fournir explicitement hôte/port/utilisateur, clé privée, fichier known_hosts
-prérempli, label et chemins de sockets neufs. Lancer `--dry-run` d'abord.
-Le transfert est au premier plan ; aucun launchd/systemd n'est installé.
-Un socket occupé est refusé, jamais effacé. La vérification de clé d'hôte reste
-stricte ; aucune redirection d'agent SSH ni config SSH héritée.
-Le déploiement client-only prend une racine Git explicite et un Cargo distant
-déjà installé : il ne fonctionne pas directement depuis l'archive sans Git.
-Pour ce cas, transférer volontairement le paquet et suivre la construction
-hors ligne ci-dessus ; ne pas réutiliser un ancien script de déploiement.
-
-L'archive ne contient aucune clé. Les recettes macOS↔Linux et coupure/reprise
-déjà exécutées sont documentées, sans déclarer leur résultat transposable à
-n'importe quel réseau. Un tunnel rompu ne justifie pas un renvoi sous une
-nouvelle clé ni un redémarrage du fournisseur.
-
-## 5. Arrêt et retour arrière
-
-Arrêter d'abord les seuls équipiers de cette instance avec leur UUID (commande
-`stop`), puis interrompre le daemon de test au premier plan et le tunnel de test.
-Vérifier PID/commande et namespace avant toute intervention sur un processus.
-Ne pas utiliser une commande globale `launchctl kickstart` ou `systemctl restart`
-de l'ancien Bridget : le diagnostic de version du noyau n'en recommande aucune.
-
-Le retour arrière consiste à quitter cette instance et reprendre les anciens
-terminaux : aucun élément de production n'a été remplacé. Garder l'état privé
-pour diagnostic, ou l'archiver après arrêt. Aucune suppression automatique,
-aucun import/migration de la base utilisateur : les migrations n'ont été
-éprouvées que sur copies de fixtures. L'adoption de la flotte est une décision
-distincte, après les gates et avec un plan de retour arrière dédié.
+Do not restore a database over an open database. Do not assume an older binary
+can read a store after a newer migration. Preserve active work and use the
+service's supported shutdown/reconnection path. This guide does not authorize
+interrupting unrelated sessions.
