@@ -157,6 +157,43 @@ def select_mapping(selected, request):
 def commit_present(root, commit):
     return git(root, "cat-file", "-e", commit + "^{commit}", check=False).returncode == 0
 
+def git_common_dir(root):
+    value = git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.decode().strip()
+    return no_links(absolute(value)).resolve()
+
+def linked_checkout_target(mapping, request):
+    relative = request.get("linked_checkout")
+    if relative is None:
+        return None
+    source = absolute(request["source_root"])
+    mapped = absolute(mapping["source_root"])
+    require(contained(source, mapped) and source != mapped and request.get("commit"),
+            "project_preparation_git_identity_mismatch")
+    expected = source.relative_to(mapped)
+    require(str(expected) == relative and ".git" not in expected.parts,
+            "project_preparation_git_identity_mismatch")
+    return no_links(absolute(mapping["remote_root"]) / expected)
+
+def check_linked_checkout(root, target):
+    top = git(target, "rev-parse", "--show-toplevel", check=False)
+    require(top.returncode == 0 and Path(top.stdout.decode().strip()) == target
+            and git_common_dir(target) == git_common_dir(root),
+            "project_preparation_destination_occupied")
+
+def prepare_linked_checkout(root, mapping, request):
+    target = linked_checkout_target(mapping, request)
+    if target is None:
+        return
+    if target.exists():
+        check_linked_checkout(root, target)
+        return
+    # Reproduire le checkout, pas le HEAD du depot principal. Aucun reset,
+    # aucune branche et aucun fichier non commite ne sont copies.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    no_links(target.parent)
+    git(root, "worktree", "add", "--detach", str(target), request["commit"])
+    check_linked_checkout(root, target)
+
 def remote_inspect(request, registry_path):
     _, registry = registry_read(registry_path)
     selected = machine(registry, request)
@@ -166,6 +203,9 @@ def remote_inspect(request, registry_path):
         require(proposed == mapping and request.get("resolved_project_id") == key,
                 "project_preparation_mapping_changed")
     root = no_links(mapping["remote_root"])
+    target = linked_checkout_target(mapping, request)
+    if target is not None and target.exists():
+        check_linked_checkout(root, target)
     if root.exists():
         require(root.is_dir(), "project_preparation_destination_occupied")
         if request.get("commit"):
@@ -237,6 +277,7 @@ def remote_receive(request, registry_path, bundle_stream):
                         require(not root.exists(), "project_preparation_destination_occupied")
                         os.rename(checkout, root)
                 require(commit_present(root, commit), "project_preparation_commit_missing")
+        prepare_linked_checkout(root, mapping, request)
         if mapping.get("additional_root"):
             extra = mapping["additional_root"]
             private_dir(extra["remote_root"])
@@ -350,6 +391,16 @@ def prepare(request):
         # Résoudre côté source avant de contacter la destination. Une ancienne
         # correspondance divergente ne peut pas créer un second projet.
         local_key, local_mapping = select_mapping(selected, request)
+        request.pop("linked_checkout", None)
+        mapped_source = absolute(local_mapping["source_root"])
+        if commit and source != mapped_source:
+            # Comme T3, l'identite du depot est son repertoire Git commun.
+            # Le chemin lexical seul confond un worktree lie et un autre depot.
+            require(contained(source, mapped_source)
+                    and no_links(source / ".git").is_file()
+                    and git_common_dir(source) == git_common_dir(mapped_source),
+                    "project_preparation_git_identity_mismatch")
+            request["linked_checkout"] = str(source.relative_to(mapped_source))
         if local_key in selected.get("mappings", {}):
             request["project_id"] = local_key
         matches = []

@@ -1265,3 +1265,12 @@ Contre-revue r1 du complément : APPROVE sur la classification, cinq réserves t
 
 
 Livraison du complément de diagnostic : source 222941e6 intégrée et poussée, maître Mac 172-222941e6 actif PID 39365, binaire signé SHA-256 0b0ad4d076554f81082773360193b70f926d66a276b5c10011bd5857d99bfd46. Contre-revue r2 APPROVE sans blocage. Quatre tests ciblés PASS ; refus MCP réel sur la tâche déjà close 508c947f, texte français transmis par le client existant, payload/résultat/ronde strictement conservés. Préflight sans wrapper distant ni commande active ; T3/pont/worker conservés. Pas de FULL ni de nouvelle mission métier. Source binaire distincte du commit documentaire final. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.json.
+
+
+## 22 octobre 2026 — Préparer les worktrees liés distants
+
+La sonde traduit le chemin du worktree Mac, mais le helper importe seulement les objets du dépôt principal. Le dossier distant manque. Référence T3 relue : GitVcsDriverCore.resolveRepositoryPathsUncached, identité du dépôt par répertoire Git commun, séparée du checkout.
+
+Le helper reconnaît cette identité, prépare un checkout détaché au commit exact et garde le mapping existant. Aucun reset ni transfert des fichiers non committés. 15 tests Python ciblés PASS, RED final discriminant conservé. Activation et recette réelle à qualifier.
+
+Reçu : validation/worktrees-lies-20261022.md.

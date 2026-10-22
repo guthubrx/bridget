@@ -1,0 +1,23 @@
+{
+  "command": [
+    "python3",
+    "-m",
+    "unittest",
+    "-v",
+    "tests/test_spec172_project_preparation.py"
+  ],
+  "rc": 0,
+  "full_suite": false,
+  "summary": [
+    "Ran 15 tests in 2.585s"
+  ],
+  "fixture_sha256": "0d5638549b9560ce6fbdead48430735f03a4ac80ac9f589e7c557e5dbc3f02dc",
+  "production_sha256": "38065b48d3c914a604ebb620ccb1e2b08a2f3694a18c97ea6b53c99ff29e06fa",
+  "log_sha256": "6870ef126516aeb6c6aaec5472e558dd15533c0704fb22cebc016cbec111c189",
+  "rust_mapping": {
+    "command": "cargo test -p bridget-daemon --lib spec172_mapping_missing_ambiguous_explicit_and_origin_guards -- --nocapture",
+    "rc": 0,
+    "passed": 1,
+    "log_sha256": "71e3a3eb6856a8e32770e38c12a87e14ed1e0d897c69e8bcbc3b3cfa7928174e"
+  }
+}
