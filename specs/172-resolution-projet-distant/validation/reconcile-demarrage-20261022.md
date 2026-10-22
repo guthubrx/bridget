@@ -19,3 +19,9 @@ Les réponses Rejected sans attente sont maintenant ignorées uniquement après 
 Un seul test ciblé : spec172_untracked_worker_refusal_keeps_known_command_channel. RED avec l’ancienne production. Le cas couvre UnknownExecution et ResourceLimit sans attente, leur transmission avec attente, et le refus d’une autre instance ou d’une époque obsolète. GREEN : 1 test PASS, 0 FAIL. Activation à suivre. Aucune mission métier ou fournisseur lancé par ce test. Aucun élargissement des délais.
 
 Preuves privées : /home/moi/.cache/bridget-reconcile172/red.log et /home/moi/.cache/bridget-reconcile172/green.log.
+
+## Activation
+
+Source ffea39ba8544c1f3b665a57c19aa27a5c936ab83 poussée sur GitHub/main. Maître macOS activé en build release optimisé signé 172-ffea39ba, PID 54465, SHA-256 6c18535edb20da7f48bfdad171763600aa4743019701e38dc9084f4c06dfc682. Compilation rc 0 en 313,18 s. T3 et pont préservés (PID et naissance), worker Cartae 2948540 inchangé. Aucune commande distante active dans le contrôle final après activation.
+
+Reçu privé : /Users/moi/.cache/bridget-reconcile172/activation.json. Avis de résolution envoyé sans délai de réponse à Monuments : bridget172-reconcile-start-livre-20261022-01, livraison b363f974-8fdc-480d-9f94-8b51d47704e9, en vol à ce checkpoint. Aucune revue métier relancée ; aucun succès de la tâche échouée revendiqué.
