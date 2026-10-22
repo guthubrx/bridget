@@ -11,5 +11,130 @@
     "scripts/prepare-project.py": "9ca19e1c74266b0c075c47b32fcbc4ed9df72a7889f6831b079b58f608c0d2ba",
     "tests/test_spec172_project_preparation.py": "15d59268cc78084634f29510530af91bfa33ee2f83977f5e27278fc3c84e105e",
     "crates/bridget-daemon/src/remote_worker.rs": "419d9b46177a8f3a1bc66abc4121d574dfdd9a94557d00788af272bb8f21a254"
+  },
+  "delivery": {
+    "source": "76b682d6bfdf315a9a3d10de6dc75d0879a265ae",
+    "build_id": "172-76b682d6",
+    "master": {
+      "source": "76b682d6bfdf315a9a3d10de6dc75d0879a265ae",
+      "build_id": "172-76b682d6",
+      "activated": true,
+      "old_master": 39365,
+      "remote_before": {
+        "active": [],
+        "wrappers": [],
+        "worker": "MainPID=2219043\nNRestarts=0\nActiveState=active\n"
+      },
+      "protected_before": "898 Sun Oct 18 08:40:54 2026     /Users/moi/.local/bin/bridget\n28528 Thu Oct 22 08:04:19 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Beta)\n28591 Thu Oct 22 08:04:20 2026     /Applications/T3 Code (Local).app/Contents/MacOS/T3 Code (Beta)",
+      "asar_sha256": "c4ce4daa865fc854e745593439d80db0539405444b34173d496ff350cde00898",
+      "new_master": 68244,
+      "sha256": "248755a6f69f20665743e7fb289b73c50083bb12a2cd67849421425b2f934c4e",
+      "protected_preserved": true,
+      "worker_after": "MainPID=2219043\nNRestarts=0\nActiveState=active\n",
+      "at": 1792667524.403216
+    },
+    "worker": {
+      "source": "76b682d6bfdf315a9a3d10de6dc75d0879a265ae",
+      "build_id": "172-76b682d6",
+      "sha256": "4cc657c2c8e287a85160d9359a8d587422308210fe00c250557254bf396040cd",
+      "old_worker": 2037495,
+      "new_worker": 2219043,
+      "active": true,
+      "unit": "/home/moi/.config/systemd/user/bridget-worker-cartae.service",
+      "unit_before_sha256": "3945416bc55d66a9e8386b6f9d526a10f7eebc4e281c0e79ca4a6e13de3aa60c",
+      "unit_after_sha256": "fe5bff630a2c41074922b97be15aace1478cc3a469efd0cae3735d9f9989a004",
+      "before": {
+        "active": [],
+        "wrappers": []
+      },
+      "props": "MainPID=2219043\nNRestarts=0\nActiveState=active\n",
+      "at": 1792667489.951222
+    },
+    "review": {
+      "approved": true,
+      "source": "76b682d6bfdf315a9a3d10de6dc75d0879a265ae",
+      "task_id": "9fdb1dae-a475-408d-8873-db6369b84732",
+      "verdict": "APPROVE",
+      "result_bytes": 4818
+    },
+    "live": {
+      "source": "76b682d6bfdf315a9a3d10de6dc75d0879a265ae",
+      "task_id": "fdd9c6e9-e16d-4994-a763-e7185870cfca",
+      "owner": "f0c70e4e-7023-450c-b5c5-1f9d6bf7660a",
+      "base": "ecef0730a9c3b5e7c6381c954537659f07baac99",
+      "machine": "cartae",
+      "cwd": "/home/moi/10.Scripts/69.opus2D/.worktrees/158-integration-continuite256",
+      "package": "opus2d",
+      "version": "0.1.0",
+      "marker": "BRIDGET172_WORKTREE_SHARED_LIVE_OK",
+      "mailbox": "acknowledged",
+      "continuable": false,
+      "status": "result_available",
+      "error": null,
+      "cleanup_done": true,
+      "source_message": "t3-4286cdb6-3985-4b20-aae3-b98fb1a7c8d1",
+      "source_message_digest": "0f97bd0c8f935e5eb933d1dd9f1b90791b4200bc44fab3f563290b8c2142e0c1",
+      "shell_required": false
+    },
+    "git": {
+      "fresh_ssh_git": "/home/moi/.local/lib/bridget-tools/git-current/bin/git",
+      "fresh_ssh_version": "git version 2.56.0",
+      "login_version": "git version 2.56.0"
+    },
+    "mac_git": "git version 2.55.0",
+    "notifications": {
+      "sent": 12,
+      "delivery": "accepted_in_flight_not_read_receipts"
+    },
+    "cleanup_mac": [
+      {
+        "path": "/Users/moi/.cache/bridget-worktrees172/source",
+        "lsof_rc": 1,
+        "removed": true
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-worktrees172/bridget-172-ad980493",
+        "lsof_rc": 1,
+        "removed": true
+      },
+      {
+        "path": "/Users/moi/.cache/bridget-worktrees172/bridget-172-fadd74df",
+        "lsof_rc": 1,
+        "removed": true
+      }
+    ],
+    "cleanup_cartae": [
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/172-preparation-worktrees",
+        "clean": true,
+        "retained": true,
+        "reason": "inventaire lsof incomplet ; aucune suppression forcee",
+        "lsof_rc": 1
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/50f19dfa",
+        "clean": true,
+        "retained": true,
+        "reason": "controle des fichiers ouverts requis"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/0043865a",
+        "clean": true,
+        "retained": true,
+        "reason": "controle des fichiers ouverts requis"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/c51603b8",
+        "clean": true,
+        "retained": true,
+        "reason": "controle des fichiers ouverts requis"
+      },
+      {
+        "path": "/home/moi/10.Scripts/64.bridget/.worktrees/9fdb1dae",
+        "clean": true,
+        "retained": true,
+        "reason": "controle des fichiers ouverts requis"
+      }
+    ]
   }
 }

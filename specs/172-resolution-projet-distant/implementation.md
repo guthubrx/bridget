@@ -1284,3 +1284,8 @@ Revue 0043865a : le worker visait encore le principal. Correction de la sonde, d
 ### Worktrees r4 — refus propre rejouable et avance du checkout lie
 
 Objections c51603b8 traitees : retirer le recu uniquement sur absence prouvee de dossier ET inscription apres refus synchrone ; garder les issues inconnues fermees. 21 Python PASS, nouveau RED discriminant, test worker etendu a cinq cas dont avance rapide C0 vers B sans toucher le principal. Les trois autres Rust de r3 sont conserves, production worker identique. Contre-revue finale avant activation.
+
+
+### Livraison worktrees et Git — 22 octobre 2026
+
+Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219043. T3/pont28528/28591/898 preserves. 21 Python et 4 Rust affectes PASS, revue9fdb1dae APPROVE. Recette reelle fdd9c6e9 depuis le worktree Opus2D : hostname/package/cwd/HEAD ecef0730 conformes, marqueur emis, resultat lu/ACK et recette close. Premiere recette partielle conservee, critere shell ajoute a tort retire du contrat. Git2.56 durable pour SSH/shell/worker Cartae, 12 agents Opus2D informes, mandats T3 preserves. Trois produits temporaires Mac retires ; cinq worktrees Cartae propres/fusionnes conserves sur garde lsof incomplete. Recu : validation/worktrees-lies-20261022.md et JSON voisin.

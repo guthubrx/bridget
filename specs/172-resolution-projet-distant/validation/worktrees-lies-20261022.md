@@ -1,5 +1,65 @@
 # Préparation des worktrees liés — 22 octobre 2026
 
+## Livraison active et qualification réelle
+
+Le build 172-76b682d6 est actif sur Mac et Cartae. Source de code :
+76b682d6bfdf315a9a3d10de6dc75d0879a265ae, fusionnée dans main et poussée.
+
+- Maître Mac PID 68244, SHA-256 248755a6f69f20665743e7fb289b73c50083bb12a2cd67849421425b2f934c4e.
+- Worker Cartae PID 2219043, SHA-256 4cc657c2c8e287a85160d9359a8d587422308210fe00c250557254bf396040cd.
+- Application T3, serveur et pont : PID 28528, 28591 et 898 conservés, ASAR inchangé.
+- Zéro commande worker et zéro wrapper Bridget actif avant les deux bascules.
+  Ce contrôle ne prétend pas inventorier les calculs T3/SSH indépendants ; aucun n'a été arrêté.
+- 21 tests Python, quatre tests Rust distincts affectés et contre-revue APPROVE.
+  Le test intégré final comprend cinq scénarios. Aucun succès de suite globale déduit.
+
+Recette réelle depuis le contexte T3 Architecture Opus2D :
+Task fdd9c6e9-e16d-4994-a763-e7185870cfca, machine cartae,
+package opus2d@0.1.0, checkout :
+/home/moi/10.Scripts/69.opus2D/.worktrees/158-integration-continuite256
+HEAD directement lu et base attendue identiques :
+ecef0730a9c3b5e7c6381c954537659f07baac99.
+Marqueur effectivement émis : BRIDGET172_WORKTREE_SHARED_LIVE_OK.
+Résultat intégral lu, ACK et clôture par son propriétaire ; aucune erreur,
+continuable=false, cleanup_done=true. Mode Shared : aucune garde Worktree acquise.
+Aucune copie du mandat métier parcs/eau ; sa fabrication reste sous T3.
+
+La première recette dccaf64a a exécuté les lectures correctes, mais n'a pas
+émis son marqueur : le parent avait ajouté une commande Git incompatible avec
+les outils de cet enfant discovery. Ce résultat reste partiel. La recette
+corrigée, strictement fondée sur les fichiers, est distincte et ne remplace
+aucune mission métier. Le contrat de recette ne requiert aucun shell.
+
+Git Cartae 2.56 est le défaut durable des nouveaux SSH et shells de connexion,
+vérifié sans PATH temporaire. La configuration du worker emploie aussi le lien
+stable /home/moi/.local/lib/bridget-tools/git-current/bin.
+Configuration utilisateur :
+/home/moi/dotfiles/bash/.bashrc
+Le lien /home/moi/.bashrc est conservé. Mac utilise Git 2.55, compatible.
+La sauvegarde de configuration et les empreintes restent privées.
+
+Confirmation finale envoyée aux 12 agents Opus2D présents dans l'annuaire.
+Les API ont accepté les envois ; cela ne prouve pas leur lecture. Aucune
+migration des tâches déjà engagées ni nouvelle recette demandée à la flotte.
+
+Nettoyage : checkout de compilation Mac et deux binaires intermédiaires
+jamais activés retirés après contrôle lsof vide. Binaire courant, sauvegarde,
+preuves et cache Cargo réutilisable conservés. Cinq worktrees Cartae propres
+et fusionnés conservés : inventaire lsof incomplet, aucune suppression forcée.
+Le worktree Opus2D de qualification reste à son propriétaire.
+
+Réserve faible non bloquante de la revue : une erreur OS au lancement de Git
+reste fermée par conservation du reçu. Pas de corruption ni élargissement de
+droits ; aucune panne de ce type observée dans la recette réelle. La revue a
+approuvé le correctif. Contrairement à sa lecture limitée, le worktree auteur
+existe encore : ses empreintes et celles du worktree de revue ont été
+comparées exactement par l'opérateur.
+
+Preuves privées :
+/home/moi/.cache/bridget-worktrees172
+/Users/moi/.cache/bridget-worktrees172
+
+
 ## Cause observée
 
 La demande opus158-156-parcs-publications-candidates-cartae-20261022-01
