@@ -1247,6 +1247,16 @@ mod tests {
                 Some(json!({"resets_at":1_900_000_000})),
             ),
             (
+                json!({"status":"refused","code":"remote_execution_ended","message":"La commande distante est terminée ou son lancement a été refusé.","detail":{"message":"La commande distante est terminée ou son lancement a été refusé."}}),
+                "remote_execution_ended",
+                Some(json!({"message":"La commande distante est terminée ou son lancement a été refusé."})),
+            ),
+            (
+                json!({"status":"refused","code":"remote_execution_unconfirmed","message":"Vérifiez l’état de la tâche sans créer de doublon.","detail":{"message":"Vérifiez l’état de la tâche sans créer de doublon."}}),
+                "remote_execution_unconfirmed",
+                Some(json!({"message":"Vérifiez l’état de la tâche sans créer de doublon."})),
+            ),
+            (
                 json!({"status":"refused","code":"permission_source_unavailable"}),
                 "permission_source_unavailable",
                 None,

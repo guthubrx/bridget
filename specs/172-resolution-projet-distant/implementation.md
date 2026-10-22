@@ -1254,8 +1254,11 @@ Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-d
 
 Le signalement Notre-Dame d7ddb20c révèle un diagnostic trompeur dans `remote_dispatch_proof` : `Terminal` était converti en `permission_not_inherited`. Le worker enregistre cette fin à 07:36:56 UTC ; la continuation refusée date de 07:45:42 UTC. L’ancienne rupture du wrapper explique l’exécution terminée ; elle ne justifie pas de présenter cet état comme un nouveau besoin de droits.
 
-Correction isolée : codes `remote_execution_ended` et `remote_execution_unconfirmed`, messages constants, contrôle de condensat inchangé. Trois tests ciblés PASS, dont six réponses sur le vrai canal Unix maître-worker et un contrôle de non-mutation du reçu. Pas de FULL ni de fournisseur dans ces tests. Revue indépendante et activation encore en attente à ce checkpoint.
+Correction isolée : codes `remote_execution_ended` et `remote_execution_unconfirmed`, messages constants, contrôle de condensat inchangé. Trois tests ciblés PASS au premier checkpoint : requête Reconcile sur socket Unix, réponses simulées dans le canal interne, comparaison du seul enregistrement de tâche. Ce checkpoint ne qualifie ni le décodage entrant worker ni l’invalidation du bail. Pas de FULL ni de fournisseur dans ces tests. Revue indépendante et activation encore en attente à ce checkpoint.
 
 Référence T3 lue : `OrchestratorMcpService.ts`, `interruptThread` (état actif/terminal séparé des modes) et `delegateTask` (checkout du parent). T3 ne couvre pas les phases de commande du worker Bridget.
 
 Preuve : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.md.
+
+
+Contre-revue r1 du complément : APPROVE sur la classification, cinq réserves levées dans r2. Le texte n’affirme plus qu’un processus a tourné quand le lancement est Refused. Les conseils passent aussi par detail.message, voie déjà transmise par le client MCP chargé. Le condensat absent reste un état non confirmé, sans cause de droits inventée. Quatre tests distincts PASS, dont un test du client MCP sur socket et huit cas de preuve distante ; aucun fournisseur ni FULL. La réponse worker du test de preuve est simulée dans le canal interne ; l’invalidation réelle du bail reste celle du code antérieur. Les deux empreintes de source sont dans green-r2.json ; RED r2 sur la même fixture finale. Référence T3 complémentaire : OrchestratorMcpService.failure conserve code et message. Activation encore en attente.

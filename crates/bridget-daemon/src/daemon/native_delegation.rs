@@ -3273,12 +3273,12 @@ impl ParentPermission {
 
 fn failure(code: &str) -> Value {
     let message = match code {
-        "remote_execution_ended" => Some("Le service distant confirme que ce processus est terminé. Cette demande ne peut pas le poursuivre. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite."),
-        "remote_execution_unconfirmed" => Some("Le service distant n’a pas confirmé que ce processus est prêt à recevoir du travail. Vérifiez l’état de la tâche sans créer de doublon."),
+        "remote_execution_ended" => Some("La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite."),
+        "remote_execution_unconfirmed" => Some("Le service distant n’a pas confirmé les conditions de reprise de cette exécution. Vérifiez l’état de la tâche sans créer de doublon."),
         _ => None,
     };
     if let Some(message) = message {
-        return json!({"status":"refused","code":code,"message":message});
+        return json!({"status":"refused","code":code,"message":message,"detail":{"message":message}});
     }
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
@@ -4771,7 +4771,10 @@ pub(super) fn remote_dispatch_proof(
     if matches!(observation.phase, WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused) {
         return Err("remote_execution_ended".into());
     }
-    if observation.phase != WorkerCommandPhase::Released || !observation.native_ready {
+    if observation.phase != WorkerCommandPhase::Released
+        || !observation.native_ready
+        || observation.permission_digest.is_none()
+    {
         return Err("remote_execution_unconfirmed".into());
     }
     if observation.permission_digest.as_ref() != Some(&placement.permission_digest) {
@@ -22967,16 +22970,17 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(state);drop(shared);cleanup(&config);
     }
 
-
     #[test]
     fn spec172_remote_continuation_distinguishes_execution_state_from_permissions() {
         use bridget_transport::protocol::*;
         use std::os::unix::fs::PermissionsExt;
         for (phase, native_ready, digest, expected) in [
+            (WorkerCommandPhase::Terminal, false, Some("b".repeat(64)), Some("remote_execution_ended")),
             (WorkerCommandPhase::Terminal, true, Some("b".repeat(64)), Some("remote_execution_ended")),
             (WorkerCommandPhase::Refused, false, None, Some("remote_execution_ended")),
             (WorkerCommandPhase::Unknown, true, Some("b".repeat(64)), Some("remote_execution_unconfirmed")),
             (WorkerCommandPhase::Released, false, Some("b".repeat(64)), Some("remote_execution_unconfirmed")),
+            (WorkerCommandPhase::Released, true, None, Some("remote_execution_unconfirmed")),
             (WorkerCommandPhase::Released, true, Some("c".repeat(64)), Some("permission_not_inherited")),
             (WorkerCommandPhase::Released, true, Some("b".repeat(64)), None),
         ] {
@@ -23038,7 +23042,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
             cleanup(&config);
         }
         let ended = failure("remote_execution_ended");
-        assert!(ended["message"].as_str().unwrap().contains("terminé"));
+        assert!(ended["message"].as_str().unwrap().contains("terminée"));
+        assert_eq!(ended["detail"]["message"], ended["message"]);
         let unconfirmed = failure("remote_execution_unconfirmed");
         assert!(unconfirmed["message"].as_str().unwrap().contains("pas confirmé"));
         assert!(unconfirmed["message"].as_str().unwrap().contains("sans créer de doublon"));
