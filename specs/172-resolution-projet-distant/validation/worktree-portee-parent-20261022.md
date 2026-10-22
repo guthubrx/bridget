@@ -34,3 +34,15 @@ La compilation optimisée a échoué sur ENOSPC. Livraison immédiate demandée 
 Le seul worker Cartae a été relancé par SIGTERM individuel, avec KillMode=process. Aucun wrapper géré n’était actif au préflight. T3 et le maître Mac n’ont pas été relancés. L’admission c67ba253 n’est ni rejouée ni réparée par mutation de base. Son reçu et son worktree restent conservés. La reprise métier appartient à son responsable après clôture officielle de l’ancienne admission, avec une nouvelle demande à jour.
 
 Reçu privé : /home/moi/.cache/bridget-worktree-scope172/activation.json.
+
+## Remplacement par le binaire optimisé — état courant
+
+Le binaire de dépannage a introduit une régression mesurée : les sondes de dix candidats sont passées d’environ 4 secondes à 189 secondes, au-delà du budget de 60 secondes. Le profil non optimisé est retiré de l’unité du worker. Aucun délai ni droit n’est modifié.
+
+La même source 39a9df21e925ad54b904a2b3c2078eba9f20ef17 est construite en profil release optimisé, en 95,01 secondes (rc 0), puis activée sous le build 172-39a9df21-opt. Worker PID 2948540 ; SHA-256 0550350510754d6edd2c4714a74e58d9b918b648f09339dec2bf9b7bf3ecb958. L’exécutable chargé et son empreinte ont été vérifiés après activation.
+
+Seul le worker a reçu un SIGTERM individuel. Aucun wrapper géré ni reçu de commande actif au contrôle précédant l’arrêt. T3 et le maître Mac sont conservés. Aucun test supplémentaire ni mission métier n’est lancé par l’intégrateur.
+
+Le signal d’essai terrain a été envoyé à Monuments : bridget172-optimized-active-monuments-20261022-01, livraison d40c5820-b91f-4c01-ae8d-435793f5c99d. À ce checkpoint, la remise du message est en vol et le résultat métier n’est pas encore reçu. Cette activation ne vaut pas validation de la délégation complète.
+
+Preuves privées : /home/moi/.cache/bridget-worktree-scope172/build-optimized.json et /home/moi/.cache/bridget-worktree-scope172/activation-optimized.json.
