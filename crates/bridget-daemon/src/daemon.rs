@@ -15525,7 +15525,10 @@ mod spec145_human_view_tests {
             .collect()
     }
 
-    fn fixture(label: &str) -> (Arc<Mutex<DaemonState>>, String, UnixStream) {
+    fn unbound_thread_fixture(
+        label: &str,
+        t3_thread_id: &str,
+    ) -> (Arc<Mutex<DaemonState>>, String, UnixStream) {
         let (mut st, _) = presence_tests::state_with_registered_agent(label);
         st.conn_counter = 1; // conn-1 appartient déjà à la fixture héritée.
         let peer = spec094_live_test_connection(&mut st, "t3");
@@ -15535,14 +15538,16 @@ mod spec145_human_view_tests {
                 "t3",
                 2,
                 "fixture".into(),
-                crate::t3code::stable_uuid(T3),
+                crate::t3code::stable_uuid(t3_thread_id),
                 Some(host.clone()),
                 Some("t3code".into()),
                 ChannelReport::Known("unix".into()),
                 Some(PresenceMode::Cli),
                 None,
                 Some("test".into()),
-                Some(crate::t3code::stable_uuid(&format!("instance:{T3}"))),
+                Some(crate::t3code::stable_uuid(&format!(
+                    "instance:{t3_thread_id}"
+                ))),
                 None,
                 false,
                 Some(false),
@@ -15583,12 +15588,128 @@ mod spec145_human_view_tests {
                 ..
             }
         ));
-        let fact = serde_json::from_value(
-            json!({"type":"T3ThreadBindingFact","version":1,"t3_thread_id":T3}),
-        )
-        .unwrap();
+        (state, root, peer)
+    }
+
+    fn fixture(label: &str) -> (Arc<Mutex<DaemonState>>, String, UnixStream) {
+        let (state, root, peer) = unbound_thread_fixture(label, T3);
+        let fact = WrapperToDaemon::T3ThreadBindingFact {
+            version: bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION,
+            t3_thread_id: T3.into(),
+        };
         assert!(handle_wrapper_message("t3", fact, &state).is_none());
         (state, root, peer)
+    }
+
+    #[test]
+    fn spec172_t3_opaque_binding_accepts_attested_primary_identity() {
+        for (index, id) in [
+            T3,
+            "mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3",
+            "thread:mcp:scope172:request172:0",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (state, _root, _peer) = unbound_thread_fixture(&format!("opaque172-{index}"), id);
+            let before = snapshot(&state);
+            let response = handle_wrapper_message(
+                "t3",
+                WrapperToDaemon::T3ThreadBindingFact {
+                    version: bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION,
+                    t3_thread_id: id.into(),
+                },
+                &state,
+            );
+            assert!(
+                response.is_none(),
+                "identifiant T3 attesté refusé : {id}: {response:?}"
+            );
+            {
+                let st = state.lock().unwrap();
+                let agent = crate::t3code::stable_uuid(id);
+                let project = agent_communication_project(&st, &agent);
+                assert_eq!(
+                    human_authority_guard(&st, id, &project),
+                    Ok(("t3".into(), agent))
+                );
+            }
+            assert_eq!(
+                snapshot(&state),
+                before,
+                "le rattachement n'écrit aucune donnée métier"
+            );
+        }
+    }
+
+    #[test]
+    fn spec172_t3_opaque_binding_preserves_identifier_and_authority_guards() {
+        let id = "mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3";
+        for (index, invalid) in [String::new(), "thread\nforged".into(), "x".repeat(2049)]
+            .into_iter()
+            .enumerate()
+        {
+            let (state, _root, _peer) =
+                unbound_thread_fixture(&format!("badopaque172-{index}"), &invalid);
+            let before = snapshot(&state);
+            let response = handle_wrapper_message(
+                "t3",
+                WrapperToDaemon::T3ThreadBindingFact {
+                    version: bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION,
+                    t3_thread_id: invalid,
+                },
+                &state,
+            );
+            assert!(matches!(response, Some(DaemonToWrapper::Nack { .. })));
+            assert!(state.lock().unwrap().t3_thread_bindings.is_empty());
+            assert_eq!(snapshot(&state), before);
+        }
+        for case in [
+            "version",
+            "foreign_identity",
+            "auxiliary",
+            "unattested_project",
+        ] {
+            let (state, _root, _peer) = unbound_thread_fixture(&format!("guardopaque172-{case}"), id);
+            let before = snapshot(&state);
+            {
+                let mut st = state.lock().unwrap();
+                match case {
+                    "auxiliary" => {
+                        st.auxiliary_connections.insert("t3".into());
+                    }
+                    "unattested_project" => {
+                        st.t3_project_connections.remove("t3");
+                    }
+                    _ => {}
+                }
+            }
+            let response = handle_wrapper_message(
+                "t3",
+                WrapperToDaemon::T3ThreadBindingFact {
+                    version: if case == "version" {
+                        99
+                    } else {
+                        bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION
+                    },
+                    t3_thread_id: if case == "foreign_identity" {
+                        "mcp:other-thread".into()
+                    } else {
+                        id.into()
+                    },
+                },
+                &state,
+            );
+            assert!(
+                matches!(response, Some(DaemonToWrapper::Nack { .. })),
+                "{case}"
+            );
+            assert!(
+                state.lock().unwrap().t3_thread_bindings.is_empty(),
+                "{case}"
+            );
+            assert_eq!(snapshot(&state), before, "{case}");
+        }
     }
 
     #[test]
@@ -20142,8 +20263,12 @@ fn handle_wrapper_message_with_peer(
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let agent = crate::t3code::stable_uuid(&t3_thread_id);
             let instance = crate::t3code::stable_uuid(&format!("instance:{t3_thread_id}"));
+            // T3 atteste aussi des identifiants opaques (mcp:…, thread:mcp:…).
+            // Même borne que SessionProof ; l'identité et le projet restent vérifiés.
             let valid = version == bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION
-                && crate::threads::canonical_uuid(&t3_thread_id).is_some()
+                && !t3_thread_id.is_empty()
+                && t3_thread_id.len() <= 2048
+                && !t3_thread_id.chars().any(char::is_control)
                 && !st.auxiliary_connections.contains(conn_id)
                 && st
                     .router

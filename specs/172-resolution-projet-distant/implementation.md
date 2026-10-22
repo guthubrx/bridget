@@ -1105,3 +1105,33 @@ L'admission figée bus-arches est soldée en refus de droits, sans Task.
 Cette livraison ne prétend pas relancer une mission métier.
 Reçu complet :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/canal-worker172.md
+
+
+### 22 octobre 2026 — Identifiants opaques des fils T3
+
+Défaut établi sur le fil mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3 :
+la preuve T3 v2 est valide, mais T3ThreadBindingFact ne retient que les UUID.
+Le contrôle human_authority_guard échoue ensuite ; le catalogue et le statut
+remontent permission_attestation_unavailable avant les contrôles métier.
+La tâche façades 837972ad-ad58-4512-9a71-fd2843ab5be5 est déjà failed, sans
+résultat, cleanup_done=true et guard_released=true ; elle appartient à chargement.
+Son accès reste réservé au propriétaire, même après cette correction.
+
+Référence T3 lue :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/mcp/OrchestratorMcpService.ts
+(stableThreadId : identifiants thread:mcp:…, sessionIdentity : identité exacte du
+fil, sans exigence UUID). Le cas réel historique porte le préfixe mcp:.
+Bridget réutilise la borne existante de SessionProof : identifiant non vide,
+au plus 2048 octets, sans contrôle. Les contrôles de connexion primaire,
+d'identité dérivée, de version, de projet et de contradiction restent inchangés.
+Aucun élargissement du panneau humain aux identifiants opaques, ni changement
+de permissions ou de propriété des tâches. Aucun changement de protocole worker.
+
+Preuve RED : 1 PASS / 1 FAIL sur l'identifiant réel mcp:, refus binding_unavailable.
+GREEN : 7 tests distincts PASS, dont identifiants UUID/mcp:/thread:mcp:, tailles et
+contrôles invalides, version, identité étrangère, auxiliaire, projet non attesté,
+ambiguïté, reconnexion et invalidation des suivis. Aucune suite complète, aucun
+fournisseur lancé par ces tests. Preuves privées :
+/home/moi/.cache/bridget-identifiants172/tests.json
+
+Revue et activation restent à qualifier ; ne pas déduire une activation des tests.
