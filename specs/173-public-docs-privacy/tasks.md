@@ -6,5 +6,5 @@
 - [x] Make public English pages the defaults and retain French editions.
 - [x] Separate original-language historical records in the documentation index.
 - [x] Add secret and documentation-link checks with negative controls.
-- [ ] Complete targeted independent review and resolve concrete findings.
-- [ ] Integrate and push the reviewed changes; record delivery limits.
+- [x] Complete targeted independent review and resolve concrete findings.
+- [x] Integrate and push the reviewed changes; record delivery limits.

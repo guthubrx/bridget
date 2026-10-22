@@ -1,6 +1,6 @@
 # 173 — Public documentation and repository privacy
 
-Status: In progress
+Status: Implemented
 Date: 2026-10-23
 
 ## Authorized scope

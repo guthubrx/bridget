@@ -1,0 +1,7 @@
+# Request maintainer review of repository hygiene controls.
+/.github/CODEOWNERS @guthubrx
+/.github/workflows/repository-hygiene.yml @guthubrx
+/.gitleaksignore @guthubrx
+/scripts/check-secrets.sh @guthubrx
+/scripts/check-docs.py @guthubrx
+/docs/public-pages.json @guthubrx

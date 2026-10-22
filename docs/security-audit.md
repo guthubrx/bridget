@@ -88,3 +88,11 @@ Unknown/custom secret formats and sensitive prose can evade automated rules.
 
 Do not use this report as a claim that the entire history was scrubbed or that
 the repository has a general security certification.
+
+This report uses the Europe/Paris date. Remaining loopback addresses and
+documentation examples are not deployment metadata.
+
+CODEOWNERS requests maintainer review for the scripts, exclusions and workflow.
+Enforcement depends on GitHub branch rules, which this task does not change.
+CI uses the proposed revision's files; it cannot defend against malicious changes
+to its own checks without trusted review.
