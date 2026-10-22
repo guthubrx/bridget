@@ -15645,9 +15645,15 @@ mod spec145_human_view_tests {
     #[test]
     fn spec172_t3_opaque_binding_preserves_identifier_and_authority_guards() {
         let id = "mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3";
-        for (index, invalid) in [String::new(), "thread\nforged".into(), "x".repeat(2049)]
-            .into_iter()
-            .enumerate()
+        for (index, invalid) in [
+            String::new(),
+            "thread\nforged".into(),
+            "mcp:\u{202e}forged".into(),
+            "mcp:\u{200b}forged".into(),
+            "x".repeat(2049),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let (state, _root, _peer) =
                 unbound_thread_fixture(&format!("badopaque172-{index}"), &invalid);
@@ -20264,11 +20270,12 @@ fn handle_wrapper_message_with_peer(
             let agent = crate::t3code::stable_uuid(&t3_thread_id);
             let instance = crate::t3code::stable_uuid(&format!("instance:{t3_thread_id}"));
             // T3 atteste aussi des identifiants opaques (mcp:…, thread:mcp:…).
-            // Même borne que SessionProof ; l'identité et le projet restent vérifiés.
+            // Borne de SessionProof, filtre de contrôles commun avec lineage.
+            // L'identité et le projet restent vérifiés.
             let valid = version == bridget_transport::protocol::HUMAN_THREAD_VIEW_VERSION
                 && !t3_thread_id.is_empty()
                 && t3_thread_id.len() <= 2048
-                && !t3_thread_id.chars().any(char::is_control)
+                && !t3_thread_id.chars().any(bridget_core::is_disallowed_control)
                 && !st.auxiliary_connections.contains(conn_id)
                 && st
                     .router

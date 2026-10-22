@@ -1135,3 +1135,13 @@ fournisseur lancé par ces tests. Preuves privées :
 /home/moi/.cache/bridget-identifiants172/tests.json
 
 Revue et activation restent à qualifier ; ne pas déduire une activation des tests.
+
+
+Revue r1 7cd09586 : invariants de sécurité confirmés ; ajustement requis sur les
+caractères de format Unicode. Réutilisation de bridget_core::is_disallowed_control
+comme lineage (Cc et Cf), sans changement de la borne 2048. Ajout U+202E et U+200B.
+RED spécifique Cf : 0 PASS / 1 FAIL. GREEN r2 : 7 tests distincts PASS, identifiants
+opaques admis et caractères invisibles refusés. Le commentaire distingue la borne
+de SessionProof de son filtre, plus permissif ; aucune modification hors liaison.
+Revue r2 et activation encore à qualifier. Preuves :
+/home/moi/.cache/bridget-identifiants172/tests-r2.json
