@@ -96,15 +96,25 @@ def atomic_json(path, value, previous=None):
         if os.path.exists(name):
             os.unlink(name)
 
-def git(root, *arguments, check=True):
+def git(root, *arguments, check=True, phase="git"):
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1",
                GIT_LFS_SKIP_SMUDGE="1")
-    result = subprocess.run(
-        ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "core.hooksPath=" + os.devnull,
-         "-c", "protocol.file.allow=always", "-C", str(root), *arguments],
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TIMEOUT)
+    timeout_code = {
+        "git": "project_preparation_git_timeout",
+        "bundle_base": "project_preparation_bundle_base_timeout",
+        "bundle_export": "project_preparation_bundle_export_timeout",
+        "bundle_verify": "project_preparation_bundle_verify_timeout",
+        "bundle_import": "project_preparation_bundle_import_timeout",
+    }[phase]
+    try:
+        result = subprocess.run(
+            ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "core.hooksPath=" + os.devnull,
+             "-c", "protocol.file.allow=always", "-C", str(root), *arguments],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise Refused(timeout_code) from None
     require(len(result.stdout) <= MAX_JSON, "project_preparation_git_output")
     if check:
         require(result.returncode == 0, "project_preparation_git_failed")
@@ -249,7 +259,14 @@ def remote_inspect(request, registry_path):
                     "project_preparation_destination_occupied")
         missing = bool(request.get("commit") and not commit_present(root, request["commit"]))
         have = git(root, "rev-parse", "HEAD", check=False).stdout.decode().strip() if missing else None
+        base = request.get("bundle_base")
+        if base is not None:
+            require(isinstance(base, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base),
+                    "project_preparation_bundle_base_invalid")
+            require(commit_present(root, base), "project_preparation_bundle_base_missing")
+            have = base if missing else None
         return dict(project_id=key, mapping=mapping, needs_bundle=missing, have_commit=have)
+    require(request.get("bundle_base") is None, "project_preparation_bundle_base_missing")
     require(request.get("commit") is not None, "project_preparation_git_required")
     return dict(project_id=key, mapping=mapping, needs_bundle=True, have_commit=None)
 
@@ -277,9 +294,9 @@ def remote_receive(request, registry_path, bundle_stream):
                     shutil.copyfileobj(bundle_stream, target, length=1024 * 1024)
                 require(bundle.stat().st_size > 0, "project_preparation_bundle_missing")
                 if root.exists():
-                    git(root, "bundle", "verify", str(bundle))
+                    git(root, "bundle", "verify", str(bundle), phase="bundle_verify")
                     git(root, "fetch", "--no-tags", "--no-write-fetch-head",
-                        "--no-recurse-submodules", str(bundle), "refs/heads/source")
+                        "--no-recurse-submodules", str(bundle), "refs/heads/source", phase="bundle_import")
                 else:
                     base = no_links(root.parent)
                     # Les nouvelles destinations sont dans le seul espace géré.
@@ -365,8 +382,13 @@ def ssh(link, request, operation, bundle=None):
                "-i", link["identity"], "-p", link["port"],
                link["user"] + "@" + link["host"], remote]
     with (open(bundle, "rb") if bundle else open(os.devnull, "rb")) as stream:
-        answer = subprocess.run(command, stdin=stream, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, timeout=TIMEOUT)
+        try:
+            answer = subprocess.run(command, stdin=stream, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            code = {"inspect": "project_preparation_ssh_inspect_timeout",
+                    "prepare": "project_preparation_ssh_prepare_timeout"}[operation]
+            raise Refused(code) from None
     require(answer.returncode == 0 and len(answer.stdout) <= MAX_JSON,
             "project_preparation_transport_failed")
     result = json.loads(answer.stdout)
@@ -385,7 +407,7 @@ def export_bundle(source, commit, destination, have_commit=None):
     if have_commit and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", have_commit) and commit_present(source, have_commit):
         if git(source, "merge-base", "--is-ancestor", have_commit, commit, check=False).returncode == 0:
             exclude = ["^" + have_commit]
-    git(scratch, "bundle", "create", str(destination), "refs/heads/source", *exclude)
+    git(scratch, "bundle", "create", str(destination), "refs/heads/source", *exclude, phase="bundle_export")
 
 def prepare(request):
     registry_path = absolute(request["registry"])
@@ -425,6 +447,7 @@ def prepare(request):
         # correspondance divergente ne peut pas créer un second projet.
         local_key, local_mapping = select_mapping(selected, request)
         request.pop("linked_checkout", None)
+        request.pop("bundle_base", None)
         mapped_source = absolute(local_mapping["source_root"])
         if commit and source != mapped_source:
             # Comme T3, l'identite du depot est son repertoire Git commun.
@@ -450,6 +473,22 @@ def prepare(request):
         local = selected.get("mappings", {}).get(result["project_id"])
         require(local is None or local == result["mapping"], "project_preparation_mapping_changed")
         request.update(mapping=result["mapping"], resolved_project_id=result["project_id"])
+        have = result.get("have_commit")
+        if result["needs_bundle"] and have and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", have) and commit_present(source, have):
+            common = git(source, "merge-base", have, commit, check=False, phase="bundle_base")
+            require(common.returncode in (0, 1), "project_preparation_git_failed")
+            base = common.stdout.decode().strip()
+            if common.returncode == 0 and base != have:
+                require(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base),
+                        "project_preparation_bundle_base_invalid")
+                request["bundle_base"] = base
+                confirmed = ssh(link, request, "inspect")
+                require(confirmed["mapping"] == result["mapping"]
+                        and confirmed["project_id"] == result["project_id"],
+                        "project_preparation_mapping_changed")
+                require(not confirmed["needs_bundle"] or confirmed.get("have_commit") == base,
+                        "project_preparation_bundle_base_missing")
+                result = confirmed
         if result["needs_bundle"]:
             require(commit is not None, "project_preparation_git_required")
             with tempfile.TemporaryDirectory(prefix="bridget-export-") as directory:

@@ -1289,3 +1289,15 @@ Objections c51603b8 traitees : retirer le recu uniquement sur absence prouvee de
 ### Livraison worktrees et Git — 22 octobre 2026
 
 Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219043. T3/pont28528/28591/898 preserves. 21 Python et 4 Rust affectes PASS, revue9fdb1dae APPROVE. Recette reelle fdd9c6e9 depuis le worktree Opus2D : hostname/package/cwd/HEAD ecef0730 conformes, marqueur emis, resultat lu/ACK et recette close. Premiere recette partielle conservee, critere shell ajoute a tort retire du contrat. Git2.56 durable pour SSH/shell/worker Cartae, 12 agents Opus2D informes, mandats T3 preserves. Trois produits temporaires Mac retires ; cinq worktrees Cartae propres/fusionnes conserves sur garde lsof incomplete. Recu : validation/worktrees-lies-20261022.md et JSON voisin.
+
+
+## Correction du 22 octobre — transfert différentiel sur branches divergentes
+
+- Périmètre : helper de préparation Git et tests ciblés ; aucune nouvelle mission Notre-Dame ni rejeu automatique.
+- Constat : si le HEAD distant n'est pas ancêtre de la base demandée, l'export existant abandonne toute exclusion et copie l'historique complet. Le timeout Notre-Dame n'est pas encore attribué à cette phase.
+- Référence T3 lue sur Mac : /Users/moi/11.Repositories/t3code/apps/server/src/vcs/GitVcsDriverCore.ts, fetchRemote 3040–3055, getReviewDiffFileContents.mergeBase 2541–2555, executeRaw 839–858. T3 laisse Git négocier les objets lors du fetch, utilise merge-base pour la base commune et garde le nom d'opération lors d'un timeout. Il ne couvre pas le transfert par bundle via la fédération SSH de Bridget.
+- Correction prévue : calculer une base commune sur la source, confirmer sa présence sur la destination par l'inspection existante, puis exporter seulement les objets postérieurs. Le worker conserve ses gardes et vérifie le bundle avant import. Les erreurs de délai indiquent une phase fermée sans exposer commande ou chemin privé.
+- RED : les trois nouveaux tests échouent sur le code initial (deux assertions et un TimeoutExpired non classé). GREEN : 24 tests Python PASS en 2,813 s sur Cartae. Le test divergent importe vraiment le commit et vérifie un bundle inférieur à 32 Kio avec un historique commun de 2 Mio, sans avancer HEAD distant.
+- Lecture réelle Opus2D : base e89b8430c17fc7f5ba2917346a7bbf36b43b3446, cible fd4cad3b5e3be49bc56f866ece6c695ed1b2d3c5, 43 commits exclusifs sur 6 914. Aucune mission Notre-Dame rejouée.
+- Documentation Git : https://git-scm.com/docs/git-bundle (prérequis et vérification), https://git-scm.com/docs/git-merge-base.
+- Revue et livraison : en cours.

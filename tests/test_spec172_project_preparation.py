@@ -176,6 +176,67 @@ class PreparationTests(unittest.TestCase):
         remote = json.loads((remote_ns / "agents.json").read_text())["machines"]["test"]["mappings"]
         return result, local, remote
 
+    def test_divergent_history_exports_only_attested_common_base(self):
+        (self.source / "history.bin").write_bytes(os.urandom(2 * 1024 * 1024))
+        prep.git(self.source, "add", "history.bin")
+        self.commit()
+        common = self.sha
+        remote = self.home / "known-project"
+        prep.git(self.home, "clone", str(self.source), str(remote))
+        (remote / "remote.txt").write_text("travail distant conserve")
+        prep.git(remote, "add", "remote.txt")
+        prep.git(remote, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                 "commit", "-m", "test: divergence distante")
+        remote_head = prep.git(remote, "rev-parse", "HEAD").stdout.decode().strip()
+        prep.git(self.source, "fetch", "--no-write-fetch-head", str(remote), "HEAD")
+        (self.source / "code.txt").write_text("branche source divergente\n")
+        self.commit()
+        self.request["commit"] = self.sha
+        self.config["machines"]["test"]["mappings"]["known"] = dict(
+            source_host="source", source_root=str(self.source), remote_root=str(remote),
+            expected_git_identity=str(self.source), mapping_revision=1)
+        exported = []
+        original = prep.export_bundle
+        def capture(source, commit, destination, have_commit=None):
+            original(source, commit, destination, have_commit)
+            data = destination.read_bytes()
+            exported.append((have_commit, data.split(b"\n\n", 1)[0], len(data)))
+        with patch.object(prep, "export_bundle", side_effect=capture):
+            self.prepare_via_federation()
+        self.assertEqual(len(exported), 1)
+        base, header, size = exported[0]
+        self.assertEqual(base, common, "la tete divergente ne doit pas imposer un export complet")
+        self.assertIn(("-" + common + " ").encode(), header)
+        self.assertLess(size, 32 * 1024)
+        self.assertTrue(prep.commit_present(remote, self.sha))
+        self.assertEqual(prep.git(remote, "rev-parse", "HEAD").stdout.decode().strip(), remote_head)
+        self.assertEqual((remote / "remote.txt").read_text(), "travail distant conserve")
+
+    def test_bundle_base_must_exist_on_destination(self):
+        self.receive()
+        (self.source / "code.txt").write_text("commit absent de la destination\n")
+        self.commit()
+        self.request.update(commit=self.sha, bundle_base=self.sha)
+        with self.assertRaisesRegex(prep.Refused, "bundle_base_missing"):
+            self.inspect()
+        self.request["bundle_base"] = "--all"
+        with self.assertRaisesRegex(prep.Refused, "bundle_base_invalid"):
+            self.inspect()
+
+    def test_preparation_timeouts_identify_operation(self):
+        timeout = subprocess.TimeoutExpired(["private-argument"], prep.TIMEOUT)
+        with patch.object(subprocess, "run", side_effect=timeout):
+            with self.assertRaisesRegex(prep.Refused, "project_preparation_git_timeout"):
+                prep.git(self.source, "rev-parse", "HEAD")
+            with self.assertRaisesRegex(prep.Refused, "project_preparation_bundle_export_timeout"):
+                prep.git(self.source, "bundle", "create", "ignored", phase="bundle_export")
+            link = dict(remote_root=str(self.home), known_hosts="/private-hosts",
+                        identity="/private-key", port="22", user="moi", host="test")
+            for operation in ("inspect", "prepare"):
+                with self.subTest(operation=operation):
+                    with self.assertRaisesRegex(prep.Refused, "project_preparation_ssh_" + operation + "_timeout"):
+                        prep.ssh(link, self.request, operation)
+
     def test_master_to_remote_without_t3_or_project_mapping(self):
         result, local, remote = self.prepare_via_federation()
         self.assertEqual(local, remote)
