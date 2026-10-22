@@ -121,26 +121,30 @@ struct Relay {
     thread: Option<thread::JoinHandle<()>>,
     workers: mpsc::Receiver<WorkerConnection>,
     ready_delayed: Arc<AtomicBool>,
+    result_slot_delayed: Arc<AtomicBool>,
 }
 
 impl Relay {
     fn new(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, false, false, false)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, false, false, false, Duration::ZERO)
     }
     fn with_ready_delay(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
-        Self::with_worker_capability(front, daemon, ready_delay, false, false, false)
+        Self::with_worker_capability(front, daemon, ready_delay, false, false, false, Duration::ZERO)
     }
     fn with_ready_delay_lease172(front: &Path, daemon: PathBuf, ready_delay: Duration) -> Self {
-        Self::with_worker_capability(front, daemon, ready_delay, true, true, true)
+        Self::with_worker_capability(front, daemon, ready_delay, true, true, true, Duration::ZERO)
+    }
+    fn with_result_slot_delay(front: &Path, daemon: PathBuf, delay: Duration) -> Self {
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true, true, delay)
     }
     /// Force l'annonce de capacité sur ce relais de recette, sans modifier le
     /// daemon réel ni son build. Le worker doit négocier l'enveloppe distincte avant
     /// de recevoir le probe.
     fn with_candidate_probe(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true, false, false)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, false, false, Duration::ZERO)
     }
     fn with_candidate_probe_v2(front: &Path, daemon: PathBuf) -> Self {
-        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true, false)
+        Self::with_worker_capability(front, daemon, Duration::ZERO, true, true, false, Duration::ZERO)
     }
     fn with_worker_capability(
         front: &Path,
@@ -149,6 +153,7 @@ impl Relay {
         candidate_probe_feature: bool,
         candidate_probe_v2_feature: bool,
         release_lease_feature: bool,
+        result_slot_delay: Duration,
     ) -> Self {
         let listener = UnixListener::bind(front).unwrap();
         fs::set_permissions(front, fs::Permissions::from_mode(0o600)).unwrap();
@@ -158,6 +163,8 @@ impl Relay {
         let (sender, workers) = mpsc::channel();
         let ready_delayed = Arc::new(AtomicBool::new(false));
         let delayed = ready_delayed.clone();
+        let result_slot_delayed = Arc::new(AtomicBool::new(false));
+        let slot_delayed = result_slot_delayed.clone();
         let stopped = stop.clone();
         let tracked = sockets.clone();
         let thread = thread::spawn(move || {
@@ -170,6 +177,7 @@ impl Relay {
                         let sender = sender.clone();
                         let tracked = tracked.clone();
                         let delayed = delayed.clone();
+                        let slot_delayed = slot_delayed.clone();
                         connections.push(thread::spawn(move || {
                             let started = Instant::now();
                             let mut stage = "accept";
@@ -228,7 +236,7 @@ impl Relay {
                                     // Le faux maître162 ne simule pas le bail de slot172.
                                     // Les cas sans relais gardent la négociation complète.
                                     features.retain(|feature| feature != "worker_candidate_probe_v2"
-                                        && feature != "worker_result_slot_deadline_v1"
+                                        && (!result_slot_delay.is_zero() || feature != "worker_result_slot_deadline_v1")
                                         && (release_lease_feature || feature != "worker_release_lease_v2"));
                                     if candidate_probe_feature && !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
                                         features.push("worker_candidate_probe_v1".into());
@@ -252,7 +260,7 @@ impl Relay {
                                 let worker = match serde_json::from_str::<WrapperToDaemon>(&first) {
                                     Ok(WrapperToDaemon::WorkerHello { hello }) => Some((hello, false, false)),
                                     Ok(WrapperToDaemon::WorkerHelloWithCapabilities { hello })
-                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2|WorkerCapability::ReleaseLeaseV2|WorkerCapability::ParentSourceProofV1)) =>
+                                        if hello.capabilities.iter().all(|capability| matches!(capability,WorkerCapability::CandidateProbeV1|WorkerCapability::CandidateProbeV2|WorkerCapability::ReleaseLeaseV2|WorkerCapability::ParentSourceProofV1|WorkerCapability::ResultSlotDeadlineV1)) =>
                                     {
                                         Some((hello.hello, hello.capabilities.contains(&WorkerCapability::CandidateProbeV1),
                                             hello.capabilities.contains(&WorkerCapability::CandidateProbeV2)))
@@ -261,7 +269,7 @@ impl Relay {
                                 };
                                 let worker_connection = worker.is_some();
                                 if let Some((hello, candidate_probe, candidate_probe_v2)) = worker
-                                    && ready_delay.is_zero()
+                                    && ready_delay.is_zero() && result_slot_delay.is_zero()
                                 {
                                     sender
                                         .send((reader, hello, candidate_probe, candidate_probe_v2))
@@ -274,7 +282,23 @@ impl Relay {
                                 let mut back_reader = backend.try_clone()?;
                                 let mut client_writer = reader.get_ref().try_clone()?;
                                 let reverse = thread::spawn(move || {
-                                    let _ = io::copy(&mut back_reader, &mut client_writer);
+                                    if worker_connection && !result_slot_delay.is_zero() {
+                                        let mut lines = BufReader::new(back_reader);
+                                        loop {
+                                            let mut frame = String::new();
+                                            if lines.read_line(&mut frame).unwrap_or(0) == 0 { break; }
+                                            if matches!(serde_json::from_str::<DaemonToWrapper>(&frame),
+                                                Ok(DaemonToWrapper::WorkerRequest { request: WorkerRequest {
+                                                    request: WorkerRequestOperation::ReserveResultSlotUntil { .. }, .. } }))
+                                                && !slot_delayed.swap(true, Ordering::AcqRel)
+                                            {
+                                                thread::sleep(result_slot_delay);
+                                            }
+                                            if client_writer.write_all(frame.as_bytes()).is_err() { break; }
+                                        }
+                                    } else {
+                                        let _ = io::copy(&mut back_reader, &mut client_writer);
+                                    }
                                     let _ = client_writer.shutdown(Shutdown::Both);
                                 });
                                 if worker_connection && !ready_delay.is_zero() {
@@ -331,6 +355,7 @@ impl Relay {
             thread: Some(thread),
             workers,
             ready_delayed,
+            result_slot_delayed,
         }
     }
 
@@ -1805,6 +1830,11 @@ fn remote162_e2e_delegate_maitre_reel_resultat_unique_cwd_et_modele() {
 }
 
 #[test]
+fn spec172_remote_result_slot_waits_for_busy_channel_without_duplicate() {
+    real_master_case("slot-delay172");
+}
+
+#[test]
 fn spec172_remote_wrapper_survives_master_restart_without_second_provider() {
     real_master_case("master-restart172");
 }
@@ -1951,6 +1981,11 @@ fn real_master_case(case: &str) {
         f.front = f.fixture.root.join("state/worker.sock");
         f.relay = Some(Relay::with_ready_delay_lease172(
             &f.front, socket.clone(), Duration::from_secs(6),
+        ));
+    } else if case == "slot-delay172" {
+        f.front = f.fixture.root.join("state/worker.sock");
+        f.relay = Some(Relay::with_result_slot_delay(
+            &f.front, socket.clone(), Duration::from_secs(4),
         ));
     } else if case == "startup-failed" {
         support::private_write(&f.fixture.root.join("fail-init162"), b"fail").unwrap();
@@ -2175,6 +2210,11 @@ fn real_master_case(case: &str) {
     let marker = receipt.marker.unwrap();
     f.fixture.native_groups.push(marker.clone());
     assert!(receipt.permit.is_some());
+    if case == "slot-delay172" {
+        assert!(f.relay.as_ref().unwrap().result_slot_delayed.load(Ordering::Acquire));
+        assert_eq!(task["remote_result_slots"].as_array().unwrap().len(), 1);
+        assert!(created["error"].is_null(), "réservation retardée : {created}");
+    }
     if matches!(case, "worktree172" | "late-ready172") {
         let permit = receipt.permit.as_ref().unwrap();
         assert_eq!(permit.expires_at - permit.issued_at, WORKER_RELEASE_LEASE_SECS);

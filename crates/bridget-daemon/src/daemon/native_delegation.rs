@@ -4872,6 +4872,9 @@ fn remote_mission_message(task: &Task) -> Result<bridget_core::BridgetMessage, S
     Ok(message)
 }
 
+// Le canal partage ses sondes ; garder une marge bornée dans le bail de démarrage de 60 s.
+const REMOTE_RESULT_SLOT_TIMEOUT: Duration = Duration::from_secs(15);
+
 fn reserve_remote_result_slot(
     state: &Arc<Mutex<DaemonState>>,
     task_id: &str,
@@ -4945,7 +4948,7 @@ fn reserve_remote_result_slot(
     if existing {
         return Ok(proof);
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + REMOTE_RESULT_SLOT_TIMEOUT;
     let operation = if deadline_supported {
         let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64).unwrap_or(0);
@@ -23125,8 +23128,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 match &request.request {
                     WorkerRequestOperation::ReserveResultSlotUntil { expires_at_ms, .. } if bounded => {
                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
-                        assert!(*expires_at_ms > now && *expires_at_ms <= now + 3000,
-                            "échéance en millisecondes encore valide et bornée à trois secondes");
+                        assert!(*expires_at_ms > now + 10_000 && *expires_at_ms <= now + 15_000,
+                            "échéance commune au RPC et au worker, bornée à quinze secondes");
                     }
                     WorkerRequestOperation::ReserveResultSlot { .. } if !bounded => {}
                     other => panic!("opération incompatible avec la capacité négociée : {other:?}"),

@@ -1329,3 +1329,14 @@ Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219
 ### Livraison du checkout sous le parent — 22 octobre 2026
 
 Source a4640b463e943daf8f44f540f571a85dd3279918 intégrée et poussée ; 31 tests Python ciblés PASS, contre-revue finale a0b9b462 APPROVE. Maître 172-a4640b46 actif PID76289, signature et SHA-256 vérifiés. Le worker2219043, le pont898 et T3 28528/28591 sont préservés. La mission Notre-Dame28da9844 conserve instance/génération, wrapper2350358 et fournisseur2351171 pendant le remplacement ; son résultat est ensuite disponible sans erreur. Aucun rejeu métier par ce fil. La demande de qualification auprès du propriétaire a expiré sans retour et le checkout a avancé de fd4cad3b vers559cec75 : l’ancienne enveloppe n’est pas forcée, cette reprise fournisseur reste non vérifiée. Résultat envoyé au propriétaire et à l’intégrateur, reçus initiaux en remise en vol sans lecture confirmée. Archive source de compilation et prototype Mac retirés après lsof complet ; rollback, preuves, cache Cargo et worktrees Cartae conservés. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/parent-worktree-20261022.md et JSON voisin.
+
+
+## Correction du 22 octobre — réservation du résultat sur un canal occupé
+
+La tâche e6283066-7755-4d6b-be16-54f3f167d6a8 est terminale et nettoyée, sans permis de remise ni résultat. Aucun rejeu métier. Le journal worker montre une sonde de4,318s dans la fenêtre du refus ; la réservation partage ce consommateur mais n’attendait que3s. Le journal ne prouve pas à lui seul la causalité historique.
+
+Référence T3 lue : /Users/moi/11.Repositories/t3code/apps/server/src/provider/acp/AcpSessionRuntime.ts, lignes65–67,734–749,935–950 sur ef86c2bbc3388be8fc593db23a323e3d80b58509. T3 applique des budgets bornés par opération et traite l’absence de réponse sans replay métier. Il n’a pas de réservation de résultat d’un worker distant. Bridget garde son contrat d’échéance commune maître/worker et le nettoyage existant.
+
+Reproduction de bout en bout : vrai maître, vrai worker, transport Unix réel ; relais de fixture qui retarde de4s la première demande ReserveResultSlotUntil. Fournisseur simulé hors réseau. Sur la production initiale, le test échoue avec le code exact remote_start_failed:remote_result_slot:WorkerUnavailable avant remise. Le correctif porte le budget à15s, inférieur au bail de démarrage de60s. Aucun réessai automatique, élargissement de droits ni changement de protocole. Tests affectés, revue et activation en cours.
+
+GREEN : le même test E2E termine avec résultat unique et rejeu strict identique. Deux tests de négociation/erreur et les tests worker172_inbound_ sont PASS, dont les refus expirés après file et verrou, annulation et saturation. Fournisseur simulé, aucun appel API. Les empreintes des sources et le journal RED sont conservés hors Git. Revue et activation à suivre.
