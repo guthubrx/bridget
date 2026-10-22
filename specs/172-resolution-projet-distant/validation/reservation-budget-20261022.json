@@ -1,0 +1,125 @@
+{
+  "source": "cbc034bd8fa5f8d8699f2f621955df8c831426e2",
+  "build_id": "172-cbc034bd",
+  "binary_sha256": "5d09a527e3a93484d1c843211275608f8f8eeb3beb28da26f0b2eaf056c38089",
+  "build_seconds": 116.98694145900663,
+  "activated": true,
+  "master_pid": 13340,
+  "protected_preserved": true,
+  "worker_pid": 2219043,
+  "worker_restarted": false,
+  "held_missions_preserved": true,
+  "held_missions": [
+    {
+      "command_id": "28da9844-0695-4f99-9159-b9beeab9bd6d",
+      "task_id": "28da9844-0695-4f99-9159-b9beeab9bd6d",
+      "instance_id": "16d0114e-70be-402f-902a-1d0f3aaa1a5a",
+      "generation": 714
+    },
+    {
+      "command_id": "e8df00b4-e3b4-482c-83bc-4f305ea2ac28",
+      "task_id": "e8df00b4-e3b4-482c-83bc-4f305ea2ac28",
+      "instance_id": "9040d937-11c0-4981-b060-8cad093253df",
+      "generation": 718
+    }
+  ],
+  "tests": {
+    "passed": 17,
+    "e2e": 1,
+    "wire_and_messages": 2,
+    "worker": 14,
+    "full_suite": false
+  },
+  "review": {
+    "task_id": "74f5eb18-7220-46c5-b124-d5a11df5a54c",
+    "verdict": "APPROVE"
+  },
+  "live": {
+    "task_id": "9d13c023-eed1-4522-8e73-d7962132766c",
+    "marker": "BRIDGET172_SLOT_BUDGET_LIVE_OK",
+    "strict_replay_same_task": true,
+    "strict_replay_same_result": true,
+    "closed": true
+  },
+  "closed_tasks": [
+    {
+      "task_id": "74f5eb18-7220-46c5-b124-d5a11df5a54c",
+      "state": "result_available",
+      "error": null,
+      "cleanup_done": true,
+      "guarded": false,
+      "guard_released": false,
+      "delivery_acked": false
+    },
+    {
+      "task_id": "9d13c023-eed1-4522-8e73-d7962132766c",
+      "state": "result_available",
+      "error": null,
+      "cleanup_done": true,
+      "guarded": false,
+      "guard_released": false,
+      "delivery_acked": false
+    }
+  ],
+  "notifications": [
+    {
+      "to": "f0c70e4e-7023-450c-b5c5-1f9d6bf7660a",
+      "receipt": {
+        "delivery_id": "4ecf1a9a-c289-4ef9-a93a-d1f4f3bb38e8",
+        "id": "mcp-59331-6ada1310-1",
+        "issued_at": 1792676624,
+        "project_warnings": [
+          {
+            "code": "cross_project",
+            "reason": "Informer les responsables Opus2D du correctif de réservation actif et de la continuité de leurs missions.",
+            "recipient": "f0c70e4e-7023-450c-b5c5-1f9d6bf7660a",
+            "recipient_project": {
+              "host": "monordinateur",
+              "root": "/Users/moi/Nextcloud/10.Scripts/69.opus2D/.git"
+            },
+            "sender_project": {
+              "host": "monordinateur",
+              "root": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.git"
+            }
+          }
+        ],
+        "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer",
+        "status": "in_flight"
+      }
+    },
+    {
+      "to": "af5ff0db-b846-45a2-8158-c4ab53a89b84",
+      "receipt": {
+        "delivery_id": "38cda581-89d6-4833-9c64-a93ab6974840",
+        "id": "mcp-59331-6ada1310-2",
+        "issued_at": 1792676624,
+        "project_warnings": [
+          {
+            "code": "cross_project",
+            "reason": "Informer les responsables Opus2D du correctif de réservation actif et de la continuité de leurs missions.",
+            "recipient": "af5ff0db-b846-45a2-8158-c4ab53a89b84",
+            "recipient_project": {
+              "host": "monordinateur",
+              "root": "/Users/moi/Nextcloud/10.Scripts/69.opus2D/.git"
+            },
+            "sender_project": {
+              "host": "monordinateur",
+              "root": "/Users/moi/Nextcloud/10.Scripts/64.bridget/.git"
+            }
+          }
+        ],
+        "reason": "remise en vol — le destinataire n'a pas encore accusé ; rejouer à l'identique — même id, même issued_at, même corps — lit le sort réel sans jamais dupliquer",
+        "status": "in_flight"
+      }
+    }
+  ],
+  "cleanup": {
+    "at": 1792676666.612861,
+    "path": "/Users/moi/.cache/bridget-slot-budget172/source",
+    "lsof_rc": 1,
+    "lsof_stdout": "",
+    "lsof_stderr": "",
+    "removed": true,
+    "logical_bytes": 96056322
+  }
+}
