@@ -1307,3 +1307,5 @@ Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219
 
 - Revue r1 : Task daab8723-2447-4de9-8c58-1d818a91a81d, APPROVE sur 10eaa0e7, trois remarques non bloquantes traitées avant livraison : tous les imports du miroir et du nouveau checkout utilisent bundle_import ; les sept codes de délai sont vérifiés à l'égalité ; la source doit connaître le HEAD distant pour calculer la base. Sans ce fait, le comportement sûr préexistant reste un bundle complet et le gain ne peut pas être promis.
 - Le délai Notre-Dame initial reste sans phase rétrospective. Le transfert réduit est mesuré ; sa causalité avec le délai initial n'est pas démontrée.
+
+- Livraison du correctif différentiel : source b8406f6c intégrée/poussée, maître 172-b8406f6c actif PID64762 ; worker2219043, pont898 et T3 inchangés. Contre-revue finale494dec67 APPROVE, 24 tests PASS, export réel7,61Mo/0,504s et vérification CartaePASS sans mission Notre-Dame. Résultat envoyé au propriétaire, aucune reprise métier lancée. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/bundles-divergents-20261022.md.

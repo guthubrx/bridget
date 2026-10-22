@@ -1,0 +1,54 @@
+{
+  "source": "b8406f6c2d2c6abf5e09493a81d1fabaa8104fb1",
+  "build_id": "172-b8406f6c",
+  "binary_sha256": "e5c325591d447ce8e71e41a1f4a52bcc417e7ae5b22b8b8588013055b076af66",
+  "master_pid": 64762,
+  "worker_pid": 2219043,
+  "worker_build": "172-76b682d6",
+  "active": true,
+  "t3_and_bridge_preserved": true,
+  "python_tests": 24,
+  "full_suite": false,
+  "review": {
+    "source": "b8406f6c2d2c6abf5e09493a81d1fabaa8104fb1",
+    "approved": true,
+    "task_id": "494dec67-0d21-4676-94cf-3e2c65937306",
+    "review_r1": "daab8723-2447-4de9-8c58-1d818a91a81d",
+    "full_result_read": true
+  },
+  "real_export": {
+    "source": "10eaa0e7f434dc83bd33d07c8284b375245844ad",
+    "target": "fd4cad3b5e3be49bc56f866ece6c695ed1b2d3c5",
+    "bundle_base": "e89b8430c17fc7f5ba2917346a7bbf36b43b3446",
+    "remote_base_confirmed": true,
+    "commits_delta": 43,
+    "commits_history": 6914,
+    "export_seconds": 0.5041355839930475,
+    "bundle_bytes": 7610389,
+    "bundle_sha256": "ae5fde76384de3592fd74081670fef4b5dba8d75df1ad183eef0baae693468e7",
+    "header": [
+      "# v2 git bundle",
+      "-e89b8430c17fc7f5ba2917346a7bbf36b43b3446 fix(158): Remplacer les prescriptions BD par le réalisme",
+      "fd4cad3b5e3be49bc56f866ece6c695ed1b2d3c5 refs/heads/source"
+    ],
+    "source_head_preserved": true,
+    "qualification": "export_real_no_business_launch",
+    "export_function_identical_in_source": "b8406f6c2d2c6abf5e09493a81d1fabaa8104fb1"
+  },
+  "remote_verify": {
+    "bundle_bytes": 7610389,
+    "bundle_sha256": "ae5fde76384de3592fd74081670fef4b5dba8d75df1ad183eef0baae693468e7",
+    "verified": true,
+    "seconds": 0.01831901492550969,
+    "remote_head_preserved": true,
+    "imported": false,
+    "task_launched": false
+  },
+  "notification": {
+    "to": "af5ff0db-b846-45a2-8158-c4ab53a89b84",
+    "id": "bridget172-bundle-differentiel-actif-monuments-20261022-r1",
+    "issued_at": 1792670502,
+    "status": "in_flight"
+  },
+  "business_replay": false
+}
