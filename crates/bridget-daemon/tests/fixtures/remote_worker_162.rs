@@ -223,7 +223,10 @@ impl Relay {
                                     let DaemonToWrapper::DaemonIdentityReport { features, .. } = &mut identity else {
                                         return Err(io::Error::other("identité maître inattendue"));
                                     };
+                                    // Le faux maître162 ne simule pas le bail de slot172.
+                                    // Les cas maître réel gardent la négociation complète.
                                     features.retain(|feature| feature != "worker_candidate_probe_v2"
+                                        && feature != "worker_result_slot_deadline_v1"
                                         && (release_lease_feature || feature != "worker_release_lease_v2"));
                                     if candidate_probe_feature && !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
                                         features.push("worker_candidate_probe_v1".into());
@@ -1642,9 +1645,11 @@ fn remote162_e2e_permis_expire_et_coupure_avant_release_sans_fournisseur() {
                     reason: WorkerRefusal::PlacementMismatch
                 }
             );
-        } else {
-            // Vrai délai depuis Ready ; aucun passage forcé à l'état terminal.
-            thread::sleep(Duration::from_millis(5200));
+        } else if case == "expiry" {
+            // Vrai bail depuis Ready, désormais 60 s ; aucun état forcé.
+            thread::sleep(Duration::from_millis(
+                u64::try_from(WORKER_RELEASE_LEASE_SECS).unwrap() * 1000 + 200,
+            ));
         }
         control.await_phase(&command, WorkerCommandPhase::Terminal);
         assert!(
@@ -1798,10 +1803,63 @@ fn remote162_e2e_delegate_maitre_reel_resultat_unique_cwd_et_modele() {
 }
 
 #[test]
+fn spec172_remote_wrapper_survives_master_restart_without_second_provider() {
+    real_master_case("master-restart172");
+}
+
+#[test]
 fn spec172_parent_natif_auto_sans_t3_resout_projet_et_attend_ready() {
     for case in ["worktree172", "late-ready172"] {
         real_master_case(case);
     }
+}
+
+fn real_master_parent(
+    f: &mut RemoteFixture,
+    socket: &Path,
+    host: &str,
+    origin: &Path,
+) -> support::Client {
+    let mut parent = support::Client::connect(socket);
+    parent.send(WrapperToDaemon::Register {
+        agent_type: "fake-codex".into(),
+        identity_version: 2,
+        agent_id: PARENT.into(),
+        host: Some(host.to_owned()),
+        transport: Some("codex_app_server".into()),
+        channel: None.into(),
+        mode: Some(PresenceMode::Acp),
+        location: None,
+        os: Some("test".into()),
+        instance_id: Some(INSTANCE.into()),
+        domain: None,
+        journal_available: None,
+        turn_in_progress: false,
+        turn_attest: false,
+        queue_fallback: false,
+    });
+    let DaemonToWrapper::Registered {
+        agent_id,
+        credential: Some(credential),
+    } = parent.receive()
+    else {
+        panic!("parent réel162 non enregistré");
+    };
+    assert_eq!(agent_id, PARENT);
+    support::save_fixture_credential(&socket, PARENT, INSTANCE, credential);
+    let observation = uuid::Uuid::new_v4().to_string();
+    parent.send(WrapperToDaemon::NativePermissionFact {
+        fact: Some(ProviderPermissions { version: 1, source: "native_wrapper".into(), run_id: "parent-turn162".into(),
+            provider_session_id: "parent-session162".into(), provider_instance_id: INSTANCE.into(), revision: 1,
+            driver: "codex_app_server".into(), cwd: origin.to_string_lossy().into_owned(),
+            runtime_mode: "full-access".into(), interaction_mode: "default".into(),
+            provider_policy: json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}}) }),
+        request_id: None, observation_id: Some(observation.clone()), unavailable_code: None,
+    });
+    assert!(
+        matches!(f.fixture.receive(&mut parent), DaemonToWrapper::NativePermissionAcknowledged { observation_id, accepted: true } if observation_id == observation)
+    );
+    parent
 }
 
 fn real_master_case(case: &str) {
@@ -1892,45 +1950,7 @@ fn real_master_case(case: &str) {
     }
     f.spawn_worker();
 
-    let mut parent = support::Client::connect(&socket);
-    parent.send(WrapperToDaemon::Register {
-        agent_type: "fake-codex".into(),
-        identity_version: 2,
-        agent_id: PARENT.into(),
-        host: Some(host),
-        transport: Some("codex_app_server".into()),
-        channel: None.into(),
-        mode: Some(PresenceMode::Acp),
-        location: None,
-        os: Some("test".into()),
-        instance_id: Some(INSTANCE.into()),
-        domain: None,
-        journal_available: None,
-        turn_in_progress: false,
-        turn_attest: false,
-        queue_fallback: false,
-    });
-    let DaemonToWrapper::Registered {
-        agent_id,
-        credential: Some(credential),
-    } = parent.receive()
-    else {
-        panic!("parent réel162 non enregistré");
-    };
-    assert_eq!(agent_id, PARENT);
-    support::save_fixture_credential(&socket, PARENT, INSTANCE, credential);
-    let observation = uuid::Uuid::new_v4().to_string();
-    parent.send(WrapperToDaemon::NativePermissionFact {
-        fact: Some(ProviderPermissions { version: 1, source: "native_wrapper".into(), run_id: "parent-turn162".into(),
-            provider_session_id: "parent-session162".into(), provider_instance_id: INSTANCE.into(), revision: 1,
-            driver: "codex_app_server".into(), cwd: origin.to_string_lossy().into_owned(),
-            runtime_mode: "full-access".into(), interaction_mode: "default".into(),
-            provider_policy: json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}}) }),
-        request_id: None, observation_id: Some(observation.clone()), unavailable_code: None,
-    });
-    assert!(
-        matches!(f.fixture.receive(&mut parent), DaemonToWrapper::NativePermissionAcknowledged { observation_id, accepted: true } if observation_id == observation)
-    );
+    let mut parent = real_master_parent(&mut f, &socket, &host, &origin);
     let mut request = delegate(&origin, "nominal162-unique", "NATIVE162_NOMINAL");
     let NativeDelegationRequest::Delegate {
         machine_id,
@@ -2193,6 +2213,22 @@ fn real_master_case(case: &str) {
     assert_eq!(task["remote_placement"]["origin_cwd"], json!(origin));
     assert_eq!(task["definition"]["protocol"], "codex_app_server");
     assert_eq!(f.starts(&command.instance_id), 1);
+    if case == "master-restart172" {
+        let worker_pid = f.worker.as_ref().unwrap().0.id();
+        let provider_birth = process_birth(provider_pid).unwrap();
+        f.fixture.stop();
+        f.start_master_with_one_slot();
+        parent = real_master_parent(&mut f, &socket, &host, &origin);
+        // Le fournisseur travaille encore derrière la porte de résultat.
+        // Une reconnexion ne peut ni le remplacer, ni fermer le groupe distant.
+        assert!(f.worker.as_mut().unwrap().0.try_wait().unwrap().is_none());
+        assert_eq!(f.worker.as_ref().unwrap().0.id(), worker_pid);
+        assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
+        assert_eq!(process_birth(provider_pid).unwrap(), provider_birth);
+        assert_eq!(f.receipt(&command).identity, command);
+        assert_eq!(f.receipt(&command).phase, WorkerCommandPhase::Released);
+        assert_eq!(f.starts(&command.instance_id), 1);
+    }
     // Un rejeu de la vraie admission garde la même mission et ne redélivre pas.
     let replay = f.fixture.request(&mut parent, request);
     assert_eq!(replay["task_id"], task_id);

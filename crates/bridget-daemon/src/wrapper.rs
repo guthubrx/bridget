@@ -4745,7 +4745,13 @@ fn launch_session_with_status(
         }
         match read_result {
             Ok(0) => {
-                if native_bootstrap.is_some() && !forward_child_requests {
+                // Le worker distant conserve le processus et le résultat durable.
+                // Une coupure du maître ne ferme pas cette mission ; un arrêt
+                // explicite et le signal natif conservent leur effet.
+                if native_bootstrap.is_some()
+                    && !forward_child_requests
+                    && remote_result_context.is_none()
+                {
                     break;
                 }
                 relay.reset_generation();
@@ -5086,7 +5092,13 @@ fn launch_session_with_status(
             }
             Err(error) => {
                 warn!("connexion daemon ACP perdue : {error}");
-                if native_bootstrap.is_some() && !forward_child_requests {
+                // Le worker distant conserve le processus et le résultat durable.
+                // Une coupure du maître ne ferme pas cette mission ; un arrêt
+                // explicite et le signal natif conservent leur effet.
+                if native_bootstrap.is_some()
+                    && !forward_child_requests
+                    && remote_result_context.is_none()
+                {
                     break;
                 }
                 relay.reset_generation();

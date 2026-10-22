@@ -1156,3 +1156,43 @@ Recette du contexte opaque encore attendue à ce checkpoint. Reçu :
 Recette réelle close : appel officiel unique bridget_capabilities réussi depuis
 le fil mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3 à 09:38:18 CEST.
 Aucun refus d'attestation ; aucune mission créée. Le reçu ci-dessus est actualisé.
+
+
+### 22 octobre 2026 — Coupure du maître pendant une mission distante
+
+Incident établi sur la ronde2 de la Task1ff9a4d5 : ACK fournisseur acquis,
+mais turn_end/cancelled à 09:36:55 CEST exactement à l'arrêt du maître.
+Le worker reste vivant ; son wrapper natif sort sur EOF lorsque child_requests=deny.
+La conservation du runtime worker ne suffisait donc pas à conserver le fournisseur.
+Le contrôle de livraison précédent ne prouvait que les identités et les compteurs
+persistés. Il est insuffisant ; ne pas le présenter comme preuve d'exécution continue.
+Worktree e7d6d67b propre et journal original préservés. Aucun résultat2 final publié.
+
+Référence T3 lue :
+/Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts
+(prepareForShutdown prépare une continuation durable ; recover réconcilie les états).
+T3 traite explicitement le cycle complet, pas seulement le processus central.
+Bridget dispose d'un worker qui demeure en ligne : son wrapper peut conserver le même
+fournisseur et réutiliser reconnect_managed_session, sans nouvelle admission ni reprise
+métier. Différence requise par la séparation maître Mac / fournisseur Cartae.
+Seul un WorkerResultContext validé utilise cette reconnexion. Les natifs locaux gardent
+leur contrat152 ; Disconnect explicite et signal d'arrêt continuent d'arrêter la mission.
+Aucune modification de politique, de droits ni de protocole worker.
+
+Preuve isolée : vrai daemon, worker, wrapper et fournisseur fermé sans réseau.
+Nouveau test spec172_remote_wrapper_survives_master_restart_without_second_provider :
+RED 0 PASS/1 FAIL (processus fournisseur absent après restart) ; GREEN 1 PASS.
+Il exige le même PID/naissance fournisseur, le même wrapper/worker et la même commande,
+puis un résultat unique après reconnexion, sans second lancement ni deuxième tour.
+Le test réemploie les contrôles de rejeu et de résultat de real_master_case.
+Régressions, revue et activation encore à qualifier à ce checkpoint.
+Preuves privées : /home/moi/.cache/bridget-remise1ff172.
+
+Validation finale du delta : quatre tests E2E distincts PASS, sans suite complète.
+La recette historique162 annonçait le bail de slot172 sans le simuler : refus
+WorkerHello avant tout scénario. Son relais masque maintenant cette capacité,
+et son cas d'expiration attend le vrai bail60s au lieu des anciennes5s. Les cas
+maître réel conservent la négociation complète. Aucune tolérance ajoutée au runtime.
+Clôture façades effectuée une seule fois par son propriétaire : cancelled,
+cleanup_done=true, guard_released=true, six commits propres conservés sur e7d6d67b.
+Aucun résultat2 ni mission de remplacement. Revue et activation restent attendues.
