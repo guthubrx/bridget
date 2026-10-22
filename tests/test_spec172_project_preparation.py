@@ -261,6 +261,47 @@ class PreparationTests(unittest.TestCase):
         self.request.update(source_root=str(checkout), cwd=str(checkout), commit=commit)
         return checkout, remote, remote / checkout.relative_to(self.source)
 
+    def test_parent_root_prepares_requested_linked_worktree(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        expected = self.request["commit"]
+        self.request["source_root"] = str(self.source)
+        result, local, distant = self.prepare_via_federation()
+        self.assertEqual(result["project_id"], "known")
+        self.assertEqual(local, distant)
+        self.assertEqual(len(local), 1)
+        self.assertEqual(local["known"]["source_root"], str(self.source))
+        self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), expected)
+        self.assertEqual(prep.git(checkout, "rev-parse", "HEAD").stdout.decode().strip(), expected)
+        self.assertEqual(prep.git(remote, "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
+        self.assertEqual(prep.git(self.source, "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
+
+    def test_parent_root_does_not_adopt_nested_independent_repository(self):
+        nested = self.source / "independent"
+        nested.mkdir()
+        prep.git(nested, "init")
+        self.request["cwd"] = str(nested)
+        with patch.object(prep, "ssh", side_effect=AssertionError("transport interdit")):
+            with self.assertRaisesRegex(prep.Refused, "git_root_outside_parent"):
+                self.prepare_via_federation()
+
+    def test_parent_subdirectory_does_not_authorize_ancestor_checkout(self):
+        checkout, _, _ = self.mapped_linked_worktree()
+        subdirectory = checkout / "scoped-subdirectory"
+        subdirectory.mkdir()
+        self.request.update(source_root=str(subdirectory), cwd=str(subdirectory))
+        with patch.object(prep, "ssh", side_effect=AssertionError("transport interdit")):
+            with self.assertRaisesRegex(prep.Refused, "git_root_outside_parent"):
+                self.prepare_via_federation()
+
+    def test_parent_root_does_not_authorize_external_linked_worktree(self):
+        self.mapped_linked_worktree()
+        external = self.base / "external-checkout"
+        prep.git(self.source, "worktree", "add", "--detach", str(external), self.request["commit"])
+        self.request.update(source_root=str(self.source), cwd=str(external))
+        with patch.object(prep, "ssh", side_effect=AssertionError("transport interdit")):
+            with self.assertRaisesRegex(prep.Refused, "cwd_outside_parent_project"):
+                self.prepare_via_federation()
+
     def test_linked_worktree_preparation_preserves_main_and_replays(self):
         checkout, remote, target = self.mapped_linked_worktree()
         (remote / "local.txt").write_text("travail principal conserve")

@@ -422,7 +422,12 @@ def prepare(request):
         require(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) is not None,
                 "expected_base_commit_invalid")
         top = Path(git(cwd, "rev-parse", "--show-toplevel").stdout.decode().strip())
-        require(top == source, "project_preparation_git_root_outside_parent")
+        require(top == source or (contained(top, source)
+                and no_links(top / ".git").is_file()
+                and git_common_dir(top) == git_common_dir(source)),
+                "project_preparation_git_root_outside_parent")
+        source = top
+        request["source_root"] = str(source)
         require(commit_present(source, commit), "expected_base_commit_mismatch")
     with locked(registry_path.parent / "project-preparation.lock"):
         _, registry = registry_read(registry_path)

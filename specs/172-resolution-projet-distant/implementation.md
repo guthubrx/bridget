@@ -1309,3 +1309,14 @@ Source76b682d6 fusionnee/poussee, build172-76b682d6 actif Mac68244 et Cartae2219
 - Le délai Notre-Dame initial reste sans phase rétrospective. Le transfert réduit est mesuré ; sa causalité avec le délai initial n'est pas démontrée.
 
 - Livraison du correctif différentiel : source b8406f6c intégrée/poussée, maître 172-b8406f6c actif PID64762 ; worker2219043, pont898 et T3 inchangés. Contre-revue finale494dec67 APPROVE, 24 tests PASS, export réel7,61Mo/0,504s et vérification CartaePASS sans mission Notre-Dame. Résultat envoyé au propriétaire, aucune reprise métier lancée. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/bundles-divergents-20261022.md.
+
+
+## Correction du 22 octobre — checkout demandé sous le projet parent
+
+- Cas réel : la couverture a5c3607c-e4d3-42ab-815d-54d0a0b0ac6c tourne sur Cartae depuis le cwd racine. Sa contre-revue depuis /Users/moi/Nextcloud/10.Scripts/69.opus2D/.worktrees/158-monuments-realistes est refusée avant Task avec project_preparation_git_root_outside_parent. Aucun rejeu ni interruption de couverture par ce lot.
+- Cause vérifiée : prepare_routing_projects transmet parent.cwd comme source_root. prepare() exigeait top == source_root même si cwd désignait un checkout lié inclus dans le projet autorisé.
+- Référence T3 relue : /Users/moi/11.Repositories/t3code/apps/server/src/vcs/GitVcsDriverCore.ts, resolveRepositoryPathsUncached 1038–1110. T3 résout séparément commonDir et worktreeRoot depuis le cwd demandé. Bridget réutilise cette séparation avec une contrainte supplémentaire : checkout contenu dans la portée du parent et même répertoire Git commun.
+- Correction : le helper conserve la limite d'accès d'origine puis résout source_root vers le checkout demandé uniquement si inclus, .git fichier sans lien symbolique et répertoire Git commun identique. Le registre des mappings et l'attestation du parent restent inchangés. Un sous-dossier parent ne donne aucun droit sur son ancêtre.
+- RED ciblé : le cas parent-racine/cwd-worktree reproduit le refus exact. Quatre tests couvrent le succès et les refus dépôt imbriqué indépendant, parent borné à un sous-dossier et worktree externe. Tests, revue et livraison en cours.
+
+- GREEN : 28 tests Python ciblés PASS sur Cartae. Le checkout lié attendu est préparé avec un seul mapping, les deux principaux restent inchangés et les trois refus ont lieu avant tout transport.
