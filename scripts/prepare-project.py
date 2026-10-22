@@ -175,7 +175,10 @@ def linked_checkout_target(mapping, request):
     relative = request.get("linked_checkout")
     if relative is None:
         return None
-    source = absolute(request["source_root"])
+    source = absolute(request.get("checkout_root", request["source_root"]))
+    require(contained(source, absolute(request["source_root"]))
+            and contained(absolute(request["cwd"]), source),
+            "project_preparation_git_identity_mismatch")
     mapped = absolute(mapping["source_root"])
     require(contained(source, mapped) and source != mapped and request.get("commit"),
             "project_preparation_git_identity_mismatch")
@@ -194,7 +197,8 @@ def prepare_linked_checkout(root, mapping, request, registry_path):
     target = linked_checkout_target(mapping, request)
     if target is None:
         return
-    identity = dict(source_host=mapping["source_host"], source_root=request["source_root"],
+    identity = dict(source_host=mapping["source_host"],
+                    source_root=request.get("checkout_root", request["source_root"]),
                     target=str(target), common_dir=str(git_common_dir(root)))
     receipts = private_dir(Path(registry_path).parent / "linked-checkouts")
     receipt = receipts / (digest(json.dumps(identity, sort_keys=True).encode()) + ".json")
@@ -427,7 +431,6 @@ def prepare(request):
                 and git_common_dir(top) == git_common_dir(source)),
                 "project_preparation_git_root_outside_parent")
         source = top
-        request["source_root"] = str(source)
         require(commit_present(source, commit), "expected_base_commit_mismatch")
     with locked(registry_path.parent / "project-preparation.lock"):
         _, registry = registry_read(registry_path)
@@ -455,6 +458,9 @@ def prepare(request):
         local_key, local_mapping = select_mapping(selected, request)
         request.pop("linked_checkout", None)
         request.pop("bundle_base", None)
+        request.pop("checkout_root", None)
+        if commit:
+            request["checkout_root"] = str(source)
         mapped_source = absolute(local_mapping["source_root"])
         if commit and source != mapped_source:
             # Comme T3, l'identite du depot est son repertoire Git commun.

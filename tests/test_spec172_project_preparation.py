@@ -133,7 +133,7 @@ class PreparationTests(unittest.TestCase):
         with patch.object(Path, "home", return_value=self.home):
             self.assertEqual(prep.remote_registry(request), real)
 
-    def prepare_via_federation(self):
+    def prepare_via_federation(self, following_requests=()):
         local_home = self.base / "local-home"
         local_home.mkdir(mode=0o700)
         namespace = local_home / "namespace"
@@ -172,6 +172,9 @@ class PreparationTests(unittest.TestCase):
             result = prep.prepare(request)
             self.assertFalse(result["needs_bundle"])
             self.assertEqual(prep.prepare(dict(self.request, registry=str(registry))), result)
+            for following in following_requests:
+                prepared = prep.prepare(dict(following, registry=str(registry)))
+                self.assertEqual(prepared["project_id"], result["project_id"])
         local = json.loads(registry.read_text())["machines"]["test"]["mappings"]
         remote = json.loads((remote_ns / "agents.json").read_text())["machines"]["test"]["mappings"]
         return result, local, remote
@@ -260,6 +263,43 @@ class PreparationTests(unittest.TestCase):
         commit = prep.git(checkout, "rev-parse", "HEAD").stdout.decode().strip()
         self.request.update(source_root=str(checkout), cwd=str(checkout), commit=commit)
         return checkout, remote, remote / checkout.relative_to(self.source)
+
+    def test_unmapped_parent_worktree_then_root_keeps_one_mapping(self):
+        checkout, _, _ = self.mapped_linked_worktree()
+        self.config["machines"]["test"]["mappings"].clear()
+        self.request["source_root"] = str(self.source)
+        principal = dict(self.request, cwd=str(self.source), commit=self.sha)
+        _, local, remote = self.prepare_via_federation([principal, dict(self.request)])
+        self.assertEqual(local, remote)
+        self.assertEqual(len(local), 1)
+        mapping = next(iter(local.values()))
+        self.assertEqual(mapping["source_root"], str(self.source))
+        target = Path(mapping["remote_root"]) / checkout.relative_to(self.source)
+        self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), self.request["commit"])
+
+    def test_unmapped_parent_root_then_worktree_keeps_one_mapping(self):
+        checkout, _, _ = self.mapped_linked_worktree()
+        self.config["machines"]["test"]["mappings"].clear()
+        linked = dict(self.request, source_root=str(self.source))
+        self.request.update(source_root=str(self.source), cwd=str(self.source), commit=self.sha)
+        _, local, remote = self.prepare_via_federation([linked, dict(self.request)])
+        self.assertEqual(local, remote)
+        self.assertEqual(len(local), 1)
+        mapping = next(iter(local.values()))
+        self.assertEqual(mapping["source_root"], str(self.source))
+        target = Path(mapping["remote_root"]) / checkout.relative_to(self.source)
+        self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), linked["commit"])
+
+    def test_parent_root_rejects_linked_worktree_of_another_repository(self):
+        other = self.base / "another-repository"
+        prep.git(self.base, "clone", str(self.source), str(other))
+        nested = self.source / ".worktrees/foreign-linked"
+        prep.git(other, "worktree", "add", "--detach", str(nested), self.sha)
+        self.assertTrue((nested / ".git").is_file())
+        self.request["cwd"] = str(nested)
+        with patch.object(prep, "ssh", side_effect=AssertionError("transport interdit")):
+            with self.assertRaisesRegex(prep.Refused, "git_root_outside_parent"):
+                self.prepare_via_federation()
 
     def test_parent_root_prepares_requested_linked_worktree(self):
         checkout, remote, target = self.mapped_linked_worktree()
