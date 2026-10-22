@@ -1379,3 +1379,7 @@ Livraison du correctif de portée : source 39a9df21e925ad54b904a2b3c2078eba9f20e
 ### 22 octobre 2026 — remplacement du worker non optimisé
 
 Source 39a9df21 inchangée, build release 172-39a9df21-opt actif sur Cartae (PID 2948540). Le binaire dev livré en dépannage ralentissait les sondes à 189 s pour un budget de 60 s. Compilation optimisée rc 0 en 95,01 s ; aucun changement de droit ou de délai. Signal d’essai réel envoyé à Monuments, résultat encore attendu. Détails : validation/worktree-portee-parent-20261022.md, section de remplacement optimisé.
+
+### 22 octobre 2026 — refus de statut et canal worker
+
+Correction ciblée du rejet des réponses sans attente pour une commande distante connue. Une sonde Reconcile précédant Start ne doit pas fermer le canal sur UnknownExecution. Un test ciblé RED puis GREEN ; aucune nouvelle mission. Détails et limite de causalité runtime : validation/reconcile-demarrage-20261022.md.

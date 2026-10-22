@@ -18797,10 +18797,12 @@ fn handle_worker_message(
                 }
             }
             let Some(pending) = st.pending_worker_responses.get(&response.correlation_id) else {
+                // Une sonde sans attente ou une réponse tardive ne ferme pas le canal de sa commande connue.
                 if matches!(
                     &response.response,
                     WorkerResponseOperation::Observation { .. }
                         | WorkerResponseOperation::DispositionRecorded { .. }
+                        | WorkerResponseOperation::Rejected { .. }
                 ) && remote_worker_has_command(&st, &response.worker, Some(&response.command))
                 {
                     return None;
@@ -41959,6 +41961,52 @@ mod presence_tests {
     /// Sans la séparation : un wrapper vivant / shell mort garde `capacity_seen`
     /// frais et who / bridget-idle le comptent LIBRE. busy doit rester busy ;
     /// `capacity_seen` (capacité) ne bouge pas sous heartbeat seul.
+    #[test]
+    fn spec172_untracked_worker_refusal_keeps_known_command_channel() {
+        use bridget_transport::protocol::*;
+        let (mut st, config) = state_with_registered_agent("worker172-untracked-refusal");
+        let worker = WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 };
+        let placement = RemotePlacement {
+            machine_id: worker.machine_id.clone(), worker_id: worker.worker_id.clone(), provisioning_revision: 1,
+            project_id: "project".into(), mapping_revision: 1, origin_host: "mac".into(), origin_cwd: "/source".into(),
+            source_root_identity: "/repo.git".into(), relative_cwd: ".".into(), execution_cwd: "/remote".into(),
+            base_commit: None, definition_digest: "a".repeat(64), permission_digest: "b".repeat(64),
+        };
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder { remote_placement: Some(placement), posture: None, agent_type: "codex".into(),
+            project: None, requested_name: Some(Uuid::new_v4().to_string()), cwd: PathBuf::from("/remote"), persistent: true,
+            command_id: Uuid::new_v4().to_string(), issued_at: now, deadline_at: now + 300, ownership: None };
+        let crate::fleet::SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap() else { panic!("start expected") };
+        st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
+            epoch: "epoch".into(), capabilities: vec![], last_contact: Instant::now(), last_contact_at: now,
+            contact: WorkerContactState::Connected });
+        let shared = Arc::new(Mutex::new(st));
+        let command = WorkerCommandIdentity { command_id: lease.command_id, task_id: order.command_id,
+            instance_id: lease.instance_id, generation: lease.generation };
+        for reason in [WorkerRefusal::UnknownExecution, WorkerRefusal::ResourceLimit] {
+            let response = WorkerResponse { version: REMOTE_WORKER_VERSION, correlation_id: Uuid::new_v4().to_string(),
+                connection_epoch: "epoch".into(), worker: worker.clone(), command: command.clone(),
+                response: WorkerResponseOperation::Rejected { reason } };
+            assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: response.clone() }).is_none(),
+                "a refusal to an untracked status request must not close the worker channel");
+            let (tx, rx) = mpsc::sync_channel(1);
+            shared.lock().unwrap().pending_worker_responses.insert(response.correlation_id.clone(), PendingWorkerResponse {
+                conn_id: "worker".into(), epoch: "epoch".into(), worker: worker.clone(), command: command.clone(), reply: tx,
+            });
+            assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: response.clone() }).is_none());
+            assert!(matches!(rx.try_recv().unwrap(), WorkerResponseOperation::Rejected { reason: actual } if actual == reason),
+                "a tracked refusal must still reach its caller");
+            let mut foreign = response.clone(); foreign.command.instance_id = Uuid::new_v4().to_string();
+            assert!(matches!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: foreign }),
+                Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::CommandMismatch })));
+            let mut stale = response; stale.connection_epoch = "old-epoch".into();
+            assert!(matches!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: stale }),
+                Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::StaleConnection })));
+        }
+        assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::Heartbeat).is_none());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
     #[test]
     fn remote162_worker_auth_epoch_et_contact_sans_presence_fournisseur() {
         use bridget_transport::protocol::*;
