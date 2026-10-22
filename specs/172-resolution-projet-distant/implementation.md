@@ -1196,3 +1196,26 @@ maître réel conservent la négociation complète. Aucune tolérance ajoutée a
 Clôture façades effectuée une seule fois par son propriétaire : cancelled,
 cleanup_done=true, guard_released=true, six commits propres conservés sur e7d6d67b.
 Aucun résultat2 ni mission de remplacement. Revue et activation restent attendues.
+
+
+Contre-revue r1 893bfc18 : le défaut est confirmé, trois réserves avant activation.
+1. Reconnexion désormais bornée à cinq minutes pour un contexte distant. Le délai est
+contrôlé pendant le backoff, avant et après l'inscription ; le signal d'arrêt garde
+priorité. Une panne prolongée ne peut donc maintenir cette attente sans fin.
+2. Commentaire du relais précisé : seuls les cas SANS relais gardent toute négociation.
+3. RED rejoué avec le fichier de test final identique à celui du GREEN (empreintes
+conservées), en retirant seulement les deux conditions du correctif. Le fournisseur
+est absent à l'assertion de naissance APRÈS l'arrêt/restart, même avec le harnais final.
+Le premier RED reste historique, ses numéros de lignes ne sont pas une preuve finale.
+La naissance de marker.pgid et le PPID du fournisseur prouvent aussi le wrapper réel.
+Disconnect explicite demeure un arrêt dans la boucle managed, distincte de l'interactif.
+
+GREEN r2 : sept tests distincts PASS. Ajouts : échéance de reconnexion sur la fonction
+réelle, fournisseur simulé qui termine pendant la coupure puis résultat unique,
+redémarrage du worker sans second fournisseur. Les natifs locaux, expiration avant
+release et annulation sont aussi rejoués. Aucune suite complète ni réseau fournisseur
+réel dans ces sept tests. Source et journaux :
+/home/moi/.cache/bridget-remise1ff172/final-tests-r2.json
+Le remplacement du worker préserve donc ses fournisseurs déjà relâchés ; le maître
+reste en place pendant cette livraison. Une nouvelle validation MCP réelle en lecture
+seule est prévue après activation, sans fabrication métier. Revue r2 attendue.

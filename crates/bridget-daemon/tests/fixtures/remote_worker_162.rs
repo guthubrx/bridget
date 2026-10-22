@@ -85,6 +85,8 @@ for line in sys.stdin:
             time.sleep(0.02)
         emit(dict(method="item/agentMessage/delta", params=dict(threadId=params["threadId"], turnId=turn, itemId="answer162", delta="fixture162-remote-answer")))
         emit(dict(method="turn/completed", params=dict(threadId=params["threadId"], turn=dict(id=turn, status="completed", items=[]))))
+        with open(evidence, "a", encoding="utf-8") as output:
+            output.write(json.dumps(dict(event="completed162", instance_id=instance, pid=os.getpid())) + "\n")
     elif method == "turn/interrupt":
         emit(dict(id=frame["id"], result={}))
 "#;
@@ -224,7 +226,7 @@ impl Relay {
                                         return Err(io::Error::other("identité maître inattendue"));
                                     };
                                     // Le faux maître162 ne simule pas le bail de slot172.
-                                    // Les cas maître réel gardent la négociation complète.
+                                    // Les cas sans relais gardent la négociation complète.
                                     features.retain(|feature| feature != "worker_candidate_probe_v2"
                                         && feature != "worker_result_slot_deadline_v1"
                                         && (release_lease_feature || feature != "worker_release_lease_v2"));
@@ -1808,6 +1810,11 @@ fn spec172_remote_wrapper_survives_master_restart_without_second_provider() {
 }
 
 #[test]
+fn spec172_remote_wrapper_preserves_result_completed_during_master_outage() {
+    real_master_case("master-restart-completed172");
+}
+
+#[test]
 fn spec172_parent_natif_auto_sans_t3_resout_projet_et_attend_ready() {
     for case in ["worktree172", "late-ready172"] {
         real_master_case(case);
@@ -2213,20 +2220,29 @@ fn real_master_case(case: &str) {
     assert_eq!(task["remote_placement"]["origin_cwd"], json!(origin));
     assert_eq!(task["definition"]["protocol"], "codex_app_server");
     assert_eq!(f.starts(&command.instance_id), 1);
-    if case == "master-restart172" {
+    if case.starts_with("master-restart") {
         let worker_pid = f.worker.as_ref().unwrap().0.id();
         let provider_birth = process_birth(provider_pid).unwrap();
         f.fixture.stop();
+        let completes_offline = case == "master-restart-completed172";
+        if completes_offline {
+            assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
+            support::private_write(&execution_cwd.join("release162"), b"go").unwrap();
+            wait_evidence152(&f.fixture, "completed162", &command.instance_id);
+            assert!(f.fixture.daemon.is_none(), "la fin fournisseur doit précéder le retour du maître");
+        }
         f.start_master_with_one_slot();
         parent = real_master_parent(&mut f, &socket, &host, &origin);
         // Le fournisseur travaille encore derrière la porte de résultat.
         // Une reconnexion ne peut ni le remplacer, ni fermer le groupe distant.
         assert!(f.worker.as_mut().unwrap().0.try_wait().unwrap().is_none());
         assert_eq!(f.worker.as_ref().unwrap().0.id(), worker_pid);
-        assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
-        assert_eq!(process_birth(provider_pid).unwrap(), provider_birth);
+        if !completes_offline {
+            assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
+            assert_eq!(process_birth(provider_pid).unwrap(), provider_birth);
+            assert_eq!(f.receipt(&command).phase, WorkerCommandPhase::Released);
+        }
         assert_eq!(f.receipt(&command).identity, command);
-        assert_eq!(f.receipt(&command).phase, WorkerCommandPhase::Released);
         assert_eq!(f.starts(&command.instance_id), 1);
     }
     // Un rejeu de la vraie admission garde la même mission et ne redélivre pas.

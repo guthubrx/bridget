@@ -46,6 +46,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(3);
 
 // SOCKET_CHECK_INTERVAL : vérification proactive de disponibilité du socket
 const SOCKET_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+// Grâce du fournisseur distant pendant une panne du maître ; aucun essai sans fin.
+const REMOTE_MASTER_RECONNECT_GRACE: Duration = Duration::from_secs(300);
 
 // Sonde de runtime : le fichier de session n'est relu que si sa date de
 // modification a changé, et le chemin n'est re-résolu que rarement — `lsof`
@@ -4770,6 +4772,7 @@ fn launch_session_with_status(
                     &my_name,
                     interactive.is_some(),
                     native_termination.as_ref(),
+                    remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
                 ) else {
                     break;
                 };
@@ -5117,6 +5120,7 @@ fn launch_session_with_status(
                     &my_name,
                     interactive.is_some(),
                     native_termination.as_ref(),
+                    remote_result_context.as_ref().map(|_| Instant::now() + REMOTE_MASTER_RECONNECT_GRACE),
                 ) else {
                     break;
                 };
@@ -5953,15 +5957,18 @@ fn reconnect_managed_session(
     fallback_name: &str,
     terminal_session: bool,
     termination: Option<&NativeTerminationSignal>,
+    deadline: Option<Instant>,
 ) -> Option<(BufReader<UnixStream>, String)> {
+    let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     let mut attempts = 0_u32;
-    while transport.is_alive() && !termination.is_some_and(NativeTerminationSignal::requested) {
+    while transport.is_alive() && !termination.is_some_and(NativeTerminationSignal::requested) && !expired() {
         // Une TUI peut se fermer pendant une panne prolongée du daemon.
         // Le backoff réseau ne doit pas retenir son terminal jusqu'à 36 s.
         let retry_at = Instant::now() + reconnect_delay(attempts);
         while Instant::now() < retry_at
             && transport.is_alive()
             && !termination.is_some_and(NativeTerminationSignal::requested)
+            && !expired()
         {
             thread::sleep(
                 retry_at
@@ -5969,7 +5976,7 @@ fn reconnect_managed_session(
                     .min(Duration::from_millis(50)),
             );
         }
-        if !transport.is_alive() || termination.is_some_and(NativeTerminationSignal::requested) {
+        if !transport.is_alive() || termination.is_some_and(NativeTerminationSignal::requested) || expired() {
             return None;
         }
         attempts = attempts.saturating_add(1);
@@ -5992,6 +5999,7 @@ fn reconnect_managed_session(
             Ok((reader, new_writer, registered_name)) if registered_name == wanted_name => {
                 if termination.is_some_and(NativeTerminationSignal::requested)
                     || !transport.is_alive()
+                    || expired()
                 {
                     return None;
                 }
@@ -11862,6 +11870,24 @@ mod native_child_requests155_tests {
         fn is_busy(&self) -> bool {
             self.busy.unwrap_or(true)
         }
+    }
+
+    #[test]
+    fn spec172_remote_reconnect_deadline_preserves_provider_and_stops_retrying() {
+        let session = Session155::default();
+        let writer = Arc::new(Mutex::new(None));
+        let started = Instant::now();
+        let absent = std::env::temp_dir().join(format!("reconnect172-absent-{}", uuid::Uuid::new_v4()));
+        let result = reconnect_managed_session(
+            &absent, &writer, &session, &session.descriptor(), "codex_app_server", "fixture",
+            &absent, "fixture", None, "test", "instance172", "agent172", false, None,
+            Some(started + Duration::from_millis(60)),
+        );
+        assert!(result.is_none());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(session.is_alive(), "la reconnexion ne remplace ni ne stoppe elle-même le fournisseur");
+        assert!(writer.lock().unwrap().is_none());
+        assert!(!absent.exists());
     }
 
     fn request155() -> ChildProviderRequest {
