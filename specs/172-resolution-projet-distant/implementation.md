@@ -1152,3 +1152,7 @@ source 31f42307 fusionnée/poussée et build 172-31f42307 actif sur le maître.
 T3/pont/worker préservés ; tâches distantes inchangées, zéro reprise.
 Recette du contexte opaque encore attendue à ce checkpoint. Reçu :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/identifiants-t3-20261022.md
+
+Recette réelle close : appel officiel unique bridget_capabilities réussi depuis
+le fil mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3 à 09:38:18 CEST.
+Aucun refus d'attestation ; aucune mission créée. Le reçu ci-dessus est actualisé.

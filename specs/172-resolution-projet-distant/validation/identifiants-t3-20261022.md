@@ -39,9 +39,14 @@ L'attente de leur fin n'était donc pas nécessaire.
 
 ## Parcours réel et limites
 
-Le statut MCP du maître confirme `172-31f42307` actif. Une unique lecture officielle
-du catalogue a été demandée au fil opaque concerné, pour vérifier son contexte exact.
-Son résultat reste attendu à ce checkpoint. Le succès de notre propre fil UUID ne le remplace pas.
+Le statut MCP du maître confirme `172-31f42307` actif. La lecture officielle unique
+`bridget_capabilities({})` réussit depuis le véritable fil opaque
+`mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3` le 22 octobre à 09:38:18 CEST.
+Preuve T3 : item 3469, confirmation 3475 ; rapport Bridget `mcp-33631-6ad9bd74-6`.
+Le catalogue rend la portée projet et le bon worktree, sans
+`permission_attestation_unavailable`. Le défaut d'accès de ce contexte est corrigé.
+La recette ne lance aucune mission ; elle ne qualifie pas l'authentification fournisseur
+ni une nouvelle exécution distante. L'ancienne tâche d'un autre propriétaire n'est pas relue.
 Aucune suite complète et aucun test fournisseur ne sont déduits des tests de bibliothèque.
 
 L'ancienne tâche façades `837972ad-ad58-4512-9a71-fd2843ab5be5` reste `failed`,

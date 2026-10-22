@@ -30,7 +30,17 @@
       "restart_resumes": 0
     }
   ],
-  "opaque_context_recipe": "pending_one_official_capabilities_read",
+  "opaque_context_recipe": {
+    "status": "PASS",
+    "tool": "bridget_capabilities",
+    "thread_id": "mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3",
+    "position": 3469,
+    "at": "2026-10-22T07:38:18.717Z",
+    "confirmation_position": 3475,
+    "report_message_id": "mcp-33631-6ad9bd74-6",
+    "auth_tested": false,
+    "new_remote_task_started": false
+  },
   "old_facades_task": {
     "task_id": "837972ad-ad58-4512-9a71-fd2843ab5be5",
     "state": "failed",
