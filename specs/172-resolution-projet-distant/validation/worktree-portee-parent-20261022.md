@@ -27,4 +27,10 @@ Preuves privées : /home/moi/.cache/bridget-worktree-scope172/red.json et /home/
 
 ## État de livraison à ce checkpoint
 
-Correction de source testée. Revue et activation encore à effectuer. L’admission c67ba253 n’est ni rejouée ni réparée par mutation de base. Son reçu et son worktree restent conservés.
+Correctif source 39a9df21e925ad54b904a2b3c2078eba9f20ef17 intégré et poussé sur GitHub/main. Worker Cartae actif : PID 2828136, build 172-39a9df21, SHA-256 6e7e4fa39117702594fc6b14303ccd0661a5fcd1cf6304793a1644db717cffcb.
+
+La compilation optimisée a échoué sur ENOSPC. Livraison immédiate demandée par l’utilisateur : binaire de dépannage non optimisé, sans symboles de débogage (profil dev-debug0). La revue indépendante e5959986-e426-422d-956f-e035dbcf89be n’a pas fourni de verdict, son démarrage ayant échoué ; son arrêt a été demandé. Aucun APPROVE n’est revendiqué.
+
+Le seul worker Cartae a été relancé par SIGTERM individuel, avec KillMode=process. Aucun wrapper géré n’était actif au préflight. T3 et le maître Mac n’ont pas été relancés. L’admission c67ba253 n’est ni rejouée ni réparée par mutation de base. Son reçu et son worktree restent conservés. La reprise métier appartient à son responsable après clôture officielle de l’ancienne admission, avec une nouvelle demande à jour.
+
+Reçu privé : /home/moi/.cache/bridget-worktree-scope172/activation.json.
