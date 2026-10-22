@@ -1240,3 +1240,11 @@ du fournisseur après300s ne sont pas qualifiés par un modèle réel. Aucun suc
 ni preuve de tous les scénarios. Le paquet reprend la source de production50b0673f
 revue et testée ; le commit suivant précise des commentaires et retire deux assertions
 inertes seulement. Compilation et activation doivent être vérifiées par leur reçu.
+
+
+Livraison worker vérifiée : build172-50b0673f actif Cartae, PID2037495.
+Maître/pont/T3 préservés ; processus déjà actif vérifié avant/après par naissance
+et session fournisseur. Recette réelle508c947f : deux rondes, même fournisseur, ACK,
+rejeu identique et garde close/cleanup_done. Sept tests isolés PASS, revue r2 approuvée.
+Anciennes instances conservées, aucun nouveau travail métier, maître non redémarré.
+Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/reconnexion-wrapper-20261022.md

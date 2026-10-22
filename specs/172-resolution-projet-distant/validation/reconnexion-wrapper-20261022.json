@@ -1,0 +1,74 @@
+{
+  "source_packaged_and_tested": "50b0673f9a26ce28e0f3a8dd35c4d9dd93834e74",
+  "build_id": "172-50b0673f",
+  "sha256": "548527c81da79b5c27423db41b21e930faf9a6c738bcb2faab1b141a59cec69f",
+  "active_worker_pid": 2037495,
+  "activated_at": "2026-10-22T10:42:32.469598+02:00",
+  "master_and_t3_restarted_for_this_worker_release": false,
+  "unit_scope": "worker Cartae seulement",
+  "target_new_wrappers": true,
+  "old_wrappers_kept_running": true,
+  "tests": {
+    "distinct_passed": 7,
+    "full_suite": false,
+    "source_sha256": {
+      "crates/bridget-daemon/src/wrapper.rs": "d5f463b00de0fa6d81b02ffac4b6d4b68b131fb34ac6a5b34d892f466a766a7e",
+      "crates/bridget-daemon/tests/fixtures/remote_worker_162.rs": "87828dc3092df442f70ce446dc6bd952d7926fc75f40af36c352dcc52c747eef"
+    }
+  },
+  "review": {
+    "task_id": "9d063b81-c2e1-412a-b2d7-f5cf897bd78e",
+    "verdict": "APPROVE avec réserves mineures levées",
+    "resolved_in": "66da72f8eff32bf33117953bc361c00171026074"
+  },
+  "existing_provider_same_session_across_upgrade": {
+    "before": {
+      "ts": "2026-10-22T08:41:49Z",
+      "session_id": "claude-stream-json-2027660",
+      "event": "update",
+      "message_id": "e6011cb9-d9e9-40a9-8ed0-1f13bd8140ff"
+    },
+    "after": {
+      "ts": "2026-10-22T08:44:22Z",
+      "session_id": "claude-stream-json-2027660",
+      "event": "update",
+      "message_id": "e6011cb9-d9e9-40a9-8ed0-1f13bd8140ff"
+    },
+    "same_session": true
+  },
+  "live_recipe": {
+    "task_id": "508c947f-038a-42fe-836f-363d1fad6fda",
+    "child_agent_id": "e0c802bc-0b5b-41bf-945c-b303c949205b",
+    "rounds": 2,
+    "strict_replay": {
+      "task_id": "508c947f-038a-42fe-836f-363d1fad6fda",
+      "child_agent_id": "e0c802bc-0b5b-41bf-945c-b303c949205b",
+      "round": 2,
+      "result_identical": true,
+      "mailbox": {
+        "state": "acknowledged"
+      }
+    },
+    "same_wrapper_and_provider_processes": true,
+    "new_business_mission": false,
+    "cleanup_done": true,
+    "guard_released": true,
+    "master_restart_in_live_recipe": false
+  },
+  "facades_task": {
+    "task_id": "1ff9a4d5-88c6-46f8-b6e1-f251869ee92f",
+    "state": "cancelled",
+    "cleanup_done": true,
+    "guard_released": true,
+    "worktree": "/home/moi/10.Scripts/69.opus2D/.worktrees/1ff9a4d5",
+    "head_commit": "e7d6d67b557715254095cfd5f949646653e12908",
+    "commit_count": 6,
+    "dirty": false
+  },
+  "limitations": [
+    "Grâce de reconnexion par coupure 300s, échange déjà engagé pouvant dépasser d’environ20s ; arrêt après expiration.",
+    "Les anciens wrappers déjà lancés conservent leur version jusqu’à leur fin ; le maître reste en place.",
+    "Coupure du maître testée en isolé avec fournisseur simulé ; recette MCP réelle de deux rondes sans coupure du maître.",
+    "Pas de FULL ni preuve de tous les scénarios."
+  ]
+}
