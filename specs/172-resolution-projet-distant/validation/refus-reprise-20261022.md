@@ -1,6 +1,6 @@
 # Reprise distante : distinguer l’état de l’exécution et les droits
 
-22 octobre 2026. Session 172. Quatre tests ciblés PASS. Revue r1 approuvée avec réserves traitées ; contre-revue r2 et activation encore à réaliser à ce checkpoint.
+22 octobre 2026. Session 172. Livré et actif : build 172-222941e6. Quatre tests ciblés PASS, contre-revue r2 APPROVE et refus MCP réel vérifié.
 
 ## Faits observés
 
@@ -22,7 +22,7 @@ Le message du premier cas dit que la commande est terminée ou son lancement ref
 
 Le client MCP courant ne transmet que `code` et `detail`. Les textes constants sont donc aussi placés dans `detail.message`, déjà transmis par ce client. Aucun rechargement de ce client ni redémarrage T3 ne sont nécessaires pour rendre le conseil lisible. Aucune logique de production du client MCP n’a changé.
 
-La classification n’écrit pas l’enregistrement de tâche. Le gestionnaire entrant réel conserve son comportement antérieur : une observation terminale invalide le bail de flotte et marque l’instance comme arrêtée. Le correctif ne change ni droits, ni reprise automatique, ni protocole worker. Il ne crée aucune ronde ni aucun fabricant.
+La classification n’écrit pas l’enregistrement de tâche. Le gestionnaire entrant réel conserve son comportement antérieur : une observation terminale invalide le bail de flotte et marque l’instance comme arrêtée. Le correctif ne change ni droits, ni reprise automatique, ni protocole worker. Il ne crée aucune ronde ni aucune nouvelle mission.
 
 ## Référence T3
 
@@ -49,4 +49,15 @@ Le premier test ne couvre pas le décodage entrant du worker ni son invalidation
 
 Preuves privées : /home/moi/.cache/bridget-reprise-diagnostic172/green-r2.json et journaux associés. La source est identifiée par SHA-256 pour les deux fichiers Rust. /home/moi/.cache/bridget-reprise-diagnostic172/red-r2.json lie le RED à la fixture finale identique ; seule la classification est rétablie à l’état antérieur. Ce RED prouve le premier cas seulement, car le test s’arrête au premier échec. Les premiers essais avaient aussi révélé une préparation de test incohérente ; le snapshot final est pris après la normalisation du store.
 
-Le correctif de reconnexion 172-50b0673f reste actif sur le worker Cartae pour les nouveaux wrappers. Une vérification MCP du refus sur une tâche propre déjà terminée reste à effectuer après activation du maître corrigé.
+Le correctif de reconnexion 172-50b0673f reste actif sur le worker Cartae pour les nouveaux wrappers. La vérification MCP réelle est terminée ; elle utilise la tâche propre déjà clôturée décrite ci-dessous.
+
+
+## Livraison active
+
+Le maître Mac a été activé sur le build 172-222941e6, source 222941e6d655bc7d3d0735327601c5f992da0755. Binaire signé SHA-256 0b0ad4d076554f81082773360193b70f926d66a276b5c10011bd5857d99bfd46. Nouveau PID 39365. T3, son serveur, le pont et le worker Cartae gardent leurs PID et dates de naissance ; l’ASAR T3 reste identique. Le contrôle avant activation ne trouvait aucun wrapper distant ni commande worker active. Aucun processus métier n’a été interrompu.
+
+La recette officielle bridget_task_continue a utilisé UNE fois la tâche déjà terminée 508c947f-038a-42fe-836f-363d1fad6fda, clé recette172-refus-reprise-terminee-20261022-r1. Le client MCP déjà chargé a reçu remote_execution_ended et detail.message en français : « La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. » Le refus est attendu. Le SHA-256 du payload entier de la tâche reste identique ; ronde 2, résultat et instance enfant sont conservés. Aucun nouveau calcul ni nouvelle tâche.
+
+La contre-revue r2 est APPROVE, sans défaut bloquant. Les remarques documentaires ont été traitées ; la limite sur le bail entrant est déclarée, sans prétendre à une nouvelle couverture. fixture-link-r2.json vérifie que le fichier actuel porte le condensat du GREEN et du fichier restauré en RED, puis que son extrait de test porte le condensat RED r2 f293e563…. Le condensat r1 bcf399c5… diffère volontairement : r2 ajoute deux cas et l’assertion du conseil transmis.
+
+Reçu public : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.json. Preuves privées : /Users/moi/.cache/bridget-reprise-diagnostic172 et /home/moi/.cache/bridget-reprise-diagnostic172. Le binaire précédent reste disponible pour retour arrière. Le correctif ne change aucun droit ni la limite du checkout parent.

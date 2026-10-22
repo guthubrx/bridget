@@ -1,0 +1,32 @@
+{
+  "date": "2026-10-22T09:59:09.725814+00:00",
+  "source": "222941e6d655bc7d3d0735327601c5f992da0755",
+  "build_id": "172-222941e6",
+  "artifact_sha256": "0b0ad4d076554f81082773360193b70f926d66a276b5c10011bd5857d99bfd46",
+  "active": true,
+  "master_pid": 39365,
+  "worker_build_id": "172-50b0673f",
+  "worker_pid": 2037495,
+  "worker_preserved": true,
+  "t3_restarted": false,
+  "protected_processes_preserved": true,
+  "tests_distinct_passed": 4,
+  "full_suite": false,
+  "review_r1": "APPROVE",
+  "review_r2": "APPROVE",
+  "review_r2_task": "8e8cdc44-48e8-46d0-8841-e89b0bc4ea26",
+  "live_mcp_refusal": {
+    "task_id": "508c947f-038a-42fe-836f-363d1fad6fda",
+    "request_id": "recette172-refus-reprise-terminee-20261022-r1",
+    "response": "remote_execution_ended {\"message\":\"La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite.\"}",
+    "expected": true,
+    "round_unchanged": true,
+    "result_preserved": true,
+    "task_payload_preserved": true
+  },
+  "limits": [
+    "Réponse worker simulée dans le test de preuve ; son décodeur entrant et l’invalidation du bail ne sont pas couverts par ce test.",
+    "La recette MCP réelle couvre un refus sur une tâche distante déjà terminée ; aucun nouveau calcul métier.",
+    "Le worker reste au build 172-50b0673f : cette correction de diagnostic s’exécute dans le maître."
+  ]
+}
