@@ -1,0 +1,50 @@
+{
+  "source": "a4640b463e943daf8f44f540f571a85dd3279918",
+  "build_id": "172-a4640b46",
+  "activated": true,
+  "binary_sha256": "1688c470c95f59bb390080ad88feb7cdf6d9b4b5d974b78a187629cf9dad9411",
+  "old_master": 64762,
+  "new_master": 76289,
+  "worker_pid": 2219043,
+  "worker_restarts": 0,
+  "protected_preserved": true,
+  "held_mission_preserved": true,
+  "held_task": "28da9844-0695-4f99-9159-b9beeab9bd6d",
+  "held_generation": 714,
+  "wrapper_pid": 2350358,
+  "wrapper_birth": 218843575,
+  "provider_pid": 2351171,
+  "provider_birth": 218844336,
+  "post_activation_task_state": "result_available",
+  "post_activation_round": 1,
+  "post_activation_error": null,
+  "tests": {
+    "python_pass": 31,
+    "full_suite": false
+  },
+  "review": {
+    "task_id": "a0b9b462-de63-4b1d-ab2b-bf1ab8e22f3f",
+    "verdict": "APPROVE",
+    "source_hashes_checked": true
+  },
+  "original_review_qualification": {
+    "state": "not_replayed_source_base_changed",
+    "expected_base": "fd4cad3b5e3be49bc56f866ece6c695ed1b2d3c5",
+    "current_head_observed": "559cec756eff573c6ecedadff3ed7b21d1656dee",
+    "followed_message_state": "timed_out",
+    "delivery_read_state": "outcome_unknown"
+  },
+  "notifications": {
+    "owner_final": "mcp-90190-6ada0a37-21",
+    "integrator": "mcp-90190-6ada09d2-20",
+    "initial_status": "in_flight",
+    "read_confirmed": false
+  },
+  "cleanup": {
+    "logical_bytes_removed": 121299266,
+    "mac_build_source_removed": true,
+    "prototype_removed": true,
+    "rollback_and_evidence_preserved": true,
+    "cartae_worktrees_preserved": true
+  }
+}
