@@ -1274,3 +1274,8 @@ La sonde traduit le chemin du worktree Mac, mais le helper importe seulement les
 Le helper reconnaît cette identité, prépare un checkout détaché au commit exact et garde le mapping existant. Aucun reset ni transfert des fichiers non committés. 15 tests Python ciblés PASS, RED final discriminant conservé. Activation et recette réelle à qualifier.
 
 Reçu : validation/worktrees-lies-20261022.md.
+
+
+### Contre-revue worktrees : bornage au checkout reel
+
+Revue 0043865a : le worker visait encore le principal. Correction de la sonde, du Prepare et de la projection du worktree isole pour utiliser le checkout reel, sous le meme depot commun et les droits existants. Recu avant extraction pour refuser les residus incomplets. T3 refreshCheckedOutBranch et WorktreeMcpService relus, differences distantes expliquees dans le recu. Qualification finale 18 Python + 4 Rust PASS ; RED/ GREEN meme fixture. Git Cartae 2.56 durable verifie dans SSH et shell de connexion neufs, sans PATH temporaire. Contre-revue et activation a suivre.

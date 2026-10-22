@@ -2480,6 +2480,52 @@ impl WorkerRuntime {
     /// Le worker traite ses commandes en série. Les préparations et reçus
     /// durables couvrent aussi un redémarrage : aucune mission connue ne peut
     /// changer de fichiers sous ses pieds, même si son état est incertain.
+    /// La correspondance identifie le depot ; les mutations Shared visent
+    /// son checkout reel, comme refreshCheckedOutBranch(cwd) dans T3.
+    fn checkout_root(&self, mapping: &ProjectMapping, cwd: &Path) -> Result<PathBuf, WorkerRefusal> {
+        let git_path = |dir: &Path, flag: &str| -> Result<PathBuf, WorkerRefusal> {
+            let output = crate::workspace_git::run_git(dir, &["rev-parse", flag], crate::workspace_git::READ_TIMEOUT)
+                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+            if !output.success() || output.truncated { return Err(WorkerRefusal::PlacementMismatch); }
+            let path = Path::new(output.stdout.trim_end_matches(['\r', '\n']));
+            let absolute = if path.is_absolute() { path.to_path_buf() } else { dir.join(path) };
+            fs::canonicalize(absolute).map_err(|_| WorkerRefusal::PlacementMismatch)
+        };
+        let root = git_path(cwd, "--show-toplevel")?;
+        if (!root.starts_with(&mapping.remote_root) && !mapping.remote_root.starts_with(&root))
+            || !cwd.starts_with(&root)
+            || git_path(&root, "--git-common-dir")? != git_path(&mapping.remote_root, "--git-common-dir")? {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        // Une correspondance limitee a un sous-dossier ne donne pas le droit
+        // de rafraichir le checkout entier : garder sa borne historique.
+        let authorized = if root.starts_with(&mapping.remote_root) { &root } else { &mapping.remote_root };
+        crate::registry::validate_unprotected_local_path(authorized, &self.protected())
+            .map_err(|_| WorkerRefusal::PlacementMismatch)
+    }
+
+    fn remap_prepared_worktree(&self, mapping: &mut ProjectMapping, cwd: &Path,
+        record: &crate::delegation::WorkspaceRecord) -> Result<PathBuf, WorkerRefusal> {
+        let top = Path::new(&record.toplevel);
+        let next;
+        if let Ok(offset) = mapping.remote_root.strip_prefix(top) {
+            next = Path::new(&record.path).join(cwd.strip_prefix(top)
+                .map_err(|_| WorkerRefusal::PlacementMismatch)?);
+            mapping.remote_root = Path::new(&record.path).join(offset);
+        } else {
+            let offset = top.strip_prefix(&mapping.remote_root)
+                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+            next = Path::new(&record.path).join(cwd.strip_prefix(top)
+                .map_err(|_| WorkerRefusal::PlacementMismatch)?);
+            mapping.source_root = mapping.source_root.join(offset);
+            mapping.remote_root = PathBuf::from(&record.path);
+        }
+        let next = crate::registry::validate_unprotected_local_path(&next, &self.protected())
+            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+        if !next.starts_with(&mapping.remote_root) { return Err(WorkerRefusal::PlacementMismatch); }
+        Ok(next)
+    }
+
     fn shared_refresh_allowed(&self, root: &Path, base: &str) -> Result<bool, CandidateProbeRefusal> {
         if !crate::workspace_git::shared_refresh_needed(root, base)? { return Ok(false); }
         let overlaps = |cwd: &Path| cwd.starts_with(root) || root.starts_with(cwd);
@@ -2503,13 +2549,15 @@ impl WorkerRuntime {
         &self,
         request: &WorkerPrepare,
         mapping: &ProjectMapping,
-        _cwd: &Path,
+        cwd: &Path,
     ) -> Result<(), CandidateProbeRefusal> {
         if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
             &request.workspace
         {
+            let root = self.checkout_root(mapping, cwd)
+                .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
             let preflight = crate::workspace_git::preflight_remote(
-                &mapping.remote_root,
+                &root,
                 base_ref.as_deref(),
                 branch.as_deref(),
             )
@@ -2524,7 +2572,9 @@ impl WorkerRuntime {
             return Ok(());
         }
         if let Some(base) = request.base_commit.as_deref() {
-            self.shared_refresh_allowed(&mapping.remote_root, base)?;
+            let root = self.checkout_root(mapping, cwd)
+                .map_err(|_| CandidateProbeRefusal::MappingUnavailable)?;
+            self.shared_refresh_allowed(&root, base)?;
         }
         Ok(())
     }
@@ -2926,8 +2976,9 @@ impl WorkerRuntime {
             // par `base_ref`, pas le HEAD courant du dépôt source. Ce même
             // préflight est relu avant toute écriture, puis le cwd créé est
             // contrôlé une seconde fois ci-dessous.
+            let root = self.checkout_root(&mapping, &cwd)?;
             let preflight = crate::workspace_git::preflight_remote(
-                &mapping.remote_root,
+                &root,
                 base_ref.as_deref(),
                 branch.as_deref(),
             )
@@ -2941,7 +2992,8 @@ impl WorkerRuntime {
             }
             inspected_base = Some(preflight.base_commit);
         } else if let Some(base) = request.base_commit.as_deref() {
-            self.shared_refresh_allowed(&mapping.remote_root, base)
+            let root = self.checkout_root(&mapping, &cwd)?;
+            self.shared_refresh_allowed(&root, base)
                 .map_err(|_| WorkerRefusal::PlacementMismatch)?;
         }
         let initial = self.inspect_candidate(&registry, request, &mapping, &cwd, &mut operation, None)?;
@@ -2990,30 +3042,20 @@ impl WorkerRuntime {
             &request.workspace,
             Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
         ) {
+            let root = self.checkout_root(&mapping, &cwd)?;
             let record = self
                 .store
-                .prepare_workspace(command, request, &mapping.remote_root)
+                .prepare_workspace(command, request, &root)
                 .map_err(refuse)?;
             worktree_base = Some(record.base_commit.clone());
             workspace = Some(serde_json::to_value(&record).map_err(unavailable)?);
-            let root_offset = mapping
-                .remote_root
-                .strip_prefix(&record.toplevel)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            mapping.remote_root = Path::new(&record.path).join(root_offset);
-            cwd = crate::registry::validate_unprotected_local_path(
-                &mapping.remote_root.join(&request.relative_cwd),
-                &self.protected(),
-            )
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            if !cwd.starts_with(&mapping.remote_root) {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
+            cwd = self.remap_prepared_worktree(&mut mapping, &cwd, &record)?;
         }
         if !matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. }))
             && let Some(base) = request.base_commit.as_deref()
         {
-            self.refresh_shared_workspace(&mapping.remote_root, base)?;
+            let root = self.checkout_root(&mapping, &cwd)?;
+            self.refresh_shared_workspace(&root, base)?;
         }
         Self::verify_base_commit(&cwd, request.base_commit.as_deref())?;
         // Le second contrôle conserve le verdict exact du cwd de worktree
@@ -3104,16 +3146,7 @@ impl WorkerRuntime {
             {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
-            let root_offset = mapping
-                .remote_root
-                .strip_prefix(&record.toplevel)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            mapping.remote_root = Path::new(&record.path).join(root_offset);
-            cwd = crate::registry::validate_unprotected_local_path(
-                &mapping.remote_root.join(&prepared.request.relative_cwd),
-                &self.protected(),
-            )
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+            cwd = self.remap_prepared_worktree(&mut mapping, &cwd, &record)?;
         } else if before_release
             && let Some(base) = prepared.prepared.placement.base_commit.as_deref()
         {
@@ -6403,6 +6436,95 @@ while not stop.exists(): time.sleep(.01)
         // Les codes distincts traversent le protocole fermé existant.
         for reason in [R::WorkspaceDirty, R::WorkspaceBusy, R::WorkspaceDiverged, R::WorkspaceBaseUnavailable] {
             assert_eq!(serde_json::from_value::<R>(serde_json::to_value(&reason).unwrap()).unwrap(), reason);
+        }
+    }
+
+    #[test]
+    fn spec172_linked_checkout_prepare_preserves_main() {
+        use bridget_transport::protocol::{ProviderPermissions, WorkspaceRequest, CandidateProbeRefusal as R};
+        for (diverged, isolated) in [(false, false), (true, false), (false, true), (true, true)] {
+            let fixture = Fixture::new();
+            let project_fixture = Fixture::new();
+            let project = project_fixture.0.canonicalize().unwrap();
+            let git = |cwd: &Path, args: &[&str]| {
+                let out = std::process::Command::new("git").current_dir(cwd)
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+                    .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                        "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null"])
+                    .args(args).output().unwrap();
+                assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+                String::from_utf8(out.stdout).unwrap().trim().to_owned()
+            };
+            git(&project, &["init", "-q"]);
+            git(&project, &["config", "remote.origin.url", "fixture:linked172"]);
+            fs::write(project.join(".gitignore"), ".worktrees/\n").unwrap();
+            fs::write(project.join("file"), "base\n").unwrap();
+            git(&project, &["add", "."]); git(&project, &["commit", "-qm", "base"]);
+            let base = git(&project, &["rev-parse", "HEAD"]);
+            let linked = project.join(".worktrees/linked172");
+            git(&project, &["worktree", "add", "--detach", linked.to_str().unwrap(), &base]);
+            fs::write(linked.join("file"), "linked\n").unwrap();
+            git(&linked, &["commit", "-qam", "linked"]);
+            let expected = git(&linked, &["rev-parse", "HEAD"]);
+            if diverged {
+                fs::write(project.join("main-only"), "main\n").unwrap();
+                git(&project, &["add", "main-only"]); git(&project, &["commit", "-qm", "main"]);
+            }
+            let main_head = git(&project, &["rev-parse", "HEAD"]);
+            let mut runtime = runtime_fixture(&fixture);
+            write_json(&runtime.config.registry_path, &serde_json::json!({
+                "agents":{"codex":{"command":"/bin/echo","args":["app-server"],"protocol":"codex_app_server",
+                    "capabilities":{"execution_paths":["codex_app_server"],"models":{"fixture-model":{"efforts":["high"]}}}}},
+                "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                    "credential_fingerprint":digest_bytes(b"worker162-test-secret"),"allowed_agent_types":["codex"],
+                    "mappings":{"linked172":{"source_host":"origin172","source_root":"/origin172",
+                        "remote_root":project,"expected_git_identity":"fixture:linked172","mapping_revision":1}}}}
+            })).unwrap();
+            runtime.source.clear();
+            runtime.source.insert("HOME".into(), fixture.0.as_os_str().to_owned());
+            runtime.source.insert("PATH".into(), OsString::from("/usr/bin:/bin"));
+            let mut identity = command();
+            identity.task_id = uuid::Uuid::new_v4().to_string();
+            identity.instance_id.clear();
+            identity.generation = 0;
+            let request = WorkerPrepare {
+                machine_id:"cartae".into(),project_id:"linked172".into(),provisioning_revision:1,mapping_revision:1,
+                origin_host:"origin172".into(),origin_cwd:"/origin172/.worktrees/linked172".into(),
+                source_root:"/origin172".into(),remote_root:project.to_string_lossy().into_owned(),
+                source_root_identity:"fixture:linked172".into(),relative_cwd:".worktrees/linked172".into(),
+                base_commit:Some(expected.clone()),agent_type:"codex".into(),model:"fixture-model".into(),
+                effort:Some("high".into()),posture:None,workspace:Some(if isolated {
+                    WorkspaceRequest::Worktree { base_ref:Some(expected.clone()), branch:None }
+                } else { WorkspaceRequest::Shared {} }),
+                parent:ProviderPermissions {
+                    version:1,source:"native_wrapper".into(),run_id:"run172".into(),
+                    provider_session_id:"session172".into(),provider_instance_id:"parent172".into(),revision:1,
+                    driver:"codex_app_server".into(),cwd:"/origin172/.worktrees/linked172".into(),
+                    runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+                    provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user",
+                        "sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+                },
+            };
+            let registry = runtime.registry().unwrap();
+            let (mapping, cwd) = runtime.mapping_for(&request, &registry, None).unwrap();
+            assert_eq!(runtime.probe_workspace_preconditions(&request, &mapping, &cwd), Ok(()));
+            let ready = runtime.prepare(&identity, &request).unwrap();
+            if isolated {
+                let record: crate::delegation::WorkspaceRecord =
+                    serde_json::from_value(ready.workspace.clone().unwrap()).unwrap();
+                assert_eq!(ready.placement.execution_cwd, record.path);
+                assert_eq!(fs::read_to_string(Path::new(&record.path).join("file")).unwrap(), "linked\n");
+            } else { assert_eq!(Path::new(&ready.placement.execution_cwd), linked); }
+            runtime.recheck(runtime.prepared.get(&command().command_id).unwrap()).unwrap();
+            assert_eq!(git(&project, &["rev-parse", "HEAD"]), main_head, "main must not move");
+            assert_eq!(fs::read_to_string(project.join("file")).unwrap(), "base\n");
+            assert_eq!(git(&linked, &["rev-parse", "HEAD"]), expected);
+            if !isolated {
+                let mut stale = request.clone(); stale.base_commit = Some(base);
+                assert_eq!(runtime.probe_workspace_preconditions(&stale, &mapping, &cwd), Err(R::WorkspaceDiverged));
+            }
+            assert!(runtime.store.commands().unwrap().is_empty());
+            assert!(runtime.running.is_empty() && runtime.held.is_empty());
         }
     }
 

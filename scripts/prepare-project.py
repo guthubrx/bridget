@@ -180,21 +180,42 @@ def check_linked_checkout(root, target):
             and git_common_dir(target) == git_common_dir(root),
             "project_preparation_destination_occupied")
 
-def prepare_linked_checkout(root, mapping, request):
+def prepare_linked_checkout(root, mapping, request, registry_path):
     target = linked_checkout_target(mapping, request)
     if target is None:
         return
+    identity = dict(source_host=mapping["source_host"], source_root=request["source_root"],
+                    target=str(target), common_dir=str(git_common_dir(root)))
+    receipts = private_dir(Path(registry_path).parent / "linked-checkouts")
+    receipt = receipts / (digest(json.dumps(identity, sort_keys=True).encode()) + ".json")
+    previous = private_read(receipt) if receipt.exists() else None
+    if previous is not None:
+        saved = json.loads(previous)
+        require(saved.get("identity") == identity, "project_preparation_mapping_changed")
+        require(saved.get("ready") is True, "project_preparation_checkout_incomplete")
     if target.exists():
         check_linked_checkout(root, target)
-        return
-    # Reproduire le checkout, pas le HEAD du depot principal. Aucun reset,
-    # aucune branche et aucun fichier non commite ne sont copies.
-    target.parent.mkdir(parents=True, exist_ok=True)
-    no_links(target.parent)
-    git(root, "worktree", "add", "--detach", str(target), request["commit"])
-    check_linked_checkout(root, target)
+        if previous is None:
+            # Sans recu de creation, des fichiers suivis manquants peuvent
+            # venir d'une extraction interrompue. Conserver puis refuser.
+            status = git(target, "status", "--porcelain=v1", "--untracked-files=no")
+            require(not status.stdout.strip(), "project_preparation_checkout_incomplete")
+        # Le worker reste responsable du HEAD : sonde puis FF propre/inactif,
+        # ou refus. Le helper ne deplace jamais un checkout existant.
+    else:
+        atomic_json(receipt, dict(identity=identity, ready=False), previous)
+        previous = private_read(receipt)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        no_links(target.parent)
+        git(root, "worktree", "add", "--detach", str(target), request["commit"])
+        check_linked_checkout(root, target)
+    atomic_json(receipt, dict(identity=identity, ready=True), previous)
 
 def remote_inspect(request, registry_path):
+    commit = request.get("commit")
+    if commit is not None:
+        require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit),
+                "expected_base_commit_invalid")
     _, registry = registry_read(registry_path)
     selected = machine(registry, request)
     key, mapping = select_mapping(selected, request)
@@ -277,7 +298,7 @@ def remote_receive(request, registry_path, bundle_stream):
                         require(not root.exists(), "project_preparation_destination_occupied")
                         os.rename(checkout, root)
                 require(commit_present(root, commit), "project_preparation_commit_missing")
-        prepare_linked_checkout(root, mapping, request)
+        prepare_linked_checkout(root, mapping, request, registry_path)
         if mapping.get("additional_root"):
             extra = mapping["additional_root"]
             private_dir(extra["remote_root"])

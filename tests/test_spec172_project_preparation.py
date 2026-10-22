@@ -259,6 +259,51 @@ class PreparationTests(unittest.TestCase):
                        check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.assertEqual(marker.read_text(), "ran")
 
+    def test_linked_worktree_partial_checkout_is_not_replayed(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        prep.git(remote, "fetch", str(checkout), self.request["commit"])
+        self.request["linked_checkout"] = str(checkout.relative_to(self.source))
+        original = prep.git
+        def interrupted(root, *arguments, **kwargs):
+            if arguments[:2] == ("worktree", "add"):
+                original(root, *arguments[:2], "--no-checkout", *arguments[2:], **kwargs)
+                raise subprocess.TimeoutExpired("git", prep.TIMEOUT)
+            return original(root, *arguments, **kwargs)
+        with patch.object(prep, "git", side_effect=interrupted):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.receive()
+        self.assertTrue((target / ".git").is_file())
+        self.assertFalse((target / "code.txt").exists())
+        with self.assertRaisesRegex(prep.Refused, "checkout_incomplete"):
+            self.receive(io.BytesIO())
+        # Meme un ancien residu sans recu n'est pas pris pour un checkout fini.
+        receipts = list((self.registry.parent / "linked-checkouts").glob("*.json"))
+        self.assertEqual(len(receipts), 1)
+        receipts[0].unlink()
+        with self.assertRaisesRegex(prep.Refused, "checkout_incomplete"):
+            self.receive(io.BytesIO())
+        self.assertFalse((target / "code.txt").exists())
+        self.assertEqual(prep.git(remote, "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
+
+    def test_linked_worktree_existing_commit_is_left_for_worker_validation(self):
+        checkout, _, target = self.mapped_linked_worktree()
+        _, local, _ = self.prepare_via_federation()
+        prep.git(target, "checkout", "--detach", self.sha)
+        request = dict(self.request, project_id="known",
+                       linked_checkout=str(checkout.relative_to(self.source)))
+        registry = self.home / "namespace/agents.json"
+        with patch.object(Path, "home", return_value=self.home):
+            prep.remote_receive(request, registry, io.BytesIO())
+        self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
+        self.assertEqual(len(local), 1)
+
+    def test_remote_commit_format_is_checked_before_preparation(self):
+        self.request["commit"] = "--invalid"
+        with self.assertRaisesRegex(prep.Refused, "expected_base_commit_invalid"):
+            self.receive()
+        self.assertFalse((self.registry.parent / "linked-checkouts").exists())
+
     def test_nested_repository_is_not_a_linked_worktree(self):
         checkout, _, _ = self.mapped_linked_worktree()
         nested = self.source / "independent"

@@ -59,3 +59,60 @@ Preuves privées :
 Ce checkpoint ne qualifie pas encore l'activation ni le lancement de la
 mission Opus2D. Ils doivent être consignés séparément. Aucun parcours
 d'interface modifié ; pas de diaporama requis.
+
+
+## Contre-revue et correction du worker
+
+La revue 0043865a refuse le checkpoint ad980493 : le helper prepare le bon
+checkout, mais le worker sonde et rafraichit encore le principal. La mutation
+est maintenant bornee au checkout reel. Le repertoire Git commun doit rester
+celui du mapping. Une correspondance limitee a un sous-dossier ne gagne aucun
+droit de rafraichir son parent.
+
+Reference T3 relue : GitVcsDriverCore.refreshCheckedOutBranch (3668–3726)
+applique statut, filiation et avance rapide dans input.cwd. Bridget conserve
+son avance rapide seule, sans le reset que T3 autorise dans certains cas.
+Les gardes de missions actives restent appliquees a ce checkout.
+
+Le mode isole part aussi du checkout source reel. Son nouveau dossier et la
+projection des droits sont relies a ce checkout, puis revalides avant remise.
+Le mapping du registre reste inchange. Le mode partage ne bouge jamais le
+principal pour satisfaire le commit d'un autre worktree.
+
+Un recu prive est ecrit avant extraction, puis marque termine seulement apres
+le succes de Git. Un recu incomplet est refuse au rejeu, sans suppression ni
+reprise automatique. Un ancien dossier sans recu et avec des fichiers suivis
+manquants ou modifies est aussi refuse. Le format du commit est verifie au
+depart et a destination. T3 arme une transaction de liaison et un rollback
+apres creation dans WorktreeMcpService (235–278) ; Bridget conserve plutot le
+recu distant incomplet et les fichiers, pour eviter une suppression distante
+non verifiee.
+
+Decision sur un checkout existant : le helper ne le deplace pas. Un commit
+ancien valide reste soumis a la sonde du worker. Une avance rapide ne se fait
+qu'au Prepare, si le checkout est propre et sans mission active. Une divergence
+est refusee avant admission. Cette politique conserve le comportement Shared
+existant ; imposer l'egalite dans le helper aurait interdit sa mise a jour sure.
+
+## Git Cartae : correction durable de l'environnement
+
+Cause observee : SSH non interactif choisit /usr/bin/git (2.43.0), alors que le
+service choisit deja /home/moi/.local/lib/bridget-tools/git-2.56.0/bin/git.
+Le choix est maintenant place avant le retour non interactif dans
+/home/moi/dotfiles/bash/.bashrc, cible du lien /home/moi/.bashrc, conserve.
+Le lien stable /home/moi/.local/lib/bridget-tools/git-current pointe vers 2.56.0.
+Une connexion SSH neuve et un shell de connexion choisissent tous deux 2.56.0,
+sans PATH ajoute a leur commande. Sauvegarde et empreintes privees conservees.
+T3 resout aussi la commande Git depuis l'environnement du processus
+(GitVcsDriverCore.executeGit) ; cette correction de shell appartient a Cartae.
+
+Le checkpoint final des tests, la revue et les activations doivent suivre.
+
+
+## Qualification finale de la revision corrective
+
+18 tests Python et 4 tests Rust distincts PASS. Le nouveau test du worker parcourt quatre cas : partage/isole, base descendante/divergente du principal. Prepare et recheck passent, le principal reste identique, le dossier execute contient le commit demande. Une demande de retour arriere partage est refusee a la sonde.
+
+RED final du worker : meme fixture, code de production ad980493. L assertion main must not move echoue sur deux HEAD differents. Le GREEN final utilise exactement la meme fixture. Aucun fournisseur reel dans ces tests, aucune suite complete. Les deux shells frais choisissent Git 2.56.0 ; les quatre tests finaux ne forcent pas PATH.
+
+Preuves privees : /home/moi/.cache/bridget-worktrees172/rust-r3.json, /home/moi/.cache/bridget-worktrees172/python-r3.json, /home/moi/.cache/bridget-worktrees172/worker-red-final.json et leurs journaux. Empreintes source dans le JSON public voisin. Activation et recette MCP reelle encore non qualifiees a ce checkpoint.
