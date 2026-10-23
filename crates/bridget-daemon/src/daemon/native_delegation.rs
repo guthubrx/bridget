@@ -3670,7 +3670,27 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "result_bytes":body.map(str::len),
         "detail":(workspace_report_ready(task) && matches!(task.state.as_str(),"result_available"|"failed")).then(|| json!({"tool":"bridget_task_status","task_id":task.task_id})),
         "mailbox":mailbox});
-    if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
+    let release_unconfirmed = task.projected_error().is_some_and(|error| {
+        error.starts_with("remote_start_failed:remote_release:")
+            || error == "remote_start_failed:remote_release_unconfirmed"
+    });
+    if release_unconfirmed {
+        let (message, recovery) = if body.is_some() {
+            ("Le résultat est disponible. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
+             "Récupérez le résultat de cette même tâche. Ne créez pas de nouvelle demande pour remplacer ce résultat.")
+        } else if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
+            ("La tâche est terminée. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
+             "Consultez l’état final de cette même tâche avant de décider d’une nouvelle demande. Rejouer la demande ne relance pas la mission.")
+        } else if task.mission_issued_at.is_some() {
+            ("Le travail métier a été remis à l’agent. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
+             "Consultez le statut et le résultat de cette même tâche. Ne lancez pas de remplacement pendant son exécution ou son nettoyage.")
+        } else {
+            ("La confirmation du démarrage distant est indisponible. La mission peut déjà être en cours.",
+             "Consultez le statut et le résultat de cette même tâche. Ne créez pas de nouvelle demande tant que son issue reste inconnue. Rejouer la demande ne relance pas la mission.")
+        };
+        view["error_message"] = json!(message);
+        view["error_recovery"] = json!(recovery);
+    } else if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
             view["error_recovery"] = if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
@@ -23396,6 +23416,53 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(reported["error_recovery"].as_str().unwrap().contains("terminé"));
         assert!(rx.try_recv().is_err(), "aucune remise métier ni relance au rejeu");
         assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec174_remote_release_uncertain_message_preserves_task_and_replay() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let task_id = admitted["task_id"].as_str().unwrap().to_owned();
+        for code in ["remote_release:WorkerUnavailable", "remote_release:StaleConnection",
+            "remote_release_unconfirmed", "remote_release:private-secret"] {
+            {
+                let st = state.lock().unwrap();
+                let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+                task.state = "starting".into();
+                task.mission_issued_at = None;
+                st.delegation_store.save(&task).unwrap();
+            }
+            let result = remote_admission_outcome(&state, &task_id, Err(code.into())).unwrap();
+            assert_eq!(result["task_id"], task_id);
+            assert_eq!(result["status"], "starting");
+            assert_eq!(result["error"], format!("remote_start_failed:{code}"));
+            assert_eq!(result["error_message"], "La confirmation du démarrage distant est indisponible. La mission peut déjà être en cours.");
+            assert_eq!(result["error_recovery"], "Consultez le statut et le résultat de cette même tâche. Ne créez pas de nouvelle demande tant que son issue reste inconnue. Rejouer la demande ne relance pas la mission.");
+            assert_eq!(admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap(), result);
+        }
+        let mut task = state.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap();
+        task.state = "working".into();
+        task.mission_issued_at = Some(unix_timestamp());
+        let working = task_view(&task, None, true);
+        assert_eq!(working["error_message"], "Le travail métier a été remis à l’agent. La confirmation initiale du démarrage distant n’avait pas été obtenue.");
+        assert!(working["error_recovery"].as_str().unwrap().contains("même tâche"));
+        task.state = "result_available".into();
+        task.result = Some("résultat confirmé".into());
+        let completed = task_view(&task, None, true);
+        assert_eq!(completed["result"], "résultat confirmé");
+        assert_eq!(completed["error_message"], "Le résultat est disponible. La confirmation initiale du démarrage distant n’avait pas été obtenue.");
+        assert!(completed["error_recovery"].as_str().unwrap().contains("Récupérez"));
+        task.state = "failed".into();
+        task.result = None;
+        task.cleanup_done = true;
+        let failed = task_view(&task, None, true);
+        assert_eq!(failed["error_message"], "La tâche est terminée. La confirmation initiale du démarrage distant n’avait pas été obtenue.");
+        assert!(!failed["error_recovery"].as_str().unwrap().contains("issue reste inconnue"));
+        task.error = None;
+        assert!(task_view(&task, None, true).get("error_message").is_none());
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        assert!(rx.try_recv().is_err(), "aucune remise métier ni relance au rejeu");
         drop(state); cleanup(&config);
     }
 

@@ -1350,3 +1350,12 @@ Utiliser `git worktree remove` sans `--force` et conserver la branche. Garder le
 worktrees actifs, modifiés, verrouillés ou non intégrés, ainsi que les parents
 qui contiennent d’autres worktrees. C’est une routine opérateur ; Bridget
 n’installe aucune suppression périodique.
+
+### Confirmation de démarrage distant (174)
+
+Un refus `remote_start_failed:remote_release:WorkerUnavailable` ne prouve pas
+que la mission n’a pas démarré. Consultez le statut et le résultat de la même
+tâche. Ne l’annulez pas et ne créez pas de remplacement sur ce seul motif.
+Le message distingue l’issue inconnue, la remise confirmée, le résultat
+disponible et la clôture confirmée. Le code de transport initial est conservé ;
+il ne remplace pas un résultat reçu ensuite.
