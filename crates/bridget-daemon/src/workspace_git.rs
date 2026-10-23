@@ -161,6 +161,7 @@ fn allowed(args: &[&str]) -> bool {
         ["rev-parse", "--show-toplevel" | "--git-common-dir"] => true,
         ["rev-parse", "--short", "HEAD"] => true,
         ["rev-parse", "--verify", "--end-of-options", value] => revision(value),
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", value] => revision(value),
         ["symbolic-ref", "-q" | "--quiet" | "--short", "HEAD"] => true,
         ["check-ref-format", "--branch", branch] => validate_branch(branch).is_ok(),
         ["check-ignore", "-q", "--", path] => !path.starts_with('-') && !path.contains('\0'),
@@ -461,9 +462,10 @@ pub(crate) fn resolve_source_commit(
     let base = base_ref.unwrap_or("HEAD");
     validate_base_ref(base).map_err(WorkspacePreflightError::Refused)?;
     let base = format!("{base}^{{commit}}");
+    // Code 1 : référence absente. Code 128 : dépôt invalide ou Git en échec.
     let base_output = run_git(
         &cwd,
-        &["rev-parse", "--verify", "--end-of-options", &base],
+        &["rev-parse", "--verify", "--quiet", "--end-of-options", &base],
         READ_TIMEOUT,
     )
     .map_err(|error| {
@@ -474,16 +476,15 @@ pub(crate) fn resolve_source_commit(
             "workspace_base_unavailable: sortie Git tronquée à 1 Mio".into(),
         ));
     }
-    if base_output.code == Some(128) {
+    if base_output.code == Some(1) {
         return Err(WorkspacePreflightError::Refused(
             "workspace_base_unavailable: référence de base inconnue".into(),
         ));
     }
     if !base_output.success() {
         return Err(WorkspacePreflightError::Technical(format!(
-            "workspace_base_unavailable: Git {:?} : {}",
-            base_output.code,
-            base_output.stderr.trim()
+            "workspace_base_unavailable: Git {:?} indisponible",
+            base_output.code
         )));
     }
     let base_commit = base_output.stdout.trim_end().to_string();

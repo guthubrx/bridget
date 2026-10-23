@@ -1261,6 +1261,11 @@ mod tests {
                 "permission_source_unavailable",
                 None,
             ),
+            (
+                json!({"status":"refused","code":"workspace_base_unavailable","message":"Le dépôt, le commit ou la référence de base demandé est introuvable.","detail":{"message":"Le dépôt, le commit ou la référence de base demandé est introuvable.","recovery":"Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place."}}),
+                "workspace_base_unavailable",
+                Some(json!({"message":"Le dépôt, le commit ou la référence de base demandé est introuvable.","recovery":"Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place."})),
+            ),
         ] {
             let socket = crate::mcp_identity::mock_socket("quota157");
             let listener = UnixListener::bind(&socket).unwrap();

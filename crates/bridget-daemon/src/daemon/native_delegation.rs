@@ -3291,6 +3291,11 @@ fn failure(code: &str) -> Value {
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
     }
+    if code.starts_with("workspace_base_unavailable:") {
+        let message = "Le dépôt, le commit ou la référence de base demandé est introuvable.";
+        let recovery = "Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place.";
+        return json!({"status":"refused","code":"workspace_base_unavailable","message":message,"detail":{"message":message,"recovery":recovery}});
+    }
     if code.starts_with("workspace_")
         && let Some((code, message)) = code.split_once(':')
     {
@@ -11425,6 +11430,25 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
+
+    #[test]
+    fn spec174_base_unavailable_detail_constant_sans_stderr() {
+        let message = "Le dépôt, le commit ou la référence de base demandé est introuvable.";
+        let recovery = "Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place.";
+        let expected = json!({
+            "status": "refused",
+            "code": "workspace_base_unavailable",
+            "message": message,
+            "detail": {"message": message, "recovery": recovery}
+        });
+        for raw in [
+            "workspace_base_unavailable: référence de base inconnue",
+            "workspace_base_unavailable: Git Some(128) : fatal: not a git repository /srv/prive/depot",
+        ] {
+            assert_eq!(failure(raw), expected);
+        }
+        assert!(failure("workspace_disk_full: Git Some(1) : x").get("detail").is_none());
+    }
 
     fn routing168_fixture(
         count: usize,

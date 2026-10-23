@@ -891,3 +891,36 @@ fn spec174_workspace_limit_128_counts_retained_and_nested_checkouts() {
         assert!(!repo.join(".git/refs/heads/new-mission").exists());
     });
 }
+
+#[test]
+fn spec174_base_ref_absente_sans_depot_ou_git_technique_sont_separees() {
+    with_repo(|repo| {
+        assert!(matches!(
+            resolve_source_commit(repo, Some("base-absente")),
+            Err(WorkspacePreflightError::Refused(error))
+                if error == "workspace_base_unavailable: référence de base inconnue"
+        ));
+        assert!(matches!(
+            resolve_source_commit(repo, Some("-bad")),
+            Err(WorkspacePreflightError::Refused(error))
+                if error == "workspace_base_unavailable: référence de base invalide"
+        ));
+        assert!(resolve_source_commit(repo, Some("HEAD")).is_ok_and(|commit| sha(&commit)));
+        let outside = repo.parent().unwrap();
+        let empty = outside.join("empty");
+        fs::create_dir(&empty).unwrap();
+        fixture_git(&empty, &["init", "-q"]);
+        assert!(matches!(
+            resolve_source_commit(&empty, None),
+            Err(WorkspacePreflightError::Refused(error))
+                if error == "workspace_base_unavailable: référence de base inconnue"
+        ));
+        assert!(matches!(
+            resolve_source_commit(outside, None),
+            Err(WorkspacePreflightError::Technical(error))
+                if error.starts_with("workspace_base_unavailable:")
+                    && !error.contains("fatal")
+                    && !error.contains(outside.to_str().unwrap())
+        ));
+    });
+}

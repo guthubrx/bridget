@@ -507,6 +507,42 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(prep.Refused, "checkout_incomplete"):
             self.receive(io.BytesIO())
 
+    def test_linked_checkout_launch_failure_is_cleaned_then_replays(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        prep.git(remote, "fetch", str(checkout), self.request["commit"])
+        self.request["linked_checkout"] = str(checkout.relative_to(self.source))
+        original = subprocess.run
+        def unlaunched(command, *args, **kwargs):
+            if "worktree" in command and command[command.index("worktree") + 1] == "add":
+                raise FileNotFoundError(2, "git introuvable")
+            return original(command, *args, **kwargs)
+        with patch.object(subprocess, "run", side_effect=unlaunched):
+            with self.assertRaises(FileNotFoundError):
+                self.receive()
+        self.assertFalse(target.exists())
+        self.assertEqual(list((self.registry.parent / "linked-checkouts").glob("*.json")), [])
+        self.receive(io.BytesIO())
+        self.assertEqual(prep.git(target, "rev-parse", "HEAD").stdout.decode().strip(), self.request["commit"])
+
+    def test_linked_checkout_launch_failure_without_absence_proof_keeps_receipt(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        prep.git(remote, "fetch", str(checkout), self.request["commit"])
+        self.request["linked_checkout"] = str(checkout.relative_to(self.source))
+        original = subprocess.run
+        def unlaunched(command, *args, **kwargs):
+            if "worktree" in command and command[command.index("worktree") + 1] in ("add", "list"):
+                raise FileNotFoundError(2, "git introuvable")
+            return original(command, *args, **kwargs)
+        with patch.object(subprocess, "run", side_effect=unlaunched):
+            with self.assertRaises(FileNotFoundError):
+                self.receive()
+        self.assertFalse(target.exists())
+        self.assertEqual(len(list((self.registry.parent / "linked-checkouts").glob("*.json"))), 1)
+        with self.assertRaisesRegex(prep.Refused, "checkout_incomplete"):
+            self.receive(io.BytesIO())
+
     def test_nested_repository_is_not_a_linked_worktree(self):
         checkout, _, _ = self.mapped_linked_worktree()
         nested = self.source / "independent"
