@@ -1,5 +1,5 @@
 # Session 176 — Observation fiable et bornée des worktrees
-Statut : In Progress
+Statut : Implemented
 
 ## Demande et cadrage
 Demande utilisateur : « go, fais tout », après cinq axes proposés pour améliorer le lot175.
