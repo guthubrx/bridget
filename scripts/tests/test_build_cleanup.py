@@ -22,7 +22,7 @@ build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
 
 
-def inventaire_reel():
+def inventaire_reel(*_args):
     # Les avertissements lsof d'autres montages ne font pas partie de ce scénario.
     return build.parse_open_paths(subprocess.run(build.LSOF_OPEN_FILES, capture_output=True,
                                                  timeout=30).stdout)
@@ -213,7 +213,7 @@ class ProcessTests(unittest.TestCase):
                 env={**os.environ, "BRIDGET_CARGO": str(cargo),
                      "BRIDGET_BUILD_CACHE_GIB": "0"}, timeout=40)
             self.assertEqual(result.returncode, 0, result.stderr)
-            if "lsof indisponible ou incomplet" in result.stderr:
+            if "observation des processus incomplète" in result.stderr:
                 self.skipTest("observation lsof incomplète sur cet hôte : nettoyage refusé")
             self.assertFalse((profile / "deps").exists(), result.stderr)
             self.assertEqual((profile / "bridget").read_text(), "binaire")
@@ -241,7 +241,7 @@ class ProcessTests(unittest.TestCase):
             try:
                 self.assertEqual(child.stdout.readline().strip(), "ready")
                 try:
-                    opened = build.opened_paths()
+                    opened = build.opened_paths((path.parent,))
                 except RuntimeError as error:
                     self.skipTest(f"observation lsof indisponible sur cet hôte : {error}")
                 self.assertIn(str(path), opened)
@@ -402,6 +402,7 @@ class WorktreePruneTests(unittest.TestCase):
     def test_ignored_outputs_are_preserved_until_archived(self):
         worktree = self.worktree("ignored-output", self.old)
         ignored = self.repo / ".git/info/exclude"
+        ignored.parent.mkdir(parents=True, exist_ok=True)
         with ignored.open("a") as stream:
             stream.write("\nlocal-evidence/\n")
         evidence = worktree / "local-evidence"
@@ -412,15 +413,15 @@ class WorktreePruneTests(unittest.TestCase):
         self.assertEqual((evidence / "receipt.json").read_text(), '{"kept": true}')
 
     def test_incomplete_process_inventory_preserves_worktree(self):
-        real_run = subprocess.run
+        real_run = build.observed_run
         for returncode, stderr in ((1, b""), (0, b"WARNING: inaccessible filesystem")):
             with self.subTest(returncode=returncode, stderr=stderr):
                 worktree = self.worktree(f"incomplete-lsof-{returncode}", self.old)
-                def incomplete(command, **kwargs):
-                    if command[0] == "lsof":
+                def incomplete(command, *args, **kwargs):
+                    if any("lsof" in part for part in command):
                         return subprocess.CompletedProcess(command, returncode, b"p42\nn/tmp\n", stderr)
-                    return real_run(command, **kwargs)
-                with patch.object(build.subprocess, "run", side_effect=incomplete):
+                    return real_run(command, *args, **kwargs)
+                with patch.object(build, "observed_run", side_effect=incomplete):
                     self.assertEqual(build.prune_merged_worktrees(self.repo), [])
                 self.assertTrue(worktree.exists())
 
@@ -504,9 +505,9 @@ class WorktreePruneTests(unittest.TestCase):
             stdout=subprocess.PIPE, text=True)
         try:
             self.assertEqual(child.stdout.readline().strip(), "ready")
-            if build.busy_paths() is None:
-                self.skipTest("lsof incomplet sur cet hôte : processus non observables")
             report = build.inventory(self.repo, "main", time.time(), Path("/"))
+            if report["processus"] == "inconnu":
+                self.skipTest("lsof incomplet pendant cet inventaire : processus non observables")
         finally:
             child.communicate("done\n", timeout=10)
         motifs = {Path(row["path"]).name: row["motifs"] for row in report["worktrees"]}
@@ -566,7 +567,7 @@ class WorktreePruneTests(unittest.TestCase):
     def test_erreurs_outils_sont_inconnues_et_commande_ne_purge_rien(self):
         for error in (FileNotFoundError("outil absent"), subprocess.TimeoutExpired("outil", 15)):
             with self.subTest(error=type(error).__name__):
-                with patch.object(build.subprocess, "run", side_effect=error):
+                with patch.object(build.subprocess, "Popen", side_effect=error):
                     self.assertIsNone(build.busy_paths())
                     with self.assertRaises(RuntimeError):
                         build.worktree_entries(self.repo)
@@ -597,6 +598,186 @@ class WorktreePruneTests(unittest.TestCase):
             report = build.inventory(self.repo, "main", time.time(), Path("/"))
         self.assertEqual(report["worktrees"][1]["motifs"], ["candidat_a_examiner"])
 
+
+
+    def test_budget_epuise_conserve_toutes_les_entrees_non_examinees(self):
+        for name in ("reste-a", "reste-b"):
+            self.worktree(name, self.old)
+        budget = build.ObservationBudget()
+        def expire(*_args):
+            budget.deadline = time.monotonic() - 1
+            return []
+        with patch.object(build, "busy_paths", side_effect=expire):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"), budget)
+        self.assertEqual(report["capacity"]["scoped_count"], 2)
+        self.assertTrue(all("lecture_inconnue" in row["motifs"] for row in report["worktrees"][1:]))
+        self.assertEqual(budget.git_calls, 1)
+        self.assertIn("deadline", report["observation"]["incomplete"])
+
+    def test_faits_git_identiques_sont_lus_une_fois_par_passage(self):
+        common = subprocess.check_output(["git", "-C", str(self.repo), "rev-parse", "HEAD"], text=True).strip()
+        for name in ("partage-a", "partage-b", "partage-c"):
+            path = self.worktree(name, self.old)
+            subprocess.run(["git", "-C", str(path), "reset", "--hard", common],
+                           check=True, capture_output=True)
+        budget = build.ObservationBudget()
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"), budget)
+        self.assertEqual(budget.git_calls, 7)
+        self.assertTrue(all(row["motifs"] == ["candidat_a_examiner"] for row in report["worktrees"][1:]))
+
+    def test_registre_au_dela_du_plafond_est_inconnu(self):
+        self.worktree("secondaire", self.old)
+        with patch.object(build, "MAX_WORKTREE_ENTRIES", 1), self.assertRaises(RuntimeError):
+            build.worktree_entries(self.repo)
+
+
+class Observation176Tests(unittest.TestCase):
+    def test_seul_verrou_propre_est_exclu_du_cache(self):
+        lock = Path("/tmp/profile/.cargo-lock")
+        data = (f"p{os.getpid()}\nn{lock}\nn/tmp/profile/other\n"
+                f"p{os.getpid()+1}\nn{lock}\n").encode()
+        self.assertEqual(build.parse_open_paths(data, (lock,)),
+                         [Path("/tmp/profile/other"), lock])
+
+    def test_fuse_sans_avertissement_et_annotation_reelle_bloquent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            dev = f"{os.major(root.stat().st_dev)}:{os.minor(root.stat().st_dev)}"
+            mounts = {Path("/"): [(dev, Path("/"), "ext4")],
+                      Path("/portal"): [("0:999", Path("/"), "fuse.portal")]}
+            for suffix in ("", " (-e /portal)"):
+                data = f"p1\nf1\ntREG\nn/portal/file{suffix}\n".encode()
+                with self.subTest(suffix=suffix), patch.object(build.sys, "platform", "linux"), \
+                        patch.object(build, "mount_snapshot", return_value=(b"stable", mounts)), \
+                        patch.object(build, "observed_run", return_value=subprocess.CompletedProcess([], 0, data, b"")):
+                    self.assertIsNone(build.busy_paths((root,)))
+
+    def test_portee_echappee_et_prefixe_exempte_restent_inconnus(self):
+        with patch.object(build, "observed_run") as run:
+            for root in (Path("/tmp/é"), Path("/tmp/a\nb"), Path("/tmp/a^b")):
+                self.assertIsNone(build.busy_paths((root,)))
+            run.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            dev = f"{os.major(root.stat().st_dev)}:{os.minor(root.stat().st_dev)}"
+            prefix = Path(str(root)[:-2])
+            mounts = {Path("/"): [(dev, Path("/"), "ext4")],
+                      prefix: [("0:999", Path("/"), "fuse.portal")]}
+            warning = (f"lsof: WARNING: can't stat() fuse.portal file system {prefix}\n"
+                       "      Output information may be incomplete.\n").encode()
+            with self.assertRaises(ValueError):
+                build.foreign_mount_exemptions(warning, (root,), mounts)
+
+    def test_capture_bornee_arrete_la_sortie_sans_la_parser(self):
+        budget = build.ObservationBudget(seconds=2)
+        result = build.observed_run([sys.executable, "-c", "import os; os.write(1,b'x'*1000000)"],
+                                    budget, limit=4096)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn("output_limit", budget.failures)
+
+    def test_budget_global_arrete_un_enfant_et_bloque_le_suivant(self):
+        budget = build.ObservationBudget(seconds=0.1)
+        start = time.monotonic()
+        result = build.observed_run([sys.executable, "-c", "import time; time.sleep(10)"], budget)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertLess(time.monotonic()-start, 2)
+        with patch.object(build.subprocess, "Popen") as spawn:
+            result = build.observed_run([sys.executable, "-c", "pass"], budget)
+        spawn.assert_not_called()
+        self.assertIn("deadline", budget.failures)
+
+    def test_erreur_d_acces_dans_stdout_interdit_absence(self):
+        self.assertFalse(build.process_output_complete(b"p1\nf1\ntREG\nn/proc/1/fd (opendir: Permission denied)\n"))
+        self.assertTrue(build.process_output_complete(b"p1\nf1\ntREG\nn/tmp/fichier avec espaces\n"))
+
+    def test_index_imbrication_conserve_ancetres_et_descendants(self):
+        a,b,c=Path("/w/a"),Path("/w/a/b"),Path("/w/c")
+        self.assertEqual(build.nested_worktrees([a,b,c]),{a,b})
+
+
+    def test_fichier_disparu_reste_un_chemin_occupe(self):
+        data = b"p1\nf1\ntREG\nn/tmp/w/f (stat: No such file or directory)\n"
+        self.assertTrue(build.process_output_complete(data))
+        self.assertEqual(build.parse_open_paths(data), [Path("/tmp/w/f")])
+
+    def test_montage_exempte_et_format_inconnu_bloquent(self):
+        for data in (b"p1\nf1\ntUNKN\nn/portal/file (-e /portal)\n",
+                     b"p1\nf1\ntREG\nn/portal/file\n",
+                     b"p1\nf1\ntREG\nn/elsewhere/file (-e /portal)\n",
+                     b"p1\nf1\ntREG\nnrelative-unknown\n",
+                     b"p1\nf1\ntNEWTYPE\nn/tmp/file\n"):
+            with self.subTest(data=data):
+                self.assertFalse(build.process_output_complete(data, ("/portal",)))
+
+    def test_objets_noyau_connus_ne_sont_pas_des_fichiers_disque(self):
+        for kind, name in (("FIFO", "pipe"), ("REG", "net"), ("REG", "mnt"), ("NEXUS", ""), ("CHAN", "channel"),
+                           ("REG", "anon_inode:[io_uring] (stat: No such file or directory)")):
+            self.assertTrue(build.process_output_complete(
+                f"p1\nf1\nt{kind}\nn{name}\n".encode()))
+        self.assertFalse(build.process_output_complete(b"p1\nf1\ntREG\nnother_inode:[unknown]\n"))
+
+    def test_mountinfo_decode_espaces_et_garde_couches(self):
+        raw = (b"1 0 8:1 / / rw - ext4 /dev/x rw\n"
+               b"2 1 0:2 / /foreign\\040mount rw - tmpfs tmpfs rw\n"
+               b"3 2 0:3 / /foreign\\040mount rw - tmpfs tmpfs rw\n")
+        with patch("builtins.open", return_value=io.BytesIO(raw)):
+            data, mounts = build.mount_snapshot()
+        self.assertEqual(data, raw)
+        self.assertEqual(len(mounts[Path("/foreign mount")]), 2)
+
+    def test_alias_et_montage_interne_refusent_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            dev = f"{os.major(root.stat().st_dev)}:{os.minor(root.stat().st_dev)}"
+            mounts = {Path("/"): [(dev, Path("/"), "ext4")],
+                      Path("/foreign"): [("0:999", Path("/"), "fuse.portal"), ("0:998", Path("/"), "tmpfs")]}
+            build.validate_mount_scopes((root,), mounts)
+            for other, layers in ((Path("/alias"), [(dev, root, "ext4")]),
+                                  (root/"inside", [("0:997", Path("/"), "tmpfs")]),
+                                  (root, [(dev, root, "ext4"), (dev, root, "ext4")])):
+                with self.subTest(other=other), self.assertRaises(ValueError):
+                    build.validate_mount_scopes((root,), {**mounts, other: layers})
+
+    def test_diagnostic_montage_ferme_exige_seconde_lecture_complete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            dev = f"{os.major(root.stat().st_dev)}:{os.minor(root.stat().st_dev)}"
+            mounts = {Path("/"): [(dev, Path("/"), "ext4")], Path("/portal"): [("0:999", Path("/"), "fuse.portal")]}
+            warning = b"lsof: WARNING: can't stat() fuse.portal file system /portal\n      Output information may be incomplete.\n"
+            good = f"p1\nf1\ntREG\nn{root}/held\n".encode()
+            first = subprocess.CompletedProcess([], 0, b"", warning)
+            second = subprocess.CompletedProcess([], 0, good, b"")
+            with patch.object(build.sys, "platform", "linux"), \
+                    patch.object(build, "mount_snapshot", return_value=(b"stable", mounts)), \
+                    patch.object(build, "observed_run", side_effect=[first, second]) as run:
+                budget = build.ObservationBudget()
+                self.assertEqual(build.busy_paths((root,), budget), [root/"held"])
+                self.assertEqual(budget.exempt_mounts, 1)
+                self.assertEqual(run.call_args.args[0][-2:], ["-e", "/portal"])
+            with patch.object(build.sys, "platform", "linux"), \
+                    patch.object(build, "mount_snapshot", side_effect=[(b"before", mounts), (b"after", mounts)]), \
+                    patch.object(build, "observed_run", return_value=second):
+                self.assertIsNone(build.busy_paths((root,)))
+            for diagnostic in (b"other warning", warning.replace(b"/portal", str(root).encode())):
+                with self.subTest(diagnostic=diagnostic), self.assertRaises(ValueError):
+                    build.foreign_mount_exemptions(diagnostic, (root,), mounts)
+
+    def test_echec_lecture_privilegiee_ne_replie_pas(self):
+        with patch.object(build.sys, "platform", "linux"), \
+                patch.object(build, "mount_snapshot", return_value=(b"stable", {})), \
+                patch.object(build, "observed_run", return_value=subprocess.CompletedProcess([], 1, b"", b"denied")) as run:
+            self.assertIsNone(build.busy_paths())
+            self.assertEqual(run.call_count, 1)
+
+    def test_stderr_borne_comme_stdout(self):
+        budget = build.ObservationBudget(seconds=2)
+        result = build.observed_run([sys.executable, "-c", "import os; os.write(2,b'x'*1000000)"],
+                                    budget, limit=4096)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, b"")
+        self.assertIn("output_limit", budget.failures)
 
 
 if __name__ == "__main__":

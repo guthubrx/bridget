@@ -7,6 +7,9 @@ import hashlib
 import json
 import math
 import os
+import re
+import selectors
+import signal
 from pathlib import Path
 import shutil
 import stat
@@ -130,18 +133,11 @@ def measure(profile):
     return size, newest
 
 
-def opened_paths():
-    """Échec de l'observation = aucune suppression, jamais une supposition d'inactivité."""
-    result = subprocess.run(["lsof", "-nP", "-Fpn"], capture_output=True, timeout=30)
-    if result.returncode != 0 or result.stderr:
-        raise RuntimeError("lsof indisponible ou incomplet ; nettoyage ignoré")
-    pid, paths = None, []
-    for line in result.stdout.splitlines():
-        if line.startswith(b"p"):
-            pid = int(line[1:])
-        elif line.startswith(b"n/") and pid != os.getpid():
-            paths.append(os.fsdecode(line[1:]))
-    return paths
+def opened_paths(scopes=()):
+    paths = busy_paths(scopes, ignore_own=tuple(scope / ".cargo-lock" for scope in scopes))
+    if paths is None:
+        raise RuntimeError("observation des processus incomplète ; nettoyage ignoré")
+    return [str(path) for path in paths]
 
 
 def prune(repo, max_bytes, max_age, dry_run=False, only=None):
@@ -181,7 +177,7 @@ def prune(repo, max_bytes, max_age, dry_run=False, only=None):
                 if current_size != size or current_newest != newest:
                     log(f"cache modifié pendant le contrôle, conservé : {profile}")
                     continue
-                if any(p == name or p.startswith(name + "/") for p in opened_paths()):
+                if any(p == name or p.startswith(name + "/") for p in opened_paths((profile,))):
                     log(f"fichiers utilisés, conservés : {profile}")
                     continue
                 if dry_run:
@@ -247,9 +243,9 @@ WORKTREE_MIN_AGE = 24 * 3600
 Worktree = namedtuple("Worktree", "path head locked prunable")
 
 
-def worktree_entries(repo):
+def worktree_entries(repo, budget=None):
     """Worktrees Git, dépôt principal en premier ; RuntimeError si le registre est illisible."""
-    result = git_ok(repo, "worktree", "list", "--porcelain", "-z")
+    result = git_ok(repo, "worktree", "list", "--porcelain", "-z", budget=budget)
     if result.returncode:
         raise RuntimeError(f"registre Git illisible : {repo}")
     entries, path, head, locked, prunable = [], None, None, False, False
@@ -265,42 +261,279 @@ def worktree_entries(repo):
         elif not field and path is not None:
             entries.append(Worktree(path, head, locked, prunable))
             path, head, locked, prunable = None, None, False, False
+    if len(entries) > MAX_WORKTREE_ENTRIES:
+        raise RuntimeError("registre Git trop grand")
     if not entries:
         raise RuntimeError(f"registre Git vide : {repo}")
     return entries
 
 
-LSOF_OPEN_FILES = ["lsof", "-n", "-P", "-F", "n"]
+LSOF_OPEN_FILES = ["lsof", "-n", "-P", "-F", "pftDn"]
+OBSERVATION_SECONDS = 30
+MAX_OBSERVATION_BYTES = 8 * 1024 * 1024
+MAX_WORKTREE_ENTRIES = 4096
 
 
-def busy_paths():
-    """Fichiers ouverts et répertoires courants de tous les processus ; None si inconnu.
+class ObservationBudget:
+    """Un seul budget monotone et des faits réutilisables pendant un passage."""
+    def __init__(self, seconds=OBSERVATION_SECONDS):
+        self.started = time.monotonic()
+        self.deadline = self.started + seconds
+        self.failures = set()
+        self.git_calls = 0
+        self.facts = {}
+        self.process_reader = "unavailable"
+        self.exempt_mounts = 0
 
-    Un seul lsof par passage. Un processus peut tenir un fichier d'un worktree
-    depuis un autre répertoire courant. Échec ou avertissement = inventaire
-    incomplet : aucun worktree n'est alors retiré (fail-closed)."""
+    def remaining(self):
+        return max(0, self.deadline - time.monotonic())
+
+
+def observed_run(arguments, budget=None, timeout=15, limit=MAX_OBSERVATION_BYTES):
+    """Captures bornées ; aucune donnée partielle n'est interprétée comme complète."""
+    budget = budget or ObservationBudget()
+    end = min(budget.deadline, time.monotonic() + timeout)
+    output = [bytearray(), bytearray()]
+    child = None
+    failure = None
     try:
-        result = subprocess.run(LSOF_OPEN_FILES, capture_output=True, check=False, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode or result.stderr.strip() or not result.stdout:
-        return None
-    return parse_open_paths(result.stdout)
+        if time.monotonic() >= end:
+            raise TimeoutError
+        child = subprocess.Popen(arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 start_new_session=True, env=dict(os.environ, LC_ALL="C"))
+        with selectors.DefaultSelector() as selector:
+            for index, stream in enumerate((child.stdout, child.stderr)):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ, index)
+            while selector.get_map():
+                remaining = end - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                for key, _ in selector.select(min(remaining, 0.1)):
+                    chunk = os.read(key.fd, min(65536, limit - len(output[key.data]) + 1))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                    else:
+                        output[key.data].extend(chunk)
+                        if sum(map(len, output)) > limit:
+                            raise OverflowError
+            child.wait(timeout=max(0.001, end-time.monotonic()))
+        return subprocess.CompletedProcess(arguments, child.returncode, bytes(output[0]), bytes(output[1]))
+    except (TimeoutError, subprocess.TimeoutExpired):
+        failure = "deadline"
+    except OverflowError:
+        failure = "output_limit"
+    except (OSError, ValueError):
+        failure = "tool_unavailable"
+    finally:
+        if child is not None:
+            if child.poll() is None or failure is not None:
+                # Groupe créé par cet appel uniquement ; jamais un PID découvert ailleurs.
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    child.wait(timeout=1)
+                except ProcessLookupError:
+                    pass
+                except (subprocess.TimeoutExpired, OSError):
+                    budget.failures.add("process_stop_unconfirmed")
+            for stream in (child.stdout, child.stderr):
+                stream.close()
+    budget.failures.add(failure)
+    return subprocess.CompletedProcess(arguments, 124, b"", b"")
 
 
-def parse_open_paths(stdout):
-    # lsof suffixe « (deleted) » aux fichiers supprimés encore ouverts.
-    return [Path(os.fsdecode(line[1:].removesuffix(b" (deleted)")))
-            for line in stdout.split(b"\n") if line.startswith(b"n/")]
+def process_output_complete(stdout, exempt=()):
+    # Les types explicitement non fichiers n'ont pas de chemin à protéger.
+    nonfiles = {"a_inode", "netlink", "unix", "IPv4", "IPv6", "sock", "pack", "PIPE",
+                "KQUEUE", "PSXSEM", "PSXSHM", "systm", "NPOLICY", "FSEVENTS", "NEXUS", "CHAN"}
+    pid, record = None, {}
+    seen = False
+
+    def valid():
+        kind, name = record.get("t"), record.get("n", "")
+        if "f" not in record:
+            return False
+        if kind in nonfiles:
+            return True
+        if kind == "FIFO" and name == "pipe":
+            return True
+        if kind == "REG" and name in {"net", "mnt", "pid", "user", "uts", "ipc", "cgroup", "time"}:
+            return True
+        if kind == "REG" and name == "anon_inode:[io_uring] (stat: No such file or directory)":
+            return True
+        # Une cible lue mais disparue du disque reste un chemin occupé, jamais une absence.
+        if kind == "REG" and name.startswith("/"):
+            name = name.removesuffix(" (stat: No such file or directory)")
+        if kind == "unknown" and record.get("f") == "txt" and name == f"/proc/{pid}/exe":
+            try:
+                raw = Path(f"/proc/{pid}/stat").read_text()
+                return bool(int(raw[raw.rfind(")")+2:].split()[6]) & 0x200000)
+            except FileNotFoundError:
+                return not Path(f"/proc/{pid}").exists()
+            except (OSError, ValueError, IndexError):
+                return False
+        if kind not in {"REG", "DIR", "CHR", "BLK", "FIFO", "LINK", "VREG", "VDIR"}:
+            return False
+        if not name.startswith("/") or any(token in name for token in
+                ("Permission denied", "(readlink:", "(opendir:", "(stat:", "(-e ", "(+e ")):
+            return False
+        path = Path(name.removesuffix(" (deleted)"))
+        return not any(path == Path(m) or Path(m) in path.parents for m in exempt)
+
+    for raw in stdout.splitlines():
+        if not raw:
+            continue
+        try:
+            field, value = chr(raw[0]), os.fsdecode(raw[1:])
+            if field in {"p", "f"}:
+                if record and not valid():
+                    return False
+                record = {}
+            if field == "p":
+                if not value.isdigit():
+                    return False
+                pid = value
+            elif field in {"f", "t", "D", "n"}:
+                if pid is None or field in record:
+                    return False
+                record[field] = value
+                seen = True
+            else:
+                return False
+        except (ValueError, UnicodeError):
+            return False
+    return seen and (not record or valid())
 
 
-def git_ok(repo, *arguments):
-    """Résultat Git ; code 128 si Git est absent ou dépasse le délai, lecture inconnue."""
+def parse_open_paths(stdout, ignore_own=()):
+    # Le verrou Cargo détenu par ce nettoyeur reste sur disque ; aucun autre usage n'est exclu.
+    paths, pid = [], None
+    for line in stdout.splitlines():
+        if line.startswith(b"p"):
+            pid = line[1:]
+        elif line.startswith(b"n/"):
+            name = line[1:].removesuffix(b" (stat: No such file or directory)").removesuffix(b" (deleted)")
+            path = Path(os.fsdecode(name))
+            if pid != str(os.getpid()).encode() or path not in ignore_own:
+                paths.append(path)
+    return paths
+
+
+def mount_snapshot():
+    with open("/proc/self/mountinfo", "rb") as stream:
+        data = stream.read(1024 * 1024 + 1)
+    if len(data) > 1024 * 1024:
+        raise ValueError("mount inventory too large")
+    mounts = {}
+    for line in data.decode().splitlines():
+        fields = line.split()
+        if len(fields) < 10 or "-" not in fields:
+            raise ValueError("mount inventory incomplete")
+        name = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[4])
+        point = Path(name)
+        root = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), fields[3])
+        mounts.setdefault(point, []).append((fields[2], Path(root), fields[fields.index("-")+1]))
+    return data, mounts
+
+
+def validate_mount_scopes(scopes, mounts):
+    protected = set()
+    roots = [path.resolve(strict=True) for path in scopes]
+    for root in roots:
+        info = root.stat()
+        device = f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}"
+        parents = [m for m in mounts if m == root or m in root.parents]
+        if not parents:
+            raise ValueError("mount identity unavailable")
+        parent = max(parents, key=lambda m: len(m.parts))
+        if len(mounts[parent]) != 1 or mounts[parent][0][0] != device or mounts[parent][0][2].startswith("fuse"):
+            raise ValueError("mount identity ambiguous")
+        identity = mounts[parent][0][1] / root.relative_to(parent)
+        for other, layers in mounts.items():
+            if other == parent:
+                continue
+            if root == other or root in other.parents:
+                raise ValueError("nested mount in observed scope")
+            for dev, source, _kind in layers:
+                if dev == device and (identity == source or identity in source.parents or source in identity.parents):
+                    raise ValueError("alias mount may hide usage")
+        protected.add(device)
+    return roots, protected
+
+
+def foreign_mount_exemptions(stderr, scopes, mounts):
+    """Seuls des stat impossibles sur des périphériques étrangers sont exemptables."""
+    lines = stderr.decode(errors="strict").splitlines()
+    if not scopes or not lines or len(lines) % 2:
+        raise ValueError("unclassified diagnostic")
+    roots, protected = validate_mount_scopes(scopes, mounts)
+    exempt = []
+    for index in range(0, len(lines), 2):
+        match = re.fullmatch(r"lsof: WARNING: can't stat\(\) \S+ file system (/.*)", lines[index])
+        if not match or lines[index+1].strip() != "Output information may be incomplete.":
+            raise ValueError("unclassified diagnostic")
+        mount = Path(match[1])
+        if mount not in mounts or len(mounts[mount]) != 1 or mounts[mount][0][0] in protected:
+            raise ValueError("relevant mount unavailable")
+        # lsof -e compare des préfixes bruts, donc refuser aussi les faux voisins de chaîne.
+        if any(str(root).startswith(str(mount)) or str(mount).startswith(str(root)) for root in roots):
+            raise ValueError("overlapping mount unavailable")
+        exempt.append(str(mount))
+    return sorted(set(exempt))
+
+
+def busy_paths(scopes=(), budget=None, ignore_own=()):
+    budget = budget or ObservationBudget()
+    command = LSOF_OPEN_FILES
+    before, fuse = None, ()
     try:
-        return subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(repo), *arguments], capture_output=True,
-                              check=False, timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return subprocess.CompletedProcess(arguments, 128, b"", b"")
+        if any(not str(scope).isascii() or not str(scope).isprintable() or "\\" in str(scope) or "^" in str(scope) for scope in scopes):
+            raise ValueError("escaped scope unavailable")
+        if sys.platform.startswith("linux"):
+            before, mounts = mount_snapshot()
+            fuse = tuple(str(point) for point, layers in mounts.items()
+                         if any(kind.startswith("fuse") for _, _, kind in layers))
+            # Lecture seule avec une autorisation existante ; aucun mot de passe ni sudoers.
+            command = ["/usr/bin/lsof", "-n", "-P", "-F", "pftDn"]
+            if os.geteuid() != 0:
+                command = ["sudo", "-n", "--", *command]
+        result = observed_run(command, budget, timeout=30)
+        if result.returncode:
+            budget.failures.add("process_access_unavailable")
+            return None
+        if result.stderr.strip():
+            if before is None:
+                raise ValueError("diagnostic without mount identity")
+            exempt = foreign_mount_exemptions(result.stderr, scopes, mounts)
+            result = observed_run([*command, *(arg for name in exempt for arg in ("-e", name))],
+                                  budget, timeout=30)
+            if result.returncode or result.stderr.strip() or not process_output_complete(result.stdout, (*fuse, *exempt)):
+                raise ValueError("incomplete scoped observation")
+            budget.exempt_mounts = len(exempt)
+        elif not process_output_complete(result.stdout, fuse):
+            raise ValueError("incomplete process records")
+        if before is not None and scopes:
+            validate_mount_scopes(scopes, mounts)
+        if before is not None and mount_snapshot()[0] != before:
+            raise ValueError("mount inventory changed")
+        if not budget.remaining():
+            raise ValueError("observation expired")
+        paths = parse_open_paths(result.stdout, ignore_own)
+        budget.process_reader = "system_lsof" if before is None else "linux_system_lsof"
+        if scopes:
+            roots = {path.resolve() for path in scopes}
+            paths = [path for path in paths if path in roots or not roots.isdisjoint(path.parents)]
+        return paths
+    except (OSError, ValueError, UnicodeError):
+        budget.failures.add("process_observation_incomplete")
+        return None
+
+
+def git_ok(repo, *arguments, budget=None):
+    budget = budget or ObservationBudget()
+    budget.git_calls += 1
+    return observed_run(["git", "-c", "core.fsmonitor=false", "-C", str(repo), *arguments],
+                        budget, timeout=15, limit=1024 * 1024)
 
 
 # Aligné sur MAX_WORKTREES dans crates/bridget-daemon/src/workspace_git.rs.
@@ -332,29 +565,50 @@ NOTE_CAPACITE = ("scoped_count compte les inscriptions Git sous le dossier .work
                  "ce nombre ne garantit ni égalité avec l'admission, ni capacité disponible.")
 
 
-def integration_reason(repo, head, base_ref):
-    """None si HEAD est intégré à base_ref ; sinon le motif de blocage."""
-    if git_ok(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", base_ref + "^{commit}").returncode:
+def integration_reason(repo, head, base_ref, budget=None):
+    budget = budget or ObservationBudget()
+    key = ("base", str(repo), base_ref)
+    if key not in budget.facts:
+        result = git_ok(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", base_ref + "^{commit}", budget=budget)
+        budget.facts[key] = result.stdout.strip().decode() if not result.returncode else None
+    base = budget.facts[key]
+    if not base or not budget.remaining():
         return "lecture_inconnue"
-    code = git_ok(repo, "merge-base", "--is-ancestor", "--", head, base_ref).returncode
-    if code == 0:
-        return None
-    return "non_integre" if code == 1 else "lecture_inconnue"
+    key = ("ancestor", str(repo), head, base)
+    if key not in budget.facts:
+        budget.facts[key] = git_ok(repo, "merge-base", "--is-ancestor", "--", head, base, budget=budget).returncode
+    code = budget.facts[key]
+    return None if code == 0 else "non_integre" if code == 1 else "lecture_inconnue"
 
 
-def age_reason(repo, head, now):
-    stamp = git_ok(repo, "log", "-1", "--format=%ct", head)
-    if stamp.returncode or not stamp.stdout.strip():
-        return "lecture_inconnue"
-    return "recent" if now - int(stamp.stdout.strip()) < WORKTREE_MIN_AGE else None
+def age_reason(repo, head, now, budget=None):
+    budget = budget or ObservationBudget()
+    key = ("time", str(repo), head)
+    if key not in budget.facts:
+        result = git_ok(repo, "log", "-1", "--format=%ct", head, budget=budget)
+        try:
+            budget.facts[key] = int(result.stdout.strip()) if not result.returncode else None
+        except ValueError:
+            budget.facts[key] = None
+    stamp = budget.facts[key]
+    return "lecture_inconnue" if stamp is None else "recent" if now-stamp < WORKTREE_MIN_AGE else None
 
 
-def dirty_reason(path):
+def dirty_reason(path, budget=None):
     status = git_ok(path, "--no-optional-locks", "status", "--porcelain",
-                    "--untracked-files=all", "--ignored")
+                    "--untracked-files=normal", "--ignored", budget=budget)
     if status.returncode:
         return "lecture_inconnue"
     return "dirty_ignored" if status.stdout.strip() else None
+
+
+def nested_worktrees(paths):
+    known, nested = set(paths), set()
+    for path in known:
+        for parent in path.parents:
+            if parent in known:
+                nested.update((path, parent))
+    return nested
 
 
 def capacity_state(count):
@@ -363,17 +617,22 @@ def capacity_state(count):
     return "warning" if count >= WORKTREE_WARNING_AT else "normal"
 
 
-def worktree_context(repo, scope=None):
-    entries = worktree_entries(repo)
+def worktree_context(repo, scope=None, budget=None):
+    entries = worktree_entries(repo, budget)
     base = ((scope if scope is not None else entries[0].path) / ".worktrees").resolve()
     return entries[0], base, [(entry, entry.path.resolve()) for entry in entries[1:]]
 
 
-def worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch):
+def worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch, budget=None):
     """Motifs de blocage d'un worktree secondaire, produits à la demande.
 
     Seul moteur de décision : l'inventaire liste tous les motifs, le retrait
     s'arrête au premier."""
+    budget = budget or ObservationBudget()
+    if not budget.remaining():
+        budget.failures.add("deadline")
+        yield "lecture_inconnue"
+        return
     if entry.locked:
         yield "locked"
     for part in (entry.path, *entry.path.parents):
@@ -387,14 +646,14 @@ def worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launc
         return
     if base not in real.parents:
         yield "hors_perimetre"
-    if any(other != real and (other in real.parents or real in other.parents) for other in others):
+    if real in others:
         yield "nested"
     if entry.prunable or not entry.head:
         yield "lecture_inconnue"
     else:
-        yield from (reason for reason in (integration_reason(repo, entry.head, base_ref),
-                                          age_reason(repo, entry.head, now)) if reason)
-    dirty = dirty_reason(real)
+        yield from (reason for reason in (integration_reason(repo, entry.head, base_ref, budget),
+                                          age_reason(repo, entry.head, now, budget)) if reason)
+    dirty = dirty_reason(real, budget)
     if dirty:
         yield dirty
     if busy is None:
@@ -403,16 +662,18 @@ def worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launc
         yield "processus_actif"
 
 
-def inventory(repo, base_ref, now, launch):
+def inventory(repo, base_ref, now, launch, budget=None):
     """Observations en lecture seule ; RuntimeError si le registre Git est illisible."""
-    principal, base, secondary = worktree_context(repo, repo.resolve())
-    busy = busy_paths()
+    budget = budget or ObservationBudget()
+    principal, base, secondary = worktree_context(repo, repo.resolve(), budget)
+    scopes = tuple(real for _, real in secondary if real.is_dir())
+    busy = busy_paths(scopes, budget) if scopes else []
     busy = None if busy is None else {ancestor for opened in busy for ancestor in (opened, *opened.parents)}
-    others = [real for _, real in secondary]
+    others = nested_worktrees(real for _, real in secondary)
     rows = [{"path": str(principal.path), "head": principal.head, "locked": principal.locked,
              "prunable": principal.prunable, "motifs": ["principal"]}]
     for entry, real in secondary:
-        reasons = worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch)
+        reasons = worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch, budget)
         motifs = list(dict.fromkeys(reasons)) or [MOTIF_CANDIDATE]
         rows.append({"path": str(entry.path), "head": entry.head, "locked": entry.locked,
                      "prunable": entry.prunable, "motifs": motifs})
@@ -428,6 +689,14 @@ def inventory(repo, base_ref, now, launch):
                      "warning_at": WORKTREE_WARNING_AT, "state": capacity_state(scoped),
                      "limite": NOTE_CAPACITE},
         "processus": "inconnu" if busy is None else "complet",
+        "observation": {"seconds": round(time.monotonic()-budget.started, 3),
+                        "budget_seconds": round(budget.deadline-budget.started, 3),
+                        "capture_limit_bytes": MAX_OBSERVATION_BYTES,
+                        "git_capture_limit_bytes": 1024 * 1024,
+                        "entry_limit": MAX_WORKTREE_ENTRIES,
+                        "git_calls": budget.git_calls, "reader": budget.process_reader,
+                        "exempt_foreign_mounts": budget.exempt_mounts,
+                        "incomplete": sorted(budget.failures)},
         "note": NOTE_CANDIDAT,
         "worktrees": rows,
     }
@@ -462,28 +731,29 @@ def prune_merged_worktrees(repo, dry_run=False, now=None, base_ref="main"):
     Même moteur que l'inventaire. `git worktree remove` sans --force refuse un worktree
     sale. La branche est conservée, donc rien n'est perdu."""
     now = time.time() if now is None else now
+    budget = ObservationBudget()
     try:
-        _, base, secondary = worktree_context(repo)
+        _, base, secondary = worktree_context(repo, budget=budget)
     except RuntimeError as error:
         log(f"worktrees fusionnés non retirés : {error}")
         return []
     if not secondary:
         return []
-    busy = busy_paths()
+    busy = busy_paths(tuple(real for _, real in secondary if real.is_dir()), budget)
     if busy is None:
         log("worktrees fusionnés non retirés : fichiers ouverts inconnus")
         return []
     busy = {ancestor for opened in busy for ancestor in (opened, *opened.parents)}
     launch = Path.cwd().resolve()
-    others = [real for _, real in secondary]
+    others = nested_worktrees(real for _, real in secondary)
     removed = []
     for entry, real in secondary:
-        reasons = worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch)
+        reasons = worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch, budget)
         if next(reasons, None):
             continue
         if dry_run:
             removed.append(real)
-        elif not git_ok(repo, "worktree", "remove", str(real)).returncode:
+        elif not git_ok(repo, "worktree", "remove", str(real), budget=budget).returncode:
             removed.append(real)
     if removed:
         verb = "retirables" if dry_run else "retirés"

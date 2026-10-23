@@ -1417,3 +1417,15 @@ checkout sélectionné à la base attendue sans isolation. Choisir
 `{"strategy":"worktree"}` pour isoler des modifications ou utiliser un checkout
 distinct. Un refus n'autorise pas à changer de stratégie ou de SHA source.
 Les chemins existants restent inchangés, y compris les worktrees imbriqués.
+
+#### Observation bornée des processus (176)
+
+Chaque inventaire partage un budget de commandes de 30 secondes. Les captures sont limitées à 8 Mio pour les processus et à 1 Mio par commande Git. Un registre qui dépasse 4 096 entrées est déclaré indisponible, jamais présenté comme un compte plus petit. Les entrées non examinées avant l'échéance restent protégées par `lecture_inconnue`. L'objet JSON `observation` indique les limites, le temps, les appels Git et les contrôles incomplets. Ce sont des limites de commandes et de capture, pas un quota mémoire système. Les opérations de fichiers et le rendu final peuvent ajouter du temps au budget des commandes.
+
+Sur Linux, la lecture utilise l'autorisation non interactive existante pour `sudo -n -- /usr/bin/lsof`. Elle ne change aucun droit et ne demande aucun mot de passe. Sans cet accès, l'observation reste inconnue. Sur macOS, elle utilise l'accès local existant à `lsof`. Les deux parcours refusent les accès incomplets et les formats inconnus. Le processus appelant fait partie de l'observation.
+
+Un avertissement de montage Linux exige une seconde lecture bornée. Tout fichier sur un montage exempté, format inconnu ou annotation d'exemption bloque encore le retrait. Un alias de montage qui recouvre la portée, un montage interne, une portée montée de façon ambiguë ou une table de montages modifiée bloque aussi le retrait. Un périphérique différent ne prouve jamais, à lui seul, qu'un montage ne peut pas exposer un fichier du projet.
+
+Les faits Git sur la base et les commits sont réutilisés dans un seul passage. L'état de chaque worktree reste lu séparément, fichiers ignorés et non suivis compris. Cette lecture ne prouve ni propriété, ni clôture de tâche, ni verrou exclusif des fichiers. Après dépassement, le script demande TERM pour son propre groupe de commande et signale un arrêt non confirmé si nécessaire. Il n'envoie jamais KILL.
+
+Le nettoyeur de cache exclut seulement son propre descripteur `.cargo-lock`, pendant qu'il détient ce verrou. Les autres fichiers et processus restent visibles. Une portée contenant un caractère non ASCII ou non imprimable, une barre oblique inverse ou un accent circonflexe est déclarée inconnue, car lsof peut échapper son nom. L'observation reste un instantané : un processus peut ouvrir un fichier après le contrôle.

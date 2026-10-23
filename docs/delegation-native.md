@@ -615,3 +615,15 @@ selected checkout at the required base without isolation. Choose
 `{"strategy":"worktree"}` when edits must be isolated or the job needs a separate
 checkout. A failed admission does not authorize switching strategies or changing
 the source SHA. Existing paths remain unchanged, including nested worktrees.
+
+#### Bounded process observation (176)
+
+Each inventory shares a 30-second command budget. Captures are limited to 8 MiB for process observation and 1 MiB per Git command. A register above 4,096 entries is rejected as unavailable; it is never reported as a smaller count. Entries not examined before the budget expires remain protected as `lecture_inconnue`. The JSON `observation` object reports limits, elapsed time, Git calls and incomplete checks. These are command and capture limits, not an operating-system memory quota. Filesystem operations and final output can add time beyond the command budget.
+
+On Linux, observation uses the existing non-interactive authorization for `sudo -n -- /usr/bin/lsof`. It changes no permissions and asks for no password. Without that access, observation remains unknown. On macOS it uses existing local `lsof` access. Both paths reject incomplete access and unknown record formats. The calling process is included.
+
+A Linux mount warning requires a second bounded observation. Every file on an exempt mount, unknown record or exemption annotation still blocks removal. Overlapping bind aliases, nested mounts, ambiguous scope mounts and a changed mount table also block removal. A different device alone is never proof that a mount cannot expose a project file.
+
+Git base and commit facts are reused only within one pass. Working-tree status is read separately, including ignored and untracked files. No ownership, task closure or exclusive filesystem lock is inferred. After a timeout, the script requests TERM for its own command group and reports an unconfirmed stop when applicable. It never sends KILL.
+
+The cache cleaner excludes only its own `.cargo-lock` descriptor while holding that lock. Other files and other processes remain visible. A scope containing non-ASCII or non-printable characters, a backslash or a caret is reported as unknown because lsof can escape its name. Process observations remain snapshots: a process can open a file after the check.
