@@ -23398,6 +23398,13 @@ for frame in frames: print(json.dumps(frame),flush=True)
         });
         let shared = Arc::new(Mutex::new(st));
         let mut reader = std::io::BufReader::new(peer);
+        shared.lock().unwrap().remote_result_reservation_last = Some((tasks[0].task_id.clone(), Instant::now()));
+        tick(&shared);
+        let mut line = String::new();
+        assert_eq!(reader.read_line(&mut line).unwrap_err().kind(), std::io::ErrorKind::WouldBlock,
+            "un appel avant la prochaine seconde ne sélectionne aucune tâche");
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
+        shared.lock().unwrap().remote_result_reservation_last = None;
         let mut visited = Vec::new();
         for turn in 0..4 {
             shared.lock().unwrap().remote_workers.get_mut("cartae").unwrap().last_contact = Instant::now();
