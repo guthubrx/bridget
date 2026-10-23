@@ -154,8 +154,8 @@ retain a queued status while the projected work state is failed.
 A transport timeout is not proof that the provider never received a mission.
 In particular, an uncertain remote Release can later reconcile to a real result.
 Do not cancel, duplicate or replace it solely from the initial error text.
-The message follows the evidence for that same task: unknown start, confirmed
-delivery, available result, or completed cleanup. The initial transport code
+The message follows the evidence for that same task: unknown start, recorded
+delivery attempt, available result, or pending/completed cleanup. The initial transport code
 is retained; it does not override a later result.
 
 A published result is immutable for its round. A turn ending alone does not

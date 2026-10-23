@@ -22,6 +22,7 @@ const MAX_MARKER_BYTES: u64 = 64 * 1024;
 pub enum IdentityError {
     LegacyMarker,
     IdentityNotFound,
+    NamespaceConfiguration,
     DelegatedMcpOnly,
     T3SessionUnavailable,
     T3SessionUnavailableAt(&'static str),
@@ -33,6 +34,7 @@ impl IdentityError {
         match self {
             Self::LegacyMarker => "legacy_marker",
             Self::IdentityNotFound => "identity_not_found",
+            Self::NamespaceConfiguration => "namespace_configuration_invalid",
             Self::DelegatedMcpOnly => "delegated_mcp_only",
             Self::T3SessionUnavailable | Self::T3SessionUnavailableAt(_) => "t3_session_unavailable",
         }
@@ -47,6 +49,9 @@ impl IdentityError {
             }
             Self::IdentityNotFound => {
                 "un sous-agent interne rend son résultat à son parent Bridget ; sinon lancez l'appel depuis un agent Bridget enregistré"
+            }
+            Self::NamespaceConfiguration => {
+                "la configuration locale de Bridget est invalide ; vérifiez le dossier d’état, HOME, BRIDGET_HOME et BRIDGET_SOCKET, et retirez les anciennes variables BRIDGET_RUNTIME_*"
             }
             Self::DelegatedMcpOnly => {
                 "un sous-agent interne utilise uniquement les outils MCP Bridget bridget_who et bridget_send"
@@ -263,7 +268,7 @@ pub fn resolve_current_identity() -> Result<ResolvedIdentity, IdentityError> {
         .ok()
         .filter(|value| !value.is_empty());
     let namespace = crate::environment::Namespace::from_environment()
-        .map_err(|_| IdentityError::IdentityNotFound)?;
+        .map_err(|_| IdentityError::NamespaceConfiguration)?;
     resolve_identity_with_delegation_scoped(
         name_file.as_deref(),
         &namespace.root.join("agent-pids"),
@@ -286,7 +291,7 @@ pub(crate) fn resolve_current_mcp_identity() -> Result<ResolvedIdentity, Identit
         .ok()
         .filter(|value| !value.is_empty());
     let namespace = crate::environment::Namespace::from_environment()
-        .map_err(|_| IdentityError::IdentityNotFound)?;
+        .map_err(|_| IdentityError::NamespaceConfiguration)?;
     let native_identity = resolve_identity_with_delegation_scoped(
         name_file.as_deref(),
         &namespace.root.join("agent-pids"),
@@ -866,6 +871,50 @@ mod tests {
     use std::collections::BTreeMap;
     use std::io::Write;
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, symlink};
+
+    #[test]
+    fn spec174_namespace_errors_are_distinct_and_isolated() {
+        if let Ok(case) = std::env::var("IDENTITY_TEST_CASE") {
+            let native = resolve_current_identity().unwrap_err();
+            let mcp = resolve_current_mcp_identity().unwrap_err();
+            if case == "missing-identity" {
+                assert_eq!(native, IdentityError::IdentityNotFound);
+                assert_eq!(mcp, IdentityError::IdentityNotFound);
+            } else {
+                assert_eq!(native.code(), "namespace_configuration_invalid");
+                if case == "invalid-proof" {
+                    assert_eq!(mcp.code(), "t3_session_unavailable");
+                } else {
+                    assert_eq!(mcp.code(), "namespace_configuration_invalid");
+                    assert!(!mcp.remediation().contains("private-test-directory"));
+                }
+            }
+            return;
+        }
+        let root = root("namespace174");
+        for case in ["invalid-namespace", "missing-identity", "invalid-proof", "removed-runtime"] {
+            let home = if case == "missing-identity" || case == "removed-runtime" {
+                root.clone()
+            } else {
+                PathBuf::from("private-test-directory")
+            };
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "mcp_identity::tests::spec174_namespace_errors_are_distinct_and_isolated"])
+                .env_clear().env("HOME", &root)
+                .env("PATH", std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into()))
+                .env("BRIDGET_HOME", &home).env("BRIDGET_SOCKET", home.join("bridget.sock"))
+                .env("IDENTITY_TEST_CASE", case);
+            if case == "invalid-proof" {
+                command.env("BRIDGET_T3_MCP_ENDPOINT", "https://invalid.example")
+                    .env("BRIDGET_T3_MCP_AUTHORIZATION", "invalid-test-proof");
+            } else if case == "removed-runtime" {
+                command.env("BRIDGET_RUNTIME_TEST", "removed");
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{case}: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     const AGENT_A: &str = "96389249-07a4-4e29-83f0-9c46bd775021";
     const AGENT_B: &str = "da78fd70-41e8-424c-a88d-e29e2c5babcd";

@@ -1356,6 +1356,6 @@ n’installe aucune suppression périodique.
 Un refus `remote_start_failed:remote_release:WorkerUnavailable` ne prouve pas
 que la mission n’a pas démarré. Consultez le statut et le résultat de la même
 tâche. Ne l’annulez pas et ne créez pas de remplacement sur ce seul motif.
-Le message distingue l’issue inconnue, la remise confirmée, le résultat
-disponible et la clôture confirmée. Le code de transport initial est conservé ;
+Le message distingue l’issue inconnue, la tentative d’envoi, le résultat
+disponible et le nettoyage encore attendu ou terminé. Le code de transport initial est conservé ;
 il ne remplace pas un résultat reçu ensuite.

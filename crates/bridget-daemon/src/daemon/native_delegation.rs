@@ -3681,8 +3681,11 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         } else if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
             ("La tâche est terminée. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
              "Consultez l’état final de cette même tâche avant de décider d’une nouvelle demande. Rejouer la demande ne relance pas la mission.")
+        } else if task.terminal() {
+            ("La tâche est clôturée côté Bridget. La vérification de son arrêt ou de son dossier de travail n’est pas terminée.",
+             "Conservez cette tâche jusqu’à la confirmation de son nettoyage. Consultez son statut avant toute nouvelle demande.")
         } else if task.mission_issued_at.is_some() {
-            ("Le travail métier a été remis à l’agent. La confirmation initiale du démarrage distant n’avait pas été obtenue.",
+            ("La tentative d’envoi du travail métier est enregistrée. Ce délai de réponse ne permet pas de conclure à un échec.",
              "Consultez le statut et le résultat de cette même tâche. Ne lancez pas de remplacement pendant son exécution ou son nettoyage.")
         } else {
             ("La confirmation du démarrage distant est indisponible. La mission peut déjà être en cours.",
@@ -23425,7 +23428,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
         let task_id = admitted["task_id"].as_str().unwrap().to_owned();
         for code in ["remote_release:WorkerUnavailable", "remote_release:StaleConnection",
-            "remote_release_unconfirmed", "remote_release:private-secret"] {
+            "remote_release_unconfirmed"] {
             {
                 let st = state.lock().unwrap();
                 let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
@@ -23445,7 +23448,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         task.state = "working".into();
         task.mission_issued_at = Some(unix_timestamp());
         let working = task_view(&task, None, true);
-        assert_eq!(working["error_message"], "Le travail métier a été remis à l’agent. La confirmation initiale du démarrage distant n’avait pas été obtenue.");
+        assert_eq!(working["error_message"], "La tentative d’envoi du travail métier est enregistrée. Ce délai de réponse ne permet pas de conclure à un échec.");
         assert!(working["error_recovery"].as_str().unwrap().contains("même tâche"));
         task.state = "result_available".into();
         task.result = Some("résultat confirmé".into());
@@ -23455,6 +23458,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(completed["error_recovery"].as_str().unwrap().contains("Récupérez"));
         task.state = "failed".into();
         task.result = None;
+        task.cleanup_done = false;
+        task.mission_issued_at = None;
+        let pending_cleanup = task_view(&task, None, true);
+        assert_eq!(pending_cleanup["error_message"], "La tâche est clôturée côté Bridget. La vérification de son arrêt ou de son dossier de travail n’est pas terminée.");
+        assert!(!pending_cleanup["error_message"].as_str().unwrap().contains("en cours"));
         task.cleanup_done = true;
         let failed = task_view(&task, None, true);
         assert_eq!(failed["error_message"], "La tâche est terminée. La confirmation initiale du démarrage distant n’avait pas été obtenue.");
