@@ -3292,8 +3292,12 @@ fn failure(code: &str) -> Value {
         return json!({"status":"refused","code":"brief_invalid","message":message});
     }
     if code == "workspace_preflight_technical" || code.starts_with("workspace_preflight_technical:") {
-        let message = "Le contrôle Git du dossier source n’a pas pu être exécuté correctement.";
-        let recovery = "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement.";
+        let cause = code.split_once(':').map(|(_, detail)| detail.trim_start().split(':').next().unwrap_or(""));
+        let (message, recovery) = match cause {
+            Some("workspace_branch_exists") => ("La branche demandée existe déjà.", "Conservez cette demande et vérifiez le travail associé à cette branche avant de proposer une autre destination. Ne supprimez pas la branche pour forcer le lancement."),
+            Some("workspace_limit") => ("Le plafond des worktrees de ce dépôt est atteint.", "Organisez le nettoyage des travaux terminés avec leurs responsables, sans supprimer les travaux actifs, modifiés ou non intégrés. Ne changez pas la base pour contourner ce plafond."),
+            _ => ("Le contrôle préalable du dossier source a refusé la demande.", "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement."),
+        };
         return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
     }
     if code == "workspace_base_unavailable" || code.starts_with("workspace_base_unavailable:") {
@@ -11462,7 +11466,7 @@ mod tests {
     #[test]
     fn spec174_workspace_preflight_technical_detail_constant() {
         use bridget_transport::protocol::{AutoDelegateWorkload, WorkerSourceBase};
-        let message = "Le contrôle Git du dossier source n’a pas pu être exécuté correctement.";
+        let message = "Le contrôle préalable du dossier source a refusé la demande.";
         let recovery = "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement.";
         let expected = json!({"status":"refused","code":"workspace_preflight_technical",
             "message":message,"detail":{"message":message,"recovery":recovery}});
@@ -11472,6 +11476,16 @@ mod tests {
             "workspace_preflight_technical: Git Some(128) : private-secret",
         ] {
             assert_eq!(failure(raw), expected);
+        }
+        for (cause, message, recovery) in [
+            ("workspace_branch_exists", "La branche demandée existe déjà.", "Conservez cette demande et vérifiez le travail associé à cette branche avant de proposer une autre destination. Ne supprimez pas la branche pour forcer le lancement."),
+            ("workspace_limit", "Le plafond des worktrees de ce dépôt est atteint.", "Organisez le nettoyage des travaux terminés avec leurs responsables, sans supprimer les travaux actifs, modifiés ou non intégrés. Ne changez pas la base pour contourner ce plafond."),
+        ] {
+            let raw = crate::workspace_git::WorkspacePreflightError::Technical(
+                format!("{cause}: private-secret")
+            ).into_admission(true);
+            assert_eq!(failure(&raw), json!({"status":"refused","code":"workspace_preflight_technical",
+                "message":message,"detail":{"message":message,"recovery":recovery}}));
         }
         let missing = std::env::temp_dir().join(format!("source174-absente-{}", uuid::Uuid::new_v4()));
         assert!(!missing.exists());

@@ -1363,3 +1363,4 @@ il ne remplace pas un résultat reçu ensuite.
 ### Échec du contrôle Git source
 
 Pour `workspace_preflight_technical`, `detail.message` et `detail.recovery` indiquent les vérifications utiles. Le champ `cwd` désigne le dossier source sur la machine du parent appelant, pas le dossier de destination. Vérifier le dossier, l’accès Git et la référence demandée. Réconcilier la demande existante avant tout nouvel essai ; une erreur technique ne prouve pas l’absence de tâche. La réponse ne publie pas l’erreur Git brute.
+Les causes connues de branche existante et de plafond atteint gardent leur propre conseil de reprise, sans changer le code d’erreur externe.

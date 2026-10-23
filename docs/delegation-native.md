@@ -563,3 +563,4 @@ This is an operator routine; Bridget installs no periodic deletion job.
 ### Source Git preflight failure
 
 For `workspace_preflight_technical`, `detail.message` and `detail.recovery` explain the next checks. The `cwd` argument identifies the source directory on the calling parent’s machine, not the destination directory. Check the directory, Git access and the requested reference. Reconcile the existing request before retrying; a technical error does not prove that no task exists. Raw Git errors are not exposed in this response.
+Known branch-exists and worktree-limit causes receive their own recovery advice, while the outer error code stays unchanged.
