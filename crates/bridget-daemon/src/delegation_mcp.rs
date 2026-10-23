@@ -1257,6 +1257,11 @@ mod tests {
                 Some(json!({"message":"Vérifiez l’état de la tâche sans créer de doublon."})),
             ),
             (
+                json!({"status":"refused","code":"workspace_preflight_technical","detail":{"message":"Le contrôle Git du dossier source n’a pas pu être exécuté correctement.","recovery":"Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement."}}),
+                "workspace_preflight_technical",
+                Some(json!({"message":"Le contrôle Git du dossier source n’a pas pu être exécuté correctement.","recovery":"Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement."})),
+            ),
+            (
                 json!({"status":"refused","code":"permission_source_unavailable"}),
                 "permission_source_unavailable",
                 None,

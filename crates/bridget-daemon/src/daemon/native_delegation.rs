@@ -3291,6 +3291,11 @@ fn failure(code: &str) -> Value {
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
     }
+    if code == "workspace_preflight_technical" || code.starts_with("workspace_preflight_technical:") {
+        let message = "Le contrôle Git du dossier source n’a pas pu être exécuté correctement.";
+        let recovery = "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement.";
+        return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
+    }
     if code == "workspace_base_unavailable" || code.starts_with("workspace_base_unavailable:") {
         let message = "Bridget n’a pas pu déterminer le commit de base dans le dépôt source.";
         let recovery = "Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place.";
@@ -11453,6 +11458,34 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     const OWNER: &str = "89000000-0000-4000-8000-000000000102";
+
+    #[test]
+    fn spec174_workspace_preflight_technical_detail_constant() {
+        use bridget_transport::protocol::{AutoDelegateWorkload, WorkerSourceBase};
+        let message = "Le contrôle Git du dossier source n’a pas pu être exécuté correctement.";
+        let recovery = "Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement.";
+        let expected = json!({"status":"refused","code":"workspace_preflight_technical",
+            "message":message,"detail":{"message":message,"recovery":recovery}});
+        for raw in [
+            "workspace_preflight_technical",
+            "workspace_preflight_technical: chemin /private/secret absent",
+            "workspace_preflight_technical: Git Some(128) : private-secret",
+        ] {
+            assert_eq!(failure(raw), expected);
+        }
+        let missing = std::env::temp_dir().join(format!("source174-absente-{}", uuid::Uuid::new_v4()));
+        assert!(!missing.exists());
+        let source = WorkerSourceBase {
+            cwd: missing.to_string_lossy().into_owned(),
+            expected_base_commit: Some("1".repeat(40)),
+            workspace: Some(WorkspaceRequest::Worktree { base_ref: None, branch: None }),
+            workload: AutoDelegateWorkload::General,
+        };
+        let code = crate::lifecycle::validate_source_base(&source).unwrap_err();
+        assert!(code.starts_with("workspace_preflight_technical:"));
+        assert_eq!(failure(&code), expected);
+        assert!(failure("workspace_preflight_technical_other").get("detail").is_none());
+    }
 
     #[test]
     fn spec174_base_unavailable_detail_constant_sans_stderr() {

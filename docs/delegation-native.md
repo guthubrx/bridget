@@ -559,3 +559,7 @@ enough. Recheck task activity and Git state immediately before each removal.
 Use `git worktree remove` without `--force` and retain the branch. Keep active,
 modified, locked or unmerged worktrees, and parents containing other worktrees.
 This is an operator routine; Bridget installs no periodic deletion job.
+
+### Source Git preflight failure
+
+For `workspace_preflight_technical`, `detail.message` and `detail.recovery` explain the next checks. The `cwd` argument identifies the source directory on the calling parent’s machine, not the destination directory. Check the directory, Git access and the requested reference. Reconcile the existing request before retrying; a technical error does not prove that no task exists. Raw Git errors are not exposed in this response.

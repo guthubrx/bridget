@@ -1359,3 +1359,7 @@ tâche. Ne l’annulez pas et ne créez pas de remplacement sur ce seul motif.
 Le message distingue l’issue inconnue, la tentative d’envoi, le résultat
 disponible et le nettoyage encore attendu ou terminé. Le code de transport initial est conservé ;
 il ne remplace pas un résultat reçu ensuite.
+
+### Échec du contrôle Git source
+
+Pour `workspace_preflight_technical`, `detail.message` et `detail.recovery` indiquent les vérifications utiles. Le champ `cwd` désigne le dossier source sur la machine du parent appelant, pas le dossier de destination. Vérifier le dossier, l’accès Git et la référence demandée. Réconcilier la demande existante avant tout nouvel essai ; une erreur technique ne prouve pas l’absence de tâche. La réponse ne publie pas l’erreur Git brute.
