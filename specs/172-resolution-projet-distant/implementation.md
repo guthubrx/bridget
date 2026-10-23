@@ -1400,3 +1400,14 @@ Quatre tests ciblés PASS : plafond réel Git avec checkout imbriqué, code ferm
 et compatibilité, projection du conseil client, négociation du maître.
 Documentation : 27 pages, 422 liens, 11 paires PASS. Aucune suite complète.
 Livraison non encore activée à ce checkpoint. Aucun BUS relancé.
+
+Livraison : source a082fa39b17019e7b7b16bd2e584a08bc163eecb intégrée
+et poussée sur main. Revue indépendante APPROVE (17c96357), résultat lu,
+acquitté et clôturé. Builds release optimisés Linux 56,67 s et macOS 71,26 s,
+signature macOS vérifiée. Maître et worker chargent 172-a082fa39.
+Annonce worker_workspace_diagnostics_v1 lue sur le socket maître ; nouvelle
+connexion worker acceptée. Trois identités de processus distants conservées ;
+T3 et pont conservés. Aucun worktree applicatif supprimé, aucun BUS relancé.
+La réponse métier R15 n'a pas été rejouée : aucun test MCP réel de ce refus
+n'est revendiqué. La projection est couverte par les tests ciblés et la revue.
+Le diagnostic distingue le plafond ; il ne libère pas de place.

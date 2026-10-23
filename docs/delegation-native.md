@@ -540,7 +540,7 @@ of 32 registered Git worktrees under the target checkout's `.worktrees` director
 Retained and nested worktrees count too. This is not a disk-space diagnosis or
 a claim that the application repository has uncommitted changes.
 
-The refusal includes `message` and `recovery`. Inspect completed missions and
+The refusal includes `message` and `recovery` in `detail.reasons[]`. Inspect completed missions and
 preserve their results before removing unused worktrees. Do not delete active
 work or change the request key, base commit or provider to bypass the check.
 After verified cleanup, replay the same envelope; admission is re-evaluated.

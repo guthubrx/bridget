@@ -1333,7 +1333,7 @@ de 32 worktrees Git enregistrés sous le dossier `.worktrees` du checkout cible.
 Les worktrees conservés et imbriqués comptent aussi. Ce diagnostic ne signifie
 ni disque plein ni modifications non commitées dans le dépôt applicatif.
 
-Le refus contient `message` et `recovery`. Examiner les missions terminées et
+Le refus expose `message` et `recovery` dans `detail.reasons[]`. Examiner les missions terminées et
 conserver leurs résultats avant de retirer les anciens worktrees inutilisés.
 Ne pas supprimer de travail actif ni changer la clé, la base ou le fournisseur
 pour contourner le contrôle. Après nettoyage vérifié, rejouer la même enveloppe :
