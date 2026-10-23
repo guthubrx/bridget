@@ -1383,3 +1383,20 @@ Source 39a9df21 inchangée, build release 172-39a9df21-opt actif sur Cartae (PID
 ### 22 octobre 2026 — refus de statut et canal worker
 
 Correction ciblée du rejet des réponses sans attente pour une commande distante connue. Une sonde Reconcile précédant Start ne doit pas fermer le canal sur UnknownExecution. Un test ciblé RED puis GREEN ; aucune nouvelle mission. Détails et limite de causalité runtime : validation/reconcile-demarrage-20261022.md.
+
+### 23 octobre 2026 — diagnostic du plafond de worktrees
+
+BUS R15 : 48 worktrees sous la racine Opus2D (34 directs, 14 imbriqués),
+base présente, branche demandée absente, 161 Go disponibles. Le preflight
+refuse à 32 ; la sonde perdait le motif en produisant workspace_unavailable.
+Correction : code fermé workspace_limit, message et action dans detail.reasons,
+sans stderr ni chemin distant. Plafond, droits et idempotence inchangés.
+Le worker ne transmet le nouveau code que si le maître annonce
+worker_workspace_diagnostics_v1 ; sinon il garde le refus générique historique.
+Référence T3 relue : GitVcsDriverCore.createWorktree utilise la base explicite
+dans git worktree add. Le plafond est propre à Bridget ; aucun nettoyage T3
+ou réemploi d'un worktree métier n'est ajouté.
+Quatre tests ciblés PASS : plafond réel Git avec checkout imbriqué, code fermé
+et compatibilité, projection du conseil client, négociation du maître.
+Documentation : 27 pages, 422 liens, 11 paires PASS. Aucune suite complète.
+Livraison non encore activée à ce checkpoint. Aucun BUS relancé.

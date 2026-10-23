@@ -2029,6 +2029,26 @@ fn worker_stop_once(
     Ok(())
 }
 
+// Le diagnostic reste fermé : aucun détail Git ni chemin n'entre dans la trame.
+fn workspace_probe_refusal(error: &str) -> CandidateProbeRefusal {
+    match error.split(':').next() {
+        Some("workspace_limit") => CandidateProbeRefusal::WorkspaceLimit,
+        _ => CandidateProbeRefusal::WorkspaceUnavailable,
+    }
+}
+
+// Un maître ancien garde le refus générique qu'il sait décoder.
+fn workspace_probe_reason_for_master(
+    reason: CandidateProbeRefusal,
+    supports_workspace_diagnostics: bool,
+) -> CandidateProbeRefusal {
+    if reason == CandidateProbeRefusal::WorkspaceLimit && !supports_workspace_diagnostics {
+        CandidateProbeRefusal::WorkspaceUnavailable
+    } else {
+        reason
+    }
+}
+
 struct WorkerRuntime {
     config: WorkerRuntimeConfig,
     identity: WorkerIdentity,
@@ -2560,7 +2580,7 @@ impl WorkerRuntime {
                 base_ref.as_deref(),
                 branch.as_deref(),
             )
-            .map_err(|_| CandidateProbeRefusal::WorkspaceUnavailable)?;
+            .map_err(|error| workspace_probe_refusal(&error))?;
             if request
                 .base_commit
                 .as_ref()
@@ -4144,7 +4164,7 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<(bool, bool, bool, bool, bool), String> {
+) -> Result<(bool, bool, bool, bool, bool, bool), String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -4167,6 +4187,7 @@ fn probe_worker_capability(
                 features.iter().any(|feature| feature == "worker_release_lease_v2"),
                 features.iter().any(|feature| feature == "worker_parent_source_proof_v1"),
                 features.iter().any(|feature| feature == "worker_result_slot_deadline_v1"),
+                features.iter().any(|feature| feature == "worker_workspace_diagnostics_v1"),
             ))
         }
         _ => Err("worker_capability_required".into()),
@@ -4198,7 +4219,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof, master_supports_slot_deadline) =
+        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof, master_supports_slot_deadline, master_supports_workspace_diagnostics) =
             match probe_worker_capability(&writer, &mut reader) {
                 Ok(capabilities) => capabilities,
                 Err(code) if matches!(code.as_str(), "worker_connection_lost" | "worker_capability_unavailable") => {
@@ -4525,7 +4546,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     if disconnected.load(Ordering::Acquire) {
                         break;
                     }
-                    let result = match runtime.candidate_probe(&probe) {
+                    let mut result = match runtime.candidate_probe(&probe) {
                         Ok(result) => result,
                         Err(_) => {
                             // Un probe hors contrat ou hors époque a déjà fermé
@@ -4535,6 +4556,11 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             break;
                         }
                     };
+                    for verdict in &mut result.verdicts {
+                        if let CandidateProbeVerdict::Ineligible { reason, .. } = verdict {
+                            *reason = workspace_probe_reason_for_master(*reason, master_supports_workspace_diagnostics);
+                        }
+                    }
                     if send_worker_frame(&writer, &WrapperToDaemon::CandidateProbeResult { result })
                         .is_err()
                     {
@@ -4545,13 +4571,18 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     if disconnected.load(Ordering::Acquire) {
                         break;
                     }
-                    let result = match runtime.candidate_probe_v2(&probe) {
+                    let mut result = match runtime.candidate_probe_v2(&probe) {
                         Ok(result) => result,
                         Err(_) => {
                             fatal = Some("worker_candidate_probe_v2_invalid".into());
                             break;
                         }
                     };
+                    for verdict in &mut result.verdicts {
+                        if let CandidateProbeV2Verdict::Ineligible { reason, .. } = verdict {
+                            *reason = workspace_probe_reason_for_master(*reason, master_supports_workspace_diagnostics);
+                        }
+                    }
                     if send_worker_frame(
                         &writer,
                         &WrapperToDaemon::CandidateProbeResultV2 { result },
@@ -6979,6 +7010,18 @@ while not stop.exists(): time.sleep(.01)
         assert!(runtime.running.is_empty());
     }
     #[test]
+    fn spec172_workspace_limit_reason_is_closed_and_legacy_safe() {
+        use CandidateProbeRefusal as R;
+        let reason = workspace_probe_refusal("workspace_limit: private path or stderr");
+        assert_eq!(reason, R::WorkspaceLimit);
+        assert_eq!(serde_json::to_value(reason).unwrap(), "workspace_limit");
+        assert_eq!(workspace_probe_refusal("Git 128: workspace_limit"), R::WorkspaceUnavailable);
+        assert_eq!(workspace_probe_reason_for_master(reason, false), R::WorkspaceUnavailable);
+        assert_eq!(workspace_probe_reason_for_master(reason, true), R::WorkspaceLimit);
+        assert_eq!(workspace_probe_reason_for_master(R::WorkspaceBusy, false), R::WorkspaceBusy);
+    }
+
+    #[test]
     fn worker162_maitre_ancien_refuse_avant_hello_et_credential() {
         use std::io::BufRead;
         for supported in [false, true] {
@@ -6992,7 +7035,7 @@ while not stop.exists(): time.sleep(.01)
                     WrapperToDaemon::DaemonIdentityRequest
                 ));
                 let features = if supported {
-                    vec!["remote_worker_v1".to_string()]
+                    vec!["remote_worker_v1".to_string(), "worker_workspace_diagnostics_v1".to_string()]
                 } else {
                     vec![]
                 };
@@ -7022,6 +7065,7 @@ while not stop.exists(): time.sleep(.01)
             let mut reader = BufReader::new(client);
             let probe = probe_worker_capability(&writer, &mut reader);
             assert_eq!(probe.is_ok(), supported, "sonde: {probe:?}");
+            if supported { assert!(probe.unwrap().5); }
             drop(writer);
             drop(reader);
             peer.join().unwrap();

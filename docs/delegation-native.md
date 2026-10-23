@@ -532,3 +532,17 @@ Keep the complete receipt outside public Git. Distinguish:
 Use status and the recorded recovery instruction. Preserve worktrees and unknown
 outcomes. Do not manufacture another mission, change provider or widen rights
 to make a refusal disappear.
+
+### Worktree count limit
+
+A candidate refusal with `code: workspace_limit` means Bridget reached its limit
+of 32 registered Git worktrees under the target checkout's `.worktrees` directory.
+Retained and nested worktrees count too. This is not a disk-space diagnosis or
+a claim that the application repository has uncommitted changes.
+
+The refusal includes `message` and `recovery`. Inspect completed missions and
+preserve their results before removing unused worktrees. Do not delete active
+work or change the request key, base commit or provider to bypass the check.
+After verified cleanup, replay the same envelope; admission is re-evaluated.
+Bridget does not clean or replay automatically. Older peers retain the generic
+`workspace_unavailable` response.

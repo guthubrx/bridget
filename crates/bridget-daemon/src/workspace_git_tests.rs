@@ -875,3 +875,19 @@ fn worktree172_stdout_flood_does_not_hide_stderr_reason() {
         assert_eq!(worktree_failure_code(&output.stderr), "workspace_disk_full");
     });
 }
+
+#[test]
+fn spec172_workspace_limit_counts_retained_and_nested_checkouts() {
+    with_repo(|repo| {
+        for n in 0..31 {
+            let path = repo.join(format!(".worktrees/{n}"));
+            fixture_git(repo, &["worktree", "add", "--detach", path.to_str().unwrap(), "HEAD"]);
+        }
+        assert_eq!(preflight_remote(repo, None, None).unwrap().listed_paths.len(), 31);
+        let nested = repo.join(".worktrees/0/.worktrees/nested");
+        fixture_git(repo, &["worktree", "add", "--detach", nested.to_str().unwrap(), "HEAD"]);
+        let error = preflight_remote(repo, None, Some("new-mission")).unwrap_err();
+        assert!(error.starts_with("workspace_limit:"), "{error}");
+        assert!(!repo.join(".git/refs/heads/new-mission").exists());
+    });
+}

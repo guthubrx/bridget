@@ -596,8 +596,16 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
     }
     let mut result = failure("routing_candidate_unavailable");
     if !counts.is_empty() {
-        let reasons = counts.into_iter().map(|((kind, code), candidates)|
-            json!({"kind":kind,"code":code,"candidates":candidates})).collect::<Vec<_>>();
+        let reasons = counts.into_iter().map(|((kind, code), candidates)| {
+            let mut reason = json!({"kind":kind,"code":code,"candidates":candidates});
+            if kind == "candidate" && code == "workspace_limit" {
+                reason["message"] = json!(format!(
+                    "Le plafond Bridget de {} worktrees enregistrés sous le dossier de travail est atteint. Les worktrees conservés et imbriqués comptent aussi. Aucune tâche créée par cette admission.",
+                    crate::workspace_git::MAX_WORKTREES));
+                reason["recovery"] = json!("Vérifier les missions terminées, conserver leurs résultats et retirer seulement les anciens worktrees inutilisés. Ne pas supprimer de travail actif ni changer la base ou la clé. Après nettoyage confirmé, rejouer la même enveloppe. Aucun nettoyage ni rejeu automatique.");
+            }
+            reason
+        }).collect::<Vec<_>>();
         result["detail"] = json!({"reasons":reasons});
     }
     result
@@ -11765,6 +11773,18 @@ mod tests {
             {"kind":"candidate","code":"permissions_changed","candidates":1},
             {"kind":"candidate","code":"workspace_unavailable","candidates":1}
         ]));
+        let original_notes = plan.decision_notes.clone();
+        plan.decision_notes.clear();
+        assert!(record_routing_probe_refusal(&mut plan, &correlation, &admission, "c001",
+            RoutingProbeRefusalCode::Candidate(CandidateProbeRefusal::WorkspaceLimit)));
+        let limit = routing_probe_failure(&plan);
+        let reason = &limit["detail"]["reasons"][0];
+        assert_eq!(reason["code"], "workspace_limit");
+        assert!(reason["message"].as_str().unwrap().contains("32 worktrees"));
+        assert!(reason["message"].as_str().unwrap().contains("imbriqués"));
+        assert!(reason["recovery"].as_str().unwrap().contains("rejouer la même enveloppe"));
+        assert!(reason["recovery"].as_str().unwrap().contains("Aucun nettoyage ni rejeu automatique"));
+        plan.decision_notes = original_notes;
         plan.decision_notes.push(json!({"event":"routing_probe_refused","kind":"worker","code":"SECRET /private/path"}).to_string());
         assert_eq!(routing_probe_failure(&plan), refused);
         plan.decision_notes.pop();

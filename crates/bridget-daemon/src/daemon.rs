@@ -23586,6 +23586,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_release_lease_v2".to_string(),
                     "worker_parent_source_proof_v1".to_string(),
                     "worker_result_slot_deadline_v1".to_string(),
+                    "worker_workspace_diagnostics_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })

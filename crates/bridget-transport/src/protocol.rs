@@ -2704,6 +2704,7 @@ pub enum CandidateProbeRefusal {
     DefinitionUnavailable,
     PermissionsChanged,
     WorkspaceUnavailable,
+    WorkspaceLimit,
     WorkspaceDirty,
     WorkspaceBusy,
     WorkspaceDiverged,

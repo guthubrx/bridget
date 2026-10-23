@@ -19,6 +19,7 @@ const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
 // Les bancs 154 simulent un Git bloqué : ils gardent l'ancienne borne de 20 s.
 pub(crate) const WORKTREE_ADD_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(test) { 20 } else { 300 });
+pub(crate) const MAX_WORKTREES: usize = 32;
 const MAX_OUTPUT: usize = 1024 * 1024;
 const HOSTILE_CONFIG: &str = "^(filter\\..*\\.(smudge|clean|process)|include\\..*|includeif\\..*|extensions\\.partialclone|remote\\..*\\.promisor)$";
 
@@ -698,7 +699,7 @@ fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, r
         .map(PathBuf::from)
         .filter(|path| path.starts_with(&worktree_dir))
         .collect::<Vec<_>>();
-    if listed_paths.len() >= 32 {
+    if listed_paths.len() >= MAX_WORKTREES {
         return Err("workspace_limit: 32 worktrees déjà enregistrés".into());
     }
     Ok(WorkspacePreflight {

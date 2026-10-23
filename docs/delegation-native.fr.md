@@ -1325,3 +1325,17 @@ la libération reste bornée à 60 secondes avec cette capacité, à 5 secondes 
 un worker ancien. Chaque revalidation des droits demeure obligatoire.
 L'adaptateur T3 tolère 10 secondes par requête HTTP d'attestation. Cela ne crée
 aucune dépendance T3 pour les parents natifs Bridget.
+
+### Plafond de worktrees
+
+Un refus candidat `code: workspace_limit` indique que Bridget atteint sa limite
+de 32 worktrees Git enregistrés sous le dossier `.worktrees` du checkout cible.
+Les worktrees conservés et imbriqués comptent aussi. Ce diagnostic ne signifie
+ni disque plein ni modifications non commitées dans le dépôt applicatif.
+
+Le refus contient `message` et `recovery`. Examiner les missions terminées et
+conserver leurs résultats avant de retirer les anciens worktrees inutilisés.
+Ne pas supprimer de travail actif ni changer la clé, la base ou le fournisseur
+pour contourner le contrôle. Après nettoyage vérifié, rejouer la même enveloppe :
+l’admission est réévaluée. Aucun nettoyage ni rejeu automatique. Les anciens
+pairs conservent le refus générique `workspace_unavailable`.
