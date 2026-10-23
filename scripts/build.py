@@ -263,19 +263,25 @@ def worktree_entries(repo):
     return entries  # Le premier est le dépôt principal, jamais retiré.
 
 
-def busy_directories():
-    """Répertoires courants de tous les processus visibles ; None si inconnu.
+LSOF_OPEN_FILES = ["lsof", "-n", "-P", "-F", "n"]
 
-    Un seul lsof par passage. Échec = on ne sait pas qui travaille où : aucun
-    worktree n'est alors retiré (fail-closed)."""
-    result = subprocess.run(
-        ["lsof", "-n", "-P", "-a", "-d", "cwd", "-F", "n"],
-        capture_output=True, check=False, timeout=15,
-    )
+
+def busy_paths():
+    """Fichiers ouverts et répertoires courants de tous les processus ; None si inconnu.
+
+    Un seul lsof par passage. Un processus peut tenir un fichier d'un worktree
+    depuis un autre répertoire courant. Échec ou avertissement = inventaire
+    incomplet : aucun worktree n'est alors retiré (fail-closed)."""
+    result = subprocess.run(LSOF_OPEN_FILES, capture_output=True, check=False, timeout=30)
     if result.returncode or result.stderr.strip() or not result.stdout:
         return None
-    return [Path(os.fsdecode(line[1:])) for line in result.stdout.split(b"\n")
-            if line.startswith(b"n")]
+    return parse_open_paths(result.stdout)
+
+
+def parse_open_paths(stdout):
+    # lsof suffixe « (deleted) » aux fichiers supprimés encore ouverts.
+    return [Path(os.fsdecode(line[1:].removesuffix(b" (deleted)")))
+            for line in stdout.split(b"\n") if line.startswith(b"n/")]
 
 
 def git_ok(repo, *arguments):
@@ -288,8 +294,8 @@ def prune_merged_worktrees(repo, dry_run=False, now=None):
 
     Conditions cumulées : branche fusionnée dans main, aucune modification même
     non suivie ou ignorée, dernier commit plus vieux que 24 h, aucun processus dont le
-    répertoire courant s'y trouve. `git worktree remove` sans --force refuse de
-    lui-même un worktree sale. La branche est conservée : rien n'est perdu, un
+    fichier ouvert ou répertoire courant s'y trouve. `git worktree remove` sans --force
+    refuse de lui-même un worktree sale. La branche est conservée : rien n'est perdu, un
     `git worktree add` la retrouve. O(worktrees) appels Git, un seul lsof."""
     now = time.time() if now is None else now
     entries = worktree_entries(repo)
@@ -313,13 +319,14 @@ def prune_merged_worktrees(repo, dry_run=False, now=None):
         candidates.append(resolved)
     if not candidates:
         return []
-    busy = busy_directories()
+    busy = busy_paths()
     if busy is None:
-        log("worktrees fusionnés non retirés : répertoires courants inconnus")
+        log("worktrees fusionnés non retirés : fichiers ouverts inconnus")
         return []
+    occupied = {ancestor for opened in busy for ancestor in (opened, *opened.parents)}
     removed = []
     for path in candidates:
-        if any(directory == path or path in directory.parents for directory in busy):
+        if path in occupied:
             continue
         if dry_run:
             removed.append(path)

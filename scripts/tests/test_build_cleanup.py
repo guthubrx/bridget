@@ -22,6 +22,12 @@ build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
 
 
+def inventaire_reel():
+    # Les avertissements lsof d'autres montages ne font pas partie de ce scénario.
+    return build.parse_open_paths(subprocess.run(build.LSOF_OPEN_FILES, capture_output=True,
+                                                 timeout=30).stdout)
+
+
 class CleanupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="bridget-cleanup-test-")
@@ -236,6 +242,13 @@ class ProcessTests(unittest.TestCase):
             finally:
                 child.communicate("done\n", timeout=10)
 
+    def test_inventaire_lsof_garde_chemins_avec_espaces_et_fichiers_supprimes(self):
+        stdout = (b"n/tmp/a b\nn/tmp/a b/fichier ouvert (copie).txt\n"
+                  b"n/tmp/a b/supprime.txt (deleted)\nnpipe\n")
+        self.assertEqual(build.parse_open_paths(stdout), [
+            Path("/tmp/a b"), Path("/tmp/a b/fichier ouvert (copie).txt"),
+            Path("/tmp/a b/supprime.txt")])
+
     def test_cli_preserve_arguments_et_code_echec_sans_nettoyage(self):
         with tempfile.TemporaryDirectory(prefix="bridget-cli-test-") as root:
             root = Path(root).resolve()
@@ -322,7 +335,7 @@ class WorktreePruneTests(unittest.TestCase):
         recent = self.worktree("recent", str(int(time.time())))
         non_fusionne = self.worktree("non-fusionne", self.old, merge=False)
         occupe = self.worktree("occupe", self.old)
-        with patch.object(build, "busy_directories", return_value=[occupe / "sous-dossier"]):
+        with patch.object(build, "busy_paths", return_value=[occupe / "sous-dossier"]):
             retires = build.prune_merged_worktrees(self.repo)
         self.assertEqual(retires, [fusionne])
         self.assertFalse(fusionne.exists())
@@ -334,21 +347,50 @@ class WorktreePruneTests(unittest.TestCase):
 
     def test_repertoires_courants_inconnus_ne_retirent_rien(self):
         fusionne = self.worktree("fusionne", self.old)
-        with patch.object(build, "busy_directories", return_value=None):
+        with patch.object(build, "busy_paths", return_value=None):
             self.assertEqual(build.prune_merged_worktrees(self.repo), [])
         self.assertTrue(fusionne.exists())
 
     def test_simulation_ne_retire_rien(self):
         fusionne = self.worktree("fusionne", self.old)
-        with patch.object(build, "busy_directories", return_value=[]):
+        with patch.object(build, "busy_paths", return_value=[]):
             self.assertEqual(build.prune_merged_worktrees(self.repo, dry_run=True), [fusionne])
         self.assertTrue(fusionne.exists())
 
     def test_lance_depuis_un_worktree_vise_les_worktrees_du_depot_principal(self):
         fusionne = self.worktree("fusionne", self.old)
         courant = self.worktree("courant", str(int(time.time())), merge=False)
-        with patch.object(build, "busy_directories", return_value=[]):
+        with patch.object(build, "busy_paths", return_value=[]):
             self.assertEqual(build.prune_merged_worktrees(courant), [fusionne])
+
+    def test_fichier_ouvert_dans_un_worktree_bloque_son_retrait(self):
+        fusionne = self.worktree("fusionne", self.old)
+        ouvert = fusionne / "dossier avec espaces" / "fichier ouvert (copie).txt"
+        with patch.object(build, "busy_paths", return_value=[ouvert]):
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+        self.assertTrue(fusionne.exists())
+
+    def test_processus_tenant_un_fichier_depuis_un_autre_cwd_bloque_puis_libere(self):
+        if not shutil.which("lsof"):
+            self.skipTest("lsof indisponible : le nettoyeur refusera aussi")
+        path = self.repo / ".worktrees" / "tenu"
+        self.git("worktree", "add", "-q", str(path), "-b", "b-tenu", "main")
+        self.commit(path, "fichier ouvert (copie).txt", self.old)
+        self.git("merge", "-q", "--ff-only", "b-tenu")
+        child = subprocess.Popen([sys.executable, "-c",
+            "import sys; f=open(sys.argv[1]); print('ready',flush=True); sys.stdin.readline()",
+            str(path / "fichier ouvert (copie).txt")], cwd=self.temp.name,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            with patch.object(build, "busy_paths", side_effect=inventaire_reel):
+                self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+            self.assertTrue(path.exists())
+        finally:
+            child.communicate("done\n", timeout=10)
+        with patch.object(build, "busy_paths", side_effect=inventaire_reel):
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [path])
+        self.assertFalse(path.exists())
 
 
     def test_ignored_outputs_are_preserved_until_archived(self):
@@ -359,7 +401,7 @@ class WorktreePruneTests(unittest.TestCase):
         evidence = worktree / "local-evidence"
         evidence.mkdir()
         (evidence / "receipt.json").write_text('{"kept": true}')
-        with patch.object(build, "busy_directories", return_value=[]):
+        with patch.object(build, "busy_paths", return_value=[]):
             self.assertEqual(build.prune_merged_worktrees(self.repo), [])
         self.assertEqual((evidence / "receipt.json").read_text(), '{"kept": true}')
 
