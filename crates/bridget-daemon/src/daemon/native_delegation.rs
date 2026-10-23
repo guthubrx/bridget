@@ -9854,13 +9854,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             Instant::now() + CANCEL_NOTIFICATION_BUDGET,
         );
     }
-    // Réservation réseau hors verrou, avant toute remise initiale, ronde ou reprise quota.
+    // Une réservation par seconde au plus ; la rotation borne les attentes réseau du tick.
     let remote_pending = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        st.delegation_store
-            .pending()
-            .unwrap_or_default()
-            .into_iter()
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let due = st.remote_result_reservation_last.as_ref()
+            .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
+        let pending = if due { st.delegation_store.pending().unwrap_or_default() } else { Vec::new() };
+        let mut candidates = pending.into_iter()
             .filter(|task| {
                 if task.remote_placement.is_none()
                     || !task.remote_prepared
@@ -9889,7 +9889,19 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         })
             })
             .map(|task| task.task_id)
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            Vec::new()
+        } else {
+            // pending() est trié par task_id ; avancer même après un refus du worker.
+            let offset = st.remote_result_reservation_last.as_ref().map_or(0, |(previous, _)| {
+                candidates.partition_point(|id| id <= previous)
+            });
+            let index = if offset == candidates.len() { 0 } else { offset };
+            let task_id = candidates.swap_remove(index);
+            st.remote_result_reservation_last = Some((task_id.clone(), Instant::now()));
+            vec![task_id]
+        }
     };
     let mut remote_proofs = HashMap::new();
     for task_id in remote_pending {
@@ -23326,6 +23338,106 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(state); cleanup(&config);
     }
 
+
+
+    #[test]
+    fn spec174_remote_tick_bounds_silent_worker_and_rotates_tasks() {
+        use bridget_transport::protocol::*;
+        use std::io::BufRead;
+        use std::os::unix::fs::PermissionsExt;
+        let (mut st, config, first, _) = remote162_capture_fixture();
+        let placement = first.remote_placement.clone();
+        let mut tasks = vec![first];
+        for index in 1..3 {
+            let mut task = tache_151(&mut st, &format!("serial174-{index}"));
+            task.remote_prepared = true;
+            task.remote_placement = placement.clone();
+            let now = unix_timestamp();
+            let order = FleetSpawnOrder {
+                posture: None, agent_type: "native-test".into(), project: None,
+                requested_name: Some(task.child.clone()), cwd: PathBuf::from("/tmp"),
+                persistent: false, command_id: Uuid::new_v4().to_string(),
+                issued_at: now, deadline_at: now + 120,
+                ownership: Some(SpawnOwnership {
+                    parent_instance_id: task.owner_instance.clone(), parent_execution_id: None,
+                    objective_id: None, delegation_id: Some(task.task_id.clone()),
+                    project: None, role: "native_delegate".into(), max_children: None, max_depth: None,
+                }), remote_placement: placement.clone(),
+            };
+            let crate::fleet::SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap()
+                else { panic!("réservation distante requise"); };
+            task.child_instance = Some(lease.instance_id);
+            tasks.push(task);
+        }
+        for task in &mut tasks {
+            task.mission = Uuid::new_v4().to_string();
+            let mut parent = continuation172_parent();
+            parent.cwd.clone_from(&task.cwd);
+            task.permission_snapshot = Some(crate::native_permissions::snapshot(
+                &task.owner, &task.owner_instance, parent, json!({"kind":"claude"}), Path::new(&task.cwd),
+            ));
+            task.state = "mission_pending".into();
+            task.mission_deadline_at = None;
+            st.delegation_store.save(task).unwrap();
+        }
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        let registry = root.join("serial174-registry.json");
+        std::fs::write(&registry, serde_json::to_vec(&json!({"agents":{},"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+        }}})).unwrap()).unwrap();
+        std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry = AgentRegistry::load_from_path(registry).unwrap();
+        let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        st.connections.insert("serial-worker".into(), Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
+        st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection {
+            identity: remote_worker_identity(placement.as_ref().unwrap()),
+            conn_id: "serial-worker".into(), epoch: "serial174-epoch".into(), capabilities: vec![],
+            last_contact: Instant::now(), last_contact_at: unix_timestamp(), contact: WorkerContactState::Connected,
+        });
+        let shared = Arc::new(Mutex::new(st));
+        let mut reader = std::io::BufReader::new(peer);
+        let mut visited = Vec::new();
+        for turn in 0..4 {
+            shared.lock().unwrap().remote_workers.get_mut("cartae").unwrap().last_contact = Instant::now();
+            let started = Instant::now();
+            tick(&shared);
+            let elapsed = started.elapsed();
+            let mut requests = Vec::new();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let DaemonToWrapper::WorkerRequest { request } = serde_json::from_str(&line).unwrap()
+                            else { panic!("requête worker attendue"); };
+                        request.validate().unwrap();
+                        assert!(matches!(request.request, WorkerRequestOperation::Reconcile {}));
+                        requests.push(request.command.task_id);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("{e}"),
+                }
+            }
+            eprintln!("serial174 turn={turn} tasks=3 requests={} elapsed_ms={}", requests.len(), elapsed.as_millis());
+            assert_eq!(requests.len(), 1, "un worker muet ne doit pas multiplier les attentes par passage");
+            visited.push(requests.remove(0));
+            let st = shared.lock().unwrap();
+            assert!(st.pending_worker_responses.is_empty());
+            for original in &tasks {
+                let saved = st.delegation_store.get(&original.task_id).unwrap().unwrap();
+                assert_eq!(saved.state, "mission_pending");
+                assert_eq!(saved.mission_issued_at, original.mission_issued_at, "aucune remise sans preuve");
+                assert_eq!(saved.remote_result_slots, original.remote_result_slots);
+            }
+        }
+        let mut expected: Vec<_> = tasks.iter().map(|task| task.task_id.clone()).collect();
+        expected.sort();
+        assert_eq!(&visited[..3], expected.as_slice(), "rotation équitable dans l’ordre SQL");
+        assert_eq!(visited[3], visited[0], "retour au début après le dernier candidat");
+        drop(shared); cleanup(&config);
+    }
 
     #[test]
     fn spec172_remote_result_reservation_negotiates_deadline_on_wire() {

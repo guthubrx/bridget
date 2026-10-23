@@ -1106,6 +1106,8 @@ struct DaemonState {
     remote_native_ready: HashSet<String>,
     /// Curseur de sondage uniquement ; aucune preuve d'arrêt ni permis durable.
     remote_start_reconcile_last: Option<(String, Instant)>,
+    /// Rotation des réservations ; ne remplace aucune preuve de droits.
+    remote_result_reservation_last: Option<(String, Instant)>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
     pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
@@ -5039,6 +5041,7 @@ impl DaemonState {
             remote_workers: HashMap::new(),
             remote_native_ready: HashSet::new(),
             remote_start_reconcile_last: None,
+            remote_result_reservation_last: None,
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
             pending_candidate_probes: HashMap::new(),
