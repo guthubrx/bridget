@@ -269,10 +269,10 @@ def busy_directories():
     Un seul lsof par passage. Échec = on ne sait pas qui travaille où : aucun
     worktree n'est alors retiré (fail-closed)."""
     result = subprocess.run(
-        ["lsof", "-n", "-P", "-w", "-a", "-d", "cwd", "-F", "n"],
+        ["lsof", "-n", "-P", "-a", "-d", "cwd", "-F", "n"],
         capture_output=True, check=False, timeout=15,
     )
-    if not result.stdout:
+    if result.returncode or result.stderr.strip() or not result.stdout:
         return None
     return [Path(os.fsdecode(line[1:])) for line in result.stdout.split(b"\n")
             if line.startswith(b"n")]
@@ -287,7 +287,7 @@ def prune_merged_worktrees(repo, dry_run=False, now=None):
     """Retire les worktrees de `.worktrees/` dont le travail est fusionné.
 
     Conditions cumulées : branche fusionnée dans main, aucune modification même
-    non suivie, dernier commit plus vieux que 24 h, aucun processus dont le
+    non suivie ou ignorée, dernier commit plus vieux que 24 h, aucun processus dont le
     répertoire courant s'y trouve. `git worktree remove` sans --force refuse de
     lui-même un worktree sale. La branche est conservée : rien n'est perdu, un
     `git worktree add` la retrouve. O(worktrees) appels Git, un seul lsof."""
@@ -307,7 +307,7 @@ def prune_merged_worktrees(repo, dry_run=False, now=None):
         stamp = git_ok(repo, "log", "-1", "--format=%ct", head)
         if stamp.returncode or now - int(stamp.stdout.strip() or 0) < WORKTREE_MIN_AGE:
             continue
-        status = git_ok(path, "status", "--porcelain", "--untracked-files=all")
+        status = git_ok(path, "status", "--porcelain", "--untracked-files=all", "--ignored")
         if status.returncode or status.stdout.strip():
             continue
         candidates.append(resolved)

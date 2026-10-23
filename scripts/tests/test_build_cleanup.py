@@ -281,10 +281,6 @@ class ProcessTests(unittest.TestCase):
                 self.assertTrue((profile / "lock-fixture").is_file())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WorktreePruneTests(unittest.TestCase):
     """Session 116 : retrait automatique des worktrees fusionnés (constitution XVI.3)."""
 
@@ -353,3 +349,33 @@ class WorktreePruneTests(unittest.TestCase):
         courant = self.worktree("courant", str(int(time.time())), merge=False)
         with patch.object(build, "busy_directories", return_value=[]):
             self.assertEqual(build.prune_merged_worktrees(courant), [fusionne])
+
+
+    def test_ignored_outputs_are_preserved_until_archived(self):
+        worktree = self.worktree("ignored-output", self.old)
+        ignored = self.repo / ".git/info/exclude"
+        with ignored.open("a") as stream:
+            stream.write("\nlocal-evidence/\n")
+        evidence = worktree / "local-evidence"
+        evidence.mkdir()
+        (evidence / "receipt.json").write_text('{"kept": true}')
+        with patch.object(build, "busy_directories", return_value=[]):
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+        self.assertEqual((evidence / "receipt.json").read_text(), '{"kept": true}')
+
+    def test_incomplete_process_inventory_preserves_worktree(self):
+        real_run = subprocess.run
+        for returncode, stderr in ((1, b""), (0, b"WARNING: inaccessible filesystem")):
+            with self.subTest(returncode=returncode, stderr=stderr):
+                worktree = self.worktree(f"incomplete-lsof-{returncode}", self.old)
+                def incomplete(command, **kwargs):
+                    if command[0] == "lsof":
+                        return subprocess.CompletedProcess(command, returncode, b"p42\nn/tmp\n", stderr)
+                    return real_run(command, **kwargs)
+                with patch.object(build.subprocess, "run", side_effect=incomplete):
+                    self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+                self.assertTrue(worktree.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
