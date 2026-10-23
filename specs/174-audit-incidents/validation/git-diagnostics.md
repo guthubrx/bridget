@@ -47,3 +47,5 @@ Bridget écrit un reçu `ready=false` avant `git worktree add`. Le reçu doit do
 - `cargo test -p bridget-daemon spec174_base` : 2 réussis.
 - `cargo test -p bridget-daemon native157_quota_detail_visible_cote_mcp` : 1 réussi.
 - `cargo test -p bridget-daemon native154_git_creation` : 1 réussi.
+
+Le libellé final indique une résolution impossible sans inventer de cause. Le code nu reçoit aussi le détail et le conseil de reprise.

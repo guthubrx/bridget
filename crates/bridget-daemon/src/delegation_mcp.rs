@@ -1262,9 +1262,9 @@ mod tests {
                 None,
             ),
             (
-                json!({"status":"refused","code":"workspace_base_unavailable","message":"Le dépôt, le commit ou la référence de base demandé est introuvable.","detail":{"message":"Le dépôt, le commit ou la référence de base demandé est introuvable.","recovery":"Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place."}}),
+                json!({"status":"refused","code":"workspace_base_unavailable","message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","detail":{"message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","recovery":"Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place."}}),
                 "workspace_base_unavailable",
-                Some(json!({"message":"Le dépôt, le commit ou la référence de base demandé est introuvable.","recovery":"Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place."})),
+                Some(json!({"message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","recovery":"Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place."})),
             ),
         ] {
             let socket = crate::mcp_identity::mock_socket("quota157");

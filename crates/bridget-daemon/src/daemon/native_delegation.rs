@@ -3291,9 +3291,9 @@ fn failure(code: &str) -> Value {
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
     }
-    if code.starts_with("workspace_base_unavailable:") {
-        let message = "Le dépôt, le commit ou la référence de base demandé est introuvable.";
-        let recovery = "Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place.";
+    if code == "workspace_base_unavailable" || code.starts_with("workspace_base_unavailable:") {
+        let message = "Bridget n’a pas pu déterminer le commit de base dans le dépôt source.";
+        let recovery = "Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place.";
         return json!({"status":"refused","code":"workspace_base_unavailable","message":message,"detail":{"message":message,"recovery":recovery}});
     }
     if code.starts_with("workspace_")
@@ -11433,8 +11433,8 @@ mod tests {
 
     #[test]
     fn spec174_base_unavailable_detail_constant_sans_stderr() {
-        let message = "Le dépôt, le commit ou la référence de base demandé est introuvable.";
-        let recovery = "Vérifiez que ce dossier est un dépôt Git avec au moins un commit et que base_ref désigne une branche, un tag ou un commit existant. Bridget n’initialise pas de dépôt à votre place.";
+        let message = "Bridget n’a pas pu déterminer le commit de base dans le dépôt source.";
+        let recovery = "Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place.";
         let expected = json!({
             "status": "refused",
             "code": "workspace_base_unavailable",
@@ -11442,6 +11442,7 @@ mod tests {
             "detail": {"message": message, "recovery": recovery}
         });
         for raw in [
+            "workspace_base_unavailable",
             "workspace_base_unavailable: référence de base inconnue",
             "workspace_base_unavailable: Git Some(128) : fatal: not a git repository /srv/prive/depot",
         ] {
