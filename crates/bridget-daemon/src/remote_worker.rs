@@ -14,6 +14,7 @@ use bridget_transport::protocol::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
@@ -291,6 +292,15 @@ impl WorkerDrainProof {
             birth: marker.birth,
         })
     }
+}
+
+fn command_key(identity: &WorkerCommandIdentity) -> (&str, &str, &str, u64) {
+    (
+        &identity.command_id,
+        &identity.task_id,
+        &identity.instance_id,
+        identity.generation,
+    )
 }
 
 fn drain_proof_path(root: &Path, command: &WorkerCommandIdentity) -> PathBuf {
@@ -1045,15 +1055,20 @@ impl WorkerStore {
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
         let (commands, slots, _, _) = self.inventory()?;
+        let terminal_commands: HashSet<_> = commands
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c.phase,
+                    WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
+                )
+            })
+            .map(|c| command_key(&c.identity))
+            .collect();
         let mut removed = 0;
         for slot in slots {
-            let command_terminal = commands.iter().any(|c| {
-                c.identity == slot.slot.identity.command
-                    && matches!(
-                        c.phase,
-                        WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-                    )
-            });
+            let command_terminal =
+                terminal_commands.contains(&command_key(&slot.slot.identity.command));
             let final_disposition = slot
                 .disposition
                 .as_ref()
@@ -1094,15 +1109,17 @@ impl WorkerStore {
         }
         // Aucun ancien canon non expiré ne perd sa preuve d'admission.
         let (_, remaining_slots, _, _) = self.inventory()?;
+        let referenced: HashSet<_> = remaining_slots
+            .iter()
+            .map(|slot| command_key(&slot.slot.identity.command))
+            .collect();
         for command in commands {
             if matches!(
                 command.phase,
                 WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
             ) && now.saturating_sub(command.deadline_at.max(command.updated_at))
                 >= WORKER_RECEIPT_RETENTION_SECS
-                && !remaining_slots
-                    .iter()
-                    .any(|slot| slot.slot.identity.command == command.identity)
+                && !referenced.contains(&command_key(&command.identity))
             {
                 let proof = drain_proof_path(&self.root, &command.identity);
                 match fs::remove_file(&proof) {
@@ -5959,6 +5976,59 @@ while not stop.exists(): time.sleep(.01)
         );
         assert_eq!(store.collect(200).unwrap(), 0);
     }
+
+    #[test]
+    fn worker174_collect_distingue_terminal_actif_et_reference() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let terminal = command_174("terminal");
+        let neighbour = command_174("terminal-voisin");
+        let active = command_174("active");
+        let kept_by_slot = command_174("kept");
+        for identity in [&terminal, &neighbour, &active, &kept_by_slot] {
+            reserve_174(&store, identity);
+        }
+        let pending = slot_174(&neighbour);
+        store.reserve_result_slot(&pending, 100).unwrap();
+        let kept_slot = slot_174(&kept_by_slot);
+        store.reserve_result_slot(&kept_slot, 100).unwrap();
+        store.set_phase(&terminal, WorkerCommandPhase::Terminal, 100).unwrap();
+        store.set_phase(&kept_by_slot, WorkerCommandPhase::Terminal, 100).unwrap();
+        assert_eq!(store.collect(101 + WORKER_RECEIPT_RETENTION_SECS).unwrap(), 0);
+        assert!(matches!(store.command(&terminal), Err(WorkerStoreError::Unknown)));
+        assert!(store.command(&neighbour).is_ok());
+        assert!(store.command(&active).is_ok());
+        assert!(store.command(&kept_by_slot).is_ok());
+        assert!(store.read_slot(&pending.identity).unwrap().is_some());
+        assert!(store.read_slot(&kept_slot.identity).unwrap().is_some());
+    }
+
+    fn command_174(id: &str) -> WorkerCommandIdentity {
+        WorkerCommandIdentity {
+            command_id: id.into(),
+            task_id: "task-174".into(),
+            instance_id: "instance-174".into(),
+            generation: 1,
+        }
+    }
+    fn reserve_174(store: &WorkerStore, identity: &WorkerCommandIdentity) {
+        store
+            .reserve_command(identity, &"d".repeat(64), &placement(), 101, 100)
+            .unwrap();
+    }
+    fn slot_174(command: &WorkerCommandIdentity) -> WorkerResultSlot {
+        WorkerResultSlot {
+            identity: WorkerResultIdentity {
+                command: command.clone(),
+                mission_id: "mission-174".into(),
+                round: 1,
+                execution_id: "execution-174".into(),
+                execution_generation: 1,
+            },
+            admission_digest: "c".repeat(64),
+        }
+    }
+
     fn runtime_fixture(fixture: &Fixture) -> WorkerRuntime {
         let state = fixture.0.join("runtime");
         private_dir(&state).unwrap();
