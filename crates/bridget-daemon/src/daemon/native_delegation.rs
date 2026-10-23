@@ -3732,11 +3732,41 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     }
     view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
+        let (code, message, recovery) = if !task.terminal()
+            || task.continuable()
+            || (task.state == "result_available" && !task.result_sent)
+        {
+            ("task_active", "La tâche utilise encore cet espace ou peut reprendre.",
+             "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait.")
+        } else if !task.cleanup_done {
+            ("stop_unconfirmed", "L’arrêt de l’exécution n’est pas confirmé.",
+             "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche.")
+        } else if !workspace_report_ready(task)
+            || workspace.dirty.is_none()
+            || workspace.head_on_branch.is_none()
+            || workspace.commit_count.is_none()
+        {
+            ("report_unavailable", "Le dernier rapport Git est absent ou incomplet.",
+             "Inspectez le dossier et ses usages avant toute décision. Un état inconnu ne permet pas le retrait.")
+        } else if workspace.dirty == Some(true) {
+            ("changes_present", "Le dernier rapport signale des modifications non commitées.",
+             "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier.")
+        } else if workspace.head_on_branch == Some(false) {
+            ("branch_changed", "Le dernier rapport ne place plus HEAD sur la branche attendue.",
+             "Examinez les commits et la branche réelle. Préservez le travail avant toute décision de retrait.")
+        } else if workspace.commit_count.unwrap_or(0) > 0 {
+            ("commits_to_review", "Le dernier rapport contient des commits à examiner.",
+             "Vérifiez leur intégration ou leur conservation, puis les fichiers ignorés et les usages du dossier.")
+        } else {
+            ("review_required", "La tâche est arrêtée ; le dossier reste conservé.",
+             "Vérifiez à nouveau Git, les fichiers ignorés, les processus et les autres tâches ou fils. Ce statut n’autorise pas un retrait.")
+        };
         view["workspace"] = json!({"strategy":workspace.strategy,"state":workspace.state,
             "path":workspace.path,"branch":workspace.branch,"base_commit":workspace.base_commit,
             "head_commit":workspace.head_commit,"branch_commit":workspace.branch_commit,
             "head_on_branch":workspace.head_on_branch,"commit_count":workspace.commit_count,
-            "commits":workspace.commits,"truncated":workspace.truncated,"dirty":workspace.dirty});
+            "commits":workspace.commits,"truncated":workspace.truncated,"dirty":workspace.dirty,
+            "retention":{"code":code,"message":message,"recovery":recovery}});
     }
     if !full {
         view.as_object_mut().unwrap().remove("result");
@@ -9208,7 +9238,7 @@ fn append_workspace_result(task: &mut Task) {
         .map(|n| format!("{n} commit(s)"))
         .unwrap_or_else(|| "nombre de commits indisponible".into());
     let line = format!(
-        "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}",
+        "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}. Consultez le statut de la tâche avant tout retrait. Clôturez la tâche, préservez le travail et vérifiez les autres usages du dossier.",
         report_text(&workspace.branch),
         &workspace.base_commit[..workspace.base_commit.len().min(7)],
         commits,

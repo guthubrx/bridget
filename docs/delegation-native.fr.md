@@ -1364,3 +1364,56 @@ il ne remplace pas un résultat reçu ensuite.
 
 Pour `workspace_preflight_technical`, `detail.message` et `detail.recovery` indiquent les vérifications utiles. Le champ `cwd` désigne le dossier source sur la machine du parent appelant, pas le dossier de destination. Vérifier le dossier, l’accès Git et la référence demandée. Réconcilier la demande existante avant tout nouvel essai ; une erreur technique ne prouve pas l’absence de tâche. La réponse ne publie pas l’erreur Git brute.
 Les causes connues de branche existante et de plafond atteint gardent leur propre conseil de reprise, sans changer le code d’erreur externe.
+
+### Cycle de vie et capacité des worktrees
+
+Une fin de ronde ne clôture pas la tâche et ne retire pas son worktree. Si une
+nouvelle ronde est nécessaire, continuer la tâche existante. Quand le travail est
+terminé, lire et acquitter le résultat, clôturer cette même tâche puis examiner
+le travail conservé.
+
+Le statut ajoute `workspace.retention`, avec `code`, `message` et `recovery`.
+Ces champs décrivent la tâche et son rapport Git enregistré. Ils ne constituent
+ni une inspection fraîche des fichiers ni une autorisation de retrait.
+
+| Code | Signification |
+|---|---|
+| `task_active` | La tâche travaille encore ou peut continuer. |
+| `stop_unconfirmed` | Le nettoyage des processus n'est pas confirmé. |
+| `report_unavailable` | Les faits Git enregistrés sont absents ou incomplets. |
+| `changes_present` | Le rapport contient des modifications non commitées. |
+| `branch_changed` | La tête rapportée n'est plus sur la branche attendue. |
+| `commits_to_review` | Des commits dépassent la base ; leur intégration reste à vérifier. |
+| `review_required` | Vérifier fichiers actuels, preuves ignorées, intégration et autres usages. |
+
+Un rapport propre, un acquittement ou zéro commit n'autorise jamais une
+suppression. Des fichiers ignorés par Git, d'autres fils et des changements
+postérieurs peuvent encore nécessiter la conservation.
+
+Depuis le checkout des sources Bridget, inspecter un dépôt choisi sans retrait :
+
+```sh
+python3 scripts/build.py worktrees --repo /chemin/absolu/du/projet --base-ref main
+python3 scripts/build.py worktrees --repo /chemin/absolu/du/projet --base-ref main --json
+```
+
+Le rapport sépare le registre Git entier des worktrees sous le dossier
+`.worktrees` du cwd choisi. Seul ce second compte décrit la capacité présentée
+ici. L'avertissement commence à 96 et le plafond reste 128. Ce compte comprend
+les inscriptions Git, pas les réservations de création en cours ni les dossiers
+conservés sans inscription ; l'admission peut donc observer un total supérieur.
+Exécuter la lecture sur la machine cible pour sa capacité. Une observation
+indisponible ne signifie pas zéro.
+
+Un `candidat_a_examiner` reste à confronter aux tâches et aux fils, puis à une inspection
+fraîche avant retrait. Conserver les espaces actifs, modifiés, contenant des
+fichiers ignorés, verrouillés, imbriqués ou non intégrés. Un inventaire incomplet
+des processus protège les candidats. Après archivage des preuves, utiliser le
+retrait Git normal sans `--force` et garder la branche. La lecture n'installe
+aucun nettoyage périodique et ne modifie pas l'admission.
+
+Choisir explicitement `{"strategy":"shared"}` quand la mission peut lire le
+checkout sélectionné à la base attendue sans isolation. Choisir
+`{"strategy":"worktree"}` pour isoler des modifications ou utiliser un checkout
+distinct. Un refus n'autorise pas à changer de stratégie ou de SHA source.
+Les chemins existants restent inchangés, y compris les worktrees imbriqués.

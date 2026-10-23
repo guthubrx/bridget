@@ -564,3 +564,54 @@ This is an operator routine; Bridget installs no periodic deletion job.
 
 For `workspace_preflight_technical`, `detail.message` and `detail.recovery` explain the next checks. The `cwd` argument identifies the source directory on the calling parent’s machine, not the destination directory. Check the directory, Git access and the requested reference. Reconcile the existing request before retrying; a technical error does not prove that no task exists. Raw Git errors are not exposed in this response.
 Known branch-exists and worktree-limit causes receive their own recovery advice, while the outer error code stays unchanged.
+
+### Worktree lifecycle and capacity
+
+A completed round does not close its task or remove its worktree. If you need
+another round, continue the existing task. When the work is finished, read and
+acknowledge its result, close that same task, then inspect the retained work.
+
+Task status adds `workspace.retention` with `code`, `message` and `recovery`.
+These fields describe the task and its recorded Git report; they are not a fresh
+filesystem scan or permission to remove a directory.
+
+| Code | Meaning |
+|---|---|
+| `task_active` | The task is running or can still continue. |
+| `stop_unconfirmed` | Process cleanup has not been confirmed. |
+| `report_unavailable` | The recorded Git facts are missing or incomplete. |
+| `changes_present` | The report contains uncommitted changes. |
+| `branch_changed` | The reported HEAD is not on the task's expected branch. |
+| `commits_to_review` | Commits exist beyond the base; integration must be checked. |
+| `review_required` | Check current files, ignored evidence, integration and other users. |
+
+A clean report, an acknowledgement or a zero commit count is never a deletion
+approval. Files ignored by Git, other threads and later edits may still matter.
+
+From the Bridget source checkout, inspect a chosen repository without deleting
+anything:
+
+```sh
+python3 scripts/build.py worktrees --repo /absolute/path/to/project --base-ref main
+python3 scripts/build.py worktrees --repo /absolute/path/to/project --base-ref main --json
+```
+
+The report separates the full Git register from worktrees under the chosen
+directory's `.worktrees` folder. Only the latter is the capacity scope shown here.
+The warning threshold is 96 and the limit is 128. This observation counts Git
+registrations, not in-flight creation reservations or unregistered retained
+directories; admission may therefore observe a larger total. Run it on the
+destination machine for destination capacity. An unavailable observation is not
+a count of zero.
+
+A `candidat_a_examiner` still needs task/thread ownership checks and a fresh inspection
+before removal. Preserve active, modified, ignored, locked, nested and unmerged
+work. An incomplete process inventory keeps candidates protected. Use Git's
+normal removal without `--force`, after archiving evidence; retain the branch.
+The inspection command does not create a cleanup schedule or change admission.
+
+Choose `{"strategy":"shared"}` explicitly when the job can safely read the
+selected checkout at the required base without isolation. Choose
+`{"strategy":"worktree"}` when edits must be isolated or the job needs a separate
+checkout. A failed admission does not authorize switching strategies or changing
+the source SHA. Existing paths remain unchanged, including nested worktrees.

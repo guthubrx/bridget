@@ -243,7 +243,12 @@ fn native154_isolation_creation_cwd_et_parent_intact() {
         },
     );
     assert_eq!(
-        status["workspace"],
+        {
+            let mut workspace = status["workspace"].clone();
+            assert_eq!(workspace["retention"]["code"], "task_active");
+            workspace.as_object_mut().unwrap().remove("retention");
+            workspace
+        },
         json!({"strategy":"worktree", "state":"active", "path":expected,
         "branch":format!("bridget/{}", &task.task_id[..8]), "base_commit":before.0,
         "head_commit":null, "branch_commit":null, "head_on_branch":null, "commit_count":null,
@@ -310,6 +315,7 @@ fn native154_rapport_faits_git_et_ligne_unique() {
     assert_eq!(workspace["head_on_branch"], true);
     let result = saved.result.unwrap();
     assert_eq!(result.matches("[Bridget] espace de travail").count(), 1);
+    assert!(result.contains("Consultez le statut de la tâche avant tout retrait."));
     assert!(
         result.contains("modifications non commitées : oui"),
         "la ligne vient de Git: {result}"
@@ -2453,4 +2459,177 @@ fn native154_conservation_trace_git_sans_suppression() {
             );
         },
     );
+}
+
+#[test]
+fn native175_conservation_expliquee_sans_mutation_ni_autorisation_de_retrait() {
+    let fixture = fixture154("conservation175");
+    for (state, continuable, stopped, reported, dirty, on_branch, commits, expected) in [
+        (
+            "working",
+            false,
+            false,
+            false,
+            Some(false),
+            Some(true),
+            Some(0),
+            "task_active",
+        ),
+        (
+            "result_available",
+            true,
+            false,
+            true,
+            Some(false),
+            Some(true),
+            Some(0),
+            "task_active",
+        ),
+        (
+            "result_available",
+            false,
+            false,
+            true,
+            Some(false),
+            Some(true),
+            Some(0),
+            "task_active",
+        ),
+        (
+            "cancelled",
+            false,
+            false,
+            true,
+            Some(false),
+            Some(true),
+            Some(0),
+            "stop_unconfirmed",
+        ),
+        (
+            "cancelled",
+            false,
+            true,
+            false,
+            Some(false),
+            Some(true),
+            Some(0),
+            "report_unavailable",
+        ),
+        (
+            "cancelled",
+            false,
+            true,
+            true,
+            None,
+            Some(true),
+            Some(0),
+            "report_unavailable",
+        ),
+        (
+            "cancelled",
+            false,
+            true,
+            true,
+            Some(true),
+            Some(true),
+            Some(0),
+            "changes_present",
+        ),
+        (
+            "cancelled",
+            false,
+            true,
+            true,
+            Some(false),
+            Some(false),
+            Some(0),
+            "branch_changed",
+        ),
+        (
+            "cancelled",
+            false,
+            true,
+            true,
+            Some(false),
+            Some(true),
+            Some(2),
+            "commits_to_review",
+        ),
+        (
+            "cancelled",
+            false,
+            true,
+            true,
+            Some(false),
+            Some(true),
+            Some(0),
+            "review_required",
+        ),
+    ] {
+        let mut task = seed_workspace154(&fixture);
+        task.state = state.into();
+        task.result = Some("Résultat de fixture".into());
+        task.result_sent = state != "result_available" || continuable;
+        task.idle_deadline_at = continuable.then_some(unix_timestamp() + 600);
+        task.guard_released = !continuable;
+        task.cleanup_done = stopped;
+        task.workspace_report_mission = reported.then(|| task.mission.clone());
+        let workspace = task.workspace.as_mut().unwrap();
+        workspace.state = WorkspaceState::Kept;
+        workspace.dirty = dirty;
+        workspace.head_on_branch = on_branch;
+        workspace.commit_count = commits;
+        {
+            let st = fixture.state.lock().unwrap();
+            st.delegation_store.save(&task).unwrap();
+        }
+        let before = fixture
+            .state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        let view = call154(
+            &fixture,
+            NativeDelegationRequest::Status {
+                task_id: task.task_id.clone(),
+            },
+        );
+        let retention = &view["workspace"]["retention"];
+        assert_eq!(retention["code"], expected, "{state}/{expected}");
+        assert!(
+            retention["message"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            retention["recovery"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert_eq!(view["continuable"], continuable);
+        assert!(view["workspace"].get("toplevel").is_none());
+        let after = fixture
+            .state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .get(&task.task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&before).unwrap(),
+            serde_json::to_value(&after).unwrap()
+        );
+        assert!(
+            serde_json::to_value(after.workspace)
+                .unwrap()
+                .get("retention")
+                .is_none(),
+            "la projection ne change pas les échanges worker ni les données persistées"
+        );
+        assert!(Path::new(&task.cwd).is_dir());
+    }
 }

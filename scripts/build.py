@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import time
+from collections import namedtuple
 
 
 CACHE_DIRS = ("deps", "build", "incremental", ".fingerprint")
@@ -243,24 +244,30 @@ def limits():
 WORKTREE_MIN_AGE = 24 * 3600
 
 
+Worktree = namedtuple("Worktree", "path head locked prunable")
+
+
 def worktree_entries(repo):
-    """(chemin, HEAD) de chaque worktree secondaire, format porcelain de Git."""
-    result = subprocess.run(
-        ["git", "-C", str(repo), "worktree", "list", "--porcelain", "-z"],
-        capture_output=True, check=False, timeout=10,
-    )
+    """Worktrees Git, dépôt principal en premier ; RuntimeError si le registre est illisible."""
+    result = git_ok(repo, "worktree", "list", "--porcelain", "-z")
     if result.returncode:
-        return []
-    entries, path, head = [], None, None
+        raise RuntimeError(f"registre Git illisible : {repo}")
+    entries, path, head, locked, prunable = [], None, None, False, False
     for field in result.stdout.split(b"\0") + [b""]:
         if field.startswith(b"worktree "):
             path = Path(os.fsdecode(field[9:]))
         elif field.startswith(b"HEAD "):
             head = field[5:].decode()
+        elif field == b"locked" or field.startswith(b"locked "):
+            locked = True
+        elif field == b"prunable" or field.startswith(b"prunable "):
+            prunable = True
         elif not field and path is not None:
-            entries.append((path, head))
-            path, head = None, None
-    return entries  # Le premier est le dépôt principal, jamais retiré.
+            entries.append(Worktree(path, head, locked, prunable))
+            path, head, locked, prunable = None, None, False, False
+    if not entries:
+        raise RuntimeError(f"registre Git vide : {repo}")
+    return entries
 
 
 LSOF_OPEN_FILES = ["lsof", "-n", "-P", "-F", "n"]
@@ -272,7 +279,10 @@ def busy_paths():
     Un seul lsof par passage. Un processus peut tenir un fichier d'un worktree
     depuis un autre répertoire courant. Échec ou avertissement = inventaire
     incomplet : aucun worktree n'est alors retiré (fail-closed)."""
-    result = subprocess.run(LSOF_OPEN_FILES, capture_output=True, check=False, timeout=30)
+    try:
+        result = subprocess.run(LSOF_OPEN_FILES, capture_output=True, check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
     if result.returncode or result.stderr.strip() or not result.stdout:
         return None
     return parse_open_paths(result.stdout)
@@ -285,53 +295,196 @@ def parse_open_paths(stdout):
 
 
 def git_ok(repo, *arguments):
-    return subprocess.run(["git", "-C", str(repo), *arguments], capture_output=True,
-                          check=False, timeout=15)
+    """Résultat Git ; code 128 si Git est absent ou dépasse le délai, lecture inconnue."""
+    try:
+        return subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(repo), *arguments], capture_output=True,
+                              check=False, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return subprocess.CompletedProcess(arguments, 128, b"", b"")
 
 
-def prune_merged_worktrees(repo, dry_run=False, now=None):
-    """Retire les worktrees de `.worktrees/` dont le travail est fusionné.
+# Aligné sur MAX_WORKTREES dans crates/bridget-daemon/src/workspace_git.rs.
+WORKTREE_LIMIT = 128
+WORKTREE_WARNING_AT = 96
+MOTIF_CANDIDATE = "candidat_a_examiner"
+NOTE_CANDIDAT = ("Un candidat n'est pas une preuve que la tâche est close "
+                 "et n'autorise pas la suppression.")
+WORKTREE_RECOVERY = {'principal': 'Conservez le checkout principal.',
+ 'hors_perimetre': 'Cet espace ne compte pas dans le dossier indiqué ; examinez-le dans son propre '
+                   'périmètre.',
+ 'locked': 'Identifiez le propriétaire du verrou avant toute action.',
+ 'nested': 'Examinez les espaces imbriqués et leurs usages avant leur parent.',
+ 'dirty_ignored': 'Préservez les modifications et les fichiers non suivis ou ignorés.',
+ 'non_integre': 'Intégrez ou archivez les commits avant tout retrait.',
+ 'recent': 'Conservez le travail récent ; le délai minimal est de 24 heures depuis le dernier '
+           'commit.',
+ 'processus_actif': 'Attendez la fin du processus qui utilise ce dossier.',
+ 'lecture_inconnue': 'Rétablissez une observation complète puis relancez cet inventaire.',
+ 'candidat_a_examiner': 'Vérifiez tâches, fils, branches et fichiers avant un retrait Git sans '
+                        'force.',
+ 'lien_symbolique': 'Conservez ce chemin symbolique ; vérifiez son emplacement réel.',
+ 'chemin_absent': 'Vérifiez le registre Git et le stockage ; ne recréez ni ne purgez '
+                  'automatiquement.'}
 
-    Conditions cumulées : branche fusionnée dans main, aucune modification même
-    non suivie ou ignorée, dernier commit plus vieux que 24 h, aucun processus dont le
-    fichier ouvert ou répertoire courant s'y trouve. `git worktree remove` sans --force
-    refuse de lui-même un worktree sale. La branche est conservée : rien n'est perdu, un
-    `git worktree add` la retrouve. O(worktrees) appels Git, un seul lsof."""
-    now = time.time() if now is None else now
+
+NOTE_CAPACITE = ("scoped_count compte les inscriptions Git sous le dossier .worktrees. "
+                 "Les réservations et dossiers retenus de l'admission Bridget ne sont pas observés ici : "
+                 "ce nombre ne garantit ni égalité avec l'admission, ni capacité disponible.")
+
+
+def integration_reason(repo, head, base_ref):
+    """None si HEAD est intégré à base_ref ; sinon le motif de blocage."""
+    if git_ok(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", base_ref + "^{commit}").returncode:
+        return "lecture_inconnue"
+    code = git_ok(repo, "merge-base", "--is-ancestor", "--", head, base_ref).returncode
+    if code == 0:
+        return None
+    return "non_integre" if code == 1 else "lecture_inconnue"
+
+
+def age_reason(repo, head, now):
+    stamp = git_ok(repo, "log", "-1", "--format=%ct", head)
+    if stamp.returncode or not stamp.stdout.strip():
+        return "lecture_inconnue"
+    return "recent" if now - int(stamp.stdout.strip()) < WORKTREE_MIN_AGE else None
+
+
+def dirty_reason(path):
+    status = git_ok(path, "--no-optional-locks", "status", "--porcelain",
+                    "--untracked-files=all", "--ignored")
+    if status.returncode:
+        return "lecture_inconnue"
+    return "dirty_ignored" if status.stdout.strip() else None
+
+
+def capacity_state(count):
+    if count >= WORKTREE_LIMIT:
+        return "limit"
+    return "warning" if count >= WORKTREE_WARNING_AT else "normal"
+
+
+def worktree_context(repo, scope=None):
     entries = worktree_entries(repo)
-    if not entries or git_ok(repo, "rev-parse", "--verify", "--quiet", "main").returncode:
+    base = ((scope if scope is not None else entries[0].path) / ".worktrees").resolve()
+    return entries[0], base, [(entry, entry.path.resolve()) for entry in entries[1:]]
+
+
+def worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch):
+    """Motifs de blocage d'un worktree secondaire, produits à la demande.
+
+    Seul moteur de décision : l'inventaire liste tous les motifs, le retrait
+    s'arrête au premier."""
+    if entry.locked:
+        yield "locked"
+    for part in (entry.path, *entry.path.parents):
+        if part.is_symlink():
+            yield "lien_symbolique"
+            return
+        if part.resolve() == base:
+            break
+    if not entry.path.is_dir():
+        yield "chemin_absent"
+        return
+    if base not in real.parents:
+        yield "hors_perimetre"
+    if any(other != real and (other in real.parents or real in other.parents) for other in others):
+        yield "nested"
+    if entry.prunable or not entry.head:
+        yield "lecture_inconnue"
+    else:
+        yield from (reason for reason in (integration_reason(repo, entry.head, base_ref),
+                                          age_reason(repo, entry.head, now)) if reason)
+    dirty = dirty_reason(real)
+    if dirty:
+        yield dirty
+    if busy is None:
+        yield "lecture_inconnue"
+    elif launch == real or real in launch.parents or real in busy:
+        yield "processus_actif"
+
+
+def inventory(repo, base_ref, now, launch):
+    """Observations en lecture seule ; RuntimeError si le registre Git est illisible."""
+    principal, base, secondary = worktree_context(repo, repo.resolve())
+    busy = busy_paths()
+    busy = None if busy is None else {ancestor for opened in busy for ancestor in (opened, *opened.parents)}
+    others = [real for _, real in secondary]
+    rows = [{"path": str(principal.path), "head": principal.head, "locked": principal.locked,
+             "prunable": principal.prunable, "motifs": ["principal"]}]
+    for entry, real in secondary:
+        reasons = worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch)
+        motifs = list(dict.fromkeys(reasons)) or [MOTIF_CANDIDATE]
+        rows.append({"path": str(entry.path), "head": entry.head, "locked": entry.locked,
+                     "prunable": entry.prunable, "motifs": motifs})
+    for row in rows:
+        row["recovery"] = [WORKTREE_RECOVERY[reason] for reason in row["motifs"]]
+    scoped = sum(1 for entry, _ in secondary if base == entry.path or base in entry.path.parents)
+    return {
+        "version": 1,
+        "repo": str(repo.resolve()),
+        "base_ref": base_ref,
+        "capacity": {"scope": str(base), "scoped_count": scoped,
+                     "git_total": len(secondary) + 1, "limit": WORKTREE_LIMIT,
+                     "warning_at": WORKTREE_WARNING_AT, "state": capacity_state(scoped),
+                     "limite": NOTE_CAPACITE},
+        "processus": "inconnu" if busy is None else "complet",
+        "note": NOTE_CANDIDAT,
+        "worktrees": rows,
+    }
+
+
+def report_worktrees(repo, base_ref, as_json):
+    try:
+        report = inventory(repo, base_ref, time.time(), Path.cwd().resolve())
+    except (OSError, RuntimeError, ValueError) as error:
+        if as_json:
+            print(json.dumps({"version": 1, "erreur": "inventaire_git_indisponible"}))
+        else:
+            log(f"inventaire Git indisponible : {error}")
+        return 1
+    if as_json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    capacity = report["capacity"]
+    print(f"Capacité : {capacity['scoped_count']}/{capacity['limit']} sous {capacity['scope']} "
+          f"({capacity['state']}) ; registre Git : {capacity['git_total']} au total")
+    print(capacity["limite"])
+    for row in report["worktrees"]:
+        print(f"{row['path']} : {', '.join(row['motifs'])}")
+        print("  " + " ".join(row["recovery"]))
+    print(report["note"])
+    return 0
+
+
+def prune_merged_worktrees(repo, dry_run=False, now=None, base_ref="main"):
+    """Retire les worktrees de `.worktrees/` intégrés à base_ref, sans aucun motif de blocage.
+
+    Même moteur que l'inventaire. `git worktree remove` sans --force refuse un worktree
+    sale. La branche est conservée, donc rien n'est perdu."""
+    now = time.time() if now is None else now
+    try:
+        _, base, secondary = worktree_context(repo)
+    except RuntimeError as error:
+        log(f"worktrees fusionnés non retirés : {error}")
         return []
-    # Racine du dépôt principal : lancé depuis un worktree, `repo` en est un.
-    base = (entries[0][0] / ".worktrees").resolve()
-    candidates = []
-    for path, head in entries[1:]:
-        resolved = path.resolve()
-        if base not in resolved.parents or not head:
-            continue
-        if git_ok(repo, "merge-base", "--is-ancestor", head, "main").returncode:
-            continue
-        stamp = git_ok(repo, "log", "-1", "--format=%ct", head)
-        if stamp.returncode or now - int(stamp.stdout.strip() or 0) < WORKTREE_MIN_AGE:
-            continue
-        status = git_ok(path, "status", "--porcelain", "--untracked-files=all", "--ignored")
-        if status.returncode or status.stdout.strip():
-            continue
-        candidates.append(resolved)
-    if not candidates:
+    if not secondary:
         return []
     busy = busy_paths()
     if busy is None:
         log("worktrees fusionnés non retirés : fichiers ouverts inconnus")
         return []
-    occupied = {ancestor for opened in busy for ancestor in (opened, *opened.parents)}
+    busy = {ancestor for opened in busy for ancestor in (opened, *opened.parents)}
+    launch = Path.cwd().resolve()
+    others = [real for _, real in secondary]
     removed = []
-    for path in candidates:
-        if path in occupied:
+    for entry, real in secondary:
+        reasons = worktree_reasons(repo, entry, real, others, base, base_ref, now, busy, launch)
+        if next(reasons, None):
             continue
         if dry_run:
-            removed.append(path)
-        elif not git_ok(repo, "worktree", "remove", str(path)).returncode:
-            removed.append(path)
+            removed.append(real)
+        elif not git_ok(repo, "worktree", "remove", str(real)).returncode:
+            removed.append(real)
     if removed:
         verb = "retirables" if dry_run else "retirés"
         log(f"worktrees fusionnés {verb} : " + ", ".join(p.name for p in removed))
@@ -349,8 +502,14 @@ def main():
     done.add_argument("--target", required=True)
     done.add_argument("--binary", required=True)
     done.add_argument("--dry-run", action="store_true")
+    inspect = sub.add_parser("worktrees", help="inventaire lecture seule des worktrees")
+    inspect.add_argument("--repo", required=True)
+    inspect.add_argument("--base-ref", default="main")
+    inspect.add_argument("--json", action="store_true")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
+    if args.action == "worktrees":
+        return report_worktrees(Path(args.repo), args.base_ref, args.json)
     if args.action == "cargo":
         if not args.arguments or args.arguments[0] not in ("build", "test", "check", "clippy"):
             parser.error("commande Cargo attendue : build, test, check ou clippy")

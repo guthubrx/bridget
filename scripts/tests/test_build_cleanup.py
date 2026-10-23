@@ -213,6 +213,8 @@ class ProcessTests(unittest.TestCase):
                 env={**os.environ, "BRIDGET_CARGO": str(cargo),
                      "BRIDGET_BUILD_CACHE_GIB": "0"}, timeout=40)
             self.assertEqual(result.returncode, 0, result.stderr)
+            if "lsof indisponible ou incomplet" in result.stderr:
+                self.skipTest("observation lsof incomplète sur cet hôte : nettoyage refusé")
             self.assertFalse((profile / "deps").exists(), result.stderr)
             self.assertEqual((profile / "bridget").read_text(), "binaire")
 
@@ -238,7 +240,11 @@ class ProcessTests(unittest.TestCase):
                 str(path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
             try:
                 self.assertEqual(child.stdout.readline().strip(), "ready")
-                self.assertIn(str(path), build.opened_paths())
+                try:
+                    opened = build.opened_paths()
+                except RuntimeError as error:
+                    self.skipTest(f"observation lsof indisponible sur cet hôte : {error}")
+                self.assertIn(str(path), opened)
             finally:
                 child.communicate("done\n", timeout=10)
 
@@ -417,6 +423,180 @@ class WorktreePruneTests(unittest.TestCase):
                 with patch.object(build.subprocess, "run", side_effect=incomplete):
                     self.assertEqual(build.prune_merged_worktrees(self.repo), [])
                 self.assertTrue(worktree.exists())
+
+    def test_locked_worktree_est_protege_du_retrait(self):
+        fusionne = self.worktree("verrouille", self.old)
+        self.git("worktree", "lock", str(fusionne))
+        with patch.object(build, "busy_paths", return_value=[]):
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+        self.assertTrue(fusionne.exists())
+
+    def test_inventaire_motifs_fermes_par_worktree(self):
+        self.worktree("fusionne", self.old)
+        sale = self.worktree("sale", self.old)
+        (sale / "brouillon.txt").write_text("brouillon")
+        self.worktree("recent", str(int(time.time())))
+        self.worktree("non-fusionne", self.old, merge=False)
+        self.worktree("verrouille", self.old)
+        self.git("worktree", "lock", str(self.repo / ".worktrees" / "verrouille"))
+        parent = self.worktree("parent", self.old)
+        self.git("worktree", "add", "-q", str(parent / ".worktrees" / "enfant"),
+                 "-b", "b-enfant", "main")
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+        motifs = {Path(row["path"]).name: row["motifs"] for row in report["worktrees"]}
+        self.assertEqual(motifs["repo"], ["principal"])
+        self.assertEqual(motifs["fusionne"], ["candidat_a_examiner"])
+        self.assertEqual(motifs["sale"], ["dirty_ignored"])
+        self.assertEqual(motifs["recent"], ["recent"])
+        self.assertEqual(motifs["non-fusionne"], ["non_integre"])
+        self.assertEqual(motifs["verrouille"], ["locked"])
+        self.assertIn("nested", motifs["parent"])
+        self.assertIn("dirty_ignored", motifs["parent"])
+        self.assertEqual(motifs["enfant"], ["nested"])
+
+    def test_capacite_seuils_et_comptes_separes(self):
+        self.assertEqual([build.capacity_state(n) for n in (0, 95, 96, 127, 128)],
+                         ["normal", "normal", "warning", "warning", "limit"])
+        self.worktree("un", self.old)
+        self.worktree("deux", self.old)
+        self.git("worktree", "add", "-q", str(self.repo.parent / "hors"), "-b", "b-hors", "main")
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+        capacity = report["capacity"]
+        self.assertEqual((capacity["scoped_count"], capacity["git_total"], capacity["state"]),
+                         (2, 4, "normal"))
+        motifs = {Path(row["path"]).name: row["motifs"] for row in report["worktrees"]}
+        self.assertEqual(motifs["hors"], ["hors_perimetre"])
+
+    def test_base_absente_rend_les_motifs_inconnus_sans_candidat(self):
+        self.worktree("fusionne", self.old)
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "absente", time.time(), Path("/"))
+        self.assertEqual([row["motifs"] for row in report["worktrees"][1:]],
+                         [["lecture_inconnue"]])
+
+    def test_worktree_de_lancement_est_protege_et_observation_inconnue_declaree(self):
+        fusionne = self.worktree("fusionne", self.old)
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), fusionne / "sous")
+        self.assertEqual(report["worktrees"][1]["motifs"], ["processus_actif"])
+        with patch.object(build, "busy_paths", return_value=None):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+        self.assertEqual(report["processus"], "inconnu")
+        self.assertEqual(report["worktrees"][1]["motifs"], ["lecture_inconnue"])
+
+    def test_registre_illisible_sort_en_echec_sans_compte(self):
+        plain = Path(self.temp.name).resolve() / "pas-git"
+        plain.mkdir()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = build.report_worktrees(plain, "main", True)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(output.getvalue()),
+                         {"version": 1, "erreur": "inventaire_git_indisponible"})
+
+    def test_processus_reel_dans_worktree_est_observe_ou_declare_indisponible(self):
+        path = self.worktree("tenu", self.old)
+        child = subprocess.Popen([sys.executable, "-c",
+            "import sys; f=open(sys.argv[1]); print('ready',flush=True); sys.stdin.readline()",
+            str(path / "tenu")], cwd=self.temp.name, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            if build.busy_paths() is None:
+                self.skipTest("lsof incomplet sur cet hôte : processus non observables")
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+        finally:
+            child.communicate("done\n", timeout=10)
+        motifs = {Path(row["path"]).name: row["motifs"] for row in report["worktrees"]}
+        self.assertIn("processus_actif", motifs["tenu"])
+
+    def test_commande_worktrees_json_stable_et_lecture_seule(self):
+        self.worktree("fusionne", self.old)
+        listing = ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]
+        before = subprocess.run(listing, capture_output=True, text=True, check=True).stdout
+        command = [sys.executable, str(SCRIPT), "worktrees", "--repo", str(self.repo)]
+        result = subprocess.run([*command, "--json"], capture_output=True, text=True,
+                                cwd=self.temp.name, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = json.loads(result.stdout)
+        self.assertEqual((data["version"], data["capacity"]["scoped_count"]), (1, 1))
+        self.assertIn("ne garantit ni égalité", data["capacity"]["limite"])
+        self.assertIn(data["processus"], ("complet", "inconnu"))
+        human = subprocess.run(command, capture_output=True, text=True,
+                               cwd=self.temp.name, timeout=60)
+        self.assertIn("Capacité : 1/128", human.stdout)
+        self.assertIn("ne garantit ni égalité", human.stdout)
+        self.assertEqual(subprocess.run(listing, capture_output=True, text=True,
+                                        check=True).stdout, before)
+        self.assertTrue((self.repo / ".worktrees" / "fusionne").exists())
+
+    def test_perimetre_du_checkout_demande_et_base_explicitement_choisie(self):
+        parent = self.worktree("parent", self.old)
+        self.git("worktree", "add", "-q", str(parent / ".worktrees" / "enfant"),
+                 "-b", "b-enfant", "main")
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(parent, "main", time.time(), Path("/"))
+        self.assertEqual(report["capacity"]["scope"], str(parent / ".worktrees"))
+        self.assertEqual(report["capacity"]["scoped_count"], 1)
+        self.assertEqual(report["capacity"]["git_total"], 3)
+        for row in report["worktrees"]:
+            self.assertTrue(row["recovery"])
+        self.git("branch", "archive", "main~1")
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "archive", time.time(), Path("/"))
+        reasons = {Path(row["path"]).name: row["motifs"] for row in report["worktrees"]}
+        self.assertIn("non_integre", reasons["parent"])
+
+    def test_chemin_absent_et_lien_symbolique_ne_sont_pas_candidats(self):
+        worktree = self.worktree("disparu", self.old)
+        saved = worktree.with_name("sauvegarde")
+        worktree.rename(saved)
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+        self.assertIn("chemin_absent", report["worktrees"][1]["motifs"])
+        worktree.symlink_to(saved, target_is_directory=True)
+        with patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+        self.assertIn("lien_symbolique", report["worktrees"][1]["motifs"])
+        self.assertTrue(saved.is_dir())
+
+    def test_erreurs_outils_sont_inconnues_et_commande_ne_purge_rien(self):
+        for error in (FileNotFoundError("outil absent"), subprocess.TimeoutExpired("outil", 15)):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(build.subprocess, "run", side_effect=error):
+                    self.assertIsNone(build.busy_paths())
+                    with self.assertRaises(RuntimeError):
+                        build.worktree_entries(self.repo)
+        self.worktree("fusionne", self.old)
+        with patch.object(sys, "argv", [str(SCRIPT), "worktrees", "--repo", str(self.repo), "--json"]), \
+                patch.object(build, "busy_paths", return_value=[]), \
+                patch.object(build, "prune") as caches, \
+                patch.object(build, "prune_merged_worktrees") as worktrees, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(build.main(), 0)
+        caches.assert_not_called()
+        worktrees.assert_not_called()
+
+
+    def test_nettoyage_sans_secondaire_ne_lance_pas_lsof(self):
+        with patch.object(build, "busy_paths") as observe:
+            self.assertEqual(build.prune_merged_worktrees(self.repo), [])
+        observe.assert_not_called()
+
+    def test_prefixe_systeme_lie_ne_bloque_pas_un_chemin_interne_sain(self):
+        worktree = self.worktree("prefixe", self.old)
+        alias = self.repo.parent / "alias"
+        alias.symlink_to(self.repo, target_is_directory=True)
+        entries = build.worktree_entries(self.repo)
+        entries[1] = entries[1]._replace(path=alias / ".worktrees" / worktree.name)
+        with patch.object(build, "worktree_entries", return_value=entries), \
+                patch.object(build, "busy_paths", return_value=[]):
+            report = build.inventory(self.repo, "main", time.time(), Path("/"))
+        self.assertEqual(report["worktrees"][1]["motifs"], ["candidat_a_examiner"])
+
 
 
 if __name__ == "__main__":
