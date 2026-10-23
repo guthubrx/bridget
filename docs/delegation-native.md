@@ -536,7 +536,7 @@ to make a refusal disappear.
 ### Worktree count limit
 
 A candidate refusal with `code: workspace_limit` means Bridget reached its limit
-of 32 registered Git worktrees under the target checkout's `.worktrees` directory.
+of 128 registered Git worktrees under the target checkout's `.worktrees` directory.
 Retained and nested worktrees count too. This is not a disk-space diagnosis or
 a claim that the application repository has uncommitted changes.
 
@@ -546,3 +546,13 @@ work or change the request key, base commit or provider to bypass the check.
 After verified cleanup, replay the same envelope; admission is re-evaluated.
 Bridget does not clean or replay automatically. Older peers retain the generic
 `workspace_unavailable` response.
+
+#### Cleanup routine
+
+Plan cleanup before the project reaches 96 worktrees. The task owner first closes
+the completed task, then integrates or preserves its commits. Archive generated
+outputs and evidence, including ignored files: a clean Git status alone is not
+enough. Recheck task activity and Git state immediately before each removal.
+Use `git worktree remove` without `--force` and retain the branch. Keep active,
+modified, locked or unmerged worktrees, and parents containing other worktrees.
+This is an operator routine; Bridget installs no periodic deletion job.

@@ -967,10 +967,10 @@ fn register_parent154(
 }
 
 #[test]
-fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
-    let fixture = fixture154("union32");
+fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
+    let fixture = fixture154("union128");
     let seed = seed_workspace154(&fixture); // Une même place dans Git et dans le store.
-    for index in 0..30 {
+    for index in 0..126 {
         let path = fixture
             .root
             .join(".worktrees")
@@ -988,10 +988,10 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
     }
     let plan =
         crate::workspace_git::preflight(&fixture.root, None, Some("bridget/last154")).unwrap();
-    assert_eq!(plan.listed_paths.len(), 31);
+    assert_eq!(plan.listed_paths.len(), 127);
     let request = request154(
         &fixture.root,
-        "last32",
+        "last128",
         Some(json!({"strategy":"worktree","branch":"bridget/last154"})),
     );
     let id = Uuid::new_v4().to_string();
@@ -1032,7 +1032,7 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
         .unwrap()
         {
             WorkspaceAdmission::Reserved { task, claim } => (task, claim),
-            _ => panic!("réservation de la 32e place attendue"),
+            _ => panic!("réservation de la 128e place attendue"),
         }
     };
     assert_eq!(
@@ -1045,7 +1045,7 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
             &fixture,
             request154(
                 &fixture.root,
-                "over32",
+                "over128",
                 Some(json!({"strategy":"worktree"}))
             )
         )["code"],
@@ -1096,7 +1096,7 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
         git154(&fixture.root, &["worktree", "list", "--porcelain"])
             .matches("worktree ")
             .count(),
-        33
+        129
     );
     assert!(Path::new(&seed.cwd).is_dir());
     // Nettoyage humain de deux worktrees : les tâches restent retenues en base.
@@ -1116,8 +1116,8 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
     let refreshed = crate::workspace_git::preflight(&fixture.root, None, None).unwrap();
     assert_eq!(
         refreshed.listed_paths.len(),
-        30,
-        "les trente fixtures Git restent enregistrées"
+        126,
+        "les 126 fixtures Git restent enregistrées"
     );
     let next = call154(
         &fixture,
@@ -1136,8 +1136,8 @@ fn native154_creation_limite_union_et_propre_trente_deuxieme_place() {
         next_path.is_dir(),
         "la nouvelle admission crée effectivement son worktree"
     );
-    // L'humain retire seulement les trente anciennes fixtures, jamais la nouvelle création.
-    for index in 0..30 {
+    // L'humain retire seulement les 126 anciennes fixtures, jamais la nouvelle création.
+    for index in 0..126 {
         let path = fixture
             .root
             .join(".worktrees")
@@ -1247,6 +1247,11 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
             ));
         }
     }
+    let prefilled = crate::workspace_git::MAX_WORKTREES - 8;
+    for index in 0..prefilled {
+        let path = fixture.root.join(".worktrees").join(format!("prefilled-{index}"));
+        git154(&fixture.root, &["worktree", "add", "--detach", path.to_str().unwrap(), "HEAD"]);
+    }
     let barrier = Arc::new(std::sync::Barrier::new(41));
     let mut workers = Vec::new();
     for index in 0..40 {
@@ -1280,7 +1285,7 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
             paths.insert(claim.path.to_string_lossy().into_owned());
         }
         assert!(
-            paths.len() <= 32,
+            prefilled + paths.len() <= crate::workspace_git::MAX_WORKTREES,
             "union durable et réservée observée en vol : {}",
             paths.len()
         );
@@ -1296,7 +1301,7 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
         .filter(|value| value.get("task_id").is_some())
         .count();
     assert!(
-        (1..=32).contains(&accepted),
+        (1..=8).contains(&accepted),
         "admissions non vides et bornées : {results:?}"
     );
     for refused in results
@@ -1324,7 +1329,7 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
         git154(&fixture.root, &["worktree", "list", "--porcelain"])
             .matches("worktree ")
             .count(),
-        accepted + 1
+        prefilled + accepted + 1
     );
     assert_eq!(
         fixture

@@ -5680,7 +5680,8 @@ fn workspace_limit(
             paths.insert(reservation.path.clone());
         }
     }
-    if paths.len() > 32 || (!created && paths.len() == 32) {
+    let limit = crate::workspace_git::MAX_WORKTREES;
+    if paths.len() > limit || (!created && paths.len() == limit) {
         Err("workspace_limit".into())
     } else {
         Ok(())
@@ -11780,7 +11781,7 @@ mod tests {
         let limit = routing_probe_failure(&plan);
         let reason = &limit["detail"]["reasons"][0];
         assert_eq!(reason["code"], "workspace_limit");
-        assert!(reason["message"].as_str().unwrap().contains("32 worktrees"));
+        assert!(reason["message"].as_str().unwrap().contains("128 worktrees"));
         assert!(reason["message"].as_str().unwrap().contains("imbriqués"));
         assert!(reason["recovery"].as_str().unwrap().contains("rejouer la même enveloppe"));
         assert!(reason["recovery"].as_str().unwrap().contains("Aucun nettoyage ni rejeu automatique"));

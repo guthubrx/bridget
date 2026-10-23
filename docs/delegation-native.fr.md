@@ -1329,7 +1329,7 @@ aucune dépendance T3 pour les parents natifs Bridget.
 ### Plafond de worktrees
 
 Un refus candidat `code: workspace_limit` indique que Bridget atteint sa limite
-de 32 worktrees Git enregistrés sous le dossier `.worktrees` du checkout cible.
+de 128 worktrees Git enregistrés sous le dossier `.worktrees` du checkout cible.
 Les worktrees conservés et imbriqués comptent aussi. Ce diagnostic ne signifie
 ni disque plein ni modifications non commitées dans le dépôt applicatif.
 
@@ -1339,3 +1339,14 @@ Ne pas supprimer de travail actif ni changer la clé, la base ou le fournisseur
 pour contourner le contrôle. Après nettoyage vérifié, rejouer la même enveloppe :
 l’admission est réévaluée. Aucun nettoyage ni rejeu automatique. Les anciens
 pairs conservent le refus générique `workspace_unavailable`.
+
+#### Routine de nettoyage
+
+Prévoir le nettoyage avant que le projet atteigne 96 worktrees. Le propriétaire
+clôture d’abord la tâche terminée, puis intègre ou conserve ses commits. Archiver
+les résultats et les preuves, y compris les fichiers ignorés : un état Git propre
+ne suffit pas. Relire l’activité et l’état Git juste avant chaque retrait.
+Utiliser `git worktree remove` sans `--force` et conserver la branche. Garder les
+worktrees actifs, modifiés, verrouillés ou non intégrés, ainsi que les parents
+qui contiennent d’autres worktrees. C’est une routine opérateur ; Bridget
+n’installe aucune suppression périodique.
