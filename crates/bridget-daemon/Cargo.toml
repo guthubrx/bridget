@@ -20,11 +20,11 @@ bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = "0.9"
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
 uuid = { workspace = true }
-# Frontière décision 163 : même client minreq 2.14.1, loopback ou HTTPS
+# Frontière décision 163 : même client minreq 3.0.0, loopback ou HTTPS
 # rustls uniquement ; aucun second client HTTP ni mode TLS permissif.
-minreq = { version = "=2.14.1", default-features = false, features = ["https-rustls"] }
+minreq = { version = "=3.0.0", default-features = false, features = ["https-rustls"] }
 # Même version que bridget-transport ; RPC natif T3 V2, sans TLS ni runtime async.
 tungstenite = { version = "0.26.2", default-features = false, features = ["handshake"] }
 rusqlite = { workspace = true }

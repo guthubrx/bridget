@@ -37,7 +37,7 @@ pub enum ContractError {
     StaleRuntime(u32),
     Unauthorized,
     Http {
-        status: i32,
+        status: u16,
         body: String,
     },
     Transport(String),

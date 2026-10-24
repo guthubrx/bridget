@@ -197,7 +197,15 @@ fn post(
         }));
     }
     if body.get("method").and_then(Value::as_str) == Some("initialize") {
-        let issued = response.headers.get("mcp-session-id").ok_or_else(denied)?;
+        let mut issued_values = response
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("mcp-session-id"))
+            .map(|(_, value)| value);
+        let issued = issued_values.next().ok_or_else(denied)?;
+        if issued_values.next().is_some() {
+            return Err(denied());
+        }
         if issued.is_empty()
             || issued.len() > 256
             || !issued

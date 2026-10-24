@@ -370,8 +370,11 @@ fn git_output(repo: &Path, args: &[&str]) -> Result<String, String> {
 pub fn load_pin(path: &Path) -> Result<LoadedPin, String> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("pin illisible ({}): {error}", path.display()))?;
-    let pin: PinFile = serde_yaml::from_str(&raw)
-        .map_err(|error| format!("pin YAML invalide ({}): {error}", path.display()))?;
+    let pin: PinFile = serde_saphyr::from_str_with_options(
+        &raw,
+        serde_saphyr::options! { reject_unsupported_tags: true },
+    )
+    .map_err(|error| format!("pin YAML invalide ({}): {error}", path.display()))?;
     let modified_at = fs::metadata(path)
         .and_then(|meta| meta.modified())
         .unwrap_or(UNIX_EPOCH);
@@ -1232,6 +1235,34 @@ mod tests {
             card.contains("geste: \"livrer carte reprise\"")
                 || card.contains("geste: livrer carte reprise")
         );
+    }
+
+    #[test]
+    fn pin_yaml_reel_est_charge_depuis_le_fichier() {
+        let chemin = std::env::temp_dir().join(format!("b174-pin-{}.yaml", uuid::Uuid::new_v4()));
+        fs::write(
+            &chemin,
+            "couloirs:\n  - id: A\n    owner: coderBridget\n    fichiers: [src/a.rs]\nprochain:\n  geste: livrer carte reprise\npieges:\n  actifs_session: [piège]\n",
+        )
+        .unwrap();
+        let loaded = load_pin(&chemin);
+        let _ = fs::remove_file(&chemin);
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.pin.couloirs[0].owner, "coderBridget");
+        assert_eq!(loaded.pin.prochain.unwrap().geste, "livrer carte reprise");
+        assert_eq!(
+            loaded.pin.pieges.unwrap().actifs_session,
+            vec!["piège".to_string()]
+        );
+    }
+
+    #[test]
+    fn pin_yaml_avec_balise_include_est_refuse() {
+        let chemin = std::env::temp_dir().join(format!("b174-pin-{}.yaml", uuid::Uuid::new_v4()));
+        fs::write(&chemin, "prochain:\n  geste: !include secret.yaml\n").unwrap();
+        let loaded = load_pin(&chemin);
+        let _ = fs::remove_file(&chemin);
+        assert!(loaded.is_err_and(|motif| motif.contains("pin YAML invalide")));
     }
 
     /// M4 — le contrôle POSITIF qui manquait.

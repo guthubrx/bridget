@@ -508,7 +508,7 @@ impl DecisionServiceClient {
 
 #[derive(Debug)]
 struct HttpReply {
-    status: i32,
+    status: u16,
     body: Vec<u8>,
 }
 
