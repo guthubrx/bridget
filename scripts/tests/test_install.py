@@ -117,6 +117,17 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
         self.run_install()
         self.assertEqual((self.home / ".local/state/bridget-install/previous-bridget").read_bytes(), b"previous executable")
 
+    def test_bash_login_keeps_existing_profile_selection(self):
+        (self.home / ".profile").write_text("export MY_SETTING=keep\n")
+        self.run_install()
+        self.assertFalse((self.home / ".bash_profile").exists())
+        self.assertIn("MY_SETTING=keep", (self.home / ".profile").read_text())
+        (self.home / ".bash_login").write_text("export LOGIN_SETTING=keep\n")
+        self.run_install()
+        self.assertFalse((self.home / ".bash_profile").exists())
+        self.assertIn('LOGIN_SETTING=keep', (self.home / ".bash_login").read_text())
+        self.assertIn('. "$HOME/.local/share/bridget/env"', (self.home / ".bash_login").read_text())
+
     def test_pin_skips_latest_lookup(self):
         self.run_install("--version", "v9.8.7")
         self.assertNotIn("/releases/latest", (self.root / "downloads").read_text())

@@ -115,15 +115,22 @@ main() {
 
     # Prepare PATH before replacing the executable; preserve existing shell settings.
     [ ! -L "$envdir/env" ] || fail "Symlink refused: $envdir/env"
-    printf '%s\n' 'export PATH="$HOME/.local/bin:$PATH"' > "$envdir/env"
+    printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac' > "$envdir/env"
     profiles="$HOME/.profile"
     case "${SHELL:-}" in
         */zsh) profiles="$profiles
 $HOME/.zshrc
 $HOME/.zprofile" ;;
         */bash) profiles="$profiles
-$HOME/.bashrc
-$HOME/.bash_profile" ;;
+$HOME/.bashrc"
+            # Do not create .bash_profile: it would hide existing .profile/.bash_login.
+            if [ -e "$HOME/.bash_profile" ] || [ -L "$HOME/.bash_profile" ]; then
+                profiles="$profiles
+$HOME/.bash_profile"
+            elif [ -e "$HOME/.bash_login" ] || [ -L "$HOME/.bash_login" ]; then
+                profiles="$profiles
+$HOME/.bash_login"
+            fi ;;
     esac
     oldifs=$IFS
     IFS='
@@ -131,7 +138,7 @@ $HOME/.bash_profile" ;;
     for profile in $profiles; do
         [ ! -L "$profile" ] || fail "Shell profile is a symlink: $profile. Configure PATH manually."
         if ! grep -Fq '. "$HOME/.local/share/bridget/env"' "$profile" 2>/dev/null; then
-            if [ -f "$profile" ] && [ ! -e "$profile.before-bridget-install" ]; then
+            if [ -f "$profile" ] && [ ! -e "$profile.before-bridget-install" ] && [ ! -L "$profile.before-bridget-install" ]; then
                 cp -p "$profile" "$profile.before-bridget-install"
             fi
             { printf '%s\n' '. "$HOME/.local/share/bridget/env"'; test ! -f "$profile" || cat "$profile"; } > "$work/profile"
@@ -150,7 +157,8 @@ $HOME/.bash_profile" ;;
         rm -f "$new"
         fail 'Could not replace the executable.'
     fi
-    printf '%s\n' "channel=$mode" "source=$identity" "sha256=$(digest "$bindir/bridget")" > "$state/installed.txt"
+    printf '%s\n' "channel=$mode" "source=$identity" "sha256=$(digest "$bindir/bridget")" > "$work/installed.txt"
+    mv -f "$work/installed.txt" "$state/installed.txt"
     if [ "$mode" = source ]; then
         (cd "$work/source" && python3 scripts/build.py installed --target "$CARGO_TARGET_DIR" --binary "$bindir/bridget")
     fi

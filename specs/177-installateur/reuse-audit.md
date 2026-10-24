@@ -6,7 +6,9 @@
   Ne répond pas à l'installation publique ni à la mise à jour sur place.
 - GitHub Releases : archives natives et sidecars SHA-256 réutilisés tels quels.
 - scripts/build.py : compilation et entretien du cache réutilisés pour --source.
-- cartae.app : Caddy sert déjà /srv/cartae/site ; ajout d'un seul fichier statique,
-  sans modification de Caddy ni redémarrage.
+- cartae.app : Caddy sert déjà une page /bridget.html. Un répertoire /bridget
+  casserait sa résolution. Une redirection précise /bridget/install.sh vers le
+  script GitHub évite ce conflit et toute copie divergente. Rechargement Caddy,
+  sans redémarrage des services applicatifs.
 
 Gate avant tasks : [x] Aucun installateur public équivalent ; pas de doublon.

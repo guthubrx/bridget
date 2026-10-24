@@ -6,10 +6,10 @@
    si absent, toolchain du dépôt, Cargo.lock et wrapper build.py existants.
 3. Validation en HOME jetable : vraie archive, corruption, reprise et erreurs.
    Construction réelle sur Cartae, sans modifier son installation active.
-4. Documentation EN/FR, push et publication du même script sur cartae.app.
+4. Documentation EN/FR, push et redirection cartae.app vers le script GitHub.
 
 T3 consulté : docs/user/install.md, scripts/release-smoke.ts et
-.github/workflows/release.yml dans /Users/moi/11.Repositories/t3code.
+.github/workflows/release.yml dans le checkout T3 de référence.
 Réemploi : distinction paquet publié/code de développement et essais de paquet
 isolés. T3 utilise npm/Electron ; Bridget est un exécutable Rust, donc archive
 native et compilation par le wrapper existant. Aucun nouveau moteur de service.
