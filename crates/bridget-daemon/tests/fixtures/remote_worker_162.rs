@@ -2343,7 +2343,7 @@ fn real_master_case(case: &str) {
         );
         // Corps fournisseur exact et unique note attestée, sans suffixe libre.
         let expected = format!(
-            "fixture162-remote-answer\n\n[Bridget] espace de travail : branche {branch}, base {}, 0 commit(s), modifications non commitées : oui, tête sur la branche : oui, worktree conservé : {}",
+            "fixture162-remote-answer\n\n[Bridget] espace de travail : branche {branch}, base {}, 0 commit(s), modifications non commitées : oui, tête sur la branche : oui, worktree conservé : {}. Consultez le statut de la tâche avant tout retrait. Clôturez la tâche, préservez le travail et vérifiez les autres usages du dossier.",
             &base[..7],
             execution_cwd.display()
         );
