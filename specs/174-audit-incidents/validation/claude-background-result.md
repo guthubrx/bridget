@@ -30,7 +30,7 @@ textes provisoires, mais la réponse finale utilise le dernier tour. Une erreur
 ou une annulation conserve son comportement terminal.
 
 Les identifiants sont bornés à 256 octets et le registre à 1024 tâches actives.
-Une observation invalide ou tronquée reste inconnue jusqu’à l’échéance,
+Un identifiant invalide ou un registre tronqué reste inconnu jusqu’à l’échéance,
 jamais considérée comme terminée. Les tâches internes marquées `ambient` ou
 `skip_transcript` ne bloquent pas la mission, selon le contrat du SDK.
 
@@ -52,3 +52,17 @@ lancé sans événement fournisseur n’est pas détecté par ce registre. Les
 résultats historiques ne sont pas réécrits. Les wrappers déjà lancés gardent
 leur code jusqu’à leur arrêt normal ; aucune mission applicative n’est
 recréée ni interrompue par ce correctif.
+
+## Revue indépendante et retouche
+
+La revue confirme le cas corrigé. Elle identifie deux risques de blocage :
+une progression tardive pouvait recréer une tâche finie ; une notification
+masquée pouvait empêcher son retrait. La version finale crée une entrée
+uniquement sur `task_started`. Les mises à jour ne créent aucune entrée et
+une fin est traitée avant le filtre d’affichage. Les deux scénarios sont testés.
+Aucun second registre ni mécanisme de reprise n’a été ajouté.
+
+La revue utilisait un SDK plus ancien. Les champs `ambient`,
+`task_started.is_backgrounded` et `patch.status=paused` sont présents dans
+le SDK 0.3.260 lu dans T3 et ne sont pas des champs inventés. Le suivi ne
+suppose pas une garantie d’ordre des événements de progression.

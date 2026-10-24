@@ -110,14 +110,13 @@ struct BackgroundTasks {
 
 impl BackgroundTasks {
     fn observe(&mut self, value: &Value) {
-        if value["type"] != "system" || value["ambient"] == true || value["skip_transcript"] == true
-        {
+        if value["type"] != "system" {
             return;
         }
         let subtype = value["subtype"].as_str().unwrap_or_default();
         if !matches!(
             subtype,
-            "task_started" | "task_progress" | "task_updated" | "task_notification"
+            "task_started" | "task_updated" | "task_notification"
         ) {
             return;
         }
@@ -141,12 +140,9 @@ impl BackgroundTasks {
         };
         if terminal {
             self.live.remove(id);
-        } else if matches!(subtype, "task_started" | "task_progress")
-            || (subtype == "task_updated"
-                && matches!(
-                    value["patch"]["status"].as_str(),
-                    Some("pending" | "running" | "paused")
-                ))
+        } else if subtype == "task_started"
+            && value["ambient"] != true
+            && value["skip_transcript"] != true
         {
             if self.live.len() < 1024 || self.live.contains(id) {
                 self.live.insert(id.to_owned());
@@ -2262,6 +2258,13 @@ mod tests {
             &json!({"type":"system","subtype":"task_started","task_id":"watcher","ambient":true}),
         );
         assert!(!tasks.pending());
+        tasks.observe(&json!({"type":"system","subtype":"task_progress","task_id":"a"}));
+        tasks.observe(&json!({"type":"system","subtype":"task_updated","task_id":"a","patch":{"status":"running"}}));
+        tasks.observe(&json!({"type":"system","subtype":"task_progress","task_id":"watcher"}));
+        assert!(!tasks.pending(), "une progression tardive ne recrée aucune tâche");
+        tasks.observe(&start);
+        tasks.observe(&json!({"type":"system","subtype":"task_notification","task_id":"a","status":"completed","skip_transcript":true}));
+        assert!(!tasks.pending(), "une fin masquée clôt aussi une tâche suivie");
         for n in 0..1025 {
             tasks.observe(
                 &json!({"type":"system","subtype":"task_started","task_id":n.to_string()}),
