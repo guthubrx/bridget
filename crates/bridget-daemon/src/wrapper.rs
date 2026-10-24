@@ -1433,21 +1433,23 @@ fn set_cloexec(stream: &UnixStream) {
 }
 
 /// Délai exponentiel (1, 2, 4, 8, 16, 30 s) avec un jitter de ±20 %.
-/// Le plafond protège le daemon et le serveur SSH pendant une panne longue.
+/// Au plafond, la fenêtre reste sous 30 s : un clamp après jitter ramènerait la moitié haute à 30 s.
 fn reconnect_delay(attempt: u32) -> Duration {
+    let max_ms = RECONNECT_MAX_DELAY.as_millis() as u64;
     let multiplier = 1_u64 << attempt.min(5);
     let base_ms = (RECONNECT_INITIAL_DELAY.as_millis() as u64)
         .saturating_mul(multiplier)
-        .min(RECONNECT_MAX_DELAY.as_millis() as u64);
-    let jitter_span = base_ms / 5;
+        .min(max_ms);
+    let span_ms = base_ms / 5;
+    let low_ms = base_ms - span_ms;
+    let high_ms = (base_ms + span_ms).min(max_ms);
     let seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos() as u64
         ^ std::process::id() as u64
         ^ attempt as u64;
-    let jitter = (seed % (jitter_span.saturating_mul(2) + 1)) as i64 - jitter_span as i64;
-    Duration::from_millis((base_ms as i64 + jitter).max(1) as u64).min(RECONNECT_MAX_DELAY)
+    Duration::from_millis(low_ms + seed % (high_ms - low_ms + 1))
 }
 
 /// Nom courant de l'agent, tel que `bridget rename` l'a laissé sur disque.
@@ -11495,6 +11497,17 @@ mod reconnect_tests {
         assert!(second >= Duration::from_millis(1600));
         assert!(sixth <= RECONNECT_MAX_DELAY);
         assert!(later <= RECONNECT_MAX_DELAY);
+    }
+
+    #[test]
+    fn reconnect_delay_plafonne_sans_regrouper_la_gigue() {
+        let samples: Vec<Duration> = (0..256).map(|_| reconnect_delay(6)).collect();
+        assert!(
+            samples
+                .iter()
+                .all(|delay| (Duration::from_secs(24)..=RECONNECT_MAX_DELAY).contains(delay))
+        );
+        assert!(samples.iter().filter(|delay| **delay == RECONNECT_MAX_DELAY).count() < 32);
     }
 
     #[test]
