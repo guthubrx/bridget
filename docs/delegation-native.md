@@ -581,6 +581,31 @@ This is an operator routine; Bridget installs no periodic deletion job.
 For `workspace_preflight_technical`, `detail.message` and `detail.recovery` explain the next checks. The `cwd` argument identifies the source directory on the calling parent’s machine, not the destination directory. Check the directory, Git access and the requested reference. Reconcile the existing request before retrying; a technical error does not prove that no task exists. Raw Git errors are not exposed in this response.
 Known branch-exists and worktree-limit causes receive their own recovery advice, while the outer error code stays unchanged.
 
+
+### Missing or mismatched source commit
+
+`workspace_base_unavailable` means Bridget could not resolve the requested base.
+Check Git and the exact commit in `cwd` on the **parent's machine**. Availability
+on the destination alone is insufficient. If the source lacks the commit,
+identify the configured remote and branch containing it, then fetch that branch
+into the source repository. Verify the exact SHA again. Do not reset, pull a new
+base into the working branch, or change `expected_base_commit` to bypass refusal.
+
+`expected_base_commit_mismatch` means the resolved base differs from the expected
+commit. For a frozen worktree review, set `workspace.base_ref` and
+`expected_base_commit` to the same full SHA. A moving `main` then cannot change
+the requested base. Shared mode instead checks the source HEAD.
+
+Follow any existing task with `bridget_task_status`. If none is known, after
+fixing the source perform at most one identical retry with the same key and all
+parameters. This retrieves the existing outcome or retries admission; it does
+not reopen a recorded refusal. Once a durable refusal and absence of a task are
+confirmed, use a new key after correction. Changed parameters also require a
+new key after confirming the previous request created no task. Repeated refusal
+alone does not prove either durability or absence of a task. Stop retrying if the
+outcome remains unknown. These are source checks, not worktree capacity
+failures. Bridget does not fetch from the network or choose another base for you.
+
 ### Worktree lifecycle and capacity
 
 A completed round does not close its task or remove its worktree. If you need

@@ -3300,9 +3300,14 @@ fn failure(code: &str) -> Value {
         };
         return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
     }
+    if code == "expected_base_commit_mismatch" {
+        let message = "La base résolue ne correspond pas au commit exact demandé.";
+        let recovery = "Dans cwd, sur la machine du parent, comparez expected_base_commit au commit résolu de workspace.base_ref (HEAD si absent ; HEAD en shared). Pour une revue figée en worktree, utilisez le même SHA complet dans workspace.base_ref et expected_base_commit afin que les mouvements de main ne changent pas la base. Ne changez pas la version à examiner pour faire passer le contrôle. Vérifiez le sort de la demande initiale : si une tâche existe, suivez-la. Un changement de paramètres exige une nouvelle request_id, seulement après confirmation que la demande précédente n’a créé aucune tâche ; un rejeu strict conserve sa clé et ses paramètres et ne rouvre pas un refus enregistré.";
+        return json!({"status":"refused","code":code,"message":message,"detail":{"message":message,"recovery":recovery}});
+    }
     if code == "workspace_base_unavailable" || code.starts_with("workspace_base_unavailable:") {
         let message = "Bridget n’a pas pu déterminer le commit de base dans le dépôt source.";
-        let recovery = "Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place.";
+        let recovery = "Dans cwd, sur la machine du parent, vérifiez que Git peut résoudre le commit demandé. Sa présence sur la machine de destination ne suffit pas. Si le commit manque, identifiez le dépôt distant et la branche qui le contiennent, puis récupérez cette branche avec git fetch dans le dépôt source. Vérifiez à nouveau le SHA exact, sans changer expected_base_commit, faire de reset ou avancer la branche de travail. Si une tâche existe, suivez-la avec bridget_task_status. Sinon, après correction, faites au plus un rejeu strict avec la même request_id et les mêmes paramètres. Un refus enregistré reste un refus au rejeu : si ce refus durable et l’absence de tâche sont confirmés, utilisez une nouvelle request_id après correction. Ne multipliez pas les essais si le sort reste inconnu. Ce code ne désigne pas le plafond des worktrees.";
         return json!({"status":"refused","code":"workspace_base_unavailable","message":message,"detail":{"message":message,"recovery":recovery}});
     }
     if code.starts_with("workspace_")
@@ -11546,7 +11551,7 @@ mod tests {
     #[test]
     fn spec174_base_unavailable_detail_constant_sans_stderr() {
         let message = "Bridget n’a pas pu déterminer le commit de base dans le dépôt source.";
-        let recovery = "Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place.";
+        let recovery = "Dans cwd, sur la machine du parent, vérifiez que Git peut résoudre le commit demandé. Sa présence sur la machine de destination ne suffit pas. Si le commit manque, identifiez le dépôt distant et la branche qui le contiennent, puis récupérez cette branche avec git fetch dans le dépôt source. Vérifiez à nouveau le SHA exact, sans changer expected_base_commit, faire de reset ou avancer la branche de travail. Si une tâche existe, suivez-la avec bridget_task_status. Sinon, après correction, faites au plus un rejeu strict avec la même request_id et les mêmes paramètres. Un refus enregistré reste un refus au rejeu : si ce refus durable et l’absence de tâche sont confirmés, utilisez une nouvelle request_id après correction. Ne multipliez pas les essais si le sort reste inconnu. Ce code ne désigne pas le plafond des worktrees.";
         let expected = json!({
             "status": "refused",
             "code": "workspace_base_unavailable",
@@ -11561,6 +11566,18 @@ mod tests {
             assert_eq!(failure(raw), expected);
         }
         assert!(failure("workspace_disk_full: Git Some(1) : x").get("detail").is_none());
+    }
+
+    #[test]
+    fn spec174_base_mismatch_guide_sans_changer_le_refus() {
+        let result = failure("expected_base_commit_mismatch");
+        assert_eq!(result["status"], "refused");
+        assert_eq!(result["code"], "expected_base_commit_mismatch");
+        let recovery = result["detail"]["recovery"].as_str().unwrap();
+        assert!(recovery.contains("même SHA complet"));
+        assert!(recovery.contains("nouvelle request_id"));
+        assert!(recovery.contains("si une tâche existe, suivez-la"));
+        assert!(failure("expected_base_commit_required").get("detail").is_none());
     }
 
     fn routing168_fixture(

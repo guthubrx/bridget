@@ -1385,6 +1385,33 @@ il ne remplace pas un résultat reçu ensuite.
 Pour `workspace_preflight_technical`, `detail.message` et `detail.recovery` indiquent les vérifications utiles. Le champ `cwd` désigne le dossier source sur la machine du parent appelant, pas le dossier de destination. Vérifier le dossier, l’accès Git et la référence demandée. Réconcilier la demande existante avant tout nouvel essai ; une erreur technique ne prouve pas l’absence de tâche. La réponse ne publie pas l’erreur Git brute.
 Les causes connues de branche existante et de plafond atteint gardent leur propre conseil de reprise, sans changer le code d’erreur externe.
 
+
+### Commit source absent ou différent
+
+`workspace_base_unavailable` signifie que Bridget ne peut pas résoudre la base
+demandée. Vérifier Git et le commit exact dans `cwd`, sur la **machine du parent**.
+Sa présence sur la destination seule ne suffit pas. S’il manque à la source,
+identifier le dépôt distant configuré et la branche qui le contient, puis
+récupérer cette branche avec `git fetch` dans le dépôt source. Revérifier le SHA
+exact. Ne pas faire de reset, avancer la branche de travail par pull ou changer
+`expected_base_commit` pour contourner le refus.
+
+`expected_base_commit_mismatch` signifie que la base résolue diffère du commit
+attendu. Pour une revue figée en worktree, donner le même SHA complet à
+`workspace.base_ref` et `expected_base_commit`. Une avance de `main` ne change
+alors pas la base demandée. Le mode shared contrôle en revanche le HEAD source.
+
+Suivre toute tâche existante avec `bridget_task_status`. Si aucune n’est connue,
+après correction de la source, faire au plus un rejeu strict avec la même clé et
+tous les mêmes paramètres. Il relit le sort existant ou retente l’admission ; il
+ne rouvre pas un refus enregistré. Après confirmation du refus durable et de
+l’absence de tâche, utiliser une nouvelle clé après correction. Des paramètres
+modifiés exigent aussi une nouvelle clé, après confirmation que la précédente
+n’a créé aucune tâche. Un refus répété seul ne prouve ni sa persistance ni
+l’absence de tâche. Arrêter les essais si le sort reste inconnu. Ces refus
+ne désignent pas le plafond des worktrees. Bridget ne fait aucun fetch réseau et
+ne choisit pas une autre base à la place du parent.
+
 ### Cycle de vie et capacité des worktrees
 
 Une fin de ronde ne clôture pas la tâche et ne retire pas son worktree. Si une

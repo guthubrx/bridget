@@ -68,7 +68,7 @@ fn parse_task_ids(args: &Value) -> Result<Vec<String>, ClientError> {
 pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     let workspace_schema = json!({"oneOf":[
         {"type":"object","properties":{"strategy":{"const":"shared"}},"required":["strategy"],"additionalProperties":false},
-        {"type":"object","properties":{"strategy":{"const":"worktree"},"base_ref":{"type":"string"},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
+        {"type":"object","properties":{"strategy":{"const":"worktree"},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. can_run et constraints donnent le verdict de lancement au dossier verdict_context.cwd, avec les droits attestés de la session. Les faits limités à une demande et les autres dossiers restent soumis à l’admission. Les binaires sont vérifiés ; aucune connexion fournisseur ni authentification n’est testée. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
@@ -1338,14 +1338,19 @@ mod tests {
                 Some(json!({"message":"Le contrôle préalable du dossier source a refusé la demande.","recovery":"Le champ cwd doit désigner le dossier source sur la machine du parent qui appelle Bridget, pas le dossier de destination. Vérifiez que ce dossier existe, que Git peut le lire et que la référence demandée est disponible. Avant un nouvel essai, vérifiez si une tâche existe déjà pour cette demande ; ne créez pas de doublon et ne changez pas la base automatiquement."})),
             ),
             (
+                json!({"status":"refused","code":"expected_base_commit_mismatch","detail":{"message":"La base résolue ne correspond pas au commit exact demandé.","recovery":"Pour une revue figée, utiliser le même SHA complet dans workspace.base_ref et expected_base_commit."}}),
+                "expected_base_commit_mismatch",
+                Some(json!({"message":"La base résolue ne correspond pas au commit exact demandé.","recovery":"Pour une revue figée, utiliser le même SHA complet dans workspace.base_ref et expected_base_commit."})),
+            ),
+            (
                 json!({"status":"refused","code":"permission_source_unavailable"}),
                 "permission_source_unavailable",
                 None,
             ),
             (
-                json!({"status":"refused","code":"workspace_base_unavailable","message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","detail":{"message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","recovery":"Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place."}}),
+                json!({"status":"refused","code":"workspace_base_unavailable","message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","detail":{"message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","recovery":"Dans cwd, sur la machine du parent, vérifiez que Git peut résoudre le commit demandé. Sa présence sur la machine de destination ne suffit pas. Si le commit manque, identifiez le dépôt distant et la branche qui le contiennent, puis récupérez cette branche avec git fetch dans le dépôt source. Vérifiez à nouveau le SHA exact, sans changer expected_base_commit, faire de reset ou avancer la branche de travail. Si une tâche existe, suivez-la avec bridget_task_status. Sinon, après correction, faites au plus un rejeu strict avec la même request_id et les mêmes paramètres. Un refus enregistré reste un refus au rejeu : si ce refus durable et l’absence de tâche sont confirmés, utilisez une nouvelle request_id après correction. Ne multipliez pas les essais si le sort reste inconnu. Ce code ne désigne pas le plafond des worktrees."}}),
                 "workspace_base_unavailable",
-                Some(json!({"message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","recovery":"Vérifiez que le dossier source est un dépôt Git avec au moins un commit, que la référence ou le SHA demandé y est présent et que Git peut le lire. Ce refus ne désigne pas le plafond des worktrees. Bridget ne crée pas de commit à votre place."})),
+                Some(json!({"message":"Bridget n’a pas pu déterminer le commit de base dans le dépôt source.","recovery":"Dans cwd, sur la machine du parent, vérifiez que Git peut résoudre le commit demandé. Sa présence sur la machine de destination ne suffit pas. Si le commit manque, identifiez le dépôt distant et la branche qui le contiennent, puis récupérez cette branche avec git fetch dans le dépôt source. Vérifiez à nouveau le SHA exact, sans changer expected_base_commit, faire de reset ou avancer la branche de travail. Si une tâche existe, suivez-la avec bridget_task_status. Sinon, après correction, faites au plus un rejeu strict avec la même request_id et les mêmes paramètres. Un refus enregistré reste un refus au rejeu : si ce refus durable et l’absence de tâche sont confirmés, utilisez une nouvelle request_id après correction. Ne multipliez pas les essais si le sort reste inconnu. Ce code ne désigne pas le plafond des worktrees."})),
             ),
         ] {
             let socket = crate::mcp_identity::mock_socket("quota157");
