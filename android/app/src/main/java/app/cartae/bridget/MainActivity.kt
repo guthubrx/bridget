@@ -13,6 +13,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -224,27 +227,28 @@ private fun AgentDirectory(vm: MobileViewModel) {
             }
         }
         FilterChip(selected = vm.favoritesOnly, onClick = vm::toggleFavorites, label = { Text(stringResource(R.string.favorites)) })
-        Text(stringResource(if (vm.fresh) R.string.current_observation else R.string.not_current), style = MaterialTheme.typography.labelMedium)
         val agents = vm.visibleAgents()
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        LazyColumn {
             if (agents.isEmpty()) item { Text(stringResource(R.string.no_agents)) }
             items(agents, key = { it.getString("agent_id") }) { agent ->
-                Card(onClick = { vm.select(agent) }, modifier = Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(agent.getString("display_name"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { vm.favorite(agent) }) {
-                                val chosen = vm.favorites.any { it.getString("agent_id") == agent.getString("agent_id") }
-                                Text(if (chosen) "★" else "☆")
-                                Text(stringResource(if (chosen) R.string.unfavorite else R.string.favorite), style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                        Text(agent.getString("machine") + " · " + stateText(agent.optString("state")), style = MaterialTheme.typography.bodySmall)
-                        Text(stringResource(R.string.observation_age, agent.optLong("observed_age_secs")), style = MaterialTheme.typography.labelSmall)
-                        agent.optJSONObject("project")?.let { ProjectChip(it,vm.projects) }
-                        if (agent.optBoolean("cached_observation")) Text(stringResource(R.string.cached_observation), color = MaterialTheme.colorScheme.error)
-                    }
-                }
+                val project=agent.optJSONObject("project")
+                val chosen=vm.favorites.any { it.getString("agent_id")==agent.getString("agent_id") }
+                val favoriteLabel=stringResource(if(chosen) R.string.unfavorite else R.string.favorite)
+                ListItem(
+                    modifier=Modifier.fillMaxWidth().clickable { vm.select(agent) },
+                    headlineContent={ Text(agent.getString("display_name"),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.titleSmall) },
+                    supportingContent={
+                        val name=project?.getString("root")?.let(::projectTitle).orEmpty()
+                        val qualifier=project?.let { value -> projectQualifier(ProjectIdentity(value.optString("host"),value.getString("root")),vm.projects.map { ProjectIdentity(it.optString("host"),it.getString("root")) }) }.orEmpty()
+                        Text(listOf(name,qualifier,agent.getString("machine")).filter { it.isNotBlank() }.joinToString(" · "),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
+                    },
+                    leadingContent={ ProjectAvatar(project) },
+                    trailingContent={ IconButton(onClick={ vm.favorite(agent) },modifier=Modifier.semantics { contentDescription=favoriteLabel }) {
+                        Text(if(chosen) "★" else "☆",color=if(chosen) Color(0xFFFFBB45) else MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.titleLarge)
+                    } },
+                    colors=ListItemDefaults.colors(containerColor=Color.Transparent),
+                )
+
             }
             if (!vm.favoritesOnly && vm.nextCursor != null) item {
                 TextButton(onClick = { vm.refresh(true) }, enabled = !vm.busy) { Text(stringResource(R.string.more)) }
@@ -258,9 +262,7 @@ private fun ProjectLabel(project: JSONObject, peers: List<JSONObject>) {
     val identity=ProjectIdentity(project.optString("host"),project.getString("root"))
     val qualifier=projectQualifier(identity,peers.map { ProjectIdentity(it.optString("host"),it.getString("root")) })
     Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-        Surface(shape=RoundedCornerShape(8.dp),color=MaterialTheme.colorScheme.secondaryContainer) {
-            Text(projectMonogram(identity.root),Modifier.padding(6.dp),style=MaterialTheme.typography.labelSmall)
-        }
+        ProjectAvatar(project)
         Column {
             Text(projectTitle(identity.root),maxLines=1,overflow=TextOverflow.Ellipsis)
             if(qualifier.isNotEmpty()) Text(qualifier,style=MaterialTheme.typography.labelSmall,maxLines=1,overflow=TextOverflow.Ellipsis)
@@ -269,12 +271,18 @@ private fun ProjectLabel(project: JSONObject, peers: List<JSONObject>) {
 }
 
 @Composable
-private fun ProjectChip(project: JSONObject, peers: List<JSONObject>) {
-    var details by remember { mutableStateOf(false) }
-    AssistChip(onClick={details=true},label={ProjectLabel(project,peers)})
-    if(details) AlertDialog(onDismissRequest={details=false},title={Text(projectTitle(project.getString("root")))},
-        text={SelectionContainer { Text(project.optString("host")+"\n"+project.getString("root")) }},
-        confirmButton={TextButton(onClick={details=false}) {Text(stringResource(R.string.dismiss))}})
+private fun ProjectAvatar(project: JSONObject?) {
+    val root=project?.optString("root").orEmpty()
+    val palette=listOf(0xFF2358B7,0xFF7351B5,0xFF007C78,0xFFB14D27,0xFF9D3974,0xFF466C2A)
+    val index=((project?.optString("host").orEmpty()+"\u0000"+root).hashCode().ushr(1))%palette.size
+    val isBridget=projectTitle(root) in setOf("64.bridget","bridget")
+    Surface(modifier=Modifier.size(38.dp),shape=RoundedCornerShape(12.dp),color=if(isBridget) Color.Transparent else Color(palette[index])) {
+        Box(contentAlignment=Alignment.Center) {
+            if(isBridget)
+                Image(painterResource(R.drawable.bridget_logo),contentDescription=null,modifier=Modifier.size(34.dp))
+            else Text(projectMonogram(root).ifBlank { "•" },color=Color.White,style=MaterialTheme.typography.labelMedium)
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -426,6 +434,8 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
     if (details) AlertDialog(onDismissRequest = { details = false }, title = { Text(stringResource(R.string.conversation_details)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.explicit_recipient))
+            agent.optJSONObject("project")?.let { project -> SelectionContainer { Text(project.optString("host")+"\n"+project.optString("root"),style=MaterialTheme.typography.bodySmall) } }
+            if(agent.optBoolean("cached_observation")) Text(stringResource(R.string.cached_observation),style=MaterialTheme.typography.bodySmall)
             Text(stringResource(R.string.immediate_delivery_detail))
             Text(stringResource(if (vm.eventGap) R.string.history_gap else R.string.follow_connected))
             Text(vm.followState, style = MaterialTheme.typography.labelSmall)
@@ -481,15 +491,30 @@ private fun ToolActivity(event: JSONObject) {
         "pending","running" -> R.string.activity_running
         else -> R.string.activity_seen
     }
-    val name=p.optString("tool").takeIf { it.isNotBlank() && it!="null" }
-        ?: p.optString("text").lineSequence().firstOrNull()?.take(80)?.takeIf { it.isNotBlank() }
-        ?: p.optString("path").substringAfterLast('/').takeIf { it.isNotBlank() }
+    val input=listOf("input","command","cmd","arguments").firstNotNullOfOrNull { key -> p.opt(key)?.takeIf { it!=JSONObject.NULL }?.toString()?.takeIf { it.isNotBlank() } }
+    val output=listOf("output","result","stdout").firstNotNullOfOrNull { key -> p.opt(key)?.takeIf { it!=JSONObject.NULL }?.toString()?.takeIf { it.isNotBlank() } }
+    val technicalNames=setOf("command_execution","dynamic_tool","mcp_tool_call","web_search","file_search","image_view","tool")
+    val name=p.optString("tool").takeIf { it.isNotBlank() && it!="null" && it !in technicalNames }
+        ?: input?.lineSequence()?.firstOrNull()?.take(90)
     Column(Modifier.fillMaxWidth()) {
         TextButton(onClick={expanded=!expanded}, contentPadding=PaddingValues(horizontal=8.dp,vertical=2.dp)) {
-            Text((if(expanded) "▾  " else "▸  ")+stringResource(category)+(name?.let { " · $it" } ?: "")+" · "+stringResource(status),
+            Text((if(expanded) "▾  " else "▸  ")+(name ?: stringResource(category))+" · "+stringResource(status),
                 style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
         }
-        if(expanded) SelectionContainer { Text(eventText(event),Modifier.padding(horizontal=8.dp),style=MaterialTheme.typography.bodySmall) }
+        if(expanded) Column(Modifier.padding(horizontal=8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+            if(input!=null) {
+                Text(stringResource(R.string.tool_input),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                SelectionContainer { Text(input,fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall) }
+            }
+            if(output!=null) {
+                Text(stringResource(R.string.tool_output),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                SelectionContainer { Text(output,fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall) }
+            }
+            if(p.has("exit_code") && !p.isNull("exit_code")) Text(stringResource(R.string.tool_exit,p.optInt("exit_code")),style=MaterialTheme.typography.labelSmall)
+            if(p.optBoolean("details_truncated")) Text(stringResource(R.string.tool_details_partial),style=MaterialTheme.typography.labelSmall)
+            if((input==null && output==null) || p.optBoolean("details_unavailable") || p.optBoolean("output_omitted"))
+                Text(stringResource(R.string.tool_details_unavailable),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

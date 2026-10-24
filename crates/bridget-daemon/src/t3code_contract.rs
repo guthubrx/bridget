@@ -726,6 +726,12 @@ impl Client {
         parse_thread_detail(&self.request("GET", &path, None)?)
     }
 
+    pub(crate) fn tool_detail(&self, thread: &str, id: &str, run: &str, node: &Value) -> Result<Value, ContractError> {
+        if !self.uses_v2() {return Err(shape("tool_detail","protocol"));}
+        let value=v2::rpc(&self.base_url,&self.token,"orchestration.getTurnItem",&serde_json::json!({"threadId":thread,"itemId":id}))?;
+        v2::tool_detail(value,thread,id,run,node)
+    }
+
     pub fn dispatch(
         &self,
         command: &Value,

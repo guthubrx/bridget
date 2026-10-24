@@ -32,3 +32,12 @@ le marqueur de repli font partie du canon d’origine. Le transport peut convert
 sa seule copie de remise en message ordinaire en file. Identifiant, date, texte
 et reçu durable restent inchangés. Les demandes strictes de guidage hors mobile
 conservent leurs contrôles et refus existants.
+
+## Contenu des outils dans le journal natif
+
+À la demande de l’utilisateur, les commandes, paramètres et résultats disponibles
+des outils du fil principal peuvent être conservés dans le même journal privé
+que la conversation. L’autorisation d’appareil et la portée de lecture restent
+obligatoires. Le téléphone ne reçoit aucun identifiant d’accès de bureau et ne
+contacte aucune API de bureau. Les notifications ne contiennent toujours aucun
+contenu de conversation ou d’outil. Les longs extraits sont explicitement bornés.

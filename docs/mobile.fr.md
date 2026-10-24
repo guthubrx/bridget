@@ -139,9 +139,24 @@ Relire un reçu n’envoie rien. Une réponse réseau perdue conserve l’envelo
 d’origine. Un refus avant admission conserve le message sur le téléphone pour
 un envoi explicite après rétablissement.
 
-Les outils utilisent le même journal Bridget que les messages. Des lignes
-compactes affichent les noms et états disponibles ; touchez-les pour les détails.
-Le connecteur de bureau ne copie que les métadonnées du fil principal, jamais
-les arguments, sorties brutes ou contenus de fils enfants. Les autres transports
-Bridget restent autonomes. Le texte apparaît quand sa source le publie ; il ne
-s’agit pas d’une seconde interface de bureau ni d’une copie caractère par caractère.
+La liste des conversations utilise des lignes courtes : repère de projet coloré,
+titre, nom court du projet et étoile de favori. Les chemins complets et les
+informations de connexion restent dans les détails de conversation. L’icône de
+l’application utilise le logo Bridget.
+
+Les outils utilisent le même journal Bridget que les messages. Les groupes et
+outils sont repliés par défaut. Dépliez un outil pour lire sa commande ou ses
+paramètres, son résultat et son code de sortie, lorsqu’ils sont disponibles.
+Le connecteur de bureau lit seulement les outils du fil principal. Il récupère
+une sortie omise par l’opération de détail déjà fournie par la source, au plus
+un élément par passage. Android contacte seulement Bridget. Les autres
+transports Bridget restent autonomes. Un extrait de sortie longue est borné et
+signalé ; une absence de détail n’est pas présentée comme un résultat vide réussi.
+Les champs d’un outil restent sous 10 Kio pour que son événement complet tienne
+dans la limite de lecture de 16 Kio. La sortie n’est pas copiée caractère par caractère.
+
+Après une nouvelle association de ce téléphone, l’activation des notifications
+peut réutiliser son jeton FCM. Seul l’enregistrement de réception passe à
+l’association courante. Les identifiants, portées et droits ne sont pas transférés.
+
+Le lanceur affiche le b Bridget sur fond noir. Les lignes d’outil affichent directement leur nom ou commande ; le dépliage montre l’entrée et le résultat.

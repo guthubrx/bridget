@@ -244,7 +244,36 @@ journal et ses reçus. Aucun appel direct de l’application Android à ce burea
 Réemploi Bridget : SteerCurrent + steer-or-queue déjà gérés par Codex natif,
 Claude et ACP ; ajout du même repli au connecteur de bureau. Sa liste de
 fournisseurs reste prudente : Claude immédiat, autres fournisseurs en file.
-Le connecteur publie des métadonnées d’outil depuis sa projection existante ;
-aucun argument ni sortie brute copiés et aucun fait d’écriture supplémentaire.
+La première version r10 publiait seulement des métadonnées d’outil. Le retour
+utilisateur r10c ci-dessous demande ensuite commandes et résultats bornés.
+Aucun fait d’écriture supplémentaire n’est créé.
 Complexité : passage O(n) sur la file bornée à 64 ; outils O(items × profondeur
 bornée à 64), même filtre de fil principal que les messages.
+
+## r10c — annuaire, détails des outils et réassociation
+
+Référence de listes : Material 3, lignes courtes, visuel à gauche et action
+secondaire à droite. Lecture locale homeThreadList.ts : le projet conserve son
+identité et son libellé de présentation. Réutiliser ProjectIdentity et les favoris
+existants ; aucune table ou identité dérivée supplémentaire. Le logo vectoriel
+provient des quatre formes de assets/branding/bridget-logo.svg.
+
+Lecture locale : orchestrationV2.ts command_execution/dynamic_tool et
+WireProjection.ts projectTurnItemForWire/projectTurnItemForDetail. La source
+retire volontairement certaines sorties de la projection générale et les expose
+par getTurnItem. Réutiliser le RPC loopback déjà authentifié dans Client, sans
+appel Android à cette source. Vérifier fil, outil, run et nœud du résultat. Un
+seul détail nouveau par passage, filtre root existant, index HashSet des éléments
+déjà vus ; aucune recherche quadratique ni collecte de fils enfants. Une sortie
+longue reste explicitement bornée par le transport de journal Bridget.
+
+Notifications : androidNotifications.ts configure/clear lie le service à
+l’appareil courant, mais cette référence ne couvre pas le magasin de réception
+FCM de Bridget. Réutiliser la table existante ; INSERT OR REPLACE déplace
+atomiquement le seul enregistrement de réception en cas de réassociation.
+Les autorisations d’appareil et contrôles de révocation ne changent pas.
+
+Dernière retouche de libellé : lecture de work-log/presentation.ts, branche
+command_execution. La commande et le statut sont deux informations distinctes.
+Bridget conserve ses données natives et retire seulement le préfixe répétitif
+lorsqu’un nom ou une commande existe. Aucun changement de transport.

@@ -32,3 +32,11 @@ The message intent and fallback marker belong to the original idempotent canon.
 A carrier may downgrade only its delivery copy to its ordinary queue. The ID,
 issued time, body and durable receipt remain unchanged. Strict non-mobile steer
 requests keep their existing permission checks and refusal behavior.
+
+## Tool content in the native journal
+
+At the user’s request, available root-tool commands, parameters and results may
+be retained in the same private journal as the conversation. Existing device
+authorization and history scope remain mandatory. The phone never receives a
+desktop credential or contacts a desktop API. Notification pushes still carry
+no conversation or tool content. Long excerpts are explicitly bounded.

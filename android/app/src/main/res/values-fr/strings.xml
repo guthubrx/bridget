@@ -182,4 +182,9 @@
  <string name="activity_seen">utilisé</string>
  <string name="activity_group">Outils utilisés</string>
  <string name="immediate_delivery_detail">Transmettre maintenant peut interrompre un outil en cours pour faire prendre en compte votre message. Aucun redémarrage de l’agent n’est demandé.</string>
+ <string name="tool_input">Commande ou paramètres</string>
+ <string name="tool_output">Résultat</string>
+ <string name="tool_exit">Code de sortie : %1$d</string>
+ <string name="tool_details_partial">Sortie longue : l’extrait affiché est limité.</string>
+ <string name="tool_details_unavailable">Certains détails n’ont pas été transmis par la source.</string>
 </resources>

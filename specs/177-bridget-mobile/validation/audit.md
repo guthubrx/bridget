@@ -78,3 +78,10 @@ Les revues ont produit des corrections et des limites, pas un certificat de
 sécurité global. T039 reste ouverte pour l’audit applicable complet. T030, T033
 et T036 restent ouvertes pour les recettes physiques et réseau. La dernière
 mise à jour Android r10b attend un téléphone de nouveau visible en USB.
+
+## Complément r10c
+
+La revue ciblée 7903c2f3-aa56-4b6d-a18e-31cf4548219c relève deux défauts de
+bornage des détails d’outil. Leur correction et la preuve par le vrai journal
+figurent dans r10c.md. Les 67 tests ciblés passent ; aucune nouvelle suite
+complète ni approbation globale n’en est déduite.

@@ -2765,7 +2765,7 @@ impl LinkWorker {
     fn refresh(&mut self, summary: &ThreadSummary) -> bool {
         let mut limit = DETAIL_PAGE;
         let mut previous = None;
-        let detail = loop {
+        let mut detail = loop {
             let fetched = self
                 .session
                 .call(|client| client.thread_detail(&self.thread_id, limit));
@@ -2817,6 +2817,30 @@ impl LinkWorker {
             }
             break detail;
         };
+        let seen_activities: HashSet<_> = self
+            .state
+            .seen_activities
+            .iter()
+            .map(String::as_str)
+            .collect();
+        // Un détail omis relu au plus une fois par passage ; aucun accès depuis Android à la source.
+        let mut fetched=false;
+        if self.state.tool_progress_seeded {
+            detail.activities.retain_mut(|activity| {
+                if activity.kind!="tool.progress" || activity.payload["output_omitted"]!=true
+                    || seen_activities.contains(activity.id.as_str()) {return true;}
+                if fetched {return false;} fetched=true;
+                let id=activity.payload["tool_id"].as_str().unwrap_or("").to_owned();
+                let node=activity.payload["source_node_id"].clone();
+                if let Some(run)=activity.turn_id.as_deref() {
+                    match self.session.call(|client|client.tool_detail(&self.thread_id,&id,run,&node)) {
+                        Ok(fields)=>activity.payload=fields,
+                        Err(_)=>activity.payload["details_unavailable"]=serde_json::json!(true),
+                    }
+                }
+                true
+            });
+        }
         // Le fait de capacité précède les faits du journal sur le même writer,
         // notamment lors du rétablissement après une indisponibilité HTTP.
         use bridget_transport::protocol::ObservationKind as Kind;
@@ -2841,12 +2865,6 @@ impl LinkWorker {
         // signifie une lacune possible, jamais une continuité garantie.
         // O(A + S), A<=4096, S<=8192 : pas de recherche linéaire du curseur
         // pour chacune des activités à chaque lecture du fil.
-        let seen_activities: HashSet<_> = self
-            .state
-            .seen_activities
-            .iter()
-            .map(String::as_str)
-            .collect();
         let activity_gap = self.state.observations_seeded
             && detail.activities.iter().any(|a| {
                 if seen_activities.contains(a.id.as_str()) {
@@ -3181,7 +3199,7 @@ impl LinkWorker {
                 ignored.push(activity.id.clone());
                 continue;
             }
-            // Métadonnées uniquement ; les autres activités ne sont pas recopiées.
+            // Détails des seuls outils autorisés du fil principal ; les autres activités sont exclues.
             for (index, mut payload) in payloads.into_iter().enumerate() {
                 payload["t3_activity_id"] = serde_json::json!(activity.id);
                 let id = if notification {
@@ -4025,7 +4043,11 @@ fn activity_payloads(
     }
     let payload = &activity.payload;
     if activity.kind == "tool.progress" {
-        return vec![serde_json::json!({"kind":"tool","tool_id":payload["tool_id"],"text":payload["tool"].as_str().unwrap_or_else(||payload["itemType"].as_str().unwrap_or("tool")),"tool_type":payload["itemType"],"status":payload["status"],"tool":payload["tool"]})];
+        let mut event=serde_json::json!({"kind":"tool","tool_id":payload["tool_id"],"text":payload["tool"].as_str().unwrap_or_else(||payload["itemType"].as_str().unwrap_or("tool")),"tool_type":payload["itemType"],"status":payload["status"],"tool":payload["tool"]});
+        for field in ["input","output","exit_code","output_omitted","details_truncated","details_unavailable"] {
+            if let Some(value)=payload.get(field) {event[field]=value.clone();}
+        }
+        return vec![event];
     }
     if activity.kind != "tool.completed"
         || payload["itemType"] != "file_change"

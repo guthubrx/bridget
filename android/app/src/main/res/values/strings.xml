@@ -182,4 +182,9 @@
  <string name="activity_seen">used</string>
  <string name="activity_group">Tools used</string>
  <string name="immediate_delivery_detail">Deliver now may interrupt a running tool so the agent can take your message into account. It does not request an agent restart.</string>
+ <string name="tool_input">Command or parameters</string>
+ <string name="tool_output">Output</string>
+ <string name="tool_exit">Exit code: %1$d</string>
+ <string name="tool_details_partial">Long output: the displayed excerpt is limited.</string>
+ <string name="tool_details_unavailable">Some details were not provided by the source.</string>
 </resources>

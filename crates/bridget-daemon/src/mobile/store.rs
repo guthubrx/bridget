@@ -296,7 +296,9 @@ impl Store {
                     return Err(StoreError::InvalidRequest);
                 }
                 self.conn.execute("DELETE FROM mobile_notifications WHERE device_id IN (SELECT device_id FROM mobile_devices WHERE revoked_at IS NOT NULL OR expires_at<=?1)", [now]).map_err(storage)?;
-                self.conn.execute("INSERT INTO mobile_notifications(device_id,token) VALUES (?1,?2) ON CONFLICT(device_id) DO UPDATE SET token=excluded.token", params![device.device_id,token]).map_err(storage)?;
+                // Un même téléphone peut être réassocié sans changer de jeton FCM.
+                // REPLACE déplace seulement la sonnette, jamais les droits de l’ancien appareil.
+                self.conn.execute("INSERT OR REPLACE INTO mobile_notifications(device_id,token) VALUES (?1,?2)", params![device.device_id,token]).map_err(storage)?;
             }
         }
         Ok(())
@@ -928,6 +930,31 @@ mod tests {
                 .is_empty()
         );
     }
+    #[test]
+    fn mobile177_notification_reassociation_moves_receiver_without_moving_authority() {
+        let mut store = Store::memory();
+        let mut rights = scope();
+        rights.all_machines = true;
+        rights.machines.clear();
+        rights.operations = vec![Operation::Read, Operation::TaskRead];
+        let old_key = key();
+        let new_key = key();
+        let grant = store.issue_pairing(&rights, 100).unwrap();
+        let old = store.pair(&grant.credential, &attempt(), &old_key, "Phone", 101).unwrap();
+        let grant = store.issue_pairing(&rights, 102).unwrap();
+        let new = store.pair(&grant.credential, &attempt(), &new_key, "Phone again", 103).unwrap();
+        let token = "receiver_reassociation_123456789";
+        store.set_notifications(&old, Some(token), 104).unwrap();
+        store.set_notifications(&new, Some("receiver_previous_token_123456789"), 104).unwrap();
+        store.set_notifications(&new, Some(token), 105).unwrap();
+        assert_eq!(store.notification_targets(106).unwrap(), vec![(new.device_id.clone(), token.into())]);
+        assert_eq!(store.authenticate(&old_key, 106).unwrap(), old);
+        assert_eq!(store.authenticate(&new_key, 106).unwrap(), new);
+        store.revoke(&old.device_id, 107).unwrap();
+        assert!(store.set_notifications(&old, Some(token), 108).is_err());
+        assert_eq!(store.notification_targets(108).unwrap(), vec![(new.device_id.clone(), token.into())]);
+    }
+
     #[test]
     fn mobile177_notification_schema_upgrades_without_changing_device_authority() {
         let mut store=Store::memory();

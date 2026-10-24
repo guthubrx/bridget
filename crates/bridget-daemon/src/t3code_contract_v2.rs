@@ -214,10 +214,9 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
             && matches!(status, "pending" | "running" | "completed" | "failed" | "cancelled")
             && root_message(item, run_id.as_deref().and_then(|id| by_run.get(id).copied()), &nodes)?
         {
-            let tool = item["toolName"].as_str().filter(|name| name.len() <= 120 && !name.chars().any(char::is_control));
             activities.push(Activity {
                 id: format!("v2-tool:{}:{status}", string(item, "id")?), kind: "tool.progress".into(), turn_id: run_id.clone(),
-                payload: json!({"itemType":kind,"status":status,"tool":tool,"tool_id":string(item,"id")?}),
+                payload: tool_fields(item)?,
             });
         }
         if kind == "file_change" && status == "completed" {
@@ -249,6 +248,43 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         activities,
         activities_available: true,
     })
+}
+
+/// Même détail autorisé que la source ; charge bornée sous le fragment journal de 16 Kio.
+pub(super) fn tool_fields(item: &Value) -> Result<Value,ContractError> {
+    for field in ["id","type","status"] {
+        let value=item[field].as_str().ok_or_else(||invalid("tool metadata"))?;
+        if value.len()>256 || value.chars().any(char::is_control) {return Err(invalid("tool metadata limit"));}
+    }
+    if item["nodeId"].as_str().is_some_and(|s|s.len()>256 || s.chars().any(char::is_control)) {
+        return Err(invalid("tool node limit"));
+    }
+    let mut fields=json!({"itemType":item["type"],"status":item["status"],"tool_id":item["id"],
+        "source_node_id":item["nodeId"],"tool":item["toolName"].as_str().filter(|s|s.len()<=120 && !s.chars().any(char::is_control)),
+        "output_omitted":item["outputOmitted"].as_bool().unwrap_or(false)});
+    let mut truncated=false;
+    for (source,target,limit) in [("input","input",4096),("output","output",8192),("pattern","input",4096),("patterns","input",4096),("results","output",8192)] {
+        if let Some(value)=item.get(source).filter(|v| !v.is_null()) {
+            let text=value.as_str().map(str::to_owned).unwrap_or_else(||value.to_string());
+            let mut end=text.len().min(limit);while !text.is_char_boundary(end) {end-=1;}
+            truncated|=end<text.len();fields[target]=json!(&text[..end]);
+        }
+    }
+    if let Some(exit)=item["exitCode"].as_i64() {fields["exit_code"]=json!(exit);}
+    while fields.to_string().len()>10*1024 {
+        let field=if fields["output"].as_str().unwrap_or("").len()>=fields["input"].as_str().unwrap_or("").len() {"output"} else {"input"};
+        let text=fields[field].as_str().unwrap_or("");if text.is_empty() {return Err(invalid("tool detail limit"));}let mut end=text.len()/2;
+        while !text.is_char_boundary(end) {end-=1;}let prefix=text[..end].to_owned();fields[field]=json!(prefix);truncated=true;
+    }
+    fields["details_truncated"]=json!(truncated);Ok(fields)
+}
+
+pub(super) fn tool_detail(value: Value, thread: &str, id: &str, run: &str, node: &Value) -> Result<Value,ContractError> {
+    let item=&value["item"];
+    if item["id"]!=id || item["threadId"]!=thread || item["runId"]!=run || &item["nodeId"]!=node {
+        return Err(invalid("tool detail binding"));
+    }
+    tool_fields(item)
 }
 
 fn root_message(
@@ -745,22 +781,63 @@ mod tests {
     }
 
     #[test]
-    fn mobile177_activity_projects_only_root_metadata_and_distinct_states() {
+    fn mobile177_activity_projects_only_root_details_and_distinct_states() {
         let mut raw=detail();
         raw["projection"]["turnItems"]=json!([
-            {"id":"tool","threadId":"t","runId":"r","nodeId":"root","type":"dynamic_tool","status":"running","toolName":"Read","input":{"secret":"never-copy"}},
-            {"id":"child-tool","threadId":"t","runId":"r","nodeId":"child","type":"dynamic_tool","status":"running","toolName":"Private child"}
+            {"id":"tool","threadId":"t","runId":"r","nodeId":"root","type":"dynamic_tool","status":"running","toolName":"Read","input":{"path":"/fixture/readme.md"},"output":"file contents"},
+            {"id":"child-tool","threadId":"t","runId":"r","nodeId":"child","type":"dynamic_tool","status":"running","toolName":"Private child","input":"never-copy"}
         ]);
         let current=parse_detail(&raw.to_string(),"t").unwrap();
         let tools:Vec<_>=current.activities.iter().filter(|a|a.kind=="tool.progress").collect();
         assert_eq!(tools.len(),1);
         assert_eq!(tools[0].payload["tool"],"Read");
         assert_eq!(tools[0].payload["tool_id"],"tool");
+        assert!(tools[0].payload["input"].as_str().unwrap().contains("/fixture/readme.md"));
+        assert_eq!(tools[0].payload["output"],"file contents");
         assert!(!tools[0].payload.to_string().contains("never-copy"));
         let first=tools[0].id.clone();
         raw["projection"]["turnItems"][0]["status"]=json!("completed");
         let done=parse_detail(&raw.to_string(),"t").unwrap();
         assert_ne!(done.activities.iter().find(|a|a.kind=="tool.progress").unwrap().id,first);
+    }
+
+    #[test]
+    fn mobile177_tool_detail_is_bound_and_large_unicode_output_is_explicit() {
+        let item=json!({"id":"x","threadId":"t","runId":"r","nodeId":"root","type":"command_execution","status":"completed","input":"echo confirmed","output":"é".repeat(9000),"exitCode":0});
+        let value=json!({"item":item});
+        let fields=tool_detail(value.clone(),"t","x","r",&json!("root")).unwrap();
+        assert_eq!(fields["input"],"echo confirmed");assert_eq!(fields["exit_code"],0);
+        assert_eq!(fields["details_truncated"],true);assert!(fields.to_string().len()<13*1024);
+        for (thread,id,run,node) in [("other","x","r","root"),("t","other","r","root"),("t","x","other","root"),("t","x","r","child")] {
+            assert!(tool_detail(value.clone(),thread,id,run,&json!(node)).is_err());
+        }
+    }
+
+    #[test]
+    fn mobile177_tool_metadata_is_bounded_before_detail_reduction() {
+        let item=json!({"id":"x".repeat(16000),"nodeId":"root","type":"command_execution","status":"completed"});
+        assert!(tool_fields(&item).is_err());
+        for field in ["nodeId","type","status"] {
+            let mut item=json!({"id":"x","nodeId":"root","type":"command_execution","status":"completed"});
+            item[field]=json!("x".repeat(16000));assert!(tool_fields(&item).is_err());
+        }
+    }
+
+    #[test]
+    fn mobile177_tool_detail_fits_the_actual_final_journal_entry() {
+        let item=json!({"id":"\"".repeat(256),"nodeId":"root","type":"command_execution","status":"completed","input":"\"".repeat(4000),"output":"\"".repeat(5000),"exitCode":0});
+        let mut fields=tool_fields(&item).unwrap();
+        let activity=format!("v2-tool:{}:completed",item["id"].as_str().unwrap());
+        fields["kind"]=json!("tool");fields["t3_activity_id"]=json!(activity);
+        let message=format!("t3-activity:{activity}:0");
+        let root=std::env::temp_dir().join(format!("mobile-tool-size-{}",uuid::Uuid::new_v4()));
+        let agent=uuid::Uuid::new_v4().to_string();
+        let mut journal=bridget_transport::journal::SessionJournal::new(&root,&agent,&uuid::Uuid::new_v4().to_string()).unwrap();
+        journal.append("update",Some(&message),fields).unwrap();drop(journal);
+        let page=crate::attach::lineage_journal_page(&root.join(&agent),&agent,0,50).unwrap();
+        assert!(page["gap"].is_null());assert_eq!(page["events"].as_array().unwrap().len(),1);
+        assert!(page["events"][0].to_string().len()<16*1024);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

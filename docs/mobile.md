@@ -133,9 +133,22 @@ when it observes the matching journal entry. Receipt reads never send a message.
 A lost network response keeps the original saved envelope. After a recipient
 refuses before admission, the message stays on this phone for an explicit send.
 
-Tool activity uses the same Bridget journal as conversation text. Compact rows
-show available tool names and states; tap for details. The desktop adapter copies
-only root-thread metadata, never tool arguments, raw outputs or child-thread
-content. Other Bridget transports remain independent. Text is shown when its
-source publishes it; this is not a duplicate desktop rendering engine or a
-character-by-character mirror.
+The conversation list uses short rows: a colored project mark, title, short
+project name and a favorite star. Full paths and connection diagnostics belong
+in the conversation details. The launcher uses the Bridget logo.
+
+Tool activity uses the same Bridget journal as conversation text. Groups and
+tools are collapsed by default. Expand a tool to read its command or parameters,
+output and exit code when available. The desktop connector reads only root-thread
+tools; omitted output is retrieved with the source’s existing detail operation,
+at most one item per refresh. Android contacts only Bridget. Other Bridget
+transports remain independent. Long output excerpts are bounded and explicitly
+marked; missing source details are not presented as an empty successful output.
+The combined tool fields stay under 10 KiB so the complete journal event fits
+its 16 KiB reading limit. This is not a character-by-character output mirror.
+
+After pairing this phone again, enabling notifications can reuse its existing
+FCM receiver token. Only the receiver registration moves to the current pairing;
+credentials, scope and rights of either pairing do not move.
+
+The launcher uses the Bridget b on black. Tool rows show their name or command directly; expand a row for its input and result.

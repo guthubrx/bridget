@@ -1,6 +1,8 @@
 # Livraison mobile r10b — 24 octobre 2026
 
-Statut : corrections livrées côté serveur ; recette finale Android incomplète.
+Statut : bilan historique r10b. Le complément courant r10c est dans r10c.md :
+APK mis à jour, annuaire compact et détails des outils ; recette finale en attente
+du déverrouillage du Pixel.
 Le périmètre complet de la session 177 reste ouvert. Cette livraison ne déclare
 ni la session terminée ni une validation globale de Bridget.
 

@@ -118,3 +118,17 @@ tests ciblés. Leur recette physique finale reste ouverte, donc leurs cases ne
 sont pas cochées. Les deux revues indépendantes sont traitées ; aucun audit
 global nouveau n’est revendiqué. Les tâches réseau, notifications, autonomie
 Mac éteint, pièces jointes et tâches métier restent suivies ci-dessus.
+
+## Retours de recette physique r10c
+
+- [x] T053 Compacter l’annuaire, conserver seulement l’étoile de favori et placer un repère de projet coloré à gauche ; vérifier sur le Pixel.
+- [x] T054 Installer le vrai logo Bridget dans l’icône Android et vérifier son rendu installé.
+- [x] T055 Transmettre et afficher commandes, paramètres et sorties des outils du fil principal ; qualifier le dépliage réel et signaler les limites de transport.
+- [x] T056 Corriger la réutilisation d’un jeton FCM après réassociation et vérifier la réception réelle sur l’association courante.
+
+APK r10c installé sans désinstallation. Les 67 contrôles natifs passent ; la
+réassociation a une preuve RED puis GREEN. L’annuaire et le détail complet des
+outils ont été vus sur le Pixel. La notification réelle est enregistrée par
+Android et sa réception est confirmée par l’utilisateur. Son ouverture par
+toucher, les recettes 4G/Mac éteint et les autres tâches ouvertes ci-dessus ne
+sont pas considérées comme validées.
