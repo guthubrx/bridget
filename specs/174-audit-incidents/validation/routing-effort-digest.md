@@ -96,4 +96,40 @@ maître Cartae sous `174-routing-effort-6582c20f`. Le mobile reste sur le binair
 commun `177-fb415ad7-opt` ; systemd l’a reconnecté lors du remplacement du maître.
 Le worker `177-mobile-r8-opt` reste utilisé et n’a pas été redémarré.
 Les trois refus durables précédents sont inchangés ; aucune mission mobile
-n’a été rejouée. Le complément de guidage doit encore être livré et consigné.
+n’a été rejouée. Le complément `5ebc8a44406c638e36fa073d0b2257c21b652e51` est intégré,
+poussé et récupéré sur le Mac. Le binaire optimisé a été construit en 3 min 35 s,
+puis activé sur le maître Cartae sous `174-routing-effort-5ebc8a44`.
+Son SHA-256 est `062b248e02f5af9b37cc791ce2093a46d04efe13b410e15fc9ee67e00e9cd30d`.
+Le statut officiel confirme `running: true` et ce build. Le maître passe de
+PID 768307 à 792812 ; le mobile est reconnecté par systemd (PID 793066) sur
+son binaire commun inchangé. Le worker PID 645547 reste inchangé. Le binaire
+`174-routing-effort-6582c20f` est conservé pour le retour arrière.
+
+Après activation, les empreintes des trois reçus refusés restent identiques,
+avec `task_id: null` et aucune tâche correspondante. `quick_check` vaut `ok`.
+La revue admise est terminée : résultat remis, `cleanup_done: true` et garde
+libérée. Aucun nouveau modèle n’a été lancé pour une recette métier mobile.
+
+## Nettoyage et conservations
+
+Le worktree `174-routing-effort` et sa branche `fix-174-routing-effort` sont
+retirés sans force après intégration, contrôle des fichiers ignorés, absence
+de référence par une tâche et observation complète des fichiers ouverts.
+Aucune branche distante de ce nom n’avait été créée. Mac et Cartae ne gardent
+que leur checkout main après ce lot.
+
+L’ancien binaire `177-r8-native-project-d5af84f8` est retiré après vérification
+des usages et des références de service : 37 261 384 octets logiques.
+Restent le maître actif, son retour arrière, le binaire mobile commun encore
+utilisé et le binaire r8 encore utilisé par le worker. Aucun processus d’un
+autre travail n’est arrêté pour ce nettoyage.
+
+La commande `installed` a retiré 0,56 Gio d’intermédiaires release du cache
+commun. Elle a ensuite refusé le retrait du profil debug, car l’observation
+des processus est devenue incomplète. Ce profil est conservé avec cette limite ;
+les preuves privées restent hors Git. Aucun cache target n’a été copié.
+
+Main Mac est propre. Main Cartae est aligné sur les commits poussés mais porte
+les modifications mobiles en cours du responsable mobile. Ces travaux ne sont
+ni committés par ce lot ni supprimés. La compilation et les tests du présent
+correctif ont utilisé son worktree propre, pas ce delta mobile concurrent.
