@@ -3,6 +3,67 @@
 [English](communication-installation.md) · [Français](communication-installation.fr.md)
 
 
+## Installer ou mettre à jour en une commande
+
+Dernière release publiée, déjà compilée :
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh
+```
+
+Dernier code de `main`, compilé sur la machine :
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
+```
+
+Release précise :
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --version v0.4.1
+```
+
+Le même script est disponible directement sur GitHub :
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guthubrx/bridget/main/scripts/install.sh | sh
+```
+
+Pour lire le script avant de l'exécuter, téléchargez-le dans un fichier, examinez
+son contenu puis lancez `sh` sur ce fichier. HTTPS vérifie le serveur ; le fichier
+SHA-256 vérifie l'intégrité de l'archive. Ce n'est pas une signature indépendante.
+
+Lancez la commande avec votre utilisateur habituel, sans sudo. Le mode release
+demande curl, tar et sha256sum ou shasum. La version 0.4.1 fournit Linux x86-64
+et Mac Apple Silicon. Une plateforme sans paquet est refusée ; aucune compilation
+n'est déclenchée sans l'option `--source`.
+
+Le mode source demande Git, Python 3.11+, un compilateur C et ses outils de
+développement (Xcode Command Line Tools sur Mac, chaîne C sur Linux).
+Il installe Rust par le script officiel rustup si nécessaire. Il utilise la
+toolchain et Cargo.lock du dépôt et le wrapper de compilation existant.
+Le cache est réutilisé et suit le budget commun de 10 Gio et 7 jours.
+Un outil système absent produit une erreur claire, sans demande sudo.
+
+Le programme est installé dans `.local/bin` du compte utilisateur. Le reçu et
+le binaire précédent distinct sont conservés dans `.local/state/bridget-install`.
+Une réinstallation identique conserve le précédent. Les profils Bash ou Zsh sont
+sauvegardés avant d'ajouter le PATH. Dans le terminal courant :
+
+```sh
+. "$HOME/.local/share/bridget/env"
+bridget --version
+```
+
+Les comptes, données et définitions de services restent en place. Aucun daemon,
+worker, tunnel ou processus T3 n'est lancé ou relancé. Installer le programme ne
+rattache pas la machine à un maître. Lancez `bridget daemon` pour une instance
+autonome ou suivez le [guide de fédération SSH](federation-services.fr.md) pour
+rejoindre un maître existant. Les services actifs gardent leur code chargé jusqu'à
+une relance volontaire. Le binaire précédent ne suffit pas à restaurer une base.
+
+## Essai séparé depuis un checkout existant
+
 Cette procédure ne remplace aucun binaire global, service, registre, profil de
 fournisseur, skill globale ni base existante. Elle ne démarre pas le service compagnon ni GUI.
 Les recettes Claude/GLM et le gate final restent soumis aux résultats consignés

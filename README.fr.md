@@ -46,6 +46,24 @@ un paramètre qu'on pourrait inventer.
 | savoir si un message est vraiment arrivé | espérer | un reçu typé : `accepted`, `in_flight`, `outcome_unknown`, et le rejeu à l'identique qui ne duplique jamais |
 | relier deux machines | un serveur web, des tokens, un tunnel | une **fédération SSH** entre daemons, même protocole, mêmes identités |
 
+## Installation en une commande
+
+Dernière release publiée :
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh
+```
+
+Dernier code GitHub, compilé sur votre machine :
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
+```
+
+La même commande sert à mettre à jour. Elle conserve les comptes et les données.
+Elle ne démarre ni ne relance de service et ne rattache pas la machine à un maître.
+Voir le [guide d'installation](docs/communication-installation.fr.md).
+
 ## Soixante secondes pour essayer
 
 ```sh

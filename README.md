@@ -28,8 +28,24 @@ program, a configured account and permissions on the selected machine.
 
 ## Start here
 
-Read the [installation guide](docs/communication-installation.md) before changing
-an existing installation. To build this checkout:
+Install the latest published release on macOS or Linux:
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh
+```
+
+For the latest code on `main`, compiled on your machine:
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
+```
+
+Run the same command to update. The installer preserves accounts and data.
+It installs the CLI, without starting or restarting a daemon or joining a master.
+Read the [installation guide](docs/communication-installation.md) for prerequisites,
+an exact release version, and standalone versus federated setup.
+
+To build an existing checkout:
 
 ```sh
 git clone https://github.com/guthubrx/bridget.git
