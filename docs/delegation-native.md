@@ -300,6 +300,21 @@ Wait returns for a terminal result or an actionable parent question.
 A timed-out wait **does not cancel the task**. Ready entries omit the full
 result; read it through `bridget_task_status` or the result message.
 
+A daemon shutdown can interrupt a read with `daemon_unreachable`. After an
+unacknowledged mutation, the transport keeps `outcome_unknown`: the command may
+have run. Wait for the connection to return, then read `bridget_task_status`
+with the same `task_id`. Without a task ID, retain the admission `request_id`
+and all arguments to recover its outcome. Do not create a replacement request
+while the original outcome is unknown. Existing bounded admission recovery
+keeps the same key; this change adds no replay to status or wait.
+
+For `t3_session_unavailable` with `binding_transport_unavailable`, `primary_absent`
+or `primary_not_live`, wait for the thread's Bridget link to reconnect and retry
+the read. A `bridget_session` attestation alone does not prove this link is back.
+If the refusal persists, report its code and retain the request. Do not change
+permissions or recreate the mission. Credential and instance mismatches still
+refuse without this transient recovery advice.
+
 Status includes a bounded `summary` (2048 UTF-8 bytes), `summary_truncated`,
 `result_bytes`, the detail-tool reference and completion `mailbox`.
 

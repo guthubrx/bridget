@@ -506,6 +506,10 @@ fn execute_with_proof(
         connection.set_deadline(Instant::now()
             + crate::communication::client::DAEMON_BUDGET + attestation_budget + wait);
     }
+    let mutation = !matches!(&request,
+        NativeDelegationRequest::Catalogue | NativeDelegationRequest::RoutingCatalogueV1 { .. }
+        | NativeDelegationRequest::CallerScope { .. } | NativeDelegationRequest::Status { .. }
+        | NativeDelegationRequest::Wait { .. });
     let message = match proof {
         Some(proof) => WrapperToDaemon::NativeDelegationT3 { request, proof },
         None => WrapperToDaemon::NativeDelegation { request },
@@ -524,14 +528,22 @@ fn execute_with_proof(
             connection.send_then_wait(&message)
         };
         if attestation_budget.is_zero() {
-            recover_admission_reply171(&request_id, is_pending, exchange)?
+            recover_admission_reply171(&request_id, is_pending, exchange)
         } else {
             recover_admission_with_budget171(&request_id, is_pending, exchange,
-                crate::communication::client::DAEMON_BUDGET + attestation_budget)?
+                crate::communication::client::DAEMON_BUDGET + attestation_budget)
         }
+    } else if mutation {
+        // Continue, Respond, Cancel et Ack peuvent avoir été appliqués avant
+        // une coupure. Conserver cette incertitude sans les rejouer ici.
+        connection.send_then_wait(&message)
     } else {
-        connection.exchange(&message)?
-    };
+        connection.exchange(&message)
+    }.map_err(|error| match error {
+        ClientError::Technical { code: code @ ("daemon_unreachable" | "outcome_unknown"), message } =>
+            ClientError::Technical { code, message: format!("{message} Attendez le retour du lien, puis consultez bridget_task_status avec le même task_id. Sans task_id, conservez request_id et tous les paramètres pour retrouver le sort de l’admission ; ne créez pas une autre demande tant que ce sort reste inconnu.") },
+        other => other,
+    })?;
     match response {
         DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
             Err(ClientError::Technical {
@@ -1569,12 +1581,14 @@ mod spec172_transport_tests {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
 
-    fn attested_response_after_legacy_deadline(wait: bool) {
+    fn attested_response(name: &'static str, disconnect: bool) {
+        let wait = name == "bridget_task_wait";
+        let mutation = matches!(name, "bridget_task_cancel" | "bridget_task_ack");
         let socket = crate::mcp_identity::mock_socket("172-attested-deadline");
         let listener = UnixListener::bind(&socket).unwrap();
         crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
         let backend = std::thread::spawn(move || {
-            if wait {
+            if wait || name == "bridget_task_ack" {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut line = String::new();
                 BufReader::new(stream.try_clone().unwrap())
@@ -1609,10 +1623,12 @@ mod spec172_transport_tests {
             assert_eq!(request["type"], "NativeDelegationT3");
             assert_eq!(
                 request["request"]["operation"],
-                if wait { "wait" } else { "status" }
+                name.strip_prefix("bridget_task_").unwrap()
             );
             // Trois échanges HTTP peuvent dépasser 10 s sans dépasser leur budget individuel.
-            std::thread::sleep(Duration::from_secs(12));
+            if !disconnect {
+                std::thread::sleep(Duration::from_secs(12));
+            }
             let result = if wait {
                 json!({"status":"refused","code":"permission_attestation_unavailable"})
             } else {
@@ -1621,7 +1637,8 @@ mod spec172_transport_tests {
             let sent = writeln!(
                 stream,
                 "{}",
-                json!({"type":"NativeDelegationResult","result":result})
+                if disconnect { json!({"type":"Disconnect"}) }
+                else { json!({"type":"NativeDelegationResult","result":result}) }
             );
             line.clear();
             let remaining = reader.read_line(&mut line).unwrap();
@@ -1645,13 +1662,11 @@ mod spec172_transport_tests {
         };
         let result = execute_with_proof(
             &identity,
-            if wait {
-                "bridget_task_wait"
-            } else {
-                "bridget_task_status"
-            },
+            name,
             &if wait {
                 json!({"task_ids":["task"],"wait_timeout":1})
+            } else if name == "bridget_task_ack" {
+                json!({"task_ids":["task"]})
             } else {
                 json!({"task_id":"task"})
             },
@@ -1660,7 +1675,12 @@ mod spec172_transport_tests {
         );
         let sent = backend.join().unwrap();
         let _ = std::fs::remove_dir_all(socket.parent().unwrap());
-        if wait {
+        if disconnect {
+            let expected = if mutation { "outcome_unknown" } else { "daemon_unreachable" };
+            assert!(matches!(result, Err(ClientError::Technical { code, message })
+                if code == expected && message.contains("bridget_task_status") && message.contains("même task_id")
+                    && message.contains("ne créez pas une autre demande")));
+        } else if wait {
             assert!(
                 matches!(result, Err(ClientError::Technical { code:"native_delegation_refused", message }) if message=="permission_attestation_unavailable"),
                 "le refus doit rester explicite après la réattestation"
@@ -1678,12 +1698,24 @@ mod spec172_transport_tests {
 
     #[test]
     fn spec172_status_atteste_attend_la_reponse_complete() {
-        attested_response_after_legacy_deadline(false);
+        attested_response("bridget_task_status", false);
     }
 
     #[test]
     fn spec172_wait_atteste_preserve_le_refus_tardif() {
-        attested_response_after_legacy_deadline(true);
+        attested_response("bridget_task_wait", false);
+    }
+
+    #[test]
+    fn spec174_disconnect_attente_et_statut_sans_rejeu() {
+        attested_response("bridget_task_wait", true);
+        attested_response("bridget_task_status", true);
+    }
+
+    #[test]
+    fn spec174_disconnect_mutations_sans_rejeu() {
+        attested_response("bridget_task_cancel", true);
+        attested_response("bridget_task_ack", true);
     }
 
     #[test]

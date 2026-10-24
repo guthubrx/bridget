@@ -1243,6 +1243,15 @@ impl DaemonConnection {
                     message: "budget total dépassé pendant le décodage".into(),
                 });
             }
+            if matches!(response, DaemonToWrapper::Disconnect) {
+                // Une fermeture annoncée a le même sort incertain qu'un EOF.
+                // Conserver le code de l'appelant, notamment outcome_unknown
+                // après une mutation ; ne pas inventer un accusé ou un refus.
+                return Err(ClientError::Technical {
+                    code: failure_code,
+                    message: "Le démon Bridget a fermé la connexion. La commande peut avoir été traitée ; cette coupure ne prouve ni son échec ni son annulation. Attendez le retour du lien, puis vérifiez le sort de l’opération avant toute nouvelle action. Conservez les identifiants et les paramètres d’origine.".into(),
+                });
+            }
             // Une réponse complète reste valide si le pair ferme ensuite.
             // Aucun setsockopt après lecture : macOS peut le refuser sur EOF.
             Ok(response)
@@ -1642,6 +1651,29 @@ mod security_tests {
             },
             peer,
         )
+    }
+
+    #[test]
+    fn spec174_disconnect_preserve_issue_et_ferme_connexion() {
+        for mutation in [false, true] {
+            let (mut connection, mut peer) = pair(Duration::from_secs(2));
+            writeln!(peer, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+            let command = WrapperToDaemon::DaemonIdentityRequest;
+            let result = if mutation {
+                connection.send_then_wait(&command)
+            } else {
+                connection.exchange(&command)
+            };
+            let expected = if mutation { "outcome_unknown" } else { "daemon_unreachable" };
+            assert!(matches!(result, Err(ClientError::Technical { code, message })
+                if code == expected && message.contains("ne prouve ni son échec ni son annulation")
+                    && message.contains("Conservez les identifiants")));
+            assert!(connection.poisoned);
+            assert!(connection.exchange(&command).is_err());
+            let mut received = String::new();
+            std::io::Read::read_to_string(&mut BufReader::new(peer), &mut received).unwrap();
+            assert_eq!(received.lines().count(), 1, "aucun rejeu sur le lien fermé");
+        }
     }
 
     fn registered_server(

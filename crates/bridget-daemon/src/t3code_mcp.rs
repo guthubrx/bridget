@@ -93,7 +93,7 @@ fn binding_failure(error: crate::communication::client::ClientError) -> Identity
             message,
         } => match message.as_str() {
             "auxiliary_identity_unproven : primary_absent" => {
-                "binding_registration_refused : primary_absent : le lien Bridget du fil est absent"
+                "binding_registration_refused : primary_absent : le lien Bridget du fil est absent. Attendez sa reconnexion, puis reprenez la lecture avec bridget_task_status et le même task_id. Une attestation bridget_session ne prouve pas que ce lien est revenu. Si le refus persiste, conservez la demande et signalez ce code ; ne recréez pas la mission."
             }
             "auxiliary_identity_unproven : credential_mismatch" => {
                 "binding_registration_refused : credential_mismatch : la preuve locale ne correspond plus au lien du fil"
@@ -102,7 +102,7 @@ fn binding_failure(error: crate::communication::client::ClientError) -> Identity
                 "binding_registration_refused : instance_mismatch : le lien appartient à une autre instance"
             }
             "auxiliary_identity_unproven : primary_not_live" => {
-                "binding_registration_refused : primary_not_live : le lien du fil n’est plus actif"
+                "binding_registration_refused : primary_not_live : le lien du fil n’est plus actif. Attendez sa reconnexion, puis reprenez la lecture avec bridget_task_status et le même task_id. Si le refus persiste, conservez la demande et signalez ce code ; ne recréez pas la mission."
             }
             "auxiliary_identity_unproven : connection_already_registered" => {
                 "binding_registration_refused : connection_already_registered : la connexion est déjà enregistrée"
@@ -113,7 +113,7 @@ fn binding_failure(error: crate::communication::client::ClientError) -> Identity
             "binding_credential_unavailable : rattachement Bridget local absent ou invalide",
         ClientError::Technical { code: "daemon_protocol", .. } =>
             "binding_protocol_invalid : réponse du démon invalide",
-        _ => "binding_transport_unavailable : connexion au démon interrompue ou délai dépassé ; aucune révocation de session établie",
+        _ => "binding_transport_unavailable : connexion au démon interrompue ou délai dépassé ; aucune révocation de session établie. Attendez le retour du lien, puis reprenez la lecture avec bridget_task_status et le même task_id. Sans task_id, conservez request_id et tous les paramètres pour retrouver le sort de la demande. Si le refus persiste, signalez ce code ; ne recréez pas la mission et ne changez pas les permissions.",
     })
 }
 
@@ -401,6 +401,31 @@ mod tests {
         });
         assert_eq!(error.code(), "t3_session_unavailable");
         assert!(!error.remediation().contains("private-canary172"));
+    }
+
+    #[test]
+    fn spec174_binding_transitoire_guide_sans_assouplir_identite() {
+        for (code, reason) in [
+            ("auxiliary_identity_unproven", "auxiliary_identity_unproven : primary_absent"),
+            ("auxiliary_identity_unproven", "auxiliary_identity_unproven : primary_not_live"),
+            ("daemon_unreachable", "private-canary174"),
+        ] {
+            let error = binding_failure(crate::communication::client::ClientError::Technical {
+                code, message: reason.into(),
+            });
+            assert_eq!(error.code(), "t3_session_unavailable");
+            let message = error.remediation();
+            assert!(message.contains("bridget_task_status") && message.contains("même task_id"));
+            assert!(message.contains("ne recréez pas la mission"));
+            assert!(!message.contains("private-canary174"));
+        }
+        for reason in ["credential_mismatch", "instance_mismatch"] {
+            let error = binding_failure(crate::communication::client::ClientError::Technical {
+                code: "auxiliary_identity_unproven",
+                message: format!("auxiliary_identity_unproven : {reason}"),
+            });
+            assert!(!error.remediation().contains("Attendez"));
+        }
     }
 
     #[test]

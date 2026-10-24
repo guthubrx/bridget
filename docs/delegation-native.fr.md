@@ -890,6 +890,23 @@ autres identifiants. Les deux listes suivent l'ordre de `task_ids`. Une tâche d
 terminée permet un retour immédiat. Si aucune tâche ne finit avant le délai,
 `timed_out` vaut `true`. Les tâches continuent : l'expiration ne les annule pas.
 
+Un arrêt du démon peut interrompre une lecture avec `daemon_unreachable`.
+Après une mutation sans accusé, le transport garde `outcome_unknown` : la commande
+peut avoir été exécutée. Attendez le retour du lien, puis lisez
+`bridget_task_status` avec le même `task_id`. Sans TaskID, conservez le
+`request_id` d’admission et tous les paramètres pour retrouver son sort.
+Ne créez pas de demande de remplacement tant que ce sort est inconnu.
+La récupération bornée d’une admission garde la même clé ; ce changement
+n’ajoute aucun rejeu aux lectures de statut ou d’attente.
+
+Pour `t3_session_unavailable` avec `binding_transport_unavailable`, `primary_absent`
+ou `primary_not_live`, attendez la reconnexion du lien Bridget du fil, puis
+reprenez la lecture. Une attestation `bridget_session` seule ne prouve pas le
+retour de ce lien. Si le refus persiste, signalez son code et conservez la
+demande. Ne changez pas les permissions et ne recréez pas la mission.
+Les incohérences de preuve ou d’instance restent refusées sans ce conseil
+réservé aux interruptions transitoires.
+
 L’extension155 ajoute le retour sur une question Parent actionnable ; voir Demandes de l’enfant.
 
 Les entrées de `ready` omettent le texte complet `result`. Le parent le lit avec
