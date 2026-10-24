@@ -66,3 +66,29 @@ La revue utilisait un SDK plus ancien. Les champs `ambient`,
 `task_started.is_backgrounded` et `patch.status=paused` sont présents dans
 le SDK 0.3.260 lu dans T3 et ne sont pas des champs inventés. Le suivi ne
 suppose pas une garantie d’ordre des événements de progression.
+
+## Livraison
+
+Source finale `be00ace5c2dca3126e420214ec248c54083440d1` intégrée et poussée
+sur main. Builds release optimisés sur Linux et macOS, sans modification de
+profil pour accélérer la compilation. Signature macOS vérifiée.
+
+- SHA-256 Linux : `d6256639fb9a6d4e807fde52e7b5469834a932d6c3a15e6ecb827e4b41292f23`.
+- SHA-256 macOS : `a9226281b33535638c4d0b7708cf6d98361859a71bacf29c23c726f207ed69c3`.
+
+Worker Cartae activé sur `174-be00ace5-opt`, reconnexion attestée dans le
+journal maître. Le service conserve `KillMode=process` et `SendSIGKILL=no`.
+Les quatre enfants encore actifs ont conservé leur PID et leur naissance ;
+leurs douze processus observés ont survécu. Les trois autres processus de
+l’instantané appartenaient à une tâche déjà terminale avant l’activation.
+Aucune nouvelle mission applicative, reprise ou modification Opus2D.
+Le maître, le pont et T3 n’ont pas été relancés.
+
+Les wrappers déjà actifs gardent leur code. La correction est disponible pour
+les nouveaux enfants ; aucune prétention de correction à chaud des missions
+en cours ni de réécriture des résultats historiques.
+
+Entretien obligatoire exécuté après installation : 0,40 Gio d’intermédiaires
+Linux retirés ; caches utiles protégés. Ancien client Linux sans utilisateur
+retiré ; version active et version de retour conservées. Aucun worktree ni
+travail applicatif supprimé. Reçus et traces détaillés conservés hors Git.
