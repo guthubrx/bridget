@@ -39,8 +39,24 @@ with the real attested source path and full source commit before use:
 }
 ```
 
+Choose the source and destination separately. `cwd` is the absolute source
+directory on the calling parent's machine. `machine_id` selects the destination;
+it does not change what `cwd` means. For example, a parent on macOS targeting a
+Linux worker must keep its macOS source path. Bridget maps that path to the worker.
+
+`expected_base_commit` must contain the complete Git object ID: exactly 40
+hexadecimal characters (SHA-1). Abbreviated IDs and branch names are refused before
+admission. For Shared, resolve HEAD in the source directory. For Worktree, resolve
+`workspace.base_ref` there (HEAD when absent). Preserve the recorded request and
+its result before correcting a refused call; never change an admitted envelope.
+
 The exact schema and available combinations come from the loaded MCP catalog.
 A documented feature is not evidence that an old process has loaded it.
+
+For direct messages, `project_unknown` in `project_warnings` is an advisory,
+not a refusal. `in_flight` does not confirm that the child has processed the
+message. After a native task has returned its result, use
+`bridget_task_continue` for another round only if its status is continuable.
 
 ## Identity, permissions and catalog
 

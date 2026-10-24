@@ -35,6 +35,26 @@ Cet exemple ne prouve pas que ce profil existe dans tous les registres.
 Un profil absent, un modèle différent ou un effort non déclaré produit un refus.
 Sans fallback explicite, Bridget ne remplace pas la cible demandée.
 
+## Choisir le dossier source et le commit
+
+`cwd` est le chemin absolu du dossier source sur la machine du parent appelant.
+`machine_id` choisit la destination ; il ne change pas le sens de `cwd`.
+Un parent sur Mac qui cible un worker Linux conserve donc son chemin source Mac.
+Bridget traduit ce chemin vers le worker avec le mapping du projet.
+
+`expected_base_commit` exige le SHA Git complet : exactement 40 caractères
+hexadécimaux (SHA-1). Un SHA abrégé ou un nom de branche est refusé avant admission.
+En Shared, résoudre HEAD dans le dossier source. En Worktree, résoudre
+`workspace.base_ref` dans ce dossier (HEAD si absent). Conserver la demande et
+son résultat avant de corriger un appel refusé ; ne pas modifier une enveloppe
+déjà admise.
+
+Pour un message direct, `project_unknown` dans `project_warnings` est un
+avertissement, pas un refus. `in_flight` ne confirme pas que l'enfant a traité
+le message. Après le résultat d'une tâche native, utiliser
+`bridget_task_continue` pour une nouvelle ronde seulement si son statut est
+continuable.
+
 ## Choisir une combinaison de flotte — routage 168
 
 Cette interface exige un binaire chargé et une politique 168 active. La présence du texte ne

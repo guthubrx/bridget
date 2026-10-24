@@ -72,8 +72,8 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     ]});
     vec![
         json!({"name":"bridget_capabilities","description":"Catalogue natif des fournisseurs, modèles, efforts et postures accessibles au parent. can_run et constraints donnent le verdict de lancement au dossier verdict_context.cwd, avec les droits attestés de la session. Les faits limités à une demande et les autres dossiers restent soumis à l’admission. Les binaires sont vérifiés ; aucune connexion fournisseur ni authentification n’est testée. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
-        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
-        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants ; conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"agent_type":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":64},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string"},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
+        json!({"name":"bridget_auto_delegate","description":"Demande une admission de flotte V2. Les axes machine, moteur, connexion, modèle et effort restent indépendants. cwd désigne le dossier source sur la machine du parent ; machine_id désigne la destination. expected_base_commit exige un SHA complet (40 caractères hexadécimaux (SHA-1)). Conserver request_id au rejeu strict. Un maître sans auto_delegate_v2 refuse explicitement.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"engine":{"type":"string","minLength":1,"maxLength":256},"connection_id":{"type":"string","minLength":1,"maxLength":256},"agent_type":{"type":"string","minLength":1,"maxLength":256},"model":{"type":"string","minLength":1,"maxLength":256},"effort":{"type":"string","minLength":1,"maxLength":256},"workload":{"type":"string","enum":["general","compilation"],"default":"general"},"expected_base_commit":{"type":"string","minLength":40,"maxLength":40,"pattern":"^[0-9a-fA-F]{40}$","description":"SHA Git complet du commit source : exactement 40 caractères hexadécimaux (SHA-1), jamais un SHA abrégé ni un nom de branche. En shared : HEAD source ; en worktree : commit résolu de workspace.base_ref (HEAD si absent)."},"task":{"type":"string","minLength":1,"maxLength":65536},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"]},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200},"brief":brief_schema,"urgent":{"type":"boolean"},"deliverable":{"type":"string","minLength":1,"maxLength":128}},"required":["request_id","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_continue","description":"Ouvre une nouvelle ronde sur son enfant encore gardé, après la remise du résultat. Employer une nouvelle request_id à chaque ronde et la conserver sur retry identique. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1,"maxLength":128},"task":{"type":"string","minLength":1,"maxLength":65536},"brief":brief_schema},"required":["task_id","request_id","task"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_respond","description":"Répond à une question de son enfant avec l'identifiant lu dans le statut ou l'avis. Les approbations appartiennent à l'humain. Aucun secret dans la réponse.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1},"request_id":{"type":"string","minLength":1},"decision":{"type":"string","enum":["accept","decline","cancel"]},"answer":{"type":"object","description":"Pour accept uniquement : chaque identifiant de question porte un tableau de chaînes, 8 Kio au plus."}},"required":["task_id","request_id","decision"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true,"openWorldHint":true}}),
         json!({"name":"bridget_task_status","description":"Lit l'état durable et le résultat stable de sa mission native. Une fin de tour ne vaut pas résultat disponible tant que les enfants travaillent.","inputSchema":{"type":"object","properties":{"task_id":{"type":"string"}},"required":["task_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
@@ -297,11 +297,11 @@ fn execute_with_proof(
                 None => None,
                 Some(_) => {
                     let value = string("expected_base_commit")?;
-                    if !matches!(value.len(), 40 | 64)
+                    if value.len() != 40
                         || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
                     {
                         return Err(ClientError::InvalidParams(
-                            "expected_base_commit invalide".into(),
+                            "expected_base_commit invalide : fournir un SHA Git complet de 40 caractères hexadécimaux (SHA-1), pas un SHA abrégé ni un nom de branche.".into(),
                         ));
                     }
                     Some(value)
@@ -679,6 +679,82 @@ mod admission_recovery171_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec174_source_arguments_expliques_et_sha_valide_avant_connexion() {
+        let catalogue = tools(&json!({}));
+        for name in ["bridget_delegate", "bridget_auto_delegate"] {
+            let tool = catalogue.iter().find(|tool| tool["name"] == name).unwrap();
+            let properties = &tool["inputSchema"]["properties"];
+            assert!(properties["cwd"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("machine du parent"));
+            assert!(properties["machine_id"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("destination"));
+        }
+        let automatic = catalogue
+            .iter()
+            .find(|tool| tool["name"] == "bridget_auto_delegate")
+            .unwrap();
+        assert_eq!(
+            automatic["inputSchema"]["properties"]["expected_base_commit"]["pattern"],
+            "^[0-9a-fA-F]{40}$"
+        );
+        let identity = ResolvedIdentity {
+            name: "owner".into(),
+            instance_id: "instance".into(),
+            delegated_origin: None,
+        };
+        for invalid in [
+            "09d8fa7e9".into(),
+            "a".repeat(41),
+            "a".repeat(63),
+            "F".repeat(64),
+            format!("{}\n", "a".repeat(40)),
+            "g".repeat(40),
+            "feature/private-ref".into(),
+        ] {
+            let result = execute_with_proof(
+                &identity,
+                "bridget_auto_delegate",
+                &json!({"request_id":"source-sha","task":"lecture","cwd":"/source",
+                    "expected_base_commit":invalid}),
+                Path::new("/missing/source-sha.sock"),
+                None,
+            );
+            match result {
+                Err(ClientError::InvalidParams(message)) => {
+                    assert!(message.contains("40 caractères"));
+                    assert!(message.contains("SHA abrégé"));
+                    assert!(
+                        !message.contains(&invalid),
+                        "ne pas répéter la valeur fournie"
+                    );
+                }
+                other => panic!("refus de forme attendu avant connexion : {other:?}"),
+            }
+        }
+        for valid in ["a".repeat(40), "F".repeat(40)] {
+            let result = execute_with_proof(
+                &identity,
+                "bridget_auto_delegate",
+                &json!({"request_id":"source-sha","task":"lecture","cwd":"/source",
+                    "expected_base_commit":valid}),
+                Path::new("/missing/source-sha.sock"),
+                None,
+            );
+            assert!(matches!(
+                result,
+                Err(ClientError::Technical {
+                    code: "daemon_unreachable",
+                    ..
+                })
+            ));
+        }
+    }
 
     #[test]
     fn spec168_wire163_byte_compatible_et_nouveau_client_refuse_ancien_maitre() {
