@@ -44,15 +44,66 @@ pas le remplacer par une compilation de l'ancien main.
 
 ## État de livraison du 24 octobre 2026
 
-Source `d5af84f8` intégrée et poussée sur main, checkout Mac et Cartae alignés.
-Le worktree de correction et sa branche sont retirés après contrôle : intégrés,
-propres y compris fichiers ignorés, aucune tâche liée, observation des fichiers
-ouverts complète et sans usage. Le cache partagé de validation reste dans le
-budget ; aucun nouveau cache ni copie de binaire n'a été créé.
+Source `d5af84f8` intégrée et poussée sur main. Le worktree de correction et sa
+branche ont été retirés après vérification de leur intégration, de leur propreté
+et de l'absence d'usage. L'état « activation ouverte » du premier compte rendu
+est remplacé par les constats suivants.
 
-L'activation reste ouverte. Le maître actif est `177-mobile-candidate-r6-opt`
-sur Cartae, issu du chantier mobile en cours. Le correctif est transmis à son
-responsable pour intégration à ce candidat ; aucune ancienne version de main
-n'a été installée à sa place. Cette note ne prouve pas une livraison binaire.
-Le demandeur connaît cette limite. La tâche de l'incident et ses fichiers sont
-conservés ; son empreinte durable est identique avant et après l'intervention.
+### Binaire actif
+
+Le maître Cartae utilise `177-r8-native-project-d5af84f8` depuis 18:33:48 UTC.
+Le statut MCP officiel confirme ce build et `running:true`. Le binaire est
+construit avec les 321 fichiers vérifiés de l'archive du candidat mobile r8,
+puis les deux fichiers Rust du correctif `d5af84f8`. Ce n'est pas une
+compilation de main seul. Le worktree mobile en cours n'a pas été modifié.
+
+- Archive r8 : SHA-256 `9accc5788d0e01e037ce90624dc3f1836a9e7d43cf0841f4eb2e42375f3834e8`.
+- Binaire 0.5.0 : SHA-256 `6c9e3c79d21136d198c1d74f361da48c9a9fed0c7b241e41171165f37b76222e`.
+- Retour arrière r8 conservé : SHA-256 `d7690b5ebcf79c4141d7db28d4fddb4a3f4e8513dba270243e9b6e4f54ec7f02`.
+
+La compilation release est réussie. Le lot consolidé sur r8 corrigée donne
+84 tests réussis et un test ignoré explicitement. Ce dernier nécessite une
+fixture privée sur deux machines (`mobile177_origin_live_two_hosts_no_task_or_provider_launch`).
+Il ne constitue pas une preuve de recette distante réelle. Quatre fixtures
+de tests absentes de l'archive de production ont été extraites de sa base Git
+`4118ff2b`, puis contrôlées par empreinte avant validation.
+
+Seul le redémarrage du maître a été demandé. Le worker garde son PID 645547.
+Systemd a aussi arrêté et relancé le service mobile ; sa première tentative
+a rencontré `daemon_unavailable`, puis son redémarrage automatique a réussi
+à 18:33:51 UTC. Le mobile et le worker gardent leur binaire r8. Les services
+sont actifs. La reconnexion du lien de ce fil a été confirmée par le statut MCP.
+
+### Préservation des incidents
+
+Les empreintes durables des tâches `0935223f`, `4651c4cf` et `7d2d0fa6`
+sont identiques avant et après activation. Elles restent en échec : aucune
+tâche n'est rejouée, annulée ou réécrite. Les trois commits `882b921d`,
+`dce69e59` et `683aa5e1` sont présents dans Git. Aucun fichier Opus2D
+n'a été modifié. Le contrôle SQLite en lecture seule renvoie `ok`.
+
+Les responsables Opus2D ont reçu un envoi Bridget décrivant le correctif actif,
+sans instruction de relance métier. Le responsable mobile a été averti
+d'intégrer `d5af84f8` au prochain candidat pour éviter une régression.
+Les reçus initiaux sont `in_flight` ; ils ne prouvent pas leur lecture.
+
+### Nettoyage
+
+La commande `installed` du script de build a retiré 0,56 Gio logiques
+d'intermédiaires release. Le profil debug reste utilisé par une compilation :
+son verrou le protège, avec 3,11 Gio logiques conservés. Aucun cache n'a été copié.
+
+Cinq anciennes installations inutilisées ont été retirées après observation
+complète des fichiers ouverts et contrôle des références de lancement :
+`174-5ac9e795-opt`, `174-6d0f0109-opt`, `177-mobile-r2-opt`,
+`177-mobile-r4-opt` et `177-mobile-r6-opt`, soit 168 492 944 octets logiques.
+La version active et r8, utilisée aussi par le worker et le mobile, restent en place.
+
+La copie privée des sources de livraison (325 fichiers, 14 703 527 octets)
+reste conservée : son observation des fichiers ouverts était incomplète.
+L'archive, les empreintes, les journaux et le retour arrière restent disponibles.
+Aucun processus d'un autre travail n'a été arrêté pour le ménage.
+
+Sur Mac, seul le checkout main reste inscrit. Sur Cartae, main et le worktree
+mobile 177 restent inscrits ; ce dernier contient un travail actif non intégré.
+Les branches reflètent ces deux seuls usages, et le distant ne conserve que main.
