@@ -3601,10 +3601,10 @@ sys.stdout.write((root/'trace.jsonl').read_text())"#,
         assert_eq!(environment["HOME"], root.to_string_lossy().as_ref());
         assert_eq!(environment["PATH"], "/usr/bin:/bin");
         for name in environment.keys() {
-            assert!(matches!(
-                name.as_str(),
-                "HOME" | "PATH" | "CLAUDE_CONFIG_DIR" | "LC_CTYPE"
-            ));
+            assert!(
+                matches!(name.as_str(), "HOME" | "PATH" | "CLAUDE_CONFIG_DIR" | "LC_CTYPE"),
+                "variable inattendue chez l'enfant : {name}"
+            );
         }
         for forbidden in [
             "--bare",

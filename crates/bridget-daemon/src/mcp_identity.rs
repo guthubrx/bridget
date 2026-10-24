@@ -892,7 +892,7 @@ mod tests {
             return;
         }
         let root = root("namespace174");
-        for case in ["invalid-namespace", "missing-identity", "invalid-proof", "removed-runtime"] {
+        for case in ["invalid-namespace", "missing-identity", "invalid-proof", "removed-runtime", "missing-home"] {
             let home = if case == "missing-identity" || case == "removed-runtime" {
                 root.clone()
             } else {
@@ -909,6 +909,8 @@ mod tests {
                     .env("BRIDGET_T3_MCP_AUTHORIZATION", "invalid-test-proof");
             } else if case == "removed-runtime" {
                 command.env("BRIDGET_RUNTIME_TEST", "removed");
+            } else if case == "missing-home" {
+                command.env_remove("HOME").env_remove("BRIDGET_HOME").env_remove("BRIDGET_SOCKET");
             }
             let output = command.output().unwrap();
             assert!(output.status.success(), "{case}: {} {}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));

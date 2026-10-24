@@ -28500,6 +28500,9 @@ mod presence_tests {
             "brt-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
         ));
+        // Résoudre les liens du dossier temporaire, comme les chemins enregistrés.
+        std::fs::create_dir_all(&base).unwrap();
+        let base = base.canonicalize().unwrap();
         let registry_home = base.join("home");
         let fixture_root = FixtureRoot(registry_home.clone());
         std::fs::create_dir_all(registry_home.join(".config/bridget")).unwrap();

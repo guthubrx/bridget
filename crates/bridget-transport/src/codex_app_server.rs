@@ -4600,11 +4600,28 @@ fn provider_error_reason(error: &Value) -> String {
     } else {
         ""
     };
+    // Classer uniquement le refus fournisseur reconnu, sans exposer son contenu.
+    let active_writer = code == Some(-32600)
+        && error
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| {
+                message
+                    .strip_prefix("thread ")
+                    .and_then(|message| message.strip_suffix(" already has an active writer"))
+                    .is_some_and(|id| id.len() == 36 && uuid::Uuid::parse_str(id).is_ok())
+            });
+    if active_writer {
+        return format!(
+            "codex_thread_already_active: Codex conserve le droit d’écriture sur cette conversation. Fermez la session d’origine si elle est encore ouverte. Si le refus persiste, ce droit n’a pas été libéré{suffixe} (référence {reference})"
+        );
+    }
     match code {
         Some(code) => format!("erreur Codex (code {code}{suffixe}; référence {reference})"),
         None => format!("erreur Codex ({suffixe}référence {reference})"),
     }
 }
+
 fn provider_fingerprint(domain: &'static [u8], value: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(b"bridget/provider-request/v1\0");
@@ -4642,6 +4659,53 @@ mod tests {
     use std::time::Instant;
 
     static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn spec172_codex_writer_lock_has_actionable_private_projection() {
+        let id = "11111111-1111-4111-8111-111111111111";
+        let error = json!({
+            "code": -32600,
+            "message": format!("thread {id} already has an active writer"),
+            "data": {"private": "secret-that-must-stay-private"}
+        });
+        let reason = provider_error_reason(&error);
+        assert!(reason.starts_with("codex_thread_already_active:"));
+        assert!(reason.contains("Codex conserve le droit d’écriture"));
+        assert!(reason.contains("si elle est encore ouverte"));
+        assert!(reason.contains("Si le refus persiste"));
+        let mut non_pilotable = error.clone();
+        non_pilotable["data"]["codexErrorInfo"] = json!({"activeTurnNotSteerable": true});
+        assert!(provider_error_reason(&non_pilotable).contains("; tour non pilotable"));
+        assert!(reason.contains(&provider_fingerprint(
+            b"error",
+            error.to_string().as_bytes()
+        )));
+        assert!(!reason.contains(id));
+        assert!(!reason.contains("secret-that-must-stay-private"));
+    }
+
+    #[test]
+    fn spec172_codex_writer_lock_does_not_classify_unknown_errors() {
+        let message = "thread 11111111-1111-4111-8111-111111111111 already has an active writer";
+        for (code, message) in [
+            (-32601, message.to_string()),
+            (
+                -32600,
+                "thread private-secret already has an active writer".to_string(),
+            ),
+            (-32600, format!("{message}; private-secret")),
+            (-32600, "other private-secret".to_string()),
+        ] {
+            let error = json!({"code":code, "message":message});
+            let reason = provider_error_reason(&error);
+            assert!(reason.starts_with("erreur Codex (code "));
+            assert!(!reason.contains("private-secret"));
+        }
+        assert_eq!(
+            provider_error_reason(&json!({"code":-32001,"message":message})),
+            CODEX_SATURATED_REASON
+        );
+    }
 
     #[test]
     fn spec091_catalogue_muet_expire_sans_accumuler_de_reponses_en_attente() {
