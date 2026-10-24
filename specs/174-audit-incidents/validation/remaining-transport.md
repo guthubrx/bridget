@@ -35,7 +35,11 @@ Correction :
 
 ## Référence T3
 
-Copies lues dans `/home/moi/.cache/bridget-174-remaining/t3`. `supervisor.ts` utilise une échelle fixe (3, 4, 8, 16 s) sans gigue. Ce fichier ne fournit donc pas de modèle de gigue à reprendre.
+Copies lues dans `/home/moi/.cache/bridget-174-remaining/t3`.
+
+- `supervisor.ts` (`retryDelayMs`, ligne 104) : échelle fixe plafonnée, sans gigue. Ce fichier ne fournit donc pas de modèle de gigue à reprendre.
+- `session.ts` (`onDisconnect`, `RpcClientError`) : toute coupure devient une erreur transitoire de type `transport`. T3 ne distingue pas une coupure avant ou après écriture. Cette distinction, qui porte `outcome_unknown`, n'a donc pas d'équivalent dans T3.
+- `transport.ts` : `sanitizeThreadErrorMessage` masque les erreurs de transport dans l'interface. Ce masquage ne doit pas s'appliquer à `outcome_unknown`. Nous ne l'avons pas modifié ; les consommateurs d'interface restent à vérifier.
 
 ## Verdict
 
