@@ -24,9 +24,30 @@ Bridget ajoute le contrôle d'autorité distante avant création d'un maître.
   dans le namespace strict de la release ; ils sont désormais précréés 0600
   hors du namespace, avec Umask=077. systemd refusait un WorkingDirectory entre
   guillemets : réemploi de %h comme T3. Les deux essais réussissent après correction.
-- 24 tests ciblés PASS : activation Linux et rendu plist Mac, échec de santé
+- 26 tests ciblés PASS : activation Linux et rendu plist Mac, échec de santé
   sans faux succès, refus de gestionnaire absent, de fédération en panne et
   d'un service étranger, namespace persistant et conservation des anciens tests.
+- Réinstallation réelle Mac : même PID du daemon, aucune interruption.
+
+## Revue
+
+Task 1f5e4450-052d-4960-b361-e83bed0313f0, clé
+bridget177-autostart-review-20261024-01 : APPROVE_WITH_CHANGES.
+Remarques confirmées et corrigées : distinguer une unité créée ici d'une unité
+préexistante lors d'un échec, signaler un arrêt impossible à confirmer. Deux
+tests couvrent ces cas. Message explicite sur le démarrage automatique inchangé
+d'une installation existante. Un daemon manuel n'est pas converti en service.
+
+La recommandation de délai externe n'est pas retenue : get_status_until dans la
+release v0.4.1 et le code courant partage un délai de 10 s, avec preuve d'identité
+bornée à 2 s. Pas de dépendance gtimeout pour Mac. La boucle est bornée à cinq
+sondes et cinq attentes d'une seconde, pas annoncée comme un délai global de 5 s.
+Le refus d'une socket existante dit désormais « impossible à vérifier avec cette
+version », sans conclure à tort que le daemon ne répond pas.
+
+L'essai MacBook reste distinct : hôte Bonjour identifié et clé d'hôte retrouvée
+dans les clés connues ; authentification SSH du compte moi refusée. Aucun
+installateur exécuté sur ce MacBook, aucun droit changé.
 
 Aucun reboot/logout global pour simuler l'autostart : propriétés natives,
 RunAtLoad/KeepAlive et enable/is-enabled vérifiées. Les comptes Claude/Codex

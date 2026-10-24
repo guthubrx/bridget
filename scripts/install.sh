@@ -26,6 +26,7 @@ systemd_quote() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/
 shell_literal() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 prepare_service() {
+    service_created=false
     daemon_root=${BRIDGET_HOME:-$HOME/.cache/bridget-core}
     daemon_root=${daemon_root%/}
     daemon_socket=${BRIDGET_SOCKET:-$daemon_root/bridget.sock}
@@ -40,7 +41,7 @@ prepare_service() {
     fi
     # A dead tunnel or uncertain socket must never become a second authority.
     [ ! -e "$daemon_root/federation.env" ] && [ ! -L "$daemon_root/federation.env" ] || fail 'An existing federation is unavailable. Restore its connection; no local daemon was started.'
-    [ ! -e "$daemon_socket" ] && [ ! -L "$daemon_socket" ] || fail 'An existing Bridget socket does not respond. Existing services were preserved; no second daemon was started.'
+    [ ! -e "$daemon_socket" ] && [ ! -L "$daemon_socket" ] || fail 'The existing Bridget socket could not be verified with this version. Existing services were preserved; no second daemon was started.'
     uid=$(id -u)
     service_path=$bindir:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
     service_kind=$platform
@@ -138,12 +139,22 @@ EOF
 }
 
 service_failure() {
-    # Only the service prepared by this invocation; never an existing healthy service.
-    if [ "$service_kind" = darwin ]; then
-        launchctl bootout "gui/$uid/app.cartae.bridget" >/dev/null 2>&1 || :
-        launchctl disable "gui/$uid/app.cartae.bridget" >/dev/null 2>&1 || :
+    # Never disable a service that existed before this installation.
+    if $service_created; then
+        stopped=false
+        if [ "$service_kind" = darwin ]; then
+            if launchctl bootout "gui/$uid/app.cartae.bridget" >/dev/null 2>&1 && launchctl disable "gui/$uid/app.cartae.bridget" >/dev/null 2>&1; then
+                if launchctl print "gui/$uid" >/dev/null 2>&1 && ! launchctl print "gui/$uid/app.cartae.bridget" >/dev/null 2>&1; then stopped=true; fi
+            fi
+        elif systemctl --user disable --now app.cartae.bridget.service >/dev/null 2>&1; then
+            enabled=$(systemctl --user is-enabled app.cartae.bridget.service 2>/dev/null || :)
+            active=$(systemctl --user is-active app.cartae.bridget.service 2>/dev/null || :)
+            if [ "$enabled" = disabled ] && { [ "$active" = inactive ] || [ "$active" = failed ]; }; then stopped=true; fi
+        fi
+        if $stopped; then say 'The newly created service was stopped and disabled.'
+        else say "Service shutdown could not be confirmed. It may still be active: $unit"; fi
     else
-        systemctl --user disable --now app.cartae.bridget.service >/dev/null 2>&1 || :
+        say "The existing service was not disabled or removed: $unit"
     fi
     fail "$* Installation is not complete; the program and data were retained."
 }
@@ -151,6 +162,7 @@ service_failure() {
 start_service() {
     if [ "$service_kind" = existing ]; then
         say 'Bridget is already responding. Its existing service or federation was preserved.'
+        say 'Existing automatic startup settings were left unchanged; a manually started daemon was not converted into a service.'
         return
     fi
     mkdir -p "$unitdir" "$daemon_root"
@@ -160,6 +172,7 @@ start_service() {
         cp "$work/service" "$staged"
         chmod 600 "$staged"
         mv "$staged" "$unit"
+        service_created=true
     fi
     if [ "$service_kind" = darwin ]; then
         for log in "$state/service-stdout.log" "$state/service-stderr.log"; do

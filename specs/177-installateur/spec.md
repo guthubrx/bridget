@@ -22,4 +22,5 @@ Commandes publiques : `https://cartae.app/bridget/install.sh` et copie GitHub.
 Une version précise doit pouvoir être choisie avec `--version vX.Y.Z`.
 Les échecs de téléchargement, contrôle et compilation conservent le binaire installé.
 L'échec d'activation n'est pas un succès ; il indique le prérequis manquant et
-désactive le seul service démarré par cette invocation pour éviter une boucle.
+tente de désactiver le seul service créé par cette invocation. Une impossibilité
+de confirmer l'arrêt est signalée. Les unités préexistantes sont conservées.

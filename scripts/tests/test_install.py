@@ -15,7 +15,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "install.sh"
 BINARY = b'''#!/bin/sh
 case "$1" in
 --version) printf 'bridget 9.8.7 (fixture)\\n';;
-agents) [ -f "$FIXTURE/service-active" ] || exit 1; printf '[]\\n';;
+agents) [ -f "$FIXTURE/service-active" ] && [ ! -f "$FIXTURE/health-failure" ] || exit 1; printf '[]\\n';;
 *) exit 1;;
 esac
 '''
@@ -46,7 +46,21 @@ if (r / 'manager-unavailable').exists(): sys.exit(1)
 if 'show' in sys.argv:
     fragment = r / 'manager-fragment'
     print(('loaded' if fragment.exists() else 'not-found') if 'LoadState' in sys.argv else fragment.read_text())
-if 'enable' in sys.argv and not (r / 'health-failure').exists(): (r / 'service-active').touch()
+if 'enable' in sys.argv:
+    (r / 'service-enabled').touch()
+    (r / 'service-active').touch()
+if 'disable' in sys.argv:
+    if (r / 'cleanup-failure').exists(): sys.exit(1)
+    (r / 'service-enabled').unlink(missing_ok=True)
+    (r / 'service-active').unlink(missing_ok=True)
+if 'is-enabled' in sys.argv:
+    enabled = (r / 'service-enabled').exists()
+    if '--quiet' not in sys.argv: print('enabled' if enabled else 'disabled')
+    sys.exit(0 if enabled else 1)
+if 'is-active' in sys.argv:
+    active = (r / 'service-active').exists()
+    if '--quiet' not in sys.argv: print('active' if active else 'inactive')
+    sys.exit(0 if active else 3)
 ''')
         self.stub("sleep", "#!/bin/sh\nexit 0\n")
         self.stub("curl", '''#!/usr/bin/env python3
@@ -192,7 +206,7 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
     def test_failed_health_check_is_not_installation_success(self):
         (self.root / 'health-failure').touch()
         result = self.run_install(ok=False)
-        self.assertIn('installation is not complete', result.stderr)
+        self.assertIn('installation is not complete', result.stderr.lower())
         self.assertNotIn('Installed bridget', result.stderr)
         self.assertIn('disable --now', (self.root / 'service-commands').read_text())
 
@@ -202,6 +216,22 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
         self.assertIn('another Bridget installation', result.stderr)
         self.assertFalse(self.installed.exists())
         self.assertNotIn('disable --now', (self.root / 'service-commands').read_text())
+
+    def test_existing_inactive_service_is_not_disabled_on_failure(self):
+        self.run_install()
+        (self.root / 'service-active').unlink()
+        (self.root / 'health-failure').touch()
+        (self.root / 'service-commands').write_text('')
+        result = self.run_install(ok=False)
+        self.assertIn('existing service was not disabled', result.stderr)
+        self.assertNotIn('disable --now', (self.root / 'service-commands').read_text())
+
+    def test_cleanup_failure_is_reported_as_unconfirmed_shutdown(self):
+        (self.root / 'health-failure').touch()
+        (self.root / 'cleanup-failure').touch()
+        result = self.run_install(ok=False)
+        self.assertIn('shutdown could not be confirmed', result.stderr)
+        self.assertIn('may still be active', result.stderr)
 
     def test_shell_namespace_and_service_values_preserve_special_characters(self):
         self.home = self.root / "home's & files"
