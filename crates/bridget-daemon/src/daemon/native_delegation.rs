@@ -3279,6 +3279,62 @@ impl ParentPermission {
     }
 }
 
+// Observation scoped au propriétaire, sous le verrou du daemon. Elle n'acquiert
+// aucune réservation et ne promet rien pour un nouvel appel concurrent.
+fn routing_failure_admission(
+    conn: &str,
+    request: &AutoDelegateV2,
+    thread: Option<&str>,
+    mut result: Value,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Value {
+    if result["status"] != "refused" {
+        return result;
+    }
+    let st = state.lock().unwrap_or_else(|error| error.into_inner());
+    let observed = (|| -> Result<(&str, Option<String>), String> {
+        recheck_attested_thread(&st, conn, thread)?;
+        let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        if let Some(receipt) = st.delegation_store.auto_admission_receipt(&owner, &request.request_id)? {
+            return match receipt.state {
+                AutoAdmissionState::Admitted => receipt.task_id
+                    .map(|id| ("admitted", Some(id)))
+                    .ok_or_else(|| "auto_admission_invalid".into()),
+                AutoAdmissionState::Refused => Ok(("refused", None)),
+                AutoAdmissionState::Pending | AutoAdmissionState::DecisionStarted
+                | AutoAdmissionState::Chosen => Ok(("pending", None)),
+            };
+        }
+        let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
+            .map_err(|_| "invalid_request")?;
+        match st.delegation_store.by_agent_request(&owner, &request.request_id, &canonical)? {
+            Some(task) => Ok(("admitted", Some(task.task_id))),
+            None => Ok(("not_recorded", None)),
+        }
+    })();
+    let (admission, task_id) = match observed {
+        Ok(value) => value,
+        Err(code) if code == "request_expired" => ("expired", None),
+        Err(_) => ("unknown", None),
+    };
+    let recovery = match admission {
+        "not_recorded" => "À cette lecture, aucune tâche ni admission en cours ou refus enregistré pour cette clé. Cette confirmation est fournie par Bridget ; inutile de la demander à un autre agent. Sans autre appel concurrent avec cette clé, corrigez la cause indiquée : mêmes paramètres, même request_id ; paramètres corrigés, nouvelle request_id. Ne changez pas la version à examiner sans autorisation.",
+        "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Conservez request_id et tous les paramètres pour relire son sort. Ne créez pas de nouvelle demande.",
+        "admitted" => "Une tâche existe pour cette clé. Suivez le task_id indiqué avec bridget_task_status ; ne créez pas de doublon.",
+        "refused" => "Un refus durable sans tâche est enregistré pour cette clé. Un rejeu identique relit ce refus sans le rouvrir. Après correction autorisée, utilisez une nouvelle request_id.",
+        "expired" => "Cette clé a expiré ; son ancien résultat n'est plus disponible. Ne réutilisez pas cette clé et ne déduisez pas qu'aucun travail n'a eu lieu.",
+        _ => "Le sort de cette clé n'a pas pu être établi. Conservez request_id et tous les paramètres pour le relire après rétablissement du lien ou de la vérification. Ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
+    };
+    if !result["detail"].is_object() {
+        result["detail"] = json!({});
+    }
+    result["detail"]["admission"] = json!({
+        "request_id": request.request_id, "state": admission, "task_id": task_id,
+        "observed_at": unix_timestamp(), "recovery": recovery,
+    });
+    result
+}
+
 fn failure(code: &str) -> Value {
     let message = match code {
         "remote_execution_ended" => Some("La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite."),
@@ -4221,6 +4277,7 @@ fn handle_with_fact(
             state,
         )
         .unwrap_or_else(|code| failure(&code));
+        let result = routing_failure_admission(conn, request, thread, result, state);
         if result["status"] != "refused" {
             tick(state);
         }
@@ -11646,6 +11703,77 @@ mod tests {
         assert!(recovery.contains("nouvelle request_id"));
         assert!(recovery.contains("si une tâche existe, suivez-la"));
         assert!(failure("expected_base_commit_required").get("detail").is_none());
+    }
+
+    #[test]
+    fn spec174_admission_hint_mismatch_handler_confirme_absence_sans_reservation() {
+        let (state, config, rx, _reader, mut request, _root) = routing168_fixture(1);
+        let cwd = PathBuf::from(&request.cwd);
+        for args in [vec!["init", "-q"], vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-qm", "fixture"]] {
+            assert!(std::process::Command::new("git").arg("-C").arg(&cwd).args(args).status().unwrap().success());
+        }
+        request.expected_base_commit = Some("a".repeat(40));
+        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", NativeDelegationRequest::AutoDelegateV2(request.clone()), &state) else { panic!("response"); };
+        assert_eq!(result["code"], "expected_base_commit_mismatch");
+        assert_eq!(result["detail"]["admission"]["state"], "not_recorded");
+        assert!(result["detail"]["admission"]["task_id"].is_null());
+        assert_eq!(result["detail"]["admission"]["request_id"], request.request_id);
+        let st = state.lock().unwrap();
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(st.delegation_store.auto_admission_receipt(OWNER, &request.request_id).unwrap().is_none());
+        assert!(rx.try_recv().is_err());
+        drop(st); drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec174_admission_hint_recu_pending_refused_et_expire_sans_rejeu() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let mut plan = routing168_plan(&state, &request);
+        observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+        let now = unix_timestamp();
+        let receipt = {
+            let st = state.lock().unwrap();
+            let receipt = routing_auto_receipt(OWNER.into(), &request,
+                serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
+                &plan, st.coordinator_epoch, now).unwrap();
+            st.delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap();
+            receipt
+        };
+        let observe = || routing_failure_admission("conn-1", &request, None, failure("workspace_base_preflight_failed"), &state);
+        assert_eq!(observe()["detail"]["admission"]["state"], "pending");
+        assert_eq!(routing168_receipt(&state, &request), receipt, "projection sans mutation");
+        state.lock().unwrap().delegation_store.refuse_auto_admission(&receipt, "expected_base_commit_mismatch", now).unwrap();
+        assert_eq!(observe()["detail"]["admission"]["state"], "refused");
+        state.lock().unwrap().delegation_store.purge_expired_auto_admission_refusals(now + 31 * 86400, 1).unwrap();
+        assert_eq!(observe()["detail"]["admission"]["state"], "expired");
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec174_admission_hint_tache_existante_et_identite_inconnue() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let result = routing_failure_admission("conn-1", &request, None, failure("envelope_mismatch"), &state);
+        assert_eq!(result["detail"]["admission"]["state"], "admitted");
+        assert_eq!(result["detail"]["admission"]["task_id"], admitted["task_id"]);
+        let unknown = routing_failure_admission("no-connection", &request, None, failure("identity_unavailable"), &state);
+        assert_eq!(unknown["detail"]["admission"]["state"], "unknown");
+        assert!(unknown["detail"]["admission"]["task_id"].is_null());
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec174_admission_hint_sql_indisponible_ne_devient_pas_absence() {
+        let (state, config, _rx, _reader, request, _root) = routing168_fixture(1);
+        state.lock().unwrap().delegation_store.test_connection().execute_batch("DROP TABLE auto_admission_receipts").unwrap();
+        let result = routing_failure_admission("conn-1", &request, None, failure("workspace_base_preflight_failed"), &state);
+        assert_eq!(result["detail"]["admission"]["state"], "unknown");
+        assert!(result["detail"]["admission"]["task_id"].is_null());
+        drop(state); cleanup(&config);
     }
 
     fn routing168_fixture(

@@ -707,3 +707,16 @@ The cache cleaner excludes only its own `.cargo-lock` descriptor while holding t
 A child-answer refusal with `permission_source_unavailable` or `delivery_check_unavailable` means that Bridget could not verify delivery authority. It does not establish a revocation. No positive answer was delivered. Read the existing task with `bridget_task_status`, restore the relevant permission source or configuration, and answer only a still-open request. Do not create a replacement task or widen permissions. `provider_quota_exhausted` remains a separate quota refusal.
 
 A decision recorded as `answered_by_parent` is not proof of delivery. Read `recent_requests[].delivery_state` separately. If a later check invalidates the answer, `delivery_state` is `void` and `delivery_error` gives a closed diagnostic code. The recorded decision stays unchanged. A generic `delivery_invalidated` hides any private provider detail. Do not repeat an answered request or create a replacement task.
+
+### Admission state included in a refusal
+
+Automatic V2 admission refusals include `detail.admission` when the request reaches the admission handler. It contains `request_id`, `state`, `task_id` (or null), `observed_at` (Unix seconds), and `recovery`. This is an owner-scoped observation of the existing records, not a new reservation. Read this state together with the cause of refusal.
+
+- `not_recorded`: no task, in-progress receipt, stored refusal, or tombstone was found for that key. Bridget supplies the confirmation; no maintainer lookup is needed. With no concurrent call using that key, correct the cause: identical parameters keep the key; changed parameters require a new key. Do not silently change the intended revision.
+- `pending`: the existing admission can still create a task. Keep the same key and parameters; do not create another request.
+- `admitted`: follow the supplied task ID.
+- `refused`: a terminal refusal without a task is stored. Identical replay does not reopen it; use a new key only after the authorized correction.
+- `expired`: the previous record has expired. This does not prove that no work happened.
+- `unknown`: identity, storage, or the legacy record could not establish the outcome. Preserve the key and parameters; do not infer absence.
+
+The observation does not cover a concurrent call submitted later. Transport failures before a daemon response and early attestation failures may have no `admission` field; absence of this field is not proof of absence of work. No automatic retry, cancellation, or permission change is introduced.

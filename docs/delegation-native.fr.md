@@ -1517,3 +1517,16 @@ Le nettoyeur de cache exclut seulement son propre descripteur `.cargo-lock`, pen
 Un refus `permission_source_unavailable` ou `delivery_check_unavailable` indique que Bridget ne peut pas vérifier les droits de remise. Il ne prouve pas une révocation. Aucune réponse positive n’a été remise. Consultez la tâche existante avec `bridget_task_status`, rétablissez la source de droits ou la configuration concernée, puis répondez seulement à une demande encore ouverte. Ne créez pas de tâche de remplacement et n’élargissez pas les droits. `provider_quota_exhausted` reste un refus distinct de quota.
 
 Une décision `answered_by_parent` ne prouve pas la remise. Lisez séparément `recent_requests[].delivery_state`. Si un contrôle ultérieur invalide la réponse, `delivery_state` vaut `void` et `delivery_error` donne un code de diagnostic fermé. La décision enregistrée reste inchangée. Le code générique `delivery_invalidated` masque les détails privés du fournisseur. Ne répétez pas une demande déjà répondue et ne créez pas de tâche de remplacement.
+
+### Sort de l’admission inclus dans le refus
+
+Les refus d’admission automatique V2 contiennent `detail.admission` lorsque la demande atteint le gestionnaire d’admission. Ce champ fournit `request_id`, `state`, `task_id` (ou null), `observed_at` (secondes Unix) et `recovery`. Il décrit les enregistrements du propriétaire courant ; il ne réserve rien. Lire ce sort avec la cause du refus.
+
+- `not_recorded` : aucune tâche, admission en cours, refus enregistré ou clé expirée trouvé. Bridget fournit la confirmation ; inutile de la demander au mainteneur. Sans appel concurrent avec cette clé, corriger la cause : mêmes paramètres, même clé ; paramètres différents, nouvelle clé. Ne pas changer silencieusement la version à examiner.
+- `pending` : l’admission existante peut encore créer une tâche. Conserver la clé et les paramètres ; ne pas créer une autre demande.
+- `admitted` : suivre le `task_id` fourni.
+- `refused` : un refus terminal sans tâche est enregistré. Un rejeu identique ne le rouvre pas ; une nouvelle clé exige une correction autorisée.
+- `expired` : l’ancien enregistrement a expiré. Cela ne prouve pas qu’aucun travail n’a eu lieu.
+- `unknown` : l’identité, le stockage ou l’ancien enregistrement ne permet pas d’établir le sort. Conserver la clé et les paramètres ; ne pas conclure à une absence.
+
+Cette observation ne couvre pas un appel concurrent envoyé ensuite. Une coupure avant réponse du daemon ou un refus précoce d’attestation peut ne pas fournir ce champ ; son absence ne prouve pas l’absence de travail. Aucun rejeu, aucune annulation et aucun changement de droits automatique n’est ajouté.
