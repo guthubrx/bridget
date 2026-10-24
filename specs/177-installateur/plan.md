@@ -12,4 +12,13 @@ T3 consulté : docs/user/install.md, scripts/release-smoke.ts et
 .github/workflows/release.yml dans le checkout T3 de référence.
 Réemploi : distinction paquet publié/code de développement et essais de paquet
 isolés. T3 utilise npm/Electron ; Bridget est un exécutable Rust, donc archive
-native et compilation par le wrapper existant. Aucun nouveau moteur de service.
+native et compilation par le wrapper existant.
+
+Correction de démarrage : reprendre le mécanisme de
+apps/server/src/cloud/bootService.ts (renderBootServiceUnit, launchdManager et
+systemdManager) : service utilisateur natif, PATH explicite, bootstrap sans
+kickstart forcé, WorkingDirectory=%h pour systemd, échappement XML et %%.
+Différences : préserver les connexions Bridget déjà actives et refuser une
+fédération inaccessible au lieu de créer une deuxième autorité. La réponse
+`agents --json --global` atteste la connexion et l'inventaire réel du daemon.
+Pas de nouveau service maison, aucun changement Rust ni migration de données.

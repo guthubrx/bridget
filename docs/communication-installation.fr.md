@@ -58,12 +58,32 @@ sauvegardés avant d'ajouter le PATH. Dans le terminal courant :
 bridget --version
 ```
 
-Les comptes, données et définitions de services restent en place. Aucun daemon,
-worker, tunnel ou processus T3 n'est lancé ou relancé. Installer le programme ne
-rattache pas la machine à un maître. Lancez `bridget daemon` pour une instance
-autonome ou suivez le [guide de fédération SSH](federation-services.fr.md) pour
-rejoindre un maître existant. Les services actifs gardent leur code chargé jusqu'à
-une relance volontaire. Le binaire précédent ne suffit pas à restaurer une base.
+Sur une installation neuve, la commande installe et démarre un service utilisateur.
+Elle attend une vraie réponse de Bridget avant d'annoncer le succès. Sur Mac,
+launchd le relance à l'ouverture de session. Sur Linux, systemd le démarre au
+démarrage du système et le conserve après déconnexion grâce au maintien de
+session (lingering). Aucun terminal ne doit rester ouvert.
+
+Sur Mac, l'utilisateur doit avoir une session graphique ouverte, même si
+l'installation passe par SSH. Sur Linux, le gestionnaire systemd utilisateur doit
+être disponible. Si nécessaire, l'installateur tente d'activer le maintien de
+session sans demander de mot de passe. Un refus indique précisément le besoin
+d'une autorisation administrateur. Ce n'est jamais annoncé comme un succès.
+
+Le service s'appelle `app.cartae.bridget`. Un daemon ou une fédération qui répond
+déjà est réutilisé sans interruption ni modification de sa définition. Une
+fédération en panne ou une socket ambiguë est refusée ; aucun deuxième maître
+n'est démarré. Les comptes et données sont conservés. Aucun worker, tunnel ou
+processus T3 n'est relancé. Les services actifs gardent leur version chargée
+jusqu'à une relance volontaire. Un service créé ici qui ne répond pas est
+désactivé ; le programme et les données restent disponibles pour réparation.
+
+Le PATH et le namespace choisi sont mémorisés pour les prochains terminaux.
+Depuis votre projet, lancez `bridget claude` ou `bridget codex`. L'installation
+et l'identification personnelle du fournisseur restent des prérequis distincts.
+Pour rejoindre un autre maître, suivez le
+[guide de fédération SSH](federation-services.fr.md).
+Le binaire précédent ne suffit pas à restaurer une base.
 Si le nettoyage échoue après une installation source, le message précise que
 le programme est installé mais que le cache n'a pas été nettoyé. Cette erreur
 ne signifie pas que l'ancien binaire est encore sur disque.

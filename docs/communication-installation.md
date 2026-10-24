@@ -62,11 +62,30 @@ command immediately in the current terminal:
 bridget --version
 ```
 
-Accounts, data and service definitions are preserved. No daemon, worker, tunnel
-or T3 process is started or restarted. Installation is not federation: use
-`bridget daemon` for a standalone instance, or follow the
-[SSH federation guide](federation-services.md) to join an existing master.
-Already running services keep their loaded version until deliberately restarted.
+On a new installation, the command installs and starts a user service, then
+requires a real response from Bridget before reporting success. macOS uses a
+LaunchAgent, started at login; Linux uses a systemd user service, enabled at boot
+and after logout through lingering. No terminal needs to remain open.
+
+macOS needs a graphical login session for the selected user, even when installing
+over SSH. Linux needs a reachable systemd user manager. If lingering is disabled,
+the installer tries to enable it for the current user without a password prompt;
+if permission is required, it explains that administrator action is still needed.
+These conditions produce an incomplete-installation error, never a false success.
+
+The service is named `app.cartae.bridget`. A responsive existing daemon or
+federation is reused without interruption, and its service definition is preserved.
+A failed federation or ambiguous existing socket is refused rather than replaced
+by another local master. Existing running services keep their loaded version
+until deliberately restarted. Accounts and data are preserved; no worker, tunnel
+or T3 process is restarted. A newly started service that fails its readiness check
+is deactivated, keeping the program and data for repair.
+
+PATH and the selected namespace are saved for subsequent terminals. Start a
+provider from your project with `bridget claude` or `bridget codex`; provider
+installation and personal authentication remain separate prerequisites.
+To join another machine's master, follow the
+[SSH federation guide](federation-services.md).
 The retained executable is not a database rollback procedure.
 If cache cleanup fails after a source installation, the installer explicitly
 reports that the executable was installed and cleanup failed; that error does
