@@ -8,4 +8,4 @@
 - [x] T006 Faire relire, intégrer, pousser et publier le script identique sur le site.
 - [x] T007 Corriger le parcours : service natif, démarrage automatique et réponse réelle.
 - [x] T008 Vérifier l'activation réelle Mac/Linux et l'accès depuis une nouvelle session.
-- [ ] T009 Faire relire et publier le démarrage opérationnel, puis nettoyer les services de test.
+- [x] T009 Faire relire et publier le démarrage opérationnel, puis nettoyer les services de test.

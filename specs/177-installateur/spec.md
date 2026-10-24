@@ -1,6 +1,6 @@
 # 177 — Installer Bridget en une commande
 
-Statut : In Progress — extension corrective de démarrage validée le 24 octobre 2026.
+Statut : Implemented — démarrage opérationnel livré le 24 octobre 2026.
 
 Installer ou mettre à jour Bridget sur Linux et macOS avec une commande publique.
 Par défaut, prendre la dernière release GitHub, figée et déjà compilée.

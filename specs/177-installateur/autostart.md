@@ -49,6 +49,19 @@ L'essai MacBook reste distinct : hôte Bonjour identifié et clé d'hôte retrou
 dans les clés connues ; authentification SSH du compte moi refusée. Aucun
 installateur exécuté sur ce MacBook, aucun droit changé.
 
+## Livraison
+
+Installateur corrigé intégré et poussé dans d09d3939, redirection cartae.app
+mise à jour vers ce commit ; fichier public retéléchargé identique à la source.
+Définitions et reçus de tests conservés hors Git ; deux services de test arrêtés
+et leurs exécutables retirés. Aucun service de production remplacé.
+
+MacBook : compte moi confirmé par l'utilisateur. SSH offre uniquement publickey,
+donc aucun mot de passe ne peut être soumis. La clé locale est valide et sa
+partie publique est cohérente ; le serveur la refuse. L'agent SSH système est
+accessible mais ne contient aucune identité. Ce blocage d'accès est indépendant
+de l'installateur. L'ajout de la clé nécessite une action depuis le MacBook.
+
 Aucun reboot/logout global pour simuler l'autostart : propriétés natives,
 RunAtLoad/KeepAlive et enable/is-enabled vérifiées. Les comptes Claude/Codex
 restent personnels et ne sont pas implicitement créés par Bridget.
