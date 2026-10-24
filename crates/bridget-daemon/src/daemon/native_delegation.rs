@@ -617,7 +617,7 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
             }
             reason
         }).collect::<Vec<_>>();
-        result["detail"] = json!({"reasons":reasons});
+        result["detail"]["reasons"] = json!(reasons);
     }
     result
 }
@@ -3373,6 +3373,12 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code == "routing_candidate_unavailable" {
+        let message = "Aucun candidat requis n’a pu être confirmé comme éligible lors du contrôle.";
+        let recovery = "Consultez detail.reasons s’il est présent, puis le catalogue sur la machine demandée avec le même cwd et la même posture. Vérifiez la disponibilité du profil, du modèle, de l’effort, du dossier et des sources de droits selon le motif reçu. Ce code seul ne prouve ni une déconnexion du compte ni l’absence du programme. Corrigez la cause sans changer les contraintes ni les permissions pour contourner le refus. Consultez detail.admission : suivez toute tâche connue ; si la demande reste en attente ou d’issue inconnue, conservez request_id et les paramètres, sans créer de doublon. Si detail.admission indique not_recorded, après correction de la cause sans changement de paramètres, rejouez strictement la même demande avec sa request_id. L’absence de tâche enregistrée à une lecture ne suffit pas à exclure un appel concurrent. Une nouvelle request_id exige un refus durable confirmé sans tâche et sa cause corrigée, ou des paramètres corrigés après confirmation de la clôture de l’ancienne demande.";
+        return json!({"status":"refused","code":code,"message":message,
+            "detail":{"message":message,"recovery":recovery}});
+    }
     if code == "routing_connection_changed" {
         let message = "Les faits vérifiés pour la cible ont changé pendant l’admission.";
         let recovery = "Vérifiez le catalogue et la connexion de la machine choisie, sans changer les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission joint et suivez toute tâche connue. Ne dupliquez pas une demande en attente ou d’issue inconnue. Un refus durable confirmé sans tâche ne se rouvre pas au rejeu ; une nouvelle request_id n’est utilisable qu’après correction de sa cause.";
@@ -12334,6 +12340,8 @@ mod tests {
         let refused = routing_probe_failure(&plan);
         assert_eq!(refused["status"], "refused");
         assert_eq!(refused["code"], "routing_candidate_unavailable");
+        assert_eq!(refused["detail"]["message"], refused["message"]);
+        assert!(refused["detail"]["recovery"].as_str().unwrap().contains("detail.admission"));
         assert_eq!(refused["detail"]["reasons"], json!([
             {"kind":"candidate","code":"mapping_unavailable","candidates":1},
             {"kind":"candidate","code":"permissions_changed","candidates":1},
@@ -14652,6 +14660,17 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 },
                 "dérive {drift}"
             );
+            let refusal = failure(&error);
+            assert_eq!(refusal["code"], error);
+            assert_eq!(refusal["status"], "refused");
+            let recovery = refusal["detail"]["recovery"].as_str().unwrap();
+            assert!(recovery.contains("request_id"));
+            assert!(recovery.contains("permissions"));
+            if drift.ends_with("_missing") {
+                assert!(recovery.contains("detail.admission"));
+                assert!(recovery.contains("sans créer de doublon"));
+                assert!(refusal["detail"].get("reasons").is_none(), "aucune cause inventée");
+            }
         }
         assert!(
             state
