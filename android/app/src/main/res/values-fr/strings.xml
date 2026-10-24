@@ -90,7 +90,7 @@
  <string name="saved_locally">Enregistré localement</string>
  <string name="received_by_bridget">Reçu par Bridget. Remise pas encore observée.</string>
  <string name="command_rejected">Commande refusée</string>
- <string name="receipt_expired">Protection contre les doublons expirée</string>
+ <string name="receipt_expired">Reçu indisponible · message conservé</string>
  <string name="command_conflict">Cette clé désigne une autre enveloppe</string>
  <string name="destination_unavailable">Destinataire ou objet indisponible</string>
  <string name="state_available">Disponible</string>
@@ -120,8 +120,8 @@
  <string name="state_observed">Agent observé ; contact worker non confirmé</string>
  <string name="state_unknown">Inconnu</string>
  <string name="state_waiting_children">Attend ses agents</string>
- <string name="delivered_to_agent">Remise observée dans le journal natif</string>
- <string name="response_finished">Tour de réponse terminé</string>
+ <string name="delivered_to_agent">Message remis</string>
+ <string name="response_finished">Réponse terminée</string>
  <string name="forget_authorization">Associer à nouveau</string>
  <string name="forget_authorization_detail">Cette action oublie seulement l’accès actuel du téléphone. Elle ne le révoque pas sur le serveur. Révoquez-le depuis une installation de confiance si nécessaire. Les commandes, brouillons et fichiers conservés restent liés à leur association d’origine et ne sont pas renvoyés.</string>
  <string name="revoke_device">Révoquer cet appareil</string>
@@ -164,6 +164,22 @@
  <string name="pairing_unavailable">Ce QR ne permet plus de vous associer. Il a expiré, a déjà servi ou ne correspond plus à cette tentative.</string>
  <string name="pairing_recovery">Un QR dure cinq minutes et sert à une seule association. Touchez « Associer à nouveau », puis scannez un nouveau QR créé depuis votre installation de confiance. Vos messages et fichiers conservés ne seront pas effacés.</string>
  <string name="older_messages">Charger les messages précédents</string>
- <string name="agent_waiting_turn">Instruction enregistrée. L’agent la traitera à son prochain tour.</string>
+ <string name="agent_waiting_turn">Agent occupé · message en attente</string>
  <string name="history_window_limit">La limite de cette fenêtre de lecture est atteinte. Revenez aux derniers messages pour reprendre le suivi récent.</string>
+ <string name="send_now">Transmettre maintenant</string>
+ <string name="message_delivering">Message enregistré · remise en cours</string>
+ <string name="activity_command">Commande</string>
+ <string name="activity_web">Recherche web</string>
+ <string name="activity_search">Recherche de fichiers</string>
+ <string name="activity_file">Fichier modifié</string>
+ <string name="activity_tool">Outil</string>
+ <string name="activity_done">terminé</string>
+ <string name="activity_failed">échec</string>
+ <string name="activity_cancelled">annulé</string>
+ <string name="activity_running">en cours</string>
+ <string name="recipient_unavailable">Agent momentanément indisponible</string>
+ <string name="recipient_recovery">Le message reste enregistré sur ce téléphone. Une fois la connexion rétablie, ouvrez Envois et envoyez le message conservé.</string>
+ <string name="activity_seen">utilisé</string>
+ <string name="activity_group">Outils utilisés</string>
+ <string name="immediate_delivery_detail">Transmettre maintenant peut interrompre un outil en cours pour faire prendre en compte votre message. Aucun redémarrage de l’agent n’est demandé.</string>
 </resources>

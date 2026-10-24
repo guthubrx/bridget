@@ -4,6 +4,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProjectPresentationTest {
+    @Test fun gitIdentityUsesTheRepositoryNameWithoutChangingTheRoot() {
+        val p=ProjectIdentity("mac", "/projects/64.bridget/.git/")
+        assertEquals("64.bridget",projectTitle(p.root))
+        assertEquals("BR",projectMonogram(p.root))
+        assertEquals("repo",projectTitle("/repositories/repo.git"))
+        assertEquals("/projects/64.bridget/.git/",p.root)
+        val other=ProjectIdentity("mac","/other/64.bridget/.git")
+        assertNotEquals(projectQualifier(p,listOf(p,other)),projectQualifier(other,listOf(p,other)))
+    }
     @Test fun uniqueNamesStayShortWithoutChangingTheirIdentity() {
         val p=ProjectIdentity("mac", "/Users/test/projects/64.bridget")
         assertEquals("64.bridget",projectTitle(p.root))

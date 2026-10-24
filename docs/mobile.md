@@ -112,3 +112,30 @@ The Android version follows the workspace version. Build with the private
 `BRIDGET_FIREBASE_CONFIG` file when notifications are enabled; it contains public
 application options, never the server account key. Retain the current installed
 version and one verified rollback package.
+
+## Conversation and delivery
+
+Project labels show the repository name, not its internal `.git` directory. Tap a
+project label to see its full identity. Conversations open on recent messages;
+load earlier messages when needed. The latest-message button and keyboard resize
+keep the end visible unless you scroll away.
+
+Send uses the existing message queue. **Deliver now** requests delivery while the
+agent works. If its current connection cannot do that, the same message waits in
+the queue. It requests no agent restart and creates no replacement message. Depending on
+the provider, live steering may interrupt a running tool.
+Native Codex can accept live steering. The current desktop connector supports
+live steering for Claude; its other providers use the queue. Native Claude and
+ACP also retain the message in their queues when live steering is unavailable.
+
+A saved message is not proof of delivery. The app says **Message delivered** only
+when it observes the matching journal entry. Receipt reads never send a message.
+A lost network response keeps the original saved envelope. After a recipient
+refuses before admission, the message stays on this phone for an explicit send.
+
+Tool activity uses the same Bridget journal as conversation text. Compact rows
+show available tool names and states; tap for details. The desktop adapter copies
+only root-thread metadata, never tool arguments, raw outputs or child-thread
+content. Other Bridget transports remain independent. Text is shown when its
+source publishes it; this is not a duplicate desktop rendering engine or a
+character-by-character mirror.

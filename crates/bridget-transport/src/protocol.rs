@@ -2575,7 +2575,7 @@ pub enum MobileOperation {
     ArtifactLookup {command_id:String},
     AgentJournal {agent_id:String,after_seq:u64,limit:u32,#[serde(default)] tail:bool},
     Federation {after:Option<String>,limit:u16},
-    Message { device_id:String, command_id:String, issued_at:i64, agent_id:String, body:String },
+    Message { device_id:String, command_id:String, issued_at:i64, agent_id:String, body:String, #[serde(default)] guide_now:bool },
     Lookup { command_id:String },
 }
 

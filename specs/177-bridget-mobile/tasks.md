@@ -94,7 +94,7 @@ US1 : association à usage unique, réponse perdue, expiration et révocation. U
 - Contre-revue de plan : demandée mais refusée avant démarrage, aucun verdict acquis ; voir reuse-audit.md.
 - DNS : enregistrement A du sous-domaine créé et relu ; route HTTPS active, backend permanent r6 actif.
 - Notifications : projet Spark et application créés, FCM V1 activé, compte serveur dédié privé ; réception réelle encore ouverte.
-- Téléphone : Pixel 10a/Android 17 présent, USB autorisé. Stockage et accueil réel vérifiés ; association de production et recette réseau encore ouvertes.
+- Téléphone : Pixel 10a/Android 17 associé et utilisé réellement. USB absent au dernier contrôle r10b ; mise à jour finale, recette réseau et notification physique ouvertes.
 - Migration : attestation et préparation d’origine prouvées dans la fédération isolée ; services permanents et bascule r6 vérifiés ; recette physique Mac éteint encore ouverte.
 
 
@@ -104,3 +104,17 @@ US1 : association à usage unique, réponse perdue, expiration et révocation. U
 - [ ] T047 Ouvrir sur une page récente ; charger les pages antérieures explicitement, en conservant les curseurs et les limites.
 - [ ] T048 Garder les derniers messages visibles à l’ouverture du clavier, sans arracher la lecture d’un ancien message.
 - [ ] T049 Rétablir le suivi vide après intégration des correctifs natifs concurrents ; conserver d5af84f8 au prochain binaire et qualifier le guidage QR.
+
+## Derniers retours Pixel — vocabulaire et suivi
+
+- [ ] T050 Corriger le nom `.git`, le faux état de reconnexion, la fin d’un long message et le reçu lu sans renvoi ; qualifier le clavier et la reconnexion réelle.
+- [ ] T051 Ajouter « Transmettre maintenant » avec la même clé et un repli en file, une autorité mobile limitée au message et les contrôles de portée.
+- [ ] T052 Afficher les activités disponibles dans le journal natif, en lignes compactes, sans nouvelle dépendance envers une interface de bureau.
+
+## Point de livraison r10b
+
+Voir validation/delivery.md. T050–T052 sont implémentées et contrôlées par les
+tests ciblés. Leur recette physique finale reste ouverte, donc leurs cases ne
+sont pas cochées. Les deux revues indépendantes sont traitées ; aucun audit
+global nouveau n’est revendiqué. Les tâches réseau, notifications, autonomie
+Mac éteint, pièces jointes et tâches métier restent suivies ci-dessus.

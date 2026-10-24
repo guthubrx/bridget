@@ -22,6 +22,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private val store = LocalStore(app)
     private val client = BridgetClient(store)
     private var followJob: Job? = null
+    private var receiptJob: Job? = null
     private var tailPending = true
     var olderBefore by mutableStateOf<Long?>(null); private set
     private var visible = false
@@ -259,11 +260,11 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             draft = value
         } catch (_: Exception) { error = "device_storage_unavailable" }
     }
-    fun send() = act {
+    fun send(guideNow: Boolean = false) = act {
         val id = selected?.getString("agent_id") ?: return@act
-        val entry = store.enqueue(id, draft)
+        val entry = store.enqueue(id, draft, guideNow)
         store.remove(store.draftKey(id)); draft = ""
-        client.send(entry)
+        try { client.send(entry) } finally { refreshPendingReceipt(id) }
         applyEvents(id, client.read("/v1/agents/" + BridgetClient.encode(id) + "/events?after_seq=" + eventNextSeq))
         resumeFollow()
     }
@@ -332,23 +333,44 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         store.put(store.historyKey(id), JSONObject().put("events", JSONArray(retained)).put("next_seq", next)
             .put("gap", eventGap || retained.size != events.size))
     }
+    private fun refreshPendingReceipt(id: String) {
+        receiptJob?.cancel()
+        receiptJob=viewModelScope.launch {
+            repeat(5) { attempt ->
+                if(attempt>0) delay(2000L shl (attempt-1))
+                if(!visible || selected?.optString("agent_id")!=id) return@launch
+                val entry=runCatching { store.list("command:") }.getOrElse { return@launch }.filter {
+                    val e=it.optJSONObject("envelope")
+                    e?.optString("type")=="message" && e.optString("agent_id")==id
+                        && it.optString("state")=="outcome_unknown"
+                        && runCatching { BridgetClient.requireCommandOrigin(it,store.get("session")!!);true }.getOrDefault(false)
+                }.maxByOrNull { it.getJSONObject("envelope").optLong("issued_at") } ?: return@launch
+                try { client.reconcile(entry); outbox=store.list("command:") }
+                catch(e: CancellationException) { throw e }
+                catch(_: MobileFailure) { /* Saved command and journal observation stay intact. */ }
+                catch(_: Exception) { return@launch }
+            }
+        }
+    }
     private fun startFollow() {
         if (!visible || !conversationVisible || !associated || followJob?.isActive == true) return
         val id = selected?.optString("agent_id") ?: return
         val origin = runCatching { store.draftKey(id) }.getOrNull() ?: return
+        refreshPendingReceipt(id)
+        followState = "connecting"
         followJob = viewModelScope.launch {
             var after: String? = null
             var failures = 0
             while (isActive && visible && conversationVisible && selected?.optString("agent_id") == id) {
                 try {
-                    followState = "connecting"
+                    if(failures>0) followState = "connecting"
                     if (tailPending) {
                         val recent=client.read("/v1/agents/$id/events?tail=true&limit=50")
                         if (store.draftKey(id)!=origin || selected?.optString("agent_id")!=id) break
                         events=emptyList(); eventNextSeq=0; eventGap=false
                         applyEvents(id,recent)
                         olderBefore=recent.optLong("older_before_seq").takeIf { it>1 }
-                        tailPending=false; after=null
+                        tailPending=false; after=null; followState="live"
                     }
                     val suffix = after?.let { "&after=" + BridgetClient.encode(it) } ?: "&after_seq=" + eventNextSeq
                     val page = client.read("/v1/events?agent_id=$id&limit=50$suffix")
@@ -364,7 +386,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                 } catch (e: CancellationException) { throw e }
                 catch (e: MobileFailure) {
                     followState = e.code
-                    if (e.code !in setOf("outcome_unknown", "endpoint_unavailable", "journal_unavailable", "busy") || ++failures >= 5) break
+                    if (e.code !in setOf("outcome_unknown", "endpoint_unavailable", "journal_unavailable", "busy", "not_found") || ++failures >= 7) break
                     delay((1000L shl (failures - 1)).coerceAtMost(15_000))
                 } catch (_: Exception) { followState = "device_storage_unavailable"; break }
             }
@@ -552,7 +574,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         client.revokeSelf(); associated = false; endpoint = ""; agents = emptyList(); selected = null
         questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""; fresh = false
     }
-    override fun onCleared() { followJob?.cancel(); store.close() }
+    override fun onCleared() { followJob?.cancel(); receiptJob?.cancel(); store.close() }
     private fun objects(array: JSONArray): List<JSONObject> = (0 until array.length()).map { array.getJSONObject(it) }
     private fun bounded(items: List<JSONObject>): List<JSONObject> {
         if (items.size > 1000) throw MobileFailure("resource_limit")

@@ -12,7 +12,7 @@ Statut : In Progress. Cette page ne clôt pas T036.
 - Diaporama de la seule correction visible vérifié dans le moteur HTML : preuves-corrections/2026-10-24-177-android-system-bars/preuves.html.
 - Les originaux et empreintes restent privés ; aucune capture d’une application extérieure dans le livrable.
 
-## Non acquis
+## Limites au premier contrôle (historique)
 
 Association à la fédération réelle, parcours complet du scanner, Wi-Fi/4G, retour après fermeture du processus, notifications, fichiers, tâches, APK de livraison signé et conservation après mise à jour finale. La bascule du maître et le test Mac éteint restent ouverts. L’application installée n’est pas encore une version utilisable au quotidien.
 
@@ -25,3 +25,12 @@ L’APK release signé 0.5.0 est installé par mise à jour, sans effacement. Qu
 Après seconde bascule r6, le QR privé a été produit par l’administration native locale du maître dans un terminal SSH interactif et affiché uniquement dans Chrome local. Le Pixel a consommé cette association et le serveur enregistre un appareil. L’annuaire connecté puis une conversation d’agent Mac ont été effectivement affichés sur le Pixel via le serveur permanent HTTPS. Les captures et textes contenant de vraies conversations restent privés et ne seront pas inclus dans les preuves publiques. Aucun envoi métier de recette n’a été effectué.
 
 L’application du téléphone a ensuite changé au premier plan. Les actions de test sont suspendues pour ne pas agir dans une autre application. Les notifications, la recette réseau, les pièces jointes et la preuve Mac hors ligne restent ouvertes.
+
+## État courant r10b
+
+Le lecteur et l’envoi ont été utilisés réellement par l’utilisateur depuis le
+Pixel. La conversation compacte et le clavier sont documentés dans le diaporama
+mobile-conversation. Les versions r10a sont installées en place ; l’APK final
+r10b est signé mais son installation n’a pas été possible après la disparition
+du téléphone de la liste USB. Les recettes restantes et les contrôles actuels
+figurent dans delivery.md. Aucun verdict complet n’est annoncé.

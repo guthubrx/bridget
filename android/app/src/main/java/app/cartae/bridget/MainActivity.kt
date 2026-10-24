@@ -11,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
@@ -289,7 +291,20 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
     val dragging by list.interactionSource.collectIsDraggedAsState()
     var followBottom by remember(id) { mutableStateOf(true) }
     var viewportHeight by remember { mutableIntStateOf(0) }
-    val messages = remember(vm.events, technical) { if (technical) vm.events else vm.events.filter { hasMessageText(it) } }
+    val messages = remember(vm.events, technical) {
+        val groups=mutableListOf<MutableList<JSONObject>>()
+        val latest=latestActivitySequences(vm.events.mapNotNull { event ->
+            activityKey(event)?.let { it to event.optLong("seq") }
+        })
+        for(event in vm.events) {
+            if(!technical && activityKey(event)?.let { latest[it]!=event.optLong("seq") }==true) continue
+            if(!technical && !hasMessageText(event)) continue
+            if(!technical && isToolActivity(event) && groups.lastOrNull()?.firstOrNull()?.let(::isToolActivity)==true)
+                groups.last().add(event)
+            else groups.add(mutableListOf(event))
+        }
+        groups
+    }
     val localMessages = remember(vm.outbox, id) { vm.outbox.mapNotNull { entry ->
         val envelope = entry.optJSONObject("envelope")
         if (envelope?.optString("type") == "message" && envelope.optString("agent_id") == id)
@@ -299,8 +314,8 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
         snapshotFlow { Triple(list.isScrollInProgress, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
             .collect { (scrolling, _, _) -> if (scrolling && dragging) followBottom = !list.canScrollForward }
     }
-    LaunchedEffect(id, messages.lastOrNull()?.optLong("seq"), viewportHeight) {
-        if (followBottom && messages.isNotEmpty()) list.scrollToItem(messages.lastIndex+1)
+    LaunchedEffect(id, messages.lastOrNull()?.lastOrNull()?.optLong("seq"), viewportHeight) {
+        if (followBottom && messages.isNotEmpty()) list.scrollToMessageEnd(messages.lastIndex+1)
     }
     DisposableEffect(section, id) {
         vm.setConversationVisible(section == 0)
@@ -351,10 +366,12 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                                 Text(stringResource(R.string.older_messages))
                             }
                         }
-                        items(messages, key = { it.getLong("seq") }) { event ->
+                        items(messages, key = { it.first().getLong("seq") }) { group ->
+                            val event=group.first()
                             val user = event.optString("event") == "turn_start"
                             Column(Modifier.fillMaxWidth(), horizontalAlignment = if (user) Alignment.End else Alignment.Start) {
-                                if (user) Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                if (!technical && isToolActivity(event)) ToolGroup(group)
+                                else if (user) Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                                     modifier = Modifier.widthIn(max = 340.dp)) {
                                     SelectionContainer { Text(if (technical) eventText(event) else conversationBody(eventText(event), true, localMessages), Modifier.padding(14.dp), style = MaterialTheme.typography.bodyLarge) }
                                 } else SelectionContainer { Text(messageMarkup(eventText(event)), style = MaterialTheme.typography.bodyLarge, lineHeight = 25.sp) }
@@ -364,7 +381,7 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                         }
                     }
                     if (list.canScrollForward) FilledTonalButton(onClick = {
-                        followBottom = true; scope.launch { if (messages.isNotEmpty()) list.animateScrollToItem(messages.lastIndex+1) }
+                        followBottom = true; scope.launch { if (messages.isNotEmpty()) list.scrollToMessageEnd(messages.lastIndex+1) }
                     }, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp), shape = RoundedCornerShape(30.dp)) {
                         Text("↓  " + stringResource(R.string.latest_messages))
                     }
@@ -376,9 +393,16 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                     Text(when (observation) {
                         "turn_end" -> stringResource(R.string.response_finished)
                         "turn_start" -> stringResource(R.string.delivered_to_agent)
-                        else -> if(entry.optString("state")=="accepted") stringResource(R.string.agent_waiting_turn) else commandState(entry.optString("state"))
+                        else -> if(messageDeliveryPending(entry.optString("state"),entry.optJSONObject("receipt")?.optJSONObject("issue")?.optString("kind"),entry.optJSONObject("receipt")?.optJSONObject("issue")?.optString("delivery_id"))) stringResource(
+                            if(agent.optString("state") in setOf("busy","working","running")) R.string.agent_waiting_turn else R.string.message_delivering
+                        ) else commandState(entry.optString("state"))
                     }, Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if(vm.draft.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.End) {
+                    TextButton(onClick={followBottom=true;vm.send(guideNow=true)},enabled=!vm.busy) {
+                        Text(stringResource(R.string.send_now))
+                    }
                 }
                 Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
@@ -402,13 +426,76 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
     if (details) AlertDialog(onDismissRequest = { details = false }, title = { Text(stringResource(R.string.conversation_details)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.explicit_recipient))
+            Text(stringResource(R.string.immediate_delivery_detail))
             Text(stringResource(if (vm.eventGap) R.string.history_gap else R.string.follow_connected))
             Text(vm.followState, style = MaterialTheme.typography.labelSmall)
         } }, confirmButton = { TextButton(onClick = { details = false }) { Text(stringResource(R.string.dismiss)) } })
 }
 
+private suspend fun LazyListState.scrollToMessageEnd(index: Int) {
+    scrollToItem(index)
+    withFrameNanos { }
+    val last=layoutInfo.visibleItemsInfo.lastOrNull { it.index==index } ?: return
+    val overflow=last.offset+last.size-layoutInfo.viewportEndOffset+layoutInfo.afterContentPadding
+    if(overflow>0) scrollBy(overflow.toFloat())
+}
+
+private fun activityKey(event: JSONObject): String? {
+    if(!isToolActivity(event)) return null
+    val payload=event.optJSONObject("payload") ?: return null
+    val id=payload.optString("tool_id").takeIf { it.isNotBlank() && it!="null" } ?: return null
+    return event.optString("session_id")+":"+id
+}
+
+private fun isToolActivity(event: JSONObject): Boolean = event.optJSONObject("payload")?.optString("kind") in setOf("tool","command","file","file_write","write")
+
+@Composable
+private fun ToolGroup(events: List<JSONObject>) {
+    var expanded by remember(events.first().optLong("seq")) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        TextButton(onClick={expanded=!expanded},contentPadding=PaddingValues(horizontal=8.dp,vertical=2.dp)) {
+            Text((if(expanded) "▾  " else "▸  ")+stringResource(R.string.activity_group),
+                style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if(expanded) Column(Modifier.padding(start=12.dp)) {
+            events.forEach { ToolActivity(it) }
+        }
+    }
+}
+
+@Composable
+private fun ToolActivity(event: JSONObject) {
+    var expanded by remember(event.optLong("seq")) { mutableStateOf(false) }
+    val p=event.optJSONObject("payload") ?: return
+    val category=when(p.optString("tool_type",p.optString("kind"))) {
+        "command_execution","command" -> R.string.activity_command
+        "web_search" -> R.string.activity_web
+        "file_search" -> R.string.activity_search
+        "file","file_write","write" -> R.string.activity_file
+        else -> R.string.activity_tool
+    }
+    val status=when(p.optString("status")) {
+        "completed" -> R.string.activity_done
+        "failed" -> R.string.activity_failed
+        "cancelled" -> R.string.activity_cancelled
+        "pending","running" -> R.string.activity_running
+        else -> R.string.activity_seen
+    }
+    val name=p.optString("tool").takeIf { it.isNotBlank() && it!="null" }
+        ?: p.optString("text").lineSequence().firstOrNull()?.take(80)?.takeIf { it.isNotBlank() }
+        ?: p.optString("path").substringAfterLast('/').takeIf { it.isNotBlank() }
+    Column(Modifier.fillMaxWidth()) {
+        TextButton(onClick={expanded=!expanded}, contentPadding=PaddingValues(horizontal=8.dp,vertical=2.dp)) {
+            Text((if(expanded) "▾  " else "▸  ")+stringResource(category)+(name?.let { " · $it" } ?: "")+" · "+stringResource(status),
+                style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=2,overflow=TextOverflow.Ellipsis)
+        }
+        if(expanded) SelectionContainer { Text(eventText(event),Modifier.padding(horizontal=8.dp),style=MaterialTheme.typography.bodySmall) }
+    }
+}
+
 private fun hasMessageText(event: JSONObject): Boolean {
     val payload = event.optJSONObject("payload") ?: return false
+    if (isToolActivity(event)) return true
     return listOf("body", "text", "content", "message").any { key ->
         val value = payload.opt(key)
         value is String && value.isNotBlank() || value is JSONObject && value.optString("text").isNotBlank()
@@ -677,6 +764,7 @@ private fun eventText(event: JSONObject): String {
         if (value is String && value.isNotBlank()) return value
         if (value is JSONObject && value.optString("text").isNotBlank()) return value.getString("text")
     }
+    payload.optString("path").takeIf { it.isNotBlank() }?.let { return it }
     return event.optString("event") + payload.optString("stop_reason").let { if (it.isBlank()) "" else " · $it" }
 }
 @Composable private fun choiceText(value: String): String = when (value) {
@@ -708,6 +796,7 @@ private fun eventText(event: JSONObject): String {
     else -> value
 }
 private fun recoveryText(code: String): Int = when (code) {
+    "recipient_unavailable" -> R.string.recipient_recovery
     "pairing_unavailable", "pairing_missing" -> R.string.pairing_recovery
     "pairing_pending" -> R.string.pending_pairing
     "command_origin_changed" -> R.string.command_origin_recovery
@@ -719,6 +808,7 @@ private fun recoveryText(code: String): Int = when (code) {
     else -> R.string.error_recovery
 }
 private fun errorText(code: String): Int = when (code) {
+    "recipient_unavailable" -> R.string.recipient_unavailable
     "pairing_unavailable", "pairing_missing" -> R.string.pairing_unavailable
     "pairing_pending" -> R.string.pending_pairing
     "update_check_unavailable" -> R.string.update_check_unavailable

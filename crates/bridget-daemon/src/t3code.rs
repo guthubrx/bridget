@@ -255,6 +255,8 @@ pub(crate) struct ThreadState {
     pub observations_seeded: bool,
     #[serde(default)]
     pub seen_activities: Vec<String>,
+    #[serde(default)]
+    pub tool_progress_seeded: bool,
     /// IDs natifs issus des notifications, pas de recherche dans leur texte.
     #[serde(default)]
     pub notification_messages: Vec<String>,
@@ -2323,6 +2325,27 @@ impl LinkWorker {
     /// O(n), n<=64 : un guidage explicite peut dépasser une tête bloquée.
     fn next_delivery_index(&mut self, summary: &ThreadSummary) -> Option<usize> {
         let provider = thread_provider(summary);
+        let v2 = self
+            .session
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .client
+            .uses_v2();
+        if !v2 || !deliverable_while_busy(provider.as_deref(), true) {
+            for (frame, _) in &mut self.queue {
+                let message = match frame {
+                    DaemonToWrapper::Deliver { message, .. }
+                    | DaemonToWrapper::DeliverIdempotent { message, .. } => message,
+                    _ => unreachable!(),
+                };
+                if message.intent == Some(bridget_core::MessageIntent::SteerCurrent)
+                    && message.references.iter().any(|reference| reference == "steer-or-queue")
+                {
+                    message.intent = None;
+                }
+            }
+        }
         let guidance = self.queue.iter().position(|(frame, _)| {
             matches!(
                 delivery_message(frame).intent.as_ref(),
@@ -2335,13 +2358,7 @@ impl LinkWorker {
         let index = guidance.unwrap_or(0);
         let (frame, _) = self.queue.get(index)?;
         let message = delivery_message(frame);
-        let v2 = self
-            .session
-            .inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .client
-            .uses_v2();
+
         let unavailable = match message.intent.as_ref() {
             Some(bridget_core::MessageIntent::SteerCurrent)
                 if !v2 || !deliverable_while_busy(provider.as_deref(), true) =>
@@ -2927,6 +2944,13 @@ impl LinkWorker {
             .collect();
         if !self.journal_caught_up {
             return;
+        }
+        if !self.state.tool_progress_seeded {
+            if self.state.seeded {
+                self.state.seen_activities.extend(detail.activities.iter()
+                    .filter(|activity| activity.kind == "tool.progress").map(|activity| activity.id.clone()));
+            }
+            self.state.tool_progress_seeded = true;
         }
         if !self.state.seeded {
             for message in &detail.messages {
@@ -4000,6 +4024,9 @@ fn activity_payloads(
         return vec![serde_json::json!({"kind":"approval","text":"permission demandée dans T3"})];
     }
     let payload = &activity.payload;
+    if activity.kind == "tool.progress" {
+        return vec![serde_json::json!({"kind":"tool","tool_id":payload["tool_id"],"text":payload["tool"].as_str().unwrap_or_else(||payload["itemType"].as_str().unwrap_or("tool")),"tool_type":payload["itemType"],"status":payload["status"],"tool":payload["tool"]})];
+    }
     if activity.kind != "tool.completed"
         || payload["itemType"] != "file_change"
         || payload["status"] != "completed"
@@ -7626,6 +7653,56 @@ mod tests {
             worker.relay.shutdown();
         }
     }
+    #[test]
+    fn mobile177_tool_progress_obeys_the_real_journal_vocabulary() {
+        let (mut worker, _peer)=worker099();
+        let activity=contract::Activity { id:"a".into(),kind:"tool.progress".into(),turn_id:Some("r".into()),
+            payload:serde_json::json!({"itemType":"dynamic_tool","status":"running","tool":"Read"}) };
+        let payload=activity_payloads(&activity,"codex",Path::new("/tmp")).remove(0);
+        assert_eq!(payload["kind"],"tool");
+        worker.journal.enqueue("update",Some("tool-progress-fixture"),payload).unwrap();
+        worker.journal.stop();worker.relay.shutdown();
+    }
+
+    #[test]
+    fn mobile177_t3_optional_guidance_waits_then_delivers_same_message() {
+        for (v2, provider) in [(true, "codex"), (true, "cursor"), (false, "claude")] {
+            let (mut worker, peer) = worker099();
+            worker.session.inner.lock().unwrap().client.set_test_protocol(v2);
+            let mut frame = idempotent113("mobile-optional");
+            if let DaemonToWrapper::DeliverIdempotent { message, .. } = &mut frame {
+                message.reply = false;
+                message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+                message.references.push("steer-or-queue".into());
+            }
+            worker.handle_frame(frame);
+            let mut thread = summary(Some(("active", "running")));
+            thread.provider_instance_id = Some(provider.into());
+            thread.session = Some(contract::SessionSummary {
+                provider_name: provider.into(), provider_instance_id: None,
+                status: "running".into(), active_turn_id: Some("active".into()),
+            });
+            assert_eq!(worker.next_delivery_index(&thread), None);
+            assert_eq!(worker.queue.len(), 1);
+            assert_eq!(delivery_message(&worker.queue[0].0).id, "mobile-optional");
+            assert!(delivery_message(&worker.queue[0].0).intent.is_none());
+            assert!(!saga_closed113(&frames113(peer), "d-mobile-optional"));
+            thread.session.as_mut().unwrap().active_turn_id = None;
+            assert_eq!(worker.next_delivery_index(&thread), Some(0));
+            worker.journal.stop(); worker.relay.shutdown();
+        }
+        let (mut worker, _peer) = worker099();
+        worker.session.inner.lock().unwrap().client.set_test_protocol(true);
+        let mut message = plain114("live-claude");
+        message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+        message.references.push("steer-or-queue".into());
+        worker.handle_frame(DaemonToWrapper::Deliver { message, mid_turn_ok: None });
+        let mut thread=summary(None); thread.provider_instance_id=Some("claude".into());
+        assert_eq!(worker.next_delivery_index(&thread),Some(0));
+        assert_eq!(delivery_message(&worker.queue[0].0).intent,Some(bridget_core::MessageIntent::SteerCurrent));
+        worker.journal.stop(); worker.relay.shutdown();
+    }
+
     #[test]
     fn guidance156_t3_steer_fournisseur_hors_liste_refuse() {
         // Cursor149 n'a pas activeSteering : son fallbackRestart ne prouve pas

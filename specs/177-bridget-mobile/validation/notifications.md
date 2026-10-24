@@ -11,3 +11,11 @@ La compilation Android configurée réussit (25 s). Installation de mise à jour
 À terminer : configuration du maître permanent par administration humaine locale, consentement Android, enregistrement du jeton, notification minimale réelle en arrière-plan, ouverture authentifiée et refus de permission sans blocage interactif. Aucun contenu métier n’est envoyé à Firebase.
 
 Sources primaires : https://firebase.google.com/docs/projects/iam/roles-predefined-product et https://docs.cloud.google.com/iam/docs/roles-permissions/firebasecloudmessaging .
+
+## Contrôle r10b — 24 octobre
+
+Le compte serveur permanent est configuré et protégé en 0600. Un appareil actif
+possède un jeton enregistré. L’authentification OAuth et la validation seule FCM
+ont renvoyé HTTP 200. Cette demande n’envoie pas de notification et ne prouve
+pas la réception sur le Pixel. Le téléphone n’étant plus visible en USB, le
+contrôle en arrière-plan et l’ouverture restent à terminer.

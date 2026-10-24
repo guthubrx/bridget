@@ -12120,7 +12120,7 @@ fn handle_idempotent_send(
     controls: &mut Vec<DeferredControl>,
 ) -> DaemonToWrapper {
     handle_idempotent_send_with_result_authority(
-        conn_id, message, message_id, issued_at, admission, st, controls, None,
+        conn_id, message, message_id, issued_at, admission, st, controls, None, false,
     )
 }
 
@@ -12133,6 +12133,7 @@ fn handle_idempotent_send_with_result_authority(
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
     authority: Option<&native_delegation::RetainedResultAuthority>,
+    scoped_mobile_human: bool,
 ) -> DaemonToWrapper {
     if message.reply && message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
         return DaemonToWrapper::Nack {
@@ -12373,16 +12374,28 @@ fn handle_idempotent_send_with_result_authority(
     };
     let guidance_admission = match guidance_action {
         Some(action) => {
-            match check_guidance(
-                st,
-                Some(conn_id),
-                &message.to,
-                action,
-                crate::guidance::GuidancePath::SendIdempotent,
-                None,
-                message.delegated_origin.is_some(),
-                &message.id,
-            ) {
+            let facts = if scoped_mobile_human && action == crate::guidance::GuidanceAction::Steer {
+                // The mobile ingress has just verified this device and this recipient's scope.
+                guidance_facts(st, Some(conn_id), &message.to, action,
+                    crate::guidance::GuidancePath::SendIdempotent,
+                    Some(bridget_core::MessageOrigin::Human), false, unix_timestamp())
+                    .map(|mut facts| {
+                        facts.actor = crate::guidance::GuidanceActor::AttachedHuman;
+                        facts.identity_attested = true;
+                        facts
+                    }).map_err(|_| ("intent_not_permitted".into(), "identity_unattested".into()))
+                    .and_then(|facts| {
+                        crate::guidance::authorize(&facts).map(|()| facts).map_err(|refusal| {
+                            let (code,reason)=guidance_refusal_fields(refusal);
+                            (code.into(),reason)
+                        })
+                    })
+            } else {
+                check_guidance(st, Some(conn_id), &message.to, action,
+                    crate::guidance::GuidancePath::SendIdempotent, None,
+                    message.delegated_origin.is_some(), &message.id)
+            };
+            match facts {
                 Ok(facts) => Some(facts),
                 Err((code, reason)) => {
                     return reject_idempotent_send(st, &key, code, reason).unwrap_or_else(

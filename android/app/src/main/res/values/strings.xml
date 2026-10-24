@@ -90,7 +90,7 @@
  <string name="saved_locally">Saved locally</string>
  <string name="received_by_bridget">Received by Bridget. Delivery is not yet observed.</string>
  <string name="command_rejected">Command refused</string>
- <string name="receipt_expired">Duplicate protection expired</string>
+ <string name="receipt_expired">Receipt unavailable · message saved</string>
  <string name="command_conflict">This key refers to a different envelope</string>
  <string name="destination_unavailable">Destination or object unavailable</string>
  <string name="state_available">Available</string>
@@ -120,8 +120,8 @@
  <string name="state_observed">Agent observed; worker contact unconfirmed</string>
  <string name="state_unknown">Unknown</string>
  <string name="state_waiting_children">Waiting for child agents</string>
- <string name="delivered_to_agent">Delivery observed in the native journal</string>
- <string name="response_finished">Response turn finished</string>
+ <string name="delivered_to_agent">Message delivered</string>
+ <string name="response_finished">Response complete</string>
  <string name="forget_authorization">Associate again</string>
  <string name="forget_authorization_detail">This forgets only this phone’s current access. It does not revoke that access on the server. Revoke it from a trusted installation if necessary. Saved commands, drafts and files remain tied to their original association and are not resent.</string>
  <string name="revoke_device">Revoke this device</string>
@@ -164,6 +164,22 @@
  <string name="pairing_unavailable">This QR can no longer pair your phone. It expired, was already used, or no longer matches this attempt.</string>
  <string name="pairing_recovery">A QR lasts five minutes and pairs one device. Tap “Associate again”, then scan a new QR from your trusted installation. Your saved messages and files will not be erased.</string>
  <string name="older_messages">Load earlier messages</string>
- <string name="agent_waiting_turn">Instruction saved. The agent will process it on its next turn.</string>
+ <string name="agent_waiting_turn">Agent busy · message waiting</string>
  <string name="history_window_limit">This reading window has reached its limit. Return to the latest messages to resume the recent feed.</string>
+ <string name="send_now">Deliver now</string>
+ <string name="message_delivering">Message saved · delivering</string>
+ <string name="activity_command">Command</string>
+ <string name="activity_web">Web search</string>
+ <string name="activity_search">File search</string>
+ <string name="activity_file">File changed</string>
+ <string name="activity_tool">Tool</string>
+ <string name="activity_done">complete</string>
+ <string name="activity_failed">failed</string>
+ <string name="activity_cancelled">cancelled</string>
+ <string name="activity_running">running</string>
+ <string name="recipient_unavailable">Agent temporarily unavailable</string>
+ <string name="recipient_recovery">The message is still saved on this phone. Once connected again, open Outbox and send the saved message.</string>
+ <string name="activity_seen">used</string>
+ <string name="activity_group">Tools used</string>
+ <string name="immediate_delivery_detail">Deliver now may interrupt a running tool so the agent can take your message into account. It does not request an agent restart.</string>
 </resources>

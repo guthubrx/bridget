@@ -449,6 +449,8 @@ enum CommandRequest {
         issued_at: i64,
         agent_id: String,
         body: String,
+        #[serde(default)]
+        guide_now: bool,
     },
     TaskCancel {
         device_id: String,
@@ -796,12 +798,14 @@ fn execute(
                 issued_at,
                 agent_id,
                 body,
+                guide_now,
             }) => Some(bridget_transport::protocol::MobileOperation::Message {
                 device_id,
                 command_id,
                 issued_at,
                 agent_id,
                 body,
+                guide_now,
             }),
             Ok(CommandRequest::TaskCancel {
                 device_id,

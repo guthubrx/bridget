@@ -148,7 +148,17 @@ class BridgetClient(private val store: LocalStore) {
             remove("type"); remove("byte_length")
             put("bytes", android.util.Base64.encodeToString(store.fileBytes(entry), android.util.Base64.NO_WRAP))
         } else envelope
-        val receipt = request(session.getString("endpoint"), if (upload) "/v1/artifacts" else "/v1/commands", "POST", session.getString("device_key"), payload)
+        val receipt = try {
+            request(session.getString("endpoint"), if (upload) "/v1/artifacts" else "/v1/commands", "POST", session.getString("device_key"), payload)
+        } catch(e: MobileFailure) {
+            if(!upload && envelope.optString("type")=="message" && e.code=="not_found") {
+                // This message was refused before reservation, so its original saved envelope is still unsent.
+                store.setCommandState(id,"local")
+                throw MobileFailure("recipient_unavailable")
+            }
+            throw e
+        }
+        requireCommandOrigin(entry, store.get("session") ?: throw MobileFailure("authorization_required"))
         retainReceipt(id, receipt)
         return receipt
     }
@@ -164,6 +174,7 @@ class BridgetClient(private val store: LocalStore) {
             else -> "/v1/commands/$id"
         }
         val receipt = request(session.getString("endpoint"), path, key = session.getString("device_key"))
+        requireCommandOrigin(entry, store.get("session") ?: throw MobileFailure("authorization_required"))
         retainReceipt(id, receipt)
         return receipt
     }

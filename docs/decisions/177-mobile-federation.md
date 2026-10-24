@@ -21,3 +21,14 @@ Device authorization is explicit. It never impersonates an agent or manufactures
 There is one business engine and no replicated task database. The new code owns device authentication, the HTTP boundary and Android state. Operations need bounded payloads, scoped authorization and truthful uncertain outcomes. The migration remains blocked until authority-preservation tests and recovery checks pass.
 
 The first implementation targets Android. Automatic authority failover, a full IDE and other mobile platforms remain separate work.
+
+### Scoped immediate message delivery
+
+The paired device's existing Message permission authorizes an optional
+`guide_now` message only after device, machine, project and recipient checks.
+This proof is passed internally for that send alone. It does not turn the socket
+into an administrator, impersonate an agent, or authorize interrupt/restart.
+The message intent and fallback marker belong to the original idempotent canon.
+A carrier may downgrade only its delivery copy to its ordinary queue. The ID,
+issued time, body and durable receipt remain unchanged. Strict non-mobile steer
+requests keep their existing permission checks and refusal behavior.

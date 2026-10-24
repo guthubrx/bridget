@@ -304,6 +304,7 @@ pub(super) fn handle(
             issued_at,
             agent_id,
             body,
+            guide_now,
         } => {
             if device_id != device.device_id {
                 return refusal("command_origin_changed");
@@ -338,9 +339,13 @@ pub(super) fn handle(
             }
             let mut message = bridget_core::BridgetMessage::new("human", &agent_id, body);
             message.id = command_id.clone();
+            if guide_now {
+                message.intent = Some(bridget_core::MessageIntent::SteerCurrent);
+                message.references.push("steer-or-queue".into());
+            }
             // Pas de reply réservé à une identité d'agent ; les résultats se lisent dans le journal.
             let mut controls = Vec::new();
-            let response = handle_idempotent_send(
+            let response = handle_idempotent_send_with_result_authority(
                 conn_id,
                 message,
                 command_id.clone(),
@@ -351,6 +356,8 @@ pub(super) fn handle(
                 },
                 &mut st,
                 &mut controls,
+                None,
+                true,
             );
             st.pending_post_response_controls
                 .entry(conn_id.into())
@@ -469,6 +476,7 @@ mod tests {
                 issued_at: unix_now_secs(),
                 agent_id: self.agent.clone(),
                 body: body.into(),
+                guide_now: false,
             }
         }
         fn deliveries(&self) -> i64 {
@@ -1289,6 +1297,41 @@ mod tests {
             "device_revoked"
         );
         assert_eq!(f.deliveries(), 0);
+    }
+
+    #[test]
+    fn mobile177_guidance_requires_the_paired_device_and_recipient_scope() {
+        let f=Fixture::new();
+        let mut op=f.command(&Uuid::new_v4().to_string(), "Scoped instruction");
+        if let MobileOperation::Message { guide_now, device_id, .. }=&mut op {
+            *guide_now=true; *device_id=Uuid::new_v4().to_string();
+        }
+        let refused=value(handle("phone",f.request(op),&f.state));
+        assert_eq!(refused["code"],"command_origin_changed");
+        let mut op=f.command(&Uuid::new_v4().to_string(), "Other project");
+        if let MobileOperation::Message { guide_now, .. }=&mut op { *guide_now=true; }
+        f.state.lock().unwrap().communication_projects.get_mut("conn-1").unwrap().0=
+            Some(CommunicationProject { host:"macbook".into(),root:"/other/project".into() });
+        let refused=value(handle("phone",f.request(op),&f.state));
+        assert_eq!(refused["code"],"not_found");
+        assert_eq!(f.deliveries(),0);
+    }
+
+    #[test]
+    fn mobile177_guidance_is_idempotent_and_distinct_from_normal_send() {
+        let f=Fixture::new();
+        let id=Uuid::new_v4().to_string();
+        let mut op=f.command(&id,"Take this into account");
+        if let MobileOperation::Message { guide_now, .. }=&mut op { *guide_now=true; }
+        let first=value(handle("phone", f.request(op.clone()), &f.state));
+        let replay=value(handle("phone", f.request(op), &f.state));
+        // Both calls expose the same durable command, never a replacement.
+        assert_eq!(first["issue"]["kind"], "outcome_unknown", "{first}");
+        assert!(first["issue"]["delivery_id"].is_string());
+        assert_eq!(first,replay);
+        assert_eq!(f.deliveries(),1,"{first}");
+        let changed=value(handle("phone", f.request(f.command(&id,"Take this into account")), &f.state));
+        assert!(serde_json::to_string(&changed).unwrap().contains("envelope_mismatch"));
     }
 
     #[test]

@@ -21,3 +21,14 @@ L'autorisation de l'appareil est explicite. Elle n'emprunte pas une identité d'
 Un seul moteur métier et aucune base de tâches répliquée. Le nouveau code porte l'authentification des appareils, la frontière HTTP et l'état Android. Les opérations exigent des charges bornées, des droits limités et un rendu fidèle des issues inconnues. La migration reste bloquée tant que les tests de préservation d'autorité et de récupération ne passent pas.
 
 La première implémentation vise Android. Le basculement automatique d'autorité, un IDE complet et les autres plateformes relèvent de travaux distincts.
+
+### Remise immédiate limitée au message autorisé
+
+Le droit Message du téléphone associé autorise l’option `guide_now` après les
+contrôles du téléphone, de la machine, du projet et du destinataire. Cette preuve
+interne vaut pour cet envoi seul. Elle ne rend pas la socket administratrice,
+n’usurpe aucun agent et n’autorise ni interruption ni redémarrage. L’intention et
+le marqueur de repli font partie du canon d’origine. Le transport peut convertir
+sa seule copie de remise en message ordinaire en file. Identifiant, date, texte
+et reçu durable restent inchangés. Les demandes strictes de guidage hors mobile
+conservent leurs contrôles et refus existants.

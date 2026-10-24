@@ -210,6 +210,16 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         let kind = string(item, "type")?;
         let status = string(item, "status")?;
         let run_id = nullable_string(item, "runId")?.map(str::to_owned);
+        if matches!(kind, "command_execution" | "dynamic_tool" | "mcp_tool_call" | "web_search" | "file_search" | "image_view")
+            && matches!(status, "pending" | "running" | "completed" | "failed" | "cancelled")
+            && root_message(item, run_id.as_deref().and_then(|id| by_run.get(id).copied()), &nodes)?
+        {
+            let tool = item["toolName"].as_str().filter(|name| name.len() <= 120 && !name.chars().any(char::is_control));
+            activities.push(Activity {
+                id: format!("v2-tool:{}:{status}", string(item, "id")?), kind: "tool.progress".into(), turn_id: run_id.clone(),
+                payload: json!({"itemType":kind,"status":status,"tool":tool,"tool_id":string(item,"id")?}),
+            });
+        }
         if kind == "file_change" && status == "completed" {
             let files = if let Some(changes) = item.get("changes").and_then(Value::as_array) {
                 if changes.len() > 256 {
@@ -732,6 +742,25 @@ mod tests {
                 {"id":"child-message","threadId":"t","runId":"r","nodeId":"child","role":"assistant","text":"secret sous-agent","streaming":false,"createdAt":"2026-10-09T00:00:01.000Z"},
                 {"id":"a","threadId":"t","runId":"r","nodeId":"root","role":"assistant","text":"réponse exacte","streaming":false,"createdAt":"2026-10-09T00:00:02.000Z"}],
             "turnItems":[],"runtimeRequests":[],"visibleTurnItems":[]}})
+    }
+
+    #[test]
+    fn mobile177_activity_projects_only_root_metadata_and_distinct_states() {
+        let mut raw=detail();
+        raw["projection"]["turnItems"]=json!([
+            {"id":"tool","threadId":"t","runId":"r","nodeId":"root","type":"dynamic_tool","status":"running","toolName":"Read","input":{"secret":"never-copy"}},
+            {"id":"child-tool","threadId":"t","runId":"r","nodeId":"child","type":"dynamic_tool","status":"running","toolName":"Private child"}
+        ]);
+        let current=parse_detail(&raw.to_string(),"t").unwrap();
+        let tools:Vec<_>=current.activities.iter().filter(|a|a.kind=="tool.progress").collect();
+        assert_eq!(tools.len(),1);
+        assert_eq!(tools[0].payload["tool"],"Read");
+        assert_eq!(tools[0].payload["tool_id"],"tool");
+        assert!(!tools[0].payload.to_string().contains("never-copy"));
+        let first=tools[0].id.clone();
+        raw["projection"]["turnItems"][0]["status"]=json!("completed");
+        let done=parse_detail(&raw.to_string(),"t").unwrap();
+        assert_ne!(done.activities.iter().find(|a|a.kind=="tool.progress").unwrap().id,first);
     }
 
     #[test]

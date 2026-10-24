@@ -94,7 +94,7 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
         return "preferences:" + digest(origin.toByteArray(Charsets.UTF_8))
     }
     @Synchronized fun historyKey(agentId: String): String = draftKey(agentId).replaceFirst("draft:", "history:")
-    @Synchronized fun enqueue(agentId: String, text: String): JSONObject {
+    @Synchronized fun enqueue(agentId: String, text: String, guideNow: Boolean = false): JSONObject {
         require(text.isNotBlank() && text.toByteArray(Charsets.UTF_8).size <= 10_000)
         check(list("command:").size < 256) { "device_storage_limit" }
         val session = get("session") ?: throw MobileFailure("authorization_required")
@@ -104,6 +104,7 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
         val envelope = JSONObject().put("device_id", device).put("command_id", UUID.randomUUID().toString())
             .put("issued_at", System.currentTimeMillis() / 1000).put("type", "message")
             .put("agent_id", agentId).put("body", text)
+        if(guideNow) envelope.put("guide_now",true)
         val entry = JSONObject().put("endpoint", endpoint).put("envelope", envelope).put("state", "local")
         put("command:" + envelope.getString("command_id"), entry)
         return entry

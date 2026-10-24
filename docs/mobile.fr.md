@@ -115,3 +115,33 @@ avant sa première mise à jour de production. La version Android suit celle du
 workspace. Le build utilise `BRIDGET_FIREBASE_CONFIG` si les notifications sont
 activées. Ce fichier contient les options publiques de l'application, jamais la
 clé du compte serveur. Gardez la version installée et un paquet de retour vérifié.
+
+## Conversation et remise des messages
+
+Les projets affichent le nom du dépôt, pas son dossier interne `.git`. Touchez un
+projet pour lire son identité complète. La conversation ouvre les messages
+récents ; les messages précédents se chargent à la demande. Le bouton vers les
+derniers messages et l’ouverture du clavier gardent la fin visible, sauf si vous
+avez fait défiler la conversation pour lire ailleurs.
+
+**Envoyer** utilise la file existante. **Transmettre maintenant** demande une
+remise pendant que l’agent travaille. Si sa connexion ne le permet pas, le même
+message attend dans la file. Cela ne demande aucun redémarrage de l’agent et ne crée aucun
+message de remplacement. Selon le fournisseur, la prise en compte immédiate peut
+interrompre un outil en cours. Codex natif peut recevoir ce guidage immédiat. Le
+connecteur de bureau actuel le permet pour Claude ; ses autres fournisseurs
+utilisent la file. Claude natif et ACP conservent également le message en file
+quand le guidage immédiat est indisponible.
+
+Un message enregistré ne prouve pas sa remise. L’application affiche **Message
+remis** seulement après avoir observé son entrée correspondante dans le journal.
+Relire un reçu n’envoie rien. Une réponse réseau perdue conserve l’enveloppe
+d’origine. Un refus avant admission conserve le message sur le téléphone pour
+un envoi explicite après rétablissement.
+
+Les outils utilisent le même journal Bridget que les messages. Des lignes
+compactes affichent les noms et états disponibles ; touchez-les pour les détails.
+Le connecteur de bureau ne copie que les métadonnées du fil principal, jamais
+les arguments, sorties brutes ou contenus de fils enfants. Les autres transports
+Bridget restent autonomes. Le texte apparaît quand sa source le publie ; il ne
+s’agit pas d’une seconde interface de bureau ni d’une copie caractère par caractère.

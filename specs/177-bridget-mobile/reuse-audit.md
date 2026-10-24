@@ -233,3 +233,18 @@ T3 ChatView.tsx retains follow-to-end until a real user scroll, and observes com
 
 ### Concurrent deployment observation
 The active core was replaced by the native-project fix while physical testing was ongoing. The r8 archive used by that build predates the empty-snapshot amendment, although the original r8 binary included it. This explains the restored stopped-follow symptom. The next candidate must include both the native-project correction d5af84f8 and the empty-snapshot amendment. No rollback to an older binary is permitted.
+
+### Guidage et activité mobile (24 octobre)
+
+Lecture préalable : runtime Codex sendTurn (turn/start et conservation du tour
+actif), adapter Claude sendTurn (tour SDK déjà actif), actions du composeur et
+contrats des outils du dépôt de référence local. Différence nécessaire : le
+mobile utilise l’autorité humaine limitée au téléphone et Bridget conserve son
+journal et ses reçus. Aucun appel direct de l’application Android à ce bureau.
+Réemploi Bridget : SteerCurrent + steer-or-queue déjà gérés par Codex natif,
+Claude et ACP ; ajout du même repli au connecteur de bureau. Sa liste de
+fournisseurs reste prudente : Claude immédiat, autres fournisseurs en file.
+Le connecteur publie des métadonnées d’outil depuis sa projection existante ;
+aucun argument ni sortie brute copiés et aucun fait d’écriture supplémentaire.
+Complexité : passage O(n) sur la file bornée à 64 ; outils O(items × profondeur
+bornée à 64), même filtre de fil principal que les messages.

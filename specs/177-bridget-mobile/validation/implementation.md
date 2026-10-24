@@ -1,6 +1,8 @@
 # Implémentation 177 — état au 24 octobre 2026
 
-Statut : In Progress. Aucun commit ou push du lot, aucune publication 0.5.0.
+Statut : In Progress. Les étapes ci-dessous sont historiques. Le bilan courant
+figure dans delivery.md : r10b actif côté serveur, dernière recette physique
+Android ouverte ; aucune publication complète 0.5.0.
 
 ## Contrôles ciblés et distribution
 
