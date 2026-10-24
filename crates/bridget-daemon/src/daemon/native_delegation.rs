@@ -3295,7 +3295,12 @@ fn routing_failure_admission(
     let observed = (|| -> Result<(&str, Option<String>), String> {
         recheck_attested_thread(&st, conn, thread)?;
         let (owner, _) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+        let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
+            .map_err(|_| "invalid_request")?;
         if let Some(receipt) = st.delegation_store.auto_admission_receipt(&owner, &request.request_id)? {
+            if receipt.canonical != canonical {
+                return Err("envelope_mismatch".into());
+            }
             return match receipt.state {
                 AutoAdmissionState::Admitted => receipt.task_id
                     .map(|id| ("admitted", Some(id)))
@@ -3305,8 +3310,6 @@ fn routing_failure_admission(
                 | AutoAdmissionState::Chosen => Ok(("pending", None)),
             };
         }
-        let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
-            .map_err(|_| "invalid_request")?;
         match st.delegation_store.by_agent_request(&owner, &request.request_id, &canonical)? {
             Some(task) => Ok(("admitted", Some(task.task_id))),
             None => Ok(("not_recorded", None)),
@@ -3315,10 +3318,12 @@ fn routing_failure_admission(
     let (admission, task_id) = match observed {
         Ok(value) => value,
         Err(code) if code == "request_expired" => ("expired", None),
+        Err(code) if code == "envelope_mismatch" => ("envelope_mismatch", None),
         Err(_) => ("unknown", None),
     };
     let recovery = match admission {
-        "not_recorded" => "À cette lecture, aucune tâche ni admission en cours ou refus enregistré pour cette clé. Cette confirmation est fournie par Bridget ; inutile de la demander à un autre agent. Sans autre appel concurrent avec cette clé, corrigez la cause indiquée : mêmes paramètres, même request_id ; paramètres corrigés, nouvelle request_id. Ne changez pas la version à examiner sans autorisation.",
+        "not_recorded" => "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Corrigez la cause indiquée puis rejouez avec la même request_id et les mêmes paramètres. Si les paramètres doivent changer, attendez la fin de tout appel déjà envoyé avec cette clé avant une nouvelle request_id : un appel concurrent peut encore enregistrer une admission. Cette lecture du registre est fournie par Bridget ; inutile de la demander à un autre agent. Ne changez pas expected_base_commit sans autorisation.",
+        "envelope_mismatch" => "Cette clé appartient déjà à une demande dont les paramètres sont différents. Le nouveau corps n'est pas admis. Reprenez la clé avec ses paramètres d'origine pour lire le sort de cette demande ; ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
         "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Conservez request_id et tous les paramètres pour relire son sort. Ne créez pas de nouvelle demande.",
         "admitted" => "Une tâche existe pour cette clé. Suivez le task_id indiqué avec bridget_task_status ; ne créez pas de doublon.",
         "refused" => "Un refus durable sans tâche est enregistré pour cette clé. Un rejeu identique relit ce refus sans le rouvrir. Après correction autorisée, utilisez une nouvelle request_id.",
@@ -11736,9 +11741,14 @@ mod tests {
             let receipt = routing_auto_receipt(OWNER.into(), &request,
                 serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
                 &plan, st.coordinator_epoch, now).unwrap();
-            st.delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap();
+            let mut foreign = receipt.clone();
+            foreign.owner = "89000000-0000-4000-8000-000000000199".into();
+            st.delegation_store.reserve_auto_admission_receipt(&foreign, now).unwrap();
             receipt
         };
+        let isolated = routing_failure_admission("conn-1", &request, None, failure("workspace_base_preflight_failed"), &state);
+        assert_eq!(isolated["detail"]["admission"]["state"], "not_recorded", "autre propriétaire ignoré");
+        state.lock().unwrap().delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap();
         let observe = || routing_failure_admission("conn-1", &request, None, failure("workspace_base_preflight_failed"), &state);
         assert_eq!(observe()["detail"]["admission"]["state"], "pending");
         assert_eq!(routing168_receipt(&state, &request), receipt, "projection sans mutation");
@@ -11761,6 +11771,13 @@ mod tests {
         let unknown = routing_failure_admission("no-connection", &request, None, failure("identity_unavailable"), &state);
         assert_eq!(unknown["detail"]["admission"]["state"], "unknown");
         assert!(unknown["detail"]["admission"]["task_id"].is_null());
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        let mut changed = request.clone();
+        changed.task.push_str(" changed");
+        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1", NativeDelegationRequest::AutoDelegateV2(changed), &state) else { panic!("response"); };
+        assert_eq!(result["code"], "envelope_mismatch");
+        assert_eq!(result["detail"]["admission"]["state"], "envelope_mismatch");
+        assert!(result["detail"]["admission"]["task_id"].is_null());
         assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
         assert!(rx.try_recv().is_err());
         drop(state); cleanup(&config);

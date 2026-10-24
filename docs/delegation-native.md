@@ -712,10 +712,11 @@ A decision recorded as `answered_by_parent` is not proof of delivery. Read `rece
 
 Automatic V2 admission refusals include `detail.admission` when the request reaches the admission handler. It contains `request_id`, `state`, `task_id` (or null), `observed_at` (Unix seconds), and `recovery`. This is an owner-scoped observation of the existing records, not a new reservation. Read this state together with the cause of refusal.
 
-- `not_recorded`: no task, in-progress receipt, stored refusal, or tombstone was found for that key. Bridget supplies the confirmation; no maintainer lookup is needed. With no concurrent call using that key, correct the cause: identical parameters keep the key; changed parameters require a new key. Do not silently change the intended revision.
+- `not_recorded`: no task, in-progress receipt, stored refusal, or tombstone was found for that key. Bridget supplies the confirmation; no maintainer lookup is needed. Correct the cause and replay the same key and parameters. Before changing parameters and using a new key, wait for every previously submitted call with this key to finish: a concurrent call can still record an admission. Do not change `expected_base_commit` without authorization.
 - `pending`: the existing admission can still create a task. Keep the same key and parameters; do not create another request.
 - `admitted`: follow the supplied task ID.
 - `refused`: a terminal refusal without a task is stored. Identical replay does not reopen it; use a new key only after the authorized correction.
+- `envelope_mismatch`: this key belongs to a different request body. The new body was not admitted; read the outcome using the original envelope.
 - `expired`: the previous record has expired. This does not prove that no work happened.
 - `unknown`: identity, storage, or the legacy record could not establish the outcome. Preserve the key and parameters; do not infer absence.
 

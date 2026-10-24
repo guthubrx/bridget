@@ -1522,10 +1522,11 @@ Une décision `answered_by_parent` ne prouve pas la remise. Lisez séparément `
 
 Les refus d’admission automatique V2 contiennent `detail.admission` lorsque la demande atteint le gestionnaire d’admission. Ce champ fournit `request_id`, `state`, `task_id` (ou null), `observed_at` (secondes Unix) et `recovery`. Il décrit les enregistrements du propriétaire courant ; il ne réserve rien. Lire ce sort avec la cause du refus.
 
-- `not_recorded` : aucune tâche, admission en cours, refus enregistré ou clé expirée trouvé. Bridget fournit la confirmation ; inutile de la demander au mainteneur. Sans appel concurrent avec cette clé, corriger la cause : mêmes paramètres, même clé ; paramètres différents, nouvelle clé. Ne pas changer silencieusement la version à examiner.
+- `not_recorded` : aucune tâche, admission en cours, refus enregistré ou clé expirée trouvé. Bridget fournit la confirmation ; inutile de la demander au mainteneur. Corriger la cause puis rejouer avec la même clé et les mêmes paramètres. Pour modifier les paramètres, attendre la fin de tout appel déjà envoyé avec cette clé avant une nouvelle clé : un appel concurrent peut encore enregistrer une admission. Ne pas changer `expected_base_commit` sans autorisation.
 - `pending` : l’admission existante peut encore créer une tâche. Conserver la clé et les paramètres ; ne pas créer une autre demande.
 - `admitted` : suivre le `task_id` fourni.
 - `refused` : un refus terminal sans tâche est enregistré. Un rejeu identique ne le rouvre pas ; une nouvelle clé exige une correction autorisée.
+- `envelope_mismatch` : la clé appartient à un autre corps de demande. Le nouveau corps n’est pas admis ; relire le sort avec l’enveloppe d’origine.
 - `expired` : l’ancien enregistrement a expiré. Cela ne prouve pas qu’aucun travail n’a eu lieu.
 - `unknown` : l’identité, le stockage ou l’ancien enregistrement ne permet pas d’établir le sort. Conserver la clé et les paramètres ; ne pas conclure à une absence.
 
