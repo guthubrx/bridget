@@ -61,7 +61,8 @@ curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
 ```
 
 La même commande sert à mettre à jour. Elle conserve les comptes et les données.
-Elle ne démarre ni ne relance de service et ne rattache pas la machine à un maître.
+Sur une installation neuve, elle démarre Bridget, active son démarrage automatique
+et vérifie qu'il répond. Une installation active ou une fédération est conservée.
 Voir le [guide d'installation](docs/communication-installation.fr.md).
 
 ## Soixante secondes pour essayer
