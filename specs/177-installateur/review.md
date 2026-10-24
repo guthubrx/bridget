@@ -19,4 +19,9 @@ Verdict initial BLOCKED, reçu intégralement lu et ACK.
   vérifiées. Pas de nouveau pipeline de release, exclu du sujet demandé.
 
 La validation du parcours source n'est pas déduite du seul stub : construction
-réelle et mise à jour répétée exécutées sur Cartae dans un HOME isolé.
+réelle et mise à jour répétée exécutées sur Cartae dans un HOME isolé,
+codes de retour 0 et 0 (1 min 34 s et 1 min 26 s).
+
+Contre-revue corrective demandée sur cc4ddac9, clé
+bridget177-installer-review-20261024-02, Task
+79381a58-78c8-4da3-b756-cd18d28c1494. Aucun autre chantier délégué.

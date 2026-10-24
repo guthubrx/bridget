@@ -29,6 +29,10 @@
   Aucune installation sur SYS-LE-2 ou KS-STOR ; aucun daemon relancé.
 - La compilation émet 18 avertissements préexistants ; aucune suite Rust
   complète n'est revendiquée. Ce changement ne modifie aucun code Rust.
+- Après revue, checkout stable : deux installations `--source` réelles
+  consécutives dans le même HOME, codes 0 et 0, compilations 1 min 34 s puis
+  1 min 26 s. Le second passage conserve bien l'identité du cache.
+- Version finale des tests exécutée sur Mac et Linux : 16 PASS de chaque côté.
 
 Les sorties détaillées et les binaires d'essai restent hors Git.
 Les tests sans réseau sont ajoutés au workflow CI existant.
