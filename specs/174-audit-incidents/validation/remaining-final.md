@@ -37,7 +37,7 @@ Eight closed Cartae worktrees and their branches were removed without forcing Gi
 
 Nine obsolete binary copies were removed. The active binaries and one rollback version per host remain, including the Linux version used by the active business process. About 3.84 GiB of intermediate build files and 212 MiB of old binary files were removed (logical sizes, not claimed physical disk savings). Other useful/active caches and all evidence remain.
 
-Politique and monuments received a single delivery notice. Their project missions were not replayed. The garde-propre hook belongs to the existing Opus2D correction task; Bridget does not bypass it.
+One delivery notice was submitted to each of Politique and monuments; recipient acknowledgment was not required or claimed. Their project missions were not replayed. The garde-propre hook belongs to the existing Opus2D correction task; Bridget does not bypass it.
 
 ## Quality axes
 
