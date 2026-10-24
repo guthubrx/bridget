@@ -1013,7 +1013,26 @@ pub(crate) fn wake_request(
             message: "identité auxiliaire requise pour cette action de réveil".into(),
         });
     };
-    match connection.exchange(&WrapperToDaemon::WakeRequest { request })? {
+    let mutation = !matches!(&request.request, WakeAction::List {});
+    let command = WrapperToDaemon::WakeRequest { request };
+    let response = if mutation {
+        connection.send_then_wait(&command)
+    } else {
+        connection.exchange(&command)
+    }
+    .map_err(|error| match error {
+        ClientError::Technical {
+            code: "outcome_unknown",
+            message,
+        } if mutation => ClientError::Technical {
+            code: "outcome_unknown",
+            message: format!(
+                "{message} Relisez la liste des réveils avant toute nouvelle création ou annulation ; conservez l’identifiant et les paramètres d’origine."
+            ),
+        },
+        other => other,
+    })?;
+    match response {
         DaemonToWrapper::WakeResult { result } if result.version == WAKE_CONTRACT_VERSION => {
             Ok(result)
         }
@@ -1673,6 +1692,80 @@ mod security_tests {
             let mut received = String::new();
             std::io::Read::read_to_string(&mut BufReader::new(peer), &mut received).unwrap();
             assert_eq!(received.lines().count(), 1, "aucun rejeu sur le lien fermé");
+        }
+    }
+
+    #[test]
+    fn spec174_wake_coupure_socket_reelle_sans_rejeu_ni_lecture_modifiee() {
+        use bridget_transport::protocol::{WAKE_CONTRACT_VERSION, WakeAction, WakeRequest};
+
+        let identity = "17400000-0000-4000-8000-000000000174";
+        for disconnect in [true, false] {
+            let path = crate::mcp_identity::mock_socket("174-wake-cut");
+            let listener = UnixListener::bind(&path).unwrap();
+            crate::mcp_identity::mock_private_identity(&path, identity, "instance-174");
+            let server = thread::spawn(move || {
+                let mut seen = Vec::new();
+                for _ in 0..2 {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    let WrapperToDaemon::RegisterAuxiliary { agent_id, .. } =
+                        decode(line.trim()).unwrap()
+                    else {
+                        panic!("RegisterAuxiliary attendu");
+                    };
+                    writeln!(
+                        stream,
+                        "{}",
+                        encode(&DaemonToWrapper::Registered {
+                            credential: None,
+                            agent_id
+                        })
+                        .unwrap()
+                    )
+                    .unwrap();
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    seen.push(line);
+                    if disconnect {
+                        writeln!(
+                            stream,
+                            "{}",
+                            encode(&DaemonToWrapper::Disconnect).unwrap()
+                        )
+                        .unwrap();
+                    }
+                }
+                seen
+            });
+            let cancel = WakeRequest {
+                version: WAKE_CONTRACT_VERSION,
+                request: WakeAction::Cancel {
+                    schedule_id: "wake-174".into(),
+                },
+            };
+            let cut = wake_request(Some((identity, "instance-174")), &path, cancel);
+            assert!(
+                matches!(&cut, Err(ClientError::Technical { code: "outcome_unknown", message })
+                    if message.contains("Relisez la liste des réveils")
+                        && (!disconnect || message.contains("ne prouve ni son échec ni son annulation"))),
+                "{cut:?}"
+            );
+            let list = WakeRequest {
+                version: WAKE_CONTRACT_VERSION,
+                request: WakeAction::List {},
+            };
+            let read = wake_request(Some((identity, "instance-174")), &path, list);
+            assert!(
+                matches!(&read, Err(ClientError::Technical { code: "daemon_unreachable", message })
+                    if !message.contains("Relisez")),
+                "{read:?}"
+            );
+            let seen = server.join().unwrap();
+            let _ = std::fs::remove_file(path);
+            assert_eq!(seen.len(), 2, "aucun rejeu automatique de la mutation");
         }
     }
 

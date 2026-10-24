@@ -1046,6 +1046,10 @@ pub(crate) fn execute_dynamic_tool_at_with_scope(
     execute_tool_at_with_scope(identity, instance_id, name, arguments, socket).map_err(|error| {
         match error {
             ToolError::InvalidParams(_) => "arguments de publication invalides".to_string(),
+            ToolError::Technical {
+                code: "outcome_unknown",
+                message,
+            } => message,
             ToolError::Technical { code, .. } => format!("publication Bridget refusée: {code}"),
         }
     })
@@ -1063,10 +1067,24 @@ fn execute_publish_artifact(
         })?;
     let canonical_publication = publication.canonical_bytes();
     let mut connection = registered_connection(identity, instance_id, socket)?;
-    match connection.exchange(&WrapperToDaemon::ArtifactPublish {
-        contract_version: ARTIFACT_CONTRACT_VERSION,
-        canonical_publication,
-    })? {
+    let response = connection
+        .send_then_wait(&WrapperToDaemon::ArtifactPublish {
+            contract_version: ARTIFACT_CONTRACT_VERSION,
+            canonical_publication,
+        })
+        .map_err(|error| match error {
+            ToolError::Technical {
+                code: "outcome_unknown",
+                message,
+            } => ToolError::Technical {
+                code: "outcome_unknown",
+                message: format!(
+                    "{message} Conservez la même clé d’idempotence avant toute nouvelle publication ; aucune reprise automatique n’est lancée."
+                ),
+            },
+            other => other,
+        })?;
+    match response {
         DaemonToWrapper::ArtifactPublicationResult {
             contract_version,
             replayed,
@@ -5316,6 +5334,69 @@ mod tests {
         assert_eq!(result["receipt"]["artifact_ref"], "artifact:fixture");
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
+    fn spec174_publication_coupure_apres_ecriture_reste_issue_inconnue() {
+        for disconnect in [true, false] {
+            let socket = test_socket("artifact-cut");
+            let listener = UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket, "agent-fixture", "test-instance");
+            let server = thread::spawn(move || {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+                let (stream, _) = listener.accept().unwrap();
+                let read_stream = stream.try_clone().unwrap();
+                let mut reader = BufReader::new(read_stream);
+                let mut writer = BufWriter::new(stream);
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::RegisterAuxiliary { .. }
+                ));
+                write_command(
+                    &mut writer,
+                    DaemonToWrapper::Registered {
+                        credential: None,
+                        agent_id: "agent-fixture".to_string(),
+                    },
+                );
+                assert!(matches!(
+                    read_command(&mut reader),
+                    WrapperToDaemon::ArtifactPublish { .. }
+                ));
+                if disconnect {
+                    write_command(&mut writer, DaemonToWrapper::Disconnect);
+                }
+            });
+            let arguments = serde_json::json!({
+                "idempotency_key": "fixture-artifact-cut",
+                "kind": "kpi",
+                "title": "Latence médiane",
+                "payload": {"value": 17.5, "unit": "ms"},
+                "sources": [{
+                    "source_kind": "agent_computed",
+                    "locator": "calculation:p50",
+                    "citation": "Calcul attesté",
+                    "content_digest": "f6c9a81b91f3329113d5b0ab57c2ca9cbbc96cd6b6f4ea8434fb829432533a7a",
+                    "transformations": ["médiane p50"]
+                }],
+                "publication_reason": "initial"
+            });
+            let result = execute_dynamic_tool_at_with_scope(
+                "agent-fixture",
+                "test-instance",
+                "bridget_publish_artifact",
+                &arguments,
+                &socket,
+            );
+            server.join().unwrap();
+            std::fs::remove_file(socket).unwrap();
+            let message = result.unwrap_err();
+            assert!(!message.contains("refusée"), "{message}");
+            assert!(message.contains("idempotence"), "{message}");
+            if disconnect {
+                assert!(message.contains("ne prouve ni son échec"), "{message}");
+            }
+        }
     }
 
     #[test]
