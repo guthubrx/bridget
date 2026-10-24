@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cargo puis entretien borné de ses caches ; jamais de cargo clean global."""
+"""Cargo avec entretien avant et après exécution ; jamais de cargo clean global."""
 
 import argparse
 import fcntl
@@ -761,10 +761,22 @@ def prune_merged_worktrees(repo, dry_run=False, now=None, base_ref="main"):
     return removed
 
 
+def maintain_build_caches(repo, arguments):
+    """Entretenir les caches sans changer le résultat de Cargo."""
+    try:
+        register_staging(repo, arguments)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        log(f"staging non enregistré : {error}")
+    try:
+        prune(repo, *limits())
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        log(f"entretien des caches différé : {error}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    cargo = sub.add_parser("cargo", help="arguments Cargo inchangés, nettoyage après succès")
+    cargo = sub.add_parser("cargo", help="arguments Cargo inchangés, entretien avant et après exécution")
     cargo.add_argument("arguments", nargs=argparse.REMAINDER)
     clean = sub.add_parser("clean", help="purger les caches anciens ou au-delà du budget")
     clean.add_argument("--dry-run", action="store_true")
@@ -787,18 +799,17 @@ def main():
         if not cargo_bin:
             fallback = Path.home() / ".cargo/bin/cargo"
             cargo_bin = str(fallback) if fallback.is_file() else "cargo"
+        maintain_build_caches(repo, args.arguments)
         result = subprocess.run([cargo_bin, *args.arguments], cwd=repo, check=False)
+        maintain_build_caches(repo, args.arguments)
         if result.returncode:
-            return result.returncode  # Conserver les traces d'un build échoué.
-        try:
-            register_staging(repo, args.arguments)
-        except (OSError, ValueError, subprocess.SubprocessError) as error:
-            log(f"staging non enregistré : {error}")
+            return result.returncode  # Aucun retrait de worktree après un échec.
     try:
         if args.action == "installed":
             installed(repo, args.target, args.binary, args.dry_run)
         else:
-            prune(repo, *limits(), dry_run=getattr(args, "dry_run", False))
+            if args.action != "cargo":
+                prune(repo, *limits(), dry_run=getattr(args, "dry_run", False))
             prune_merged_worktrees(repo, dry_run=getattr(args, "dry_run", False))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         log(str(error))

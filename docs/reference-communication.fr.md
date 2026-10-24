@@ -1030,7 +1030,7 @@ Rust est épinglé dans rust-toolchain.toml. Construire avec Cargo disponible :
 
 ```sh
 cd /Users/moi/Nextcloud/10.Scripts/64.bridget
-PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
+PATH=/Users/moi/.cargo/bin:$PATH python3 scripts/build.py cargo build --locked -p bridget-daemon
 ```
 
 Choisir une racine d'état privée NEUVE, courte et absolue. Ne pas pointer vers

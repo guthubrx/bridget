@@ -35,7 +35,7 @@ package_parent=$(cd "$package_parent" && pwd -P)
 bash scripts/package-089-core.sh "$package_parent/source"
 cd "$package_parent/source"
 shasum -a 256 -c SOURCE-MANIFEST.sha256
-BRIDGET_BUILD_ID="$(cat BUILD_ID)" cargo build --locked --offline --release -p bridget-daemon
+BRIDGET_BUILD_ID="$(cat BUILD_ID)" python3 scripts/build.py cargo build --locked --offline --release -p bridget-daemon
 ```
 
 Offline mode requires the toolchain and locked dependencies to be cached.

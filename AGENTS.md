@@ -1,3 +1,18 @@
+## Builds : entretien automatique obligatoire
+
+Pour toute compilation ou test Cargo de Bridget, utiliser `make build`,
+`make release`, `make test` ou `python3 scripts/build.py cargo ...`, y compris
+les tests filtrés. Ne pas lancer Cargo directement : cela contourne le nettoyage.
+Le passage contrôle les caches avant et après Cargo, même en cas d'échec.
+Réutiliser le cache de ce checkout ; ne pas copier un target par test ou par revue.
+Si une isolation est nécessaire, utiliser un dossier `.cache/bridget-build-*`
+du compte courant, via `CARGO_TARGET_DIR` ou `--target-dir`, pour son enregistrement.
+Le budget commun des intermédiaires reconnus reste 10 Gio et 7 jours.
+Après installation vérifiée hors staging, appeler la commande `installed` du
+même script. Les exécutables installés et sauvegardes restent hors de ce budget.
+Conserver la version active et une version de retour ; traiter les autres copies
+identifiées à la livraison, sans supprimer de travaux non intégrés ni de preuves.
+
 ## T3 comme référence de mise en œuvre
 
 Pour un parcours déjà couvert par T3 (sessions, fournisseurs, Git/worktrees,

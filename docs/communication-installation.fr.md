@@ -20,7 +20,7 @@ bash scripts/package-089-core.sh "$package_parent/source"
 cd "$package_parent/source"
 shasum -a 256 -c SOURCE-MANIFEST.sha256
 PATH=/Users/moi/.cargo/bin:$PATH BRIDGET_BUILD_ID="$(cat BUILD_ID)" \
-  cargo build --locked --offline --release -p bridget-daemon
+  python3 scripts/build.py cargo build --locked --offline --release -p bridget-daemon
 ```
 
 Rust 1.92.0 et les dépendances verrouillées doivent déjà être disponibles.
@@ -138,7 +138,7 @@ Pour construire un binaire de test sans remplacer l'installation release :
 
 ```sh
 cd /Users/moi/Nextcloud/10.Scripts/64.bridget
-PATH=/Users/moi/.cargo/bin:$PATH cargo build --locked -p bridget-daemon
+PATH=/Users/moi/.cargo/bin:$PATH python3 scripts/build.py cargo build --locked -p bridget-daemon
 ```
 
 Employer ensuite ce binaire avec le daemon privé et les variables de la section 2.

@@ -194,6 +194,62 @@ class CleanupTests(unittest.TestCase):
                     build.limits()
 
 
+    def test_build_echoue_nettoie_avant_et_apres_sans_perdre_le_code(self):
+        stage = self.cache / "bridget-build-failure"
+        profile = self.profile(stage)
+        proof = self.repo / "preuve.log"
+        proof.write_text("preuve hors cache")
+        cargo = self.repo / "cargo-fixture"
+        cargo.write_text("#!/bin/sh\n"
+                         'test ! -d "$CARGO_TARGET_DIR/debug/deps" || exit 88\n'
+                         'mkdir -p "$CARGO_TARGET_DIR/debug/deps"\n'
+                         'printf nouveau > "$CARGO_TARGET_DIR/debug/deps/generated"\n'
+                         'exit 7\n')
+        cargo.chmod(0o700)
+        with patch.object(build, "__file__", str(self.repo / "scripts/build.py")), \
+             patch.object(sys, "argv", ["build.py", "cargo", "test"]), \
+             patch.dict(os.environ, {"CARGO_TARGET_DIR": str(stage),
+                 "BRIDGET_CARGO": str(cargo), "BRIDGET_BUILD_CACHE_GIB": "0"}), \
+             patch.object(build, "prune_merged_worktrees") as worktree_cleanup:
+            self.assertEqual(build.main(), 7)
+            worktree_cleanup.assert_not_called()
+        self.assertTrue((stage / build.OWNER).is_file())
+        self.assertFalse((profile / "deps").exists())
+        self.assertEqual(proof.read_text(), "preuve hors cache")
+        self.assertEqual((profile / "bridget").read_bytes(), b"executable conserve")
+
+    def test_cache_cree_par_build_echoue_est_enregistre_et_nettoye(self):
+        stage = self.cache / "bridget-build-new-failure"
+        cargo = self.repo / "cargo-fixture"
+        cargo.write_text("#!/bin/sh\n"
+                         'mkdir -p "$CARGO_TARGET_DIR/debug/deps"\n'
+                         'touch "$CARGO_TARGET_DIR/debug/.cargo-lock"\n'
+                         'printf nouveau > "$CARGO_TARGET_DIR/debug/deps/generated"\n'
+                         'exit 9\n')
+        cargo.chmod(0o700)
+        with patch.object(build, "__file__", str(self.repo / "scripts/build.py")), \
+             patch.object(sys, "argv", ["build.py", "cargo", "build", "--target-dir", str(stage)]), \
+             patch.dict(os.environ, {"CARGO_TARGET_DIR": str(stage),
+                 "BRIDGET_CARGO": str(cargo), "BRIDGET_BUILD_CACHE_GIB": "0"}):
+            self.assertEqual(build.main(), 9)
+        self.assertTrue((stage / build.OWNER).is_file())
+        self.assertFalse((stage / "debug/deps").exists())
+
+    def test_entretien_indisponible_ne_masque_pas_le_resultat_cargo(self):
+        cargo = self.repo / "cargo-fixture"
+        for code in (0, 7):
+            with self.subTest(code=code):
+                cargo.write_text(f"#!/bin/sh\nexit {code}\n")
+                cargo.chmod(0o700)
+                with patch.object(build, "__file__", str(self.repo / "scripts/build.py")), \
+                     patch.object(sys, "argv", ["build.py", "cargo", "test"]), \
+                     patch.dict(os.environ, {"BRIDGET_CARGO": str(cargo)}), \
+                     patch.object(build, "prune", side_effect=RuntimeError("indisponible")), \
+                     patch.object(build, "prune_merged_worktrees") as worktree_cleanup:
+                    self.assertEqual(build.main(), code)
+                    self.assertEqual(worktree_cleanup.call_count, 1 if code == 0 else 0)
+
+
 class ProcessTests(unittest.TestCase):
     def test_cli_succes_nettoie_automatiquement_dans_un_depot_isole(self):
         with tempfile.TemporaryDirectory(prefix="bridget-success-test-") as root:
@@ -255,7 +311,7 @@ class ProcessTests(unittest.TestCase):
             Path("/tmp/a b"), Path("/tmp/a b/fichier ouvert (copie).txt"),
             Path("/tmp/a b/supprime.txt")])
 
-    def test_cli_preserve_arguments_et_code_echec_sans_nettoyage(self):
+    def test_cli_preserve_arguments_et_code_echec_avec_entretien(self):
         with tempfile.TemporaryDirectory(prefix="bridget-cli-test-") as root:
             root = Path(root).resolve()
             (root / "scripts").mkdir()
@@ -268,7 +324,7 @@ class ProcessTests(unittest.TestCase):
                 env={**os.environ, "BRIDGET_CARGO": str(cargo)}, timeout=10)
             self.assertEqual(result.returncode, 7)
             self.assertEqual(result.stdout.splitlines(), ["test", "--", "--test-threads=1"])
-            self.assertNotIn("Nettoyage", result.stderr)
+            self.assertEqual(result.stderr.count("Nettoyage :"), 2, result.stderr)
 
     def test_verrou_est_effectivement_respecte_par_cargo_installe(self):
         cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")

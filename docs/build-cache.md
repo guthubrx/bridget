@@ -3,8 +3,8 @@
 [English](build-cache.md) · [Français](build-cache.fr.md) · [Documentation](README.md)
 
 `make build`, `make release` and `make test` use `scripts/build.py`.
-After a successful command, the wrapper maintains this repository's worktree
-build caches. It does not restart a daemon.
+The wrapper maintains this repository's recognized build caches before and after
+Cargo, including failed builds. It does not restart a daemon.
 
 - Shared budget: **10 GiB**, not 10 GiB per worktree.
 - Age limit: **7 days**, based on the cache contents' latest modification.
@@ -16,8 +16,10 @@ build caches. It does not restart a daemon.
 - A busy Cargo lock or an open file preserves the profile. If `lsof` cannot
   establish a reliable result, cleanup is refused. The budget is a target,
   not a reason to bypass these guards.
-- A failed build triggers no cleanup. Maintenance failure warns without
-  turning a successful build into a failed one.
+- Cargo arguments and its exit code are preserved. A maintenance failure warns
+  without hiding a failed build or failing a successful one. Failed builds do
+  not trigger worktree removal. Keep diagnostic logs outside intermediate cache
+  directories; those intermediates may be removed even after a failed build.
 
 Requirements: Unix, Python **3.11+**, Git, Cargo and `lsof`. No extra Python
 package is required. Sizes are logical; APFS clones can make physical space
@@ -47,10 +49,11 @@ with all guards still enforced. Negative, infinite or invalid values are refused
 
 ## Temporary build directories
 
-After a successful wrapped build, directories named `bridget-build-*` directly
+Before and after a wrapped build, existing directories named `bridget-build-*` directly
 under the user's `.cache` directory can be registered when selected by
 `CARGO_TARGET_DIR` or `--target-dir`. A marker ties the directory to this
-repository. It then shares the worktree cache budget.
+repository. A directory created by a failed build is registered afterward too.
+It then shares the worktree cache budget.
 
 Older unmarked directories and directories owned by other repositories are
 ignored.
@@ -70,10 +73,16 @@ after installation; this guide does not authorize replacing an active installati
 ## Scope and limits
 
 Direct `cargo` calls bypass maintenance. Use Make or the wrapper for new builds,
-including agent-driven builds. The K1 installer uses the wrapper when present;
+including agent-driven builds. This is required in the repository's agent
+instructions. Reuse the checkout's existing target directory rather than copying
+it for each test. Use a registered temporary directory when isolation is needed. The K1 installer uses the wrapper when present;
 its older standalone mode keeps its Cargo fallback. The historical SSH deployment
 path is unchanged and adds no remote cleanup prerequisite.
 
 Custom profiles, cross-compilation outputs and arbitrary external directories
 are not scanned. The global Cargo cache is not covered. Preserve sources,
 worktrees, state and rollback artifacts independently of build-cache cleanup.
+
+Maintenance runs with builds, not on a timer. No background model or scheduler
+is required. Installed executables and rollback copies are outside this cache
+budget and must be accounted for separately at delivery.
