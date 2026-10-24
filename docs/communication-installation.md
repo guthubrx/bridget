@@ -6,7 +6,73 @@ Build and try Bridget in a private namespace before replacing an existing
 installation. A built binary does not update a running daemon, MCP server,
 worker or T3 application.
 
-## Prerequisites
+## Install or update in one command
+
+Latest published release (precompiled, no Rust needed):
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh
+```
+
+Latest source code on `main` (compiled locally):
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
+```
+
+An exact published release:
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --version v0.4.1
+```
+
+The same script is available directly from GitHub:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guthubrx/bridget/main/scripts/install.sh | sh
+```
+
+For inspection before execution, download the script to a file and read it
+before running `sh` on that file. HTTPS authenticates the download host;
+the release's SHA-256 sidecar checks archive integrity, not an independent signature.
+
+Run as your normal user, without sudo. Release installation needs curl, tar and
+sha256sum or shasum. A platform without a published archive is refused; it never
+silently falls back to a source build. Current v0.4.1 packages cover Linux x86-64
+and macOS Apple Silicon. Other supported source targets require `--source`.
+
+Source mode needs Git, Python 3.11+, a C compiler and its platform development
+tools (Xcode Command Line Tools on macOS, a C build toolchain on Linux).
+It installs Rust through the official rustup script if absent, uses the repository's
+toolchain and Cargo.lock, and builds through the existing cache maintenance wrapper.
+It keeps a dedicated source checkout in `.local/state/bridget-install/source`,
+so cache ownership remains stable across updates. The cache follows the same
+10 GiB / 7-day budget; successful installation purges its build intermediates.
+An edited installer checkout is preserved and refused, never reset automatically.
+An unavailable compiler or dependency is an explicit error, never a sudo prompt.
+
+The executable is installed in the user's `.local/bin` directory, with a receipt
+and a distinct previous executable in `.local/state/bridget-install`. Repeating
+an identical installation preserves that previous executable. Profiles for the
+user's Bash or Zsh shell are backed up before adding PATH setup. To use the
+command immediately in the current terminal:
+
+```sh
+. "$HOME/.local/share/bridget/env"
+bridget --version
+```
+
+Accounts, data and service definitions are preserved. No daemon, worker, tunnel
+or T3 process is started or restarted. Installation is not federation: use
+`bridget daemon` for a standalone instance, or follow the
+[SSH federation guide](federation-services.md) to join an existing master.
+Already running services keep their loaded version until deliberately restarted.
+The retained executable is not a database rollback procedure.
+An interrupted install can leave `.local/state/bridget-install/lock`. Inspect its
+`pid` file and verify that no installer still runs before removing that lock
+directory. Never remove the source checkout or user data to clear a lock.
+
+## Prerequisites for an existing source checkout
 
 Use macOS or Linux, Git and the Rust toolchain in `rust-toolchain.toml`
 (currently 1.92.0). The build wrapper needs Python 3.11 or later. Cache

@@ -28,3 +28,5 @@ jobs:
         run: bash scripts/check-secrets.sh
       - name: Check public documentation links and language pairs
         run: python3 scripts/check-docs.py
+      - name: Check the public installer contract without network access
+        run: python3 -m unittest discover -s scripts/tests -p test_install.py -v
