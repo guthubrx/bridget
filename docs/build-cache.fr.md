@@ -55,8 +55,8 @@ restent applicables. Une valeur négative, infinie ou invalide est refusée.
 ## Compilation dans un répertoire temporaire
 
 Les répertoires temporaires nommés `bridget-build-*` directement dans le dossier
-`.cache` du compte utilisateur sont enregistrés avant et après la compilation lorsqu'ils existent
-par le script, si `CARGO_TARGET_DIR` ou `--target-dir` les désigne. Un marqueur
+`.cache` du compte utilisateur sont enregistrés par le script avant et après la compilation,
+lorsqu'ils existent, si `CARGO_TARGET_DIR` ou `--target-dir` les désigne. Un marqueur
 les rattache à ce dépôt. Ils participent alors au même budget que les worktrees.
 Les anciens répertoires non marqués et ceux d'un autre dépôt sont ignorés.
 
@@ -83,7 +83,7 @@ distance ni de nouveau prérequis imposé aux hôtes distants.
 
 Les profils personnalisés, les sorties de compilation croisée et les répertoires
 externes arbitraires ne sont pas parcourus. Le cache global Cargo n'est pas
-touché. Le nettoyage intervient après les commandes, pas en arrière-plan.
+touché. Le nettoyage intervient avant et après les commandes, pas en arrière-plan.
 Les worktrees anciens doivent utiliser le nouveau script pour déclencher cet
 entretien ; leurs caches standards sont néanmoins visibles depuis le dépôt.
 

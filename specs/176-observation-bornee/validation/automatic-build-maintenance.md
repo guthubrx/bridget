@@ -52,3 +52,10 @@ Documentation check passed: 27 pages, 422 local links, 11 language pairs.
 Two known Cartae build targets were registered without changing foreign markers.
 Their recognized intermediates totaled 4,810,208,251 logical bytes, below budget.
 No active binary or daemon is replaced by this correction.
+
+The real CLI cleanup test also passed on macOS (one test, 0.944 seconds).
+The independent read-only review approved the delta without a blocking finding.
+It notes an extra cache scan before each build, possible rebuild cost after
+pruning, and the need to keep diagnostics outside generated cache directories.
+The actual Cartae maintenance pass returned successfully: zero bytes removed,
+4.48 GiB retained below the budget.

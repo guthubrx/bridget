@@ -49,8 +49,8 @@ with all guards still enforced. Negative, infinite or invalid values are refused
 
 ## Temporary build directories
 
-Before and after a wrapped build, existing directories named `bridget-build-*` directly
-under the user's `.cache` directory can be registered when selected by
+Before and after a wrapped build, existing directories named `bridget-build-*`
+directly under the user's `.cache` directory can be registered when selected by
 `CARGO_TARGET_DIR` or `--target-dir`. A marker ties the directory to this
 repository. A directory created by a failed build is registered afterward too.
 It then shares the worktree cache budget.
@@ -75,7 +75,8 @@ after installation; this guide does not authorize replacing an active installati
 Direct `cargo` calls bypass maintenance. Use Make or the wrapper for new builds,
 including agent-driven builds. This is required in the repository's agent
 instructions. Reuse the checkout's existing target directory rather than copying
-it for each test. Use a registered temporary directory when isolation is needed. The K1 installer uses the wrapper when present;
+it for each test. Use a registered temporary directory when isolation is needed.
+The K1 installer uses the wrapper when present;
 its older standalone mode keeps its Cargo fallback. The historical SSH deployment
 path is unchanged and adds no remote cleanup prerequisite.
 
