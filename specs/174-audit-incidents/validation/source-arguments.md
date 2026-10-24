@@ -57,3 +57,19 @@ The final schema, parser, diagnostics and guides now use that same supported
 format. This is an earlier explicit refusal, not new SHA-256 support.
 The reviewer accepted the source/destination guidance and constant diagnostic.
 The responsible maintainer applied this correction and reran the targeted tests.
+
+## Delivery
+
+Source fe18a02a18ff87654e4b3108faeada4e471d5ede was pushed to main.
+Optimized clients built and installed on macOS and Cartae. A fresh MCP process
+from each installed executable returned the corrected schema through
+initialize / notifications/initialized / tools/list. The macOS signature was
+verified. No daemon, worker, provider or T3 restart was performed. Already-open
+MCP processes keep their loaded catalog until their normal restart.
+
+- macOS SHA-256: 86cde091adecea9ec0a52324bfcb4122325d90733fccda9d3c8db24daa5e38b0.
+- Linux SHA-256: 045bd5d474fe05ac472920366ecd137a02e4ff7c96e21e3e21c5288b353cd088.
+
+Both builds used the mandatory maintenance wrapper and existing caches.
+Post-install maintenance removed 0.40 GiB of Linux intermediates; protected
+caches were retained. Operational receipts remain outside Git.
