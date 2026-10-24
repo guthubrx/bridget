@@ -1108,6 +1108,8 @@ struct DaemonState {
     remote_start_reconcile_last: Option<(String, Instant)>,
     /// Rotation des réservations ; ne remplace aucune preuve de droits.
     remote_result_reservation_last: Option<(String, Instant)>,
+    /// Un seul travail réseau en vol ; résultat consommé sans attendre dans tick.
+    remote_result_reservation: Option<Receiver<Result<Option<crate::delegation::Task>, String>>>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
     pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
@@ -5042,6 +5044,7 @@ impl DaemonState {
             remote_native_ready: HashSet::new(),
             remote_start_reconcile_last: None,
             remote_result_reservation_last: None,
+            remote_result_reservation: None,
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
             pending_candidate_probes: HashMap::new(),

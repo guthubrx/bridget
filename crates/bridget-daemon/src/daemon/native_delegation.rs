@@ -9894,11 +9894,23 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             Instant::now() + CANCEL_NOTIFICATION_BUDGET,
         );
     }
-    // Une réservation par seconde au plus ; la rotation borne les attentes réseau du tick.
+    // O(n) tâches triées par SQL, une opération réseau en vol pour tous les ticks.
+    // Le canal ne contient qu'un résultat ; aucun thread n'attend dans cette boucle.
+    let mut remote_proofs = HashMap::new();
     let remote_pending = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-        let due = st.remote_result_reservation_last.as_ref()
-            .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
+        if let Some(receiver) = st.remote_result_reservation.take() {
+            match receiver.try_recv() {
+                Ok(Ok(Some(proof))) => { remote_proofs.insert(proof.task_id.clone(), proof); }
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => warn!("réservation résultat distant différée: {error}"),
+                Err(mpsc::TryRecvError::Empty) => st.remote_result_reservation = Some(receiver),
+                Err(mpsc::TryRecvError::Disconnected) => warn!("réservation résultat distant interrompue"),
+            }
+        }
+        let due = st.remote_result_reservation.is_none() && remote_proofs.is_empty()
+            && st.remote_result_reservation_last.as_ref()
+                .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(1));
         let pending = if due { st.delegation_store.pending().unwrap_or_default() } else { Vec::new() };
         let mut candidates = pending.into_iter()
             .filter(|task| {
@@ -9931,7 +9943,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             .map(|task| task.task_id)
             .collect::<Vec<_>>();
         if candidates.is_empty() {
-            Vec::new()
+            None
         } else {
             // pending() est trié par task_id ; avancer même après un refus du worker.
             let offset = st.remote_result_reservation_last.as_ref().map_or(0, |(previous, _)| {
@@ -9940,23 +9952,24 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             let index = if offset == candidates.len() { 0 } else { offset };
             let task_id = candidates.swap_remove(index);
             st.remote_result_reservation_last = Some((task_id.clone(), Instant::now()));
-            vec![task_id]
+            let (sender, receiver) = mpsc::channel();
+            st.remote_result_reservation = Some(receiver);
+            Some((task_id, sender))
         }
     };
-    let mut remote_proofs = HashMap::new();
-    for task_id in remote_pending {
-        let proof = match reserve_remote_result_slot(state, &task_id) {
-            Ok(proof) => proof,
-            Err(error) => {
-                warn!("réservation résultat distant différée: {error}");
-                continue;
+    if let Some((task_id, sender)) = remote_pending {
+        let state = Arc::clone(state);
+        if let Err(error) = thread::Builder::new().name("bridget-result-slot".into()).spawn(move || {
+            let result = reserve_remote_result_slot(&state, &task_id);
+            if let Ok(proof) = &result {
+                if let Err(error) = dispatch_remote_pause_resume(&state, &task_id, proof.as_ref()) {
+                    warn!("reprise de pause distante différée: {error}");
+                }
             }
-        };
-        if let Err(error) = dispatch_remote_pause_resume(state, &task_id, proof.as_ref()) {
-            warn!("reprise de pause distante différée: {error}");
-        }
-        if let Some(proof) = proof {
-            remote_proofs.insert(task_id, proof);
+            let _ = sender.send(result);
+        }) {
+            // Le sender est détruit : le prochain tick constate Disconnected et libère le créneau.
+            warn!("réservation résultat distant non démarrée: {error}");
         }
     }
     // Les demandes sont fermées AVANT le skip de pause et les arrêts de flotte.
@@ -23499,7 +23512,10 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let started = Instant::now();
             tick(&shared);
             let elapsed = started.elapsed();
+            eprintln!("nonblocking174 elapsed_ms={}", elapsed.as_millis());
+            assert!(elapsed < Duration::from_millis(500), "le tick attend le worker pendant {elapsed:?}");
             let mut requests = Vec::new();
+            let wire_deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 let mut line = String::new();
                 match reader.read_line(&mut line) {
@@ -23511,13 +23527,34 @@ for frame in frames: print(json.dumps(frame),flush=True)
                         assert!(matches!(request.request, WorkerRequestOperation::Reconcile {}));
                         requests.push(request.command.task_id);
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if !requests.is_empty() || Instant::now() >= wire_deadline { break; }
+                        thread::sleep(Duration::from_millis(5));
+                    }
                     Err(e) => panic!("{e}"),
                 }
             }
             eprintln!("serial174 turn={turn} tasks=3 requests={} elapsed_ms={}", requests.len(), elapsed.as_millis());
             assert_eq!(requests.len(), 1, "un worker muet ne doit pas multiplier les attentes par passage");
             visited.push(requests.remove(0));
+            // Même après la cadence, deux ticks concurrents ne doublent pas le travail en vol.
+            shared.lock().unwrap().remote_result_reservation_last.as_mut().unwrap().1 =
+                Instant::now() - Duration::from_secs(2);
+            thread::scope(|scope| {
+                for _ in 0..2 { scope.spawn(|| tick(&shared)); }
+            });
+            let receiver = {
+                let mut st = shared.lock().unwrap();
+                assert_eq!(st.pending_worker_responses.len(), 1);
+                if turn > 0 {
+                    // Simuler la perte du canal ; le premier passage attend le vrai délai de 5 s.
+                    st.pending_worker_responses.clear();
+                }
+                st.remote_result_reservation.take().unwrap()
+            };
+            assert!(receiver.recv_timeout(Duration::from_secs(6)).unwrap().is_err());
+            let mut extra = String::new();
+            assert_eq!(reader.read_line(&mut extra).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
             let st = shared.lock().unwrap();
             assert!(st.pending_worker_responses.is_empty());
             for original in &tasks {
