@@ -68,6 +68,9 @@ or T3 process is started or restarted. Installation is not federation: use
 [SSH federation guide](federation-services.md) to join an existing master.
 Already running services keep their loaded version until deliberately restarted.
 The retained executable is not a database rollback procedure.
+If cache cleanup fails after a source installation, the installer explicitly
+reports that the executable was installed and cleanup failed; that error does
+not mean the previous binary is still on disk.
 An interrupted install can leave `.local/state/bridget-install/lock`. Inspect its
 `pid` file and verify that no installer still runs before removing that lock
 directory. Never remove the source checkout or user data to clear a lock.

@@ -25,3 +25,12 @@ codes de retour 0 et 0 (1 min 34 s et 1 min 26 s).
 Contre-revue corrective demandée sur cc4ddac9, clé
 bridget177-installer-review-20261024-02, Task
 79381a58-78c8-4da3-b756-cd18d28c1494. Aucun autre chantier délégué.
+
+Verdict R2 : APPROVE_WITH_CHANGES, B1/B2 levés, aucun blocage confirmé.
+Remarques vérifiées :
+- ancien cache marqué avant correction : seules nos installations jetables ont
+  utilisé cette version, non publiée ; aucun cache utilisateur à migrer.
+- erreur Git status : refus désormais explicite, testé sans état ouvert.
+- origine différente et checkout modifié : refus testés, binaire conservé.
+- erreur d'entretien après remplacement : message explicite sur le binaire
+  réellement installé et le nettoyage en échec ; documentation alignée.

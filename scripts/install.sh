@@ -107,7 +107,8 @@ main() {
         else
             [ -d "$source/.git" ] || fail "Invalid installer checkout: $source"
             [ "$(git -C "$source" remote get-url origin)" = "$repo.git" ] || fail 'Installer checkout has a different origin.'
-            [ -z "$(git -C "$source" status --porcelain --untracked-files=all)" ] || fail "Installer checkout was edited: preserve your work in $source before retrying."
+            source_status=$(git -C "$source" status --porcelain --untracked-files=all) || fail 'Cannot inspect the installer checkout. No update was applied.'
+            [ -z "$source_status" ] || fail "Installer checkout was edited: preserve your work in $source before retrying."
             git -C "$source" fetch --quiet --depth 1 origin refs/heads/main
             git -C "$source" -c core.hooksPath=/dev/null checkout --quiet --detach FETCH_HEAD
         fi
@@ -184,7 +185,7 @@ $HOME/.bash_login"
     printf '%s\n' "channel=$mode" "source=$identity" "sha256=$(digest "$bindir/bridget")" > "$work/installed.txt"
     mv -f "$work/installed.txt" "$state/installed.txt"
     if [ "$mode" = source ]; then
-        (cd "$source" && python3 scripts/build.py installed --target "$CARGO_TARGET_DIR" --binary "$bindir/bridget")
+        (cd "$source" && python3 scripts/build.py installed --target "$CARGO_TARGET_DIR" --binary "$bindir/bridget") || fail "The executable was installed at $bindir/bridget, but build-cache cleanup failed. Inspect $CARGO_TARGET_DIR; services were not restarted."
     fi
     say "Installed $(cat "$work/version") ($identity) at $bindir/bridget"
     say 'For this terminal: . "$HOME/.local/share/bridget/env"'

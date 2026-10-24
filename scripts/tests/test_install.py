@@ -203,11 +203,16 @@ if sys.argv[1] == 'cargo':
         (self.root / "candidate").write_bytes(BINARY)
         self.stub("git", '''#!/usr/bin/env python3
 import os, pathlib, shutil, sys
+mode = pathlib.Path(os.environ['FIXTURE']) / 'git-mode'
+mode = mode.read_text() if mode.exists() else ''
 if 'clone' in sys.argv:
     shutil.copytree(pathlib.Path(os.environ['FIXTURE']) / 'source-fixture', sys.argv[-1])
     (pathlib.Path(sys.argv[-1]) / '.git').mkdir()
-elif 'status' in sys.argv or 'checkout' in sys.argv or 'fetch' in sys.argv: pass
-elif 'remote' in sys.argv: print('https://github.com/guthubrx/bridget.git')
+elif 'status' in sys.argv:
+    if mode == 'error': sys.exit(128)
+    if mode == 'dirty': print(' M edited-file')
+elif 'checkout' in sys.argv or 'fetch' in sys.argv: pass
+elif 'remote' in sys.argv: print('https://example.com/other.git' if mode == 'origin' else 'https://github.com/guthubrx/bridget.git')
 else: print('1234567890abcdef1234567890abcdef12345678')
 ''')
         self.stub("cc", "#!/bin/sh\nexit 0\n")
@@ -221,6 +226,13 @@ else: print('1234567890abcdef1234567890abcdef12345678')
         self.assertIn("bridget-build-installer", args)
         self.run_install("--source")
         self.assertEqual(self.installed.read_bytes(), BINARY)
+        for mode in ('dirty', 'error', 'origin'):
+            (self.root / 'git-mode').write_text(mode)
+            result = self.run_install('--source', ok=False)
+            self.assertEqual(self.installed.read_bytes(), BINARY)
+            if mode == 'error':
+                self.assertIn('Cannot inspect', result.stderr)
+        (self.root / 'git-mode').unlink()
         checkout = self.home / ".local/state/bridget-install/source"
         (checkout / "scripts/build.py").write_text("raise SystemExit(42)\n")
         self.run_install("--source", ok=False)

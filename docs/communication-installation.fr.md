@@ -64,6 +64,9 @@ rattache pas la machine à un maître. Lancez `bridget daemon` pour une instance
 autonome ou suivez le [guide de fédération SSH](federation-services.fr.md) pour
 rejoindre un maître existant. Les services actifs gardent leur code chargé jusqu'à
 une relance volontaire. Le binaire précédent ne suffit pas à restaurer une base.
+Si le nettoyage échoue après une installation source, le message précise que
+le programme est installé mais que le cache n'a pas été nettoyé. Cette erreur
+ne signifie pas que l'ancien binaire est encore sur disque.
 Une interruption peut laisser `.local/state/bridget-install/lock`. Consultez son
 fichier `pid` et vérifiez qu'aucun installateur ne tourne avant de retirer ce
 seul dossier de verrou. Ne supprimez ni les sources ni les données pour le libérer.
