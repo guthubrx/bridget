@@ -254,6 +254,7 @@ fn run_with_args(args: Vec<String>) {
     match cmd.as_str() {
         "daemon" => cmd_daemon(&args[2..]),
         "federate" => crate::federate::run(&args[2..]),
+        "mobile" => crate::mobile::run(&args[2..]),
         "t3" => crate::t3code::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),

@@ -8,6 +8,17 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## Non publié
+
+### Android et accès permanent à la fédération
+
+- Application Android native : association QR, annuaire filtré, messages, fichiers,
+  actions de tâche, questions, rejeux durables et stockage local protégé.
+- Accès HTTPS avec autorisations d’appareil révocables et travaux bornés.
+- Notifications minimales facultatives, période silencieuse et mise à jour signée.
+- Attestations et préparation sur la machine d’origine par le worker authentifié ;
+  raccordement privé du poste à un maître serveur permanent.
+
 ## [0.4.1] - 2026-10-16
 
 ### Corrigé

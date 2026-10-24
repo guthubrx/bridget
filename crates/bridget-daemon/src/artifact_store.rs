@@ -269,6 +269,8 @@ impl ArtifactStore {
                 created_at INTEGER NOT NULL,
                 PRIMARY KEY (project_id, idempotency_key)
             );
+            CREATE INDEX IF NOT EXISTS idx_artifact_publications_key
+                ON artifact_publications(idempotency_key);
             CREATE INDEX IF NOT EXISTS idx_artifact_publications_version
                 ON artifact_publications(version_ref);
 
@@ -510,6 +512,50 @@ impl ArtifactStore {
         conversation_reference: &str,
         limit: usize,
     ) -> Result<Vec<ArtifactConversationReference>, ArtifactStoreError> {
+        self.list_conversation_page(project_id, conversation_reference, limit, None)
+    }
+
+    /// Repère complet pour les publications du même instant, sans saut ni filtre après pagination.
+    pub fn list_conversation_page(
+        &self,
+        project_id: &str,
+        conversation_reference: &str,
+        limit: usize,
+        after: Option<(i64, &str)>,
+    ) -> Result<Vec<ArtifactConversationReference>, ArtifactStoreError> {
+        self.reference_page(project_id, conversation_reference, None, limit, after)
+    }
+
+    /// Historique d'un agent : l'appelant doit attester une autorisation de fédération complète.
+    pub(crate) fn list_agent_references(
+        &self,
+        agent: &str,
+        limit: usize,
+        after: Option<(i64, &str)>,
+    ) -> Result<Vec<ArtifactConversationReference>, ArtifactStoreError> {
+        self.reference_page("", "", Some(agent), limit, after)
+    }
+
+    /// La référence de version fixe le projet ; aucun chemin fourni par le lecteur.
+    pub(crate) fn project_for_agent_version(
+        &self,
+        agent: &str,
+        version: &str,
+    ) -> Result<Option<String>, ArtifactStoreError> {
+        self.conn.query_row("SELECT a.project_id FROM artifact_versions v JOIN artifacts a ON a.artifact_ref=v.artifact_ref
+            WHERE v.version_ref=?1 AND a.deleted_at IS NULL
+            AND v.conversation_reference='conversation:'||a.project_id||':'||?2",
+            params![version,agent],|r|r.get(0)).optional().map_err(ArtifactStoreError::Sqlite)
+    }
+
+    fn reference_page(
+        &self,
+        project_id: &str,
+        conversation_reference: &str,
+        agent: Option<&str>,
+        limit: usize,
+        after: Option<(i64, &str)>,
+    ) -> Result<Vec<ArtifactConversationReference>, ArtifactStoreError> {
         let bounded_limit = i64::try_from(limit.clamp(1, 200)).unwrap_or(200);
         let mut statement = self.conn.prepare(
             "SELECT r.reference_id, r.artifact_ref, r.version_ref, a.project_id,
@@ -518,14 +564,22 @@ impl ArtifactStore {
              FROM artifact_references r
              JOIN artifacts a ON a.artifact_ref = r.artifact_ref
              JOIN artifact_versions v ON v.version_ref = r.version_ref
-             WHERE a.project_id = ?1
-               AND v.conversation_reference = ?2
+             WHERE ((?6 IS NULL AND a.project_id=?1 AND v.conversation_reference=?2)
+                 OR (?6 IS NOT NULL AND v.conversation_reference='conversation:'||a.project_id||':'||?6))
                AND a.deleted_at IS NULL
+               AND (?4 IS NULL OR v.created_at > ?4 OR (v.created_at = ?4 AND r.reference_id > ?5))
              ORDER BY v.created_at ASC, r.reference_id ASC
              LIMIT ?3",
         )?;
         let rows = statement.query_map(
-            params![project_id, conversation_reference, bounded_limit],
+            params![
+                project_id,
+                conversation_reference,
+                bounded_limit,
+                after.map(|v| v.0),
+                after.map(|v| v.1),
+                agent
+            ],
             |row| {
                 let kind: String = row.get(6)?;
                 let state: String = row.get(8)?;
@@ -546,6 +600,34 @@ impl ArtifactStore {
         )?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(ArtifactStoreError::Sqlite)
+    }
+
+    /// Lecture seule du reçu natif ; une clé appareil ne peut pas changer de projet au rejeu.
+    pub(crate) fn publication_by_key(
+        &self,
+        key: &str,
+    ) -> Result<Option<(String, String, ArtifactReceiptV1)>, ArtifactStoreError> {
+        let mut query=self.conn.prepare("SELECT project_id,content_digest,receipt_json FROM artifact_publications WHERE idempotency_key=?1 LIMIT 2")?;
+        let rows = query
+            .query_map([key], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        if rows.len() > 1 {
+            return Err(ArtifactStoreError::IdempotencyConflict);
+        }
+        rows.into_iter()
+            .next()
+            .map(|(project, digest, bytes)| {
+                serde_json::from_slice(&bytes)
+                    .map(|receipt| (project, digest, receipt))
+                    .map_err(|_| ArtifactStoreError::CorruptReceipt)
+            })
+            .transpose()
     }
 
     pub fn version_detail(

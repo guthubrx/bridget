@@ -51,6 +51,8 @@ impl WaitEpoch {
 #[path = "delegation_lineage.rs"]
 mod lineage;
 pub(crate) use lineage::{MAX_RETAINED_TASKS, ProjectionMutation};
+#[cfg(test)]
+pub(crate) use lineage::delegation_lineage_tests::task as lineage_test_task;
 
 pub(crate) struct DelegationStore {
     conn: Connection,

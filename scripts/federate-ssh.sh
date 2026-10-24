@@ -94,7 +94,7 @@ federation_remote_command() {
 
 federation_remote_guards() {
   printf 'set -euo pipefail\numask 077\n'
-  declare -f federation_fail federation_path federation_state_path federation_ancestors federation_metadata federation_private_dir federation_new_dir
+  declare -f federation_fail federation_path federation_state_path federation_ancestors federation_metadata federation_private_dir federation_new_dir federation_recover_socket
 }
 
 federation_label() {
@@ -210,7 +210,7 @@ federation_set_install_paths() {
 federation_load_config() {
   local path=$1 line key value count=0
   federation_private_file "$path"
-  host= user= port= label= identity= known_hosts= root= socket= remote_root= remote_socket= config_backend=
+  host= user= port= label= identity= known_hosts= root= socket= remote_root= remote_socket= config_backend= direction=from-master
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ "$line" == *=* ]] || federation_fail "configuration inerte invalide"
     key=${line%%=*}; value=${line#*=}; count=$((count + 1))
@@ -227,10 +227,12 @@ federation_load_config() {
       10:socket) socket=$value ;;
       11:remote_root) remote_root=$value ;;
       12:remote_socket) remote_socket=$value ;;
+      13:direction) direction=$value ;;
       *) federation_fail "champ ou ordre de configuration invalide : $key" ;;
     esac
   done <"$path"
-  [[ $count == 12 ]] || federation_fail "configuration incomplète"
+  [[ $count == 12 || $count == 13 ]] || federation_fail "configuration incomplète"
+  [[ "$direction" == from-master || "$direction" == to-master ]] || federation_fail "direction de fédération invalide"
   federation_label "$label"
   [[ "$config_backend" == launchd || "$config_backend" == systemd ]] || federation_fail "backend de configuration invalide"
   [[ "$host" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ && "$host" != *..* ]] || federation_fail "hôte invalide"
@@ -286,26 +288,27 @@ federation_validate_install() {
 federation_parse_link_args() {
   local allow_dry_run=$1
   shift
-  host= user= port=22 label= identity= known_hosts= root= socket= remote_root= remote_socket= dry_run=false
+  host= user= port=22 label= identity= known_hosts= root= socket= remote_root= remote_socket= direction=from-master dry_run=false
   while (( $# )); do
     case "$1" in
       --dry-run)
         [[ "$allow_dry_run" == true ]] || federation_fail "--dry-run réservé à run"
         dry_run=true; shift; continue ;;
-      --host|--user|--port|--label|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket)
+      --host|--user|--port|--label|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket|--direction)
         (( $# >= 2 )) || federation_fail "valeur absente pour $1" ;;
       *) federation_fail "option inconnue : $1" ;;
     esac
     case "$1" in
       --host) host=$2 ;; --user) user=$2 ;; --port) port=$2 ;; --label) label=$2 ;;
       --identity) identity=$2 ;; --known-hosts) known_hosts=$2 ;; --root) root=$2 ;;
-      --socket) socket=$2 ;; --remote-root) remote_root=$2 ;; --remote-socket) remote_socket=$2 ;;
+      --socket) socket=$2 ;; --remote-root) remote_root=$2 ;; --remote-socket) remote_socket=$2 ;; --direction) direction=$2 ;;
     esac
     shift 2
   done
 }
 
 federation_validate_link() {
+  [[ "$direction" == from-master || "$direction" == to-master ]] || federation_fail "direction de fédération invalide"
   federation_connection
   federation_state_path "$root"
   federation_state_path "$remote_root"
@@ -315,44 +318,13 @@ federation_validate_link() {
   (( ${#socket} <= 100 && ${#remote_socket} <= 100 )) || federation_fail "socket Unix trop longue (100 octets maximum)"
   federation_private_dir "$root"
   federation_ancestors "$socket"
+  [[ "$direction" != to-master ]] || return 0
   local socket_metadata
   socket_metadata=$(federation_metadata "$socket")
   [[ -S "$socket" && ( "$socket_metadata" == "$(id -u) 600" || "$socket_metadata" == "$(id -u) 700" ) ]] || federation_fail "socket maître privée absente : $socket"
 }
 
-federation_remote_preflight() {
-  local mode=$1
-  federation_remote_command "$remote_root" "$remote_socket" "$mode"
-  {
-    federation_remote_guards
-    cat <<'REMOTE'
-federation_state_path "$1"; federation_path "$2"; federation_ancestors "$2"
-[[ ${2%/*} == "$1" ]] || federation_fail "socket hors racine"
-if [[ "$3" == remove ]]; then
-  if [[ ! -e "$1" && ! -L "$1" && ! -e "$2" && ! -L "$2" ]]; then
-    exit 0
-  fi
-  federation_private_dir "$1"
-elif [[ -e "$1" ]]; then
-  federation_private_dir "$1"
-else
-  federation_new_dir "$1"
-fi
-if [[ "$3" == strict ]]; then
-  [[ ! -e "$2" && ! -L "$2" ]] || federation_fail "socket distante déjà occupée (même stale)"
-  exit 0
-fi
-config="$1/federation.env"
-federation_path "$config"; federation_ancestors "$config"
-if [[ "$3" == recover ]]; then
-  if [[ -e "$config" || -L "$config" ]]; then
-    [[ -f "$config" && ! -L "$config" && $(federation_metadata "$config") == "$(id -u) 600" ]] || federation_fail "configuration distante étrangère"
-    [[ $(cat "$config") == channel=ssh-unix ]] || federation_fail "configuration distante incompatible"
-  else
-    (umask 077; set -C; printf 'channel=ssh-unix\n' >"$config") || federation_fail "collision configuration distante"
-  fi
-fi
-if [[ -e "$2" || -L "$2" ]]; then
+federation_recover_socket() {
   if ! python3 - "$1" "$2" <<'PY'
 import errno, os, socket, stat, sys
 root, path = sys.argv[1:]
@@ -391,9 +363,73 @@ PY
   then
     federation_fail "socket distante non récupérable"
   fi
+}
+
+federation_remote_preflight() {
+  local mode=$1
+  if [[ "${direction:-from-master}" == to-master ]]; then
+    [[ "$mode" != remove ]] || return 0
+    federation_master_preflight
+    return
+  fi
+  federation_remote_command "$remote_root" "$remote_socket" "$mode"
+  {
+    federation_remote_guards
+    cat <<'REMOTE'
+federation_state_path "$1"; federation_path "$2"; federation_ancestors "$2"
+[[ ${2%/*} == "$1" ]] || federation_fail "socket hors racine"
+if [[ "$3" == remove ]]; then
+  if [[ ! -e "$1" && ! -L "$1" && ! -e "$2" && ! -L "$2" ]]; then
+    exit 0
+  fi
+  federation_private_dir "$1"
+elif [[ -e "$1" ]]; then
+  federation_private_dir "$1"
+else
+  federation_new_dir "$1"
+fi
+if [[ "$3" == strict ]]; then
+  [[ ! -e "$2" && ! -L "$2" ]] || federation_fail "socket distante déjà occupée (même stale)"
+  exit 0
+fi
+config="$1/federation.env"
+federation_path "$config"; federation_ancestors "$config"
+if [[ "$3" == recover ]]; then
+  if [[ -e "$config" || -L "$config" ]]; then
+    [[ -f "$config" && ! -L "$config" && $(federation_metadata "$config") == "$(id -u) 600" ]] || federation_fail "configuration distante étrangère"
+    [[ $(cat "$config") == channel=ssh-unix ]] || federation_fail "configuration distante incompatible"
+  else
+    (umask 077; set -C; printf 'channel=ssh-unix\n' >"$config") || federation_fail "collision configuration distante"
+  fi
+fi
+if [[ -e "$2" || -L "$2" ]]; then
+  federation_recover_socket "$1" "$2"
 fi
 REMOTE
   } | ssh "${ssh_args[@]}" "$target" "$remote_command"
+}
+
+federation_master_preflight() {
+  federation_remote_command "$remote_root" "$remote_socket"
+  {
+    federation_remote_guards
+    cat <<'REMOTE'
+federation_private_dir "$1"
+federation_path "$2"; federation_ancestors "$2"
+[[ ${2%/*} == "$1" && -S "$2" ]] || federation_fail "socket maître distante absente"
+metadata=$(federation_metadata "$2")
+[[ "$metadata" == "$(id -u) 600" || "$metadata" == "$(id -u) 700" ]] || federation_fail "socket maître distante non privée"
+PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin command -v socat >/dev/null || federation_fail "socat requis sur la machine maître"
+REMOTE
+  } | ssh "${ssh_args[@]}" "$target" "$remote_command"
+}
+
+federation_stream_run() {
+  federation_connection
+  [[ "$direction" == to-master ]] || federation_fail "direction de flux invalide"
+  # Observer le premier octet sans le consommer conserve le flux duplex natif.
+  python3 -c 'import select,socket,sys; ready=select.select([0],[],[],10)[0]; channel=socket.socket(fileno=0); sys.exit(0 if ready and channel.recv(1,socket.MSG_PEEK) else 1)' || return 0
+  exec ssh "${ssh_args[@]}" "$target" "exec env PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin socat STDIO 'UNIX-CONNECT:$remote_socket'"
 }
 
 federation_run() {
@@ -402,6 +438,18 @@ federation_run() {
   if $dry_run; then
     printf 'dry-run [%s] : %s:%s, transfert Unix %s -> %s ; préflight distant non exécuté\n' "$label" "$target" "$port" "$remote_socket" "$socket"
     return
+  fi
+  if [[ "$direction" == to-master ]]; then
+    [[ -n ${runner_path:-} && -n ${config_path:-} ]] || federation_fail "la direction to-master exige une liaison installée"
+    if [[ -e "$socket" || -L "$socket" ]]; then
+      [[ "$mode" != strict ]] || federation_fail "socket cliente locale déjà occupée"
+      federation_recover_socket "$root" "$socket"
+    fi
+    federation_remote_preflight "$mode"
+    local socat_bin
+    socat_bin=$(PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin command -v socat) || federation_fail "socat requis sur la machine cliente"
+    # Borne de transport explicite : les canaux ne sont pas des missions.
+    exec "$socat_bin" "UNIX-LISTEN:$socket,fork,max-children=1024,mode=0600" "EXEC:'\"$runner_path\" stream-run --config \"$config_path\"'"
   fi
   federation_remote_preflight "$mode"
   printf 'Tunnel [%s] au premier plan ; aucun daemon Bridget créé.\n' "$label" >&2
@@ -415,6 +463,7 @@ federation_write_config() {
     printf 'host=%s\nuser=%s\nport=%s\n' "$host" "$user" "$port"
     printf 'identity=%s\nknown_hosts=%s\n' "$identity" "$known_hosts"
     printf 'root=%s\nsocket=%s\nremote_root=%s\nremote_socket=%s\n' "$root" "$socket" "$remote_root" "$remote_socket"
+    [[ "$direction" != to-master ]] || printf 'direction=to-master\n'
   } | federation_atomic_create "$config_path" 600 "configuration"
 }
 
@@ -547,18 +596,18 @@ federation_rollback_file() {
 
 federation_install() {
   local requested_host requested_user requested_port requested_label requested_identity requested_known_hosts
-  local requested_root requested_socket requested_remote_root requested_remote_socket
+  local requested_root requested_socket requested_remote_root requested_remote_socket requested_direction
   federation_parse_link_args false "$@"
   federation_validate_link
   federation_set_install_paths
   requested_host=$host; requested_user=$user; requested_port=$port; requested_label=$label
   requested_identity=$identity; requested_known_hosts=$known_hosts
   requested_root=$root; requested_socket=$socket
-  requested_remote_root=$remote_root; requested_remote_socket=$remote_socket
+  requested_remote_root=$remote_root; requested_remote_socket=$remote_socket; requested_direction=$direction
   if [[ -e "$install_dir" || -L "$install_dir" || -e "$service_path" || -L "$service_path" ]]; then
     [[ -d "$install_dir" && ! -L "$install_dir" && -f "$service_path" && ! -L "$service_path" ]] || federation_fail "collision avec une installation étrangère : $label"
     federation_validate_install
-    [[ "$host" == "$requested_host" && "$user" == "$requested_user" && "$port" == "$requested_port" && "$label" == "$requested_label" && "$identity" == "$requested_identity" && "$known_hosts" == "$requested_known_hosts" && "$root" == "$requested_root" && "$socket" == "$requested_socket" && "$remote_root" == "$requested_remote_root" && "$remote_socket" == "$requested_remote_socket" ]] || federation_fail "installation existante attestée mais paramètres divergents"
+    [[ "$host" == "$requested_host" && "$user" == "$requested_user" && "$port" == "$requested_port" && "$label" == "$requested_label" && "$identity" == "$requested_identity" && "$known_hosts" == "$requested_known_hosts" && "$root" == "$requested_root" && "$socket" == "$requested_socket" && "$remote_root" == "$requested_remote_root" && "$remote_socket" == "$requested_remote_socket" && "$direction" == "$requested_direction" ]] || federation_fail "installation existante attestée mais paramètres divergents"
     printf 'Liaison [%s] déjà installée et attestée (%s).\n' "$label" "$backend" >&2
     return 0
   fi
@@ -638,6 +687,9 @@ federation_remove() {
   federation_deactivate
   federation_connection
   federation_remote_preflight remove
+  if [[ "$direction" == to-master && ( -e "$socket" || -L "$socket" ) ]]; then
+    federation_recover_socket "$root" "$socket"
+  fi
   federation_remove_if_attested "$service_path" 600 "$receipt_service_hash"
   federation_remove_if_attested "$config_path" 600 "$receipt_config_hash"
   federation_remove_if_attested "$runner_path" 700 "$receipt_runner_hash"
@@ -655,7 +707,8 @@ federation_cli_usage() {
     '       bridget federate remove [ssh://[utilisateur@]hôte[:port]] [--label NOM] [-p PORT]' \
     '       bridget federate --help' \
     'Options de nouvelle liaison : --label --user --identity --known-hosts --root --socket' \
-    '                               --remote-root --remote-socket' \
+    '                               --remote-root --remote-socket [--direction from-master|to-master]' \
+    'Sans --direction : nouvelle liaison from-master ; liaison existante conservée et direction affichée.' \
     'Le port vaut 22 par défaut. Un port URL et -p doivent être identiques.' \
     'Les questions interactives exigent stdin ET stdout sur un terminal.'
 }
@@ -714,10 +767,10 @@ PY
 
 federation_cli_parse_options() {
   cli_label= cli_user= cli_port= cli_identity= cli_known_hosts=
-  cli_root= cli_socket= cli_remote_root= cli_remote_socket=
+  cli_root= cli_socket= cli_remote_root= cli_remote_socket= cli_direction=
   while (( $# )); do
     case "$1" in
-      -p|--port|--label|--user|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket)
+      -p|--port|--label|--user|--identity|--known-hosts|--root|--socket|--remote-root|--remote-socket|--direction)
         (( $# >= 2 )) || federation_fail "valeur absente pour $1" ;;
       *) federation_fail "option federate inconnue : $1" ;;
     esac
@@ -731,9 +784,11 @@ federation_cli_parse_options() {
       --socket) [[ -z "$cli_socket" ]] || federation_fail "option --socket répétée"; cli_socket=$2 ;;
       --remote-root) [[ -z "$cli_remote_root" ]] || federation_fail "option --remote-root répétée"; cli_remote_root=$2 ;;
       --remote-socket) [[ -z "$cli_remote_socket" ]] || federation_fail "option --remote-socket répétée"; cli_remote_socket=$2 ;;
+      --direction) [[ -z "$cli_direction" ]] || federation_fail "option --direction répétée"; cli_direction=$2 ;;
     esac
     shift 2
   done
+  [[ -z "$cli_direction" || "$cli_direction" == from-master || "$cli_direction" == to-master ]] || federation_fail "direction de fédération invalide"
   [[ -z "$cli_label" ]] || federation_label "$cli_label"
 }
 
@@ -875,6 +930,7 @@ federation_cli_validate_selected_options() {
   [[ -z "$cli_socket" || "$cli_socket" == "$socket" ]] || federation_fail "--socket contredit l'installation [$label]"
   [[ -z "$cli_remote_root" || "$cli_remote_root" == "$remote_root" ]] || federation_fail "--remote-root contredit l'installation [$label]"
   [[ -z "$cli_remote_socket" || "$cli_remote_socket" == "$remote_socket" ]] || federation_fail "--remote-socket contredit l'installation [$label]"
+  [[ -z "$cli_direction" || "$cli_direction" == "$direction" ]] || federation_fail "--direction contredit l'installation [$label]"
 }
 
 federation_cli_install_new() {
@@ -901,7 +957,7 @@ federation_cli_install_new() {
   federation_install --label "$cli_label" --host "$requested_host" --user "$requested_user" \
     --port "$requested_port" --identity "$cli_identity" --known-hosts "$cli_known_hosts" \
     --root "$cli_root" --socket "$cli_socket" --remote-root "$cli_remote_root" \
-    --remote-socket "$cli_remote_socket"
+    --remote-socket "$cli_remote_socket" --direction "${cli_direction:-from-master}"
 }
 
 federation_cli_status_all() {
@@ -934,8 +990,8 @@ federation_cli_connect() {
     cli_selected=${cli_matches[0]}; selected_label=${cli_install_labels[$cli_selected]}
     federation_cli_validate_selected_options
     federation_status
-    printf 'Liaison [%s] réutilisée sans réinstallation ; cible enregistrée %s:%s.\n' \
-      "$selected_label" "${cli_install_hosts[$cli_selected]}" "${cli_install_ports[$cli_selected]}"
+    printf 'Liaison [%s] réutilisée sans réinstallation ; cible enregistrée %s:%s ; direction %s.\n' \
+      "$selected_label" "${cli_install_hosts[$cli_selected]}" "${cli_install_ports[$cli_selected]}" "$direction"
     return
   fi
   [[ -z "$cli_label" ]] || {
@@ -1003,6 +1059,7 @@ federation_usage() {
   printf '%s\n' \
     'Usage: federate-ssh.sh run|install --label NAME --host HOST --user USER --identity FILE --known-hosts FILE' \
     '       --root DIR --socket PATH --remote-root DIR --remote-socket PATH [--port 22] [--dry-run]' \
+    '       --direction to-master : socket cliente locale vers maître distant, liaison installée requise.' \
     '       federate-ssh.sh status|remove --label NAME' \
     '       federate-ssh.sh cli URL|status|remove ...   Façade du binaire bridget federate' \
     'Racines/socket absolues privées ; fichiers SSH déjà en 0600.' \
@@ -1029,13 +1086,14 @@ federation_main() {
       label=$2
       if [[ "$action" == status ]]; then federation_status; else federation_remove; fi
       ;;
-    service-run)
+    service-run|stream-run)
       [[ ${1:-} == --config && -n ${2:-} && $# == 2 ]] || federation_fail "usage interne invalide"
       supplied_config=$2
       federation_load_config "$supplied_config"
       federation_set_install_paths
       [[ "$supplied_config" == "$config_path" && "$config_backend" == "$backend" ]] || federation_fail "runner/config hors installation attestée"
       federation_validate_install
+      if [[ "$action" == stream-run ]]; then federation_stream_run; return; fi
       dry_run=false
       federation_run recover
       ;;

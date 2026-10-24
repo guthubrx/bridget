@@ -2117,7 +2117,7 @@ fn prompt_for_with_private_instructions(
     let response = if message.reply {
         "Le wrapper relaie automatiquement ta réponse finale à l'expéditeur avec in_reply_to=id. Réponds avec le résultat utile ; ne double pas cette réponse par un envoi d'outil."
     } else {
-        bridget_core::envelope::NO_REPLY_NOTICE
+        bridget_core::envelope::no_reply_notice(message)
     };
     let mut metadata = json!({"id": message.id, "from": message.from, "to": message.to,
         "reply": message.reply, "in_reply_to": message.in_reply_to});

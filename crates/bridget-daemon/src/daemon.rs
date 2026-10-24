@@ -3,7 +3,14 @@
 
 mod native_child_requests;
 mod native_delegation;
+pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
+mod mobile_admin;
+mod origin_proof;
+mod mobile_operations;
+mod mobile_artifacts;
+mod mobile_tasks;
+mod mobile_questions;
 
 use bridget_core::{CircuitBreaker, Deduplicator, EnvelopeGuard, Router, RouterAction};
 use bridget_transport::greffe_authorization::{
@@ -1050,6 +1057,7 @@ struct DaemonState {
     /// fédéré ne peut pas les déduire, ni confondre deux redémarrages locaux.
     host: String,
     db_path: PathBuf,
+    socket_path: PathBuf,
     /// Racine privée des contenus publiés par cette instance. Elle est
     /// distincte du cache Desktop et ne sort jamais dans une réponse MCP.
     artifact_root: PathBuf,
@@ -1112,6 +1120,8 @@ struct DaemonState {
     remote_result_reservation: Option<Receiver<Result<Option<crate::delegation::Task>, String>>>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
+    pending_origin_proofs: HashMap<String,origin_proof::Pending>,
+    mobile_notifier: Option<crate::mobile::notifications::Notifier>,
     pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
     pending_candidate_probes_v2: HashMap<String, PendingCandidateProbeV2>,
     terminal_sessions: HashSet<String>,
@@ -4998,6 +5008,7 @@ impl DaemonState {
             fixture_root: None,
             host: crate::build_info::local_host(),
             db_path: config.db_path.clone(),
+            socket_path: config.socket_path.clone(),
             artifact_root,
             instance_id: instance_uuid.to_string(),
             coordinator_epoch,
@@ -5047,6 +5058,8 @@ impl DaemonState {
             remote_result_reservation: None,
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
+            pending_origin_proofs: HashMap::new(),
+            mobile_notifier: config.db_path.parent().and_then(crate::mobile::notifications::Notifier::start),
             pending_candidate_probes: HashMap::new(),
             pending_candidate_probes_v2: HashMap::new(),
             terminal_sessions: HashSet::new(),
@@ -10935,7 +10948,7 @@ fn announce_communication_project(
     worktree: Option<&str>,
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::CommunicationProjectSource;
-    let (owner, local, generation) = {
+    let (owner, local, foreign, generation) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let owner = live_connection_identity(&st, conn_id);
         let bare = owner.is_none()
@@ -10952,20 +10965,30 @@ fn announce_communication_project(
             .get(conn_id)
             .and_then(|instance| st.presences.get(instance))
             .is_some_and(|presence| presence.transport == "t3code");
-        let host_ok = bridget_core::host_is_attested(&st.host)
-            && host == st.host
-            && (bare || st.conn_hosts.get(conn_id).is_some_and(|v| v == host));
+        let host_ok = bridget_core::host_is_attested(host)
+            && (bare && host==st.host || st.conn_hosts.get(conn_id).is_some_and(|v| v == host))
+            && (source == CommunicationProjectSource::Git || t3);
+        let foreign=host_ok && host!=st.host && owner.is_some() && t3
+            && source==CommunicationProjectSource::T3
+            && owner.as_ref().and_then(|(_,instance)|st.presences.get(instance)).is_some_and(|p|p.host==host);
         (
             owner,
-            host_ok && (source == CommunicationProjectSource::Git || t3),
+            host_ok && host==st.host,
+            foreign,
             st.instance_id.clone(),
         )
     };
-    let resolved = local
-        .then(|| crate::communication::resolve_communication_project(root, host, source, worktree))
-        .flatten();
+    let (resolved, unavailable) = if local {
+        (crate::communication::resolve_communication_project(root,host,source,worktree),false)
+    } else if foreign {
+        match origin_proof::communication_project(state,host,root,source,worktree) {
+            Ok(project)=>(project,false),Err(_)=>(None,true),
+        }
+    } else {(None,false)};
+    let verified=resolved.is_some();
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-    let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner;
+    let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner
+        && (local || st.conn_hosts.get(conn_id).is_some_and(|current|current==host));
     let previous = st
         .communication_projects
         .get(conn_id)
@@ -10974,14 +10997,14 @@ fn announce_communication_project(
     let conflicting =
         previous.2 || matches!((&previous.1, &resolved), (Some(a), Some(b)) if a != b);
     let project = if unchanged && !conflicting {
-        resolved
+        resolved.or_else(||previous.0.clone().filter(|p|unavailable && p.host==host))
     } else {
         None
     };
     let last_known = previous.1.or_else(|| project.clone());
     st.communication_projects
         .insert(conn_id.into(), (project.clone(), last_known, conflicting));
-    if project.is_some() && local && source == CommunicationProjectSource::T3 {
+    if verified && project.is_some() && (local || foreign) && source == CommunicationProjectSource::T3 {
         st.t3_project_connections.insert(conn_id.into());
     } else {
         st.t3_project_connections.remove(conn_id);
@@ -13616,6 +13639,7 @@ fn daemon_deposit_human_inbox(
     match crate::human_inbox::deposit_and_notify(st.store.connection(), request, channel.as_ref()) {
         Ok(Ok(deposited)) => {
             if deposited.created {
+                if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
                 info!(
                     "boîte humaine: item {} déposé ({})",
                     deposited.item_id,
@@ -18116,6 +18140,17 @@ fn human_client_guard(
 }
 
 /// O(C), C connexions ; identité et projet viennent de la liaison primaire.
+fn human_request_project(state:&Arc<Mutex<DaemonState>>,thread:&str,root:&str)
+    ->Option<bridget_transport::protocol::CommunicationProject>{
+    let (host,local)={let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let owner=crate::t3code::stable_uuid(thread);
+        let host=origin_proof::host_for_owner(&st,&owner).ok()?;
+        let local=host==st.host;(host,local)};
+    if local {crate::communication::resolve_communication_project(root,&host,
+        bridget_transport::protocol::CommunicationProjectSource::T3,None)}
+    else {origin_proof::communication_project(state,&host,root,
+        bridget_transport::protocol::CommunicationProjectSource::T3,None).ok().flatten()}
+}
 fn human_authority_guard(
     st: &DaemonState,
     t3_thread_id: &str,
@@ -18143,7 +18178,12 @@ fn human_authority_guard(
         || !st
             .presences
             .get(&instance)
-            .is_some_and(|p| p.transport == "t3code" && p.host == st.host)
+            .is_some_and(|p| p.transport == "t3code" && match project {
+                Some(project) if project.host!=st.host => p.host==project.host
+                    && st.conn_hosts.get(owner).is_some_and(|host|host==&project.host)
+                    && origin_proof::worker_is_current(st,&project.host),
+                _=>p.host==st.host,
+            })
     {
         return Err(E::BindingUnavailable);
     }
@@ -18168,7 +18208,7 @@ fn handle_human_thread_view(
     let refusal = |code| DaemonToWrapper::HumanThreadViewResult {
         result: R::error(code),
     };
-    let host = {
+    {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(code) = human_client_guard(
             &st,
@@ -18179,14 +18219,8 @@ fn handle_human_thread_view(
         ) {
             return refusal(code);
         }
-        st.host.clone()
-    };
-    let project = crate::communication::resolve_communication_project(
-        &request.project_root,
-        &host,
-        bridget_transport::protocol::CommunicationProjectSource::T3,
-        None,
-    );
+    }
+    let project = human_request_project(state,&request.t3_thread_id,&request.project_root);
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
     if let Err(code) = human_client_guard(
         &st,
@@ -18232,6 +18266,7 @@ fn human_watch_guard(
 /// O(log T+M+S*C), M<=16, S<=128 ; une requête de membres par mutation.
 /// Aucun corps ni E/S socket et aucune requête SQL par suivi humain.
 fn publish_human_thread_change(st: &mut DaemonState, thread_id: &str) {
+    if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
     let connections: Vec<_> = st.human_thread_watches.keys().cloned().collect();
     if connections.is_empty() {
         return;
@@ -18391,7 +18426,7 @@ fn handle_human_thread_watch(
             event: HumanThreadWatchEvent::error(code),
         })
     };
-    let host = {
+    {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(code) = human_client_guard(
             &st,
@@ -18402,14 +18437,8 @@ fn handle_human_thread_watch(
         ) {
             return refusal(code);
         }
-        st.host.clone()
-    };
-    let project = crate::communication::resolve_communication_project(
-        &request.project_root,
-        &host,
-        bridget_transport::protocol::CommunicationProjectSource::T3,
-        None,
-    );
+    }
+    let project = human_request_project(state,&request.t3_thread_id,&request.project_root);
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     if let Err(code) = human_client_guard(
         &st,
@@ -18535,8 +18564,10 @@ fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
             warn!("worker contact invalidation failed: {error}");
         }
     }
+    invalidate_human_authority(st);
     st.pending_worker_responses
         .retain(|_, pending| pending.conn_id != conn_id);
+    st.pending_origin_proofs.retain(|_,pending|pending.conn_id!=conn_id);
     st.pending_candidate_probes
         .retain(|_, pending| pending.conn_id != conn_id);
     st.pending_candidate_probes_v2
@@ -18573,11 +18604,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 5
+                && capabilities.len() <= 6
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18654,6 +18685,7 @@ fn handle_worker_message(
         if let Some(previous) = &previous_conn {
             st.pending_worker_responses
                 .retain(|_, pending| &pending.conn_id != previous);
+            st.pending_origin_proofs.retain(|_,pending| &pending.conn_id != previous);
             st.pending_candidate_probes
                 .retain(|_, pending| &pending.conn_id != previous);
             st.pending_candidate_probes_v2
@@ -18832,6 +18864,7 @@ fn handle_worker_message(
             let _ = pending.reply.try_send(response.response);
             None
         }
+        WrapperToDaemon::OriginProofResponse {response} => origin_proof::receive(&mut st,conn_id,response),
         WrapperToDaemon::CandidateProbeResult { result } => {
             let worker = &st.remote_workers[&machine];
             if !worker
@@ -19297,6 +19330,12 @@ fn handle_wrapper_message_with_peer(
             return None;
         }
     }
+    if let WrapperToDaemon::MobileOperation { request } = &msg {
+        return Some(mobile_operations::handle(conn_id, request.clone(), state));
+    }
+    if let WrapperToDaemon::MobileAdministration { request } = &msg {
+        return Some(mobile_admin::handle(conn_id,request.clone(),state));
+    }
     if let WrapperToDaemon::HumanLineage { request } = &msg {
         return native_lineage::handle(conn_id, request, state);
     }
@@ -19510,11 +19549,13 @@ fn handle_wrapper_message_with_peer(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
+                WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
                 | WrapperToDaemon::CandidateProbeResult { .. }
-                | WrapperToDaemon::CandidateProbeResultV2 { .. } =>
+                | WrapperToDaemon::CandidateProbeResultV2 { .. }
+                | WrapperToDaemon::OriginProofResponse { .. } =>
                     Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::HumanInboxDeposit { .. }
@@ -19789,11 +19830,13 @@ fn handle_wrapper_message_with_peer(
                 Some(ClientRefusal::CapabilityNotNegotiated)
             }
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
                 | WrapperToDaemon::CandidateProbeResult { .. }
-                | WrapperToDaemon::CandidateProbeResultV2 { .. } =>
+                | WrapperToDaemon::CandidateProbeResultV2 { .. }
+                | WrapperToDaemon::OriginProofResponse { .. } =>
                     Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::QueueEditV1)) => Some(ClientRefusal::CapabilityNotNegotiated),
@@ -20077,7 +20120,8 @@ fn handle_wrapper_message_with_peer(
         | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
         | WrapperToDaemon::WorkerResponse { .. }
         | WrapperToDaemon::CandidateProbeResult { .. }
-        | WrapperToDaemon::CandidateProbeResultV2 { .. } => Some(DaemonToWrapper::WorkerRejected {
+        | WrapperToDaemon::CandidateProbeResultV2 { .. }
+                | WrapperToDaemon::OriginProofResponse { .. } => Some(DaemonToWrapper::WorkerRejected {
             reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
         }),
         WrapperToDaemon::WakeRequest { request } => Some(handle_wake_request(
@@ -21656,7 +21700,8 @@ fn handle_wrapper_message_with_peer(
                     }
                     matches!(
                         capability,
-                        ClientCapability::SendIdempotent
+                        ClientCapability::MobileAdministrationV1 | ClientCapability::MobileOperationsV1
+                            | ClientCapability::SendIdempotent
                             | ClientCapability::QueueListV1
                             | ClientCapability::QueueEditV1
                             | ClientCapability::ThreadMembersV1
@@ -23529,8 +23574,10 @@ fn handle_wrapper_message_with_peer(
 
         WrapperToDaemon::TurnState { in_progress } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let finished=!in_progress && st.conn_instances.get(conn_id).and_then(|id| st.presences.get(id)).is_some_and(|p| p.state=="busy");
             match st.set_turn_state(conn_id, in_progress) {
                 Ok(()) => {
+                    if finished { if let Some(notifier)=&st.mobile_notifier { notifier.changed(); } }
                     // La levée peut précéder le terminal de `turn/interrupt`.
                     // Le retour à l'état disponible rejoue alors la reprise
                     // durable. Celle-ci reste refusée tant que le contrôle est
@@ -23594,6 +23641,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_parent_source_proof_v1".to_string(),
                     "worker_result_slot_deadline_v1".to_string(),
                     "worker_workspace_diagnostics_v1".to_string(),
+                    "worker_origin_proof_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })
@@ -24170,6 +24218,8 @@ fn handle_wrapper_message_with_peer(
             None
         }
 
+        // Le contrôle de rôle mobile est exécuté avant cette matrice.
+        WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
         WrapperToDaemon::LedgerProjection { scope, limit } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {

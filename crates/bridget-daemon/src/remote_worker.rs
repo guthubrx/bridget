@@ -4175,13 +4175,39 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
     writer.flush().map_err(|_| "worker_connection_lost".into())
 }
 
+/// Deux lectures d’origine au plus, conservées au travers des reconnexions.
+/// Elles ne bloquent ni Release ni la maintenance du worker.
+fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofRequest,
+    writer:Arc<Mutex<UnixStream>>,disconnected:Arc<AtomicBool>,slots:Arc<std::sync::atomic::AtomicUsize>,registry:PathBuf) {
+    use bridget_transport::protocol::{OriginProofResult,OriginProofResponse};
+    let limit=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {1} else {2};
+    let busy=slots.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n| (n<limit).then_some(n+1)).is_err();
+    let envelope=request.clone();
+    let response=move |result| WrapperToDaemon::OriginProofResponse {response:OriginProofResponse {
+        version:envelope.version,correlation_id:envelope.correlation_id.clone(),connection_epoch:envelope.connection_epoch.clone(),
+        worker:envelope.worker.clone(),response:result}};
+    if busy {let _=send_worker_frame(&writer,&response(OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));return;}
+    struct Permit(Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for Permit {fn drop(&mut self){self.0.fetch_sub(1,Ordering::AcqRel);}}
+    let permit=Permit(slots);
+    std::thread::spawn(move||{
+        let _permit=permit;
+        if disconnected.load(Ordering::Acquire){return;}
+        let result=crate::origin_proof::execute(&request,&registry);
+        if disconnected.load(Ordering::Acquire){return;}
+        let frame=response(result);
+        if let WrapperToDaemon::OriginProofResponse {response}=&frame {if response.validate_shape().is_err(){return;}}
+        let _=send_worker_frame(&writer,&frame);
+    });
+}
+
 /// Sonde historique sur la même connexion, avant toute variante ou secret162.
 /// Le drapeau retourné est une attestation du maître pour proposer la nouvelle
 /// enveloppe de capacités ; il ne dépend jamais du build du pair.
 fn probe_worker_capability(
     writer: &Mutex<UnixStream>,
     reader: &mut BufReader<UnixStream>,
-) -> Result<(bool, bool, bool, bool, bool, bool), String> {
+) -> Result<(bool, bool, bool, bool, bool, bool, bool), String> {
     send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
     let line = bridget_transport::jsonl::read_unix_line(
         reader,
@@ -4205,6 +4231,7 @@ fn probe_worker_capability(
                 features.iter().any(|feature| feature == "worker_parent_source_proof_v1"),
                 features.iter().any(|feature| feature == "worker_result_slot_deadline_v1"),
                 features.iter().any(|feature| feature == "worker_workspace_diagnostics_v1"),
+                features.iter().any(|feature| feature == "worker_origin_proof_v1"),
             ))
         }
         _ => Err("worker_capability_required".into()),
@@ -4215,6 +4242,8 @@ fn probe_worker_capability(
 /// ni processus relâché ni reçu ; seuls les permis en mémoire sont abandonnés.
 pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
     let mut runtime = WorkerRuntime::new(config)?;
+    let origin_slots=Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let origin_preparation_slots=Arc::new(std::sync::atomic::AtomicUsize::new(0));
     loop {
         runtime
             .tick()
@@ -4236,7 +4265,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof, master_supports_slot_deadline, master_supports_workspace_diagnostics) =
+        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof, master_supports_slot_deadline, master_supports_workspace_diagnostics, master_supports_origin_proof) =
             match probe_worker_capability(&writer, &mut reader) {
                 Ok(capabilities) => capabilities,
                 Err(code) if matches!(code.as_str(), "worker_connection_lost" | "worker_capability_unavailable") => {
@@ -4256,7 +4285,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             build: crate::build_info::BUILD_ID.to_owned(),
             capability: ClientCapability::RemoteWorkerV1,
         };
-        let hello = if master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline {
+        let hello = if master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline || master_supports_origin_proof {
             WrapperToDaemon::WorkerHelloWithCapabilities {
                 hello: WorkerHelloWithCapabilities {
                     hello: worker_hello,
@@ -4269,6 +4298,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         (master_supports_release_lease, WorkerCapability::ReleaseLeaseV2),
                         (master_supports_source_proof, WorkerCapability::ParentSourceProofV1),
                         (master_supports_slot_deadline, WorkerCapability::ResultSlotDeadlineV1),
+                        (master_supports_origin_proof, WorkerCapability::OriginProofV1),
                     ]
                     .into_iter()
                     .filter_map(|(supported, capability)| supported.then_some(capability))
@@ -4298,20 +4328,21 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 continue;
             }
         };
-        let (epoch, candidate_probe_negotiated, candidate_probe_v2_negotiated, slot_deadline_negotiated) =
+        let (epoch, candidate_probe_negotiated, candidate_probe_v2_negotiated, slot_deadline_negotiated, origin_proof_negotiated) =
             match serde_json::from_slice::<DaemonToWrapper>(&line) {
                 Ok(DaemonToWrapper::WorkerAccepted { accepted })
                     if !master_supports_candidate_probe
                         && !master_supports_probe_v2
                         && !master_supports_release_lease
                         && !master_supports_slot_deadline
+                        && !master_supports_origin_proof
                         && accepted.validate().is_ok()
                         && accepted.identity == runtime.identity =>
                 {
-                    (accepted.connection_epoch, false, false, false)
+                    (accepted.connection_epoch, false, false, false, false)
                 }
                 Ok(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
-                    if (master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline)
+                    if (master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline || master_supports_origin_proof)
                         && (!accepted
                             .capabilities
                             .contains(&WorkerCapability::CandidateProbeV1)
@@ -4325,6 +4356,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         && (!accepted.capabilities.contains(&WorkerCapability::ReleaseLeaseV2) || master_supports_release_lease)
                         && (!accepted.capabilities.contains(&WorkerCapability::ParentSourceProofV1) || master_supports_source_proof)
                         && (!accepted.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1) || master_supports_slot_deadline)
+                        && (!accepted.capabilities.contains(&WorkerCapability::OriginProofV1) || master_supports_origin_proof)
                         && accepted.capabilities.iter().all(|capability| {
                             matches!(
                                 capability,
@@ -4333,6 +4365,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                     | WorkerCapability::ReleaseLeaseV2
                                     | WorkerCapability::ParentSourceProofV1
                                     | WorkerCapability::ResultSlotDeadlineV1
+                                    | WorkerCapability::OriginProofV1
                             )
                         }) =>
                 {
@@ -4346,6 +4379,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                             .capabilities
                             .contains(&WorkerCapability::CandidateProbeV2),
                         accepted.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1),
+                        accepted.capabilities.contains(&WorkerCapability::OriginProofV1),
                     )
                 }
                 Ok(DaemonToWrapper::WorkerRejected { .. }) => {
@@ -4367,6 +4401,9 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let read_epoch = epoch.clone();
         let read_worker = runtime.identity.clone();
         let writer_for_reader = writer.clone();
+        let origin_slots=origin_slots.clone();
+        let origin_preparation_slots=origin_preparation_slots.clone();
+        let origin_registry=runtime.config.registry_path.clone();
         let reader_thread = std::thread::spawn(move || {
             while !read_disconnected.load(Ordering::Acquire) {
                 let frame = bridget_transport::jsonl::read_unix_line(
@@ -4376,6 +4413,15 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 );
                 let inbound = match frame {
                     Ok(Some(bytes)) => match serde_json::from_slice::<DaemonToWrapper>(&bytes) {
+                        Ok(DaemonToWrapper::OriginProofRequest { request })
+                            if origin_proof_negotiated && request.connection_epoch==read_epoch
+                                && request.worker==read_worker && request.validate_shape().is_ok() => {
+                            let permits=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {
+                                origin_preparation_slots.clone()
+                            } else {origin_slots.clone()};
+                            dispatch_origin_proof(request,writer_for_reader.clone(),read_disconnected.clone(),permits,origin_registry.clone());
+                            continue;
+                        }
                         Ok(DaemonToWrapper::WorkerRequest { request })
                             if request.connection_epoch == read_epoch
                                 && request.worker == read_worker

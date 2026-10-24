@@ -53,7 +53,7 @@ fn delegate_request(request_id: &str, instruction: &str) -> NativeDelegationRequ
 }
 
 #[allow(clippy::too_many_arguments)]
-fn task(
+pub(crate) fn task(
     task_id: &str,
     owner: &str,
     owner_instance: &str,

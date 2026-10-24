@@ -1525,7 +1525,7 @@ fn private_prompt(instructions: Option<&str>, body: &str) -> String {
 
 fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
     let response = if !message.reply {
-        bridget_core::envelope::NO_REPLY_NOTICE
+        bridget_core::envelope::no_reply_notice(message)
     } else if interactive {
         "Si reply=true, réponds une seule fois par l'outil bridget_send avec to=from et in_reply_to=id ci-dessus. La réponse finale à l'écran n'est pas envoyée à cet agent."
     } else {

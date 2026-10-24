@@ -42,6 +42,7 @@ pub(crate) mod delegation;
 pub(crate) mod delegation_mcp;
 pub mod mcp;
 pub mod mcp_identity;
+pub(crate) mod mobile;
 pub(crate) mod mcp_scopes;
 mod native_permission_observer;
 pub(crate) mod native_permissions;
@@ -72,3 +73,5 @@ pub(crate) mod workspace_git;
 pub mod wrapper;
 
 pub(crate) mod wake_schedules;
+
+pub(crate) mod origin_proof;

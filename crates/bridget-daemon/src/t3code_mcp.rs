@@ -1,7 +1,6 @@
 //! Adaptation d'identité T3. Aucun lancement ni état de tâche ne dépend de ce module.
 use crate::mcp_identity::{IdentityError, ResolvedIdentity};
 use crate::t3code_contract::{ServerRuntime, base_dir, read_runtime};
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io::Read;
 use std::time::Duration;
@@ -16,17 +15,7 @@ pub(crate) const ATTESTATION_MAX_BUDGET: Duration = Duration::from_secs(
     3 * ATTESTATION_HTTP_TIMEOUT_SECS + ATTESTATION_CLEANUP_TIMEOUT_SECS,
 );
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct SessionProof {
-    pub version: u8,
-    pub environment_id: String,
-    pub thread_id: String,
-    pub provider_session_id: String,
-    pub provider_instance_id: String,
-    #[serde(default)]
-    pub permissions: Option<bridget_transport::protocol::ProviderPermissions>,
-}
+pub(crate) type SessionProof = bridget_transport::protocol::OriginSessionProof;
 
 pub(crate) fn private_proof() -> Option<bridget_transport::protocol::NativePermissionProof> {
     Some(bridget_transport::protocol::NativePermissionProof {
@@ -284,19 +273,7 @@ fn attest(
             .ok_or_else(denied)?,
     )
     .map_err(|_| denied())?;
-    if !matches!(proof.version,1|2)
-        || (proof.version==1 && proof.permissions.is_some())
-        || (proof.version==2 && proof.permissions.as_ref().is_none_or(|fact|
-            bridget_transport::protocol::validate_permissions(fact,true).is_err()
-            || fact.provider_session_id!=proof.provider_session_id
-            || fact.provider_instance_id!=proof.provider_instance_id))
-        // Les fils ordinaires ont souvent un UUID ; les enfants T3 ont aussi
-        // des identifiants opaques `thread:delegated-task:...` attestés.
-        || proof.thread_id.is_empty() || proof.thread_id.len() > 2048 || proof.thread_id.chars().any(char::is_control)
-        || [&proof.environment_id, &proof.provider_session_id, &proof.provider_instance_id].iter().any(|s| s.is_empty() || s.len() > 256 || s.chars().any(char::is_control))
-    {
-        return Err(denied());
-    }
+    proof.validate().map_err(|_|denied())?;
     Ok(proof)
 }
 

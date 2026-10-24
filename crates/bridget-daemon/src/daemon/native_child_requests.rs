@@ -330,6 +330,7 @@ fn publish_human(
     if !created {
         return Ok(None);
     }
+    if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
     #[cfg(test)]
     let channel = if st.fixture_root.is_some() {
         None

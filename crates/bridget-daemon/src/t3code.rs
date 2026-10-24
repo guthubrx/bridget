@@ -3645,9 +3645,15 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
                 message.body
             ));
         }
-        rendered.push_str(
-            "\nPas d'accusé de réception pour ces messages : n'envoie aucun « bien reçu ». Ce n'est pas une absence de tâche : si un message demande une action, fais-la. Le pont ne relaie pas ta réponse finale pour ce tour ; pour transmettre un résultat à un expéditeur, fais un nouvel envoi Bridget.",
-        );
+        if messages.iter().any(bridget_core::envelope::is_human_instruction) {
+            rendered.push_str("\n");
+            rendered.push_str(bridget_core::envelope::HUMAN_REPLY_NOTICE);
+            rendered.push_str(" Les résultats destinés aux autres agents se transmettent à ces agents par Bridget.");
+        } else {
+            rendered.push_str(
+                "\nPas d'accusé de réception pour ces messages : n'envoie aucun « bien reçu ». Ce n'est pas une absence de tâche : si un message demande une action, fais-la. Le pont ne relaie pas ta réponse finale pour ce tour ; pour transmettre un résultat à un expéditeur, fais un nouvel envoi Bridget.",
+            );
+        }
         return rendered;
     };
     envelope(message)
@@ -3757,6 +3763,9 @@ pub(crate) fn envelope(message: &bridget_core::BridgetMessage) -> String {
             "🔔 Notification Bridget (id {}) :\n\n{}\n\nPas d'accusé de réception à envoyer. Agis seulement si ce fait change ce que tu dois faire ; informe l'utilisateur si utile.",
             message.id, message.body
         );
+    }
+    if !message.reply && bridget_core::envelope::is_human_instruction(message) {
+        return bridget_core::envelope::wrap_envelope(message);
     }
     if !message.reply {
         return format!(
@@ -4551,6 +4560,18 @@ mod tests {
                 batch_envelope(std::slice::from_ref(&message)),
                 envelope(&message)
             );
+        }
+    }
+
+    #[test]
+    fn mobile177_human_single_and_batched_instructions_reply_here() {
+        let human=bridget_core::BridgetMessage::new("human","agent177","Coucou depuis le téléphone");
+        assert!(envelope(&human).contains(bridget_core::envelope::HUMAN_REPLY_NOTICE));
+        let other=bridget_core::BridgetMessage::new("agent178","agent177","Faits utiles");
+        for messages in [vec![human.clone(),human.clone()],vec![human,other]] {
+            let rendered=batch_envelope(&messages);
+            assert!(rendered.contains(bridget_core::envelope::HUMAN_REPLY_NOTICE));
+            assert!(!rendered.contains("Le pont ne relaie pas ta réponse finale"));
         }
     }
 

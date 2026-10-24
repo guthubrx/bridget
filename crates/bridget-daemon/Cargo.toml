@@ -37,6 +37,17 @@ libc.workspace = true
 unicode-width = "0.2"
 pulldown-cmark = { version = "0.13", default-features = false }
 
+# QR local intégré, sans bibliothèque image ni programme séparé.
+qrcode = { version = "=0.14.1", default-features = false, features = ["svg"] }
+
+# HTTP borné et authentifié ; réutilisation des types et du client Unix existants.
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+tokio = { version = "=1.54.1", features = ["rt-multi-thread", "net", "time", "sync", "io-util", "signal"] }
+
+# Signature OAuth FCM ; ring déjà verrouillé via TLS, codec standard JWT/PEM.
+ring = "=0.17.14"
+base64 = "=0.22.1"
+
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport", features = ["test-support"] }

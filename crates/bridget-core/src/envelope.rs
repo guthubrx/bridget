@@ -8,7 +8,22 @@ use std::time::{Duration, Instant};
 
 /// Génère le texte de l'enveloppe à injecter dans le pane de l'agent destinataire.
 /// Format compact avec instruction de réponse explicite.
+pub const HUMAN_REPLY_NOTICE: &str = "Instruction de l’utilisateur : réponds normalement dans ce fil, que l’utilisateur lit depuis Bridget. N’envoie pas de message au destinataire « human » : ce nom n’est pas routable. Pour une demande simple, réponds directement ; aucun outil Bridget n’est nécessaire pour transmettre ta réponse.";
+
+/// Présentation seule : les clients humains historiques n'avaient pas origin ; les agents sont routés par UUID.
+pub fn is_human_instruction(msg: &BridgetMessage) -> bool {
+    msg.origin == Some(crate::MessageOrigin::Human)
+        || (msg.origin.is_none() && matches!(msg.from.as_str(), "human" | "humain") && msg.delegated_origin.is_none())
+}
+
+pub fn no_reply_notice(msg: &BridgetMessage) -> &'static str {
+    if is_human_instruction(msg) { HUMAN_REPLY_NOTICE } else { NO_REPLY_NOTICE }
+}
+
 pub fn wrap_envelope(msg: &BridgetMessage) -> String {
+    if !msg.reply && is_human_instruction(msg) {
+        return format!("💬 Instruction de l’utilisateur (id={})\n{}\n\n{HUMAN_REPLY_NOTICE}", msg.id, msg.body);
+    }
     if msg.reply {
         // reply=yes : l'expéditeur attend une réponse.
         // On rend l'instruction impossible à ignorer.
@@ -88,6 +103,22 @@ impl EnvelopeGuard {
 mod tests {
     use super::*;
     use std::thread;
+
+    #[test]
+    fn mobile177_human_instruction_replies_in_the_conversation_without_a_routable_human() {
+        let mut message=BridgetMessage::new("human","agent177","Dis-moi coucou");
+        for origin in [None,Some(crate::MessageOrigin::Human)] {
+            message.origin=origin;
+            let rendered=wrap_envelope(&message);
+            assert!(rendered.contains("Dis-moi coucou"));
+            assert!(rendered.contains(HUMAN_REPLY_NOTICE));
+            assert!(!rendered.contains(NO_REPLY_NOTICE));
+        }
+        message.origin=Some(crate::MessageOrigin::Agent);
+        assert!(!is_human_instruction(&message));
+        message.from="agent177".into();message.origin=None;
+        assert!(wrap_envelope(&message).contains(NO_REPLY_NOTICE));
+    }
 
     #[test]
     fn test_envelope_format() {

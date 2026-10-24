@@ -216,6 +216,7 @@ d'architecture sont historisées dans [docs/decisions](docs/decisions) (50 docum
 ## Aller plus loin
 
 - [Mode d'emploi pour les agents](skills/bridget/SKILL.md) et sa [référence des commandes](skills/bridget/references/commandes.md)
+- [Application Android](docs/mobile.fr.md) : association, messages, notifications et mises à jour
 - [Référence complète de la communication](docs/reference-communication.fr.md) : reçus, observation, sessions natives, construction sans toucher à l'installation
 - [Installation et pont T3 Code](docs/communication-installation.fr.md)
 - [Fédération SSH entre serveurs](docs/federation-services.fr.md)

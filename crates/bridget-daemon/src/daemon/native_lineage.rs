@@ -192,7 +192,7 @@ fn journal_directory(st: &DaemonState, child: &str) -> Result<PathBuf, E> {
     Ok(root.join("sessions").join(child))
 }
 
-fn available(st: &DaemonState, task: &crate::delegation::Task) -> bool {
+pub(super) fn available(st: &DaemonState, task: &crate::delegation::Task) -> bool {
     if task.remote_placement.is_some() {
         return task.child_instance.is_some()
             && (st.router.get_agent(&task.child).is_some()
@@ -289,9 +289,6 @@ fn journal_page(
     context: &Context,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, E> {
-    use bridget_transport::protocol::{
-        WorkerIdentity, WorkerRequestOperation, WorkerResponseOperation,
-    };
     let A::Journal {
         task_id,
         after_seq,
@@ -301,28 +298,55 @@ fn journal_page(
     else {
         return Err(E::InvalidRequest);
     };
-    // L'autorité et l'identité sont figées sous verrou ; aucune E/S distante ici.
-    let (task, directory, remote) = {
+    let task = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         guard(&st, conn, context)?;
-        let task = st
-            .delegation_store
+        st.delegation_store
             .get(task_id)
             .map_err(|_| E::StoreUnavailable)?
             .filter(|task| task.root_owner() == context.root)
-            .ok_or(E::TaskUnavailable)?;
+            .ok_or(E::TaskUnavailable)?
+    };
+    let (page, command) = read_task_journal(state, &task, *after_seq, *limit)?;
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    guard_journal_snapshot(&st, conn, context, &task, command.as_ref())?;
+    Ok(page)
+}
+
+/// Lecture native unique ; l'appelant vérifie son autorité avant et après les I/O.
+pub(super) fn read_task_journal(
+    state: &Arc<Mutex<DaemonState>>,
+    task: &crate::delegation::Task,
+    after_seq: u64,
+    limit: u32,
+) -> Result<
+    (
+        Value,
+        Option<bridget_transport::protocol::WorkerCommandIdentity>,
+    ),
+    E,
+> {
+    use bridget_transport::protocol::{
+        WorkerIdentity, WorkerRequestOperation, WorkerResponseOperation,
+    };
+    if !(1..=100).contains(&limit) || after_seq > bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ
+    {
+        return Err(E::InvalidRequest);
+    }
+    let task_id = &task.task_id;
+    let (directory, remote) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(placement) = &task.remote_placement {
             let worker = WorkerIdentity {
                 machine_id: placement.machine_id.clone(),
                 worker_id: placement.worker_id.clone(),
                 provisioning_revision: placement.provisioning_revision,
             };
-            let command = native_delegation::remote_command_identity(&st, &task)
+            let command = native_delegation::remote_command_identity(&st, task)
                 .map_err(|_| E::JournalUnavailable)?;
-            (task, None, Some((worker, command)))
+            (None, Some((worker, command)))
         } else {
-            let directory = journal_directory(&st, &task.child)?;
-            (task, Some(directory), None)
+            (Some(journal_directory(&st, &task.child)?), None)
         }
     };
     let page = if let Some((worker, command)) = &remote {
@@ -331,8 +355,8 @@ fn journal_page(
             worker,
             command,
             WorkerRequestOperation::JournalPage {
-                after_seq: *after_seq,
-                limit: *limit,
+                after_seq: after_seq,
+                limit: limit,
             },
             Instant::now() + Duration::from_secs(5),
         )
@@ -347,14 +371,14 @@ fn journal_page(
         };
         // Le lecteur froid du worker renvoie les entrées complètes, avec les mêmes
         // bornes que le lecteur local. Une lacune reste explicite, jamais du texte.
-        let through = through_seq.unwrap_or(*after_seq);
-        if through < *after_seq
+        let through = through_seq.unwrap_or(after_seq);
+        if through < after_seq
             || through > bridget_transport::protocol::HUMAN_LINEAGE_MAX_SEQ
-            || fragments.len() > *limit as usize
+            || fragments.len() > limit as usize
         {
             return Err(E::JournalUnavailable);
         }
-        let mut next = *after_seq;
+        let mut next = after_seq;
         let mut bytes = 0usize;
         let mut events = Vec::new();
         for fragment in fragments {
@@ -384,19 +408,12 @@ fn journal_page(
         crate::attach::lineage_journal_page(
             directory.as_deref().ok_or(E::JournalUnavailable)?,
             task_id,
-            *after_seq,
-            *limit,
+            after_seq,
+            limit,
         )?
     };
-    let st = state.lock().unwrap_or_else(|e| e.into_inner());
-    guard_journal_snapshot(
-        &st,
-        conn,
-        context,
-        &task,
-        remote.as_ref().map(|(_, command)| command),
-    )?;
-    Ok(page)
+
+    Ok((page, remote.map(|(_, command)| command)))
 }
 
 fn refusal(request: &Request, e: E) -> DaemonToWrapper {
@@ -463,6 +480,7 @@ pub(super) fn invalid_message(st: &mut DaemonState, conn: &str) -> bool {
 }
 
 fn publish(st: &mut DaemonState, root: &str, mutation: &ProjectionMutation) {
+    if let Some(notifier)=&st.mobile_notifier { notifier.changed(); }
     for conn in st.lineage_watches.keys().cloned().collect::<Vec<_>>() {
         if st.lineage_watches[&conn].context.root != root {
             continue;

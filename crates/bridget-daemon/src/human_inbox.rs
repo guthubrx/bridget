@@ -71,6 +71,8 @@ pub fn ensure_schema(conn: &Connection) -> rusqlite::Result<()> {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_human_inbox_open_dedup
             ON human_inbox(dedup_key) WHERE state = 'open';
+        CREATE INDEX IF NOT EXISTS idx_human_inbox_decision_actor
+            ON human_inbox(json_extract(decision_json,'$.actor'));
         CREATE INDEX IF NOT EXISTS idx_human_inbox_exact_dedup
             ON human_inbox(dedup_key,created_at,id);",
         kinds = HumanInboxKind::sql_in_clause(),
@@ -237,6 +239,42 @@ pub fn list(
         |row| row.get(0),
     )?;
     Ok((items, open_count.max(0) as u32))
+}
+
+/// Page native complète : deux items du même instant ne se masquent pas.
+pub(crate) fn list_open_page(
+    conn: &Connection,
+    limit: u32,
+    after: Option<(i64, &str)>,
+) -> rusqlite::Result<Vec<HumanInboxItemFrame>> {
+    let mut statement = conn.prepare(&format!(
+        "{SELECT_ITEM} WHERE state='open'
+        AND (?2 IS NULL OR created_at<?2 OR (created_at=?2 AND id<?3))
+        ORDER BY created_at DESC,id DESC LIMIT ?1"
+    ))?;
+    statement
+        .query_map(
+            params![limit.clamp(1, 51), after.map(|v| v.0), after.map(|v| v.1)],
+            row_to_frame,
+        )?
+        .collect()
+}
+
+/// Le principal appareil encode sa commande dans l'acteur natif, pas dans un second reçu.
+pub(crate) fn find_decision_by_actor(
+    conn: &Connection,
+    actor: &str,
+) -> rusqlite::Result<Option<HumanInboxItemFrame>> {
+    let mut statement = conn.prepare(&format!(
+        "{SELECT_ITEM} WHERE json_extract(decision_json,'$.actor')=?1 LIMIT 2"
+    ))?;
+    let rows = statement
+        .query_map([actor], row_to_frame)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if rows.len() > 1 {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(rows.into_iter().next())
 }
 
 pub fn open_count(conn: &Connection) -> rusqlite::Result<u32> {

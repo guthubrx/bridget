@@ -14,6 +14,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 
 SCRIPTS = Path(sys.argv.pop())
@@ -82,6 +84,8 @@ if name == 'ssh':
     if '-N' in args:
         assert args.count('-R') == 1, args
         sys.exit(int(os.environ.get('TEST_FORWARD_EXIT','0')))
+    if args[-1].startswith('exec env PATH='):
+        sys.exit(subprocess.run(['/bin/bash','-c',args[-1]],env=os.environ).returncode)
     assert args[-1].startswith('bash -s -- '), args
     env=dict(os.environ)
     if env.get('TEST_REMOTE_PROBE_EXIT'):
@@ -181,6 +185,76 @@ class Federation095(unittest.TestCase):
     def install(self, platform='Darwin'):
         env = dict(self.env, TEST_PLATFORM=platform)
         return self.run_script(['install'] + self.common, env=env)
+
+    def test_to_master_private_socket_roundtrip_and_live_socket_preserved(self):
+        if not shutil.which('socat'):
+            self.skipTest('real socat unavailable')
+        self.home = self.root / 'home space'; self.home.mkdir(mode=0o700)
+        self.env = dict(self.env, HOME=str(self.home))
+        local = self.root / 'client space'
+        local.mkdir(mode=0o700)
+        target = self.remote / 'authority.sock'
+        authority = socket.socket(socket.AF_UNIX)
+        authority.bind(str(target)); target.chmod(0o600); authority.listen(8)
+        authority.settimeout(0.2)
+        stopped = threading.Event()
+        def echo():
+            while not stopped.is_set():
+                try: conn, _ = authority.accept()
+                except socket.timeout: continue
+                except OSError: return
+                with conn:
+                    conn.settimeout(2)
+                    try:
+                        while data := conn.recv(65536): conn.sendall(data)
+                    except OSError: pass
+        thread = threading.Thread(target=echo, daemon=True); thread.start()
+        options = ['--label','pull177','--host','fixture.invalid','--user','fixture',
+            '--identity',str(self.identity),'--known-hosts',str(self.known),
+            '--root',str(local),'--socket',str(local/'client.sock'),
+            '--remote-root',str(self.remote),'--remote-socket',str(target),'--direction','to-master']
+        runner = self.home / '.local/share/bridget-federation/pull177/runner.sh'
+        config = runner.parent / 'config'
+        process = None
+        error_path=self.root/"proxy.stderr"
+        error_file=error_path.open("wb")
+        try:
+            self.run_script(['install',*options])
+            self.assertIn('direction=to-master',config.read_text())
+            process = subprocess.Popen(['/bin/bash',str(runner),'service-run','--config',str(config)],
+                env=self.env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=error_file)
+            deadline=time.monotonic()+5
+            while not (local/'client.sock').exists() and process.poll() is None and time.monotonic()<deadline:
+                time.sleep(0.02)
+            self.assertIsNone(process.poll())
+            self.assertEqual(stat.S_IMODE((local/'client.sock').stat().st_mode),0o600)
+            with socket.socket(socket.AF_UNIX) as client:
+                client.settimeout(5); client.connect(str(local/'client.sock'))
+                data=b'private-native-frame177\n'; client.sendall(data)
+                self.assertEqual(client.recv(1024),data,error_path.read_text())
+                time.sleep(0.2)
+                later=b"second-native-frame177\n"; client.sendall(later)
+                self.assertEqual(client.recv(1024),later,error_path.read_text())
+            before=(local/'client.sock').stat().st_ino
+            ssh_before=len([x for x in self.calls() if x[0]=='ssh'])
+            duplicate=subprocess.run(['/bin/bash',str(runner),'service-run','--config',str(config)],
+                env=self.env,stdin=subprocess.DEVNULL,text=True,capture_output=True,timeout=5)
+            self.assertNotEqual(duplicate.returncode,0)
+            self.assertIn('socket distante vivante',duplicate.stderr)
+            time.sleep(0.2)
+            self.assertEqual(len([x for x in self.calls() if x[0]=='ssh']),ssh_before)
+            self.assertEqual((local/'client.sock').stat().st_ino,before)
+            self.assertTrue(target.exists(),'remote authority socket must never be removed')
+            reused=self.run_script(['cli','ssh://fixture@fixture.invalid'])
+            self.assertIn('direction to-master',reused.stdout)
+            self.run_script(['cli','ssh://fixture@fixture.invalid','--direction','from-master'],success=False)
+            process.terminate(); process.wait(timeout=5)
+            self.run_script(['remove','--label','pull177'])
+            self.assertTrue(target.exists(),'remove must preserve remote authority socket')
+        finally:
+            if process and process.poll() is None: process.terminate(); process.wait(timeout=5)
+            error_file.close()
+            stopped.set(); authority.close(); thread.join(timeout=3)
 
     def test_launchd_cycle_uses_autonomous_owned_runner(self):
         self.install()

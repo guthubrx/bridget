@@ -8,6 +8,16 @@ figures below describe the named release's evidence, not the current checkout.
 
 ## Unreleased
 
+### Android and permanent federation access
+
+- Add the native Android app: QR pairing, scoped directory, messages, files,
+  task actions, questions, durable retries and protected local storage.
+- Add the HTTPS mobile gateway with revocable device credentials and bounded work.
+- Add optional minimal notifications, local quiet hours and signed APK updates.
+- Add origin attestations and project preparation over the authenticated worker
+  channel, plus a private workstation connection to a permanent server master.
+
+
 ### Documentation and repository hygiene
 
 - English is the default README and public-guide language. French editions remain available.

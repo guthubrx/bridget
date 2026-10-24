@@ -249,6 +249,7 @@ impl DelegationStore {
     pub(super) fn initialize_lineage(&self) -> rusqlite::Result<()> {
         self.conn.execute_batch("CREATE TABLE IF NOT EXISTS native_delegation_projection_meta(singleton INTEGER PRIMARY KEY CHECK(singleton=1),generation TEXT NOT NULL,seq INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS native_delegation_cancel_receipts(root TEXT NOT NULL,request_id TEXT NOT NULL,task_id TEXT NOT NULL,receipt TEXT NOT NULL,PRIMARY KEY(root,request_id));
+            CREATE INDEX IF NOT EXISTS idx_native_cancel_request ON native_delegation_cancel_receipts(request_id);
             CREATE TABLE IF NOT EXISTS native_delegation_tombstones(owner TEXT NOT NULL,request_id TEXT NOT NULL,purged_at INTEGER NOT NULL,PRIMARY KEY(owner,request_id));")?;
         self.conn.execute("INSERT OR IGNORE INTO native_delegation_projection_meta(singleton,generation,seq) VALUES(1,?1,0)", [uuid::Uuid::new_v4().to_string()])?;
         // Les anciens liens sont dérivés seulement des identités native148 durables.
@@ -1034,6 +1035,39 @@ impl DelegationStore {
         Ok(())
     }
 
+    /// La clé d'appareil doit rester liée à une seule racine et une seule tâche.
+    pub(crate) fn human_cancel_scoped_receipt(
+        &self,
+        root: &str,
+        task_id: &str,
+        request_id: &str,
+    ) -> Result<Option<Value>, E> {
+        let mut query=self.conn.prepare("SELECT root,task_id,receipt FROM native_delegation_cancel_receipts WHERE request_id=?1 LIMIT 2").map_err(|_|E::StoreUnavailable)?;
+        let rows = query
+            .query_map([request_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|_| E::StoreUnavailable)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| E::StoreUnavailable)?;
+        if rows.len() > 1 {
+            return Err(E::StoreUnavailable);
+        }
+        rows.into_iter()
+            .next()
+            .map(|(old_root, old_task, receipt)| {
+                if old_root != root || old_task != task_id {
+                    return Err(E::EnvelopeMismatch);
+                }
+                serde_json::from_str(&receipt).map_err(|_| E::StoreUnavailable)
+            })
+            .transpose()
+    }
+
     pub fn human_cancel(
         &self,
         root: &str,
@@ -1111,4 +1145,4 @@ impl DelegationStore {
 
 #[cfg(test)]
 #[path = "delegation_lineage_tests.rs"]
-mod delegation_lineage_tests;
+pub(super) mod delegation_lineage_tests;

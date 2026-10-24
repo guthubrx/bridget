@@ -43,6 +43,10 @@
     {
       "en": "docs/security-audit.md",
       "fr": "docs/security-audit.fr.md"
+    },
+    {
+      "en": "docs/mobile.md",
+      "fr": "docs/mobile.fr.md"
     }
   ],
   "additional": [

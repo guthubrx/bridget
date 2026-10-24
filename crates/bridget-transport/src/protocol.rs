@@ -196,6 +196,8 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    MobileAdministrationV1,
+    MobileOperationsV1,
     RemoteWorkerV1,
     HumanLineageViewV1,
     HumanLineageWatchV1,
@@ -2524,6 +2526,78 @@ impl std::fmt::Debug for IdentityCredential {
     }
 }
 
+
+/// Administration des appareils par un client humain local négocié.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
+pub enum MobileAdministrationRequest {
+    Status,
+    Configure { public_url:String, listen_addr:String },
+    ConfigureNotifications { account:IdentityCredential },
+    Pair { scope:serde_json::Value },
+    Devices,
+    Revoke { device_id:String },
+}
+
+/// Le secret du QR reste un IdentityCredential pour être masqué dans Debug.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag="status",rename_all="snake_case",deny_unknown_fields)]
+pub enum MobileAdministrationResult {
+    Configuration { configured:bool, public_url:Option<String>, listen_addr:Option<String> },
+    Pairing { pairing_id:String, credential:IdentityCredential, expires_at:i64, public_url:String },
+    Devices { items:Vec<serde_json::Value> },
+    Revoked { device_id:String, found:bool },
+    NotificationsConfigured { configured:bool },
+    Error { code:String },
+}
+
+/// Opérations mobiles fermées ; le daemon recontrôle la portée avant tout effet natif.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobileOperationRequest {
+    pub credential: IdentityCredential,
+    pub operation: MobileOperation,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
+pub enum MobileOperation {
+    Questions {after:Option<String>,limit:u32},
+    QuestionShow {item_id:String},
+    QuestionRespond {device_id:String,command_id:String,item_id:String,choice:String},
+    QuestionReceipt {device_id:String,command_id:String,item_id:String,choice:String},
+    TaskList {agent_id:String,after:Option<String>,limit:u32},
+    TaskShow {task_id:String,offset:u32},
+    TaskCancel {device_id:String,command_id:String,task_id:String},
+    TaskCancelReceipt {device_id:String,command_id:String,task_id:String},
+    ArtifactList {agent_id:String,after:Option<String>,limit:u16},
+    ArtifactRead {agent_id:String,artifact_ref:String,version_ref:String,offset:u64,limit:u32},
+    ArtifactUpload {upload:MobileFileUpload},
+    ArtifactLookup {command_id:String},
+    AgentJournal {agent_id:String,after_seq:u64,limit:u32,#[serde(default)] tail:bool},
+    Federation {after:Option<String>,limit:u16},
+    Message { device_id:String, command_id:String, issued_at:i64, agent_id:String, body:String },
+    Lookup { command_id:String },
+}
+
+/// Enveloppe de fichier bornée avant l'appel natif ; clé et empreinte conservées par le téléphone.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobileFileUpload {
+    pub device_id:String,
+    pub command_id:String,
+    pub agent_id:String,
+    pub file_name:String,
+    pub media_type:String,
+    pub expected_digest:String,
+    #[serde(with="base64_bytes")]
+    pub bytes:Vec<u8>,
+}
+impl std::fmt::Debug for MobileFileUpload {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {
+        f.debug_struct("MobileFileUpload").field("command_id",&self.command_id).field("byte_length",&self.bytes.len()).finish_non_exhaustive()
+    }
+}
+
 /// Contrat technique distant162. Le framing JSONL existant reste la frontière
 /// de lecture ; ses consommateurs appliquent cette borne plus basse au worker.
 pub const REMOTE_WORKER_VERSION: u16 = 1;
@@ -2642,6 +2716,7 @@ pub enum WorkerCapability {
     ReleaseLeaseV2,
     ParentSourceProofV1,
     ResultSlotDeadlineV1,
+    OriginProofV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2657,6 +2732,128 @@ pub struct WorkerAcceptedWithCapabilities {
     pub accepted: WorkerAccepted,
     /// Sous-ensemble confirmé par le maître, lié à connection_epoch.
     pub capabilities: Vec<WorkerCapability>,
+}
+
+/// Lecture d'origine, hors de l'identité et du cycle de vie d'une Task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct OriginSessionProof {
+    pub version:u8,
+    pub environment_id:String,
+    pub thread_id:String,
+    pub provider_session_id:String,
+    pub provider_instance_id:String,
+    #[serde(default)]
+    pub permissions:Option<ProviderPermissions>,
+}
+impl OriginSessionProof {
+    /// Contrat identique pour l’attestation locale et son relais authentifié.
+    pub fn validate(&self)->Result<(),WorkerRefusal>{
+        worker_require(matches!(self.version,1|2)
+            && (self.version!=1 || self.permissions.is_none())
+            && !self.thread_id.is_empty() && self.thread_id.len()<=2048 && !self.thread_id.chars().any(char::is_control)
+            && [&self.environment_id,&self.provider_session_id,&self.provider_instance_id].iter().all(|s| !s.is_empty() && s.len()<=256 && !s.chars().any(char::is_control)))?;
+        if self.version==2 {
+            let parent=self.permissions.as_ref().ok_or(WorkerRefusal::PermissionsChanged)?;
+            validate_permissions(parent,true).map_err(|_|WorkerRefusal::PermissionsChanged)?;
+            worker_require(parent.provider_session_id==self.provider_session_id && parent.provider_instance_id==self.provider_instance_id)?;
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag="operation",rename_all="snake_case",deny_unknown_fields)]
+pub enum OriginProofOperation {
+    Catalogue {parent:ProviderPermissions,blocked:Vec<String>},
+    CommunicationProject {root:String,source:CommunicationProjectSource,worktree:Option<String>},
+    Attest {expected_thread:String, proof:NativePermissionProof},
+    Sources {parent:ProviderPermissions, source:Option<WorkerSourceBase>},
+    PrepareProject {parent:ProviderPermissions, source:WorkerSourceBase, target_machine:String, project_id:Option<String>},
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginProofRequest {
+    pub version:u16,
+    pub correlation_id:String,
+    pub connection_epoch:String,
+    pub worker:WorkerIdentity,
+    pub expires_at_ms:i64,
+    pub request:OriginProofOperation,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag="operation",rename_all="snake_case",deny_unknown_fields)]
+pub enum OriginProofResult {
+    Catalogue {permission_digest:String,entries:Vec<serde_json::Value>},
+    CommunicationProject {project:Option<CommunicationProject>},
+    Attested {proof:OriginSessionProof},
+    Sources {permission_digest:String, source_error:Option<String>},
+    ProjectPrepared {permission_digest:String, preparation_error:Option<String>},
+    Rejected {reason:WorkerRefusal},
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OriginProofResponse {
+    pub version:u16,
+    pub correlation_id:String,
+    pub connection_epoch:String,
+    pub worker:WorkerIdentity,
+    pub response:OriginProofResult,
+}
+impl OriginProofRequest {
+    pub fn validate_shape(&self)->Result<(),WorkerRefusal>{
+        self.worker.validate()?;
+        worker_require(self.version==1 && worker_atom(&self.correlation_id,128)
+            && worker_atom(&self.connection_epoch,128) && self.expires_at_ms>0)?;
+        worker_serialized_size(self,128*1024)?;
+        match &self.request {
+            OriginProofOperation::Catalogue {parent,blocked} => {
+                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
+                worker_require(blocked.len()<=128 && blocked.iter().all(|name|worker_atom(name,128)))
+            }
+            OriginProofOperation::CommunicationProject {root,worktree,..} => worker_require(
+                worker_absolute_path(root) && worktree.as_ref().is_none_or(|p|worker_absolute_path(p))),
+            OriginProofOperation::Attest {expected_thread,proof} => worker_require(
+                worker_atom(expected_thread,2048) && proof.endpoint.len()<=512
+                && proof.authorization.expose_for_attestation().len()<=300),
+            OriginProofOperation::PrepareProject {parent,source,target_machine,project_id} => {
+                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
+                worker_require(worker_atom(target_machine,128) && target_machine != &self.worker.machine_id
+                    && project_id.as_ref().is_none_or(|id| worker_atom(id,128))
+                    && worker_absolute_path(&source.cwd)
+                    && std::path::Path::new(&source.cwd).starts_with(&parent.cwd)
+                    && worker_base_commit(source.expected_base_commit.as_deref()))?;
+                worker_serialized_size(&source.workspace,4096)
+            }
+            OriginProofOperation::Sources {parent,source} => {
+                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
+                if let Some(source)=source {
+                    worker_require(worker_absolute_path(&source.cwd)
+                        && std::path::Path::new(&source.cwd).starts_with(&parent.cwd)
+                        && worker_base_commit(source.expected_base_commit.as_deref()))?;
+                    worker_serialized_size(&source.workspace,4096)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+impl OriginProofResponse {
+    pub fn validate_shape(&self)->Result<(),WorkerRefusal>{
+        self.worker.validate()?;
+        worker_require(self.version==1 && worker_atom(&self.correlation_id,128) && worker_atom(&self.connection_epoch,128))?;
+        worker_serialized_size(self,128*1024)?;
+        match &self.response {
+            OriginProofResult::Catalogue {permission_digest,entries} => worker_require(worker_digest(permission_digest)
+                && entries.len()<=128 && entries.iter().all(|entry|entry.get("agent_type").and_then(|v|v.as_str()).is_some_and(|name|worker_atom(name,128)))),
+            OriginProofResult::CommunicationProject {project} => worker_require(project.as_ref().is_none_or(|p|
+                p.host==self.worker.machine_id && worker_absolute_path(&p.root))),
+            OriginProofResult::Attested {proof} => proof.validate(),
+            OriginProofResult::Sources {permission_digest,source_error}
+            | OriginProofResult::ProjectPrepared {permission_digest,preparation_error:source_error} => worker_require(worker_digest(permission_digest)
+                && source_error.as_ref().is_none_or(|s| !s.is_empty() && s.len()<=128 && s.bytes().all(|b|b.is_ascii_lowercase()||b==b'_'))),
+            OriginProofResult::Rejected {..} => Ok(())
+        }
+    }
 }
 
 /// Tuple étudié sans Prepare, création de worktree, fournisseur ou slot.
@@ -4514,6 +4711,8 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    MobileAdministration { request:MobileAdministrationRequest },
+    MobileOperation { request:MobileOperationRequest },
     /// Authentification worker distincte du rôle Service et du Register agent.
     WorkerHello {
         hello: WorkerHello,
@@ -4525,6 +4724,7 @@ pub enum WrapperToDaemon {
     WorkerResponse {
         response: WorkerResponse,
     },
+    OriginProofResponse { response:OriginProofResponse },
     /// Verdicts groupés, lecture seule et liés à l'époque négociée du worker.
     CandidateProbeResult {
         result: CandidateProbeResult,
@@ -5537,6 +5737,8 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    MobileAdministrationResult { result:MobileAdministrationResult },
+    MobileOperationResult { result:serde_json::Value },
     WorkerAccepted {
         accepted: WorkerAccepted,
     },
@@ -5558,6 +5760,7 @@ pub enum DaemonToWrapper {
     WorkerRequest {
         request: WorkerRequest,
     },
+    OriginProofRequest { request:OriginProofRequest },
     WakeResult {
         result: WakeResult,
     },

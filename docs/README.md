@@ -14,6 +14,7 @@ implementation records remain historical evidence, not installation instructions
 | Send, reply, inspect and manage queues | [Communication](reference-communication.md) | [Communication](reference-communication.fr.md) |
 | Delegate, continue and cancel work | [Native delegation](delegation-native.md) | [Délégation native](delegation-native.fr.md) |
 | Connect machines | [SSH federation](federation-services.md) | [Fédération SSH](federation-services.fr.md) |
+| Use Bridget on Android | [Mobile](mobile.md) | [Mobile](mobile.fr.md) |
 | Build and maintain caches | [Build caches](build-cache.md) | [Caches](build-cache.fr.md) |
 | Understand compatibility changes | [Deprecations](DEPRECATIONS.md) | [Dépréciations](DEPRECATIONS.fr.md) |
 | Published releases | [Changelog](../CHANGELOG.md) | [Journal](../CHANGELOG.fr.md) |

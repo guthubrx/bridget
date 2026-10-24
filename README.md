@@ -137,6 +137,7 @@ No secret scanner can prove that a repository contains no sensitive information.
 | Communication, receipts and queues | [Reference](docs/reference-communication.md) | [Référence](docs/reference-communication.fr.md) |
 | Native delegation and remote work | [Guide](docs/delegation-native.md) | [Guide](docs/delegation-native.fr.md) |
 | SSH federation | [Guide](docs/federation-services.md) | [Guide](docs/federation-services.fr.md) |
+| Android app | [Guide](docs/mobile.md) | [Guide](docs/mobile.fr.md) |
 | Build cache maintenance | [Guide](docs/build-cache.md) | [Guide](docs/build-cache.fr.md) |
 | Deprecations | [Register](docs/DEPRECATIONS.md) | [Registre](docs/DEPRECATIONS.fr.md) |
 | Release history | [Changelog](CHANGELOG.md) | [Journal](CHANGELOG.fr.md) |

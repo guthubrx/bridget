@@ -9,6 +9,7 @@ restent accessibles avec le suffixe `.fr.md`.
 - [Communication et files](reference-communication.fr.md)
 - [Délégation native](delegation-native.fr.md)
 - [Fédération SSH](federation-services.fr.md)
+- [Application Android](mobile.fr.md)
 - [Caches de compilation](build-cache.fr.md)
 - [Dépréciations](DEPRECATIONS.fr.md)
 - [Journal des versions](../CHANGELOG.fr.md)
