@@ -3300,6 +3300,11 @@ fn failure(code: &str) -> Value {
         };
         return json!({"status":"refused","code":"workspace_preflight_technical","message":message,"detail":{"message":message,"recovery":recovery}});
     }
+    if code == "workspace_base_preflight_failed" || code.starts_with("workspace_base_preflight_failed:") {
+        let message = "Bridget n’a pas pu contrôler le dossier source avant l’admission.";
+        let recovery = "Le champ cwd désigne un dossier sur la machine du parent appelant. machine_id choisit seulement la destination : vérifier le chemin par SSH sur cette destination ne valide pas la source. Sur la machine du parent, vérifiez que cwd existe et est lisible, puis exécutez git rev-parse --show-toplevel et git rev-parse HEAD dans ce dossier. En shared, ce HEAD doit être égal à expected_base_commit. Si le commit manque, récupérez explicitement la branche qui le contient avec git fetch ; cela ne déplace pas HEAD. Ne changez pas le SHA attendu et ne déplacez pas un checkout utilisé pour contourner le refus. Si shared est imposé, conservez ce mode ; sinon, pour une base figée en worktree autorisé, donnez le même SHA complet à workspace.base_ref et expected_base_commit. Suivez toute tâche connue avec bridget_task_status. Après correction, des paramètres inchangés permettent au plus un rejeu avec la même request_id ; un refus enregistré ne se rouvre pas. Un changement de cwd ou de mode exige une nouvelle request_id après confirmation que la demande précédente n’a créé aucune tâche. Ne créez pas de nouvelle demande si le sort reste inconnu.";
+        return json!({"status":"refused","code":"workspace_base_preflight_failed","message":message,"detail":{"message":message,"recovery":recovery}});
+    }
     if code == "expected_base_commit_mismatch" {
         let message = "La base résolue ne correspond pas au commit exact demandé.";
         let recovery = "Dans cwd, sur la machine du parent, comparez expected_base_commit au commit résolu de workspace.base_ref (HEAD si absent ; HEAD en shared). Pour une revue figée en worktree, utilisez le même SHA complet dans workspace.base_ref et expected_base_commit afin que les mouvements de main ne changent pas la base. Ne changez pas la version à examiner pour faire passer le contrôle. Vérifiez le sort de la demande initiale : si une tâche existe, suivez-la. Un changement de paramètres exige une nouvelle request_id, seulement après confirmation que la demande précédente n’a créé aucune tâche ; un rejeu strict conserve sa clé et ses paramètres et ne rouvre pas un refus enregistré.";
@@ -11546,6 +11551,40 @@ mod tests {
         assert!(code.starts_with("workspace_preflight_technical:"));
         assert_eq!(failure(&code), expected);
         assert!(failure("workspace_preflight_technical_other").get("detail").is_none());
+    }
+
+    #[test]
+    fn spec174_workspace_shared_preflight_guide_sans_stderr() {
+        use bridget_transport::protocol::{AutoDelegateWorkload, WorkerSourceBase};
+        let expected = failure("workspace_base_preflight_failed");
+        assert_eq!(expected["code"], "workspace_base_preflight_failed");
+        assert_eq!(expected["status"], "refused");
+        let recovery = expected["detail"]["recovery"].as_str().unwrap();
+        for hint in ["machine du parent", "machine_id", "git rev-parse HEAD", "En shared",
+            "git fetch", "ne déplace pas HEAD", "Si shared est imposé", "bridget_task_status",
+            "au plus un rejeu", "n’a créé aucune tâche", "sort reste inconnu"] {
+            assert!(recovery.contains(hint), "conseil absent : {hint}");
+        }
+        for raw in [
+            "workspace_base_preflight_failed: No such file or directory (os error 2)",
+            "workspace_base_preflight_failed: Git Some(128) : /private/secret git-error",
+        ] {
+            assert_eq!(failure(raw), expected);
+        }
+        let missing = std::env::temp_dir().join(format!("source174-shared-absente-{}", uuid::Uuid::new_v4()));
+        assert!(!missing.exists());
+        for workspace in [Some(WorkspaceRequest::Shared {}), None] {
+            let source = WorkerSourceBase {
+                cwd: missing.to_string_lossy().into_owned(),
+                expected_base_commit: Some("1".repeat(40)),
+                workspace,
+                workload: AutoDelegateWorkload::General,
+            };
+            let code = crate::lifecycle::validate_source_base(&source).unwrap_err();
+            assert!(code.starts_with("workspace_base_preflight_failed:"));
+            assert_eq!(failure(&code), expected);
+        }
+        assert!(failure("workspace_base_preflight_failed_other").get("detail").is_none());
     }
 
     #[test]

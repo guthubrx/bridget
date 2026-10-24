@@ -1,3 +1,12 @@
+## Incidents : corriger et livrer le guidage
+
+Pour chaque incident remonté, vérifier la cause réelle. Tout défaut confirmé de
+Bridget, y compris un message ou un conseil insuffisant, doit être corrigé puis
+livré dans le binaire actif, avec les contrôles ciblés utiles et les sources
+poussées. Une explication ponctuelle au demandeur ne suffit pas : le prochain
+agent doit pouvoir agir avec le message reçu. Informer ensuite le demandeur du
+correctif livré. Cette consigne permanente a été donnée le 24 octobre 2026.
+
 ## Builds : entretien automatique obligatoire
 
 Pour toute compilation ou test Cargo de Bridget, utiliser `make build`,

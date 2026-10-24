@@ -1382,6 +1382,21 @@ il ne remplace pas un résultat reçu ensuite.
 
 ### Échec du contrôle Git source
 
+`workspace_base_preflight_failed` signale un échec du contrôle source en mode
+shared ou sans mode explicite. Ses champs `detail.message` et `detail.recovery`
+expliquent la distinction source/destination sans publier les erreurs système
+ou Git brutes. Sur la machine du parent, vérifier que `cwd` existe et est lisible,
+puis y exécuter `git rev-parse --show-toplevel` et `git rev-parse HEAD`. Un contrôle
+SSH réussi sur la destination ne valide pas cette source. En shared, le HEAD
+source doit égaler `expected_base_commit`. Récupérer un commit par fetch ne déplace
+pas HEAD. Conserver un mode shared imposé ; ne pas déplacer un checkout actif ni
+substituer un autre SHA pour passer le contrôle. Une revue en worktree autorisée
+peut figer le SHA exact dans les deux champs de base. Suivre toute tâche connue ;
+retenter au plus une fois une demande inchangée après correction. Des paramètres
+modifiés exigent une nouvelle clé seulement après confirmation que la précédente
+n’a créé aucune tâche. Un refus répété seul ne prouve ni cette absence ni un refus
+durable.
+
 Pour `workspace_preflight_technical`, `detail.message` et `detail.recovery` indiquent les vérifications utiles. Le champ `cwd` désigne le dossier source sur la machine du parent appelant, pas le dossier de destination. Vérifier le dossier, l’accès Git et la référence demandée. Réconcilier la demande existante avant tout nouvel essai ; une erreur technique ne prouve pas l’absence de tâche. La réponse ne publie pas l’erreur Git brute.
 Les causes connues de branche existante et de plafond atteint gardent leur propre conseil de reprise, sans changer le code d’erreur externe.
 
