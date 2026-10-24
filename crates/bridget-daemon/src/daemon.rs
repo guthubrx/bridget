@@ -11914,6 +11914,7 @@ fn prepare_dispatch(
     logical_sender: String,
     content_key: String,
     message_guard_id: String,
+    native_task_exchange: bool,
 ) -> Result<PreparedDispatch, (&'static str, String)> {
     let routing_from = routing_agent_id(&message.from).to_string();
     let routing_to = routing_agent_id(&message.to).to_string();
@@ -11955,20 +11956,27 @@ fn prepare_dispatch(
         None
     };
     let scope_reason = explicit_reason.or(inherited_reason);
-    let project_warnings = crate::communication::project_scope(
-        connection_communication_project(st, conn_id).as_ref(),
-        agent_communication_project(st, &routing_to).as_ref(),
-        &message.to,
-        scope_reason.as_deref(),
-    )
-    .map_err(|reason| {
-        let category = if reason.starts_with("cross_project_reason_required") {
-            "cross_project_reason_required"
-        } else {
-            "invalid_cross_project_reason"
-        };
-        (category, reason)
-    })?;
+    // La relation parent/enfant est déjà admise et le message interne exact
+    // est vérifié. Ne pas confondre ses deux emplacements avec deux projets.
+    // Les envois ordinaires ne disposent jamais de cette autorité.
+    let project_warnings = if native_task_exchange {
+        Vec::new()
+    } else {
+        crate::communication::project_scope(
+            connection_communication_project(st, conn_id).as_ref(),
+            agent_communication_project(st, &routing_to).as_ref(),
+            &message.to,
+            scope_reason.as_deref(),
+        )
+        .map_err(|reason| {
+            let category = if reason.starts_with("cross_project_reason_required") {
+                "cross_project_reason_required"
+            } else {
+                "invalid_cross_project_reason"
+            };
+            (category, reason)
+        })?
+    };
     message.cross_project_reason = scope_reason;
 
     if !st.circuit_breaker.check(&logical_sender, &message.to) {
@@ -12320,6 +12328,21 @@ fn handle_idempotent_send_with_result_authority(
         }
         _ => None,
     };
+    let native_task_exchange = if authority.is_some() {
+        // authorize_retained_result a déjà contrôlé le résultat canonique.
+        true
+    } else {
+        match native_delegation::admitted_mission_exchange(st, conn_id, &message) {
+            Ok(admitted) => admitted,
+            Err(reason) => {
+                return reject_idempotent_send(st, &key, "native_mission_invalid", reason)
+                    .unwrap_or_else(|reason| DaemonToWrapper::Nack {
+                        id: message.id.clone(),
+                        reason,
+                    });
+            }
+        }
+    };
     let prepared = match prepare_dispatch(
         st,
         &mut message,
@@ -12327,6 +12350,7 @@ fn handle_idempotent_send_with_result_authority(
         logical_sender,
         content_key,
         scoped_message_id,
+        native_task_exchange,
     ) {
         Ok(prepared) => prepared,
         Err((category, reason)) => {
@@ -23235,6 +23259,7 @@ fn handle_wrapper_message_with_peer(
                 logical_sender,
                 content_key,
                 message_guard_id,
+                false,
             ) {
                 Ok(prepared) => prepared,
                 Err((category, reason)) => {

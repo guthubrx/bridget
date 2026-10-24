@@ -3847,6 +3847,12 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             json!("Attendez la confirmation d’arrêt et le rapport du dossier dans bridget_task_status. Conservez la tâche et ses sorties ; ne lancez pas de remplacement pendant ce contrôle. bridget_task_continue ne reprend pas une tâche failed.")
         };
     }
+    if task.state == "failed"
+        && task.error.as_deref().is_some_and(|error| error.starts_with("cross_project_reason_required:"))
+    {
+        view["error_message"] = json!("Le contrôle de projet a refusé la remise de la mission à l’enfant. Ce message décrit l’échec de la tâche, pas un refus de lecture de son statut.");
+        view["error_recovery"] = json!("N’ajoutez pas cross_project_reason à bridget_task_status. Conservez la tâche, sa request_id et ses fichiers. Rejouer la demande ne la redémarre pas ; bridget_task_continue ne reprend pas une tâche failed. Après mise à jour de Bridget, vérifiez l’arrêt, le nettoyage et le rapport du dossier avant toute nouvelle demande. Aucun remplacement automatique.");
+    }
     view["quota_wait"] = task.quota_waits.last().filter(|wait| task.state == "working" && wait.phase != QuotaWaitPhase::Done)
         .map(|wait| json!({"round":wait.round,"phase":wait.phase,"resumes_at":wait.reset_at.saturating_add(30)}))
         .unwrap_or(Value::Null);
@@ -7901,6 +7907,64 @@ pub(super) fn authorize_retained_result(
             .map_err(|_| "native_result_owner_unavailable".to_string())?;
     }
     Ok(())
+}
+
+/// Reconnaît uniquement la remise interne de la mission exacte déjà admise.
+/// Les emplacements physiques du parent et de l'enfant peuvent être différents.
+/// Aucun client ne possède cette connexion éphémère ; les contrôles de lancement,
+/// de droits et de placement restent dans tick, avant send_as.
+pub(super) fn admitted_mission_exchange(
+    st: &DaemonState,
+    conn: &str,
+    message: &bridget_core::BridgetMessage,
+) -> Result<bool, String> {
+    if conn != format!("native-delegation:{}", message.id)
+        || st.connections.contains_key(conn)
+        || !st.auxiliary_connections.contains(conn)
+    {
+        return Ok(false);
+    }
+    let Some(task) = st.delegation_store.for_mission(&message.id)? else {
+        return Ok(false);
+    };
+    let invalid = || "native_mission_invalid".to_string();
+    let child_instance = task.child_instance.as_ref().ok_or_else(invalid)?;
+    if task.state != "mission_pending"
+        || task.cleanup_done
+        || task.guard_released
+        || *message != remote_mission_message(&task)?
+        || st.conn_names.get(conn) != Some(&task.owner)
+        || st.conn_instances.get(conn) != Some(&task.owner_instance)
+        || !st.client_negotiations.get(conn).is_some_and(|client| {
+            client.issuer_scope == crate::communication::issuer_scope(&task.task_id)
+        })
+    {
+        return Err(invalid());
+    }
+    for (agent, instance) in [
+        (&task.owner, &task.owner_instance),
+        (&task.child, child_instance),
+    ] {
+        let route = st.router.get_agent(agent).ok_or_else(invalid)?;
+        if live_connection_identity(st, &route.connection_id)
+            != Some((agent.clone(), instance.clone()))
+            || st
+                .communication_projects
+                .get(&route.connection_id)
+                .is_some_and(|fact| fact.2)
+            || st.delegation_store.revoked_agent(agent)?
+            || st.delegation_store.revoked(instance)?
+        {
+            return Err(invalid());
+        }
+    }
+    if st
+        .delegation_store
+        .revoked_agent(&task.root_owner_agent_id)?
+    {
+        return Err(invalid());
+    }
+    Ok(true)
 }
 
 pub(super) fn send_as(
@@ -27657,6 +27721,20 @@ for frame in frames: print(json.dumps(frame),flush=True)
         i64,
         bridget_core::BridgetMessage,
     ) {
+        parent_en_cours_avec_projets_174(native_request, retard, false)
+    }
+
+    fn parent_en_cours_avec_projets_174(
+        native_request: NativeDelegationRequest,
+        retard: i64,
+        projets_distants: bool,
+    ) -> (
+        Arc<Mutex<DaemonState>>,
+        DaemonConfig,
+        String,
+        i64,
+        bridget_core::BridgetMessage,
+    ) {
         use std::io::BufRead;
         let (mut st, config, rx, _parent_reader) = fixture("n150-delai-parent");
         let first = handle_locked("conn-1", native_request, &mut st).unwrap();
@@ -27712,8 +27790,31 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 )
                 .unwrap();
             st.managed_spawns.get_mut(&task_id).unwrap().wrapper_conn = Some("child-conn".into());
+            if projets_distants {
+                for (conn, host, root) in [
+                    ("conn-1", "mac", "/source/projet/.git"),
+                    ("child-conn", "cartae", "/execution/projet/.git"),
+                ] {
+                    st.communication_projects.insert(
+                        conn.into(),
+                        (
+                            Some(bridget_transport::protocol::CommunicationProject {
+                                host: host.into(),
+                                root: root.into(),
+                            }),
+                            None,
+                            false,
+                        ),
+                    );
+                }
+            }
         }
         tick(&shared);
+        if projets_distants {
+            let st = shared.lock().unwrap();
+            let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+            assert_eq!(task.state, "working", "refus interne : {:?}", task.error);
+        }
         let mut line = String::new();
         child_reader.read_line(&mut line).unwrap();
         let DaemonToWrapper::DeliverIdempotent { message, .. } = decode(line.trim()).unwrap()
@@ -27729,6 +27830,181 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 .expect("échéance du parent posée")
         };
         (shared, config, task_id, deadline, message)
+    }
+
+    #[test]
+    fn native174_projet_mission_admise_entre_deux_emplacements() {
+        let (shared, config, task_id, _, message) =
+            parent_en_cours_avec_projets_174(request("projet-mission"), 0, true);
+        assert!(
+            message.cross_project_reason.is_none(),
+            "aucun motif volontaire fabriqué"
+        );
+        let st = shared.lock().unwrap();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert_eq!(message.id, task.mission);
+        assert_eq!(message.from, task.owner);
+        assert_eq!(message.to, task.child);
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+        drop(st);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native174_projet_message_direct_ne_reutilise_pas_autorite_mission() {
+        let (shared, config, task_id, _, _) =
+            parent_en_cours_avec_projets_174(request("projet-direct"), 0, true);
+        let mut st = shared.lock().unwrap();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        let message = remote_mission_message(&task).unwrap();
+        st.client_negotiations.insert(
+            "conn-1".into(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::communication::issuer_scope("client-projet"),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+        );
+        let response = handle_idempotent_send(
+            "conn-1",
+            message.clone(),
+            message.id,
+            unix_timestamp(),
+            IdempotentSendAdmission {
+                project: None,
+                issued_at_tolerance_secs: i64::MAX,
+            },
+            &mut st,
+            &mut Vec::new(),
+        );
+        assert!(
+            matches!(response, DaemonToWrapper::IdempotencyResult {
+            issue: IdempotencyIssue::Rejected { ref category, .. }, ..
+        } if category == "cross_project_reason_required"),
+            "{response:?}"
+        );
+        assert_eq!(
+            st.delegation_store.get(&task_id).unwrap().unwrap().state,
+            "working"
+        );
+        drop(st);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native174_projet_autorite_limitee_au_contrat_et_aux_instances() {
+        let (shared, config, task_id, _, _) =
+            parent_en_cours_avec_projets_174(request("projet-garde"), 0, true);
+        let mut st = shared.lock().unwrap();
+        let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        task.state = "mission_pending".into();
+        st.delegation_store.save(&task).unwrap();
+        let message = remote_mission_message(&task).unwrap();
+        let conn = format!("native-delegation:{}", message.id);
+        st.conn_names.insert(conn.clone(), task.owner.clone());
+        st.conn_instances
+            .insert(conn.clone(), task.owner_instance.clone());
+        st.auxiliary_connections.insert(conn.clone());
+        st.client_negotiations.insert(
+            conn.clone(),
+            NegotiatedClient {
+                version: CLIENT_CONTRACT_VERSION,
+                issuer_scope: crate::communication::issuer_scope(&task.task_id),
+                capabilities: vec![ClientCapability::SendIdempotent],
+            },
+        );
+        assert_eq!(admitted_mission_exchange(&st, &conn, &message), Ok(true));
+        let mut autre = message.clone();
+        autre.body.push_str(" autre travail");
+        assert!(admitted_mission_exchange(&st, &conn, &autre).is_err());
+        autre = message.clone();
+        autre.to = task.owner.clone();
+        assert!(admitted_mission_exchange(&st, &conn, &autre).is_err());
+        st.conn_instances
+            .insert("child-conn".into(), "autre-instance".into());
+        assert!(admitted_mission_exchange(&st, &conn, &message).is_err());
+        st.conn_instances
+            .insert("child-conn".into(), task.child_instance.clone().unwrap());
+        st.communication_projects.get_mut("conn-1").unwrap().2 = true;
+        assert!(admitted_mission_exchange(&st, &conn, &message).is_err());
+        st.communication_projects.get_mut("conn-1").unwrap().2 = false;
+        task.state = "failed".into();
+        st.delegation_store.save(&task).unwrap();
+        assert!(admitted_mission_exchange(&st, &conn, &message).is_err());
+        drop(st);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native174_projet_resultat_canonique_revient_au_parent() {
+        let (shared, config, task_id, _, _) =
+            parent_en_cours_avec_projets_174(request("projet-resultat"), 0, true);
+        let mut st = shared.lock().unwrap();
+        let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        task.state = "result_available".into();
+        task.result = Some("Résultat conservé".into());
+        st.delegation_store.save(&task).unwrap();
+        let mut message =
+            bridget_core::BridgetMessage::new(&task.child, &task.owner, "Résultat conservé");
+        message.id = task.result_message_id();
+        message.in_reply_to = Some(task.mission.clone());
+        let response = send_as_with_result_authority(
+            &mut st,
+            &task.child,
+            task.child_instance.as_deref().unwrap(),
+            &task.task_id,
+            message,
+            unix_timestamp(),
+            &mut Vec::new(),
+            Some(&RetainedResultAuthority {
+                task_id: task.task_id.clone(),
+            }),
+        );
+        assert!(
+            matches!(
+                response,
+                DaemonToWrapper::IdempotencyResult {
+                    issue: IdempotencyIssue::Accepted { .. }
+                        | IdempotencyIssue::OutcomeUnknown { .. },
+                    ..
+                }
+            ),
+            "{response:?}"
+        );
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+        drop(st);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native174_projet_statut_distingue_echec_mission_et_lecture() {
+        let (st, config, mut task, _) = remote162_capture_fixture();
+        task.state = "failed".into();
+        task.error = Some(
+            "cross_project_reason_required:cross_project_reason_required : autre projet".into(),
+        );
+        st.delegation_store.save(&task).unwrap();
+        let before =
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        let view = task_view(&task, None, true);
+        assert!(
+            view["error_message"]
+                .as_str()
+                .unwrap()
+                .contains("pas un refus de lecture")
+        );
+        assert!(
+            view["error_recovery"]
+                .as_str()
+                .unwrap()
+                .contains("ne la redémarre pas")
+        );
+        assert_eq!(view["error"], task.error.as_deref().unwrap());
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        cleanup(&config);
     }
 
     #[test]
