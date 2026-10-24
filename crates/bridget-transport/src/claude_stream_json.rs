@@ -19,7 +19,7 @@ use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::DirBuilderExt;
@@ -102,6 +102,65 @@ pub struct ClaudeStreamJsonOptions {
     pub agent_name: Option<String>,
 }
 
+#[derive(Default)]
+struct BackgroundTasks {
+    live: HashSet<String>,
+    unconfirmed: bool,
+}
+
+impl BackgroundTasks {
+    fn observe(&mut self, value: &Value) {
+        if value["type"] != "system" || value["ambient"] == true || value["skip_transcript"] == true
+        {
+            return;
+        }
+        let subtype = value["subtype"].as_str().unwrap_or_default();
+        if !matches!(
+            subtype,
+            "task_started" | "task_progress" | "task_updated" | "task_notification"
+        ) {
+            return;
+        }
+        let Some(id) = value["task_id"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+        else {
+            self.unconfirmed = true;
+            return;
+        };
+        let terminal = match subtype {
+            "task_notification" => matches!(
+                value["status"].as_str(),
+                Some("completed" | "failed" | "stopped")
+            ),
+            "task_updated" => matches!(
+                value["patch"]["status"].as_str(),
+                Some("completed" | "failed" | "killed")
+            ),
+            _ => false,
+        };
+        if terminal {
+            self.live.remove(id);
+        } else if matches!(subtype, "task_started" | "task_progress")
+            || (subtype == "task_updated"
+                && matches!(
+                    value["patch"]["status"].as_str(),
+                    Some("pending" | "running" | "paused")
+                ))
+        {
+            if self.live.len() < 1024 || self.live.contains(id) {
+                self.live.insert(id.to_owned());
+            } else {
+                self.unconfirmed = true;
+            }
+        }
+    }
+
+    fn pending(&self) -> bool {
+        self.unconfirmed || !self.live.is_empty()
+    }
+}
+
 struct ActiveTurn {
     message_id: String,
     completion: mpsc::Sender<ManagedTerminal>,
@@ -113,6 +172,7 @@ struct ActiveTurn {
     permission_denied: bool,
     latest_assistant_rate_limited: bool,
     structured_rate_limit_observed: bool,
+    background_tasks: BackgroundTasks,
 }
 
 struct QueueState {
@@ -1157,6 +1217,7 @@ fn spawn_worker(
                 permission_denied: false,
                 latest_assistant_rate_limited: false,
                 structured_rate_limit_observed: false,
+                background_tasks: BackgroundTasks::default(),
             });
             busy.store(true, Ordering::SeqCst);
             push_internal(
@@ -1456,6 +1517,15 @@ fn spawn_reader(
                 .get("type")
                 .and_then(Value::as_str)
                 .unwrap_or("inconnu");
+            if let Some(active) = queue
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .active
+                .as_mut()
+            {
+                active.background_tasks.observe(&value);
+            }
             for path in confirmed_tool_writes(&value, &mut pending_writes) {
                 let message_id = queue
                     .0
@@ -1786,7 +1856,17 @@ fn spawn_reader(
                 }
                 let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                 if let Some(active) = state.active.as_mut() {
-                    let _ = active.completion.send(terminal);
+                    if matches!(terminal, ManagedTerminal::Completed)
+                        && active.background_tasks.pending()
+                    {
+                        // Comme T3, une fin de tour ne clôt pas les tâches du fournisseur.
+                        // Le prochain rapport reste dans la même mission et son délai initial.
+                        active.response.clear();
+                        active.text_updates = 0;
+                        active.stop_reason = None;
+                    } else {
+                        let _ = active.completion.send(terminal);
+                    }
                 }
             }
             let managed_event = if let Some(limited) = assistant_limit_observation {
@@ -2164,6 +2244,195 @@ mod tests {
             assert_eq!(prompt.contains("Pas d'accusé de réception"), !requested);
             assert_eq!(prompt.contains("relaie automatiquement"), requested);
         }
+    }
+
+    #[test]
+    fn spec174_claude_taches_bornees_et_notifications_correlees() {
+        let mut tasks = BackgroundTasks::default();
+        let start = json!({"type":"system","subtype":"task_started","task_id":"a"});
+        tasks.observe(&start);
+        tasks.observe(&start);
+        tasks.observe(&json!({"type":"system","subtype":"task_notification","task_id":"b","status":"completed"}));
+        assert_eq!(tasks.live.len(), 1);
+        tasks.observe(&json!({"type":"system","subtype":"task_updated","task_id":"a","patch":{"status":"paused"}}));
+        assert!(tasks.pending());
+        tasks.observe(&json!({"type":"system","subtype":"task_updated","task_id":"a","patch":{"status":"killed"}}));
+        assert!(!tasks.pending());
+        tasks.observe(
+            &json!({"type":"system","subtype":"task_started","task_id":"watcher","ambient":true}),
+        );
+        assert!(!tasks.pending());
+        for n in 0..1025 {
+            tasks.observe(
+                &json!({"type":"system","subtype":"task_started","task_id":n.to_string()}),
+            );
+        }
+        assert_eq!(tasks.live.len(), 1024);
+        assert!(tasks.unconfirmed);
+        tasks.live.clear();
+        assert!(
+            tasks.pending(),
+            "un inventaire tronqué ne prouve pas la fin"
+        );
+        let mut invalid = BackgroundTasks::default();
+        invalid
+            .observe(&json!({"type":"system","subtype":"task_started","task_id":"x".repeat(257)}));
+        assert!(invalid.pending());
+        assert!(invalid.live.is_empty());
+    }
+
+    #[test]
+    fn spec174_claude_fond_conserve_annulation_echec_et_echeance() {
+        for reason in ["aborted_tools", "api_error", "completed"] {
+            let frames = [
+                json!({"type":"system","subtype":"task_started","task_id":"running"}),
+                json!({"type":"result","terminal_reason":reason,"is_error":reason == "api_error","result":"interim"}),
+            ];
+            let output = frames
+                .iter()
+                .map(|frame| format!("printf '%s\\n' '{}'; ", frame))
+                .collect::<String>();
+            let mut configured = options();
+            configured.args[1] = format!("IFS= read -r line; {output} IFS= read -r line");
+            configured.notify_timeout_secs = 1;
+            let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+            transport.deliver(&message("background-terminal")).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let terminal = loop {
+                let found = transport
+                    .drain_events()
+                    .into_iter()
+                    .find_map(|e| match e.kind {
+                        ManagedEventKind::TurnFinished { terminal, .. } => Some(terminal),
+                        ManagedEventKind::DeliveryRejected { reason, .. } => {
+                            Some(ManagedTerminal::Failed { detail: reason })
+                        }
+                        _ => None,
+                    });
+                if let Some(terminal) = found {
+                    break terminal;
+                }
+                assert!(Instant::now() < deadline, "échéance perdue");
+                thread::sleep(Duration::from_millis(10));
+            };
+            match reason {
+                "aborted_tools" => assert!(matches!(terminal, ManagedTerminal::Cancelled)),
+                "api_error" => assert!(
+                    matches!(terminal, ManagedTerminal::Failed { detail } if detail == "api_error")
+                ),
+                _ => assert!(
+                    matches!(terminal, ManagedTerminal::Failed { detail } if detail == "échéance Claude dépassée")
+                ),
+            }
+            transport.stop();
+        }
+    }
+
+    #[test]
+    fn spec174_claude_attend_le_rapport_apres_le_travail_de_fond() {
+        let root = std::env::temp_dir().join(format!(
+            "bridget-background-{}-{}",
+            std::process::id(),
+            FIXTURE_SEQ.fetch_add(1, AtomicOrdering::Relaxed)
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let script = r#"
+import json, pathlib, sys, time
+root = pathlib.Path(sys.argv[1])
+def emit(value):
+    print(json.dumps(value), flush=True)
+def gate(n):
+    emit({'type':'system','subtype':'status','barrier':n})
+    while not (root / str(n)).exists():
+        time.sleep(.01)
+def result(text):
+    emit({'type':'result','is_error':False,'terminal_reason':'completed','result':text})
+sys.stdin.readline()
+emit({'type':'system','subtype':'task_started','task_id':'calculation','task_type':'local_bash','is_backgrounded':True})
+result('calcul en cours, rapport a venir')
+gate(1)
+emit({'type':'system','subtype':'task_notification','task_id':'foreign','status':'completed'})
+result('toujours en cours')
+gate(2)
+emit({'type':'system','subtype':'task_notification','task_id':'calculation','status':'completed'})
+gate(3)
+result('rapport final, commit termine')
+sys.stdin.readline()
+"#;
+        let mut configured = options();
+        configured.command = "python3".into();
+        configured.args = vec![
+            "-u".into(),
+            "-c".into(),
+            script.into(),
+            root.to_string_lossy().into_owned(),
+        ];
+        configured.notify_timeout_secs = 10;
+        let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+        transport.deliver(&message("background-mission")).unwrap();
+        let mut events = Vec::new();
+        for stage in 1..=3 {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                events.extend(transport.drain_events());
+                if events.iter().any(|e| {
+                    serde_json::from_slice::<Value>(&e.raw)
+                        .ok()
+                        .is_some_and(|v| v["barrier"] == stage)
+                }) {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "barrière fournisseur {stage} absente"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            thread::sleep(Duration::from_millis(50));
+            events.extend(transport.drain_events());
+            assert!(
+                transport.is_busy(),
+                "mission publiée avant le rapport final, étape {stage}"
+            );
+            assert!(
+                !events.iter().any(|e| matches!(
+                    e.kind,
+                    ManagedEventKind::TurnFinished { .. }
+                        | ManagedEventKind::DeliveryRejected { .. }
+                )),
+                "résultat prématuré, étape {stage}"
+            );
+            fs::write(root.join(stage.to_string()), b"continue").unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            events.extend(transport.drain_events());
+            if events
+                .iter()
+                .any(|e| matches!(e.kind, ManagedEventKind::TurnFinished { .. }))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "rapport final absent");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let results: Vec<_> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                ManagedEventKind::TurnFinished {
+                    message,
+                    response,
+                    terminal: ManagedTerminal::Completed,
+                } => Some((message.id.as_str(), response.as_str())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            results,
+            vec![("background-mission", "rapport final, commit termine")]
+        );
+        transport.stop();
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn options() -> ClaudeStreamJsonOptions {
