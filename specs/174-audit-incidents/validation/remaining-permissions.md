@@ -1,95 +1,62 @@
-# Remaining permission candidates — audit 174
+# Qualification of the four permission candidates
 
-Date: 2026-10-24
-Scope: PERM-DELIVERY, PERM-ROOT, PERM-ENV, PERM-UUID
-Method: static reading of the code paths and existing tests. No Cargo run. No production code changed.
+Date: 2026-10-24. Scope: the four unresolved permission hypotheses from audit 174.
+The initial independent reading is preserved in the private audit evidence.
 
-## Verdicts
-
-| Candidate | Verdict | Code change |
+| Original candidate | Qualification | Action |
 |---|---|---|
-| PERM-DELIVERY | Confirmed diagnostic defect. No authority bypass. | None. Fix proposed, not coded. |
-| PERM-ROOT | Intended boundary. Not a defect. | None. |
-| PERM-ENV | Intended behavior. Same OS account is inside the threat model. | None. |
-| PERM-UUID | Not confirmed as exploitable. Fix would migrate persisted identities. | None. Options proposed. |
+| PERM-DELIVERY, same-task proof | No authority bypass: `emit` obtains the remote proof before a positive answer and rechecks the worker epoch and current task. Cancel frames only restrict. | Refute the bypass hypothesis. Fix the separate diagnostic defect below. |
+| PERM-ROOT, worktree policy | `.git` bounds project policy lookup. A linked checkout is its own project directory. Reading untracked settings from another checkout would change that authority. | Keep the boundary. Provider behavior outside these read paths is not certified. |
+| PERM-ENV, environment instance | Environment resolution selects an identity; it does not authenticate it. `load_credential` checks the private file and both identifiers. `register_auxiliary` checks the live primary connection and its credential. | Keep the supported marker-free path. Same-account hostile processes remain outside this boundary. |
+| PERM-UUID, input domain | Cross-role equal strings are possible, but agent, instance and message identifiers are not interchangeable authorities. | Refute the proposed collision-based impersonation; preserve persisted IDs. |
 
-## PERM-DELIVERY
+## Delivery diagnostic
 
-Claim: a remote delivery refused for a live reason is recorded with one generic reason.
+`valid_delivery` previously mapped every failure from the live local or remote
+check to `revoked`. This included quota exhaustion and missing permission sources.
+The new closed mapping preserves `provider_quota_exhausted` and
+`permission_source_unavailable`; other verification failures become
+`delivery_check_unavailable`. A proven `permission_not_inherited` remains denied.
+No check is removed. No response is sent on failure. Historical rows are not
+rewritten. `void_reason` is an existing text field; no schema change is needed.
+`ChildRequestCancel` contains the request tuple, not this reason. Contrary to the
+initial review suggestion, no worker wire enum needs extending.
 
-Evidence:
-- `crates/bridget-daemon/src/daemon/native_child_requests.rs:148` — `valid_delivery` calls `native_delegation::recheck_remote_dispatch(st, task, task).map_err(|_| "revoked")?`. Every error from the live recheck becomes `"revoked"`.
-- `crates/bridget-daemon/src/daemon/native_child_requests.rs:858-865` — `tick` persists the `valid_delivery` reason through `invalidate`. The recorded reason is therefore `"revoked"` for any live-check failure.
-- `crates/bridget-daemon/src/daemon/native_delegation.rs:7066` — the resume path maps `"revoked"` to `permission_not_inherited`. This file is owned by ROOT and was only read.
-- `crates/bridget-daemon/src/daemon/native_child_requests.rs` `emit` — only `ChildRequestAnswer` frames run the remote recheck and `valid_delivery`. Cancel frames only restrict.
+The Respond path preserves the distinct codes. Unavailable checks receive a
+constant MCP recovery message: inspect the existing task and pending requests,
+restore the relevant source, and do not create a replacement or widen rights.
+The fixture `spec174_child_delivery_unavailable_is_not_revoked` exercises a live
+remote child, a missing source, explicit denial, an opaque error and a quota.
+It also checks that a private error canary does not reach the public diagnostic.
 
-Discriminating proof: the existing test `remote162_remise_refuse_fait_natif_change_sans_exiger_parent_absent_ou_t3` in `crates/bridget-daemon/src/daemon/native_child_requests155_tests.rs:633-662`. It asserts that `recheck_remote_dispatch` returns `"permission_not_inherited"` (line 644) and `"permission_source_unavailable"` (line 657). The recheck layer already distinguishes causes. `valid_delivery` discards that distinction.
+## Identity domains: concrete counterexample to the original assumption
 
-Authority: the live checks still run and still block delivery. No check is skipped and no permission is granted. The defect is in the recorded cause only.
+T3 `packages/contracts/src/baseSchemas.ts` accepts branded non-empty identifiers.
+Imported thread identifiers are not restricted to UUIDs. With thread A=`example`
+and thread B=`instance:example`, B's agent ID equals A's instance ID. This is an
+equality across roles, not an equality of two agent IDs or two instance IDs.
 
-Proposed fix, not coded:
-1. Map each recheck error to its own code (for example quota exhausted, parent fact changed, source unavailable, revoked).
-2. Add the new codes to the closed list in `crates/bridget-daemon/src/remote_worker.rs` (around lines 110-140). Otherwise remote peers classify them as `"unknown"`.
-3. Update the `"revoked"` mapping in `native_delegation.rs:7066` so that resume keeps its current behavior. This is a ROOT-owned change and needs a hunk proposed to ROOT.
-4. Decide how existing records that store `"revoked"` are read. This is a persisted-state question and is not decided here.
+Bridget `t3code_mcp::resolve_binding` supplies the pair derived from one thread.
+`mcp_identity::load_credential` validates both fields in the credential file.
+`daemon::register_auxiliary` first resolves the agent's route, then checks that
+route's credential and instance, and finally the live pair. A value from another
+role cannot pass these checks by itself. Revocations also use separate tables:
+`native_delegation_revocations.agent_id` and
+`native_delegation_grants.owner_instance`. Message IDs are stored in message
+records, not looked up as agent authority. Reply IDs additionally carry `t3-`.
+Existing tests `spec099_preuve_auxiliaire_valide_bornee_et_revoquee` and
+`spec172_binding_refusal_preserves_guards_and_explains_failed_check` exercise
+credential, instance and live-route rejection. The opaque identifier integration
+test protects imported identifiers. No identifier migration is justified here.
 
-T3 reference: `McpSessionRegistry.ts` offers explicit revocation and a liveness TTL. It has no per-delivery reason taxonomy. Equivalent absent.
+## T3 reference and limits
 
-## PERM-ROOT
+T3 `apps/server/src/mcp/McpSessionRegistry.ts` binds a random credential to a scope
+containing distinct thread and provider-instance fields. Its revocation API is
+separate from session liveness. Bridget retains the same separation of identity
+selection, credential proof and live authority. T3 has no remote child-answer
+wire protocol or equivalent delivery-error mapping to copy.
 
-Claim: the project root stops at the first ancestor that contains `.git`. A linked worktree, where `.git` is a file, is therefore its own root and does not read the settings of the main checkout.
-
-Evidence:
-- `crates/bridget-daemon/src/native_permissions.rs:892-897` — `project_root` returns the first ancestor where `.git` exists.
-- `crates/bridget-daemon/src/native_permissions.rs:1264` — the project loop reads `.claude/settings.json` and `.claude/settings.local.json` for each ancestor, then stops at `.git`.
-- `crates/bridget-daemon/src/native_permissions149_tests.rs:393` — the existing comment states that `.git` bounds the ancestor walk.
-
-Verdict: intended boundary. Extending the walk to the main repository would let a worktree inherit permission settings it did not declare. That relaxes authority and is out of scope for this audit.
-
-Open point: whether the provider reads project settings for linked worktrees cannot be checked here. No T3 equivalent was found for project-root resolution. This is not a defect claim.
-
-## PERM-ENV
-
-Claim: the agent identity can be set through environment variables or a name file without checking the process marker.
-
-Evidence:
-- `crates/bridget-daemon/src/mcp_identity.rs:458-466` — when `expected_instance_id` and a readable, permitted name file are both present, the function returns the identity without reading the `AgentPidMarker`.
-- `crates/bridget-daemon/src/mcp_identity.rs:470-490` — the marker check runs on the other path only.
-
-Naming note: the environment variable is `BRIDGET_AGENT_INSTANCE_ID`, not `BRIDGET_INSTANCE_ID`.
-
-Verdict: intended behavior. Whoever can set the environment of the MCP process or write the name file already runs under the same OS account. That account is inside the threat model. No cross-account escalation is shown.
-
-T3 reference: no equivalent variable scheme was found in the read T3 files. Equivalent absent.
-
-## PERM-UUID
-
-Claim: `stable_uuid` uses one namespace for several domains with no separation. Raw identifiers and the prefixes `instance:`, `t3code-message:` and `t3code-reply:` share the same space. A crafted thread identifier could collide with a derived identifier from another domain.
-
-Evidence:
-- `crates/bridget-daemon/src/t3code.rs:350-357` — `stable_uuid` builds a v5 UUID on `NAMESPACE_098`, then sets the v4 presentation bits.
-- Usages in `crates/bridget-daemon/src/t3code.rs` at lines 161-166, 1416-1417, 1485-1486, 2635, 3608 and the determinism test at 6975-6977.
-- Same derivation in `crates/bridget-daemon/src/t3code_mcp.rs` at lines 73-74 and 650-651.
-
-Verdict: not confirmed as exploitable. A collision needs a thread identifier that reaches `stable_uuid` without validation. The producer of that string was not verified in this audit. The threat model is also the same OS account.
-
-Why not fixed: changing the derivation changes persisted identities (thread-state files, agent identifiers, instance identifiers). A silent change of identity is forbidden by the audit scope.
-
-Options for the owner to decide:
-1. Validate identifier format at the entry point, before `stable_uuid` is called. No persisted identity changes.
-2. Use a separate domain prefix only for identifiers created after the change. Existing identifiers keep their current derivation.
-
-T3 reference: the read T3 schema files use branded non-empty strings. They contain no UUID derivation. Equivalent absent.
-
-## Tests
-
-Not run:
-- No Cargo command was run. The consolidated build belongs to ROOT.
-- The existing tests cited above were not executed in this session.
-- No new test was added. An unexecuted Rust test could break the consolidated build.
-
-Discriminating tests proposed, not written:
-- PERM-ROOT: create a temporary main repository with `.git` directory and `.claude/settings.json`, then a linked worktree with `.git` file below it. Assert that `project_root` returns the worktree path.
-- PERM-DELIVERY: after the mapping in the fix above, assert that a live quota refusal produces its own code, not `"revoked"`.
-
-No visible UI change was made, so no proof slideshow is required.
+This is a focused code-path qualification, not a claim that all project policy
+combinations or same-account hostile processes are covered. Consolidated test
+results and independent final review are recorded in the delivery evidence.

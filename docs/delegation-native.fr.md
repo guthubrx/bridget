@@ -1511,3 +1511,7 @@ Un avertissement de montage Linux exige une seconde lecture bornée. Tout fichie
 Les faits Git sur la base et les commits sont réutilisés dans un seul passage. L'état de chaque worktree reste lu séparément, fichiers ignorés et non suivis compris. Cette lecture ne prouve ni propriété, ni clôture de tâche, ni verrou exclusif des fichiers. Après dépassement, le script demande TERM pour son propre groupe de commande et signale un arrêt non confirmé si nécessaire. Il n'envoie jamais KILL.
 
 Le nettoyeur de cache exclut seulement son propre descripteur `.cargo-lock`, pendant qu'il détient ce verrou. Les autres fichiers et processus restent visibles. Une portée contenant un caractère non ASCII ou non imprimable, une barre oblique inverse ou un accent circonflexe est déclarée inconnue, car lsof peut échapper son nom. L'observation reste un instantané : un processus peut ouvrir un fichier après le contrôle.
+
+### Vérification de remise enfant indisponible
+
+Un refus `permission_source_unavailable` ou `delivery_check_unavailable` indique que Bridget ne peut pas vérifier les droits de remise. Il ne prouve pas une révocation. Aucune réponse positive n’a été remise. Consultez la tâche existante avec `bridget_task_status`, rétablissez la source de droits ou la configuration concernée, puis répondez seulement à une demande encore ouverte. Ne créez pas de tâche de remplacement et n’élargissez pas les droits. `provider_quota_exhausted` reste un refus distinct de quota.

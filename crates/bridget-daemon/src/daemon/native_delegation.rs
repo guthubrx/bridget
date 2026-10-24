@@ -3315,6 +3315,11 @@ fn failure(code: &str) -> Value {
         let recovery = "Dans cwd, sur la machine du parent, vérifiez que Git peut résoudre le commit demandé. Sa présence sur la machine de destination ne suffit pas. Si le commit manque, identifiez le dépôt distant et la branche qui le contiennent, puis récupérez cette branche avec git fetch dans le dépôt source. Vérifiez à nouveau le SHA exact, sans changer expected_base_commit, faire de reset ou avancer la branche de travail. Si une tâche existe, suivez-la avec bridget_task_status. Sinon, après correction, faites au plus un rejeu strict avec la même request_id et les mêmes paramètres. Un refus enregistré reste un refus au rejeu : si ce refus durable et l’absence de tâche sont confirmés, utilisez une nouvelle request_id après correction. Ne multipliez pas les essais si le sort reste inconnu. Ce code ne désigne pas le plafond des worktrees.";
         return json!({"status":"refused","code":"workspace_base_unavailable","message":message,"detail":{"message":message,"recovery":recovery}});
     }
+    if matches!(code, "delivery_check_unavailable" | "permission_source_unavailable") {
+        let message = "La vérification des droits de remise est indisponible ; aucune révocation n’est établie.";
+        let recovery = "Aucune réponse positive n’a été remise. Consultez bridget_task_status sur la tâche existante et ses demandes en attente. Rétablissez la source de droits ou la configuration signalée avant de répondre à une demande encore ouverte. Ne créez pas une autre tâche et ne changez pas les droits pour contourner ce refus.";
+        return json!({"status":"refused","code":code,"message":message,"detail":{"message":message,"recovery":recovery}});
+    }
     if code.starts_with("workspace_")
         && let Some((code, message)) = code.split_once(':')
     {
@@ -7068,6 +7073,8 @@ fn handle_locked_with_remote_proof(
                     "expired" => "request_expired",
                     "paused" => "referent_paused",
                     "revoked" => "permission_not_inherited",
+                    "provider_quota_exhausted" | "permission_source_unavailable"
+                    | "delivery_check_unavailable" => code,
                     _ => "request_closed",
                 },
             )?;

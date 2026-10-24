@@ -701,3 +701,7 @@ A Linux mount warning requires a second bounded observation. Every file on an ex
 Git base and commit facts are reused only within one pass. Working-tree status is read separately, including ignored and untracked files. No ownership, task closure or exclusive filesystem lock is inferred. After a timeout, the script requests TERM for its own command group and reports an unconfirmed stop when applicable. It never sends KILL.
 
 The cache cleaner excludes only its own `.cargo-lock` descriptor while holding that lock. Other files and other processes remain visible. A scope containing non-ASCII or non-printable characters, a backslash or a caret is reported as unknown because lsof can escape its name. Process observations remain snapshots: a process can open a file after the check.
+
+### Child answer verification unavailable
+
+A child-answer refusal with `permission_source_unavailable` or `delivery_check_unavailable` means that Bridget could not verify delivery authority. It does not establish a revocation. No positive answer was delivered. Read the existing task with `bridget_task_status`, restore the relevant permission source or configuration, and answer only a still-open request. Do not create a replacement task or widen permissions. `provider_quota_exhausted` remains a separate quota refusal.

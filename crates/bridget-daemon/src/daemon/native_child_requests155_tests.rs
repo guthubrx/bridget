@@ -2090,3 +2090,28 @@ fn guidance156_cancel_parent_mission_sans_interruption() {
         "working"
     );
 }
+
+#[test]
+fn spec174_child_delivery_unavailable_is_not_revoked() {
+    let fixture = RequestFixture155::with_remote("r174-diagnostic", true);
+    let question = fixture.question(174);
+    fixture.receive(question.clone());
+    let row = fixture.row(&question);
+    let mut st = fixture.state.lock().unwrap();
+    let now = unix_timestamp();
+    assert!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now).is_ok());
+    st.native_permission_facts.remove("conn-1");
+    st.native_permission_refusals.insert("conn-1".into(), "permission_source_unavailable".into());
+    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("permission_source_unavailable"));
+    st.native_permission_refusals.insert("conn-1".into(), "permission_not_inherited".into());
+    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("revoked"));
+    st.native_permission_refusals.insert("conn-1".into(), "/private/canary: read failed".into());
+    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("delivery_check_unavailable"));
+    st.provider_limits.record_scoped("native-test", fixture.task.child_instance.as_deref().unwrap(),
+        bridget_transport::protocol::RateLimitFact { credits: None, window: "five_hour".into(), status: "rate_limit_reached".into(), resets_at: Some(now + 600), used_percent: Some(100) },
+        bridget_transport::protocol::RateLimitSource::CodexAppServer, now);
+    assert_eq!(native_child_requests::valid_delivery(&st, &fixture.task, &row, now), Err("provider_quota_exhausted"));
+    let view = failure("delivery_check_unavailable");
+    assert!(view["detail"]["recovery"].as_str().unwrap().contains("bridget_task_status"));
+    assert!(!view.to_string().contains("canary"));
+}

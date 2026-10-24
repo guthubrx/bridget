@@ -145,11 +145,22 @@ pub(super) fn valid_delivery(
     }
     if task.remote_placement.is_some() {
         // Les lectures de sources sur destination sont réservées à emit, hors mutex.
-        native_delegation::recheck_remote_dispatch(st, task, task).map_err(|_| "revoked")?;
+        native_delegation::recheck_remote_dispatch(st, task, task).map_err(delivery_check_reason)?;
     } else {
-        native_delegation::native_launch_registry(st, task).map_err(|_| "revoked")?;
+        native_delegation::native_launch_registry(st, task).map_err(delivery_check_reason)?;
     }
     Ok(conn)
+}
+
+// Une indisponibilité n'est pas une révocation. Garder des motifs fermés,
+// sans exposer les chemins ni les erreurs système de la vérification.
+fn delivery_check_reason(error: String) -> &'static str {
+    match error.as_str() {
+        "permission_not_inherited" => "revoked",
+        "provider_quota_exhausted" => "provider_quota_exhausted",
+        "permission_source_unavailable" => "permission_source_unavailable",
+        _ => "delivery_check_unavailable",
+    }
 }
 
 /// O(log droits), le parent est le propriétaire direct vivant, pas la racine.
