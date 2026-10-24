@@ -74,3 +74,4 @@ Dated design decisions, mainly in French. They record context and trade-offs, no
 - [166-rattachement-bridget-reprise.md](166-rattachement-bridget-reprise.md)
 - [167-coordination-cli-autonome.md](167-coordination-cli-autonome.md)
 - [169-priorite-bridget.md](169-priorite-bridget.md)
+- [170-minreq-3-et-serde-saphyr.md](170-minreq-3-et-serde-saphyr.md)
