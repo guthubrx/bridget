@@ -345,7 +345,7 @@ def observed_run(arguments, budget=None, timeout=15, limit=MAX_OBSERVATION_BYTES
 def process_output_complete(stdout, exempt=()):
     # Les types explicitement non fichiers n'ont pas de chemin à protéger.
     nonfiles = {"a_inode", "netlink", "unix", "IPv4", "IPv6", "sock", "pack", "PIPE",
-                "KQUEUE", "PSXSEM", "PSXSHM", "systm", "NPOLICY", "FSEVENTS", "NEXUS", "CHAN"}
+                "KQUEUE", "PSXSEM", "PSXSHM", "systm", "NPOLICY", "FSEVENTS", "NEXUS", "CHAN", "rte"}
     pid, record = None, {}
     seen = False
 

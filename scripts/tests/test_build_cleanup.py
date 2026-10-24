@@ -768,7 +768,7 @@ class Observation176Tests(unittest.TestCase):
                 self.assertFalse(build.process_output_complete(data, ("/portal",)))
 
     def test_objets_noyau_connus_ne_sont_pas_des_fichiers_disque(self):
-        for kind, name in (("FIFO", "pipe"), ("REG", "net"), ("REG", "mnt"), ("NEXUS", ""), ("CHAN", "channel"),
+        for kind, name in (("FIFO", "pipe"), ("REG", "net"), ("REG", "mnt"), ("NEXUS", ""), ("CHAN", "channel"), ("rte", ""),
                            ("REG", "anon_inode:[io_uring] (stat: No such file or directory)")):
             self.assertTrue(build.process_output_complete(
                 f"p1\nf1\nt{kind}\nn{name}\n".encode()))
