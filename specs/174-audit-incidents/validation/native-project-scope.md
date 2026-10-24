@@ -41,3 +41,18 @@ succès de suite complète n’est déduit de ce lot.
 Aucune tâche métier existante n'est rejouée ou modifiée. Les journaux de tests
 restent hors Git. La livraison doit conserver le candidat mobile actif et ne
 pas le remplacer par une compilation de l'ancien main.
+
+## État de livraison du 24 octobre 2026
+
+Source `d5af84f8` intégrée et poussée sur main, checkout Mac et Cartae alignés.
+Le worktree de correction et sa branche sont retirés après contrôle : intégrés,
+propres y compris fichiers ignorés, aucune tâche liée, observation des fichiers
+ouverts complète et sans usage. Le cache partagé de validation reste dans le
+budget ; aucun nouveau cache ni copie de binaire n'a été créé.
+
+L'activation reste ouverte. Le maître actif est `177-mobile-candidate-r6-opt`
+sur Cartae, issu du chantier mobile en cours. Le correctif est transmis à son
+responsable pour intégration à ce candidat ; aucune ancienne version de main
+n'a été installée à sa place. Cette note ne prouve pas une livraison binaire.
+Le demandeur connaît cette limite. La tâche de l'incident et ses fichiers sont
+conservés ; son empreinte durable est identique avant et après l'intervention.
