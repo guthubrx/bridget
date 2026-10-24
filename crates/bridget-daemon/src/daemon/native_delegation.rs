@@ -3564,6 +3564,30 @@ pub(super) fn request_frozen_secs(
         .map_err(|error| error.to_string())
 }
 
+/// Projeter l'échéance native à la remise, sans modifier l'enveloppe persistée.
+/// Le suivi existe avant cette remise, même avant le checkpoint working.
+/// O(log N + P), comme effective_deadline ; aucune écriture ni nouveau budget.
+pub(super) fn stamp_mission_deadline_for_delivery(
+    st: &DaemonState,
+    message: &mut bridget_core::BridgetMessage,
+) -> Result<(), String> {
+    let Some(mut task) = st.delegation_store.for_mission(&message.id)? else {
+        return Ok(());
+    };
+    if message.from != task.owner || message.to != task.child {
+        return Err("mission_delivery_mismatch".into());
+    }
+    let tracked = st.store.get_request(&message.id)
+        .map_err(|error| error.to_string())?
+        .ok_or("request_unavailable")?;
+    task.mission_deadline_at.get_or_insert_with(|| tracked.created_at.saturating_add(
+        task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS),
+    ));
+    message.deadline_at = Some(effective_deadline(st, &task, unix_timestamp())?
+        .ok_or("mission_deadline_unavailable")?.max(0) as u64);
+    Ok(())
+}
+
 fn parent_fact(
     st: &DaemonState,
     owner: &str,
@@ -3791,6 +3815,17 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         } else if preparation_failed {
             view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
         }
+    }
+    if task.state == "failed"
+        && matches!(task.error.as_deref(),
+            Some("mission_reply_timeout" | "échéance Claude dépassée"))
+    {
+        view["error_message"] = json!("Le délai d’exécution est dépassé. La tâche est terminée ; ses effets et ses fichiers ne sont pas annulés.");
+        view["error_recovery"] = if task.cleanup_done && workspace_report_ready(task) {
+            json!("bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant.")
+        } else {
+            json!("Attendez la confirmation d’arrêt et le rapport du dossier dans bridget_task_status. Conservez la tâche et ses sorties ; ne lancez pas de remplacement pendant ce contrôle. bridget_task_continue ne reprend pas une tâche failed.")
+        };
     }
     view["quota_wait"] = task.quota_waits.last().filter(|wait| task.state == "working" && wait.phase != QuotaWaitPhase::Done)
         .map(|wait| json!({"round":wait.round,"phase":wait.phase,"resumes_at":wait.reset_at.saturating_add(30)}))
@@ -28005,6 +28040,76 @@ for frame in frames: print(json.dumps(frame),flush=True)
             4300 - crate::disk_hygiene::MAX_ENTRIES_PER_PASS,
             "le quota du passage est consommé"
         );
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native174_delai_transport_suit_mission_courte_longue_et_defaut() {
+        for timeout in [Some(120), Some(14_400), None] {
+            let (shared, config, _, deadline, message) =
+                parent_en_cours_150(request_delai_150("transport174", timeout), 30);
+            assert_eq!(message.deadline_at, Some(deadline as u64),
+                "le transport reçoit la même échéance que la mission, délai {timeout:?}");
+            drop(shared);
+            cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn native174_delai_transport_relecture_ne_renouvelle_pas_le_budget() {
+        let (shared, config, id, deadline, original) =
+            parent_en_cours_150(request_delai_150("budget174", Some(14_400)), 30);
+        {
+            let st = shared.lock().unwrap();
+            let mut task = st.delegation_store.get(&id).unwrap().unwrap();
+            // Relecture avant checkpoint : retrouver l'origine durable, pas maintenant.
+            task.mission_deadline_at = None;
+            st.delegation_store.save(&task).unwrap();
+            let mut message = original.clone();
+            message.deadline_at = Some(u64::MAX);
+            stamp_mission_deadline_for_delivery(&st, &mut message).unwrap();
+            assert_eq!(message.deadline_at, Some(deadline as u64));
+            task.mission_deadline_at = Some(deadline - 90);
+            st.delegation_store.save(&task).unwrap();
+            stamp_mission_deadline_for_delivery(&st, &mut message).unwrap();
+            assert_eq!(message.deadline_at, Some((deadline - 90) as u64));
+            let mut altered = message.clone();
+            altered.to = "autre-enfant".into();
+            assert_eq!(stamp_mission_deadline_for_delivery(&st, &mut altered),
+                Err("mission_delivery_mismatch".into()));
+            let mut ordinary = message;
+            ordinary.id = "message-ordinaire".into();
+            ordinary.deadline_at = None;
+            stamp_mission_deadline_for_delivery(&st, &mut ordinary).unwrap();
+            assert_eq!(ordinary.deadline_at, None);
+            st.store.connection().execute("DELETE FROM tracked_requests WHERE id=?1",
+                [&task.mission]).unwrap();
+            assert_eq!(stamp_mission_deadline_for_delivery(&st, &mut original.clone()),
+                Err("request_unavailable".into()));
+        }
+        drop(shared);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn native174_delai_transport_statut_failed_guide_sans_reouvrir() {
+        let (mut st, config, _rx, _reader) = fixture("deadline-guide174");
+        let mut task = tache_soldee_150(&mut st, "guide174");
+        let saved_state = task.state.clone();
+        task.state = "failed".into();
+        task.error = Some("échéance Claude dépassée".into());
+        task.cleanup_done = false;
+        let waiting = task_view(&task, None, true);
+        assert!(waiting["error_recovery"].as_str().unwrap().contains("Attendez"));
+        task.cleanup_done = true;
+        task.workspace_report_mission = Some(task.mission.clone());
+        let closed = task_view(&task, None, true);
+        let advice = closed["error_recovery"].as_str().unwrap();
+        assert!(advice.contains("nouvelle request_id") && advice.contains("réutiliser ces sorties"));
+        assert_eq!(closed["status"], "failed");
+        assert_eq!(closed["continuable"], false);
+        assert_eq!(st.delegation_store.get(&task.task_id).unwrap().unwrap().state,
+            saved_state, "la projection ne modifie aucune tâche");
         cleanup(&config);
     }
 

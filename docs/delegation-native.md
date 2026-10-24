@@ -442,6 +442,8 @@ Omission and an explicit default are different envelopes. A child's explicit
 deadline cannot exceed its parent's effective remaining time.
 
 The mission deadline begins with admitted mission delivery, not provider startup.
+The transport receives this native mission deadline, including when it exceeds the provider's default turn timeout. Re-reading a delivery does not grant a fresh time budget. Ordinary messages keep their provider timeout.
+
 Business time excludes qualifying pause/quota intervals; a caller's wait budget
 continues. A raw `mission_deadline_at` alone is therefore not always the
 effective remaining duration.
@@ -454,6 +456,14 @@ deadline. Results already acquired and cancellation remain possible.
 Ordinary crash recovery retains task/mission identity and permits at most two
 recorded resume decisions. It does not make an ended guard continuable or
 erase uncertain delivery.
+
+After a deadline failure, status includes `error_message` and `error_recovery`.
+A `failed` task is not continuable, even if keep-alive was requested. An exact
+admission replay reads that task; it does not restart it. Wait for stop confirmation
+and the workspace report, retain commits and partial outputs, and check for detached
+business processes. A separately authorized recovery mission needs a new request ID
+and an explicit brief to reuse those outputs and finish only the remaining work.
+Bridget does not roll back effects or restart production automatically.
 
 Cancellation checks that all descendants are managed and stoppable before
 stopping them, descendants first. An unverifiable precheck stops none.

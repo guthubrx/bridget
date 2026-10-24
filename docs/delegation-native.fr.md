@@ -267,6 +267,19 @@ en secondes entières. Sans lui, le délai reste 3600 secondes.
 Le reçu donne `mission_deadline_at` après admission de la remise. Cette date brute
 reste identique après rejeu ou reprise. Le temps de pause est exclu du délai métier.
 L'expiration de ce délai produit `mission_reply_timeout`, puis le nettoyage.
+Le transport reçoit l’échéance de la mission native, même quand elle dépasse
+le délai de tour par défaut du fournisseur. Une relecture de remise ne donne
+pas un nouveau budget. Les messages ordinaires gardent leur délai fournisseur.
+
+Après un échec de délai, le statut expose `error_message` et `error_recovery`.
+Une tâche `failed` ne reprend pas avec `bridget_task_continue`, même avec
+keep-alive. Le rejeu de sa clé lit la tâche terminée, sans la relancer.
+Attendez la confirmation d’arrêt et le rapport du dossier. Conservez les commits
+et les sorties partielles, et vérifiez les calculs métier détachés. Une mission
+de reprise autorisée séparément utilise une nouvelle `request_id` et un brief
+qui réutilise ces sorties pour terminer seulement le travail restant.
+Bridget n’annule pas les effets déjà produits et ne relance rien automatiquement.
+
 Un délai de transport ou une attente du parent n'annule rien.
 
 Après une panne du daemon, Bridget peut reprendre une mission `starting`,

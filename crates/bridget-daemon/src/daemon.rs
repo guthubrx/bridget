@@ -6162,6 +6162,7 @@ fn defer_idempotent_delivery(
         .and_then(|instance_id| state.presences.get(instance_id))
         .map(|presence| presence.agent_type.as_str())
         .unwrap_or("");
+    native_delegation::stamp_mission_deadline_for_delivery(state, &mut message)?;
     stamp_turn_deadline_for_delivery(&mut message, &state.registry, agent_type);
     let execution = match state
         .idempotency

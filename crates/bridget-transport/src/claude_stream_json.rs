@@ -2462,6 +2462,35 @@ sys.stdin.readline()
     }
 
     #[test]
+    fn native174_claude_echeance_explicite_depasse_defaut_fournisseur() {
+        let mut configured = options();
+        configured.notify_timeout_secs = 1;
+        configured.args[1] = format!("sleep 2; {}", configured.args[1]);
+        let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+        let mut request = message("native-deadline174");
+        request.deadline_at = Some(SystemTime::now().duration_since(UNIX_EPOCH)
+            .unwrap().as_secs() + 5);
+        transport.deliver(&request).unwrap();
+        let until = Instant::now() + Duration::from_secs(4);
+        loop {
+            if let Some(terminal) = transport.drain_events().into_iter().find_map(|event|
+                match event.kind {
+                    ManagedEventKind::TurnFinished { terminal, .. } => Some(terminal),
+                    ManagedEventKind::DeliveryRejected { reason, .. } =>
+                        Some(ManagedTerminal::Failed { detail: reason }),
+                    _ => None,
+                })
+            {
+                assert!(matches!(terminal, ManagedTerminal::Completed), "{terminal:?}");
+                break;
+            }
+            assert!(Instant::now() < until, "résultat de la fixture absent");
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+    }
+
+    #[test]
     fn provider_kind_reste_celui_declare_par_le_registre() {
         for provider_kind in ["claude", "anthropic", "glm", "deepseek"] {
             let mut configured = options();
