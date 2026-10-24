@@ -22,6 +22,28 @@ même script. Les exécutables installés et sauvegardes restent hors de ce budg
 Conserver la version active et une version de retour ; traiter les autres copies
 identifiées à la livraison, sans supprimer de travaux non intégrés ni de preuves.
 
+## Fin de livraison : Git et nettoyage obligatoires
+
+À chaque livraison autorisée, sans nouvelle demande utilisateur :
+
+- committer le travail validé avec l’identité Git existante, l’intégrer à `main`
+  et pousser les sources ; vérifier que `main` est propre et aligné au distant
+  sur les machines concernées ;
+- retirer les worktrees et branches de travail devenus inutiles après vérification
+  de l’intégration, de la clôture des tâches, des fichiers ignorés et des usages
+  réels ; supprimer aussi les références distantes obsolètes vérifiées ;
+- nettoyer les intermédiaires de compilation et les copies de binaires devenues
+  inutiles ; conserver la version active et une version de retour vérifiée ;
+- conserver tout travail non intégré, preuve, tâche active ou binaire encore
+  utilisé ; annoncer le motif précis et reprendre son nettoyage à la livraison
+  suivante ; ne pas terminer les processus d’un autre travail pour faire le ménage ;
+- donner le bilan réel : commit poussé, éléments retirés et conservations.
+
+Le nettoyage avant et après Cargo reste automatique avec le script existant.
+Le contrôle de fin de livraison complète ce script : il ne transforme pas une
+suppression de données ou de travaux en cours en entretien autorisé. Consigne
+permanente confirmée par l’utilisateur le 24 octobre 2026.
+
 ## T3 comme référence de mise en œuvre
 
 Pour un parcours déjà couvert par T3 (sessions, fournisseurs, Git/worktrees,
