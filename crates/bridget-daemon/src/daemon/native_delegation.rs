@@ -1548,29 +1548,41 @@ fn refresh_routing_selected(
     }
     if effort != original.default_effort.as_deref() {
         single.candidates[0].default_effort = effort.map(str::to_owned);
+        // Une définition distante inclut les arguments de l'effort. Re-sonder
+        // l'ancien et le nouvel effort dans le même lot : le worker utilise
+        // un registre unique et une lecture de droits cohérente pour ce lot.
+        single.candidates.push(original.clone());
         single.observations.clear();
         single.machines.clear();
         single.connections.clear();
         observe_routing_candidates(conn, request, &mut single, attested, state)?;
-        let selected = single
-            .observations
-            .first()
-            .ok_or("routing_candidate_unavailable")?;
-        // L'effort peut changer les droits projetés, jamais la définition,
-        // le mapping ni l'époque attestés par la première sonde fraîche.
-        if selected.definition_digest != observed.definition_digest
+        let observed_effort = |wanted: Option<&str>| {
+            single
+                .candidates
+                .iter()
+                .zip(&single.observations)
+                .find(|(candidate, _)| candidate.default_effort.as_deref() == wanted)
+                .map(|(_, observation)| observation)
+                .ok_or("routing_candidate_unavailable")
+        };
+        let control = observed_effort(original.default_effort.as_deref())?;
+        let selected = observed_effort(effort)?;
+        // La variation d'effort n'autorise aucune dérive du profil initial.
+        // Les droits du choix restent attestés, puis revalidés à Prepare.
+        if control.definition_digest != observed.definition_digest
+            || control.permission_digest != observed.permission_digest
+            || control.connection_epoch != observed.connection_epoch
+            || control.mapping_revision != observed.mapping_revision
+            || control.project_id != observed.project_id
             || selected.connection_epoch != observed.connection_epoch
             || selected.mapping_revision != observed.mapping_revision
             || selected.project_id != observed.project_id
         {
             return Err("routing_connection_changed".into());
         }
+        return Ok(selected.clone());
     }
-    single
-        .observations
-        .into_iter()
-        .next()
-        .ok_or_else(|| "routing_candidate_unavailable".into())
+    Ok(observed)
 }
 
 fn routing_lightweight_options(
@@ -3361,6 +3373,12 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code == "routing_connection_changed" {
+        let message = "Les faits vérifiés pour la cible ont changé pendant l’admission.";
+        let recovery = "Vérifiez le catalogue et la connexion de la machine choisie, sans changer les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission joint et suivez toute tâche connue. Ne dupliquez pas une demande en attente ou d’issue inconnue. Un refus durable confirmé sans tâche ne se rouvre pas au rejeu ; une nouvelle request_id n’est utilisable qu’après correction de sa cause.";
+        return json!({"status":"refused","code":code,"message":message,
+            "detail":{"message":message,"recovery":recovery}});
+    }
     let message = match code {
         "remote_execution_ended" => Some("La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite."),
         "remote_execution_unconfirmed" => Some("Le service distant n’a pas confirmé les conditions de reprise de cette exécution. Vérifiez l’état de la tâche sans créer de doublon."),
@@ -14408,18 +14426,38 @@ for frame in frames: print(json.dumps(frame),flush=True)
             ),
             "worker contrôlé refusé : {accepted:?}"
         );
+        // Les vrais arguments résolus incluent l'effort : leur empreinte doit varier.
+        let definition_registry = state.lock().unwrap().registry.clone();
+        let definition_for = |effort| {
+            definition_registry
+                .clone()
+                .pin_delegation_model("native-test", "saturated168", Some(effort))
+                .unwrap()
+                .resolved_definition("native-test")
+                .unwrap()
+                .digest
+        };
+        let high_definition = definition_for("high");
+        let low_definition = definition_for("low");
+        assert_ne!(high_definition, low_definition);
+        let expected_low_definition = low_definition.clone();
         let probe_count = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&probe_count);
         let worker_state = Arc::clone(&state);
         let expected_base = base.clone();
         let worker = std::thread::spawn(move || {
             let mut previous: Option<CandidateProbeV2Result> = None;
-            for index in 0..9 {
+            for index in 0..15 {
                 let frame = super::super::presence_tests::read_control(&mut worker_reader);
                 let DaemonToWrapper::CandidateProbeV2 { probe } = frame else {
                     panic!("aucun Prepare/Start pour la cible écartée : {frame:?}");
                 };
-                assert_eq!(probe.candidates.len(), 1);
+                let paired = matches!(index, 2 | 4 | 6 | 8 | 10 | 12);
+                assert_eq!(probe.candidates.len(), if paired { 2 } else { 1 });
+                if paired {
+                    assert_eq!(probe.candidates[1].candidate_id, "c002");
+                    assert_eq!(probe.candidates[1].effort.as_deref(), Some("high"));
+                }
                 assert_eq!(
                     probe.candidates[0].expected_base_commit.as_deref(),
                     Some(expected_base.as_str())
@@ -14427,7 +14465,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 assert_eq!(probe.candidates[0].model, "saturated168");
                 assert_eq!(
                     probe.candidates[0].candidate_id,
-                    if matches!(index, 0 | 7) {
+                    if matches!(index, 0 | 13) {
                         "c003"
                     } else {
                         "c001"
@@ -14435,7 +14473,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 );
                 assert_eq!(
                     probe.candidates[0].effort.as_deref(),
-                    Some(if matches!(index, 2 | 4 | 6) {
+                    Some(if paired {
                         "low"
                     } else {
                         "high"
@@ -14479,13 +14517,35 @@ for frame in frames: print(json.dumps(frame),flush=True)
                     verdicts: probe
                         .candidates
                         .into_iter()
-                        .map(|candidate| CandidateProbeV2Verdict::Eligible {
-                            candidate_id: candidate.candidate_id,
-                            mapping_revision: if index == 6 { 2 } else { 1 },
-                            definition_digest: if index == 4 { "d" } else { "a" }.repeat(64),
-                            permission_digest: if matches!(index, 2 | 4 | 6) { "c" } else { "b" }
+                        .map(|candidate| {
+                            if (index == 10 && candidate.candidate_id == "c002")
+                                || (index == 12 && candidate.candidate_id == "c001")
+                            {
+                                return CandidateProbeV2Verdict::Ineligible {
+                                    candidate_id: candidate.candidate_id,
+                                    reason: CandidateProbeRefusal::CapabilityUnavailable,
+                                };
+                            }
+                            CandidateProbeV2Verdict::Eligible {
+                                candidate_id: candidate.candidate_id,
+                                mapping_revision: if index == 6 { 2 } else { 1 },
+                                definition_digest: if index == 4 {
+                                    "d".repeat(64)
+                                } else if candidate.effort.as_deref() == Some("low") {
+                                    low_definition.clone()
+                                } else {
+                                    high_definition.clone()
+                                },
+                                permission_digest: if index == 8 {
+                                    "d"
+                                } else if candidate.effort.as_deref() == Some("low") {
+                                    "c"
+                                } else {
+                                    "b"
+                                }
                                 .repeat(64),
-                            observed_at: source_at,
+                                observed_at: source_at,
+                            }
                         })
                         .collect(),
                 };
@@ -14555,10 +14615,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             false,
         )
         .unwrap();
-        assert_eq!(
-            selected.definition_digest,
-            remote_observation.definition_digest
-        );
+        assert_eq!(selected.definition_digest, expected_low_definition);
         assert_eq!(
             selected.connection_epoch,
             remote_observation.connection_epoch
@@ -14568,7 +14625,13 @@ for frame in frames: print(json.dumps(frame),flush=True)
             remote_observation.mapping_revision
         );
         assert_eq!(selected.permission_digest, "c".repeat(64));
-        for drift in ["definition", "mapping"] {
+        for drift in [
+            "definition",
+            "mapping",
+            "permissions",
+            "control_missing",
+            "selected_missing",
+        ] {
             let error = refresh_routing_selected(
                 "conn-1",
                 &request,
@@ -14580,7 +14643,15 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 false,
             )
             .unwrap_err();
-            assert_eq!(error, "routing_connection_changed", "dérive {drift}");
+            assert_eq!(
+                error,
+                if drift.ends_with("_missing") {
+                    "routing_candidate_unavailable"
+                } else {
+                    "routing_connection_changed"
+                },
+                "dérive {drift}"
+            );
         }
         assert!(
             state
@@ -14592,7 +14663,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 .is_empty(),
             "aucune dérive de seconde sonde ne crée de Task ni de cible de remplacement"
         );
-        assert_eq!(probe_count.load(Ordering::SeqCst), 7);
+        assert_eq!(probe_count.load(Ordering::SeqCst), 13);
         let view = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
         let receipt = routing168_receipt(&state, &request);
         let metadata: Value = serde_json::from_slice(&receipt.metadata).unwrap();
@@ -14655,7 +14726,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(matches!(&tasks[0].request,
             NativeDelegationRequest::Delegate {model, machine_id:None, ..} if model == "m000"));
         assert!(rx.try_recv().is_err(), "aucun fournisseur avant le tick");
-        assert_eq!(probe_count.load(Ordering::SeqCst), 8);
+        assert_eq!(probe_count.load(Ordering::SeqCst), 14);
         // Des mesures nouvelles ne réécrivent jamais l'explication du rejeu.
         state.lock().unwrap().host_resources.reset();
         assert_eq!(
@@ -14663,7 +14734,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             view
         );
         assert_eq!(routing168_receipt(&state, &request), receipt);
-        assert_eq!(probe_count.load(Ordering::SeqCst), 8);
+        assert_eq!(probe_count.load(Ordering::SeqCst), 14);
         assert_eq!(server.requests().len(), 2);
         request.request_id = "saturation168-imposed".into();
         request.machine_id = Some("zz-saturated".into());
@@ -14671,7 +14742,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap_err(),
             "resource_saturated"
         );
-        assert_eq!(probe_count.load(Ordering::SeqCst), 9);
+        assert_eq!(probe_count.load(Ordering::SeqCst), 15);
         assert_eq!(
             state
                 .lock()
