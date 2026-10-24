@@ -42,7 +42,10 @@ Le mode source demande Git, Python 3.11+, un compilateur C et ses outils de
 développement (Xcode Command Line Tools sur Mac, chaîne C sur Linux).
 Il installe Rust par le script officiel rustup si nécessaire. Il utilise la
 toolchain et Cargo.lock du dépôt et le wrapper de compilation existant.
-Le cache est réutilisé et suit le budget commun de 10 Gio et 7 jours.
+Un checkout dédié reste dans `.local/state/bridget-install/source` pour garder
+une identité de cache stable entre les mises à jour. Le cache suit le budget
+commun de 10 Gio et 7 jours. Les intermédiaires sont purgés après installation.
+Un checkout de l'installateur modifié est conservé et refusé, jamais réinitialisé.
 Un outil système absent produit une erreur claire, sans demande sudo.
 
 Le programme est installé dans `.local/bin` du compte utilisateur. Le reçu et
@@ -61,6 +64,9 @@ rattache pas la machine à un maître. Lancez `bridget daemon` pour une instance
 autonome ou suivez le [guide de fédération SSH](federation-services.fr.md) pour
 rejoindre un maître existant. Les services actifs gardent leur code chargé jusqu'à
 une relance volontaire. Le binaire précédent ne suffit pas à restaurer une base.
+Une interruption peut laisser `.local/state/bridget-install/lock`. Consultez son
+fichier `pid` et vérifiez qu'aucun installateur ne tourne avant de retirer ce
+seul dossier de verrou. Ne supprimez ni les sources ni les données pour le libérer.
 
 ## Essai séparé depuis un checkout existant
 

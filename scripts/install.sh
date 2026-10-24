@@ -40,6 +40,8 @@ main() {
     case "${HOME:-}" in /*) ;; *) fail 'HOME must be an absolute directory.' ;; esac
     case "$HOME" in *'
 '*) fail 'HOME must not contain a newline.' ;; esac
+    HOME=$(cd "$HOME" && pwd -P)
+    export HOME
     need curl
     need tar
     command -v sha256sum >/dev/null 2>&1 || need shasum
@@ -60,9 +62,12 @@ main() {
     lock=$state/lock
     mkdir "$lock" 2>/dev/null || fail "Another installation is running (or interrupted): inspect $lock"
     work=
-    trap 'test -z "$work" || rm -rf "$work"; rmdir "$lock"' EXIT
+    staged=
+    new=
+    trap 'test -z "$staged" || rm -f "$staged"; test -z "$new" || rm -f "$new"; test -z "$work" || rm -rf "$work"; rm -f "$lock/pid"; rmdir "$lock"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    printf '%s\n' "$$" > "$lock/pid"
     work=$(mktemp -d "$state/stage.XXXXXXXX")
     candidate=$work/bridget
 
@@ -72,6 +77,8 @@ main() {
                 --connect-timeout 15 --max-time 60 -o /dev/null -w '%{url_effective}' "$repo/releases/latest")
             case "$latest" in "$repo"/releases/tag/*) version=${latest##*/} ;; *) fail 'Cannot resolve the latest release.' ;; esac
         fi
+        case "$version" in *'
+'*) fail 'Invalid release tag.' ;; esac
         printf '%s\n' "$version" | LC_ALL=C grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' || fail 'Invalid release tag.'
         stem=bridget-${version#v}-$platform-$arch
         archive=$stem.tar.gz
@@ -80,6 +87,7 @@ main() {
         expected=$(awk 'NR == 1 {print $1}' "$work/checksum")
         [ "${#expected}" = 64 ] || fail 'Invalid SHA-256 sidecar.'
         case "$expected" in *[!0-9a-fA-F]*) fail 'Invalid SHA-256 digest.' ;; esac
+        expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
         download "$repo/releases/download/$version/$archive" "$work/package.tar.gz"
         [ "$(digest "$work/package.tar.gz")" = "$expected" ] || fail 'SHA-256 mismatch. Installed Bridget was not changed.'
         # Stream only the known member, never extract arbitrary archive paths or links.
@@ -91,8 +99,19 @@ main() {
         need cc
         python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || fail 'Python 3.11 or later is required for --source.'
         say 'Fetching current main. Source builds take longer than release installs.'
-        git clone --quiet --depth 1 --single-branch --branch main "$repo.git" "$work/source"
-        identity=$(git -C "$work/source" rev-parse HEAD)
+        source=$state/source
+        [ ! -L "$source" ] && [ ! -L "$source/.git" ] || fail 'Source checkout must not be a symlink.'
+        if [ ! -e "$source" ]; then
+            git -c core.hooksPath=/dev/null clone --quiet --depth 1 --single-branch --branch main "$repo.git" "$work/source"
+            mv "$work/source" "$source"
+        else
+            [ -d "$source/.git" ] || fail "Invalid installer checkout: $source"
+            [ "$(git -C "$source" remote get-url origin)" = "$repo.git" ] || fail 'Installer checkout has a different origin.'
+            [ -z "$(git -C "$source" status --porcelain --untracked-files=all)" ] || fail "Installer checkout was edited: preserve your work in $source before retrying."
+            git -C "$source" fetch --quiet --depth 1 origin refs/heads/main
+            git -C "$source" -c core.hooksPath=/dev/null checkout --quiet --detach FETCH_HEAD
+        fi
+        identity=$(git -C "$source" rev-parse HEAD)
         export PATH="$HOME/.cargo/bin:$PATH"
         BRIDGET_BUILD_ID=$identity
         export BRIDGET_BUILD_ID
@@ -105,7 +124,7 @@ main() {
         # Same registered cache on every invocation; the existing wrapper owns its budget.
         CARGO_TARGET_DIR=$HOME/.cache/bridget-build-installer
         export CARGO_TARGET_DIR
-        (cd "$work/source" && python3 scripts/build.py cargo build --locked --release -p bridget-daemon)
+        (cd "$source" && python3 scripts/build.py cargo build --locked --release -p bridget-daemon)
         cp "$CARGO_TARGET_DIR/release/bridget" "$candidate"
     fi
     [ -s "$candidate" ] || fail 'Package contains no Bridget executable.'
@@ -135,14 +154,19 @@ $HOME/.bash_login"
     oldifs=$IFS
     IFS='
 '
+    # Validate every destination before changing the first profile.
     for profile in $profiles; do
         [ ! -L "$profile" ] || fail "Shell profile is a symlink: $profile. Configure PATH manually."
+    done
+    for profile in $profiles; do
         if ! grep -Fq '. "$HOME/.local/share/bridget/env"' "$profile" 2>/dev/null; then
             if [ -f "$profile" ] && [ ! -e "$profile.before-bridget-install" ] && [ ! -L "$profile.before-bridget-install" ]; then
                 cp -p "$profile" "$profile.before-bridget-install"
             fi
-            { printf '%s\n' '. "$HOME/.local/share/bridget/env"'; test ! -f "$profile" || cat "$profile"; } > "$work/profile"
-            cat "$work/profile" > "$profile"
+            staged=$(mktemp "$profile.bridget.XXXXXXXX")
+            if [ -f "$profile" ]; then cp -p "$profile" "$staged"; fi
+            { printf '%s\n' '. "$HOME/.local/share/bridget/env"'; test ! -f "$profile" || cat "$profile"; } > "$staged"
+            mv -f "$staged" "$profile"
         fi
     done
     IFS=$oldifs
@@ -160,7 +184,7 @@ $HOME/.bash_login"
     printf '%s\n' "channel=$mode" "source=$identity" "sha256=$(digest "$bindir/bridget")" > "$work/installed.txt"
     mv -f "$work/installed.txt" "$state/installed.txt"
     if [ "$mode" = source ]; then
-        (cd "$work/source" && python3 scripts/build.py installed --target "$CARGO_TARGET_DIR" --binary "$bindir/bridget")
+        (cd "$source" && python3 scripts/build.py installed --target "$CARGO_TARGET_DIR" --binary "$bindir/bridget")
     fi
     say "Installed $(cat "$work/version") ($identity) at $bindir/bridget"
     say 'For this terminal: . "$HOME/.local/share/bridget/env"'

@@ -45,8 +45,11 @@ Source mode needs Git, Python 3.11+, a C compiler and its platform development
 tools (Xcode Command Line Tools on macOS, a C build toolchain on Linux).
 It installs Rust through the official rustup script if absent, uses the repository's
 toolchain and Cargo.lock, and builds through the existing cache maintenance wrapper.
-Its cache is shared between installer runs and follows the same 10 GiB / 7-day
-budget. An unavailable compiler or dependency is an explicit error, never a sudo prompt.
+It keeps a dedicated source checkout in `.local/state/bridget-install/source`,
+so cache ownership remains stable across updates. The cache follows the same
+10 GiB / 7-day budget; successful installation purges its build intermediates.
+An edited installer checkout is preserved and refused, never reset automatically.
+An unavailable compiler or dependency is an explicit error, never a sudo prompt.
 
 The executable is installed in the user's `.local/bin` directory, with a receipt
 and a distinct previous executable in `.local/state/bridget-install`. Repeating
@@ -65,6 +68,9 @@ or T3 process is started or restarted. Installation is not federation: use
 [SSH federation guide](federation-services.md) to join an existing master.
 Already running services keep their loaded version until deliberately restarted.
 The retained executable is not a database rollback procedure.
+An interrupted install can leave `.local/state/bridget-install/lock`. Inspect its
+`pid` file and verify that no installer still runs before removing that lock
+directory. Never remove the source checkout or user data to clear a lock.
 
 ## Prerequisites for an existing source checkout
 

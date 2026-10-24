@@ -2,13 +2,18 @@
 
 ## Contrôles ciblés
 
-- `python3 -m unittest scripts.tests.test_install -v` : 14 tests PASS.
+- `python3 -m unittest scripts.tests.test_install -v` : 16 tests PASS.
   Vraies archives, HOME avec espaces, téléchargement simulé sans réseau :
   corruption, erreur HTTP, exécutable invalide, lien dans archive, traversée de
   chemin, remplacement d'un lien vers un ancien binaire sans modifier sa cible,
   profils et comptes conservés (sans masquer le profil de connexion Bash),
   répétition sans perdre le rollback distinct,
-  verrou, version figée, plateforme sans paquet, compilation par le wrapper.
+  verrou, version figée (refus multi-lignes), SHA en majuscules, plateforme sans
+  paquet, compilation par le wrapper et échec de build conservant le binaire.
+- Cas cache : le vrai module build.py et deux vrais dépôts Git confirment qu'un
+  clone temporaire différent perd son identité de cache ; le chemin stable
+  conserve cette identité. Deux installations source sont aussi testées dans
+  le contrat du script, avant les essais réels répétés.
 - `sh -n scripts/install.sh` et `git diff --check` : PASS.
 - `python3 scripts/check-docs.py` : PASS, 27 pages, 425 liens locaux.
 
