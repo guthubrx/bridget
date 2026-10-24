@@ -1,3 +1,19 @@
+## T3 comme référence de mise en œuvre
+
+Pour un parcours déjà couvert par T3 (sessions, fournisseurs, Git/worktrees,
+préparation et lancement), lire d'abord son implémentation dans
+`/Users/moi/11.Repositories/t3code`. Réutiliser son expérience et ses mécanismes
+éprouvés dans Bridget. Justifier les différences nécessaires au travail distant
+ou aux permissions ; ne pas reconstruire par défaut un parcours plus complexe.
+Vérifier le parcours utilisateur complet, pas seulement ses étapes isolées.
+
+Pour CHAQUE défaut concret à corriger, rechercher le cas équivalent dans T3
+avant de choisir la correction. Lire le code concerné, puis noter brièvement
+le mécanisme réutilisable et les différences nécessaires dans Bridget. Si T3
+ne couvre pas ce cas, le dire explicitement. Une référence générale à T3 ne
+remplace pas cette lecture par défaut. Cette étape doit rester courte et utile
+au correctif, sans nouvelle campagne de validation.
+
 <!-- SPECKIT START -->
 Session170 livrée le16octobre2026 :8/8, Implemented, pipeline Livré avec conservations justifiées. Correctif des faux timeouts après résultat distant accepté. Source57f2fff31b1c23d015a483a5a97754130b1e44bc intégrée/poussée, releasev0.4.1 publiée avec quatre actifs retéléchargés conformes. Version0.4.1 active Mac/Cartae ; maître55610/pont55688/worker560830. T3 4717/4792 et tunnel60206 préservés sans relance. Tests ciblés46+3PASS, dernier oracleSQL sélectif rejoué seul1PASS ; aucuneFULL. Recette Cartae, rejeu mêmeTask et zéro rappel après échéance prouvés, delivery_ackedfalse conservé. Schémas/configurations conservés ; reprise native de l’ancien choix Revue sansTask vers refus permission_not_inherited. CacheMac170 retiré ; worktreesR1/R2 conservés pour deltaR1 noncommitté et garde lsofCartae incomplète. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/170-delais-reponses-distantes/validation/livraison170.md. SHA documentaire final : /Users/moi/.cache/bridget-delivery170/final170.json. Les checkpoints suivants restent historiques.
 
