@@ -27,5 +27,19 @@ revue. Cela explique le fetch puis rejeu réussi de l’incident sans changer de
 
 Premier lot ciblé : 3 tests base, 1 projection MCP et 1 schéma MCP réussis.
 Contrôle documentaire : 27 pages, 422 liens locaux, 11 paires de langues.
-Rejeu des contrôles affectés après clarification : à compléter.
+Rejeu après clarification : 3 tests base et 1 test de projection MCP réussis ;
+le test du schéma (1 PASS) était inchangé par cette clarification. Aucun test
+ignoré. Les tests socket utilisent une réponse simulée ; ils vérifient le
+rendu de detail, pas une nouvelle admission métier. Aucune suite complète.
 
+Livraison : source 41ade47a7d6061d75d4d0df67b4827e8e33e7d5f poussée sur main.
+Binaire macOS optimisé et signé ; SHA-256
+28b4db9d1b0699d9d0e5c0da5006699b238723ccd4b2e773c6344d7ef1f92a95.
+Daemon actif confirmé par le MCP officiel : build 41ade47a7d60.
+Une reconnexion MCP transitoire pendant activation, puis accès rétabli.
+Les processus T3 et worker distant sont conservés. Les missions distantes
+encore actives gardent leur instance et leur état working sans erreur.
+Une mission est devenue result_available sans erreur entre les observations.
+Aucune mission métier créée ou rejouée pour cette validation.
+Conseils transmis au parent demandeur par Bridget ; lecture non confirmée.
+Entretien du cache effectué par le wrapper, sauvegarde précédente conservée.
