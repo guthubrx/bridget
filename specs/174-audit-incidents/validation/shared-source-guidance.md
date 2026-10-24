@@ -7,7 +7,7 @@ manquant est un défaut de Bridget.
 
 Correction : projection constante dans `detail.message` et `detail.recovery`.
 Le code reste identique. Les suffixes système/Git ne sont pas exposés. Le conseil
-sépare parent/destination, HEAD shared/commit récupéré, mode imposé/worktree
+sépare parent/destination, HEAD shared/commit demandé, mode imposé/worktree
 autorisé, rejeu strict/demande modifiée. Les contrôles, droits, reçus et tâches
 ne changent pas. Aucun fetch ni mission métier automatique.
 
@@ -30,4 +30,10 @@ transport ont été réhorodatées pour le reconstruire dans le même cache, san
 modification de contenu. Les quatre tests ci-dessus passent ensuite.
 
 La règle permanente « défaut de guidage confirmé = correction et livraison »
-est conservée dans AGENTS.md. Revue indépendante en cours ; livraison à compléter.
+est conservée dans AGENTS.md. Revue indépendante lue et acquittée : deux précisions reprises avant activation.
+Le conseil fetch a été retiré de ce code d’accès source. Une admission déjà
+choisie peut rester en attente sans TaskID : la nouvelle clé exige donc de
+confirmer aussi l’absence d’admission en cours. Le test vérifie que ce code
+reste non terminal. La proposition de la revue fondée sur la seule absence de
+tâche n’a pas été reprise. La règle AGENTS correspond à l’autorisation explicite
+de l’utilisateur ; elle reste conservée. Livraison à compléter.

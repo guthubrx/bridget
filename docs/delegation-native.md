@@ -583,14 +583,18 @@ or when no workspace mode is supplied. Its `detail.message` and `detail.recovery
 explain the source/destination distinction without exposing raw system or Git
 errors. On the parent's machine, check that `cwd` exists and is readable, then
 run `git rev-parse --show-toplevel` and `git rev-parse HEAD` there. A successful
-SSH check on the destination does not validate this source. In shared mode,
-the source HEAD must equal `expected_base_commit`. Fetching a missing commit
-does not move HEAD. Keep any explicitly required shared mode; do not move an
-active checkout or substitute another SHA to pass the check. An authorized
-worktree review can instead pin the exact SHA in both base fields. Follow any
-known task; retry an unchanged request at most once after correction. Changed
-parameters need a new key only after confirming the prior request created no
-task. A repeated error alone proves neither that fact nor a durable refusal.
+SSH check on the destination does not validate this source. Correct the path or
+Git access if this fails. In shared mode, the source HEAD must equal
+`expected_base_commit`. Keep any explicitly required shared mode; do not move
+an active checkout or substitute another SHA to pass the check. An authorized
+worktree review can instead pin the exact SHA in both base fields.
+
+This technical refusal does not close an ongoing admission or prove that no
+task exists. Follow any known task. An identical retry keeps the same key and
+all parameters; `admission_pending` means the request is still pending. Before
+using a new key with corrected parameters, confirm that neither a task nor an
+ongoing admission remains for the previous request. Do not create a new request
+while the outcome is unknown.
 
 For `workspace_preflight_technical`, `detail.message` and `detail.recovery` explain the next checks. The `cwd` argument identifies the source directory on the calling parent’s machine, not the destination directory. Check the directory, Git access and the requested reference. Reconcile the existing request before retrying; a technical error does not prove that no task exists. Raw Git errors are not exposed in this response.
 Known branch-exists and worktree-limit causes receive their own recovery advice, while the outer error code stays unchanged.

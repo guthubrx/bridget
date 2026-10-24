@@ -3302,7 +3302,7 @@ fn failure(code: &str) -> Value {
     }
     if code == "workspace_base_preflight_failed" || code.starts_with("workspace_base_preflight_failed:") {
         let message = "Bridget n’a pas pu contrôler le dossier source avant l’admission.";
-        let recovery = "Le champ cwd désigne un dossier sur la machine du parent appelant. machine_id choisit seulement la destination : vérifier le chemin par SSH sur cette destination ne valide pas la source. Sur la machine du parent, vérifiez que cwd existe et est lisible, puis exécutez git rev-parse --show-toplevel et git rev-parse HEAD dans ce dossier. En shared, ce HEAD doit être égal à expected_base_commit. Si le commit manque, récupérez explicitement la branche qui le contient avec git fetch ; cela ne déplace pas HEAD. Ne changez pas le SHA attendu et ne déplacez pas un checkout utilisé pour contourner le refus. Si shared est imposé, conservez ce mode ; sinon, pour une base figée en worktree autorisé, donnez le même SHA complet à workspace.base_ref et expected_base_commit. Suivez toute tâche connue avec bridget_task_status. Après correction, des paramètres inchangés permettent au plus un rejeu avec la même request_id ; un refus enregistré ne se rouvre pas. Un changement de cwd ou de mode exige une nouvelle request_id après confirmation que la demande précédente n’a créé aucune tâche. Ne créez pas de nouvelle demande si le sort reste inconnu.";
+        let recovery = "Le champ cwd désigne un dossier sur la machine du parent appelant. machine_id choisit seulement la destination : vérifier le chemin par SSH sur cette destination ne valide pas la source. Sur la machine du parent, vérifiez que cwd existe et est lisible, puis exécutez git rev-parse --show-toplevel et git rev-parse HEAD dans ce dossier. Corrigez le chemin ou l’accès Git en cas d’échec. En shared, le HEAD source doit être égal à expected_base_commit. Ne changez pas le SHA attendu et ne déplacez pas un checkout utilisé pour contourner le refus. Si shared est imposé, conservez ce mode ; sinon, pour une base figée en worktree autorisé, donnez le même SHA complet à workspace.base_ref et expected_base_commit. Ce refus technique ne clôt pas une admission déjà en cours et ne prouve pas l’absence de tâche. Suivez toute tâche connue avec bridget_task_status. Un rejeu strict conserve request_id et tous les paramètres : admission_pending signifie que la demande reste en attente. Avant une nouvelle clé pour des paramètres corrigés, confirmez qu’aucune tâche et aucune admission en cours ne subsistent pour l’ancienne demande. Si le sort reste inconnu, ne créez pas de nouvelle demande.";
         return json!({"status":"refused","code":"workspace_base_preflight_failed","message":message,"detail":{"message":message,"recovery":recovery}});
     }
     if code == "expected_base_commit_mismatch" {
@@ -11557,12 +11557,14 @@ mod tests {
     fn spec174_workspace_shared_preflight_guide_sans_stderr() {
         use bridget_transport::protocol::{AutoDelegateWorkload, WorkerSourceBase};
         let expected = failure("workspace_base_preflight_failed");
+        assert!(auto_terminal_refusal_code("workspace_base_preflight_failed").is_none());
+        assert!(auto_terminal_refusal_code("workspace_base_preflight_failed: private-error").is_none());
         assert_eq!(expected["code"], "workspace_base_preflight_failed");
         assert_eq!(expected["status"], "refused");
         let recovery = expected["detail"]["recovery"].as_str().unwrap();
         for hint in ["machine du parent", "machine_id", "git rev-parse HEAD", "En shared",
-            "git fetch", "ne déplace pas HEAD", "Si shared est imposé", "bridget_task_status",
-            "au plus un rejeu", "n’a créé aucune tâche", "sort reste inconnu"] {
+            "Corrigez le chemin", "Si shared est imposé", "bridget_task_status", "admission_pending",
+            "aucune tâche et aucune admission en cours", "sort reste inconnu"] {
             assert!(recovery.contains(hint), "conseil absent : {hint}");
         }
         for raw in [
