@@ -2115,3 +2115,28 @@ fn spec174_child_delivery_unavailable_is_not_revoked() {
     assert!(view["detail"]["recovery"].as_str().unwrap().contains("bridget_task_status"));
     assert!(!view.to_string().contains("canary"));
 }
+
+#[test]
+fn spec174_child_answer_invalidated_after_decision_is_visible() {
+    let mut fixture = RequestFixture155::with_remote("r174-late-diagnostic", true);
+    let question = fixture.question(175);
+    fixture.receive(question.clone());
+    let row = fixture.row(&question);
+    fixture.decide(&row);
+    {
+        let mut st = fixture.state.lock().unwrap();
+        assert_eq!(current_task_view(&st, &fixture.task, true).unwrap()["recent_requests"][0]["delivery_state"], "pending");
+        st.native_permission_facts.remove("conn-1");
+        st.native_permission_refusals.insert("conn-1".into(), "permission_source_unavailable".into());
+    }
+    native_child_requests::tick(&fixture.state);
+    let row = fixture.row(&question);
+    assert_eq!(row.state, "answered");
+    assert_eq!(row.outcome.as_deref(), Some("answered_by_parent"));
+    assert_eq!(row.delivery_state, "void");
+    let view = current_task_view(&fixture.state.lock().unwrap(), &fixture.task, true).unwrap();
+    assert_eq!(view["recent_requests"][0]["delivery_error"], "permission_source_unavailable");
+    let frames = fixture.frames();
+    assert_eq!(frames.len(), 1);
+    assert!(matches!(frames[0], DaemonToWrapper::ChildRequestCancel { .. }));
+}

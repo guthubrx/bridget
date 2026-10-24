@@ -1515,3 +1515,5 @@ Le nettoyeur de cache exclut seulement son propre descripteur `.cargo-lock`, pen
 ### Vérification de remise enfant indisponible
 
 Un refus `permission_source_unavailable` ou `delivery_check_unavailable` indique que Bridget ne peut pas vérifier les droits de remise. Il ne prouve pas une révocation. Aucune réponse positive n’a été remise. Consultez la tâche existante avec `bridget_task_status`, rétablissez la source de droits ou la configuration concernée, puis répondez seulement à une demande encore ouverte. Ne créez pas de tâche de remplacement et n’élargissez pas les droits. `provider_quota_exhausted` reste un refus distinct de quota.
+
+Une décision `answered_by_parent` ne prouve pas la remise. Lisez séparément `recent_requests[].delivery_state`. Si un contrôle ultérieur invalide la réponse, `delivery_state` vaut `void` et `delivery_error` donne un code de diagnostic fermé. La décision enregistrée reste inchangée. Le code générique `delivery_invalidated` masque les détails privés du fournisseur. Ne répétez pas une demande déjà répondue et ne créez pas de tâche de remplacement.

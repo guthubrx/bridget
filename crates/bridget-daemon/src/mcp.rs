@@ -1049,7 +1049,7 @@ pub(crate) fn execute_dynamic_tool_at_with_scope(
             ToolError::Technical {
                 code: "outcome_unknown",
                 message,
-            } => message,
+            } => format!("outcome_unknown: {message}"),
             ToolError::Technical { code, .. } => format!("publication Bridget refusée: {code}"),
         }
     })
@@ -5391,6 +5391,7 @@ mod tests {
             server.join().unwrap();
             std::fs::remove_file(socket).unwrap();
             let message = result.unwrap_err();
+            assert!(message.starts_with("outcome_unknown:"), "{message}");
             assert!(!message.contains("refusée"), "{message}");
             assert!(message.contains("idempotence"), "{message}");
             if disconnect {

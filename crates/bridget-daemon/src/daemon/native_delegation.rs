@@ -3831,7 +3831,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             .then_with(|| b.request_id.cmp(&a.request_id))
     });
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
-        json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state})).collect::<Vec<_>>());
+        json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     Ok(view)
 }
 
@@ -5201,7 +5201,14 @@ fn dispatch_remote_pause_resume(
         .remove(&conn)
         .unwrap_or_default();
     drop(st);
-    let _ = execute_controls(controls);
+    // Une connexion qui ne lit plus ne doit pas garder le créneau de réservation.
+    // Même budget global que les avis enfant ; état durable conservé en cas de coupure.
+    let deadline = Instant::now() + CANCEL_NOTIFICATION_BUDGET;
+    for control in controls {
+        if push_control_message_until(&control.writer, &control.message, deadline).is_err() {
+            warn!("remote_resume_notification_unavailable");
+        }
+    }
     Ok(())
 }
 

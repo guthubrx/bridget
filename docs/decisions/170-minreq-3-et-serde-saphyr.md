@@ -1,49 +1,38 @@
-# ADR-170 — Passage à minreq 3 et remplacement de serde_yaml
+# ADR-170 — Upgrade minreq and replace serde_yaml
 
-**Date :** 2026-10-24. **Statut :** Accepté par ROOT dans la session 174.
+[Français](170-minreq-3-et-serde-saphyr.fr.md)
 
-## Contexte
+**Date:** 2026-10-24. **Status:** Accepted for session 174.
 
-L'audit 174 signale quatre dépendances ouvertes. Trois viennent du client HTTP `minreq` 2.14.1 : `rustls` 0.21.12, `rustls-webpki` 0.101.7 et `webpki-roots` 0.25.4. La quatrième est `unsafe-libyaml` 0.2.11, tirée par `serde_yaml`. Aucune version corrigée n'existe sur les lignes 0.21, 0.101 et 0.25. La correction passe donc par un changement de version majeure.
+## Context
 
-L'ADR-163 fixe le client `minreq` 2.14.1 comme seule frontière HTTP. Cette ADR fait évoluer ce pin. La frontière reste la même : un seul client, `https-rustls` seul, aucun mode TLS permissif.
+Audit 174 left four dependency findings open. Three came from minreq 2.14.1: rustls 0.21.12, rustls-webpki 0.101.7 and webpki-roots 0.25.4. The fourth, unsafe-libyaml 0.2.11, came through serde_yaml. The migration removes these old dependency lines.
 
-## Décision
+ADR-163 designated minreq as the single HTTP boundary. This decision updates its exact version pin and retains that boundary: one client, only https-rustls, no permissive TLS mode.
 
-1. `minreq` passe de `=2.14.1` à `=3.0.0`, avec `default-features = false` et la seule feature `https-rustls`.
-2. `serde_yaml` est retiré. `serde-saphyr` 2.0.0 le remplace, avec `default-features = false` et la seule feature `deserialize`. L'avis RUSTSEC-2024-0449 recommande cette alternative.
-3. Le chargement du pin appelle `serde_saphyr::from_str_with_options` avec `reject_unsupported_tags: true`. Les fonctions externes ne sont pas compilées : `!include` (feature `include`), `${VAR}` (feature `properties`) et les expressions robotiques. Une balise `!include` est donc refusée.
-4. Les doublons de clés restent refusés, et le budget de parsing reste celui par défaut. Ces valeurs viennent de la documentation de `serde-saphyr` 2.0.0.
-5. Les appels HTTP gardent leurs protections : `send_lazy`, `with_max_redirects(0)`, les plafonds d'en-têtes et de ligne de statut, et un seul appel en vol. Le décideur n'utilise pas `with_timeout`, comme avant.
-6. La garde `MINREQ_TIMEOUT` reste en place. `minreq` 3.0.0 lit toujours cette variable (`src/connection.rs`).
+## Decision
 
-## Adaptations de code
+1. Pin minreq to =3.0.0, disable default features and enable only https-rustls.
+2. Replace serde_yaml with serde-saphyr 2.0.0. Disable default features and enable only deserialize. RUSTSEC-2024-0449 lists this alternative.
+3. Parse pin files with from_str_with_options and reject_unsupported_tags: true. The include and properties features are not compiled. An !include tag is rejected.
+4. Keep the parser's default duplicate-key rejection and resource budget.
+5. Preserve lazy HTTP bodies, zero redirects, header and status-line limits, and the single in-flight request permit. The decision service still does not use with_timeout.
+6. Preserve the MINREQ_TIMEOUT environment guard, since minreq 3 still reads this variable.
 
-- Le code de statut est désormais un `u16`. Le champ `HttpReply::status` du décideur et le variant `ContractError::Http` passent à `u16`.
-- Les en-têtes sont une liste de paires `(String, String)`, sans normalisation des noms. Le contrôle de `Mcp-Session-Id` lit donc la liste sans tenir compte de la casse. Une réponse qui contient deux valeurs de cet en-tête est refusée.
+## Code changes
 
-## Conséquences
+The HTTP status is now u16. HttpReply::status and ContractError::Http use that type. Headers are now pairs without normalized names. Mcp-Session-Id is read without case sensitivity; duplicate values are rejected.
 
-Positives :
+## Consequences
 
-- `rustls` 0.23.46, `rustls-webpki` 0.103.16 et `webpki-roots` 1.0.11 sont résolus. Ces versions dépassent les seuils corrigés des avis RUSTSEC-2026-0104, 0098, 0099, 0381 et 0382.
-- `unsafe-libyaml` et `serde_yaml` disparaissent du graphe.
+The lockfile resolves rustls 0.23.46, rustls-webpki 0.103.16 and webpki-roots 1.0.11. unsafe-libyaml and serde_yaml disappear from the graph. The explicit lockfile scan covers 148 packages and reports no known vulnerability at the time of this audit.
 
-Négatives et limites :
+The default cryptographic provider adds aws-lc-rs and a C build through aws-lc-sys. Build hosts need a C compiler and, depending on the target, cmake. YAML edge cases may differ from serde_yaml 0.9. The focused pin tests do not certify the whole YAML grammar.
 
-- Le fournisseur cryptographique par défaut de rustls 0.23 passe par `aws-lc-rs`. Il ajoute `aws-lc-sys`, qui compile du C à la construction. Les machines de build doivent disposer d'un compilateur C, et de `cmake` selon la cible.
-- L'analyseur YAML change. Son comportement sur des cas limites peut différer de `serde_yaml` 0.9. Les tests de pin couvrent le cas légitime et le cas refusé, pas toute la grammaire YAML.
-- Aucune compilation ni aucun test n'a été exécuté dans cette session. Cette ADR ne prouve pas que le code compile.
+## Alternatives
 
-## Alternatives écartées
+Keeping minreq 2.14.1 would preserve the old dependency findings. System certificate probing would make trust depend on each host. Native TLS and OpenSSL features would introduce another TLS stack, contrary to ADR-163. serde_yaml forks listed by RUSTSEC-2024-0449 do not resolve that advisory.
 
-- Garder `minreq` 2.14.1 et accepter le risque : écarté, car ROOT a tranché pour la migration.
-- Feature `https-rustls-probe` (magasin de certificats du système) : écartée, car la liste de confiance dépendrait de chaque machine.
-- Features `https-native-tls` ou `https-openssl` : écartées, car elles ajoutent une seconde pile TLS, interdite par l'ADR-163.
-- Forks de `serde_yaml` : écartés, car l'avis RUSTSEC-2024-0449 indique qu'ils sont touchés par le même problème.
+## Validation
 
-## Validation prévue
-
-- `cargo build -p bridget-daemon`, avec un compilateur C disponible.
-- Tests ciblés : `reprise::tests::pin_yaml`, `decision_service`, `t3code` et `t3code_opaque_identifiers149_test`.
-- `cargo tree -p bridget-daemon -d` pour détecter les doublons de versions.
+The session 174 validation records the pin, decision-service, T3, permission and transport tests, the complete remote delegation path and the dependency scan. Builds and tests use the repository's scripts/build.py wrapper. The dependency graph is checked with cargo tree; no new HTTP client or unsafe TLS option is introduced.

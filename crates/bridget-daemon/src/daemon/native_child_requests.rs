@@ -115,15 +115,15 @@ pub(super) fn valid_delivery(
     if st
         .delegation_store
         .revoked_agent(&task.owner)
-        .map_err(|_| "revoked")?
+        .map_err(|_| "delivery_check_unavailable")?
         || st
             .delegation_store
             .revoked_agent(&task.root_owner_agent_id)
-            .map_err(|_| "revoked")?
+            .map_err(|_| "delivery_check_unavailable")?
         || st
             .delegation_store
             .revoked(&task.owner_instance)
-            .map_err(|_| "revoked")?
+            .map_err(|_| "delivery_check_unavailable")?
     {
         return Err("revoked");
     }
@@ -141,7 +141,7 @@ pub(super) fn valid_delivery(
         return Err("instance_changed");
     }
     if !parent_available(st, task) {
-        return Err("revoked");
+        return Err("delivery_check_unavailable");
     }
     if task.remote_placement.is_some() {
         // Les lectures de sources sur destination sont réservées à emit, hors mutex.

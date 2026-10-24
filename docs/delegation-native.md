@@ -705,3 +705,5 @@ The cache cleaner excludes only its own `.cargo-lock` descriptor while holding t
 ### Child answer verification unavailable
 
 A child-answer refusal with `permission_source_unavailable` or `delivery_check_unavailable` means that Bridget could not verify delivery authority. It does not establish a revocation. No positive answer was delivered. Read the existing task with `bridget_task_status`, restore the relevant permission source or configuration, and answer only a still-open request. Do not create a replacement task or widen permissions. `provider_quota_exhausted` remains a separate quota refusal.
+
+A decision recorded as `answered_by_parent` is not proof of delivery. Read `recent_requests[].delivery_state` separately. If a later check invalidates the answer, `delivery_state` is `void` and `delivery_error` gives a closed diagnostic code. The recorded decision stays unchanged. A generic `delivery_invalidated` hides any private provider detail. Do not repeat an answered request or create a replacement task.

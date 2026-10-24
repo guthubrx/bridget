@@ -11,3 +11,5 @@ T3 reference: ProviderSessionReaper starts its periodic sweep with forkParked an
 The SQL pending-task scan remains O(n). Only one candidate performs network operations. This change removes the result-slot wait from the shared tick; it does not claim a total latency bound for every other maintenance operation or increase the one-operation concurrency limit.
 
 Minimalism: no new scheduler, persistent state, schema, dependency or permission. The volatile receiver is needed to bound concurrency and preserve completion.
+
+Final review: the pause/resume notification now uses the existing one-second global writer budget, including lock acquisition. A non-reading connection cannot keep the single reservation slot indefinitely. Durable recovery state and the pre-delivery permission check are unchanged.

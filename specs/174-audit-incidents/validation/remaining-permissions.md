@@ -22,7 +22,7 @@ rewritten. `void_reason` is an existing text field; no schema change is needed.
 `ChildRequestCancel` contains the request tuple, not this reason. Contrary to the
 initial review suggestion, no worker wire enum needs extending.
 
-The Respond path preserves the distinct codes. Unavailable checks receive a
+The synchronous Respond check preserves the distinct codes. A later invalidation leaves the historical decision intact; task status exposes its separate delivery_state and a closed delivery_error. Unavailable checks receive a
 constant MCP recovery message: inspect the existing task and pending requests,
 restore the relevant source, and do not create a replacement or widen rights.
 The fixture `spec174_child_delivery_unavailable_is_not_revoked` exercises a live
@@ -60,3 +60,5 @@ wire protocol or equivalent delivery-error mapping to copy.
 This is a focused code-path qualification, not a claim that all project policy
 combinations or same-account hostile processes are covered. Consolidated test
 results and independent final review are recorded in the delivery evidence.
+
+The final review also identified SQL lookup failures and an absent parent route being labeled revoked. They now report delivery_check_unavailable; a proven revocation remains revoked. The late-invalidation fixture records an answer, removes its authority source, and checks the real tick, cancellation frame and status projection.
