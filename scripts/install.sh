@@ -1,5 +1,5 @@
 #!/bin/sh
-# Bridget user installer. O(archive size); no service or account changes.
+# Bridget user installer. O(archive size); installs and verifies a user service.
 set -eu
 umask 077
 
@@ -17,6 +17,179 @@ digest() {
         shasum -a 256 "$1" | cut -d ' ' -f 1
     fi
 }
+healthy() {
+    BRIDGET_HOME="$daemon_root" BRIDGET_SOCKET="$daemon_socket" \
+        "$1" agents --json --global > "$work/health.json" 2> "$work/health-error"
+}
+xml_text() { printf '%s' "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
+systemd_quote() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g')"; }
+shell_literal() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+prepare_service() {
+    daemon_root=${BRIDGET_HOME:-$HOME/.cache/bridget-core}
+    daemon_root=${daemon_root%/}
+    daemon_socket=${BRIDGET_SOCKET:-$daemon_root/bridget.sock}
+    case "$daemon_root" in /*) ;; *) fail 'BRIDGET_HOME must be absolute.' ;; esac
+    case "$daemon_root$daemon_socket" in *'
+'*) fail 'Service paths must not contain newlines.' ;; esac
+    [ "${daemon_socket%/*}" = "$daemon_root" ] || fail 'BRIDGET_SOCKET must be directly inside BRIDGET_HOME.'
+    [ "$(printf '%s' "$daemon_socket" | LC_ALL=C wc -c | tr -d ' ')" -lt 104 ] || fail 'Bridget state path is too long for its socket. Choose a shorter BRIDGET_HOME.'
+    if healthy "$candidate"; then
+        service_kind=existing
+        return
+    fi
+    # A dead tunnel or uncertain socket must never become a second authority.
+    [ ! -e "$daemon_root/federation.env" ] && [ ! -L "$daemon_root/federation.env" ] || fail 'An existing federation is unavailable. Restore its connection; no local daemon was started.'
+    [ ! -e "$daemon_socket" ] && [ ! -L "$daemon_socket" ] || fail 'An existing Bridget socket does not respond. Existing services were preserved; no second daemon was started.'
+    uid=$(id -u)
+    service_path=$bindir:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+    service_kind=$platform
+    if [ "$platform" = darwin ]; then
+        need launchctl
+        launchctl print "gui/$uid" >/dev/null 2>&1 || fail 'macOS has no graphical login session for this user. Log in at the Mac, then rerun this installer; no service was started.'
+        unitdir=$HOME/Library/LaunchAgents
+        unit=$unitdir/app.cartae.bridget.plist
+        legacy=$unitdir/com.bridget.daemon.plist
+        if launchctl print "gui/$uid/app.cartae.bridget" >/dev/null 2>&1; then
+            [ -f "$unit" ] && grep -Fq 'Bridget public installer service v1' "$unit" || fail 'The Bridget service label belongs to another installation.'
+        fi
+        cat > "$work/service" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<!-- Bridget public installer service v1 -->
+<key>Label</key><string>app.cartae.bridget</string>
+<key>ProgramArguments</key><array><string>$(xml_text "$bindir/bridget")</string><string>daemon</string></array>
+<key>WorkingDirectory</key><string>$(xml_text "$HOME")</string>
+<key>EnvironmentVariables</key><dict>
+<key>HOME</key><string>$(xml_text "$HOME")</string>
+<key>PATH</key><string>$(xml_text "$service_path")</string>
+<key>BRIDGET_HOME</key><string>$(xml_text "$daemon_root")</string>
+<key>BRIDGET_SOCKET</key><string>$(xml_text "$daemon_socket")</string>
+</dict>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>Umask</key><integer>63</integer>
+<key>ThrottleInterval</key><integer>5</integer>
+<key>ExitTimeOut</key><integer>90</integer>
+<key>StandardOutPath</key><string>$(xml_text "$state/service-stdout.log")</string>
+<key>StandardErrorPath</key><string>$(xml_text "$state/service-stderr.log")</string>
+</dict></plist>
+EOF
+        need plutil
+        plutil -lint "$work/service" >/dev/null || fail 'Invalid macOS service configuration.'
+    else
+        need systemctl
+        systemctl --user show-environment >/dev/null 2>&1 || fail 'The systemd user manager is unavailable. Use a normal SSH/login session with systemd user services, then rerun.'
+        need loginctl
+        linger=$(loginctl show-user "$uid" -p Linger --value) || fail 'Cannot check Linux background startup.'
+        if [ "$linger" != yes ]; then
+            loginctl --no-ask-password enable-linger "$uid" || fail 'Automatic startup needs permission to keep your user service running after logout. Ask the administrator to enable lingering for your account, then rerun.'
+            [ "$(loginctl show-user "$uid" -p Linger --value)" = yes ] || fail 'Linux background startup was not enabled.'
+        fi
+        config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+        case "$config_home" in /*) ;; *) fail 'XDG_CONFIG_HOME must be absolute.' ;; esac
+        unitdir=$config_home/systemd/user
+        unit=$unitdir/app.cartae.bridget.service
+        legacy=$unitdir/bridget-daemon.service
+        loaded=$(systemctl --user show app.cartae.bridget.service -p LoadState --value 2>/dev/null || :)
+        case "$loaded" in
+            not-found) ;;
+            loaded)
+                fragment=$(systemctl --user show app.cartae.bridget.service -p FragmentPath --value)
+                [ "$fragment" = "$unit" ] && [ -f "$unit" ] && grep -Fq 'Bridget public installer service v1' "$unit" || fail 'The running service belongs to another Bridget installation.' ;;
+            *) fail 'Cannot establish ownership of the existing Bridget service. Nothing was started.' ;;
+        esac
+        exec_path=$(systemd_quote "$bindir/bridget" | sed 's/\$/$$/g')
+        cat > "$work/service" <<EOF
+# Bridget public installer service v1
+[Unit]
+Description=Bridget communication service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=$exec_path daemon
+Environment=$(systemd_quote "HOME=$HOME")
+Environment=$(systemd_quote "PATH=$service_path")
+Environment=$(systemd_quote "BRIDGET_HOME=$daemon_root")
+Environment=$(systemd_quote "BRIDGET_SOCKET=$daemon_socket")
+Restart=always
+RestartSec=5
+TimeoutStopSec=90
+[Install]
+WantedBy=default.target
+EOF
+    fi
+    if [ -e "$legacy" ] || [ -L "$legacy" ]; then
+        legacy_inactive=false
+        if [ "$platform" = linux ] && [ ! -L "$legacy" ]; then
+            enabled=$(systemctl --user is-enabled bridget-daemon.service 2>/dev/null || :)
+            active=$(systemctl --user is-active bridget-daemon.service 2>/dev/null || :)
+            if [ "$enabled" = disabled ] && [ "$active" = inactive ]; then legacy_inactive=true; fi
+        fi
+        $legacy_inactive || fail "An older Bridget service exists but is unavailable: $legacy. Repair that installation before creating another."
+    fi
+    [ ! -L "$unitdir" ] && [ ! -L "$unit" ] || fail "Service configuration is a symlink: $unit"
+    if [ -e "$unit" ]; then
+        grep -Fq 'Bridget public installer service v1' "$unit" || fail "An unrecognized service already exists: $unit"
+        cmp -s "$work/service" "$unit" || fail "Service settings changed: $unit. Existing configuration was preserved."
+    fi
+}
+
+service_failure() {
+    # Only the service prepared by this invocation; never an existing healthy service.
+    if [ "$service_kind" = darwin ]; then
+        launchctl bootout "gui/$uid/app.cartae.bridget" >/dev/null 2>&1 || :
+        launchctl disable "gui/$uid/app.cartae.bridget" >/dev/null 2>&1 || :
+    else
+        systemctl --user disable --now app.cartae.bridget.service >/dev/null 2>&1 || :
+    fi
+    fail "$* Installation is not complete; the program and data were retained."
+}
+
+start_service() {
+    if [ "$service_kind" = existing ]; then
+        say 'Bridget is already responding. Its existing service or federation was preserved.'
+        return
+    fi
+    mkdir -p "$unitdir" "$daemon_root"
+    chmod 700 "$daemon_root"
+    if [ ! -e "$unit" ]; then
+        staged=$(mktemp "$unitdir/.bridget-service.XXXXXXXX")
+        cp "$work/service" "$staged"
+        chmod 600 "$staged"
+        mv "$staged" "$unit"
+    fi
+    if [ "$service_kind" = darwin ]; then
+        for log in "$state/service-stdout.log" "$state/service-stderr.log"; do
+            [ ! -L "$log" ] || fail "Service log is a symlink: $log"
+            touch "$log"
+            chmod 600 "$log"
+        done
+        launchctl enable "gui/$uid/app.cartae.bridget" || service_failure 'macOS refused service activation.'
+        if launchctl print "gui/$uid/app.cartae.bridget" >/dev/null 2>&1; then
+            launchctl kickstart "gui/$uid/app.cartae.bridget" || service_failure 'macOS could not start Bridget.'
+        else
+            launchctl bootstrap "gui/$uid" "$unit" || service_failure 'macOS could not load Bridget.'
+        fi
+    else
+        systemctl --user daemon-reload || service_failure 'systemd could not load the service configuration.'
+        systemctl --user enable --now app.cartae.bridget.service || service_failure 'systemd could not start Bridget.'
+        systemctl --user is-enabled --quiet app.cartae.bridget.service || service_failure 'Automatic startup was not enabled.'
+        systemctl --user is-active --quiet app.cartae.bridget.service || service_failure 'Bridget service did not remain active.'
+    fi
+    attempt=0
+    while [ "$attempt" -lt 5 ]; do
+        if healthy "$bindir/bridget"; then
+            say 'Bridget is running and responding. Automatic startup is enabled.'
+            return
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    service_failure "Bridget did not respond. Inspect the service $unit and its logs; installation is not complete."
+}
 
 main() {
     mode=release
@@ -30,7 +203,7 @@ main() {
             --help|-h)
                 printf '%s\n' 'Usage: sh install.sh [--source | --version vX.Y.Z]' \
                     'Default: latest published release. --source: build current main.' \
-                    'User installation; no sudo, service restart or provider login.'
+                    'Installs, starts and verifies a user service; preserves existing running services and accounts.'
                 return ;;
             *) fail "Unknown option: $1" ;;
         esac
@@ -132,10 +305,16 @@ main() {
     chmod 755 "$candidate"
     "$candidate" --version > "$work/version" || fail 'Candidate cannot run. Installed Bridget was not changed.'
     grep -qi 'bridget' "$work/version" || fail 'Unexpected candidate version response.'
+    prepare_service
 
     # Prepare PATH before replacing the executable; preserve existing shell settings.
     [ ! -L "$envdir/env" ] || fail "Symlink refused: $envdir/env"
-    printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac' > "$envdir/env"
+    {
+        printf '%s\n' 'case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
+        printf 'export BRIDGET_HOME=%s\n' "$(shell_literal "$daemon_root")"
+        printf 'export BRIDGET_SOCKET=%s\n' "$(shell_literal "$daemon_socket")"
+        if [ -f "$daemon_root/federation.env" ]; then printf '%s\n' 'export BRIDGET_CHANNEL=ssh-unix'; fi
+    } > "$envdir/env"
     profiles="$HOME/.profile"
     case "${SHELL:-}" in
         */zsh) profiles="$profiles
@@ -184,13 +363,14 @@ $HOME/.bash_login"
     fi
     printf '%s\n' "channel=$mode" "source=$identity" "sha256=$(digest "$bindir/bridget")" > "$work/installed.txt"
     mv -f "$work/installed.txt" "$state/installed.txt"
+    start_service
     if [ "$mode" = source ]; then
         (cd "$source" && python3 scripts/build.py installed --target "$CARGO_TARGET_DIR" --binary "$bindir/bridget") || fail "The executable was installed at $bindir/bridget, but build-cache cleanup failed. Inspect $CARGO_TARGET_DIR; services were not restarted."
     fi
     say "Installed $(cat "$work/version") ($identity) at $bindir/bridget"
     say 'For this terminal: . "$HOME/.local/share/bridget/env"'
-    say 'No services were started or restarted. Existing processes keep their loaded version.'
-    say 'Standalone use: bridget daemon. Join an existing master: see bridget federate --help.'
+    say 'Start an agent in your project with: bridget claude or bridget codex'
+    say 'Existing running services were not interrupted. Provider login remains personal.'
     say 'Claude/Codex accounts and Bridget data were preserved.'
 }
 

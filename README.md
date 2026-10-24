@@ -41,7 +41,8 @@ curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --source
 ```
 
 Run the same command to update. The installer preserves accounts and data.
-It installs the CLI, without starting or restarting a daemon or joining a master.
+On a new installation it starts Bridget, enables automatic startup and verifies
+that the service responds. Existing running services and federations are preserved.
 Read the [installation guide](docs/communication-installation.md) for prerequisites,
 an exact release version, and standalone versus federated setup.
 
