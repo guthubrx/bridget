@@ -36,4 +36,26 @@ choisie peut rester en attente sans TaskID : la nouvelle clé exige donc de
 confirmer aussi l’absence d’admission en cours. Le test vérifie que ce code
 reste non terminal. La proposition de la revue fondée sur la seule absence de
 tâche n’a pas été reprise. La règle AGENTS correspond à l’autorisation explicite
-de l’utilisateur ; elle reste conservée. Livraison à compléter.
+de l’utilisateur ; elle reste conservée. Les quatre tests ciblés passent à nouveau après ces précisions.
+
+Livraison : source finale 06b1da2336f18245565bb53076412e9ea7dcb532 poussée sur main.
+Binaire macOS optimisé et signé, compilation finale 189,98 secondes, code retour 0.
+SHA-256 : e49e231b877a18225d11dd2e29831a4469c8852e0eda942df0bd9d8b22ea186c.
+Seule la build finale a été activée sur le maître. Le MCP officiel confirme
+`running=true`, `build_id=06b1da2336f1`. Une réinscription transitoire du lien de
+ce fil a précédé ce contrôle. T3 et le worker distant sont restés en place.
+Les 16 tâches du parent incident ont conservé leurs instances et erreurs ; une
+ronde est devenue result_available sans erreur entre les deux observations.
+
+Circuit réel : appel MCP shared avec cwd volontairement absent et destination
+distante. Le refus contient le message et le conseil complets. Les lectures
+ciblées des deux tables durables avant et après donnent zéro reçu d’admission
+et zéro tâche pour cette seule clé. Aucun modèle ni mission métier lancé par
+ce contrôle. Le conseil couvre aussi le cas général d’une admission déjà en
+cours, sans déduire sa clôture de l’absence d’identifiant.
+
+Résultat envoyé au demandeur par Bridget ; remise en vol, lecture non confirmée.
+La sauvegarde du binaire précédent est conservée. Le wrapper a effectué
+l’entretien du cache, puis la commande installed a confirmé cet entretien.
+Aucun build worker nécessaire : cette projection est produite par le maître
+et les clients existants rendent déjà detail. Aucun protocole ne change.
