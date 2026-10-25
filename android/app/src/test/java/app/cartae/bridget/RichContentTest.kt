@@ -32,4 +32,14 @@ class RichContentTest {
         assertFalse(isTextPreview("data.bin","text/plain"))
         assertThrows(IllegalArgumentException::class.java) { htmlPreviewDocument("x".repeat(262_145)) }
     }
+    @Test fun oldOrUnknownWebViewCannotRenderHtml() {
+        for(version in listOf(null,"","155.0.8059.43","156.0.8078.47","unknown","156.0.8078.+48","157.-1.0.0","9999999.0.0.0")) {
+            assertFalse("Unsafe or unknown WebView: $version",htmlPreviewEngineAllowed(version))
+        }
+    }
+    @Test fun patchedWebViewAndNewerBranchesCanRenderHtml() {
+        for(version in listOf("156.0.8078.48","156.0.8078.49","156.0.8079.1","157.0.8103.14")) {
+            assertTrue("Patched WebView: $version",htmlPreviewEngineAllowed(version))
+        }
+    }
 }

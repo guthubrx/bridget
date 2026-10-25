@@ -191,4 +191,7 @@
 <string name="preview_file">Aperçu</string>
 <string name="preview_html_static">Aperçu local · scripts et ressources externes désactivés</string>
 <string name="preview_unavailable">Aperçu indisponible. Tu peux enregistrer le fichier.</string>
+<string name="preview_html_update_required">Mettez à jour Android System WebView dans Google Play pour ouvrir les aperçus HTML en sécurité. Le code source reste accessible.</string>
+<string name="preview_html_update_action">Ouvrir Google Play</string>
+<string name="preview_html_update_manual">Ouvrez Google Play et recherchez Android System WebView.</string>
 </resources>

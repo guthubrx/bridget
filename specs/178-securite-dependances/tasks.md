@@ -7,3 +7,5 @@
 - [x] T006 Scanner les dépendances finales et relire le delta.
 - [ ] T007 Intégrer, pousser et activer les exécutables.
 - [ ] T008 Vérifier l’installation et effectuer le nettoyage.
+
+- [x] T009 Neutraliser le rendu WebView ancien et vérifier le parcours réel, avec preuves.

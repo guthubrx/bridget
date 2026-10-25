@@ -5,3 +5,5 @@ local.properties
 *.keystore
 *.apk
 google-services.json
+
+.kotlin/
