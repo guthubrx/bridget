@@ -37,3 +37,5 @@ Un fichier téléchargé n'est pas une version active. Un client MCP déjà lanc
 Le nettoyeur conserve l'exécutable actif, un retour vérifié et toutes les copies encore utilisées. Un inventaire de processus incomplet interdit le retrait. Les autres installations, travaux, preuves et tâches en attente sont conservés. Les caches de compilation continuent de passer par scripts/build.py.
 
 Le premier déploiement doit installer un binaire capable de gérer les mises à jour et configurer ses services. Il suit les mêmes précautions que les livraisons ordinaires. Le reçu de la session 179 distingue les versions installées, actives et encore différées.
+
+Le droit de mise à jour est enregistré séparément des permissions historiques de l’appareil. Leur format reste lisible par la version de retour. Chaque appel vérifie toujours la révocation et l’expiration de l’association.

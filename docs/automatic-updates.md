@@ -44,3 +44,5 @@ Changing a file does not change an already running MCP client. T3 owns these cli
 Only update-owned version directories are removed automatically, after a complete open-file inventory. The active executable, the rollback executable, other live versions, unrelated installations, evidence and unknown inventories are preserved. Build intermediates remain subject to scripts/build.py. Keep one verified rollback; do not erase a worktree or pending task to make an update possible.
 
 The first rollout must install the update-capable binary and configure the watchers through the normal controlled deployment. The updater does not grant itself an exception to bootstrap an old daemon. See the session 179 delivery receipt for actual installed/active versions and any deferred component.
+
+The UpdatesManage grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.

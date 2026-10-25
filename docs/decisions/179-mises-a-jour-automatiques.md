@@ -13,3 +13,5 @@ T3's updateMachine/DesktopUpdates separate available/downloaded/active states, s
 GitHub release administration and the local OS account remain trusted. A compromised publisher is not addressed by a digest served by the same publisher. Android additionally verifies its signing lineage. macOS verifies the delivered code signature. No downgrade is automated. An unknown mission stop is a real blocker, not a candidate for state deletion.
 
 The update services need an initial controlled installation on an old daemon. The feature does not create a bypass for that bootstrap. See docs/automatic-updates.md and the delivery receipt for actual activation and deferred components.
+
+The UpdatesManage grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.

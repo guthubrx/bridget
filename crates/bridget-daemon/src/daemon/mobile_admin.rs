@@ -81,15 +81,14 @@ pub(super) fn handle(
         };
     }
     if let MobileAdministrationRequest::GrantUpdates { device_id } = request {
-        let result = crate::mobile::store::Store::open(&root.join("mobile-devices.db"))
-            .and_then(|mut s| s.grant_updates(&device_id, unix_now_secs()));
+        let result = crate::updates::grant_device(&root, &device_id);
         return DaemonToWrapper::MobileAdministrationResult {
             result: match result {
                 Ok(found) => MobileAdministrationResult::Updates {
                     value: serde_json::json!({"status":"ok","granted":found,"device_id":device_id}),
                 },
                 Err(e) => MobileAdministrationResult::Error {
-                    code: e.code().into(),
+                    code: e.into(),
                 },
             },
         };

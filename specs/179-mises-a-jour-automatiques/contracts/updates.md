@@ -13,3 +13,5 @@ Local administration extends MobileAdministrationRequest with Updates and GrantU
 DaemonToWrapper::UpdateInProgress means the ordinary request was not dispatched through this gate. The client poisons the connection and advises a later attempt with unchanged identifiers. It is not a success, a terminal mission failure, or an instruction to create a new request.
 
 Host state files and lease files are local private implementation state, not an authority offered to the phone. No automatic task replay, task cancellation, data migration or project cleanup is part of this contract.
+
+The UpdatesManage grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.

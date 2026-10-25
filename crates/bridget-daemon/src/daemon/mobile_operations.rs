@@ -193,7 +193,11 @@ pub(super) fn handle(
             | MobileOperation::UpdatesInstall { .. }
             | MobileOperation::UpdatesConfigure { .. }
     ) {
-        if !device.scope.permits_federation(Operation::UpdatesManage) {
+        let granted = match crate::updates::device_granted(&root, &device.device_id) {
+            Ok(granted) => granted,
+            Err(code) => return refusal(code),
+        };
+        if !device.scope.all_machines || !device.scope.all_projects || !granted {
             return refusal("forbidden_scope");
         }
         let q = match request.operation {
@@ -553,7 +557,10 @@ mod tests {
             "forbidden_scope"
         );
         let mut store = Store::open(&f.root.join("mobile-devices.db")).unwrap();
-        assert!(store.grant_updates(&device, unix_now_secs()).unwrap());
+        let legacy_scope = store.authenticate(&key, unix_now_secs()).unwrap().scope;
+        assert!(crate::updates::grant_device(&f.root, &device).unwrap());
+        assert_eq!(store.authenticate(&key, unix_now_secs()).unwrap().scope, legacy_scope,
+            "The previous binary can still deserialize the unchanged device scope");
         assert_eq!(call(MobileOperation::UpdatesStatus)["automatic"], true);
         assert_eq!(
             call(MobileOperation::UpdatesConfigure { automatic: false })["automatic"],

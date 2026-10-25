@@ -22,7 +22,6 @@ pub(crate) enum Operation {
     TaskCancel,
     TaskRespond,
     DevicesManage,
-    UpdatesManage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +39,7 @@ impl Scope {
     pub fn permits_federation(&self, op: Operation) -> bool {
         self.all_machines && self.all_projects && self.operations.contains(&op)
     }
-    /// O(M+P+O), listes bornées : 128 machines/projets et 9 opérations.
+    /// O(M+P+O), listes bornées : 128 machines/projets et 8 opérations.
     pub fn permits(
         &self,
         op: Operation,
@@ -57,7 +56,7 @@ impl Scope {
             || self.machines.len() > 128
             || self.projects.len() > 128
             || self.operations.is_empty()
-            || self.operations.len() > 9
+            || self.operations.len() > 8
             || (self.all_machines && !self.machines.is_empty())
             || (self.all_projects && !self.projects.is_empty())
             || self.machines.iter().any(|m| !bounded_label(m, 256))
@@ -500,32 +499,6 @@ impl Store {
             "SELECT device_id,label,scope,created_at,expires_at,revoked_at FROM mobile_devices ORDER BY created_at,device_id"
         ).map_err(storage)?.query_map([],row_device).map_err(storage)?
             .collect::<Result<Vec<_>,_>>().map_err(storage)
-    }
-
-    /// Octroi humain explicite, sans changer les autres droits de l'appareil.
-    pub(crate) fn grant_updates(&mut self, id: &str, now: i64) -> Result<bool, StoreError> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(storage)?;
-        let raw:Option<String>=tx.query_row("SELECT scope FROM mobile_devices WHERE device_id=?1 AND revoked_at IS NULL AND expires_at>?2",params![id,now],|r|r.get(0)).optional().map_err(storage)?;
-        let Some(raw) = raw else { return Ok(false) };
-        let mut scope: Scope =
-            serde_json::from_str(&raw).map_err(|_| StoreError::StorageUnavailable)?;
-        if !scope.operations.contains(&Operation::UpdatesManage) {
-            scope.operations.push(Operation::UpdatesManage);
-        }
-        scope.validate()?;
-        tx.execute(
-            "UPDATE mobile_devices SET scope=?1 WHERE device_id=?2",
-            params![
-                serde_json::to_string(&scope).map_err(|_| StoreError::StorageUnavailable)?,
-                id
-            ],
-        )
-        .map_err(storage)?;
-        tx.commit().map_err(storage)?;
-        Ok(true)
     }
 
     /// O(log D), D<=256 ; idempotente, irréversible par ce contrat.

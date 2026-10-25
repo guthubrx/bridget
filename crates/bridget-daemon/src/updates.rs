@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -34,6 +34,8 @@ struct Policy {
     check_generation: u64,
     #[serde(default)]
     install_target: Option<String>,
+    #[serde(default)]
+    granted_devices: BTreeSet<String>,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -42,6 +44,7 @@ impl Default for Policy {
             hosts: BTreeMap::new(),
             check_generation: 0,
             install_target: None,
+            granted_devices: BTreeSet::new(),
         }
     }
 }
@@ -81,6 +84,40 @@ fn write<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     })();
     let _ = fs::remove_file(temp);
     result
+}
+/// The grant is separate from legacy device scopes so rollback can still read them.
+pub(crate) fn grant_device(root: &Path, device_id: &str) -> Result<bool, &'static str> {
+    let devices = crate::mobile::store::Store::open(&root.join("mobile-devices.db"))
+        .and_then(|s| s.devices())
+        .map_err(|e| e.code())?;
+    let current = now();
+    let active = |id: &str| {
+        devices
+            .iter()
+            .any(|d| d.device_id == id && d.revoked_at.is_none() && d.expires_at > current)
+    };
+    if !active(device_id) {
+        return Ok(false);
+    }
+    let _lock = FILE_LOCK.lock().map_err(|_| "update_state_unavailable")?;
+    let path = root.join("updates.json");
+    let mut p: Policy = read(&path)
+        .map_err(|_| "update_state_unavailable")?
+        .unwrap_or_default();
+    p.granted_devices.retain(|id| active(id));
+    if p.granted_devices.len() >= 256 && !p.granted_devices.contains(device_id) {
+        return Err("update_state_unavailable");
+    }
+    p.granted_devices.insert(device_id.into());
+    write(&path, &p).map_err(|_| "update_state_unavailable")?;
+    Ok(true)
+}
+pub(crate) fn device_granted(root: &Path, device_id: &str) -> Result<bool, &'static str> {
+    let _lock = FILE_LOCK.lock().map_err(|_| "update_state_unavailable")?;
+    let p: Policy = read(&root.join("updates.json"))
+        .map_err(|_| "update_state_unavailable")?
+        .unwrap_or_default();
+    Ok(p.granted_devices.contains(device_id))
 }
 pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
     let _lock = FILE_LOCK.lock().map_err(|_| "update_state_unavailable")?;
