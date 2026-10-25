@@ -902,6 +902,12 @@ impl IdempotencyStore {
             CREATE INDEX IF NOT EXISTS idx_queue_edits_delivery ON queue_edits(delivery_id);",
         )?;
 
+        // 180: reçu additif pour le remplacement mobile, canon initial d'envoi inchangé.
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS mobile_queue_replacements (
+            issuer_scope TEXT NOT NULL, request_id TEXT NOT NULL, canonical_bytes BLOB NOT NULL,
+            result TEXT NOT NULL, expires_at INTEGER NOT NULL,
+            PRIMARY KEY(issuer_scope,request_id));
+            CREATE INDEX IF NOT EXISTS idx_mobile_queue_replacements_expires ON mobile_queue_replacements(expires_at);")?;
         // Session156 : objets additifs APRÈS la reconstructionv4 éventuelle.
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS guidance_events (

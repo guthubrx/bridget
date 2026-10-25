@@ -473,6 +473,16 @@ enum CommandRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct QueueChangeRequest {
+    command_id: String,
+    request_id: String,
+    action: String,
+    expected_body: String,
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PairRequest {
     credential: String,
     attempt_id: String,
@@ -825,6 +835,20 @@ fn execute(
                 Err(_) => return failure("invalid_request"),
             },
         })
+    } else if path.starts_with("/v1/message-queue/") {
+        let agent_id = path.trim_start_matches("/v1/message-queue/").to_string();
+        if agent_id.contains('/') { return failure("invalid_request"); }
+        if method == Method::GET {
+            Some(bridget_transport::protocol::MobileOperation::MessageQueue { agent_id })
+        } else if method == Method::POST {
+            match strict::<QueueChangeRequest>(bytes) {
+                Ok(q) => Some(bridget_transport::protocol::MobileOperation::MessageQueueChange {
+                    agent_id, command_id:q.command_id, request_id:q.request_id, change:q.action,
+                    expected_body:q.expected_body, body:q.body,
+                }),
+                Err(response) => return response,
+            }
+        } else { return failure("invalid_request"); }
     } else if path == "/v1/commands" && method == Method::POST {
         match strict::<CommandRequest>(bytes) {
             Ok(CommandRequest::Message {

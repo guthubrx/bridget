@@ -199,6 +199,17 @@ class BridgetClient(private val store: LocalStore) {
             else -> "outcome_unknown"
         }, receipt)
     }
+    suspend fun changeMessageQueue(entry: JSONObject): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        requireCommandOrigin(entry, session)
+        val envelope = entry.getJSONObject("envelope")
+        val result = request(session.getString("endpoint"), "/v1/message-queue/" + encode(envelope.getString("agent_id")),
+            "POST", session.getString("device_key"), entry.getJSONObject("queue_change"))
+        requireCommandOrigin(entry, store.get("session") ?: throw MobileFailure("authorization_required"))
+        if (result.optString("state") != "applied") throw MobileFailure(
+            result.optString("refusal").substringBefore(':').takeIf { it.matches(Regex("[a-z_]{1,64}")) } ?: "outcome_unknown")
+        return result
+    }
     suspend fun download(agentId: String, metadata: JSONObject, progress: (Float) -> Unit = {}): ByteArray {
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         val total = metadata.getLong("byte_length")

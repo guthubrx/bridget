@@ -1509,7 +1509,7 @@ impl Link {
                 .session
                 .as_ref()
                 .is_some_and(|session| session.active_turn_id.is_some()),
-            false,
+            true,
         )?;
         info!(
             "fil « {} » exposé comme « {name} » ({agent_type}, {agent_id})",
@@ -1963,6 +1963,9 @@ impl LinkWorker {
             LinkEvent::Tick(summary) => {
                 self.report_project_context(&summary);
                 send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
+                send_wrapper_message(&self.writer, WrapperToDaemon::TurnState {
+                    in_progress: summary.session.as_ref().is_some_and(|s| s.active_turn_id.is_some()),
+                });
                 let title = display_title(&summary.title);
                 let retry = self
                     .title_refused_at
@@ -2332,7 +2335,7 @@ impl LinkWorker {
             .unwrap_or_else(|e| e.into_inner())
             .client
             .uses_v2();
-        if !v2 || !deliverable_while_busy(provider.as_deref(), true) {
+        if !v2 || !explicit_steering_supported(provider.as_deref()) {
             for (frame, _) in &mut self.queue {
                 let message = match frame {
                     DaemonToWrapper::Deliver { message, .. }
@@ -2361,7 +2364,7 @@ impl LinkWorker {
 
         let unavailable = match message.intent.as_ref() {
             Some(bridget_core::MessageIntent::SteerCurrent)
-                if !v2 || !deliverable_while_busy(provider.as_deref(), true) =>
+                if !v2 || !explicit_steering_supported(provider.as_deref()) =>
             {
                 Some("steer_unavailable")
             }
@@ -3708,6 +3711,11 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
 /// (Claude, donc GLM), il est remis aussitôt si mid_turn_ok vaut true.
 /// Cursor149, Codex, les demandes suivies, les sollicitations de fil et les
 /// notifications attendent la fin du tour. Cursor149 sait seulement relancer.
+// Le guidage explicite V2 est distinct du regroupement automatique des notifications.
+fn explicit_steering_supported(provider: Option<&str>) -> bool {
+    matches!(provider, Some("claude" | "codex"))
+}
+
 fn deliverable_while_busy(provider: Option<&str>, groupable_front: bool) -> bool {
     groupable_front && matches!(provider, Some("claude"))
 }
@@ -7688,7 +7696,7 @@ mod tests {
 
     #[test]
     fn mobile177_t3_optional_guidance_waits_then_delivers_same_message() {
-        for (v2, provider) in [(true, "codex"), (true, "cursor"), (false, "claude")] {
+        for (v2, provider) in [(true, "cursor"), (false, "claude")] {
             let (mut worker, peer) = worker099();
             worker.session.inner.lock().unwrap().client.set_test_protocol(v2);
             let mut frame = idempotent113("mobile-optional");
@@ -7726,10 +7734,30 @@ mod tests {
     }
 
     #[test]
+    fn mobile180_t3_codex_explicit_guidance_keeps_intent_while_busy() {
+        let (mut worker,_peer)=worker099();
+        worker.session.inner.lock().unwrap().client.set_test_protocol(true);
+        let mut frame=idempotent113("mobile180-codex");
+        if let DaemonToWrapper::DeliverIdempotent { message,.. }=&mut frame {
+            message.reply=false;
+            message.intent=Some(bridget_core::MessageIntent::SteerCurrent);
+            message.references.push("steer-or-queue".into());
+        }
+        worker.handle_frame(frame);
+        let mut thread=summary(Some(("active","running")));
+        thread.provider_instance_id=Some("codex".into());
+        thread.session=Some(contract::SessionSummary {provider_name:"codex".into(),provider_instance_id:None,status:"running".into(),active_turn_id:Some("active".into())});
+        assert_eq!(worker.next_delivery_index(&thread),Some(0));
+        assert_eq!(delivery_message(&worker.queue[0].0).intent,Some(bridget_core::MessageIntent::SteerCurrent));
+        assert!(!deliverable_while_busy(Some("codex"),true),"automatic notifications remain queued");
+        worker.journal.stop();worker.relay.shutdown();
+    }
+
+    #[test]
     fn guidance156_t3_steer_fournisseur_hors_liste_refuse() {
         // Cursor149 n'a pas activeSteering : son fallbackRestart ne prouve pas
-        // un guidage natif. Aucun steer n'est envoyé à Cursor, Codex ou inconnu.
-        for provider in [Some("cursor"), Some("codex"), None] {
+        // un guidage natif. Aucun steer natif n'est envoyé à Cursor ou inconnu.
+        for provider in [Some("cursor"), None] {
             let (mut worker, peer) = worker099();
             worker
                 .session

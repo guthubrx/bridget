@@ -10,6 +10,12 @@ format AAAA-MM-JJ.
 
 ## Non publié
 
+### File de messages Android
+
+- Retenir les messages mobiles dans Bridget pendant le travail de l’agent. Afficher un volet repliable au-dessus de la saisie, avec édition, annulation et guidage explicite.
+- Conserver les actions incertaines. Rapprocher les identifiants du journal et conserver le guidage après reprise de transmission.
+- Prendre en charge le guidage Codex explicite via l’adaptateur T3 V2 existant ; les notifications ordinaires attendent toujours.
+
 ### Android et accès permanent à la fédération
 
 - Application Android native : association QR, annuaire filtré, messages, fichiers,

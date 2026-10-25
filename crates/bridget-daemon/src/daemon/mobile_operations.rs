@@ -263,8 +263,13 @@ pub(super) fn handle(
         return refusal("authorization_required");
     };
     negotiated.issuer_scope = format!("mobile177_{}", device.device_id.replace('-', ""));
+    if matches!(request.operation, MobileOperation::MessageQueue { .. } | MobileOperation::MessageQueueChange { .. }) {
+        return super::mobile_queue::handle(conn_id, &request.operation, &device, &mut st);
+    }
     match request.operation {
-        MobileOperation::UpdatesStatus
+        MobileOperation::MessageQueue { .. }
+        | MobileOperation::MessageQueueChange { .. }
+        | MobileOperation::UpdatesStatus
         | MobileOperation::UpdatesCheck
         | MobileOperation::UpdatesInstall { .. }
         | MobileOperation::UpdatesConfigure { .. }
@@ -1883,4 +1888,111 @@ mod tests {
             "device_revoked"
         );
     }
+    fn mobile180_hold(f:&Fixture) {
+        let mut st=f.state.lock().unwrap();
+        let p=st.presences.get_mut("instance-1").unwrap();
+        p.turn_attest=true; p.queue_fallback=true; p.state="busy".into(); p.transport="t3code".into();
+        p.last_attested_at=Some(Instant::now());
+    }
+    fn mobile180_change(f:&Fixture,id:&str,request:&str,action:&str,expected:&str,body:Option<&str>)->MobileOperation {
+        use sha2::{Digest,Sha256};
+        MobileOperation::MessageQueueChange {agent_id:f.agent.clone(),command_id:id.into(),request_id:request.into(),change:action.into(),
+            expected_body:format!("{:x}",Sha256::digest(expected.as_bytes())),body:body.map(String::from)}
+    }
+    fn mobile180_list(f:&Fixture)->serde_json::Value {
+        value(handle("phone",f.request(MobileOperation::MessageQueue {agent_id:f.agent.clone()}),&f.state))
+    }
+    #[test]
+    fn mobile180_queue_edit_cancel_replays_and_keeps_creation_canon() {
+        let f=Fixture::new();mobile180_hold(&f);
+        let id=Uuid::new_v4().to_string();
+        let op=f.command(&id,"Original");
+        let first=value(handle("phone",f.request(op.clone()),&f.state));
+        assert_eq!(mobile180_list(&f)["items"][0]["body"],"Original");
+        assert!(f.state.lock().unwrap().pending_post_response_controls.values().all(|v|v.is_empty()));
+        let edit=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"edit","Original",Some("Edited"));
+        let result=value(handle("phone",f.request(edit.clone()),&f.state));
+        assert_eq!(result["state"],"applied","{result}");
+        assert_eq!(result,value(handle("phone",f.request(edit),&f.state)));
+        assert_eq!(mobile180_list(&f)["items"][0]["body"],"Edited");
+        assert_eq!(first,value(handle("phone",f.request(op),&f.state)),"old creation retries never overwrite edited body");
+        let stale=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"edit","Original",Some("Lost update"));
+        assert_eq!(value(handle("phone",f.request(stale),&f.state))["code"],"queue_changed");
+        let cancel=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"cancel","Edited",None);
+        let result=value(handle("phone",f.request(cancel.clone()),&f.state));
+        assert_eq!(result["state"],"applied","{result}");
+        assert_eq!(result,value(handle("phone",f.request(cancel),&f.state)));
+        assert_eq!(mobile180_list(&f)["items"].as_array().unwrap().len(),0);
+        let edit=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"edit","Edited",Some("Too late"));
+        assert_eq!(value(handle("phone",f.request(edit),&f.state))["code"],"not_held");
+        assert_eq!(f.deliveries(),1);
+    }
+    #[test]
+    fn mobile180_promotes_only_once_and_reports_uneditable_after_release() {
+        let f=Fixture::new();mobile180_hold(&f);
+        let id=Uuid::new_v4().to_string();
+        handle("phone",f.request(f.command(&id,"Steer")),&f.state);
+        let promote=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"promote","Steer",None);
+        let result=value(handle("phone",f.request(promote.clone()),&f.state));
+        assert_eq!(result["state"],"applied","{result}");
+        let count=f.state.lock().unwrap().pending_post_response_controls.values().map(Vec::len).sum::<usize>();
+        assert_eq!(count,1);
+        assert_eq!(result,value(handle("phone",f.request(promote),&f.state)));
+        assert_eq!(f.state.lock().unwrap().pending_post_response_controls.values().map(Vec::len).sum::<usize>(),count);
+        {
+            let st=f.state.lock().unwrap();
+            let key=IdempotencyKey::new(format!("mobile177_{}",f.device.replace('-',"")),OperationKind::Send,id.clone()).unwrap();
+            let delivery=st.idempotency.send_delivery(&key).unwrap().unwrap();
+            let original:bridget_core::BridgetMessage=serde_json::from_slice(&delivery.message_bytes).unwrap();
+            assert_eq!(original.intent,None,"creation bytes remain unchanged");
+            let mut recovered=Vec::new();
+            defer_idempotent_delivery(&st,"conn-1",delivery,&mut recovered,None,None).unwrap();
+            match &recovered[0].message {
+                DaemonToWrapper::DeliverIdempotent {message,..}=>{
+                    assert_eq!(message.intent,Some(bridget_core::MessageIntent::SteerCurrent));
+                    assert!(message.references.iter().any(|r|r=="steer-or-queue"));
+                }, _=>panic!("delivery expected")
+            }
+        }
+        let cancel=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"cancel","Steer",None);
+        assert_eq!(value(handle("phone",f.request(cancel),&f.state))["state"],"refused");
+    }
+    #[test]
+    fn mobile180_idle_release_waits_for_fresh_primary_state() {
+        let f=Fixture::new();mobile180_hold(&f);
+        let id=Uuid::new_v4().to_string();handle("phone",f.request(f.command(&id,"Queued")),&f.state);
+        let mut st=f.state.lock().unwrap();
+        assert!(!schedule_held_release(&mut st,&f.agent,Instant::now()));
+        let p=st.presences.get_mut("instance-1").unwrap();p.state="connected".into();p.busy_period_start=None;
+        p.last_attested_at=Some(Instant::now()-Duration::from_secs(100));
+        assert!(!schedule_held_release(&mut st,&f.agent,Instant::now()));
+        st.presences.get_mut("instance-1").unwrap().last_attested_at=Some(Instant::now());
+        assert!(schedule_held_release(&mut st,&f.agent,Instant::now()));
+        assert!(!schedule_held_release(&mut st,&f.agent,Instant::now()));
+    }
+    #[test]
+    fn mobile180_changed_project_cannot_read_or_mutate_queue() {
+        let f=Fixture::new();mobile180_hold(&f);
+        let id=Uuid::new_v4().to_string();handle("phone",f.request(f.command(&id,"Private")),&f.state);
+        f.state.lock().unwrap().communication_projects.get_mut("conn-1").unwrap().0.as_mut().unwrap().root="/other".into();
+        assert_eq!(mobile180_list(&f)["code"],"not_found");
+        let edit=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"edit","Private",Some("Leak"));
+        assert_eq!(value(handle("phone",f.request(edit),&f.state))["code"],"not_found");
+    }
+    #[test]
+    fn mobile180_another_paired_phone_cannot_read_or_change_the_queue() {
+        let f=Fixture::new();mobile180_hold(&f);
+        let id=Uuid::new_v4().to_string();handle("phone",f.request(f.command(&id,"Private")),&f.state);
+        let mut store=Store::open(&f.root.join("mobile-devices.db")).unwrap();
+        let grant=store.issue_pairing(&Scope {all_machines:true,machines:vec![],all_projects:true,projects:vec![],operations:vec![Operation::Message]},unix_now_secs()).unwrap();
+        let key=format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple());
+        store.pair(&grant.credential,&Uuid::new_v4().to_string(),&key,"Other phone",unix_now_secs()).unwrap();
+        let request=|operation|MobileOperationRequest {credential:IdentityCredential::new(key.clone()),operation};
+        let list=value(handle("phone",request(MobileOperation::MessageQueue {agent_id:f.agent.clone()}),&f.state));
+        assert_eq!(list["items"].as_array().unwrap().len(),0);
+        let change=mobile180_change(&f,&id,&Uuid::new_v4().to_string(),"cancel","Private",None);
+        assert_eq!(value(handle("phone",request(change),&f.state))["code"],"not_found");
+        assert_eq!(mobile180_list(&f)["items"].as_array().unwrap().len(),1);
+    }
+
 }

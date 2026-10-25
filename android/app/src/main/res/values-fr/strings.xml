@@ -224,4 +224,19 @@
     <string name="host_update_installing">Activation des composants Bridget en cours…</string>
     <string name="host_update_install_action">Installer sur Mac et Cartae dès que possible</string>
     <string name="update_hosts_unavailable">Le choix Android est conservé. Le réglage Mac/Cartae attend un service Bridget compatible et joignable.</string>
+ <string name="message_queue">Messages en attente (%1$d)</string>
+ <string name="queue_edit">Modifier ce message</string>
+ <string name="queue_cancel">Annuler ce message</string>
+ <string name="queue_promote">Transmettre ce message maintenant en interrompant le tour</string>
+ <string name="queue_retry">Vérifier et reprendre cette action</string>
+ <string name="queue_save">Enregistrer la modification</string>
+ <string name="queue_local">Enregistré sur le téléphone · pas encore transmis</string>
+ <string name="queue_waiting">Dans la file Bridget · en attente du prochain tour</string>
+ <string name="queue_check_pending">État de la file à confirmer</string>
+ <string name="queue_transmitted">Transmis · prise en charge à confirmer</string>
+ <string name="queue_interrupt_requested">Interruption demandée · prise en charge à confirmer</string>
+ <string name="queue_action_unconfirmed">Action enregistrée · résultat à confirmer</string>
+ <string name="queue_already_sent">Ce message a déjà quitté la file. Cette action est impossible.</string>
+ <string name="queue_changed">Le message a changé. Actualisez la file avant de réessayer.</string>
+ <string name="queue_interrupt_unavailable">Le moteur ne peut pas prendre ce message maintenant. Il reste dans la file.</string>
 </resources>

@@ -316,10 +316,10 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
         }
         groups
     }
-    val localMessages = remember(vm.outbox, id) { vm.outbox.mapNotNull { entry ->
+    val localMessages = remember(vm.outbox, id) { vm.conversationEntries(id).mapNotNull { entry ->
         val envelope = entry.optJSONObject("envelope")
         if (envelope?.optString("type") == "message" && envelope.optString("agent_id") == id)
-            envelope.getString("command_id") to envelope.optString("body") else null
+            envelope.getString("command_id") to entry.optString("queue_body", envelope.optString("body")) else null
     }.toMap() }
     LaunchedEffect(list, dragging) {
         snapshotFlow { Triple(list.isScrollInProgress, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
@@ -397,24 +397,7 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                         Text("↓  " + stringResource(R.string.latest_messages))
                     }
                 }
-                val sent = vm.outbox.filter { it.optJSONObject("envelope")?.optString("agent_id") == id && it.optJSONObject("envelope")?.optString("type") == "message" }
-                    .maxByOrNull { it.getJSONObject("envelope").optLong("issued_at") }
-                sent?.let { entry ->
-                    val observation = entry.optJSONObject("delivery_observation")?.optString("event")
-                    Text(when (observation) {
-                        "turn_end" -> stringResource(R.string.response_finished)
-                        "turn_start" -> stringResource(R.string.delivered_to_agent)
-                        else -> if(messageDeliveryPending(entry.optString("state"),entry.optJSONObject("receipt")?.optJSONObject("issue")?.optString("kind"),entry.optJSONObject("receipt")?.optJSONObject("issue")?.optString("delivery_id"))) stringResource(
-                            if(agent.optString("state") in setOf("busy","working","running")) R.string.agent_waiting_turn else R.string.message_delivering
-                        ) else commandState(entry.optString("state"))
-                    }, Modifier.padding(horizontal = 12.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if(vm.draft.isNotBlank()) Row(Modifier.fillMaxWidth(), horizontalArrangement=Arrangement.End) {
-                    TextButton(onClick={followBottom=true;vm.send(guideNow=true)},enabled=!vm.busy) {
-                        Text(stringResource(R.string.send_now))
-                    }
-                }
+                MessageQueue(vm, id)
                 Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                     Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.Bottom) {
@@ -882,6 +865,9 @@ private fun recoveryText(code: String): Int = when (code) {
 private fun errorText(code: String): Int = when (code) {
     "update_hosts_unavailable" -> R.string.update_hosts_unavailable
     "update_in_progress" -> R.string.update_server_in_progress
+    "not_held" -> R.string.queue_already_sent
+    "queue_changed" -> R.string.queue_changed
+    "no_active_turn", "steer_unavailable" -> R.string.queue_interrupt_unavailable
     "recipient_unavailable" -> R.string.recipient_unavailable
     "pairing_unavailable", "pairing_missing" -> R.string.pairing_unavailable
     "pairing_pending" -> R.string.pending_pairing

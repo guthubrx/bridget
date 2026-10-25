@@ -33,4 +33,18 @@ class ConversationTextTest {
         val raw = "Ce texte cite id $id et doit rester entier"
         assertEquals(raw, conversationBody(raw, true, mapOf(id to "Autre texte")))
     }
+    @org.junit.Test fun wrappedCommandIdIsIndependentOfTheNativeJournalMessageId() {
+        org.junit.Assert.assertEquals("12345678-1234-4123-8123-123456789012",humanInstructionId("💬 Instruction de l’utilisateur (id=12345678-1234-4123-8123-123456789012)\nText"))
+        org.junit.Assert.assertNull(humanInstructionId("A normal answer with id=12345678-1234-4123-8123-123456789012"))
+    }
+    @org.junit.Test fun queueKeepsUncertainMessagesAndHidesOnlyObservedOrCancelledOnes() {
+        org.junit.Assert.assertTrue(queuedMessageVisible("local", null, ""))
+        org.junit.Assert.assertTrue(queuedMessageVisible("outcome_unknown", null, "held"))
+        org.junit.Assert.assertTrue(queuedMessageVisible("accepted", null, "promoted"))
+        org.junit.Assert.assertFalse(queuedMessageVisible("outcome_unknown", "turn_start", "held"))
+        org.junit.Assert.assertFalse(queuedMessageVisible("accepted", "turn_end", "released"))
+        org.junit.Assert.assertFalse(queuedMessageVisible("outcome_unknown", null, "cancelled"))
+        org.junit.Assert.assertFalse(queuedMessageVisible("rejected", null, ""))
+        org.junit.Assert.assertTrue(queuedMessageVisible("outcome_unknown", "turn_start", "cancelled",true))
+    }
 }

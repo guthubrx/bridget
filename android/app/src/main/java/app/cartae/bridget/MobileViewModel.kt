@@ -52,6 +52,8 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var selected by mutableStateOf<JSONObject?>(null); private set
     var draft by mutableStateOf(""); private set
     var outbox by mutableStateOf<List<JSONObject>>(emptyList()); private set
+    var messageQueue by mutableStateOf<List<JSONObject>>(emptyList()); private set
+    var queueAvailable by mutableStateOf(false); private set
     var fresh by mutableStateOf(false); private set
     var events by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var eventGap by mutableStateOf(false); private set
@@ -299,13 +301,100 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             draft = value
         } catch (_: Exception) { error = "device_storage_unavailable" }
     }
-    fun send(guideNow: Boolean = false) = act {
+    fun send() = act {
         val id = selected?.getString("agent_id") ?: return@act
-        val entry = store.enqueue(id, draft, guideNow)
+        val entry = store.enqueue(id, draft)
         store.remove(store.draftKey(id)); draft = ""
-        try { client.send(entry) } finally { refreshPendingReceipt(id) }
+        outbox = store.list("command:") // Visible avant le premier accès réseau.
+        try { client.send(entry) } finally {
+            outbox = store.list("command:")
+            runCatching { refreshMessageQueue(id) }
+            refreshPendingReceipt(id)
+        }
         applyEvents(id, client.read("/v1/agents/" + BridgetClient.encode(id) + "/events?after_seq=" + eventNextSeq))
         resumeFollow()
+    }
+    /** O(n): la file serveur est l'autorité ; les enveloppes locales restent immuables. */
+    private suspend fun refreshMessageQueue(id: String) {
+        val origin = store.draftKey(id)
+        try {
+            val page = client.read("/v1/message-queue/" + BridgetClient.encode(id))
+            if (selected?.optString("agent_id") != id || store.draftKey(id) != origin) return
+            val items = objects(page.getJSONArray("items"))
+            val held = items.associateBy { it.getString("command_id") }
+            val phases = objects(page.getJSONArray("receipts")).associate { it.getString("command_id") to it.getString("phase") }
+            for (entry in store.list("command:")) {
+                val envelope = entry.getJSONObject("envelope")
+                if (envelope.optString("type") != "message" || envelope.optString("agent_id") != id) continue
+                if (runCatching { BridgetClient.requireCommandOrigin(entry,store.get("session")!!); true }.getOrDefault(false) != true) continue
+                val key = envelope.getString("command_id")
+                val item = held[key]
+                if (item != null) {
+                    entry.put("queue_state", "held").put("queue_body", item.getString("body")).put("queue_revision", item.getString("revision"))
+                } else if (entry.optString("queue_state") !in setOf("promoted","cancelled") && phases[key]!=null && phases[key]!="held") {
+                    entry.put("queue_state", if(phases[key]=="cancelled") "cancelled" else "released")
+                }
+                store.put("command:$key",entry)
+            }
+            messageQueue = items; queueAvailable = true; outbox = store.list("command:")
+        } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { queueAvailable = false; throw e }
+    }
+    fun changeQueuedMessage(item: JSONObject, action: String, body: String? = null) = act {
+        val id = selected?.getString("agent_id") ?: return@act
+        val command = item.getString("command_id")
+        val entry = store.get("command:$command") ?: throw MobileFailure("not_found")
+        BridgetClient.requireCommandOrigin(entry, store.get("session") ?: throw MobileFailure("authorization_required"))
+        require(entry.getJSONObject("envelope").getString("agent_id") == id)
+        if (action == "retry" && !entry.has("queue_change")) {
+            if (entry.getString("state") == "local") client.send(entry)
+            else try { client.reconcile(entry) } catch(e: MobileFailure) {
+                if(e.code != "not_found") throw e
+                client.send(entry) // Même enveloppe et même clé ; aucun nouveau message.
+            }
+        } else if (entry.getString("state") == "local" && entry.optJSONObject("queue_change") == null) {
+            when(action) {
+                "edit" -> store.editUnsentMessage(command, body ?: return@act)
+                "cancel" -> store.discardCommand(command)
+                "promote" -> { entry.getJSONObject("envelope").put("guide_now",true); store.put("command:$command",entry); client.send(entry) }
+            }
+        } else {
+            val pending = entry.optJSONObject("queue_change")
+            if (pending == null) {
+                val change = JSONObject().put("command_id", command).put("request_id", java.util.UUID.randomUUID().toString())
+                    .put("action", action).put("expected_body",item.getString("revision"))
+                body?.let { change.put("body",it) }
+                entry.put("queue_change",change)
+                store.put("command:$command",entry)
+            }
+            try {
+                outbox = store.list("command:")
+                client.changeMessageQueue(entry)
+                val latest = store.get("command:$command") ?: throw MobileFailure("not_found")
+                val actual = entry.getJSONObject("queue_change")
+                when(actual.getString("action")) {
+                    "edit" -> latest.put("queue_body",actual.getString("body"))
+                    "cancel" -> latest.put("queue_state","cancelled")
+                    "promote" -> latest.put("queue_state","promoted")
+                }
+                latest.remove("queue_change"); store.put("command:$command",latest)
+            } catch (e: MobileFailure) {
+                if (e.code !in setOf("outcome_unknown","endpoint_unavailable")) {
+                    val latest = store.get("command:$command") ?: entry
+                    latest.remove("queue_change"); store.put("command:$command",latest)
+                }
+                throw e
+            } finally { runCatching { refreshMessageQueue(id) } }
+        }
+        outbox = store.list("command:")
+        runCatching { refreshMessageQueue(id) }
+    }
+    internal fun conversationEntries(agent: String): List<JSONObject> {
+        val session = store.get("session") ?: return emptyList()
+        return outbox.filter {
+            it.optJSONObject("envelope")?.optString("agent_id") == agent
+                && runCatching { BridgetClient.requireCommandOrigin(it,session) }.isSuccess
+        }
     }
     fun reconcile(entry: JSONObject) = act { client.reconcile(entry) }
     fun sendStored(entry: JSONObject, strictReplay: Boolean = false) = act {
@@ -394,6 +483,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private fun startFollow() {
         if (!visible || !conversationVisible || !associated || followJob?.isActive == true) return
         val id = selected?.optString("agent_id") ?: return
+        messageQueue = emptyList(); queueAvailable = false
         val origin = runCatching { store.draftKey(id) }.getOrNull() ?: return
         refreshPendingReceipt(id)
         followState = "connecting"
@@ -411,6 +501,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                         olderBefore=recent.optLong("older_before_seq").takeIf { it>1 }
                         tailPending=false; after=null; followState="live"
                     }
+                    runCatching { refreshMessageQueue(id) }
                     val suffix = after?.let { "&after=" + BridgetClient.encode(it) } ?: "&after_seq=" + eventNextSeq
                     val page = client.read("/v1/events?agent_id=$id&limit=50$suffix")
                     if (store.draftKey(id) != origin || selected?.optString("agent_id") != id) break

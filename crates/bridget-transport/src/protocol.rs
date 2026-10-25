@@ -2714,6 +2714,15 @@ pub enum MobileOperation {
         #[serde(default)]
         guide_now: bool,
     },
+    MessageQueue { agent_id: String },
+    MessageQueueChange {
+        agent_id: String,
+        command_id: String,
+        request_id: String,
+        change: String,
+        expected_body: String,
+        body: Option<String>,
+    },
     Lookup {
         command_id: String,
     },

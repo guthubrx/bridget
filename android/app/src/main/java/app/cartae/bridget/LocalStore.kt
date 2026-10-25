@@ -105,9 +105,20 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
             .put("issued_at", System.currentTimeMillis() / 1000).put("type", "message")
             .put("agent_id", agentId).put("body", text)
         if(guideNow) envelope.put("guide_now",true)
-        val entry = JSONObject().put("endpoint", endpoint).put("envelope", envelope).put("state", "local")
+        val entry = JSONObject().put("endpoint", endpoint).put("envelope", envelope).put("state", "local").put("created_at",System.currentTimeMillis())
         put("command:" + envelope.getString("command_id"), entry)
         return entry
+    }
+    /** Uniquement avant le premier essai réseau ; un envoi incertain reste immuable. */
+    @Synchronized fun editUnsentMessage(id: String, body: String) {
+        require(body.isNotBlank() && body.toByteArray(Charsets.UTF_8).size <= 10_000)
+        val entry = get("command:$id") ?: throw MobileFailure("not_found")
+        BridgetClient.requireCommandOrigin(entry, get("session") ?: throw MobileFailure("authorization_required"))
+        require(entry.getString("state") == "local") { "outcome_unknown" }
+        val envelope = entry.getJSONObject("envelope")
+        require(envelope.getString("type") == "message")
+        envelope.put("body", body)
+        put("command:$id", entry)
     }
     @Synchronized fun enqueueAction(type: String, objectId: String, choice: String? = null): JSONObject {
         require(type in setOf("task_cancel", "question_respond"))
@@ -221,17 +232,22 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
     @Synchronized fun observeMessage(agentId: String, event: JSONObject) {
         val kind = event.optString("event")
         if (kind !in setOf("turn_start", "turn_end")) return
-        val id = event.optString("message_id")
-        if (runCatching { UUID.fromString(id).toString() == id }.getOrDefault(false) != true) return
-        val entry = get("command:$id") ?: return
-        val envelope = entry.getJSONObject("envelope")
-        if (envelope.optString("type") != "message" || envelope.optString("agent_id") != agentId) return
+        val native = event.optString("message_id")
+        val wrapped = if(kind=="turn_start") humanInstructionId(event.optJSONObject("payload")?.optString("body").orEmpty()) else null
         val current = get("session") ?: return
-        if (runCatching { BridgetClient.requireCommandOrigin(entry, current) }.isFailure) return
-        val seq = event.optLong("seq")
-        if (seq <= 0 || seq <= (entry.optJSONObject("delivery_observation")?.optLong("seq") ?: 0)) return
-        entry.put("delivery_observation", JSONObject().put("agent_id", agentId).put("seq", seq).put("event", kind))
-        put("command:$id", entry)
+        // O(n), n <= 256: correspondance par ID natif observé ou ID Bridget de l’enveloppe.
+        for(entry in list("command:")) {
+            val envelope=entry.getJSONObject("envelope")
+            val id=envelope.optString("command_id")
+            if(envelope.optString("type")!="message" || envelope.optString("agent_id")!=agentId) continue
+            val previous=entry.optJSONObject("delivery_observation")
+            if(id!=native && id!=wrapped && previous?.optString("native_message_id")!=native) continue
+            if(runCatching {BridgetClient.requireCommandOrigin(entry,current)}.isFailure) continue
+            val seq=event.optLong("seq")
+            if(seq<=0 || seq<=(previous?.optLong("seq") ?: 0)) continue
+            entry.put("delivery_observation",JSONObject().put("agent_id",agentId).put("seq",seq).put("event",kind).put("native_message_id",native))
+            put("command:$id",entry)
+        }
     }
     companion object {
         private val keyLock = Any()

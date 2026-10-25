@@ -8,6 +8,7 @@ mod native_lineage;
 mod mobile_admin;
 mod origin_proof;
 mod mobile_operations;
+mod mobile_queue;
 mod mobile_artifacts;
 mod mobile_tasks;
 mod mobile_questions;
@@ -6166,6 +6167,16 @@ fn defer_idempotent_delivery(
 ) -> Result<(), String> {
     let mut message: bridget_core::BridgetMessage = serde_json::from_slice(&delivery.message_bytes)
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
+    // O(log E): le reçu de promotion est l’autorité durable, y compris après une panne.
+    // Les octets et le canon de création restent intacts (contrat159).
+    let promoted:bool=state.store.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM queue_edits WHERE delivery_id=?1 AND action='promote' AND state='applied')",
+        [&delivery.delivery_id],|r|r.get(0),
+    ).map_err(|e|format!("reçu de promotion illisible: {e}"))?;
+    if promoted {
+        message.intent=Some(bridget_core::MessageIntent::SteerCurrent);
+        if !message.references.iter().any(|r|r=="steer-or-queue") {message.references.push("steer-or-queue".into());}
+    }
     // Le journal et l'idempotence conservent l'Agent ID. Le seul nom destiné
     // au fournisseur est une projection de présentation ajoutée à la remise.
     message.from_display_name = provider_display_name(state, &message.from);
@@ -6245,7 +6256,11 @@ fn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> boo
     let Some(p) = st.presences.get(&instance) else {
         return false;
     };
-    if !p.turn_attest || p.transport == "t3code" || p.state != "connected" {
+    let mobile_held = st.store.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM send_deliveries WHERE recipient_agent=?1 AND phase='held' AND issuer_scope GLOB 'mobile177_*')",
+        [agent], |row| row.get::<_,bool>(0),
+    ).unwrap_or(false);
+    if !p.turn_attest || (p.transport == "t3code" && !mobile_held) || p.state != "connected" {
         return false;
     }
     let fresh = p.busy_period_start.is_none()
@@ -12458,7 +12473,16 @@ fn handle_idempotent_send_with_result_authority(
             reason: error,
         });
     };
-    let held_for_agent = if let Some(presence) = st.presences.get(&recipient_instance_id)
+    // O(log N): messages mobiles retenus avant le porteur, même pour T3.
+    let mobile_hold = scoped_mobile_human && message.intent.is_none()
+        && st.presences.get(&recipient_instance_id).is_some_and(|p| p.turn_attest
+            && (p.state == "busy" || st.store.connection().query_row(
+                "SELECT EXISTS(SELECT 1 FROM send_deliveries WHERE recipient_agent=?1 AND phase='held')",
+                [&message.to], |row| row.get::<_,bool>(0),
+            ).unwrap_or(true)));
+    let held_for_agent = if mobile_hold {
+        Some((message.to.clone(), 32))
+    } else if let Some(presence) = st.presences.get(&recipient_instance_id)
         && let Ok(definition) = st.registry.get(&presence.agent_type)
         && definition.held_queue
         && presence.turn_attest

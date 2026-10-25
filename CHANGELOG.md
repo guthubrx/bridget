@@ -8,6 +8,12 @@ figures below describe the named release's evidence, not the current checkout.
 
 ## Unreleased
 
+### Android message queue
+
+- Keep ordinary mobile messages in Bridget while the agent is busy. Show a collapsible queue above the composer with edit, cancel and explicit steering actions.
+- Preserve pending actions across uncertain responses. Reconcile native journal message identifiers and keep steering intent after delivery recovery.
+- Support explicit Codex steering through the existing T3 V2 adapter while ordinary notifications continue to wait.
+
 ### Android and permanent federation access
 
 - Add the native Android app: QR pairing, scoped directory, messages, files,
