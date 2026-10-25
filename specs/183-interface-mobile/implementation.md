@@ -119,3 +119,17 @@ T021 : candidatMacbridget0.6.3 vérifié après compilation2m23s et comparaison 
 Correction d'auditM1 : la recherche des appels confirme qu'htmlCodeBlocks n'était plus utilisé en production après la découpe CommonMark. Son unique appel restait dans un test hérité. Suppression de l'extracteur et de deux imports ; le test vise désormais markdownRenderBlocks, distingue balise mentionnée et bloc réel et vérifie dix blocs sans troncature. Avant et recherche des appels conservés dans la session d'audit. Aucun changement visible attendu, car le rendu n'appelait pas ce code. T022 ajoutée, puis vérification et convergence supplémentaires requises.
 
 T022 vérifiée :13lignes de production retirées, aucun appel résiduel à htmlCodeBlocks ; test reporté sur l'AST réellement affiché ; JVM30/30 et assemblagedebug/tests/releasePASS39s. Le code retiré n'était appelé par aucune interface : les circuits visibles et leur diaporama restent pertinents. Le changement reste une correction technique à comportement constant.
+
+### Contrôle historique de livraison
+
+La CI du merge1d122d31 a échoué sur une ancienne valeur de test, déjà présente
+sur le socle706a70ab. Le scan différentiel est sans détection. Le contrôle local
+complet a reproduit un seul signal : commit6f2ad516, mobile/store.rs:946.
+Lecture de la fonction complète : magasin en mémoire, dates synthétiques,
+aucun appel externe, chaîne de mots et suffixe numérique séquentiel. Faux
+positif confirmé. Réutilisation du mécanisme existant .gitleaksignore : une
+seule empreinte exacte, avec justification bilingue dans docs/security-audit*.md.
+Aucun code moteur ou Android modifié, aucune règle générale supprimée.
+Vérification : contrôle complet sans détection,32pages/522liens/13paires de
+langues valides,26tests de l’installateur PASS(4,427s). Ce correctif de livraison
+ne change aucune exigence ni code de la convergence précédente.
