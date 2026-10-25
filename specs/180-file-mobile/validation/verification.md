@@ -4,7 +4,7 @@ Code : file native, édition/annulation/promotion par appareil, volet au-dessus 
 
 Rust : dernier lot mobile77PASS/1ignored ; guidage6PASS. Un passage intermédiaire avait71PASS/6FAIL/1ignored, car le harnais de recette avait créé le dossier sessions avec des permissions trop larges. Répertoire immédiatement remis en0700 et fichiers du seul harnais en0600. Rejeu complet du lot affecté77PASS/1ignored. Pas de suite globale.
 
-Android : JVM, lintRelease et assembleRelease passent. Un test instrumenté QueueStoreTest passe sur Pixel10a Android17 dans le paquet de recette distinct, ensuite désinstallé. Le nombre exact JVM est gardé dans les XML privés et le reçu final.
+Android : JVM20PASS/0échec, lintRelease et assembleRelease passent. Un test instrumenté QueueStoreTest passe sur Pixel10a Android17 dans le paquet de recette distinct, ensuite désinstallé. Les XML privés et leur archive vérifiée sont conservés.
 
 Recette réelle Android vers un destinataire natif contrôlé : envoi normal, volet replié/déplié, édition persistante, annulation, guidage explicite, remise au repos avec application arrêtée, réouverture. Trois commandes natives : un cancelled, deux acked ; témoin destinataire : exactement deux IDs uniques, aucun message annulé. Le moteur de recette est contrôlé et ne lance aucun modèle. Le guidage Codex/T3 est qualifié par les tests ciblés et la lecture de son adaptateur ; aucun nouvel envoi de test dans un vrai fil utilisateur.
 

@@ -1,6 +1,6 @@
 # 180 — File de messages Android
 
-Statut : In Progress. Correction du parcours mobile déjà demandé.
+Statut : Implemented. Correction du parcours mobile déjà demandé.
 
 La flèche bleue enregistre le message. Si le destinataire travaille, Bridget le conserve dans sa file durable. Un volet avec compteur et chevron se trouve juste au-dessus de la saisie. Chaque message montre son texte et les icônes Modifier, Annuler et Transmettre maintenant. L’ancien lien avant envoi disparaît.
 
