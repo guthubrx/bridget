@@ -127,3 +127,13 @@ diagnostic suivi a expiré sans réponse. Aucun nouveau rappel périodique ajout
 
 Corrections techniques : pas de changement d’interface dans ce lot, donc pas de
 diaporama requis. Le parcours mobile intégré conserve ses propres preuves.
+
+## Complément : correction du rejeu strict préparée
+
+La source `7478e9e756dced0e0f85d9519229c279644d362c` est intégrée et poussée sur `main`. Elle reprend un reçu `chosen` de l'époque courante sur rejeu explicite, avec son choix et son enveloppe d'origine. L'exclusion concurrente couvre la préparation et la clôture de l'erreur. Aucun nouveau décideur ni repli n'est ajouté. Les sources mobiles récentes sont conservées.
+
+Validation : 42 tests ciblés réussis, aucun ignoré, et contre-revue R2 sans défaut bloquant. La build optimisée est terminée. Le candidat `183-admission-7478e9e7` est installé et son SHA-256 vérifié. Le détail et les limites figurent dans [validation/admission-replay.md](validation/admission-replay.md).
+
+La commande d'entretien après installation a retiré 4,12 Gio ; 3,10 Gio de caches sont annoncés restants. Le worktree, sa branche, les preuves et le candidat sont conservés pour terminer la livraison. Aucun ancien binaire actif ou retour n'a été retiré.
+
+**Activation non effectuée.** Le garde réel renvoie encore `update_missions_active_or_unconfirmed`. Le core Cartae reste en 0.6.2. La clé KS-STOR reste non réconciliée et ce serveur n'est pas annoncé disponible. La tâche historique `e5959986-e426-422d-956f-e035dbcf89be`, en arrêt non confirmé, constitue un autre point à traiter. Aucun service n'a été arrêté pour franchir ce refus.

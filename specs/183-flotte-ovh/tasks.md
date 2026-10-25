@@ -14,4 +14,5 @@
 
 - [x] Reproduire le reçu choisi bloqué et permettre son rejeu dans la même époque.
 - [x] Vérifier l'exclusion concurrente, l'enveloppe et les droits relus ; obtenir une contre-revue.
-- [ ] Intégrer la correction et consigner séparément son activation et la réconciliation réelle.
+- [x] Intégrer et pousser la correction ; construire et vérifier le candidat ; consigner le refus réel du garde et le nettoyage.
+- [ ] Activer le candidat lors d'une maintenance autorisée et réconcilier la clé de production sans modifier son enveloppe.

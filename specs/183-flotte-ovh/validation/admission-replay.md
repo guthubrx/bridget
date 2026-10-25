@@ -31,3 +31,15 @@ Cette note décrit une correction de sources, pas une activation. L’ancien cor
 Une tâche historique `e5959986-e426-422d-956f-e035dbcf89be` reste également `cancelling`, avec nettoyage non confirmé. Sa réconciliation est distincte de la qualification OVH. Les travaux et preuves sont conservés.
 
 Correction technique : aucun parcours visuel modifié, aucun diaporama requis.
+
+## Reçu de préparation de livraison
+
+- Source `7478e9e756dced0e0f85d9519229c279644d362c` intégrée et poussée sur `main`. Les checkouts principaux Mac et Cartae étaient propres et alignés lors du contrôle.
+- Build optimisée terminée en 3 min 29 s via le wrapper d'entretien, avec un seul job et le cache existant. Binaire vérifié : `bridget 0.6.3`, identifiant `183-admission-7478e9e7`.
+- Candidat installé hors staging : `/home/moi/.local/lib/bridget-communication/183-admission-7478e9e7/bin/bridget`.
+- SHA-256 : `d6ba590c987b67a206d6ea87e5d9e832d3b3f47abc54a19c30df93deb93770ef`.
+- Après installation, `scripts/build.py installed` a retiré 4,12 Gio de caches debug/release et annonce 3,10 Gio restants. Les caches protégés sont conservés ; aucune suppression forcée.
+- Le contrôle réel `updates prepare` a renvoyé `update_missions_active_or_unconfirmed`, sans acquérir de maintenance. Le lien actif Cartae reste sur `181-dd1410f43dc2` (0.6.2). Le candidat ne constitue donc pas une correction active.
+- Le worktree, sa branche et le candidat sont conservés pour l'activation et la réconciliation restantes. Aucune admission persistée n'a été modifiée à la main. Aucune mission métier n'a été rejouée.
+
+La préparation est terminée. L'activation, le résultat réel de la clé KS-STOR et la qualification de ce serveur restent à établir. Une éventuelle maintenance manuelle doit traiter explicitement l'interruption du coordinateur et la tâche historique non réconciliée ; elle ne découle pas d'un succès du garde.
