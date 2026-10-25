@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "bridget-core"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "bridget-daemon"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "axum",
  "base64",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "bridget-transport"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "bridget-core",
  "libc",

@@ -2102,6 +2102,39 @@ fn observe_steered_user_message_visibility(
     observations.1.notify_all();
 }
 
+/// O(1), champs bornés : seul un item structurel du tour actif atteste le compactage.
+fn compaction_payload(value: &Value, thread: &str, turn: &str) -> Option<Value> {
+    let status = match value.get("method")?.as_str()? {
+        "item/started" => "running",
+        "item/completed" => "completed",
+        _ => return None,
+    };
+    if value.pointer("/params/threadId")?.as_str()? != thread
+        || value.pointer("/params/turnId")?.as_str()? != turn
+        || value.pointer("/params/item/type")?.as_str()? != "contextCompaction" {
+        return None;
+    }
+    let item = value.pointer("/params/item/id")?.as_str()?;
+    if item.is_empty() || item.len() > 256 || item.chars().any(char::is_control) { return None; }
+    Some(json!({"kind":"tool","tool_type":"context_compaction","tool_id":format!("compaction:{thread}:{turn}:{item}"),"text":"Compactage du contexte","status":status,"turn_id":turn,"item_id":item}))
+}
+
+fn record_context_compaction(
+    journal: &Journal,
+    observations: &Arc<(Mutex<Observations>, Condvar)>,
+    active_detail: &ActiveTurnDetail,
+    value: &Value,
+) {
+    let observed = {
+        let active = active_detail.lock().unwrap_or_else(|e| e.into_inner());
+        active.as_ref().and_then(|a| compaction_payload(value, &a.thread_id, a.turn_id.as_deref()?)
+            .map(|payload| (a.message_id.clone(), payload)))
+    };
+    if let Some((message, payload)) = observed {
+        record_or_terminal(journal, observations, "update", Some(&message), payload);
+    }
+}
+
 fn record_active_act(
     journal: &Journal,
     observations: &Arc<(Mutex<Observations>, Condvar)>,
@@ -3857,6 +3890,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 // (B) Repli : message agent complet sans aucun delta (stdout
                 // sans flux partiel). `item/completed` type agentMessage.
                 Some("item/completed") => {
+                    record_context_compaction(&journal, &observations, &active_detail, &value);
                     let item = value.pointer("/params/item");
                     if item.and_then(|i| i.get("type")).and_then(Value::as_str)
                         == Some("fileChange")
@@ -4013,6 +4047,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 // est dans item/started type=commandExecution.params.item.command.
                 // Les outputDelta ne portent que la sortie — ce n'est pas le nom.
                 Some("item/started") => {
+                    record_context_compaction(&journal, &observations, &active_detail, &value);
                     let item = value.pointer("/params/item").unwrap_or(&Value::Null);
                     if interactive
                         && item.get("type").and_then(Value::as_str) == Some("userMessage")
@@ -5821,6 +5856,18 @@ for line in sys.stdin:
         // remplacer RuntimeObserved par une déclaration synthétique le casse aussi.
     }
 
+    #[test]
+    fn mobile183_compaction_reaches_the_real_journal_without_foreign_items() {
+        let _suite = crate::act_kind::pilot_kind_suite_lock();
+        let (events, journal) = codex_activity_turn_managed_events_with("mobile183", &[("BRIDGET_CODEX_COMPACTION", "1")], None);
+        assert!(!events.iter().any(|e| matches!(e.kind, ManagedEventKind::JournalFailed { .. })));
+        let facts:Vec<_> = journal.iter().filter(|e|e["payload"]["tool_type"]=="context_compaction").collect();
+        assert_eq!(facts.len(),2,"{journal:?}");
+        assert_eq!(facts[0]["payload"]["status"],"running");
+        assert_eq!(facts[1]["payload"]["status"],"completed");
+        assert!(facts.iter().all(|e|e["payload"]["item_id"]=="compact183"));
+    }
+
     fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {
         CodexAppServerOptions {
             command: "sh".to_string(),
@@ -5845,6 +5892,11 @@ for line in sys.stdin:
                             elif [ "${BRIDGET_CODEX_TURN_ERROR:-0}" = 1 ]; then malicious_reason='{"id":5,"error":{"code":-32098,"message":"SENTINELLE-RAISON-019\u001b[2J\r\u202e"}}'; printf '%s\n' "$malicious_reason" >> "$BRIDGET_CODEX_OUTPUT_TRACE"; printf '%s\n' "$malicious_reason"
                             else
                                 printf '%s\n' '{"id":5,"result":{"turn":{"id":"turn-native"}}}'
+                                if [ "${BRIDGET_CODEX_COMPACTION:-0}" = 1 ]; then
+                                    printf '%s\n' '{"method":"item/started","params":{"threadId":"foreign","turnId":"turn-native","item":{"type":"contextCompaction","id":"bad"}}}'
+                                    printf '%s\n' '{"method":"item/started","params":{"threadId":"thread-native","turnId":"turn-native","item":{"type":"contextCompaction","id":"compact183"}}}'
+                                    printf '%s\n' '{"method":"item/completed","params":{"threadId":"thread-native","turnId":"turn-native","item":{"type":"contextCompaction","id":"compact183"}}}'
+                                fi
                                 if [ "${BRIDGET_CODEX_REQUEST_APPROVAL:-0}" = 1 ]; then
                                     case "${BRIDGET_CODEX_REQUEST_VARIANT:-known}" in
                                         method) printf '%s\n' '{"id":"approval-native","method":"SENTINELLE-METHOD-019\u001b[2J\r\u202e","params":{"threadId":"thread-native","turnId":"turn-native","itemId":"i","command":"SENTINELLE-SECRETE-019"}}' ;;
@@ -9807,5 +9859,26 @@ for line in sys.stdin:
         }
         transport.stop();
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod mobile183_compaction_tests {
+    use super::*;
+    #[test]
+    fn mobile183_compaction_is_structural_and_scoped_to_the_active_turn() {
+        let mut event=json!({"method":"item/started","params":{"threadId":"t","turnId":"r","item":{"id":"c","type":"contextCompaction"}}});
+        let start=compaction_payload(&event,"t","r").unwrap();
+        assert_eq!(start["status"],"running");assert_eq!(start["item_id"],"c");
+        assert!(crate::act_kind::validate_journal_write("update", &start).is_ok());
+        assert!(compaction_payload(&event,"foreign","r").is_none());
+        assert!(compaction_payload(&event,"t","old").is_none());
+        event["method"]=json!("item/completed");
+        assert_eq!(compaction_payload(&event,"t","r").unwrap()["status"],"completed");
+        event["params"]["item"]["type"]=json!("agentMessage");
+        assert!(compaction_payload(&event,"t","r").is_none());
+        event["params"]["item"]["type"]=json!("contextCompaction");
+        event["params"]["item"]["id"]=json!("bad\nitem");
+        assert!(compaction_payload(&event,"t","r").is_none());
     }
 }

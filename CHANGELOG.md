@@ -6,6 +6,14 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## [0.6.3] - 2026-10-25
+
+- Add a left conversation drawer with favorites, search and explicit attention states.
+- Keep drafts and reading positions per agent; add loaded-history search and editable system dictation.
+- Prepare files and photos locally before explicit sending; show code languages and exact copy controls.
+- Add isolated interactive HTML previews alongside static and source modes, with no privileged bridge or network access.
+- Project correlated native context-compaction activity without inferred progress.
+
 ## Unreleased
 
 ### Android message queue

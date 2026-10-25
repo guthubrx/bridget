@@ -166,7 +166,7 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
         val entry=JSONObject().put("endpoint",session.getString("endpoint")).put("envelope",envelope).put("input_questions",item.optJSONArray("questions")).put("state","local").put("created_at",System.currentTimeMillis())
         put("command:"+envelope.getString("command_id"),entry);return entry
     }
-    @Synchronized fun enqueueFile(agentId: String, name: String, mediaType: String, input: InputStream, commandId: String = UUID.randomUUID().toString()): JSONObject {
+    @Synchronized fun enqueueFile(agentId: String, name: String, mediaType: String, input: InputStream, commandId: String = UUID.randomUUID().toString(), staged: Boolean = false): JSONObject {
         require(name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= 240
             && name != "." && name != ".." && name.none { it.isISOControl() || it == '/' || it == '\\' }) { "invalid_file" }
         require(mediaType in setOf("application/pdf", "text/plain", "text/html", "text/markdown", "image/png", "image/jpeg")) { "invalid_file" }
@@ -191,6 +191,7 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
             .put("expected_digest", digest(bytes)).put("byte_length", bytes.size)
         val entry = JSONObject().put("endpoint", session.getString("endpoint")).put("envelope", envelope)
             .put("created_at", System.currentTimeMillis()).put("state", "local")
+            .put("staged",staged).put("compose_attachment",staged)
         check(attachmentDirectory.exists() || attachmentDirectory.mkdirs()) { "device_storage_unavailable" }
         val used = attachmentDirectory.listFiles().orEmpty().sumOf { it.length() }
         check(used + bytes.size + 28 <= 32L * 1024 * 1024) { "device_storage_limit" }
@@ -210,6 +211,38 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
         try { put("command:$id", entry) }
         catch (error: Exception) { atomic.delete(); throw error }
         return entry
+    }
+    /** Validation locale explicite avant le premier accès réseau ; l'enveloppe ne change pas. */
+    @Synchronized fun releasePreparedFile(id: String): JSONObject {
+        val entry=get("command:$id") ?: throw MobileFailure("not_found")
+        BridgetClient.requireCommandOrigin(entry,get("session") ?: throw MobileFailure("authorization_required"))
+        require(entry.getJSONObject("envelope").optString("type")=="file" && entry.optBoolean("compose_attachment"))
+        entry.put("staged",false); put("command:$id",entry)
+        return entry
+    }
+    @Synchronized fun removePreparedFile(id: String) {
+        val entry=get("command:$id") ?: return
+        BridgetClient.requireCommandOrigin(entry,get("session") ?: throw MobileFailure("authorization_required"))
+        require(entry.optBoolean("compose_attachment"))
+        if(entry.optBoolean("staged") && entry.optString("state")=="local") discardCommand(id)
+        else {entry.put("compose_attachment",false);put("command:$id",entry)}
+    }
+    /** Message, retrait des cartes et brouillon sont validés dans la même transaction locale. */
+    @Synchronized fun enqueueComposed(agentId: String, body: String, files: List<String>): JSONObject {
+        writableDatabase.beginTransaction()
+        try {
+            for(id in files) {
+                val entry=get("command:$id") ?: throw MobileFailure("not_found")
+                BridgetClient.requireCommandOrigin(entry,get("session") ?: throw MobileFailure("authorization_required"))
+                require(entry.getJSONObject("envelope").optString("agent_id")==agentId && entry.optBoolean("compose_attachment")
+                    && entry.optString("state")=="accepted" && entry.optJSONObject("receipt")?.optJSONObject("receipt")?.has("artifact_ref")==true)
+                entry.put("compose_attachment",false);put("command:$id",entry)
+            }
+            val message=enqueue(agentId,body)
+            remove(draftKey(agentId))
+            writableDatabase.setTransactionSuccessful()
+            return message
+        } finally {writableDatabase.endTransaction()}
     }
     @Synchronized fun fileBytes(entry: JSONObject): ByteArray {
         val session = get("session") ?: throw MobileFailure("authorization_required")

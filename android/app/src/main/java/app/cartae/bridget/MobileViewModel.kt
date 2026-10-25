@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
@@ -26,6 +27,8 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private var questionJob: Job? = null
     private var userInputPagesLoaded=false
     private var tailPending = true
+    private var directoryObservedAt=0L
+    var attentionPending by mutableStateOf<Set<String>>(emptySet()); private set
     var olderBefore by mutableStateOf<Long?>(null); private set
     private var visible = false
     private var conversationVisible = false
@@ -59,6 +62,8 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var fresh by mutableStateOf(false); private set
     var events by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var eventGap by mutableStateOf(false); private set
+    private var compactionSignals by mutableStateOf<List<CompactionSignal>>(emptyList())
+    val compacting: Boolean get() = activeContextCompaction(compactionSignals,followState=="live")!=null
     var eventNextSeq by mutableStateOf(0L); private set
     var followState by mutableStateOf("stopped"); private set
     var attachments by mutableStateOf<List<JSONObject>>(emptyList()); private set
@@ -81,6 +86,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     fun questionOpened() {requestedQuestion=null}
     var userInputCapability by mutableStateOf("unknown"); private set
     var userInputs by mutableStateOf<List<JSONObject>>(emptyList()); private set
+    private var freshUserInputIds by mutableStateOf<Set<String>>(emptySet())
     var userInputCursor by mutableStateOf<String?>(null); private set
     var questions by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var questionCursor by mutableStateOf<String?>(null); private set
@@ -103,6 +109,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             endpoint = session?.getString("endpoint") ?: ""
             if (associated) {
                 loadPreferences()
+                runCatching {machines=allPages("/v1/federation");projects=allPages("/v1/projects?limit=50");refreshDirectoryQuietly()}
                 runCatching {refreshUserInputs()}
                 runCatching { MobileUpdates.syncHosts(getApplication()) }
             }
@@ -144,10 +151,12 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     }
     private fun loadPreferences() {
         val value = preferences()
+        freshUserInputIds=emptySet();userInputs=emptyList()
         machine = value.optString("machine")
         project = value.optJSONObject("project")
         favoritesOnly = value.optBoolean("favorites_only")
         favorites = value.optJSONArray("favorites")?.let(::objects).orEmpty()
+        attentionPending=value.optJSONArray("attention_pending")?.let { a -> (0 until a.length()).map(a::getString).toSet() }.orEmpty()
         selected = value.optJSONObject("selected")
         selected?.let { restoreConversation(it.getString("agent_id")) }
     }
@@ -195,7 +204,13 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         questionJob?.cancel()
         if(value) questionJob=viewModelScope.launch {
             while(isActive && visible) {
-                if(associated && !busy) try { refreshUserInputs() } catch(e:CancellationException){throw e} catch(_:Exception){ userInputs=userInputs.map { JSONObject(it.toString()).put("can_respond",false) } }
+                if(associated && !busy) {
+                    try {refreshUserInputs()}
+                    catch(e:CancellationException) {throw e}
+                    catch(_:Exception) {freshUserInputIds=emptySet();userInputs=userInputs.map {JSONObject(it.toString()).put("can_respond",false)}}
+                    // Une panne des questions ne doit pas empêcher de dater l'annuaire.
+                    if(System.currentTimeMillis()-directoryObservedAt>15_000) refreshDirectoryQuietly()
+                }
                 delay(5000)
             }
         }
@@ -214,27 +229,79 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         if (selected != null) startFollow() else if (!fresh && !busy) refresh()
     }
     fun refresh(next: Boolean = false) = act {
-        fresh = false
+        if (!next && agents.isEmpty()) fresh = false
         if (!next) {
             machines = allPages("/v1/federation")
             val filter = if (machine.isNotEmpty()) "&machine=" + BridgetClient.encode(machine) else ""
             projects = allPages("/v1/projects?limit=50$filter")
         }
-        val filter = buildString {
-            if (machine.isNotEmpty()) append("&machine=" + BridgetClient.encode(machine))
-            project?.let {
-                append("&project_host=" + BridgetClient.encode(it.getString("host")))
-                append("&project_root=" + BridgetClient.encode(it.getString("root")))
-            }
-        }
+        val filter = directoryFilter()
         val afterSuffix = if (next && nextCursor != null) "&after=" + BridgetClient.encode(nextCursor!!) else ""
         val page = client.read("/v1/agents?limit=50$filter$afterSuffix")
         val items = objects(page.getJSONArray("items"))
         val combined = if (next) (agents + items).distinctBy { it.getString("agent_id") } else items
         if (combined.size > 1000) throw MobileFailure("resource_limit")
+        observeDirectory(items)
         agents = combined
         nextCursor = cursor(page)
         fresh = true
+    }
+    private fun directoryFilter(): String = buildString {
+        if(machine.isNotEmpty()) append("&machine="+BridgetClient.encode(machine))
+        project?.let {append("&project_host="+BridgetClient.encode(it.getString("host"))+"&project_root="+BridgetClient.encode(it.getString("root")))}
+    }
+    private fun setAttention(ids: Set<String>) {
+        if(ids==attentionPending) return
+        check(ids.size<=1000) {"device_storage_limit"}
+        updatePreferences {it.put("attention_pending",JSONArray(ids.toList()))}
+        attentionPending=ids
+    }
+    private fun observeDirectory(items: List<JSONObject>) {
+        val previous=agents.associateBy {it.getString("agent_id")}
+        val freshPair=fresh && System.currentTimeMillis()-directoryObservedAt<30_000
+        val ended=items.filter {now ->
+            val old=previous[now.getString("agent_id")]
+            observedActivityEnded(old?.optString("state"),now.optString("state"),
+                old?.takeIf {it.has("reconnect_count")}?.optInt("reconnect_count"),
+                now.takeIf {it.has("reconnect_count")}?.optInt("reconnect_count"),freshPair && old?.optBoolean("cached_observation")!=true)
+        }.map {it.getString("agent_id")}
+        setAttention(attentionPending+ended)
+        directoryObservedAt=System.currentTimeMillis()
+    }
+    private suspend fun refreshDirectoryQuietly() {
+        val origin=store.preferencesKey(); val filter=directoryFilter()
+        try {
+            val page=client.read("/v1/agents?limit=50"+filter)
+            if(store.preferencesKey()!=origin || directoryFilter()!=filter) return
+            val items=objects(page.getJSONArray("items")); observeDirectory(items)
+            val ids=items.map {it.getString("agent_id")}.toSet()
+            val combined=items+agents.filter {it.getString("agent_id") !in ids}.map {JSONObject(it.toString()).put("cached_observation",true)}
+            agents=combined.take(1000)
+            if(combined.size>1000) notice="agent_window_limit"
+            nextCursor=cursor(page); fresh=true
+        } catch(e:CancellationException) {throw e}
+        catch(_:Exception) {fresh=false; directoryObservedAt=System.currentTimeMillis()}
+    }
+    private val questionOwners by derivedStateOf {userInputs.filter {it.getString("request_id") in freshUserInputIds && it.optString("state")=="pending"}.map {it.optString("owner")}.toSet()}
+    private val pendingInputOwners by derivedStateOf {userInputs.filter {it.getString("request_id") in freshUserInputIds && it.optString("state") in setOf("submitted","unknown")}.map {it.optString("owner")}.toSet()}
+    private val staleQuestionOwners by derivedStateOf {userInputs.filter {it.getString("request_id") !in freshUserInputIds && it.optString("state") in setOf("pending","submitted","unknown")}.map {it.optString("owner")}.toSet()}
+    fun attentionFor(agent: JSONObject): String {
+        val id=agent.optString("agent_id")
+        val question=id in questionOwners
+        val current=fresh && !agent.optBoolean("cached_observation")
+        if(!question && id in staleQuestionOwners) return "question_stale"
+        if(!question && id in pendingInputOwners) return "answer_pending"
+        // La question est un fait distinct : une réponse fraîche reste visible même sur un favori d'annuaire ancien.
+        val attention=agentAttention(question,id in attentionPending,agent.optString("state") in setOf("busy","working","running"),current || question)
+        return if(attention=="idle" && agent.optString("state") in setOf("unreachable","disconnected","offline")) "unavailable" else attention
+    }
+    fun markConversationRead(id: String, seq: Long) {
+        if(selected?.optString("agent_id")!=id || followState!="live" || seq<=0) return
+        try {
+            val key=store.historyKey(id); val history=store.get(key) ?: return
+            if(seq>history.optLong("read_seq")) {history.put("read_seq",seq);store.put(key,history)}
+            setAttention(attentionPending-id)
+        } catch(_:Exception) {error="device_storage_unavailable"}
     }
     private suspend fun allPages(path: String): List<JSONObject> {
         val items = mutableListOf<JSONObject>()
@@ -283,9 +350,10 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                 && (project == null || favorite.optJSONObject("project")?.let {
                     it.optString("host") == project!!.optString("host") && it.optString("root") == project!!.optString("root")
                 } == true)
-        }.map { favorite ->
-            agents.find { it.getString("agent_id") == favorite.getString("agent_id") }
-                ?: JSONObject(favorite.toString()).put("cached_observation", true)
+        }.let { filtered ->
+            val current=agents.associateBy {it.getString("agent_id")}
+            filtered.map { favorite -> current[favorite.getString("agent_id")]
+                ?: JSONObject(favorite.toString()).put("cached_observation", true) }
         }
     }
     fun select(agent: JSONObject?) {
@@ -311,18 +379,42 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             eventGap = saved.optBoolean("gap")
         }
     }
+    fun composerOrigin(): String? = selected?.optString("agent_id")?.let {runCatching {store.draftKey(it)}.getOrNull()}
+    fun acceptDictation(origin: String?, text: String?) {
+        dictationDraft(composerOrigin(),origin,draft,text)?.let(::editDraft)
+    }
     fun editDraft(value: String) {
         if (value.toByteArray(Charsets.UTF_8).size > 10_000) return
         val id = selected?.getString("agent_id") ?: return
         try {
-            store.put(store.draftKey(id), JSONObject().put("body", value))
+            val key=store.draftKey(id)
+            store.put(key,(store.get(key) ?: JSONObject()).put("body",value))
             draft = value
         } catch (_: Exception) { error = "device_storage_unavailable" }
     }
     fun send() = act {
         val id = selected?.getString("agent_id") ?: return@act
-        val entry = store.enqueue(id, draft)
-        store.remove(store.draftKey(id)); draft = ""
+        val files=preparedAttachments()
+        val emptyId="00000000-0000-0000-0000-000000000000"
+        val reserved=files.map {file -> val e=file.getJSONObject("envelope")
+            attachmentReference(e.getString("file_name"),"artifact:$emptyId","artifact-version:$emptyId",e.getString("expected_digest"))}
+        if((listOf(draft)+reserved).filter {it.isNotBlank()}.joinToString("\n").toByteArray(Charsets.UTF_8).size>10_000) throw MobileFailure("message_too_long")
+        val refs=mutableListOf<String>()
+        for(file in files) {
+            val key=file.getJSONObject("envelope").getString("command_id")
+            val entry=store.releasePreparedFile(key)
+            if(entry.optString("state")=="local") client.send(entry)
+            else if(entry.optString("state")!="accepted") try {client.reconcile(entry)} catch(e:MobileFailure) {
+                if(e.code!="not_found") throw e
+                client.send(entry)
+            }
+            val accepted=store.get("command:$key") ?: throw MobileFailure("not_found")
+            refs.add(fileReference(accepted) ?: throw MobileFailure("outcome_unknown"))
+        }
+        val body=(listOf(draft)+refs).filter {it.isNotBlank()}.joinToString("\n")
+        if(body.toByteArray(Charsets.UTF_8).size>10_000) throw MobileFailure("message_too_long")
+        val entry=store.enqueueComposed(id,body,files.map {it.getJSONObject("envelope").getString("command_id")})
+        draft = ""
         outbox = store.list("command:") // Visible avant le premier accès réseau.
         try { client.send(entry) } finally {
             outbox = store.list("command:")
@@ -458,6 +550,19 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         val next = page.getLong("next_seq")
         if (next < eventNextSeq) throw MobileFailure("resync_required")
         val incoming = objects(page.getJSONArray("items"))
+        if(!page.isNull("gap")) compactionSignals=emptyList()
+        else if(!tailPending && followState=="live") {
+            val signals=incoming.filter {it.optLong("seq")>eventNextSeq}.mapNotNull { event ->
+                val p=event.optJSONObject("payload") ?: return@mapNotNull null
+                val turn=p.optString("turn_id").ifEmpty {p.optString("provider_turn_id").ifEmpty {p.optString("t3_turn_id")}}
+                if(turn.isEmpty()) return@mapNotNull null
+                val phase=if(event.optString("event") in setOf("turn_start","turn_end")) event.optString("event")
+                    else if(p.optString("tool_type")=="context_compaction") p.optString("status") else return@mapNotNull null
+                CompactionSignal(event.optString("session_id"),turn,p.optString("item_id"),phase)
+            }
+            // Une fenêtre saturée ferme le signal plutôt que d'oublier une fin et le rouvrir.
+            compactionSignals=if(compactionSignals.size+signals.size>500) emptyList() else compactionSignals+signals
+        }
         if (incoming.any { it.optLong("seq") <= 0 || it.optLong("seq") > next }) throw MobileFailure("resync_required")
         var merged = (events + incoming).distinctBy { it.getLong("seq") }.sortedBy { it.getLong("seq") }
         var bytes = merged.sumOf { it.toString().toByteArray(Charsets.UTF_8).size }
@@ -476,7 +581,10 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             if (bytes + count > 48 * 1024) break
             bytes += count; retained.add(0, event)
         }
-        store.put(store.historyKey(id), JSONObject().put("events", JSONArray(retained)).put("next_seq", next)
+        val saved=store.get(store.historyKey(id)) ?: JSONObject()
+        val readSeq=saved.optLong("read_seq")
+        if(incoming.any {it.optString("event")=="turn_end" && it.optLong("seq")>readSeq}) setAttention(attentionPending+id)
+        store.put(store.historyKey(id), saved.put("events", JSONArray(retained)).put("next_seq", next)
             .put("gap", eventGap || retained.size != events.size))
     }
     private fun refreshPendingReceipt(id: String) {
@@ -504,10 +612,12 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         messageQueue = emptyList(); queueAvailable = false
         val origin = runCatching { store.draftKey(id) }.getOrNull() ?: return
         refreshPendingReceipt(id)
+        compactionSignals=emptyList()
         followState = "connecting"
         followJob = viewModelScope.launch {
             var after: String? = null
             var failures = 0
+            var bootstrap=true
             while (isActive && visible && conversationVisible && selected?.optString("agent_id") == id) {
                 try {
                     if(failures>0) followState = "connecting"
@@ -517,7 +627,12 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                         events=emptyList(); eventNextSeq=0; eventGap=false
                         applyEvents(id,recent)
                         olderBefore=recent.optLong("older_before_seq").takeIf { it>1 }
-                        tailPending=false; after=null; followState="live"
+                        tailPending=false; after=null; followState="live";bootstrap=false
+                    } else if(bootstrap) {
+                        val current=client.read("/v1/agents/$id/events?after_seq=$eventNextSeq&limit=50")
+                        if(store.draftKey(id)!=origin || selected?.optString("agent_id")!=id) break
+                        applyEvents(id,current);after=null;bootstrap=false
+                        if(current.getJSONArray("items").length()<50) followState="live"
                     }
                     runCatching { refreshMessageQueue(id) }
                     val suffix = after?.let { "&after=" + BridgetClient.encode(it) } ?: "&after_seq=" + eventNextSeq
@@ -527,12 +642,13 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                     applyEvents(id, page)
                     after = page.optString("next_cursor").takeIf { it.isNotEmpty() && it != "null" }
                     failures = 0
-                    followState = "live"
+                    if(followState=="live" || page.getJSONArray("items").length()<50) followState="live"
                     if (page.getJSONArray("items").length() == 0 && page.isNull("gap")
                         && !page.optBoolean("idle") && eventNextSeq == before) { followState = "stopped"; break }
                     delay(250)
                 } catch (e: CancellationException) { throw e }
                 catch (e: MobileFailure) {
+                    compactionSignals=emptyList();bootstrap=true;after=null
                     followState = e.code
                     if (e.code !in setOf("outcome_unknown", "endpoint_unavailable", "journal_unavailable", "busy", "not_found") || ++failures >= 7) break
                     delay((1000L shl (failures - 1)).coerceAtMost(15_000))
@@ -551,6 +667,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         if (busy) return false
         return try {
             val agentId = selected?.getString("agent_id") ?: return false
+            if(preparedAttachments().size>=4) throw MobileFailure("resource_limit")
             val pending = store.get("upload-picker")
             if (pending != null) {
                 BridgetClient.requireCommandOrigin(pending, store.get("session") ?: throw MobileFailure("authorization_required"))
@@ -580,7 +697,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             val agentId = command.getString("agent_id")
             val id = command.getString("command_id")
             val resolver = getApplication<Application>().contentResolver
-            val entry = store.get("command:$id") ?: withContext(Dispatchers.IO) {
+            if(store.get("command:$id")==null) withContext(Dispatchers.IO) {
                 val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use {
                     check(it.moveToFirst()) { "invalid_file" }
                     val size = it.getColumnIndex(OpenableColumns.SIZE)
@@ -588,26 +705,30 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                     it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
                 } ?: throw MobileFailure("invalid_file")
                 val mime = resolver.getType(uri) ?: throw MobileFailure("invalid_file")
-                resolver.openInputStream(uri)?.use { store.enqueueFile(agentId, name, mime, it, id) }
+                resolver.openInputStream(uri)?.use { store.enqueueFile(agentId, name, mime, it, id, staged=true) }
                     ?: throw MobileFailure("invalid_file")
             }
             // Le checkpoint d'interface est clos avant tout réseau ; l'enveloppe est déjà durable.
             store.remove("upload-picker")
-            if (entry.getString("state") == "local") client.send(entry) else client.reconcile(entry)
-            attachReference(store.get("command:$id")!!)
+            outbox=store.list("command:")
+            notice="attachment_prepared"
         }
     }
     fun attachReference(entry: JSONObject) {
         try { BridgetClient.requireCommandOrigin(entry, store.get("session") ?: throw MobileFailure("authorization_required")) }
         catch (e: MobileFailure) { error = e.code; return }
         val envelope = entry.getJSONObject("envelope")
-        val receipt = entry.optJSONObject("receipt")?.optJSONObject("receipt") ?: return
-        if (envelope.optString("type") != "file" || selected?.optString("agent_id") != envelope.optString("agent_id")) return
-        val text = ("\n[Fichier Bridget : " + envelope.getString("file_name") + "; artifact_ref="
-            + receipt.getString("artifact_ref") + "; version_ref=" + receipt.getString("version_ref")
-            + "; sha256=" + envelope.getString("expected_digest") + "]")
-        editDraft(draft + text)
+        if(envelope.optString("type")!="file" || selected?.optString("agent_id")!=envelope.optString("agent_id")) return
+        fileReference(entry)?.let {editDraft(draft+"\n"+it)}
     }
+    private fun fileReference(entry: JSONObject): String? {
+        val envelope=entry.getJSONObject("envelope")
+        val receipt=entry.optJSONObject("receipt")?.optJSONObject("receipt") ?: return null
+        if(entry.optString("state")!="accepted" || !receipt.has("artifact_ref") || !receipt.has("version_ref")) return null
+        return attachmentReference(envelope.getString("file_name"),receipt.getString("artifact_ref"),receipt.getString("version_ref"),envelope.getString("expected_digest"))
+    }
+    fun preparedAttachments(): List<JSONObject> = selected?.optString("agent_id")?.let {id->conversationEntries(id).filter {it.optBoolean("compose_attachment")}}.orEmpty()
+    fun removePreparedFile(entry: JSONObject) = act {store.removePreparedFile(entry.getJSONObject("envelope").getString("command_id"))}
     fun closePreview() { previewContent=null; previewTitle=""; previewMediaType="" }
     fun previewFile(metadata: JSONObject) = act {
         val id=selected?.getString("agent_id") ?: return@act
@@ -702,21 +823,22 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         val after=if(next) userInputCursor?.let {"&after="+BridgetClient.encode(it)}.orEmpty() else ""
         val page=try {client.read("/v1/user-inputs?limit=20$after")} catch(e:MobileFailure) {
             if(e.code in setOf("not_found","capability_unavailable")) {
-                userInputCapability="unavailable";userInputs=userInputs.map {JSONObject(it.toString()).put("can_respond",false)};return
+                freshUserInputIds=emptySet();userInputCapability="unavailable";userInputs=userInputs.map {JSONObject(it.toString()).put("can_respond",false)};return
             };throw e
         }
         userInputCapability="available"
         if(store.get("session")?.let(MobileNotifications::binding)!=binding) return
         val incoming=objects(page.getJSONArray("items"))
         val items=(if(next) userInputs else userInputs.filter {it.optString("state") in setOf("pending","submitted","unknown") || it.optLong("updated_at")>System.currentTimeMillis()/1000-300}).associateBy {it.getString("request_id")}.toMutableMap()
-        incoming.forEach {items[it.getString("request_id")]=it}
+        val verified=mutableSetOf<String>()
+        incoming.forEach {items[it.getString("request_id")]=it;verified.add(it.getString("request_id"))}
         if(!next) for(old in userInputs.filter {old->old.optString("state") in setOf("pending","submitted","unknown") && incoming.none {it.optString("request_id")==old.optString("request_id")}}.take(16)) {
-            try {val current=client.read("/v1/user-inputs/"+old.getString("request_id")).getJSONObject("item");items[current.getString("request_id")]=current}
+            try {val current=client.read("/v1/user-inputs/"+old.getString("request_id")).getJSONObject("item");items[current.getString("request_id")]=current;verified.add(current.getString("request_id"))}
             catch(e:CancellationException){throw e}
             catch(_:MobileFailure){items[old.getString("request_id")]=JSONObject(old.toString()).put("can_respond",false)}
         }
         focusedQuestion?.takeIf {it !in items}?.let {id->
-            val current=client.read("/v1/user-inputs/$id").getJSONObject("item");items[id]=current
+            val current=client.read("/v1/user-inputs/$id").getJSONObject("item");items[id]=current;verified.add(id)
         }
         if(store.get("session")?.let(MobileNotifications::binding)!=binding) return
         for(entry in store.list("command:").filter {it.getJSONObject("envelope").optString("type")=="user_input_respond" && it.optString("state") in setOf("accepted","outcome_unknown")}.takeLast(8)) {
@@ -724,6 +846,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         }
         outbox=store.list("command:")
         userInputs=items.values.toList().takeLast(100)
+        freshUserInputIds=verified
         if(next || !userInputPagesLoaded) userInputCursor=cursor(page)
         if(next) userInputPagesLoaded=true
         userInputs.forEach {UserInputNotifications.stateChanged(getApplication(),it)}

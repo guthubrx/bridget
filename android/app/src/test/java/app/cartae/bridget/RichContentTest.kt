@@ -12,10 +12,13 @@ class RichContentTest {
         assertEquals(SyntaxLanguage.RUST,syntaxLanguage("rust"))
         assertNull(syntaxLanguage("unknown-language"))
     }
-    @Test fun htmlPreviewComesFromCodeBlocksNotMentionedFences() {
-        assertEquals(listOf("<h1>Bonjour</h1>\n"),htmlCodeBlocks("Avant\n\n```html\n<h1>Bonjour</h1>\n```\n\n```python\nprint('x')\n```"))
-        assertTrue(htmlCodeBlocks("Du texte qui cite `html`.").isEmpty())
-        assertEquals(4,htmlCodeBlocks((1..10).joinToString("\n\n") { "```html\n<p>$it</p>\n```" }).size)
+    @Test fun htmlBlocksUseTheSameParsedTreeAsTheVisibleContent() {
+        val parser=org.commonmark.parser.Parser.builder().build()
+        val blocks=markdownRenderBlocks(parser.parse("Avant\n\n```html\n<h1>Bonjour</h1>\n```\n\n```python\nprint('x')\n```"))
+        assertEquals(listOf("<h1>Bonjour</h1>\n"),blocks.filter {it.language=="html"}.map {it.code})
+        assertTrue(markdownRenderBlocks(parser.parse("Du texte qui cite `html`.")).none {it.code!=null})
+        val pages=(1..10).joinToString("\n\n") {"```html\n<p>$it</p>\n```"}
+        assertEquals(10,markdownRenderBlocks(parser.parse(pages)).count {it.language=="html"})
     }
     @Test fun previewPolicyDoesNotTrustClosingTagsOrRemoteResources() {
         val html=htmlPreviewDocument("</head><script>fetch('https://example.com')</script><img src='file:///private'>")
@@ -41,5 +44,25 @@ class RichContentTest {
         for(version in listOf("156.0.8078.48","156.0.8078.49","156.0.8079.1","157.0.8103.14")) {
             assertTrue("Patched WebView: $version",htmlPreviewEngineAllowed(version))
         }
+    }
+
+    @Test fun interactiveDocumentCannotEscapeItsOpaqueSandboxOrAcquireNetwork() {
+        val hostile="\" ></iframe><script>parent.document.body.textContent='bad'</script>"
+        val wrapped=isolatedHtmlPreviewDocument(hostile)
+        assertTrue(wrapped.contains("sandbox=\"allow-scripts\""))
+        assertFalse(wrapped.contains("allow-same-origin"))
+        assertFalse(wrapped.contains("</iframe><script>"))
+        assertTrue(wrapped.contains("&lt;/iframe&gt;"))
+        assertTrue(wrapped.contains("connect-src"))
+        assertThrows(IllegalArgumentException::class.java) {isolatedHtmlPreviewDocument("x".repeat(262145))}
+    }
+    @Test fun codeBlocksKeepTheirExactBytesAndProseOrderWithoutDuplication() {
+        val root=org.commonmark.parser.Parser.builder().build().parse("Avant\n\n```python\nprint('é')  \n\n```\n\nAprès\n")
+        val blocks=markdownRenderBlocks(root)
+        assertEquals(3,blocks.size)
+        assertNotNull(blocks[0].prose);assertNotNull(blocks[2].prose)
+        assertEquals("python",blocks[1].language)
+        assertEquals("print('é')  \n\n",blocks[1].code)
+        assertNull(blocks[1].prose)
     }
 }
