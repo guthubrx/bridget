@@ -52,7 +52,7 @@ internal fun inputAnswerText(entry:JSONObject):String {
 }
 
 @Composable
-fun UserInputCard(vm:MobileViewModel,item:JSONObject) {
+fun UserInputCard(vm:MobileViewModel,item:JSONObject,onFullVisibility:(Boolean)->Unit = {}) {
     val key=vm.userInputDraftKey(item)
     var expanded by rememberSaveable(key) {mutableStateOf(false)}
     var full by rememberSaveable(key) {mutableStateOf(vm.focusedQuestion==item.getString("request_id"))}
@@ -71,6 +71,7 @@ fun UserInputCard(vm:MobileViewModel,item:JSONObject) {
             else if(!expanded) Text(inputState(item),style=MaterialTheme.typography.bodySmall)
         }
     }
+    DisposableEffect(full) {if(full) onFullVisibility(true);onDispose {if(full) onFullVisibility(false)}}
     if(full) Dialog(onDismissRequest={full=false;vm.questionFocusHandled(item.getString("request_id"))},properties=DialogProperties(usePlatformDefaultWidth=false)) {
         Surface(Modifier.fillMaxSize().safeDrawingPadding()) {
             Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {

@@ -169,6 +169,46 @@ Previews accept up to 256 KiB of UTF-8 text. **Save a verified copy** keeps the
 complete file within the general 8 MiB limit.
 
 Rendering is bundled in Android and does not contact a desktop interface.
-HTML previews are static: embedded styles are allowed; scripts, forms,
-navigation, local file access and external resources are disabled. Documents
-that require those features will not be fully interactive in this preview.
+Previews offer **Interactive**, **Static** and **Code**. Interactive mode runs embedded
+scripts in an isolated document. Local buttons, charts and forms work. Network,
+navigation, downloads, storage, local files, microphone and camera access remain
+blocked. External libraries must be embedded in the source. Static mode disables
+scripts. An old or unknown WebView receives only source code and update guidance.
+The Close control belongs to Bridget.
+
+Each top-level code block shows its language and **Copy**. Copy preserves accents,
+spaces and line breaks. Nested code in lists and quotes keeps its structure and
+normal text selection.
+
+## Drawer, attention and composing
+
+Open the menu at the upper left of a conversation. The drawer reuses the agent
+directory, favorites and search by name, machine or project. Machine and project
+filters stay visible. **More** loads further pages. Search covers loaded agents
+and saved favorites. Switching conversations keeps each draft and reading position
+for the current application session.
+
+Markers include labels: **Answer requested**, **To review**, **Working** and
+**Observation to refresh**. A fresh question takes priority even on a cached favorite. Unverified questions say **Question to verify**; submitted answers say **Answer awaiting confirmation**. A received terminal event or
+a fresh activity transition within the same connection generation can mark an
+item to review. This does not certify success. Very short activity on an agent
+that is not being followed may be missed. Opening the drawer never marks a
+conversation read. Its last message must be visible with a live follow. A failed
+refresh keeps old observations explicitly marked.
+
+The search control covers loaded messages, with a result count and previous/next
+navigation. Load older messages to widen that coverage. Dictation opens the system
+speech recognizer and returns editable text to the draft. It never sends. Changing
+agent or pairing prevents insertion into another destination. Audio processing and
+availability depend on the speech service selected by Android.
+
+The **+** menu prepares a photo or file on this device. Remove its card before
+transmission if needed. The arrow explicitly uploads attachments, then sends the
+message with their references. File and message receipts remain separate. A partial
+failure reuses each existing command instead of recreating files. Removing a card
+after upload does not remove the server artifact.
+
+When a producer supplies a structural event for the current turn, the header shows
+**Compacting context…**. Item or turn completion closes it. Loss of follow or a
+conversation switch also closes it. Cached starts never invent current activity.
+No percentage is estimated.

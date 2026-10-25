@@ -8,6 +8,14 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.6.3] - 2026-10-25
+
+- Volet gauche des conversations : favoris, recherche et états d’attention explicites.
+- Brouillons et positions propres à chaque agent ; recherche dans l’historique chargé et dictée système éditable.
+- Fichiers et photos préparés localement avant envoi explicite ; langage et copie exacte du code.
+- Aperçus HTML interactifs isolés, modes statique et code, sans pont privilégié ni accès réseau.
+- Compactage du contexte attesté par des événements natifs corrélés, sans progression inventée.
+
 ## Non publié
 
 ### File de messages Android

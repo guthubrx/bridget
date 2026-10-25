@@ -113,6 +113,7 @@ pub(super) fn agents_page(
     Ok(json!({"items":page.iter().map(|a| json!({
         "agent_id":a.agent.agent_id,"display_name":a.agent.display_name,"machine":a.agent.host,
         "project":a.communication_project,"state":a.agent.state,"observed_age_secs":a.agent.last_seen_secs,
+        "reconnect_count":a.agent.reconnect_count,
         "agent_type":a.agent.agent_type,"transport":a.agent.transport,"model":a.agent.model
     })).collect::<Vec<_>>(),"next_cursor":after,"snapshot":"current_native_directory"}))
 }
@@ -280,6 +281,8 @@ mod tests {
         let projected = serde_json::to_string(&first).unwrap();
         assert!(!projected.contains("private"));
         assert!(!projected.contains("connection_id"));
+        assert_eq!(first["items"][0]["reconnect_count"],0);
+        assert_eq!(first["items"][0]["observed_age_secs"],2);
         assert_eq!(
             projects_page(&d, &list, &Default::default()).unwrap()["items"]
                 .as_array()

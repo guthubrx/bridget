@@ -4120,6 +4120,13 @@ fn activity_payloads(
         return vec![serde_json::json!({"kind":"approval","text":"permission demandée dans T3"})];
     }
     let payload = &activity.payload;
+    if activity.kind == "context.compaction" {
+        let valid = payload["kind"] == "tool" && payload["tool_type"] == "context_compaction"
+            && matches!(payload["status"].as_str(), Some("running" | "completed" | "failed" | "cancelled"))
+            && payload["turn_id"].as_str().is_some_and(|turn| Some(turn) == activity.turn_id.as_deref())
+            && payload["item_id"].as_str().is_some_and(|id| !id.is_empty() && id.len()<=256 && !id.chars().any(char::is_control));
+        return if valid { vec![payload.clone()] } else { vec![] };
+    }
     if activity.kind == "tool.progress" {
         let mut event=serde_json::json!({"kind":"tool","tool_id":payload["tool_id"],"text":payload["tool"].as_str().unwrap_or_else(||payload["itemType"].as_str().unwrap_or("tool")),"tool_type":payload["itemType"],"status":payload["status"],"tool":payload["tool"]});
         for field in ["input","output","exit_code","output_omitted","details_truncated","details_unavailable"] {
@@ -8076,5 +8083,20 @@ mod tests {
         );
         worker.journal.stop();
         worker.relay.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod mobile183_compaction_projection_tests {
+    use super::*;
+    #[test]
+    fn mobile183_compaction_projection_preserves_only_correlated_structural_facts() {
+        let mut activity=contract::Activity {id:"comp".into(),kind:"context.compaction".into(),turn_id:Some("r".into()),
+            payload:json!({"kind":"tool","tool_type":"context_compaction","status":"running","turn_id":"r","item_id":"i"})};
+        let facts=activity_payloads(&activity,"codex",Path::new("/tmp"));
+        assert_eq!(facts.len(),1);
+        assert!(bridget_transport::act_kind::validate_journal_write("update",&facts[0]).is_ok());
+        activity.payload["turn_id"]=json!("foreign");
+        assert!(activity_payloads(&activity,"codex",Path::new("/tmp")).is_empty());
     }
 }

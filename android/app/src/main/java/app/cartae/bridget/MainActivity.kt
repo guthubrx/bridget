@@ -2,6 +2,10 @@ package app.cartae.bridget
 
 import android.Manifest
 import android.content.Intent
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Bundle
@@ -10,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.viewModels
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
@@ -37,9 +42,11 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.graphics.Color
@@ -74,6 +81,10 @@ class MainActivity : ComponentActivity() {
         uri?.let { runCatching { contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) } }
         model.importFile(uri)
     }
+    private val photoPicker=registerForActivityResult(ActivityResultContracts.PickVisualMedia()) {uri ->
+        uri?.let {runCatching {contentResolver.takePersistableUriPermission(it,Intent.FLAG_GRANT_READ_URI_PERMISSION)}}
+        model.importFile(uri)
+    }
     private val fileExporter = registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         model.exportFile(uri)
     }
@@ -89,6 +100,7 @@ class MainActivity : ComponentActivity() {
                         .setPrompt(getString(R.string.scan_prompt)).setBeepEnabled(false).setBarcodeImageEnabled(false)) },
                     onConfirm = { scanned?.let(model::associate); scanned = null }, onDismiss = { scanned = null },
                     onPick = { if (model.beginFileSelection()) filePicker.launch(arrayOf("application/pdf", "text/plain", "text/html", "text/markdown", "image/png", "image/jpeg")) },
+                    onPickPhoto={if(model.beginFileSelection()) photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))},
                     onExport = { metadata -> model.beginExport(metadata)?.let(fileExporter::launch) },
                     onNotifications = { if (model.notificationsEnabled) model.changeNotifications(false) else enableNotifications() })
             }
@@ -122,8 +134,11 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit, onConfirm: () -> Unit,
-    onDismiss: () -> Unit, onPick: () -> Unit, onExport: (JSONObject) -> Unit, onNotifications: () -> Unit) {
+    onDismiss: () -> Unit, onPick: () -> Unit, onPickPhoto: () -> Unit, onExport: (JSONObject) -> Unit, onNotifications: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val drawer=rememberDrawerState(DrawerValue.Closed)
+    val scope=rememberCoroutineScope()
+    val conversations=rememberSaveableStateHolder()
     LaunchedEffect(vm.requestedQuestion,vm.userInputs,vm.busy) {
         val id=vm.requestedQuestion
         if(id!=null && !vm.busy) {
@@ -134,8 +149,22 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
     }
     var revoke by remember { mutableStateOf(false) }
     var forget by remember { mutableStateOf(false) }
-    BackHandler(enabled = vm.selected != null && tab == 0 && !vm.busy) { vm.select(null) }
+    BackHandler(enabled = drawer.currentValue==DrawerValue.Open || drawer.targetValue==DrawerValue.Open || (vm.selected != null && tab == 0 && !vm.busy)) {
+        if(drawer.currentValue==DrawerValue.Open || drawer.targetValue==DrawerValue.Open) scope.launch {drawer.close()}
+        else vm.select(null)
+    }
     val conversationOpen = vm.associated && tab == 0 && vm.selected != null
+    ModalNavigationDrawer(drawerState=drawer,gesturesEnabled=conversationOpen || drawer.isOpen,
+        drawerContent={ if(vm.associated) ModalDrawerSheet(Modifier.widthIn(max=360.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically) {
+                Text("Bridget",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.weight(1f))
+                val close=stringResource(R.string.drawer_close)
+                IconButton(onClick={scope.launch {drawer.close()}},modifier=Modifier.semantics {contentDescription=close}) {Text("×",fontSize=24.sp)}
+            }
+            Box(Modifier.weight(1f).padding(horizontal=12.dp)) {AgentDirectory(vm) {scope.launch {drawer.close()}}}
+            TextButton(onClick={vm.select(null);tab=1;scope.launch {drawer.close()}}) {Text(stringResource(R.string.questions))}
+            TextButton(onClick={vm.select(null);tab=3;scope.launch {drawer.close()}}) {Text(stringResource(R.string.settings))}
+        } }) {
     Scaffold(
         topBar = { if (!conversationOpen) TopAppBar(title = { Text("Bridget", style = MaterialTheme.typography.headlineSmall) }) },
         bottomBar = {
@@ -168,6 +197,8 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
                     "history_window_limit" -> R.string.history_window_limit
                     "file_saved" -> R.string.file_saved
                     "instruction_draft" -> R.string.instruction_draft
+                    "attachment_prepared" -> R.string.attachment_prepared
+                    "agent_window_limit" -> R.string.agent_window_limit
                     else -> R.string.saved_locally
                 }), style = MaterialTheme.typography.bodySmall)
             }
@@ -175,13 +206,16 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
                 when {
                     !vm.associated -> Welcome(vm, onScan) { forget = true }
                     tab == 0 && vm.selected == null -> AgentDirectory(vm)
-                    tab == 0 -> Conversation(vm, onPick, onExport)
+                    tab == 0 -> conversations.SaveableStateProvider(vm.selected!!.getString("agent_id")) {
+                        Conversation(vm,onPick,onPickPhoto,onExport,drawer.currentValue==DrawerValue.Closed && drawer.targetValue==DrawerValue.Closed) {scope.launch {drawer.open()}}
+                    }
                     tab == 1 -> Questions(vm)
                     tab == 2 -> Outbox(vm)
                     else -> Settings(vm, onRevoke = { revoke = true }, onForget = { forget = true }, onNotifications = onNotifications)
                 }
             }
         }
+    }
     }
     if (scanned != null) AlertDialog(onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.confirm_pairing)) },
@@ -212,7 +246,8 @@ private fun Welcome(vm: MobileViewModel, onScan: () -> Unit, onForget: () -> Uni
 }
 
 @Composable
-private fun AgentDirectory(vm: MobileViewModel) {
+private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
+    var search by rememberSaveable {mutableStateOf("")}
     var machineMenu by remember { mutableStateOf(false) }
     var projectMenu by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -242,21 +277,46 @@ private fun AgentDirectory(vm: MobileViewModel) {
                     onClick = { projectMenu = false; vm.filter(vm.machine, project) }) }
             }
         }
-        FilterChip(selected = vm.favoritesOnly, onClick = vm::toggleFavorites, label = { Text(stringResource(R.string.favorites)) })
-        val agents = vm.visibleAgents()
+        OutlinedTextField(value=search,onValueChange={search=it.take(200)},singleLine=true,modifier=Modifier.fillMaxWidth(),
+            label={Text(stringResource(R.string.agents_search))})
+        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected=!vm.favoritesOnly,onClick={if(vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.agents_all))})
+            FilterChip(selected=vm.favoritesOnly,onClick={if(!vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.favorites))})
+        }
+        if(!vm.fresh) Text(stringResource(R.string.attention_stale),style=MaterialTheme.typography.labelSmall)
+        val agents=vm.visibleAgents().filter {search.isBlank() || listOf(it.optString("display_name"),it.optString("machine"),it.optJSONObject("project")?.optString("root").orEmpty()).any {v->v.contains(search.trim(),ignoreCase=true)}}
+        val favoriteIds=remember(vm.favorites) {vm.favorites.map {it.getString("agent_id")}.toSet()}
+        val projectPeers=remember(vm.projects) {vm.projects.map {ProjectIdentity(it.optString("host"),it.getString("root"))}}
+        // O(p²) une fois par observation, p<=256 projets ; chaque ligne d'agent lit ensuite O(1).
+        val qualifiers=remember(projectPeers) {projectPeers.associateWith {projectQualifier(it,projectPeers)}}
+
         LazyColumn {
-            if (agents.isEmpty()) item { Text(stringResource(R.string.no_agents)) }
+            if (agents.isEmpty()) item { Text(stringResource(if(search.isNotBlank()) R.string.agents_search_empty else R.string.no_agents)) }
             items(agents, key = { it.getString("agent_id") }) { agent ->
                 val project=agent.optJSONObject("project")
-                val chosen=vm.favorites.any { it.getString("agent_id")==agent.getString("agent_id") }
+                val chosen=agent.getString("agent_id") in favoriteIds
                 val favoriteLabel=stringResource(if(chosen) R.string.unfavorite else R.string.favorite)
                 ListItem(
-                    modifier=Modifier.fillMaxWidth().clickable { vm.select(agent) },
+                    modifier=Modifier.fillMaxWidth().clickable(enabled=!vm.busy) { vm.select(agent); onSelected() },
                     headlineContent={ Text(agent.getString("display_name"),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.titleSmall) },
                     supportingContent={
                         val name=project?.getString("root")?.let(::projectTitle).orEmpty()
-                        val qualifier=project?.let { value -> projectQualifier(ProjectIdentity(value.optString("host"),value.getString("root")),vm.projects.map { ProjectIdentity(it.optString("host"),it.getString("root")) }) }.orEmpty()
-                        Text(listOf(name,qualifier,agent.getString("machine")).filter { it.isNotBlank() }.joinToString(" · "),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
+                        val qualifier=project?.let { value -> qualifiers[ProjectIdentity(value.optString("host"),value.getString("root"))].orEmpty() }.orEmpty()
+                        Column {
+                            Text(listOf(name,qualifier,agent.getString("machine")).filter { it.isNotBlank() }.joinToString(" · "),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
+                            val age=agent.optLong("observed_age_secs",-1)
+                            if(age>=90) Text(stringResource(R.string.activity_observed_age,age/60),style=MaterialTheme.typography.labelSmall)
+                            val attention=vm.attentionFor(agent)
+                            if(attention!="idle") Text(stringResource(when(attention) {
+                                "question" -> R.string.attention_question
+                                "answer_pending" -> R.string.attention_answer_pending
+                                "question_stale" -> R.string.attention_question_stale
+                                "unread" -> R.string.attention_unread
+                                "working" -> R.string.attention_working
+                                "unavailable" -> R.string.attention_unavailable
+                                else -> R.string.attention_stale
+                            }),style=MaterialTheme.typography.labelSmall,color=if(attention in setOf("question","question_stale","answer_pending","unread")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     },
                     leadingContent={ ProjectAvatar(project) },
                     trailingContent={ IconButton(onClick={ vm.favorite(agent) },modifier=Modifier.semantics { contentDescription=favoriteLabel }) {
@@ -303,17 +363,30 @@ private fun ProjectAvatar(project: JSONObject?) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSONObject) -> Unit) {
+private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: () -> Unit, onExport: (JSONObject) -> Unit, exposed: Boolean, onOpenDrawer: () -> Unit) {
     val agent = vm.selected!!
     val id = agent.getString("agent_id")
     var section by rememberSaveable(id) { mutableIntStateOf(0) }
     var menu by remember { mutableStateOf(false) }
     var details by remember { mutableStateOf(false) }
+    var overlays by remember {mutableStateOf<Set<String>>(emptySet())}
+    fun cover(key:String,shown:Boolean) {overlays=if(shown) overlays+key else overlays-key}
+    val readingVisible=exposed && section==0 && !details && overlays.isEmpty()
     var technical by rememberSaveable(id) { mutableStateOf(false) }
     val list = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    var attachMenu by remember {mutableStateOf(false)}
+    var searching by rememberSaveable {mutableStateOf(false)}
+    var query by rememberSaveable {mutableStateOf("")}
+    var resultIndex by rememberSaveable {mutableIntStateOf(0)}
+    var voiceOrigin by rememberSaveable {mutableStateOf<String?>(null)}
+    var voiceError by remember {mutableStateOf(false)}
+    val voice=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {result ->
+        val origin=voiceOrigin;voiceOrigin=null
+        if(result.resultCode==Activity.RESULT_OK) vm.acceptDictation(origin,result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull())
+    }
     val dragging by list.interactionSource.collectIsDraggedAsState()
-    var followBottom by remember(id) { mutableStateOf(true) }
+    var followBottom by rememberSaveable(id) { mutableStateOf(true) }
     var viewportHeight by remember { mutableIntStateOf(0) }
     val messages = remember(vm.events, technical) {
         val groups=mutableListOf<MutableList<JSONObject>>()
@@ -329,32 +402,52 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
         }
         groups
     }
-    val localMessages = remember(vm.outbox, id) { vm.conversationEntries(id).mapNotNull { entry ->
+    val localEntries=remember(vm.outbox,id,vm.associated,vm.endpoint) {vm.conversationEntries(id)}
+    val localMessages = remember(localEntries) { localEntries.mapNotNull { entry ->
         val envelope = entry.optJSONObject("envelope")
         if (envelope?.optString("type") == "message" && envelope.optString("agent_id") == id)
             envelope.getString("command_id") to entry.optString("queue_body", envelope.optString("body")) else null
     }.toMap() }
+    val matches=remember(query,messages,localMessages) {messageSearchMatches(query,messages.map { group ->
+        group.joinToString("\n") {event -> conversationBody(eventText(event),event.optString("event")=="turn_start",localMessages)}
+    })}
+    fun showMatch(index: Int) {
+        if(matches.isEmpty()) return
+        resultIndex=Math.floorMod(index,matches.size);followBottom=false
+        scope.launch {list.scrollToItem(matches[resultIndex]+1)}
+    }
+    LaunchedEffect(query,matches) {if(searching) showMatch(0)}
     LaunchedEffect(list, dragging) {
         snapshotFlow { Triple(list.isScrollInProgress, list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) }
             .collect { (scrolling, _, _) -> if (scrolling && dragging) followBottom = !list.canScrollForward }
     }
-    LaunchedEffect(id, messages.lastOrNull()?.lastOrNull()?.optLong("seq"), viewportHeight) {
-        if (followBottom && messages.isNotEmpty()) list.scrollToMessageEnd(messages.lastIndex+1)
+    val lastItemSize by remember(list) {derivedStateOf {list.layoutInfo.visibleItemsInfo.lastOrNull()?.let {it.index to it.size}}}
+    LaunchedEffect(id, messages.lastOrNull()?.lastOrNull()?.optLong("seq"), viewportHeight,followBottom,lastItemSize,dragging,readingVisible) {
+        if (readingVisible && followBottom && !dragging && messages.isNotEmpty()) list.scrollToMessageEnd(messages.lastIndex+1)
     }
-    DisposableEffect(section, id) {
-        vm.setConversationVisible(section == 0)
+    val lastMessageVisible by remember(list,messages.size) {derivedStateOf {
+        val last=list.layoutInfo.visibleItemsInfo.lastOrNull()
+        last!=null && last.index==messages.size && last.offset+last.size<=list.layoutInfo.viewportEndOffset
+    }}
+    LaunchedEffect(id,vm.followState,vm.eventNextSeq,lastMessageVisible,followBottom,readingVisible) {
+        if(readingVisible && followBottom && lastMessageVisible && messages.isNotEmpty()) vm.markConversationRead(id,vm.eventNextSeq)
+    }
+    DisposableEffect(id,readingVisible) {
+        vm.setConversationVisible(readingVisible)
         onDispose { vm.setConversationVisible(false) }
     }
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
-            val backLabel = stringResource(R.string.back)
-            IconButton(onClick = { if (section == 0) vm.select(null) else section = 0 }, modifier = Modifier.semantics { contentDescription = backLabel }) {
-                Text("←", fontSize = 25.sp)
+            val backLabel = stringResource(if(section==0) R.string.drawer_open else R.string.back)
+            IconButton(onClick = { if (section == 0) onOpenDrawer() else section = 0 }, modifier = Modifier.semantics { contentDescription = backLabel }) {
+                if(section==0) Icon(painterResource(R.drawable.ic_menu),contentDescription=null,modifier=Modifier.size(24.dp)) else Text("←",fontSize=25.sp)
             }
             Column(Modifier.weight(1f)) {
                 Text(agent.getString("display_name"), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(agent.getString("machine"), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            val searchLabel=stringResource(R.string.conversation_search)
+            IconButton(onClick={searching=!searching;if(!searching) query=""},modifier=Modifier.semantics {contentDescription=searchLabel}) {Icon(painterResource(R.drawable.ic_search),contentDescription=null,modifier=Modifier.size(24.dp))}
             Box {
                 val menuLabel = stringResource(R.string.conversation_menu)
                 IconButton(onClick = { menu = true }, modifier = Modifier.semantics { contentDescription = menuLabel }) { Text("⋮", fontSize = 26.sp) }
@@ -377,10 +470,19 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                         CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp)
                     else Text("●", color = if (live) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, fontSize = 10.sp)
                     Spacer(Modifier.width(7.dp))
-                    Text(if (live) stateText(agent.optString("state")) else stringResource(if (vm.followState == "connecting") R.string.sync_connecting else R.string.sync_paused),
+                    Text(if(vm.compacting) stringResource(R.string.context_compacting) else if (live) stateText(agent.optString("state")) else stringResource(if (vm.followState == "connecting") R.string.sync_connecting else R.string.sync_paused),
                         style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
                     if (!live && vm.followState != "connecting") TextButton(onClick = vm::resumeFollow) { Text(stringResource(R.string.reconnect), style = MaterialTheme.typography.labelSmall) }
                     if (vm.eventGap) TextButton(onClick = { details = true }) { Text("ⓘ", style = MaterialTheme.typography.labelMedium) }
+                }
+                if(searching) Column {
+                    OutlinedTextField(value=query,onValueChange={query=it.take(200)},singleLine=true,modifier=Modifier.fillMaxWidth(),label={Text(stringResource(R.string.conversation_search))})
+                    Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                        Text(if(query.isBlank()) stringResource(R.string.search_loaded) else stringResource(R.string.search_count,if(matches.isEmpty()) 0 else resultIndex.coerceAtMost(matches.lastIndex)+1,matches.size),modifier=Modifier.weight(1f),style=MaterialTheme.typography.labelSmall)
+                        TextButton(onClick={showMatch(resultIndex-1)},enabled=matches.isNotEmpty()) {Text(stringResource(R.string.search_previous))}
+                        TextButton(onClick={showMatch(resultIndex+1)},enabled=matches.isNotEmpty()) {Text(stringResource(R.string.search_next))}
+                    }
+                    if(query.isNotBlank()) Text(stringResource(R.string.search_loaded),style=MaterialTheme.typography.labelSmall)
                 }
                 Box(Modifier.weight(1f).fillMaxWidth().onSizeChanged { viewportHeight=it.height }) {
                     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 14.dp),
@@ -398,7 +500,7 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                                 else if (user) Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                                     modifier = Modifier.widthIn(max = 340.dp)) {
                                     SelectionContainer { Text(if (technical) eventText(event) else conversationBody(eventText(event), true, localMessages), Modifier.padding(14.dp), style = MaterialTheme.typography.bodyLarge) }
-                                } else RichMarkdown(eventText(event))
+                                } else RichMarkdown(eventText(event),onPreviewVisibility={shown -> cover("preview:"+event.optLong("seq"),shown)})
                                 Text(conversationTime(event.optString("ts")), Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
                                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -410,19 +512,46 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                         Text("↓  " + stringResource(R.string.latest_messages))
                     }
                 }
-                vm.userInputs.filter {it.optString("owner")==id && it.optString("state") in setOf("pending","submitted","unknown")}.take(2).forEach {UserInputCard(vm,it)}
-                MessageQueue(vm, id)
+                vm.userInputs.filter {it.optString("owner")==id && it.optString("state") in setOf("pending","submitted","unknown")}.take(2).forEach {item -> UserInputCard(vm,item) {shown -> cover("question:"+item.getString("request_id"),shown)}}
+                MessageQueue(vm,id,localEntries) {shown -> cover("queue-editor",shown)}
+                val prepared=localEntries.filter {it.optBoolean("compose_attachment")}
+                if(prepared.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    prepared.forEach {file -> Card(Modifier.widthIn(max=260.dp)) {Row(verticalAlignment=Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).padding(start=12.dp)) {
+                            Text(file.getJSONObject("envelope").getString("file_name"),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.labelMedium)
+                            Text(stringResource(if(file.optBoolean("staged")) R.string.attachment_prepared else R.string.attachment_started),style=MaterialTheme.typography.labelSmall)
+                        }
+                        val remove=stringResource(R.string.attachment_remove)
+                        IconButton(onClick={vm.removePreparedFile(file)},enabled=!vm.busy,modifier=Modifier.semantics {contentDescription=remove}) {Text("×")}
+                    }} }
+                }
+                if(voiceError) Text(stringResource(R.string.user_input_voice_unavailable),color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.labelSmall)
                 Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                     Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp), verticalAlignment = Alignment.Bottom) {
                         val attachLabel = stringResource(R.string.attach)
-                        IconButton(onClick = onPick, enabled = !vm.busy, modifier = Modifier.semantics { contentDescription = attachLabel }) { Text("＋", fontSize = 26.sp) }
+                        Box {
+                            IconButton(onClick={attachMenu=true},enabled=!vm.busy,modifier=Modifier.semantics {contentDescription=attachLabel}) {Text("＋",fontSize=26.sp)}
+                            DropdownMenu(expanded=attachMenu,onDismissRequest={attachMenu=false}) {
+                                DropdownMenuItem(text={Text(stringResource(R.string.attachment_photo))},onClick={attachMenu=false;onPickPhoto()})
+                                DropdownMenuItem(text={Text(stringResource(R.string.attachment_file))},onClick={attachMenu=false;onPick()})
+                            }
+                        }
                         TextField(value = vm.draft, onValueChange = vm::editDraft, enabled = !vm.busy, modifier = Modifier.weight(1f),
                             placeholder = { Text(stringResource(R.string.message_placeholder)) }, maxLines = 5,
                             colors = TextFieldDefaults.colors(focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                                 disabledContainerColor = Color.Transparent, focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent))
+                        val voiceLabel=stringResource(R.string.composer_dictate)
+                        IconButton(onClick={voiceOrigin=vm.composerOrigin();voiceError=false
+                            try {voice.launch(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                .putExtra(RecognizerIntent.EXTRA_LANGUAGE,java.util.Locale.getDefault().toLanguageTag())
+                                .putExtra(RecognizerIntent.EXTRA_PROMPT,voiceLabel))}
+                            catch(_:ActivityNotFoundException) {voiceOrigin=null;voiceError=true}
+                            catch(_:SecurityException) {voiceOrigin=null;voiceError=true}
+                        },enabled=!vm.busy,modifier=Modifier.semantics {contentDescription=voiceLabel}) {Icon(painterResource(R.drawable.ic_mic),contentDescription=null,modifier=Modifier.size(24.dp))}
                         val sendLabel = stringResource(R.string.send)
-                        FilledIconButton(onClick = { followBottom = true; vm.send() }, enabled = !vm.busy && vm.draft.isNotBlank(),
+                        FilledIconButton(onClick = { followBottom = true; vm.send() }, enabled = !vm.busy && (vm.draft.isNotBlank() || prepared.isNotEmpty()),
                             modifier = Modifier.semantics { contentDescription = sendLabel }) { Text("↑", fontSize = 23.sp) }
                     }
                 }
@@ -694,7 +823,8 @@ private fun Outbox(vm: MobileViewModel) {
                             }), style = MaterialTheme.typography.bodySmall)
                         }
                         Text(envelope.getString("command_id"), style = MaterialTheme.typography.labelSmall)
-                        if (state == "local") TextButton(onClick = { vm.sendStored(entry) }, enabled = !vm.busy) { Text(stringResource(R.string.send)) }
+                        if(entry.optBoolean("staged")) Text(stringResource(R.string.attachment_prepared),style=MaterialTheme.typography.labelSmall)
+                        else if (state == "local") TextButton(onClick = { vm.sendStored(entry) }, enabled = !vm.busy) { Text(stringResource(R.string.send)) }
                         else TextButton(onClick = { vm.reconcile(entry) }, enabled = !vm.busy) { Text(stringResource(R.string.reconcile)) }
                         if (state == "outcome_unknown") TextButton(onClick = { replay = entry }, enabled = !vm.busy) { Text(stringResource(R.string.strict_replay)) }
                         if (type == "file" && state == "accepted") TextButton(onClick = { vm.attachReference(entry) }, enabled = !vm.busy) { Text(stringResource(R.string.insert_file_reference)) }
@@ -874,6 +1004,8 @@ private fun recoveryText(code: String): Int = when (code) {
     "command_origin_changed" -> R.string.command_origin_recovery
     "authorization_origin_changed" -> R.string.authorization_origin_recovery
     "history_scope_unavailable", "forbidden_scope" -> R.string.scope_recovery
+    "message_too_long" -> R.string.message_shorten
+    "attachment_not_sent" -> R.string.attachment_prepared
     "invalid_file", "payload_too_large" -> R.string.file_limits
     "file_export_incomplete" -> R.string.file_export_recovery
     "resync_required" -> R.string.resync_recovery
@@ -907,6 +1039,8 @@ private fun errorText(code: String): Int = when (code) {
     "authorization_origin_changed" -> R.string.authorization_origin_error
     "device_storage_unavailable", "device_storage_locked", "device_storage_invalid", "device_storage_limit" -> R.string.storage_error
     "preview_unavailable" -> R.string.preview_unavailable
+    "message_too_long" -> R.string.message_too_long
+    "attachment_not_sent" -> R.string.attachment_prepared
     "invalid_file", "payload_too_large", "file_export_incomplete" -> R.string.file_unavailable
     "choice_not_offered" -> R.string.choice_not_offered
     "question_already_resolved" -> R.string.question_already_resolved

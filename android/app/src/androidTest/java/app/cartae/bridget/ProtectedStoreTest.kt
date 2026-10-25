@@ -66,7 +66,7 @@ class ProtectedStoreTest {
         vault.put("session", session())
         val agent = "89000000-0000-4000-8000-000000000102"
         assertTrue(runCatching { vault.enqueueFile(agent, "../preuve.txt", "text/plain", byteArrayOf(1).inputStream()) }.isFailure)
-        assertTrue(runCatching { vault.enqueueFile(agent, "preuve.html", "text/html", byteArrayOf(1).inputStream()) }.isFailure)
+        assertTrue(runCatching { vault.enqueueFile(agent, "preuve.exe", "application/x-msdownload", byteArrayOf(1).inputStream()) }.isFailure)
         assertTrue(runCatching { vault.enqueueFile(agent, "preuve.txt", "text/plain",
             ByteArray(LocalStore.MAX_FILE_BYTES + 1) { 32 }.inputStream()) }.isFailure)
         assertTrue(vault.list("command:").isEmpty())
@@ -264,12 +264,15 @@ class ProtectedStoreTest {
     @Test fun updatesAcceptOnlyStableOfficialApkAndNeverAnArbitraryUrl() {
         fun metadata(version: String = "0.5.0") = JSONObject().put("draft", false).put("prerelease", false)
             .put("tag_name", "v$version").put("assets", org.json.JSONArray().put(JSONObject()
-                .put("name", "bridget-android.apk").put("size", 1024)
+                .put("name", "bridget-android.apk").put("size", 1024).put("digest","sha256:"+"00".repeat(32))
                 .put("browser_download_url", "https://github.com/guthubrx/bridget/releases/download/v$version/bridget-android.apk")))
         assertEquals("0.5.0", MobileRelease.parse(metadata(), "0.4.1")!!.version)
         assertNull(MobileRelease.parse(metadata(), "0.5.0"))
         assertNull(MobileRelease.parse(metadata(), "0.6.0"))
         assertTrue(runCatching { MobileRelease.parse(metadata().put("draft", true), "0.4.1") }.isFailure)
+        val missingDigest=metadata()
+        missingDigest.getJSONArray("assets").getJSONObject(0).remove("digest")
+        assertTrue(runCatching {MobileRelease.parse(missingDigest,"0.4.1")}.isFailure)
         val foreign = metadata()
         foreign.getJSONArray("assets").getJSONObject(0).put("browser_download_url", "https://example.com/private.apk")
         assertTrue(runCatching { MobileRelease.parse(foreign, "0.4.1") }.isFailure)
