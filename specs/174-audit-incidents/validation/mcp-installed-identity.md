@@ -68,3 +68,52 @@ travaux concernés ; activer sans doublon ; vérifier la santé et garder une
 version de retour. Elle doit contrôler le montage MCP après activation et
 signaler les processus encore sur l'ancienne version. Le lien stable règle
 la dérive de chemin ; il ne recharge pas les processus existants.
+
+## Livraison et limites effectives
+
+Source d496598224ff424e4522b9bfafd677661fc4ab82 intégrée et poussée sur
+main, puis récupérée sur Mac. Releases construites par scripts/build.py :
+Linux 1 min 47 s ; Mac 2 min 10 s. Identifiant commun :
+174-mcp-installed-d4965982. Binaire Mac signé ad hoc et signature vérifiée.
+SHA-256 Mac : d8c2c9ef7be5b36277a62e36f44709fe36b6347a8e4c4f447f3bd15de18dbca5.
+SHA-256 Linux : 64276359c008ddff1b1954c99b8af0fd3fd78261ce18651734bbc762e4b55849.
+
+Clients installés hors staging, empreintes comparées aux builds, liens
+.local/bin/bridget remplacés atomiquement. Chaque exécutable installé a
+traité une séquence JSON-RPC stdio réelle initialize/initialized/status,
+dans un namespace temporaire sans identité. Le refus conserve son code,
+isError=true et expose le nouveau conseil. Ce test négatif ne prouve pas
+une identité T3 fonctionnelle.
+
+Core1520358 et mobile1520533 restent en r10e. Connecteur Mac35661, T3 650/975
+et workers existants préservés. Ce changement porte sur le client MCP,
+pas sur l'autorité, le protocole mobile ou les permissions. Les processus
+MCP déjà ouverts restent anciens : le status de ce fil renvoie encore
+identity_not_found. Aucun rétablissement Monuments n'est revendiqué avant
+une lecture positive depuis son prochain rattachement natif. La seule
+entrée Codex officielle corrigée suit maintenant le lien installé.
+
+L'envoi de coordination Android par Bridget a lui aussi été refusé avant
+remise pour identity_not_found. Aucune autre route utilisée, aucun rejeu
+de mission. Aucun enfant créé. L'activation des services n'a pas été forcée.
+Un ancien état cancelling avec annulation non vérifiable est conservé ;
+aucune tâche étrangère n'a été modifiée pour obtenir un état sans activité.
+
+Entretien installed appelé sur les deux machines après installation.
+Linux : 3,50 Gio logiques d'intermédiaires debug retirés, puis observation
+incomplète des processus : reste conservé, code retour1. Mac : 1,12 Gio
+logiques de cache réutilisable conservés, code retour0. Ancienne copie Mac
+r10c conservée car le contrôle des usages est incomplet. r10e reste actif
+et sert de retour pour les clients ; r8 reste utilisé par les workers.
+Aucune preuve ni base retirée. Branche de correction supprimée après
+intégration. Aucun worktree créé par ce lot ; les deux worktrees177 du
+serveur restent conservés pour leurs gardes de clôture/usage non acquises.
+
+La boîte à idées globale est en lecture seule pour ce processus ; le choix
+automatique reste durablement consigné dans la section précédente. Il ne
+s'agit pas d'une option déjà implémentée. Une différence de build entre
+composants ne suffit pas à prouver qu'une version publiée est plus récente :
+la future détection doit utiliser les métadonnées de livraison. T3 sépare
+aussi disponibilité et téléchargement (DesktopUpdates.ts et updateMachine.ts),
+puis l'application de la version. Aucune mise à jour automatique de T3 ou
+Android n'a été ajoutée par ce correctif.
