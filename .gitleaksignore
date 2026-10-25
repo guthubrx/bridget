@@ -82,3 +82,4 @@ d9d790a538b2a10d40ae65cdc9c13a9eaaa8cdb1:skills/bridget/references/commandes.md:
 db46c7816777199da7c41bb9bc10063cd361dae7:specs/168-routage-flotte/validation/release168.md:generic-api-key:7
 dedb5e39d1ad700d3dbc63ca443784e313e0036f:plugins/maicie/tests/integration/guichet_greffe.rs:generic-api-key:142
 e06d5c9531b7ffc8e40cf1759952c9dcd2f2992c:specs/090-codex-interactif/probe_shared_session.py:generic-api-key:78
+6f2ad5166ec1762b6726fbbf51acaf3ebc79c73f:crates/bridget-daemon/src/mobile/store.rs:generic-api-key:946
