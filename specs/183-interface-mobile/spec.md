@@ -1,6 +1,6 @@
 # Spécification183 — Interface mobile et suivi d’activité
 
-Statut : Implemented. Pipeline : In Progress (audit/livraison/nettoyage requis). Date : 25 octobre 2026. Branche : session-183-interface-mobile.
+Statut : Implemented. Pipeline : In Progress (activation Linux retenue ; voir validation/livraison.md). Date : 25 octobre 2026. Branche : session-183-interface-mobile.
 
 ## Demande initiale et cadrage
 
