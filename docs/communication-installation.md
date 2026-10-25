@@ -251,8 +251,27 @@ the loaded versions. Compatible T3 resume handling remounts the current private
 proof before a new turn; a failed remount must not borrow another thread's
 identity. Do not loop through uninstall/reinstall operations.
 
-For `identity_not_found`, first determine how the agent was started. Missing
-wrapper registration and a lost T3 binding are different faults.
+For `identity_not_found`, the MCP process has no usable identity. This does
+not establish that the caller is an internal child. In T3, call
+`t3_code.bridget_session`. If attestation succeeds but Bridget still refuses,
+compare the real path of `mcp_servers.bridget.command` in the effective Codex
+configuration with the executable selected by T3: `T3CODE_BRIDGET_EXECUTABLE`
+when set, otherwise the installed `$HOME/.local/bin/bridget` link. T3 will not
+pass its session proof to a different executable, even one named `bridget`.
+
+For a stale official entry, change only its command to the stable installed
+link. Preserve other settings, custom servers and explicit opt-outs. Never
+store a session proof in user configuration. A `target/release` path or a
+versioned release path can become stale after delivery. Check this connection
+at every installation, in addition to connector health.
+
+Changing configuration does not update an already running MCP process. The
+native thread attachment or resume must remount the verified definition. Do
+not interrupt other threads or replay a mission to force this. A new turn alone
+is not a guarantee: the provider may retain its mount. Recovery requires a
+successful `bridget_status` in the affected thread, not just T3 attestation.
+Outside T3, use `bridget codex` or `bridget claude`; an internal child returns
+its result to its parent.
 
 For `permission_attestation_unavailable`, an identity exists but the required
 permission proof is unavailable. A successful catalog or session call does

@@ -279,6 +279,32 @@ son plist inchangé. Ce n'est pas la procédure d'installation isolée ci-dessou
 
 ### Dépanner le pont T3
 
+`identity_not_found` signifie que le processus MCP n'a reçu aucune identité
+utilisable. Ce code ne prouve pas que l'appelant est un sous-agent interne.
+Dans un fil T3, appeler `t3_code.bridget_session` pour distinguer une attestation
+absente d'un mauvais montage MCP. Si cette lecture réussit mais que Bridget
+refuse toujours, comparer le chemin réel de `mcp_servers.bridget.command` dans
+la configuration Codex effective avec l'exécutable choisi par T3 :
+`T3CODE_BRIDGET_EXECUTABLE` s'il est défini, sinon le lien installé
+`$HOME/.local/bin/bridget`. T3 refuse de transmettre sa preuve à un autre
+exécutable, même si son nom est aussi `bridget`.
+
+Pour une ancienne entrée officielle, remplacer uniquement son chemin de
+commande par le lien installé stable. Conserver ses autres réglages, les
+serveurs personnalisés et les désactivations explicites. Ne jamais inscrire
+une preuve de session dans la configuration. Un chemin `target/release` ou
+celui d'une release datée devient périmé après une livraison. Vérifier ce
+raccordement à chaque installation, en plus de la santé du connecteur.
+
+Une configuration corrigée ne modifie pas un processus MCP déjà lancé.
+Le rattachement ou la reprise native du fil doit remonter la définition
+vérifiée. Ne pas interrompre les autres fils ni relancer une mission pour
+provoquer ce remontage. Un nouveau tour seul n'est pas une garantie : le
+fournisseur peut conserver son montage. Le rétablissement est acquis après
+un `bridget_status` réussi dans le fil concerné, pas après la seule attestation
+T3. Hors T3, lancer l'agent avec `bridget codex` ou `bridget claude` ; un
+sous-agent interne rend son résultat à son parent.
+
 `t3_session_unavailable` signifie que la preuve privée présentée par le fil n'est
 plus acceptée. Avec T3 Code `0.0.45-local.166` ou plus récent, une reprise Codex
 remonte automatiquement la preuve courante avant son premier tour. Si le remontage

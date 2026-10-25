@@ -5520,6 +5520,45 @@ mod tests {
     }
 
     #[test]
+    fn spec174_identite_absente_guide_montage_t3_sans_execution() {
+        let calls = Cell::new(0);
+        let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| {
+            calls.set(calls.get() + 1);
+            Ok(json!({ "status": "accepted" }))
+        };
+        for name in ["bridget_status", "bridget_auto_delegate"] {
+            let request = json!({
+                "jsonrpc": "2.0", "id": 174, "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            });
+            let mut session = Session {
+                initialize_seen: true,
+                initialized: true,
+            };
+            let response = dispatch_with_executor(
+                &request,
+                &mut session,
+                &|| Err(crate::mcp_identity::IdentityError::IdentityNotFound),
+                &execute,
+            )
+            .unwrap();
+            assert_eq!(response["result"]["code"], "identity_not_found");
+            assert_eq!(response["result"]["isError"], true);
+            let text = response["result"]["content"][0]["text"].as_str().unwrap();
+            for action in [
+                "t3_code.bridget_session",
+                "mcp_servers.bridget.command",
+                ".local/bin/bridget",
+                "preuve",
+                "sous-agent interne",
+            ] {
+                assert!(text.contains(action), "conseil absent : {action}");
+            }
+        }
+        assert_eq!(calls.get(), 0, "aucun outil ni admission sans identité");
+    }
+
+    #[test]
     fn identite_mcp_unicode_est_refusee_avant_toute_execution() {
         let root = test_socket("identity-unicode").with_extension("identity");
         std::fs::create_dir_all(&root).unwrap();

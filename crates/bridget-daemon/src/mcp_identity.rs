@@ -48,7 +48,7 @@ impl IdentityError {
                 "relancez l'agent avec une version Bridget qui réécrit le marqueur agent-pids typé"
             }
             Self::IdentityNotFound => {
-                "un sous-agent interne rend son résultat à son parent Bridget ; sinon lancez l'appel depuis un agent Bridget enregistré"
+                "aucune identité utilisable dans ce processus MCP. Dans T3, vérifiez t3_code.bridget_session ; si l'attestation réussit, contrôlez mcp_servers.bridget.command : son chemin réel doit correspondre à l'exécutable choisi par T3 (T3CODE_BRIDGET_EXECUTABLE, sinon le lien installé $HOME/.local/bin/bridget), pas à une ancienne copie target/release. Corrigez uniquement l'entrée officielle, puis faites remonter sa configuration par la reprise native du fil ; un MCP déjà ouvert garde son ancien montage. Ne copiez aucune preuve ni identité d'un autre fil. Hors T3, lancez l'agent avec bridget codex ou bridget claude ; un sous-agent interne rend son résultat à son parent Bridget"
             }
             Self::NamespaceConfiguration => {
                 "la configuration locale de Bridget est invalide ; vérifiez le dossier d’état, HOME, BRIDGET_HOME et BRIDGET_SOCKET, et retirez les anciennes variables BRIDGET_RUNTIME_*"
