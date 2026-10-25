@@ -67,3 +67,15 @@ Preuves visibles : diaporama vérifié, dix étapes, navigation testée. Capture
 - Commande installed exécutée sur les deux machines après installation vérifiée. Cache Mac environ 1,40 Gio ; cache Cartae conservé sur observation incomplète. Aucun target copié par test.
 
 Les sources et documents sont intégrés à main et poussés. Le worktree 179 conservé reste propre et sur le même commit documentaire. Les reçus Git finaux et de nettoyage sont conservés hors Git pour éviter une référence circulaire au commit du présent document.
+
+## Contrôle complémentaire d’entretien — 25 octobre 2026, 07:02 UTC
+
+Les deux `main` sont propres et alignés sur GitHub au commit documentaire 504e1a34 avant ce complément. Toutes les branches de travail restantes sur Cartae sont intégrées à `main`. Après actualisation des références, GitHub ne contient aucune branche de travail distante à retirer.
+
+Le dernier checkout temporaire Mac, `/Users/moi/.cache/bridget-security178/source-mac`, a été retiré sans force. Sa source c49d2766 est intégrée, son état est propre, aucun fichier ignoré n’y reste et le contrôle lsof ciblé ne signale aucun usage ni avertissement. Retrait supplémentaire : 98 769 613 octets logiques, distincts des 225 324 587 octets précédemment annoncés. Mac ne conserve qu’un checkout et la branche `main`.
+
+Mac conserve les installations 0.6.0 active et 178-c49d2766 pour retour ; cette dernière reste aussi chargée par un client MCP. Quatre anciennes sauvegardes Git (stash, sessions 100, 142 et 168) restent présentes : leur intégration complète n’est pas qualifiée et elles ne sont pas effacées.
+
+La commande d’entretien a été exécutée sur les deux machines. Aucun cache supplémentaire n’a été retiré : 1,40 Gio sur Mac et 9,91 Gio sur Cartae, sous le budget de 10 Gio. Les quatre worktrees Cartae et les binaires 174-mcp-installed-d4965982 / 177-r10e-e631e47c restent conservés : lsof privilégié signale toujours fuse.portal et une observation incomplète, y compris lors du contrôle ciblé. Les tâches des autres travaux et leurs fichiers ignorés ne sont pas clôturés ou supprimés pour contourner ce refus.
+
+Aucun code, binaire actif ou service n’a changé pendant ce contrôle. La règle permanente de fin de livraison reste dans AGENTS.md : intégration, push, vérification et nettoyage à chaque livraison, avec conservation explicite des usages et travaux non qualifiés. Le reçu détaillé Mac est conservé hors Git dans `/Users/moi/.cache/bridget-updates179/cleanup-followup.json`.
