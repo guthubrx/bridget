@@ -65,3 +65,23 @@ dependencies {
  androidTestImplementation("androidx.test:runner:1.6.2")
  androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
+
+// Patch the Android test platform too: these dependencies execute on the build host.
+configurations.configureEach {
+ resolutionStrategy.eachDependency {
+  when {
+   requested.group == "io.netty" -> {
+    useVersion("4.1.139.Final")
+    because("Patch the unified test platform without changing the Netty 4.1 API")
+   }
+   requested.group == "com.google.protobuf" && requested.name != "protobuf-javalite" -> {
+    useVersion("3.25.8")
+    because("GHSA-735f-pc8j-v9w8: reject malicious nested protobuf messages safely")
+   }
+   requested.group == "com.google.android.gms" && requested.name == "play-services-basement" -> {
+    useVersion("18.3.0")
+    because("CVE-2022-2390: keep test metadata and compilation on the patched runtime version")
+   }
+  }
+ }
+}
