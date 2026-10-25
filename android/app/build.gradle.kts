@@ -39,7 +39,9 @@ android {
  }
  buildFeatures { compose = true; buildConfig = true }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
- buildTypes { release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt")) } }
+ buildTypes {
+  debug { if (providers.gradleProperty("bridgetUpdateFixture").orNull == "true") applicationIdSuffix = ".updatefixture" }
+  release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt")) } }
 }
 dependencyLocking { lockAllConfigurations() }
 dependencies {

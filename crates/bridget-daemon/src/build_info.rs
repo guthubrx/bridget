@@ -54,18 +54,18 @@ fn remediation(local_host: &str, daemon_host: Option<&str>) -> String {
         || !daemon_host.is_some_and(bridget_core::host_is_attested)
     {
         return format!(
-            "machine du daemon non attestée — on ne sait pas où relancer ; \
+            "machine du daemon non attestée — on ne sait pas où vérifier les versions ; \
              renseigner HOSTNAME de part et d'autre avant toute relance ({})",
             describe_host(daemon_host)
         );
     }
     match daemon_host {
         Some(host) if host != local_host => {
-            format!("relancer le daemon sur {host} — aucune commande locale ne l'atteint")
+            format!("vérifier les versions actives sur {host} avec bridget updates status ; un écart de build ne donne aucun ordre de version")
         }
         // Le noyau extrait n'installe aucun service global. Recommander le
         // label historique agirait sur une autre installation de Bridget.
-        _ => "relancer manuellement le daemon Bridget communication du namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié — ne pas relancer le service historique".to_string(),
+        _ => "consulter bridget updates status dans le namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié ; un écart de build ne prouve pas une version ancienne ; ne pas relancer le service historique".to_string(),
     }
 }
 
@@ -103,7 +103,7 @@ pub fn stale_daemon_warning_for(
             )
         } else {
             format!(
-                "daemon périmé sur {machine} ({daemon_build_id}) — client \
+                "build du daemon différent sur {machine} ({daemon_build_id}) — client \
                  {local_build_id} sur {ici} : {remediation}"
             )
         }
@@ -153,19 +153,20 @@ mod tests {
         let vrai_ecart =
             stale_daemon_warning_for("client-neuf", "cartae", "24e8003", Some("monordinateur"))
                 .expect("écart signalé");
-        assert!(vrai_ecart.contains("daemon périmé"));
+        assert!(vrai_ecart.contains("build du daemon différent"));
+        assert!(!vrai_ecart.contains("daemon périmé"));
     }
 
     /// POINT 4 — le fait est attaché à la machine où il vaut, pas à la mienne.
     /// Mutant qui tue ce test : rendre `machine` = `local_host` → l'assertion
-    /// « daemon périmé sur monordinateur » meurt.
+    /// « build du daemon différent sur monordinateur » meurt.
     #[test]
     fn le_verdict_nomme_la_machine_du_daemon_et_non_la_mienne() {
         let warning =
             stale_daemon_warning_for("client-neuf", "cartae", "24e8003", Some("monordinateur"))
                 .expect("écart signalé");
         assert!(
-            warning.contains("daemon périmé sur monordinateur"),
+            warning.contains("build du daemon différent sur monordinateur"),
             "le verdict doit être attaché à la machine du daemon : {warning}"
         );
         assert!(
@@ -183,7 +184,7 @@ mod tests {
             stale_daemon_warning_for("client-neuf", "cartae", "24e8003", Some("monordinateur"))
                 .expect("écart signalé");
         assert!(
-            warning.contains("relancer le daemon sur monordinateur"),
+            warning.contains("vérifier les versions actives sur monordinateur"),
             "la remédiation doit nommer la machine à traiter : {warning}"
         );
         assert!(
@@ -224,7 +225,7 @@ mod tests {
             stale_daemon_warning_for("client-neuf", "cartae", "24e8003", None).expect("écart");
         assert!(warning.contains(MACHINE_NON_ATTESTEE), "{warning}");
         assert!(
-            !warning.contains("daemon périmé sur cartae"),
+            !warning.contains("build du daemon différent sur cartae"),
             "une machine inconnue ne doit pas être supposée locale : {warning}"
         );
     }
@@ -268,7 +269,7 @@ mod tests {
             "aucune commande locale ne doit être proposée : {warning}"
         );
         assert!(
-            warning.contains("on ne sait pas où relancer"),
+            warning.contains("on ne sait pas où vérifier les versions"),
             "le message doit dire qu'on ignore où agir : {warning}"
         );
         // L'hôte LOCAL aussi passe par le rendu unique : sans cela le message
@@ -292,7 +293,7 @@ mod tests {
         let local = stale_daemon_warning_for("client", "cartae", "daemon", Some("cartae"))
             .expect("écart signalé");
         assert!(
-            local.contains("relancer manuellement le daemon Bridget communication"),
+            local.contains("consulter bridget updates status"),
             "une machine attestée et locale doit recevoir sa remédiation : {local}"
         );
     }

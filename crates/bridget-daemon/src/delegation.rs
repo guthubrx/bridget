@@ -2480,6 +2480,10 @@ WHERE state='refused' AND task_id IS NULL;
         ).map_err(|error| error.to_string())
     }
 
+    pub(crate) fn update_has_pending_admissions(&self) -> Result<bool, String> {
+        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM auto_admission_receipts WHERE state IN ('pending','decision_started','chosen'))",[],|r|r.get(0)).map_err(|e|e.to_string())
+    }
+
     pub fn pending(&self) -> Result<Vec<Task>, String> {
         let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.state') NOT IN ('failed','cancelled','result_available') OR (json_extract(payload,'$.state')='result_available' AND (json_extract(payload,'$.result_sent')=0 OR coalesce(json_extract(payload,'$.cleanup_done'),0)=0)) OR (json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) OR (json_extract(payload,'$.state')='cancelled' AND json_extract(payload,'$.workspace') IS NOT NULL AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) ORDER BY task_id").map_err(|error|error.to_string())?;
         statement

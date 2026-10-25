@@ -29,6 +29,9 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private var conversationVisible = false
     var release by mutableStateOf<MobileRelease?>(null); private set
     var updateChecked by mutableStateOf(false); private set
+    var hostUpdates by mutableStateOf(JSONObject()); private set
+    var hostUpdatesPending by mutableStateOf(false); private set
+    var updateState by mutableStateOf(JSONObject()); private set
     var notificationsPending by mutableStateOf(false); private set
     var notificationsEnabled by mutableStateOf(false); private set
     var quietSettings by mutableStateOf(JSONObject()); private set
@@ -73,16 +76,29 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var deviceCursor by mutableStateOf<String?>(null); private set
 
     init {
+        viewModelScope.launch {
+            MobileUpdates.changes.collect {
+                updateState = MobileUpdates.state(getApplication())
+                hostUpdates = store.get("host-update-status") ?: JSONObject()
+                hostUpdatesPending = store.get("host-update-choice") != null
+                release = updateState.optJSONObject("available")?.let(MobileRelease::stored)
+                updateChecked = updateState.optString("stage") == "up_to_date"
+            }
+        }
         act {
             val session = store.get("session")
             associated = session != null
             endpoint = session?.getString("endpoint") ?: ""
-            if (associated) loadPreferences()
+            if (associated) {
+                loadPreferences()
+                runCatching { MobileUpdates.syncHosts(getApplication()) }
+            }
         }
     }
     private fun act(work: suspend () -> Unit) {
         if (busy) return
         busy = true
+        MobileUpdates.operations.incrementAndGet()
         viewModelScope.launch {
             error = null
             notice = null
@@ -103,6 +119,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
                 notificationsPending = MobileNotifications.pending(store)
                 quietSettings = MobileNotifications.quietSettings(store)
                 busy = false
+                MobileUpdates.operations.decrementAndGet()
             }
         }
     }
@@ -121,11 +138,29 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         selected = value.optJSONObject("selected")
         selected?.let { restoreConversation(it.getString("agent_id")) }
     }
-    fun checkForUpdates() = act {
-        updateChecked = false
-        release = withContext(Dispatchers.IO) { MobileRelease.check(BuildConfig.VERSION_NAME) }
-        updateChecked = true
+    fun checkForUpdates() {
+        MobileUpdates.launch(getApplication(), manual = true)
+        act { if (associated) { MobileUpdates.syncHosts(getApplication()); hostUpdates = client.requestUpdates(false) } }
     }
+    fun changeAutomaticUpdates(enabled: Boolean) = act {
+        MobileUpdates.setAutomatic(getApplication(), enabled)
+        hostUpdatesPending = store.get("host-update-choice") != null
+        if (associated) { hostUpdates = MobileUpdates.syncHosts(getApplication()); hostUpdatesPending = false }
+    }
+    fun installHostUpdates() = act {
+        val hosts = MobileUpdates.syncHosts(getApplication()).getJSONObject("hosts")
+        val target = hosts.keys().asSequence().mapNotNull { hosts.getJSONObject(it).optString("available").takeIf { v -> v.isNotEmpty() && v != "null" } }
+            .maxByOrNull(MobileRelease::versionCode) ?: return@act
+        hostUpdates = client.requestUpdates(true, target)
+    }
+    suspend fun refreshUpdateStatus() {
+        if (associated && !busy) {
+            try { hostUpdates = MobileUpdates.syncHosts(getApplication()) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Le dernier état reste daté ; aucun succès inventé. */ }
+        }
+    }
+    fun installUpdate() { MobileUpdates.confirm(getApplication()) }
     fun changeNotifications(enabled: Boolean) = act {
         MobileNotifications.setEnabled(getApplication(), store, enabled)
         notificationsEnabled = MobileNotifications.enabled(store)

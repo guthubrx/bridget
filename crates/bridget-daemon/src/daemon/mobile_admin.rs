@@ -33,6 +33,67 @@ pub(super) fn handle(
         };
         root
     };
+    if let MobileAdministrationRequest::Updates { request } = request {
+        use bridget_transport::protocol::UpdateRequest as Q;
+        let result = (|| -> Result<serde_json::Value, &'static str> {
+            match &request {
+                Q::Prepare { token } => {
+                    // L'état et le compteur sont observés sous le même verrou métier.
+                    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+                    if !st
+                        .delegation_store
+                        .pending()
+                        .map_err(|_| "update_activity_unknown")?
+                        .is_empty()
+                        || st
+                            .delegation_store
+                            .update_has_pending_admissions()
+                            .map_err(|_| "update_activity_unknown")?
+                        || st.fleet.active_count() != 0
+                        || st.recovering
+                        || !st.managed_spawns.is_empty()
+                        || st.presences.values().any(|p| p.state == "busy")
+                        || st.remote_result_reservation.is_some()
+                        || !st.pending_replies.is_empty()
+                        || !st.pending_post_response_controls.is_empty()
+                        || !st.pending_worker_responses.is_empty()
+                        || !st.pending_origin_proofs.is_empty()
+                        || !st.pending_candidate_probes_v2.is_empty()
+                        || !st.pending_attach_sends.is_empty()
+                    {
+                        return Err("update_missions_active_or_unconfirmed");
+                    }
+                    st.update_gate.prepare(token)
+                }
+                Q::Finish { token } => state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .update_gate
+                    .finish(token),
+                _ => crate::updates::policy(&root, &request),
+            }
+        })();
+        return DaemonToWrapper::MobileAdministrationResult {
+            result: match result {
+                Ok(value) => MobileAdministrationResult::Updates { value },
+                Err(code) => MobileAdministrationResult::Error { code: code.into() },
+            },
+        };
+    }
+    if let MobileAdministrationRequest::GrantUpdates { device_id } = request {
+        let result = crate::mobile::store::Store::open(&root.join("mobile-devices.db"))
+            .and_then(|mut s| s.grant_updates(&device_id, unix_now_secs()));
+        return DaemonToWrapper::MobileAdministrationResult {
+            result: match result {
+                Ok(found) => MobileAdministrationResult::Updates {
+                    value: serde_json::json!({"status":"ok","granted":found,"device_id":device_id}),
+                },
+                Err(e) => MobileAdministrationResult::Error {
+                    code: e.code().into(),
+                },
+            },
+        };
+    }
     // Aucun appel réseau ni écriture du magasin mobile sous le mutex métier.
     let reload = matches!(
         &request,
@@ -207,6 +268,90 @@ mod tests {
         );
         drop(client);
         server.join().unwrap();
+        drop(state);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn updates179_human_activation_blocks_delivery_and_sql_unknown_is_closed() {
+        use bridget_transport::protocol::{
+            IdentityCredential, MobileOperation, MobileOperationRequest, UpdateRequest as Q,
+        };
+        let root = std::env::temp_dir().join(format!("bridget179-gate-{}", Uuid::new_v4()));
+        crate::environment::ensure_private_directory(&root).unwrap();
+        let config = DaemonConfig {
+            socket_path: root.join("s"),
+            db_path: root.join("b.db"),
+            log_path: root.join("log"),
+            ..DaemonConfig::default()
+        };
+        let (tx, _) = mpsc::channel();
+        let state = Arc::new(Mutex::new(DaemonState::new(&config, tx).unwrap()));
+        {
+            let mut st = state.lock().unwrap();
+            st.connection_roles
+                .insert("human".into(), ConnectionRole::Client);
+            st.peer_uids
+                .insert("human".into(), unsafe { libc::geteuid() });
+            st.client_negotiations.insert(
+                "human".into(),
+                NegotiatedClient {
+                    version: CLIENT_CONTRACT_VERSION,
+                    issuer_scope: crate::communication::issuer_scope("bridget-mobile-admin"),
+                    capabilities: vec![ClientCapability::MobileAdministrationV1],
+                },
+            );
+        }
+        let token = Uuid::new_v4().to_string();
+        let prepare = || MobileAdministrationRequest::Updates {
+            request: Q::Prepare {
+                token: token.clone(),
+            },
+        };
+        assert!(
+            matches!(handle("agent",prepare(),&state),DaemonToWrapper::MobileAdministrationResult{result:MobileAdministrationResult::Error{code}} if code=="human_principal_required")
+        );
+        assert!(
+            matches!(handle("human",prepare(),&state),DaemonToWrapper::MobileAdministrationResult{result:MobileAdministrationResult::Updates{value}} if value["status"]=="ok")
+        );
+        let delivery = || WrapperToDaemon::MobileOperation {
+            request: MobileOperationRequest {
+                credential: IdentityCredential::new("invalid".into()),
+                operation: MobileOperation::Questions {
+                    after: None,
+                    limit: 10,
+                },
+            },
+        };
+        assert!(matches!(
+            handle_wrapper_message("other", delivery(), &state),
+            Some(DaemonToWrapper::UpdateInProgress)
+        ));
+        assert!(matches!(
+            handle(
+                "human",
+                MobileAdministrationRequest::Updates {
+                    request: Q::Finish { token }
+                },
+                &state
+            ),
+            DaemonToWrapper::MobileAdministrationResult {
+                result: MobileAdministrationResult::Updates { .. }
+            }
+        ));
+        assert!(!matches!(
+            handle_wrapper_message("other", delivery(), &state),
+            Some(DaemonToWrapper::UpdateInProgress)
+        ));
+        state
+            .lock()
+            .unwrap()
+            .store
+            .connection()
+            .execute_batch("DROP TABLE auto_admission_receipts")
+            .unwrap();
+        assert!(
+            matches!(handle("human",MobileAdministrationRequest::Updates{request:Q::Prepare{token:Uuid::new_v4().to_string()}},&state),DaemonToWrapper::MobileAdministrationResult{result:MobileAdministrationResult::Error{code}} if code=="update_activity_unknown")
+        );
         drop(state);
         std::fs::remove_dir_all(root).unwrap();
     }

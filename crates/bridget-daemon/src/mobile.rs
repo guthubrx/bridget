@@ -170,7 +170,10 @@ pub(crate) fn administer(root: &Path, request: AdminRequest, now: i64) -> AdminR
     })
 }
 
-fn admin_connection(socket: &Path, request: AdminRequest) -> Result<AdminResult, &'static str> {
+pub(crate) fn admin_connection(
+    socket: &Path,
+    request: AdminRequest,
+) -> Result<AdminResult, &'static str> {
     use crate::communication::client::DaemonConnection;
     let mut connection = DaemonConnection::connect(socket).map_err(|_| "daemon_unavailable")?;
     if !matches!(

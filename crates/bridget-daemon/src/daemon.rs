@@ -1003,6 +1003,7 @@ impl Drop for FixtureRoot {
 }
 
 struct DaemonState {
+    update_gate: Arc<crate::updates::Gate>,
     /// Quotas observés, volatils et bornés par type de fournisseur.
     provider_limits: crate::provider_limits::ProviderLimits,
     host_resources: crate::host_resources::HostResourceCollector,
@@ -4982,6 +4983,9 @@ impl DaemonState {
         // aléatoire ne permettrait pas le prédicat SQL « époque antérieure ».
         let coordinator_epoch = delegation_store.next_auto_coordinator_epoch()?;
         Ok(DaemonState {
+            update_gate: crate::updates::Gate::open(
+                config.db_path.parent().ok_or("update_root_missing")?,
+            )?,
             provider_limits: Default::default(),
             host_resources: Default::default(),
             held_ids,
@@ -7001,6 +7005,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             }
             let now = std::time::Instant::now();
 
+            let Some(_update_activity) = update_activity(&st_reminder) else {
+                continue;
+            };
             remote_worker_contact_tick(&st_reminder);
             native_delegation::tick(&st_reminder);
             let wake_clock = Instant::now();
@@ -7241,7 +7248,9 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Boucle d'acceptation avec timeout pour vérifier shutdown
     listener.set_nonblocking(true)?;
     loop {
-        drain_managed_events(&state, &managed_event_rx);
+        if let Some(_update_activity) = update_activity(&state) {
+            drain_managed_events(&state, &managed_event_rx);
+        }
         // Vérifier si shutdown demandé
         if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             info!("shutdown demandé - notification des wrappers externes...");
@@ -7499,6 +7508,20 @@ fn handle_connection(
                         my_writer.flush()?;
                     }
                     continue;
+                }
+            };
+
+            // Le compteur couvre aussi la réponse et ses contrôles différés.
+            let _update_activity = if update_exempt(&msg) {
+                None
+            } else {
+                match update_activity(&state) {
+                    Some(guard) => Some(guard),
+                    None => {
+                        writeln!(my_writer, "{}", encode(&DaemonToWrapper::UpdateInProgress)?)?;
+                        my_writer.flush()?;
+                        break;
+                    }
                 }
             };
 
@@ -9859,6 +9882,9 @@ fn maintain_stores(st: &mut DaemonState, now: i64) {
 /// State couvre SQL et les notices historiques ; les remises normales restent
 /// différées hors State. Les fichiers sont traités hors verrou.
 fn run_maintenance(state: &Arc<Mutex<DaemonState>>, root: &std::path::Path) {
+    let Some(_update_activity) = update_activity(state) else {
+        return;
+    };
     let now = unix_now_secs();
     let connected: HashSet<String> = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -19348,12 +19374,37 @@ fn handle_wrapper_message(
     handle_wrapper_message_with_peer(conn_id, msg, state, None)
 }
 
+fn update_activity(state: &Arc<Mutex<DaemonState>>) -> Option<crate::updates::Activity> {
+    let gate = state
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .update_gate
+        .clone();
+    gate.enter()
+}
+fn update_exempt(msg: &WrapperToDaemon) -> bool {
+    matches!(
+        msg,
+        WrapperToDaemon::MobileAdministration { .. }
+            | WrapperToDaemon::RoleHandshake { .. }
+            | WrapperToDaemon::ClientHello { .. }
+            | WrapperToDaemon::DaemonIdentityRequest
+    ) || matches!(msg,WrapperToDaemon::MobileOperation{request} if matches!(request.operation,bridget_transport::protocol::MobileOperation::UpdatesStatus|bridget_transport::protocol::MobileOperation::UpdatesConfigure{..}))
+}
 fn handle_wrapper_message_with_peer(
     conn_id: &str,
     msg: WrapperToDaemon,
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> Option<DaemonToWrapper> {
+    let _update_activity = if update_exempt(&msg) {
+        None
+    } else {
+        match update_activity(state) {
+            Some(guard) => Some(guard),
+            None => return Some(DaemonToWrapper::UpdateInProgress),
+        }
+    };
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if native_lineage::invalid_message(&mut st, conn_id) {

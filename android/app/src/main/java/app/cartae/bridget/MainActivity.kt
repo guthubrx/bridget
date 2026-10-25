@@ -97,6 +97,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         model.setVisible(true)
+        MobileUpdates.foreground(applicationContext, true)
         MobileNotifications.refresh(applicationContext)
         val manager = getSystemService(ConnectivityManager::class.java)
         val callback = object : ConnectivityManager.NetworkCallback() {
@@ -108,6 +109,7 @@ class MainActivity : ComponentActivity() {
         networkCallback?.let { callback -> runCatching { getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback) } }
         networkCallback = null
         model.setVisible(false)
+        MobileUpdates.foreground(applicationContext, false)
         super.onStop()
     }
 }
@@ -710,18 +712,14 @@ private fun Outbox(vm: MobileViewModel) {
 
 @Composable
 private fun Settings(vm: MobileViewModel, onRevoke: () -> Unit, onForget: () -> Unit, onNotifications: () -> Unit) {
+    LaunchedEffect(vm.associated) {
+        while (true) { vm.refreshUpdateStatus(); kotlinx.coroutines.delay(30_000) }
+    }
     var revokeDevice by remember { mutableStateOf<JSONObject?>(null) }
-    var update by remember { mutableStateOf<MobileRelease?>(null) }
-    val uriHandler = LocalUriHandler.current
     val quietLabel = stringResource(R.string.quiet_hours)
     var quiet by remember(vm.quietSettings) { mutableStateOf(vm.quietSettings.optBoolean("enabled")) }
     var quietStart by remember(vm.quietSettings) { mutableStateOf(vm.quietSettings.optString("start", "22:00")) }
     var quietEnd by remember(vm.quietSettings) { mutableStateOf(vm.quietSettings.optString("end", "08:00")) }
-    update?.let { release -> Confirm(stringResource(R.string.install_update),
-        stringResource(R.string.update_install_detail), onDismiss = { update = null }) {
-        update = null
-        runCatching { uriHandler.openUri(release.url) }
-    } }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Card(Modifier.fillMaxWidth()) {
@@ -754,11 +752,47 @@ private fun Settings(vm: MobileViewModel, onRevoke: () -> Unit, onForget: () -> 
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(stringResource(R.string.app_version, BuildConfig.VERSION_NAME), style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = vm::checkForUpdates, enabled = !vm.busy) { Text(stringResource(R.string.check_updates)) }
-                    if (vm.updateChecked && vm.release == null) Text(stringResource(R.string.app_up_to_date))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = vm.updateState.optBoolean("automatic", true),
+                            onCheckedChange = vm::changeAutomaticUpdates, enabled = !vm.busy,
+                            modifier = Modifier.semantics { contentDescription = "auto-update-android" })
+                        Text(stringResource(R.string.automatic_updates), Modifier.weight(1f))
+                    }
+                    Text(stringResource(R.string.automatic_updates_detail), style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.android_updates_title), style = MaterialTheme.typography.titleSmall)
+                    Text(updateStage(vm.updateState.optString("stage")))
+                    Text(stringResource(R.string.host_updates_title), style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(if (vm.hostUpdatesPending) R.string.host_updates_pending
+                        else if (!vm.hostUpdates.has("automatic")) R.string.host_updates_unknown
+                        else if (vm.hostUpdates.optBoolean("automatic")) R.string.host_updates_on else R.string.host_updates_off))
+                    vm.hostUpdates.optJSONObject("hosts")?.let { hosts ->
+                        hosts.keys().asSequence().sorted().forEach { host ->
+                            val item = hosts.getJSONObject(host)
+                            Text(host + " : " + item.optString("installed") + " · " + hostUpdateStage(item.optString("stage")), style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(R.string.update_last_check, dateText(item.optLong("observed_at"))), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (vm.updateState.has("checked_at")) Text(stringResource(R.string.update_last_check,
+                        dateText(vm.updateState.optLong("checked_at") / 1000)), style = MaterialTheme.typography.bodySmall)
+                    if (vm.updateState.has("error")) Text(stringResource(errorText(vm.updateState.optString("error"))),
+                        color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = vm::checkForUpdates, enabled = !vm.busy &&
+                        vm.updateState.optString("stage") !in setOf("checking", "downloading", "installing")) {
+                        Text(stringResource(R.string.check_updates))
+                    }
+                    val hosts = vm.hostUpdates.optJSONObject("hosts")
+                    if (hosts != null && hosts.keys().asSequence().any { host ->
+                        val item = hosts.getJSONObject(host)
+                        item.optString("available").let { it.isNotEmpty() && it != "null" && it != item.optString("installed") }
+                    }) OutlinedButton(onClick = vm::installHostUpdates, enabled = !vm.busy && !vm.hostUpdatesPending) {
+                        Text(stringResource(R.string.host_update_install_action))
+                    }
                     vm.release?.let { release ->
                         Text(stringResource(R.string.update_available, release.version))
-                        OutlinedButton(onClick = { update = release }) { Text(stringResource(R.string.install_update)) }
+                        OutlinedButton(onClick = vm::installUpdate, enabled = !vm.busy &&
+                            vm.updateState.optString("stage") !in setOf("checking", "downloading", "installing")) {
+                            Text(stringResource(R.string.install_update))
+                        }
                     }
                 }
             }
@@ -846,10 +880,16 @@ private fun recoveryText(code: String): Int = when (code) {
     else -> R.string.error_recovery
 }
 private fun errorText(code: String): Int = when (code) {
+    "update_hosts_unavailable" -> R.string.update_hosts_unavailable
+    "update_in_progress" -> R.string.update_server_in_progress
     "recipient_unavailable" -> R.string.recipient_unavailable
     "pairing_unavailable", "pairing_missing" -> R.string.pairing_unavailable
     "pairing_pending" -> R.string.pending_pairing
     "update_check_unavailable" -> R.string.update_check_unavailable
+    "update_integrity_failed" -> R.string.update_integrity_failed
+    "update_install_failed" -> R.string.update_install_failed
+    "update_schedule_unavailable", "update_storage_unavailable" -> R.string.update_storage_unavailable
+    "update_disabled" -> R.string.update_disabled
     "android_release_unpublished" -> R.string.android_release_unpublished
     "invalid_quiet_period" -> R.string.quiet_invalid
     "notifications_not_configured" -> R.string.notifications_unconfigured
@@ -881,3 +921,31 @@ private fun errorText(code: String): Int = when (code) {
 }
 
 private fun dateText(seconds: Long): String = java.text.DateFormat.getDateTimeInstance().format(java.util.Date(seconds * 1000))
+
+@Composable private fun updateStage(value: String): String = stringResource(when (value) {
+    "checking" -> R.string.update_checking
+    "available" -> R.string.update_available_stage
+    "downloading" -> R.string.update_downloading
+    "ready" -> R.string.update_ready_title
+    "waiting_idle" -> R.string.update_waiting_idle
+    "permission_required" -> R.string.update_permission_detail
+    "confirmation_required" -> R.string.update_confirmation_detail
+    "installing" -> R.string.update_installing
+    "installed", "up_to_date" -> R.string.app_up_to_date
+    "error" -> R.string.update_error_stage
+    else -> R.string.update_not_checked
+})
+
+@Composable private fun hostUpdateStage(stage: String): String = stringResource(when(stage) {
+    "active" -> R.string.host_update_active
+    "error" -> R.string.update_error_stage
+    "up_to_date" -> R.string.app_up_to_date
+    "disabled" -> R.string.host_updates_off
+    "rolled_back" -> R.string.host_update_rollback
+    "waiting_idle" -> R.string.host_update_waiting
+    "ready" -> R.string.update_ready_title
+    "available" -> R.string.update_available_stage
+    "downloading" -> R.string.update_downloading
+    "installing" -> R.string.host_update_installing
+    else -> R.string.host_updates_unknown
+})

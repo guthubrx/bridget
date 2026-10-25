@@ -188,6 +188,31 @@ pub(super) fn handle(
     };
     if matches!(
         request.operation,
+        MobileOperation::UpdatesStatus
+            | MobileOperation::UpdatesCheck
+            | MobileOperation::UpdatesInstall { .. }
+            | MobileOperation::UpdatesConfigure { .. }
+    ) {
+        if !device.scope.permits_federation(Operation::UpdatesManage) {
+            return refusal("forbidden_scope");
+        }
+        let q = match request.operation {
+            MobileOperation::UpdatesCheck => bridget_transport::protocol::UpdateRequest::Check,
+            MobileOperation::UpdatesInstall { version } => {
+                bridget_transport::protocol::UpdateRequest::Install { version }
+            }
+            MobileOperation::UpdatesConfigure { automatic } => {
+                bridget_transport::protocol::UpdateRequest::Configure { automatic }
+            }
+            _ => bridget_transport::protocol::UpdateRequest::Status,
+        };
+        return match crate::updates::policy(&root, &q) {
+            Ok(result) => DaemonToWrapper::MobileOperationResult { result },
+            Err(code) => refusal(code),
+        };
+    }
+    if matches!(
+        request.operation,
         MobileOperation::Questions { .. }
             | MobileOperation::QuestionShow { .. }
             | MobileOperation::QuestionRespond { .. }
@@ -235,7 +260,11 @@ pub(super) fn handle(
     };
     negotiated.issuer_scope = format!("mobile177_{}", device.device_id.replace('-', ""));
     match request.operation {
-        MobileOperation::Questions { .. }
+        MobileOperation::UpdatesStatus
+        | MobileOperation::UpdatesCheck
+        | MobileOperation::UpdatesInstall { .. }
+        | MobileOperation::UpdatesConfigure { .. }
+        | MobileOperation::Questions { .. }
         | MobileOperation::QuestionShow { .. }
         | MobileOperation::QuestionRespond { .. }
         | MobileOperation::QuestionReceipt { .. }
@@ -503,6 +532,44 @@ mod tests {
             DaemonToWrapper::MobileOperationResult { result } => result,
             _ => panic!("mobile response expected"),
         }
+    }
+
+    #[test]
+    fn updates179_phone_requires_explicit_grant_and_revocation_is_live() {
+        let f = Fixture::new();
+        let (key, device) = full_device(&f);
+        let call = |operation| {
+            value(handle(
+                "phone",
+                MobileOperationRequest {
+                    credential: IdentityCredential::new(key.clone()),
+                    operation,
+                },
+                &f.state,
+            ))
+        };
+        assert_eq!(
+            call(MobileOperation::UpdatesConfigure { automatic: false })["code"],
+            "forbidden_scope"
+        );
+        let mut store = Store::open(&f.root.join("mobile-devices.db")).unwrap();
+        assert!(store.grant_updates(&device, unix_now_secs()).unwrap());
+        assert_eq!(call(MobileOperation::UpdatesStatus)["automatic"], true);
+        assert_eq!(
+            call(MobileOperation::UpdatesConfigure { automatic: false })["automatic"],
+            false
+        );
+        assert_eq!(call(MobileOperation::UpdatesStatus)["automatic"], false);
+        store.revoke(&device, unix_now_secs()).unwrap();
+        assert_eq!(
+            call(MobileOperation::UpdatesConfigure { automatic: true })["code"],
+            "device_revoked"
+        );
+        assert_eq!(
+            crate::updates::policy(&f.root, &bridget_transport::protocol::UpdateRequest::Status)
+                .unwrap()["automatic"],
+            false
+        );
     }
 
     fn full_device(f: &Fixture) -> (String, String) {

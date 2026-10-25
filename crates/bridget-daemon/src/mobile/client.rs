@@ -212,6 +212,10 @@ pub(crate) fn mobile_operation(
         },
     }) {
         Ok(DaemonToWrapper::MobileOperationResult { result }) => Ok(result),
+        Err(crate::communication::client::ClientError::Technical {
+            code: "update_in_progress",
+            ..
+        }) => Err("update_in_progress"),
         _ => Err("outcome_unknown"),
     }
 }

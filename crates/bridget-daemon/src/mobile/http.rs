@@ -99,6 +99,11 @@ fn failure(code: &str) -> Response {
             "Accès momentanément saturé.",
             "Attendez puis conservez la même clé pour réconcilier.",
         ),
+        "update_in_progress" => (
+            503,
+            "Mise à jour Bridget en cours. Cet appel n’a pas été exécuté.",
+            "Attendez le retour de la connexion, puis consultez les reçus existants. Conservez les mêmes identifiants et paramètres.",
+        ),
         "outcome_unknown" => (
             504,
             "Réponse non confirmée.",
@@ -676,9 +681,39 @@ fn execute(
         };
     }
 
-    let operation = if method == Method::GET
-        && path.starts_with("/v1/agents/")
-        && path.ends_with("/events")
+    let operation = if method == Method::GET && path == "/v1/updates" {
+        Some(bridget_transport::protocol::MobileOperation::UpdatesStatus)
+    } else if method == Method::POST && path == "/v1/updates/check" && bytes == b"{}" {
+        Some(bridget_transport::protocol::MobileOperation::UpdatesCheck)
+    } else if method == Method::POST && path == "/v1/updates/install" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Install {
+            version: String,
+        }
+        match serde_json::from_slice::<Install>(bytes) {
+            Ok(value) => Some(
+                bridget_transport::protocol::MobileOperation::UpdatesInstall {
+                    version: value.version,
+                },
+            ),
+            Err(_) => return failure("invalid_request"),
+        }
+    } else if method == Method::PUT && path == "/v1/updates" {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Setting {
+            automatic: bool,
+        }
+        match serde_json::from_slice::<Setting>(bytes) {
+            Ok(value) => Some(
+                bridget_transport::protocol::MobileOperation::UpdatesConfigure {
+                    automatic: value.automatic,
+                },
+            ),
+            Err(_) => return failure("invalid_request"),
+        }
+    } else if method == Method::GET && path.starts_with("/v1/agents/") && path.ends_with("/events")
     {
         Some(bridget_transport::protocol::MobileOperation::AgentJournal {
             agent_id: path

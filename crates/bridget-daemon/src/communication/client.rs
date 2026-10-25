@@ -1262,6 +1262,12 @@ impl DaemonConnection {
                     message: "budget total dépassé pendant le décodage".into(),
                 });
             }
+            if matches!(response, DaemonToWrapper::UpdateInProgress) {
+                return Err(ClientError::Technical {
+                    code: "update_in_progress",
+                    message: "Une mise à jour Bridget est en cours. Cet appel n’a pas été exécuté. Attendez le retour du lien, puis relisez le sort de la demande avec les mêmes identifiants et paramètres ; ne créez pas de mission de remplacement.".into(),
+                });
+            }
             if matches!(response, DaemonToWrapper::Disconnect) {
                 // Une fermeture annoncée a le même sort incertain qu'un EOF.
                 // Conserver le code de l'appelant, notamment outcome_unknown
@@ -1670,6 +1676,33 @@ mod security_tests {
             },
             peer,
         )
+    }
+
+    #[test]
+    fn updates179_activation_reply_is_deferred_without_replay() {
+        for mutation in [false, true] {
+            let (mut connection, mut peer) = pair(Duration::from_secs(2));
+            writeln!(
+                peer,
+                "{}",
+                encode(&DaemonToWrapper::UpdateInProgress).unwrap()
+            )
+            .unwrap();
+            let command = WrapperToDaemon::DaemonIdentityRequest;
+            let result = if mutation {
+                connection.send_then_wait(&command)
+            } else {
+                connection.exchange(&command)
+            };
+            assert!(
+                matches!(result, Err(ClientError::Technical {code, ..}) if code == "update_in_progress")
+            );
+            assert!(connection.poisoned);
+            assert!(connection.exchange(&command).is_err());
+            let mut received = String::new();
+            std::io::Read::read_to_string(&mut BufReader::new(peer), &mut received).unwrap();
+            assert_eq!(received.lines().count(), 1);
+        }
     }
 
     #[test]

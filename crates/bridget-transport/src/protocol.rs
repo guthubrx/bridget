@@ -2536,19 +2536,88 @@ pub enum MobileAdministrationRequest {
     ConfigureNotifications { account:IdentityCredential },
     Pair { scope:serde_json::Value },
     Devices,
-    Revoke { device_id:String },
+    Revoke {
+        device_id: String,
+    },
+    Updates {
+        request: UpdateRequest,
+    },
+    GrantUpdates {
+        device_id: String,
+    },
+}
+
+/// Contrat humain de maintenance : ni URL, ni chemin, ni commande reçue du téléphone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UpdateRequest {
+    Status,
+    Check,
+    Install {
+        version: String,
+    },
+    Configure {
+        automatic: bool,
+    },
+    Prepare {
+        token: String,
+    },
+    Finish {
+        token: String,
+    },
+    Report {
+        host: String,
+        installed: String,
+        available: Option<String>,
+        stage: UpdateStage,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpdateStage {
+    UpToDate,
+    Available,
+    Downloading,
+    Ready,
+    WaitingIdle,
+    Installing,
+    Active,
+    RolledBack,
+    Error,
+    Disabled,
 }
 
 /// Le secret du QR reste un IdentityCredential pour être masqué dans Debug.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag="status",rename_all="snake_case",deny_unknown_fields)]
 pub enum MobileAdministrationResult {
-    Configuration { configured:bool, public_url:Option<String>, listen_addr:Option<String> },
-    Pairing { pairing_id:String, credential:IdentityCredential, expires_at:i64, public_url:String },
-    Devices { items:Vec<serde_json::Value> },
-    Revoked { device_id:String, found:bool },
-    NotificationsConfigured { configured:bool },
-    Error { code:String },
+    Configuration {
+        configured: bool,
+        public_url: Option<String>,
+        listen_addr: Option<String>,
+    },
+    Pairing {
+        pairing_id: String,
+        credential: IdentityCredential,
+        expires_at: i64,
+        public_url: String,
+    },
+    Devices {
+        items: Vec<serde_json::Value>,
+    },
+    Revoked {
+        device_id: String,
+        found: bool,
+    },
+    NotificationsConfigured {
+        configured: bool,
+    },
+    Updates {
+        value: serde_json::Value,
+    },
+    Error {
+        code: String,
+    },
 }
 
 /// Opérations mobiles fermées ; le daemon recontrôle la portée avant tout effet natif.
@@ -2561,22 +2630,93 @@ pub struct MobileOperationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
 pub enum MobileOperation {
-    Questions {after:Option<String>,limit:u32},
-    QuestionShow {item_id:String},
-    QuestionRespond {device_id:String,command_id:String,item_id:String,choice:String},
-    QuestionReceipt {device_id:String,command_id:String,item_id:String,choice:String},
-    TaskList {agent_id:String,after:Option<String>,limit:u32},
-    TaskShow {task_id:String,offset:u32},
-    TaskCancel {device_id:String,command_id:String,task_id:String},
-    TaskCancelReceipt {device_id:String,command_id:String,task_id:String},
-    ArtifactList {agent_id:String,after:Option<String>,limit:u16},
-    ArtifactRead {agent_id:String,artifact_ref:String,version_ref:String,offset:u64,limit:u32},
-    ArtifactUpload {upload:MobileFileUpload},
-    ArtifactLookup {command_id:String},
-    AgentJournal {agent_id:String,after_seq:u64,limit:u32,#[serde(default)] tail:bool},
-    Federation {after:Option<String>,limit:u16},
-    Message { device_id:String, command_id:String, issued_at:i64, agent_id:String, body:String, #[serde(default)] guide_now:bool },
-    Lookup { command_id:String },
+    UpdatesStatus,
+    UpdatesCheck,
+    UpdatesInstall {
+        version: String,
+    },
+    UpdatesConfigure {
+        automatic: bool,
+    },
+    Questions {
+        after: Option<String>,
+        limit: u32,
+    },
+    QuestionShow {
+        item_id: String,
+    },
+    QuestionRespond {
+        device_id: String,
+        command_id: String,
+        item_id: String,
+        choice: String,
+    },
+    QuestionReceipt {
+        device_id: String,
+        command_id: String,
+        item_id: String,
+        choice: String,
+    },
+    TaskList {
+        agent_id: String,
+        after: Option<String>,
+        limit: u32,
+    },
+    TaskShow {
+        task_id: String,
+        offset: u32,
+    },
+    TaskCancel {
+        device_id: String,
+        command_id: String,
+        task_id: String,
+    },
+    TaskCancelReceipt {
+        device_id: String,
+        command_id: String,
+        task_id: String,
+    },
+    ArtifactList {
+        agent_id: String,
+        after: Option<String>,
+        limit: u16,
+    },
+    ArtifactRead {
+        agent_id: String,
+        artifact_ref: String,
+        version_ref: String,
+        offset: u64,
+        limit: u32,
+    },
+    ArtifactUpload {
+        upload: MobileFileUpload,
+    },
+    ArtifactLookup {
+        command_id: String,
+    },
+    AgentJournal {
+        agent_id: String,
+        after_seq: u64,
+        limit: u32,
+        #[serde(default)]
+        tail: bool,
+    },
+    Federation {
+        after: Option<String>,
+        limit: u16,
+    },
+    Message {
+        device_id: String,
+        command_id: String,
+        issued_at: i64,
+        agent_id: String,
+        body: String,
+        #[serde(default)]
+        guide_now: bool,
+    },
+    Lookup {
+        command_id: String,
+    },
 }
 
 /// Enveloppe de fichier bornée avant l'appel natif ; clé et empreinte conservées par le téléphone.
@@ -6240,6 +6380,8 @@ pub enum DaemonToWrapper {
         id: String,
         reason: String,
     },
+    /// Cet appel est refusé avant tout traitement pendant une activation bornée.
+    UpdateInProgress,
     /// Le daemon s'éteint.
     Disconnect,
     /// Réponse à ListAgents.
