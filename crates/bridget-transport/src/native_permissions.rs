@@ -458,6 +458,31 @@ pub fn recheck_permission_context_sources_with_profile(
     recheck_permission_context_sources_inner(context, Some(verified))
 }
 
+// Déduplication limitée à cette relecture. Chaque appel repart du disque ;
+// les deux révisions attendues sont comparées, même pour un chemin identique.
+fn recheck_cli_revisions(
+    context: &Value,
+    mut revision: impl FnMut(&std::path::Path) -> Result<String, String>,
+) -> Result<(), String> {
+    use std::path::Path;
+    let changed = || "settings_revision_changed".to_string();
+    let launcher = Path::new(context["cli_path"].as_str().ok_or_else(changed)?);
+    let cli = Path::new(context["resolved_cli_path"].as_str().ok_or_else(changed)?);
+    let launcher_revision = revision(launcher).map_err(|_| changed())?;
+    if launcher_revision != context["cli_revision"] {
+        return Err(changed());
+    }
+    let cli_revision = if cli == launcher {
+        launcher_revision
+    } else {
+        revision(cli).map_err(|_| changed())?
+    };
+    if cli_revision != context["resolved_cli_revision"] {
+        return Err(changed());
+    }
+    Ok(())
+}
+
 fn recheck_permission_context_sources_inner(
     context: &Value, verified: Option<&super::native_hook_profile171::VerifiedGuardedHookProfile>,
 ) -> Result<(), String> {
@@ -474,20 +499,9 @@ fn recheck_permission_context_sources_inner(
     {
         return Err(changed());
     }
-    for (path, expected) in [
-        ("cli_path", "cli_revision"),
-        ("resolved_cli_path", "resolved_cli_revision"),
-    ] {
-        if permission_source_revision(
-            Path::new(context[path].as_str().ok_or_else(changed)?),
-            512 * 1024 * 1024,
-        )
-        .map_err(|_| changed())?
-            != context[expected]
-        {
-            return Err(changed());
-        }
-    }
+    recheck_cli_revisions(context, |path| {
+        permission_source_revision(path, 512 * 1024 * 1024)
+    })?;
     let sources = context["permission_sources"]
         .as_array()
         .filter(|s| s.len() <= if attestation_version == 2 { 128 } else { 32 })
@@ -1053,4 +1067,53 @@ pub fn validate_permission_source_equivalence(context: &Value) -> Result<(), Str
         return Err(fail());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod executable_revision183_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn native183_cli_unique_lu_une_fois_par_controle_et_attentes_distinctes() {
+        let mut context = serde_json::json!({
+            "cli_path":"/cli", "cli_revision":"revision-a",
+            "resolved_cli_path":"/cli", "resolved_cli_revision":"revision-a"
+        });
+        let mut reads = 0;
+        recheck_cli_revisions(&context, |path| {
+            assert_eq!(path, Path::new("/cli"));
+            reads += 1;
+            Ok("revision-a".into())
+        }).unwrap();
+        assert_eq!(reads, 1);
+        context["resolved_cli_revision"] = Value::from("revision-b");
+        assert_eq!(recheck_cli_revisions(&context, |_| Ok("revision-a".into())),
+            Err("settings_revision_changed".into()));
+        context["resolved_cli_path"] = Value::from("/wrapper-target");
+        let mut paths = Vec::new();
+        recheck_cli_revisions(&context, |path| {
+            paths.push(path.to_path_buf());
+            Ok(if path == Path::new("/cli") { "revision-a" } else { "revision-b" }.into())
+        }).unwrap();
+        assert_eq!(paths, [Path::new("/cli"), Path::new("/wrapper-target")]);
+    }
+
+    #[test]
+    fn native183_cli_modifie_entre_deux_controles_reste_refuse() {
+        let path = std::env::temp_dir().join(format!("bridget-cli183-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"original").unwrap();
+        let revision = permission_source_revision(&path, 512).unwrap();
+        let context = serde_json::json!({
+            "cli_path":path, "cli_revision":revision,
+            "resolved_cli_path":path, "resolved_cli_revision":revision
+        });
+        recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)).unwrap();
+        std::fs::write(&path, b"modified").unwrap();
+        assert_eq!(recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
+            Err("settings_revision_changed".into()));
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
+            Err("settings_revision_changed".into()));
+    }
 }

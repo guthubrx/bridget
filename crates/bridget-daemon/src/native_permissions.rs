@@ -1490,7 +1490,14 @@ fn capture_context_with_env_impl(
         return Err(unavailable());
     }
     let has_hooks = sources.iter().any(|source| source["kind"] == "hook");
-    let mut context = json!({"attestation_version":2,"cli_path":launcher,"cli_revision":launcher_revision,"resolved_cli_path":cli,"resolved_cli_revision":executable_revision(&cli)?,"config_dir":config,"settings_sources":selected,"permission_sources":sources});
+    // Une seule capture peut désigner deux fois le même fichier. Aucune
+    // révision n'est conservée pour la capture ou la revalidation suivante.
+    let cli_revision = if cli == launcher {
+        launcher_revision.clone()
+    } else {
+        executable_revision(&cli)?
+    };
+    let mut context = json!({"attestation_version":2,"cli_path":launcher,"cli_revision":launcher_revision,"resolved_cli_path":cli,"resolved_cli_revision":cli_revision,"config_dir":config,"settings_sources":selected,"permission_sources":sources});
     if has_hooks {
         context["hook_execution"] = json!("native_same_host");
         if let Ok(manifest) = source_equivalence_manifest(&context, &project) {
