@@ -1707,6 +1707,28 @@ fn routing_lightweight_options(
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    static ROUTING_ADMISSION_BEFORE_CLOSE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Exclusion O(1) moyenne, limitée au parcours choisi. Le Drop ne prend pas
+/// le mutex métier et libère aussi la clé après erreur ou déroulement de pile.
+struct RoutingAdmissionClaim {
+    active: Arc<Mutex<HashSet<(String, String)>>>,
+    key: (String, String),
+}
+
+impl Drop for RoutingAdmissionClaim {
+    fn drop(&mut self) {
+        self.active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.key);
+    }
+}
+
 fn route_selected_admission(
     conn: &str,
     request: &AutoDelegateV2,
@@ -1718,83 +1740,130 @@ fn route_selected_admission(
     permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<Value, String> {
-    let snapshot: RoutingAdmissionSnapshot =
-        serde_json::from_slice(&receipt.metadata).map_err(|_| "auto_admission_invalid")?;
-    let decision = snapshot.decision.ok_or("auto_admission_invalid")?;
-    let index = routing_choice_index(plan, &decision.candidate_id)?;
-    let candidate = &plan.candidates[index];
-    validate_routing_parent_source(conn, request, attested, state)?;
-    let (host, recovering) = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        (
-            st.host.clone(),
-            st.coordinator_epoch != receipt.coordinator_epoch,
-        )
+    let _claim = {
+        let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
+        let current = st
+            .delegation_store
+            .auto_admission_receipt(&receipt.owner, &receipt.request_id)?
+            .ok_or("auto_admission_missing")?;
+        if current.canonical != receipt.canonical {
+            return Err("envelope_mismatch".into());
+        }
+        if current.state != AutoAdmissionState::Chosen {
+            return auto_receipt_view(&mut st, &current);
+        }
+        if current.revision != receipt.revision {
+            return Err("admission_pending".into());
+        }
+        let active = Arc::clone(&st.routing_admission_claims);
+        let key = (receipt.owner.clone(), receipt.request_id.clone());
+        if !active
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(key.clone())
+        {
+            return Err("admission_pending".into());
+        }
+        RoutingAdmissionClaim { active, key }
     };
-    let observed = refresh_routing_selected(
-        conn,
-        request,
-        plan,
-        index,
-        decision.effort.as_deref(),
-        attested,
-        state,
-        recovering,
-    )?;
-    let delegate = routing_delegate(request, candidate, decision.effort, &host, observed.project_id.as_deref());
-    if receipt.delegate_canonical.as_deref()
-        != Some(
-            serde_json::to_vec(&delegate)
-                .map_err(|e| e.to_string())?
-                .as_slice(),
-        )
-    {
-        return Err("auto_admission_invalid".into());
-    }
-    match &delegate {
-        NativeDelegationRequest::Delegate {
-            machine_id: Some(_),
-            ..
-        } => delegate_remote_with_routing(
+    let outcome = (|| {
+        let snapshot: RoutingAdmissionSnapshot =
+            serde_json::from_slice(&receipt.metadata).map_err(|_| "auto_admission_invalid")?;
+        let decision = snapshot.decision.ok_or("auto_admission_invalid")?;
+        let index = routing_choice_index(plan, &decision.candidate_id)?;
+        let candidate = &plan.candidates[index];
+        validate_routing_parent_source(conn, request, attested, state)?;
+        let (host, recovering) = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                st.host.clone(),
+                st.coordinator_epoch != receipt.coordinator_epoch,
+            )
+        };
+        let observed = refresh_routing_selected(
             conn,
-            &delegate,
-            project,
+            request,
+            plan,
+            index,
+            decision.effort.as_deref(),
             attested,
-            thread,
-            permission_proof,
-            Some(receipt),
-            Some(&observed),
             state,
-        ),
-        NativeDelegationRequest::Delegate {
-            workspace: Some(WorkspaceRequest::Worktree { .. }),
-            ..
-        } => delegate_worktree(
-            conn,
-            &delegate,
-            project,
-            attested,
-            thread,
-            Some(receipt),
-            state,
-        ),
-        _ => {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            recheck_attested_thread(&st, conn, thread)?;
-            match admit_delegate(
+            recovering,
+        )?;
+        let delegate = routing_delegate(
+            request,
+            candidate,
+            decision.effort,
+            &host,
+            observed.project_id.as_deref(),
+        );
+        if receipt.delegate_canonical.as_deref()
+            != Some(
+                serde_json::to_vec(&delegate)
+                    .map_err(|e| e.to_string())?
+                    .as_slice(),
+            )
+        {
+            return Err("auto_admission_invalid".into());
+        }
+        match &delegate {
+            NativeDelegationRequest::Delegate {
+                machine_id: Some(_),
+                ..
+            } => delegate_remote_with_routing(
                 conn,
                 &delegate,
                 project,
                 attested,
-                &mut st,
-                WorkspacePass::Shared,
+                thread,
+                permission_proof,
                 Some(receipt),
-            )? {
-                WorkspaceAdmission::View(view) => Ok(view),
-                _ => Err("auto_admission_invalid".into()),
+                Some(&observed),
+                state,
+            ),
+            NativeDelegationRequest::Delegate {
+                workspace: Some(WorkspaceRequest::Worktree { .. }),
+                ..
+            } => delegate_worktree(
+                conn,
+                &delegate,
+                project,
+                attested,
+                thread,
+                Some(receipt),
+                state,
+            ),
+            _ => {
+                let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+                recheck_attested_thread(&st, conn, thread)?;
+                match admit_delegate(
+                    conn,
+                    &delegate,
+                    project,
+                    attested,
+                    &mut st,
+                    WorkspacePass::Shared,
+                    Some(receipt),
+                )? {
+                    WorkspaceAdmission::View(view) => Ok(view),
+                    _ => Err("auto_admission_invalid".into()),
+                }
             }
         }
+    })();
+    #[cfg(test)]
+    if outcome.is_err() {
+        ROUTING_ADMISSION_BEFORE_CLOSE.with(|hook| {
+            if let Some(hook) = hook.borrow_mut().take() {
+                hook();
+            }
+        });
     }
+    // La clôture CAS fait partie du même parcours exclusif que Prepare.
+    outcome.or_else(|code| {
+        let st = state.lock().unwrap_or_else(|error| error.into_inner());
+        Err(close_auto_admission_error(&st, receipt, code)?)
+    })
 }
 
 fn choose_routing_admission(
@@ -1967,7 +2036,25 @@ fn admit_auto_routing(
             if receipt.canonical != canonical {
                 return Err("envelope_mismatch".into());
             }
-            return auto_receipt_view(&mut st, &receipt);
+            if receipt.state != AutoAdmissionState::Chosen {
+                return auto_receipt_view(&mut st, &receipt);
+            }
+            // Un rejeu reprend uniquement le choix durable, jamais le décideur.
+            // Le parcours commun exclut les préparations concurrentes et relit
+            // source, droits et cible avant toute matérialisation de tâche.
+            drop(st);
+            let plan = frozen_routing_plan(&receipt)?;
+            return route_selected_admission(
+                conn,
+                request,
+                &plan,
+                &receipt,
+                project,
+                attested,
+                thread,
+                permission_proof,
+                state,
+            );
         }
         // Ce puits rend également les tombstones sans relire la politique.
         if let Some(task) =
@@ -3356,7 +3443,7 @@ fn routing_failure_admission(
     let recovery = match admission {
         "not_recorded" => "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Corrigez la cause indiquée puis rejouez avec la même request_id et les mêmes paramètres. Si les paramètres doivent changer, attendez la fin de tout appel déjà envoyé avec cette clé avant une nouvelle request_id : un appel concurrent peut encore enregistrer une admission. Cette lecture du registre est fournie par Bridget ; inutile de la demander à un autre agent. Ne changez pas expected_base_commit sans autorisation.",
         "envelope_mismatch" => "Cette clé appartient déjà à une demande dont les paramètres sont différents. Le nouveau corps n'est pas admis. Reprenez la clé avec ses paramètres d'origine pour lire le sort de cette demande ; ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
-        "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Conservez request_id et tous les paramètres pour relire son sort. Ne créez pas de nouvelle demande.",
+        "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Après correction de la cause, rejouez avec la même request_id et tous les paramètres d’origine. Si le choix est déjà enregistré et aucune préparation de cette demande ne tourne, Bridget reprend ce choix après revalidation ; sinon l’admission reste en attente. Ne créez pas de nouvelle demande.",
         "admitted" => "Une tâche existe pour cette clé. Suivez le task_id indiqué avec bridget_task_status ; ne créez pas de doublon.",
         "refused" => "Un refus durable sans tâche est enregistré pour cette clé. Un rejeu identique relit ce refus sans le rouvrir. Après correction autorisée, utilisez une nouvelle request_id.",
         "expired" => "Cette clé a expiré ; son ancien résultat n'est plus disponible. Ne réutilisez pas cette clé et ne déduisez pas qu'aucun travail n'a eu lieu.",
@@ -14956,6 +15043,309 @@ for frame in frames: print(json.dumps(frame),flush=True)
         );
         drop(state);
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec183_rejeu_chosen_meme_epoque_reprend_sans_nouveau_choix() {
+        let (state, config, _rx, _reader, request, _root) = routing168_fixture(2);
+        state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .test_connection()
+            .execute_batch(
+                "CREATE TRIGGER abort168 BEFORE INSERT ON native_delegations
+             BEGIN SELECT RAISE(ABORT,'sql168_injected'); END;",
+            )
+            .unwrap();
+        assert!(
+            admit_auto_routing("conn-1", &request, None, None, None, None, &state)
+                .unwrap_err()
+                .contains("sql168_injected")
+        );
+        let chosen = routing168_receipt(&state, &request);
+        assert_eq!(chosen.state, AutoAdmissionState::Chosen);
+        let reopened = crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+        assert_eq!(reopened.tasks().unwrap().len(), 0);
+        assert_eq!(
+            reopened
+                .auto_admission_receipt(OWNER, &request.request_id)
+                .unwrap()
+                .unwrap(),
+            chosen
+        );
+        drop(reopened);
+        {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .test_connection()
+                .execute_batch("DROP TRIGGER abort168")
+                .unwrap();
+        }
+        let epoch = state.lock().unwrap().coordinator_epoch;
+        let view = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        assert_eq!(state.lock().unwrap().coordinator_epoch, epoch);
+        let settled = routing168_receipt(&state, &request);
+        assert_eq!(settled.candidate_id, chosen.candidate_id);
+        assert_eq!(settled.delegate_canonical, chosen.delegate_canonical);
+        assert_eq!(settled.metadata, chosen.metadata);
+        let replay =
+            admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        assert_eq!(replay["task_id"], view["task_id"]);
+        let mut changed = request.clone();
+        changed.task.push('x');
+        assert_eq!(
+            admit_auto_routing("conn-1", &changed, None, None, None, None, &state),
+            Err("envelope_mismatch".into())
+        );
+        assert_eq!(
+            routing168_receipt(&state, &request).state,
+            AutoAdmissionState::Admitted
+        );
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .tasks()
+                .unwrap()
+                .len(),
+            1
+        );
+        drop(state);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec183_rejeu_chosen_concurrent_exclut_prepare_et_ne_duplique_pas() {
+        let (state, config, _rx, _reader, request, _root) = routing168_fixture(2);
+        {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .test_connection()
+                .execute_batch(
+                    "CREATE TRIGGER abort183 BEFORE INSERT ON native_delegations
+                 BEGIN SELECT RAISE(ABORT,'sql183_injected'); END;",
+                )
+                .unwrap();
+        }
+        assert!(
+            admit_auto_routing("conn-1", &request, None, None, None, None, &state)
+                .unwrap_err()
+                .contains("sql183_injected")
+        );
+        let chosen = routing168_receipt(&state, &request);
+        let claims = {
+            let st = state.lock().unwrap();
+            st.delegation_store
+                .test_connection()
+                .execute_batch("DROP TRIGGER abort183")
+                .unwrap();
+            Arc::clone(&st.routing_admission_claims)
+        };
+        assert!(
+            claims.lock().unwrap().is_empty(),
+            "échec technique : permis libéré"
+        );
+        let key = (OWNER.to_owned(), request.request_id.clone());
+        claims.lock().unwrap().insert(key.clone());
+        assert_eq!(
+            admit_auto_routing("conn-1", &request, None, None, None, None, &state),
+            Err("admission_pending".into())
+        );
+        assert_eq!(routing168_receipt(&state, &request), chosen);
+        assert!(state
+            .lock()
+            .unwrap()
+            .delegation_store
+            .tasks()
+            .unwrap()
+            .is_empty());
+        claims.lock().unwrap().remove(&key);
+        // Une clé identique d'un autre propriétaire ne bloque pas cette demande.
+        let other = ("autre-proprietaire".to_owned(), request.request_id.clone());
+        claims.lock().unwrap().insert(other.clone());
+        let barrier = std::sync::Barrier::new(4);
+        let results = std::thread::scope(|scope| {
+            let handles = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        admit_auto_routing("conn-1", &request, None, None, None, None, &state)
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let admitted = routing168_receipt(&state, &request);
+        assert_eq!(admitted.state, AutoAdmissionState::Admitted);
+        assert_eq!(admitted.candidate_id, chosen.candidate_id);
+        assert_eq!(
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .tasks()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(results.iter().any(Result::is_ok));
+        for result in results {
+            match result {
+                Ok(view) => assert_eq!(view["task_id"].as_str(), admitted.task_id.as_deref()),
+                Err(code) => assert_eq!(code, "admission_pending"),
+            }
+        }
+        assert_eq!(*claims.lock().unwrap(), HashSet::from([other]));
+        drop(state);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec183_rejeu_chosen_relit_source_et_revocation_avant_admission() {
+        for changed_source in [true, false] {
+            let (state, config, rx, _reader, mut request, _root) = routing168_fixture(1);
+            let git = |args: &[&str]| {
+                let output = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&request.cwd)
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{output:?}");
+                String::from_utf8(output.stdout).unwrap().trim().to_owned()
+            };
+            git(&["init", "--quiet", "--initial-branch=main"]);
+            let commit = || {
+                git(&[
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "--allow-empty",
+                    "-m",
+                    "Fixture",
+                ])
+            };
+            commit();
+            request.expected_base_commit = Some(git(&["rev-parse", "HEAD"]));
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .test_connection()
+                .execute_batch(
+                    "CREATE TRIGGER abort183 BEFORE INSERT ON native_delegations
+                 BEGIN SELECT RAISE(ABORT,'sql183_injected'); END;",
+                )
+                .unwrap();
+            assert!(
+                admit_auto_routing("conn-1", &request, None, None, None, None, &state)
+                    .unwrap_err()
+                    .contains("sql183_injected")
+            );
+            assert_eq!(
+                routing168_receipt(&state, &request).state,
+                AutoAdmissionState::Chosen
+            );
+            state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .test_connection()
+                .execute_batch("DROP TRIGGER abort183")
+                .unwrap();
+            let expected = if changed_source {
+                commit();
+                "expected_base_commit_mismatch"
+            } else {
+                state
+                    .lock()
+                    .unwrap()
+                    .delegation_store
+                    .grant(
+                        "instance-1",
+                        Path::new(&request.cwd),
+                        SpawnPosture::Discovery,
+                        true,
+                    )
+                    .unwrap();
+                "delegation_grant_required"
+            };
+            let outcome = if changed_source {
+                let (entered_tx, entered_rx) = mpsc::channel();
+                let (release_tx, release_rx) = mpsc::channel();
+                let shared = Arc::clone(&state);
+                let original = request.clone();
+                let first = std::thread::spawn(move || {
+                    ROUTING_ADMISSION_BEFORE_CLOSE.with(|hook| {
+                        *hook.borrow_mut() = Some(Box::new(move || {
+                            entered_tx.send(()).unwrap();
+                            release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                        }));
+                    });
+                    admit_auto_routing("conn-1", &original, None, None, None, None, &shared)
+                });
+                entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                // Rétablir la base dans le dépôt temporaire pendant la fenêtre
+                // entre erreur et clôture : le second appel doit rester exclu.
+                git(&[
+                    "update-ref",
+                    "refs/heads/main",
+                    request.expected_base_commit.as_deref().unwrap(),
+                ]);
+                let competing =
+                    admit_auto_routing("conn-1", &request, None, None, None, None, &state);
+                release_tx.send(()).unwrap();
+                let first = first.join().unwrap();
+                assert_eq!(competing, Err("admission_pending".into()));
+                first
+            } else {
+                admit_auto_routing("conn-1", &request, None, None, None, None, &state)
+            };
+            assert_eq!(outcome, Err(expected.into()));
+            let refused = routing168_receipt(&state, &request);
+            assert_eq!(
+                refused.state,
+                if changed_source {
+                    AutoAdmissionState::Refused
+                } else {
+                    AutoAdmissionState::Chosen
+                }
+            );
+            assert_eq!(
+                refused.refusal_code.as_deref(),
+                changed_source.then_some(expected)
+            );
+            assert!(refused.task_id.is_none());
+            assert!(state
+                .lock()
+                .unwrap()
+                .delegation_store
+                .tasks()
+                .unwrap()
+                .is_empty());
+            assert!(rx.try_recv().is_err(), "aucun départ de fournisseur");
+            assert!(state
+                .lock()
+                .unwrap()
+                .routing_admission_claims
+                .lock()
+                .unwrap()
+                .is_empty());
+            assert_eq!(
+                admit_auto_routing("conn-1", &request, None, None, None, None, &state),
+                Err(expected.into())
+            );
+            drop(state);
+            cleanup(&config);
+        }
     }
 
     #[test]

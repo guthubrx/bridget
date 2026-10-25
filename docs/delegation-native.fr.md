@@ -1522,3 +1522,5 @@ Les refus d’admission automatique V2 contiennent `detail.admission` lorsque la
 - `unknown` : l’identité, le stockage ou l’ancien enregistrement ne permet pas d’établir le sort. Conserver la clé et les paramètres ; ne pas conclure à une absence.
 
 Cette observation ne couvre pas un appel concurrent envoyé ensuite. Une coupure avant réponse du daemon ou un refus précoce d’attestation peut ne pas fournir ce champ ; son absence ne prouve pas l’absence de travail. Aucun rejeu, aucune annulation et aucun changement de droits automatique n’est ajouté.
+
+Un rejeu explicite V2 peut reprendre une admission `chosen` interrompue après sa décision, dans la même époque du coordinateur. Il conserve l'enveloppe et le choix enregistrés, puis relit la source Git, les droits et la cible. Une préparation déjà en cours pour le même propriétaire et la même clé rend `admission_pending`. Les états `pending` et `decision_started` ne déclenchent pas de nouvelle décision au rejeu. Une tâche déjà admise et un refus durable restent inchangés. La garde de maintenance reste fermée tant que l'admission n'est pas soldée.

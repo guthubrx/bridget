@@ -1071,6 +1071,8 @@ struct DaemonState {
     /// daemon portent la même valeur. Elle ne dépend donc jamais de l'instant
     /// d'admission et permet à l'entretien de ne reprendre qu'après restart.
     coordinator_epoch: i64,
+    /// Préparations V2 en cours, indexées par propriétaire et clé. État volatile.
+    routing_admission_claims: Arc<Mutex<HashSet<(String, String)>>>,
     router: Router,
     circuit_breaker: CircuitBreaker,
     execution_store: ExecutionStore,
@@ -5019,6 +5021,7 @@ impl DaemonState {
             artifact_root,
             instance_id: instance_uuid.to_string(),
             coordinator_epoch,
+            routing_admission_claims: Arc::default(),
             router: Router::new(),
             circuit_breaker: CircuitBreaker::new(
                 config.circuit_breaker_window,

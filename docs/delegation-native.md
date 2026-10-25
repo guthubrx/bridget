@@ -731,3 +731,5 @@ Automatic V2 admission refusals include `detail.admission` when the request reac
 - `unknown`: identity, storage, or the legacy record could not establish the outcome. Preserve the key and parameters; do not infer absence.
 
 The observation does not cover a concurrent call submitted later. Transport failures before a daemon response and early attestation failures may have no `admission` field; absence of this field is not proof of absence of work. No automatic retry, cancellation, or permission change is introduced.
+
+An explicit V2 replay can resume a `chosen` admission interrupted after its decision, within the same coordinator epoch. It preserves the recorded envelope and choice, then rechecks the Git source, permissions and target. An ongoing preparation for the same owner and key returns `admission_pending`. Replaying `pending` or `decision_started` does not start a new decision. An admitted task and a durable refusal remain unchanged. Maintenance remains blocked until the admission is settled.

@@ -11,3 +11,7 @@
 - [x] Corriger les lectures doubles du CLI, tester et obtenir une contre-revue.
 - [ ] Réconcilier la clé KS-STOR avant toute nouvelle qualification.
 - [ ] Confirmer le rétablissement MCP depuis le fil Monuments.
+
+- [x] Reproduire le reçu choisi bloqué et permettre son rejeu dans la même époque.
+- [x] Vérifier l'exclusion concurrente, l'enveloppe et les droits relus ; obtenir une contre-revue.
+- [ ] Intégrer la correction et consigner séparément son activation et la réconciliation réelle.
