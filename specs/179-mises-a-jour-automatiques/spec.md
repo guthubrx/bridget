@@ -1,5 +1,5 @@
 # 179 — Mises à jour automatiques
-Statut : In Progress. Demande validée le 25 octobre 2026.
+Statut : Implemented — livré avec conservations justifiées. Demande validée le 25 octobre 2026.
 ## Demande et résultat
 L'utilisateur veut les mises à jour automatiques activées par défaut, y compris pour son installation, et désactivables dans les paramètres. Périmètre confirmé : Android et Bridget sur Mac/Cartae. Réalisation immédiate, sans passage par une boîte à idées. Les limites de la livraison précédente liées aux versions, à l'activation, aux clients anciens et au nettoyage sont traitées ici.
 Le résultat attendu est une installation qui trouve une version publiée plus récente, la prépare, l'active au moment sûr et explique toute attente. Une version téléchargée n'est pas présentée comme active.

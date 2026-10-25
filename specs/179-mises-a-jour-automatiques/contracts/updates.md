@@ -6,7 +6,7 @@ Authenticated mobile endpoints:
 - POST /v1/updates/check with {}
 - POST /v1/updates/install with the closed object {"version": "X.Y.Z"}
 
-All require an unrevoked device, UpdatesManage and federation-wide scope. Responses expose policy, host observations, check generation, exact manual target and core version. Unknown fields do not add authority. The exact target cannot select another newer release. Turning automatic mode off clears it.
+All require an unrevoked device, an update-management grant and federation-wide scope. Responses expose policy, host observations, check generation, exact manual target and core version. Unknown fields do not add authority. The exact target cannot select another newer release. Turning automatic mode off clears it.
 
 Local administration extends MobileAdministrationRequest with Updates and GrantUpdates, using the existing same-UID, non-agent negotiated role. Prepare/Finish carry one UUID token. Report carries a bounded host name, strict installed/available versions and a closed stage enum. Prepare reads activity under State and takes the gate while that observation remains protected. Policy files are private, bounded and atomically replaced.
 
@@ -14,4 +14,4 @@ DaemonToWrapper::UpdateInProgress means the ordinary request was not dispatched 
 
 Host state files and lease files are local private implementation state, not an authority offered to the phone. No automatic task replay, task cancellation, data migration or project cleanup is part of this contract.
 
-The UpdatesManage grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.
+The update-management grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.

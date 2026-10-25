@@ -25,7 +25,7 @@ A per-host file lock permits one updater. Metadata is checked every six hours an
 
 The updater atomically switches the executable link, restarts only configured Bridget services, and verifies their loaded executable and the core version. A failed activation restores the prior link and checks the services again. A lost reply after the final release of the barrier never triggers a late rollback. Interrupted activation is reconciled before a further attempt. Recovery also requires the barrier; it never restarts services underneath new work.
 
-Services and data use the existing OS account. The phone needs the explicit UpdatesManage scope and federation-wide access. Agent connections cannot use the mobile administrative role. The installation administrator grants this scope with bridget updates grant DEVICE in a terminal. The ordinary device scope is preserved.
+Services and data use the existing OS account. The phone needs the explicit update-management grant and federation-wide access. Agent connections cannot use the mobile administrative role. The installation administrator grants this permission with bridget updates grant DEVICE in a terminal. The ordinary device scope is preserved.
 
 Commands:
 - bridget updates status: policy and dated host states;
@@ -45,4 +45,4 @@ Only update-owned version directories are removed automatically, after a complet
 
 The first rollout must install the update-capable binary and configure the watchers through the normal controlled deployment. The updater does not grant itself an exception to bootstrap an old daemon. See the session 179 delivery receipt for actual installed/active versions and any deferred component.
 
-The UpdatesManage grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.
+The update-management grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.

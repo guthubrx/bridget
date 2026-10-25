@@ -1,6 +1,6 @@
-# Plan179
+# Plan 179
 ## Contexte
-Rust/SQLite, services systemd/launchd, Kotlin/Compose, APK signé distribué directement. Un responsable, pas de sous-agent : délégation bloquée par la politique de ce tour. Travail dans le worktree179 Cartae ; Mac pour compilation/installation et Pixel.
+Rust/SQLite, services systemd/launchd, Kotlin/Compose, APK signé distribué directement. Un responsable, pas de sous-agent : délégation bloquée par la politique de ce tour. Travail dans le worktree 179 Cartae ; Mac pour compilation/installation et Pixel.
 ## Mise en œuvre
 1. Étendre MobileRelease pour publier/lire une empreinte et vérifier un APK. Ajouter un contrôleur de mise à jour Android : préférence, tâche périodique, téléchargement borné, session PackageInstaller, état et reprise explicite. Réutiliser LocalStore pour les préférences/données persistées et Paramètres pour l'interface.
 2. Ajouter un gestionnaire natif updates dans le binaire : publication, préparation atomique, configuration locale des services, exclusion d'activation, état et retour. Le gestionnaire périodique tourne comme service utilisateur et ne dépend d'aucun agent.
@@ -13,3 +13,6 @@ Tests ciblés avant intégration ; vrais dépôts/HTTP/sockets/PackageInstaller 
 Aucune dépense fournisseur. Aucun nouveau framework, aucune modification d'identité Git. Commandes Cargo via build.py. Nouveaux modules justifiés par responsabilités absentes, pas de doublon installateur/nettoyeur. Les archives sont bornées ; les scans de tâches/versions sont linéaires et limités au passage.
 ## Livraison
 Commit conventionnel, intégration sur main à jour, push vérifié, activation sûre, retrait des branches/worktree propres de ce lot après conservation des preuves. Toute attente d'un composant est publiée avec motif et reprise automatique, sans maquiller l'activation.
+
+## Clôture
+Version 0.6.0 livrée le 25 octobre 2026. Paramètres automatiques actifs sur les trois plateformes. Les limites et conservations observées sont consignées dans le reçu ; aucun statut de tâche ni ancien client MCP n’est maquillé.

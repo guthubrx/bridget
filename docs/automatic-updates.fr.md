@@ -24,7 +24,7 @@ Avant de remplacer un service, il demande une fenêtre exclusive au daemon. Une 
 
 Après bascule, le programme vérifie les services et l'exécutable réellement chargé. En cas d'échec, il restaure la version précédente puis vérifie le retour. Une coupure de réponse après libération de la fenêtre ne déclenche pas de retour arrière tardif.
 
-L'appareil Android doit recevoir la capacité UpdatesManage depuis l'administration humaine. Cette capacité n'est pas ajoutée aux agents ni automatiquement aux autres appareils. Les paramètres de mise à jour ne permettent pas d'envoyer une URL, un chemin ou une commande arbitraire.
+L'appareil Android doit recevoir le droit de gérer les mises à jour depuis l'administration humaine. Cette capacité n'est pas ajoutée aux agents ni automatiquement aux autres appareils. Les paramètres de mise à jour ne permettent pas d'envoyer une URL, un chemin ou une commande arbitraire.
 
 Le fichier privé BRIDGET_HOME/update-host.json contient seulement host et services. Les rôles sont core/mobile/worker sur Linux, t3 sur macOS. Le rôle worker vise bridget-worker-cartae.service. Les services supervisés doivent utiliser ~/.local/bin/bridget. Python 3.9 ou supérieur est requis.
 

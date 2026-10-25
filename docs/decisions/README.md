@@ -75,3 +75,5 @@ Dated design decisions, mainly in French. They record context and trade-offs, no
 - [167-coordination-cli-autonome.md](167-coordination-cli-autonome.md)
 - [169-priorite-bridget.md](169-priorite-bridget.md)
 - [170-minreq-3-et-serde-saphyr.md](170-minreq-3-et-serde-saphyr.md)
+
+- [179-mises-a-jour-automatiques.md](179-mises-a-jour-automatiques.md)
