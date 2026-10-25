@@ -159,6 +159,7 @@ impl ToolCallGuard {
     fn new(id: String, registry: Arc<Mutex<ToolCallRegistry>>) -> Self {
         let context = ToolCallContext { id, registry };
         TOOL_CALL_CONTEXT.with(|slot| *slot.borrow_mut() = Some(context.clone()));
+        USER_INPUT_RECEIPT.with(|slot| {slot.borrow_mut().take();});
         Self {
             context,
             finished: false,
@@ -332,7 +333,9 @@ where
                         .and_then(|params| params.get("name"))
                         .and_then(Value::as_str),
                     Some("bridget_task_wait" | "bridget_request_wait")
-                );
+                ) || (request["params"]["name"]=="bridget_ask_user"
+                    && matches!(request["params"]["arguments"]["action"].as_str(),None|Some("create"|"wait"))
+                    && request["params"]["arguments"]["wait_timeout"].as_u64()!=Some(0));
                 let reservation = registry
                     .lock()
                     .unwrap_or_else(|error| error.into_inner())
@@ -370,7 +373,8 @@ where
                     );
                     let cancelled_call = call.finish();
                     if !cancelled_call && let Some(response) = response {
-                        let _ = write_shared_response(&output, &response);
+                        if write_shared_response(&output, &response).is_ok() { acknowledge_user_input_receipt(); }
+                        else { USER_INPUT_RECEIPT.with(|s| {s.borrow_mut().take();}); }
                     }
                 });
                 continue;
@@ -628,7 +632,7 @@ fn execute_tool_at_with_identity(
         .ok_or_else(|| ToolError::InvalidParams("outil inconnu".into()))?;
     // Contrat156 : une preuve enfant est refusée avant toute connexion.
     // execute_queue conserve aussi sa garde pour les appels CLI/directs.
-    if name == "bridget_queue" && identity.delegated_origin.is_some() {
+    if matches!(name,"bridget_queue"|"bridget_ask_user") && identity.delegated_origin.is_some() {
         return Err(ToolError::Technical {
             code: "delegated_tool_forbidden",
             message: "une preuve enfant ne peut pas consulter la file".into(),
@@ -764,6 +768,7 @@ fn execute_tool_at_with_identity(
             &Value::Object(arguments.clone()),
             socket,
         ),
+        "bridget_ask_user" => execute_ask_user(identity, arguments, socket),
         "bridget_request_wait" => execute_request_wait(identity, arguments, socket),
         "bridget_send" => execute_send(identity, arguments, socket),
         "bridget_queue" => execute_queue(
@@ -2523,6 +2528,8 @@ pub(crate) fn tools() -> Vec<Value> {
         "limitations":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}}
     },"required":["objective","summary"],"additionalProperties":false});
     let mut catalogue = vec![
+        json!({"name":"bridget_ask_user","description":"Pose une question humaine native Bridget, utilisable en terminal et sur Android sans T3. Préserver le texte du modèle. Préparer request_id UUID et rejouer le même contenu après coupure. create attend la réponse (3600s par défaut), wait reprend l’attente sans republier. Texte libre et complément sont renvoyés sans interprétation. status lit, cancel ferme. acknowledge confirme la réception de la réponse submitted si le client ne la confirme pas automatiquement.","inputSchema":{"type":"object","properties":{"action":{"enum":["create","status","wait","cancel","acknowledge"],"default":"create"},"request_id":{"type":"string","format":"uuid"},"questions":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":4096},"header":{"type":"string","minLength":1,"maxLength":1024},"question":{"type":"string","minLength":1,"maxLength":16384},"options":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"label":{"type":"string","minLength":1,"maxLength":4096},"description":{"type":"string","maxLength":8192},"value":{"type":"string","minLength":1,"maxLength":4096}},"required":["label"],"additionalProperties":false}},"multiSelect":{"type":"boolean","default":false},"allowCustomAnswer":{"type":"boolean","default":true}},"required":["id","header","question","options"],"additionalProperties":false}},"wait_timeout":{"type":"integer","minimum":0,"maximum":3600,"default":3600},"command_id":{"type":"string","format":"uuid"}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
+
         json!({"name":"bridget_request_wait","description":"Attend la réponse de sa demande suivie sans la renvoyer ni modifier son état. Si l'hôte coupe l'appel, reprendre avec le même request_id. La réponse peut aussi arriver par le message normal.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1},"wait_timeout":{"type":"integer","minimum":1,"maximum":crate::delegation_mcp::WAIT_TIMEOUT_MAX_SECS,"default":crate::delegation_mcp::WAIT_TIMEOUT_DEFAULT_SECS}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({
             "name": "bridget_read_artifact",
@@ -9035,5 +9042,59 @@ mod spec172_wait_probe_tests {
             ),
             "une panne de transport ne prouve pas l'absence de capacité"
         );
+    }
+}
+
+#[derive(Clone)]
+struct UserInputReceipt { identity:crate::mcp_identity::ResolvedIdentity, socket:std::path::PathBuf, request_id:String, command_id:String }
+thread_local! { static USER_INPUT_RECEIPT:RefCell<Option<UserInputReceipt>>=const{RefCell::new(None)}; }
+fn acknowledge_user_input_receipt() {
+    let pending=USER_INPUT_RECEIPT.with(|s|s.borrow_mut().take());
+    if let Some(p)=pending {
+        let _=crate::communication::client::user_input_request(&p.socket,Some((&p.identity.name,&p.identity.instance_id)),json!({"action":"ack","request_id":p.request_id,"command_id":p.command_id,"applied":true}));
+    }
+}
+fn execute_ask_user(identity:&crate::mcp_identity::ResolvedIdentity,args:&serde_json::Map<String,Value>,socket:&Path)->Result<Value,ToolError> {
+    let action=match args.get("action"){None=>"create",Some(Value::String(s))=>s.as_str(),_=>return Err(ToolError::InvalidParams("action de question invalide".into()))};
+    let allowed=match action {
+        "create"=>vec!["action","request_id","questions","wait_timeout"],"wait"=>vec!["action","request_id","wait_timeout"],
+        "status"|"cancel"=>vec!["action","request_id"],"acknowledge"=>vec!["action","request_id","command_id"],
+        _=>return Err(ToolError::InvalidParams("action de question invalide".into()))};
+    reject_unknown_arguments(args,&allowed)?;
+    let id=required_non_empty_string(args,"request_id")?;
+    let timeout=match args.get("wait_timeout"){None=>3600,Some(v)=>v.as_u64().filter(|n|*n<=3600).ok_or_else(||ToolError::InvalidParams("wait_timeout attendu de0à3600".into()))?};
+    if action=="wait" && timeout==0 {return Err(ToolError::InvalidParams("wait_timeout doit être positif pour wait".into()));}
+    if action=="create" {crate::user_input::validate_questions(args.get("questions").unwrap_or(&Value::Null)).map_err(ToolError::InvalidParams)?;}
+    let mut request=Value::Object(args.clone());request["action"]=json!(action);request.as_object_mut().unwrap().remove("wait_timeout");
+    if action=="wait" {request["wait_timeout"]=json!(timeout);}
+    if action=="acknowledge"{request["action"]=json!("ack");request["applied"]=json!(true);}
+    let mut result=crate::communication::client::user_input_request(socket,Some((&identity.name,&identity.instance_id)),request)?;
+    if action=="create" && result["status"]=="ok" && result["item"]["state"]=="pending" && timeout>0 {
+        result=crate::communication::client::user_input_request(socket,Some((&identity.name,&identity.instance_id)),json!({"action":"wait","request_id":id,"wait_timeout":timeout}))?;
+    }
+    if result["status"]=="ok" && result["item"]["state"]=="submitted" && TOOL_CALL_CONTEXT.with(|s|s.borrow().is_some()) {
+        if let Some(command)=result["item"]["command_id"].as_str() {
+            USER_INPUT_RECEIPT.with(|s|*s.borrow_mut()=Some(UserInputReceipt{identity:identity.clone(),socket:socket.to_owned(),request_id:id,command_id:command.into()}));
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod user_input181_mcp_tests {
+    use super::*;
+    #[test]
+    fn user_input181_catalogue_has_no_human_response_action() {
+        let t=tools().into_iter().find(|t|t["name"]=="bridget_ask_user").unwrap();
+        let actions=t["inputSchema"]["properties"]["action"]["enum"].as_array().unwrap();
+        assert!(!actions.iter().any(|v|v=="respond"));assert!(actions.iter().any(|v|v=="acknowledge"));
+        assert_eq!(crate::mcp_scopes::scope_of("bridget_ask_user",&serde_json::from_value(json!({"action":"wait"})).unwrap()),Some(crate::mcp_scopes::Scope::Reads));
+    }
+    #[test]
+    fn user_input181_malformed_actions_fail_before_connecting() {
+        let identity=crate::mcp_identity::ResolvedIdentity{name:"agent".into(),instance_id:"instance".into(),delegated_origin:None};
+        for args in [json!({"action":true,"request_id":uuid::Uuid::new_v4().to_string()}),json!({"action":"respond","request_id":uuid::Uuid::new_v4().to_string()}),json!({"action":"wait","request_id":uuid::Uuid::new_v4().to_string(),"wait_timeout":0})] {
+            assert!(matches!(execute_ask_user(&identity,args.as_object().unwrap(),Path::new("/missing181.sock")),Err(ToolError::InvalidParams(_))));
+        }
     }
 }

@@ -14,7 +14,7 @@ use crate::managed_session::{
     ManagedProviderIdentity, ManagedSession, ManagedSessionDescriptor, ManagedTerminal,
     stop_owned_child,
 };
-use crate::protocol::{PresenceMode, ProviderObservation};
+use crate::protocol::{PresenceMode, ProviderObservation, ChildProviderRequest, ChildProviderRequestId, ChildRequestAnswer, ChildRequestDecision, ChildRequestKind};
 use crate::transport::{Transport, TransportError};
 use bridget_core::{BridgetMessage, MessageIntent, MessageOrigin};
 use serde::{Deserialize, Serialize};
@@ -183,6 +183,7 @@ struct QueueState {
 
 pub struct ClaudeStreamJsonTransport {
     permission_observation: Arc<Mutex<Option<(String, Value, u64, Option<String>)>>>,
+    user_inputs: Arc<Mutex<Vec<(ChildProviderRequest, bool)>>>,
     connection_id: String,
     alive: Arc<AtomicBool>,
     shutdown_started: AtomicBool,
@@ -268,6 +269,7 @@ impl ClaudeStreamJsonTransport {
             child: child.clone(),
         });
         let permission_observation = Arc::new(Mutex::new(None));
+        let user_inputs = Arc::new(Mutex::new(Vec::new()));
         let reader_handle = spawn_reader(
             spawned.stdout,
             Vec::new(),
@@ -282,6 +284,7 @@ impl ClaudeStreamJsonTransport {
             writer.clone(),
             permission_observation.clone(),
             options.args.clone(),
+            user_inputs.clone(),
         );
         let worker_handle = spawn_worker(
             queue.clone(),
@@ -312,6 +315,7 @@ impl ClaudeStreamJsonTransport {
         );
         Ok(Self {
             permission_observation,
+            user_inputs,
             connection_id: format!("claude-stream-json-{pid}"),
             alive,
             shutdown_started: AtomicBool::new(false),
@@ -463,6 +467,26 @@ impl Transport for ClaudeStreamJsonTransport {
 }
 
 impl ManagedSession for ClaudeStreamJsonTransport {
+    fn answer_provider_request(&mut self, answer: &ChildRequestAnswer) -> Result<(), TransportError> {
+        if !self.alive.load(Ordering::SeqCst) { return Err(TransportError::AgentDead); }
+        let mut pending = self.user_inputs.lock().unwrap_or_else(|e| e.into_inner());
+        let index = pending.iter().position(|(r,_)|r.provider_session == answer.provider_session && r.turn_id == answer.turn_id && r.provider_request_id == answer.provider_request_id)
+            .ok_or_else(||TransportError::DeliveryFailed("request_unknown".into()))?;
+        let (request, uncertain) = &pending[index];
+        if *uncertain { return Err(TransportError::Io("child_request_write_uncertain: attente déjà incertaine".into())); }
+        if !self.queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().is_some_and(|a| a.message_id == request.turn_id) {
+            return Err(TransportError::DeliveryFailed("request_unlinked".into()));
+        }
+        let frame = claude_user_input_response(request, answer)?;
+        pending[index].1 = true;
+        let result = (|| -> std::io::Result<()> {
+            let mut writer = self.writer.lock().map_err(|_|std::io::Error::other("writer poisoned"))?;
+            let stdin = writer.as_mut().ok_or_else(||std::io::Error::other("writer closed"))?;
+            writeln!(stdin, "{frame}")?; stdin.flush()
+        })();
+        result.map_err(|e|TransportError::Io(format!("child_request_write_uncertain: {e}")))?;
+        pending.remove(index); Ok(())
+    }
     fn provider_permissions(&self) -> Option<(String, Value, u64, Option<String>)> {
         self.permission_observation
             .lock()
@@ -1380,6 +1404,47 @@ fn interrupt_terminal_reason(reason: &str) -> bool {
     matches!(reason, "aborted_tools" | "aborted_streaming")
 }
 
+// Même mécanisme que canUseTool de T3 ; seule AskUserQuestion sort du refus des permissions.
+fn claude_user_input(value: &Value, session: &str, turn: &str) -> Option<ChildProviderRequest> {
+    if value.pointer("/request/tool_name")?.as_str()? != "AskUserQuestion" {return None;}
+    let id = value["request_id"].as_str()?;
+    let input = value.pointer("/request/input")?;
+    if serde_json::to_vec(input).ok()?.len() > 16*1024 {return None;}
+    let source = input["questions"].as_array()?;
+    if source.is_empty() || source.len()>16 {return None;}
+    let mut ids = Vec::new(); let mut questions = Vec::new();
+    for q in source {
+        let id = q["question"].as_str()?;
+        if id.is_empty() || ids.iter().any(|v|v==id) {return None;}
+        ids.push(id.to_string());
+        let mut question = q.clone(); question["id"] = json!(id); questions.push(question);
+    }
+    Some(ChildProviderRequest {version:1, provider_session:session.into(), turn_id:turn.into(),
+        provider_request_id:ChildProviderRequestId::String(id.into()), kind:ChildRequestKind::UserInput,
+        details:json!({"method":"AskUserQuestion","input":input,"questions":questions,"secret":false}),
+        offered:vec![ChildRequestDecision::Accept,ChildRequestDecision::Decline,ChildRequestDecision::Cancel], question_ids:ids,truncated:false})
+}
+fn claude_user_input_response(request: &ChildProviderRequest, answer: &ChildRequestAnswer) -> Result<Value,TransportError> {
+    let response = if answer.decision == ChildRequestDecision::Accept {
+        let raw = answer.answer.as_ref().and_then(Value::as_object).ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
+        if raw.len() != request.question_ids.len() || serde_json::to_vec(raw).map_or(true,|v|v.len()>32*1024) {return Err(TransportError::DeliveryFailed("answer_invalid".into()));}
+        let mut mapped = serde_json::Map::new();
+        for id in &request.question_ids {
+            let a = raw.get(id).ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
+            let values = a["selected"].as_array().ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
+            let mut selected = values.iter().map(|v|v.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>().ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
+            let text = a["text"].as_str().ok_or_else(||TransportError::DeliveryFailed("answer_invalid".into()))?;
+            if !text.is_empty() {selected.push(text.into());}
+            if selected.is_empty() {return Err(TransportError::DeliveryFailed("answer_invalid".into()));}
+            mapped.insert(id.clone(),json!(selected.join(", ")));
+        }
+        let mut input = request.details["input"].clone();
+        input["answers"] = Value::Object(mapped);
+        json!({"behavior":"allow","updatedInput":input})
+    } else {json!({"behavior":"deny","message":"user_input_cancelled","interrupt":true})};
+    Ok(json!({"type":"control_response","response":{"subtype":"success","request_id":request.provider_request_id,"response":response}}))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     stdout: ChildStdout,
@@ -1395,6 +1460,7 @@ fn spawn_reader(
     writer: Writer,
     permission_observation: Arc<Mutex<Option<(String, Value, u64, Option<String>)>>>,
     launch_args: Vec<String>,
+    user_inputs: Arc<Mutex<Vec<(ChildProviderRequest, bool)>>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let (stdout, prefetch) = if let Some(bootstrap) = resume_bootstrap {
@@ -1406,6 +1472,7 @@ fn spawn_reader(
             .into_iter()
             .map(Ok)
             .chain(BufReader::new(stdout).lines());
+        let mut provider_session = None;
         let mut pending_writes = std::collections::HashMap::new();
         let observation_cwd = std::env::current_dir().ok();
         let mut permission_requests = std::collections::HashSet::new();
@@ -1486,6 +1553,7 @@ fn spawn_reader(
                 }
             }
             if let Some(session_id) = session_id_from_system_init(&value) {
+                provider_session = Some(session_id.clone());
                 if let Some(store) = session_store
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner())
@@ -1587,6 +1655,19 @@ fn spawn_reader(
                         break;
                     }
                     if permission_requests.insert(request_id.to_owned()) {
+                        let turn = queue.0.lock().unwrap_or_else(|e| e.into_inner()).active.as_ref().map(|a| a.message_id.clone());
+                        if let (Some(session), Some(turn)) = (provider_session.as_deref(), turn.as_deref()) {
+                            if let Some(request) = claude_user_input(&value, session, turn) {
+                                let mut pending = user_inputs.lock().unwrap_or_else(|e| e.into_inner());
+                                pending.retain(|(r,_)|r.turn_id == turn);
+                                if pending.len() < 4 {
+                                    pending.push((request.clone(), false));
+                                    drop(pending);
+                                    push_source(&events, raw, ManagedEventKind::ProviderRequest { request });
+                                    continue;
+                                }
+                            }
+                        }
                         if let Some(active) = queue
                             .0
                             .lock()
@@ -3132,6 +3213,43 @@ sys.stdin.readline()
             "l'agent a été tué au lieu d'être interrompu"
         );
         transport.stop();
+    }
+
+    #[test]
+    fn user_input181_claude_callback_roundtrip_and_permissions() {
+        let request = json!({"type":"control_request","request_id":"ask181","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Quel choix ?","header":"Choix","multiSelect":true,"options":[{"label":"A","description":"Premier"},{"label":"B","description":"Second"}]}]}}});
+        let mut configured = options();
+        configured.args[1] = format!("printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"session181\"}}'; while IFS= read -r line; do printf '%s\\n' '{request}'; IFS= read -r answer; printf '%s\\n' '{{\"type\":\"result\",\"result\":\"answered\",\"terminal_reason\":\"completed\",\"is_error\":false}}'; done");
+        let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+        transport.deliver(&message("ask181-turn")).unwrap();
+        let deadline = Instant::now()+Duration::from_secs(3);
+        let mut callback = None;
+        while Instant::now()<deadline && callback.is_none() {
+            for event in transport.drain_events() {
+                if let ManagedEventKind::ProviderRequest{request}=event.kind {callback=Some(request);}
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let callback = callback.expect("question Claude publiée");
+        assert_eq!(callback.details["questions"][0]["options"][0]["description"],"Premier");
+        let mut answer = ChildRequestAnswer {request_id:"daemon181".into(),provider_session:callback.provider_session.clone(),turn_id:callback.turn_id.clone(),provider_request_id:callback.provider_request_id.clone(),decision:ChildRequestDecision::Accept,answer:Some(json!({"Quel choix ?":{"selected":["A","B"],"text":"avec précision"}})),outcome:"human_user_input".into()};
+        let frame = claude_user_input_response(&callback,&answer).unwrap();
+        assert_eq!(frame["response"]["response"]["updatedInput"]["answers"]["Quel choix ?"],"A, B, avec précision");
+        answer.provider_session="foreign".into();
+        assert!(transport.answer_provider_request(&answer).is_err());
+        answer.provider_session=callback.provider_session.clone();
+        transport.answer_provider_request(&answer).unwrap();
+        assert!(transport.answer_provider_request(&answer).is_err(),"aucune seconde écriture SDK");
+        let mut events=Vec::new();
+        while Instant::now()<deadline {
+            events.extend(transport.drain_events());
+            if events.iter().any(|e|matches!(e.kind,ManagedEventKind::TurnFinished{..})){break;}
+            thread::sleep(Duration::from_millis(10));
+        }
+        transport.stop();
+        assert!(events.iter().any(|e|matches!(e.kind,ManagedEventKind::TurnFinished{terminal:ManagedTerminal::Completed,..})),"{events:?}");
+        let mut unrelated=request.clone(); unrelated["request"]["tool_name"]=json!("Bash");
+        assert!(claude_user_input(&unrelated,"s","t").is_none());
     }
 
     #[test]

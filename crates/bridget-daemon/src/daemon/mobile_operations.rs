@@ -218,6 +218,10 @@ pub(super) fn handle(
     if matches!(
         request.operation,
         MobileOperation::Questions { .. }
+            | MobileOperation::UserInputs { .. }
+            | MobileOperation::UserInputShow { .. }
+            | MobileOperation::UserInputRespond { .. }
+            | MobileOperation::UserInputReceipt { .. }
             | MobileOperation::QuestionShow { .. }
             | MobileOperation::QuestionRespond { .. }
             | MobileOperation::QuestionReceipt { .. }
@@ -274,7 +278,11 @@ pub(super) fn handle(
         | MobileOperation::UpdatesInstall { .. }
         | MobileOperation::UpdatesConfigure { .. }
         | MobileOperation::Questions { .. }
-        | MobileOperation::QuestionShow { .. }
+        | MobileOperation::UserInputs { .. }
+            | MobileOperation::UserInputShow { .. }
+            | MobileOperation::UserInputRespond { .. }
+            | MobileOperation::UserInputReceipt { .. }
+            | MobileOperation::QuestionShow { .. }
         | MobileOperation::QuestionRespond { .. }
         | MobileOperation::QuestionReceipt { .. }
         | MobileOperation::TaskList { .. }
@@ -1056,6 +1064,34 @@ mod tests {
             );
         }
         assert_eq!(f.deliveries(), 0);
+    }
+
+    #[test]
+    fn user_input181_mobile_scope_revision_replay_and_receipt() {
+        let f=Fixture::new();
+        let mut devices=Store::open(&f.root.join("mobile-devices.db")).unwrap();
+        let scope=Scope{all_machines:false,machines:vec!["macbook".into()],all_projects:false,projects:vec![CommunicationProject{host:"macbook".into(),root:"/project/a".into()}],operations:vec![Operation::TaskRead,Operation::TaskRespond]};
+        let pair=devices.issue_pairing(&scope,unix_now_secs()).unwrap();
+        let key=format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple());
+        let device=devices.pair(&pair.credential,&Uuid::new_v4().to_string(),&key,"Questions181",unix_now_secs()).unwrap().device_id;
+        let call=|op|value(handle("phone",MobileOperationRequest{credential:IdentityCredential::new(key.clone()),operation:op},&f.state));
+        let id=Uuid::new_v4().to_string();let command=Uuid::new_v4().to_string();
+        let row={let st=f.state.lock().unwrap();crate::user_input::create(st.store.connection(),&f.agent,"instance-1",Some(&serde_json::to_string(&CommunicationProject{host:"macbook".into(),root:"/project/a".into()}).unwrap()),&id,&serde_json::json!([{"id":"q","header":"Choix","question":"Que faire ?","options":[{"label":"A"},{"label":"B"}]}]),"mcp",&serde_json::Value::Null,unix_now_secs()).unwrap()};
+        let page=call(MobileOperation::UserInputs{after:None,limit:1});
+        assert_eq!(page["items"][0]["request_id"],id,"{page}");
+        assert_eq!(page["items"][0]["can_respond"],true);assert!(page["items"][0].get("callback").is_none());
+        let response=|rev:String,device_id:String|MobileOperation::UserInputRespond{device_id,command_id:command.clone(),request_id:id.clone(),revision:rev,answers:serde_json::json!({"q":{"selected":["A"],"text":"et ce complément"}})};
+        assert_eq!(call(response("wrong".into(),device.clone()))["code"],"question_changed");
+        assert_eq!(call(response(row["revision"].as_str().unwrap().into(),"foreign".into()))["code"],"command_origin_changed");
+        let accepted=call(response(row["revision"].as_str().unwrap().into(),device.clone()));
+        assert_eq!(accepted["item"]["state"],"submitted","{accepted}");assert_eq!(accepted["receipt"]["application"]["confirmed"],false);
+        assert_eq!(accepted,call(response(row["revision"].as_str().unwrap().into(),device.clone())));
+        let receipt=call(MobileOperation::UserInputReceipt{device_id:device.clone(),command_id:command.clone(),request_id:id.clone()});assert_eq!(receipt["item"]["state"],"submitted");
+        {let st=f.state.lock().unwrap();crate::user_input::finish(st.store.connection(),&id,&f.agent,"instance-1",Some(&command),"applied",unix_now_secs()).unwrap();}
+        assert_eq!(call(MobileOperation::UserInputShow{request_id:id.clone()})["item"]["state"],"applied");
+        assert_eq!(value(handle("phone",f.request(MobileOperation::UserInputShow{request_id:id.clone()}),&f.state))["code"],"not_found","device without TaskRead cannot read question");
+        devices.revoke(&device,unix_now_secs()).unwrap();
+        assert_eq!(call(MobileOperation::UserInputShow{request_id:id})["code"],"device_revoked");
     }
 
     #[test]

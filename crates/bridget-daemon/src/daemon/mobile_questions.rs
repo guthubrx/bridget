@@ -68,6 +68,13 @@ pub(super) fn handle(
             };
         }
     };
+    if matches!(request.operation,MobileOperation::UserInputs{..}|MobileOperation::UserInputShow{..}|MobileOperation::UserInputRespond{..}|MobileOperation::UserInputReceipt{..}) {
+        let result=handle_user_input(&request.operation,&device,&st);
+        drop(st);
+        if let Err(e)=Store::open(&root.join("mobile-devices.db")).and_then(|s|s.authenticate(request.credential.expose_for_attestation(),unix_now_secs())) {return DaemonToWrapper::MobileOperationResult{result:fail(e.code())};}
+        if result["item"]["state"]=="submitted" {user_input::tick_request(state,result["item"]["request_id"].as_str());}
+        return DaemonToWrapper::MobileOperationResult{result};
+    }
     let writing = matches!(
         request.operation,
         MobileOperation::QuestionRespond { .. } | MobileOperation::QuestionReceipt { .. }
@@ -261,4 +268,60 @@ fn application(st: &DaemonState, item: &HumanInboxItemFrame) -> Result<Value, &'
         (None, "not_confirmed")
     };
     Ok(json!({"producer_acknowledged":item.acked_at.is_some(),"confirmed":confirmed,"state":state}))
+}
+
+fn user_input_permitted(device:&crate::mobile::store::Device,st:&DaemonState,row:&Value,op:Operation)->bool {
+    let Some(owner)=row["owner"].as_str()else{return false;};
+    let Some((agent,instance))=st.router.get_agent(owner).and_then(|r|live_connection_identity(st,&r.connection_id))else{return false;};
+    let Some(presence)=st.presences.get(&instance)else{return false;};
+    row["instance"]==instance && row["project"]==json!(agent_communication_project(st,&agent).and_then(|p|serde_json::to_string(&p).ok()))
+        && device.scope.permits(op,&presence.host,agent_communication_project(st,&agent).as_ref())
+}
+fn handle_user_input(operation:&MobileOperation,device:&crate::mobile::store::Device,st:&DaemonState)->Value {
+    let result=(||->Result<Value,String>{
+        use crate::user_input as store;
+        let db=st.store.connection();let now=unix_now_secs();
+        if let MobileOperation::UserInputs{after,limit}=operation {
+            if !(1..=50).contains(limit) || after.as_ref().is_some_and(|s|s.len()>256) {return Err("invalid_request".into());}
+            let cursor=after.as_ref().map(|s|serde_json::from_str::<(i64,String)>(s)).transpose().map_err(|_|"invalid_request")?;
+            if cursor.as_ref().is_some_and(|(t,id)|*t<0 || Uuid::parse_str(id).is_err()) {return Err("invalid_request".into());}
+            let rows=store::list_page(db,cursor.as_ref().map(|(t,id)|(*t,id.as_str())),now,*limit as usize+1)?;
+            let mut items=Vec::new();let mut last=None;let mut more=false;let mut bytes=1024;
+            for (n,row) in rows.into_iter().enumerate() {
+                if n>=*limit as usize {more=true;break;}
+                if user_input_permitted(device,st,&row,Operation::TaskRead) {
+                    let mut public=user_input::public(st,row.clone());
+                    public["can_respond"]=json!(public["can_respond"]==true && user_input_permitted(device,st,&row,Operation::TaskRespond));
+                    let size=serde_json::to_vec(&public).map_err(|_|"invalid_request")?.len();
+                    if bytes+size>120*1024 {more=true;break;} bytes+=size;items.push(public);
+                }
+                last=Some((row["created_at"].as_i64().unwrap_or(now),row["request_id"].as_str().unwrap_or("").to_owned()));
+            }
+            return Ok(json!({"status":"ok","items":items,"next_cursor":if more{last.and_then(|v|serde_json::to_string(&v).ok())}else{None}}));
+        }
+        let (id,writing)=match operation {
+            MobileOperation::UserInputShow{request_id}=>(request_id,false),
+            MobileOperation::UserInputRespond{request_id,..}=>(request_id,true),
+            MobileOperation::UserInputReceipt{request_id,..}=>(request_id,false),_=>return Err("invalid_request".into())};
+        let row=store::get(db,id)?.ok_or("not_found")?;
+        if !user_input_permitted(device,st,&row,if writing{Operation::TaskRespond}else{Operation::TaskRead}) {return Err("not_found".into());}
+        match operation {
+            MobileOperation::UserInputShow{..}=>{let mut public=user_input::public(st,row.clone());public["can_respond"]=json!(public["can_respond"]==true && user_input_permitted(device,st,&row,Operation::TaskRespond));Ok(json!({"status":"ok","item":public}))},
+            MobileOperation::UserInputRespond{device_id,command_id,revision,answers,..}=>{
+                if device_id!=&device.device_id {return Err("command_origin_changed".into());}
+                if row["state"]=="pending" && !user_input::live(st,&row) {return Err("question_not_resumable".into());}
+                let current=store::respond(db,id,revision,command_id,&format!("mobile181:{}",device.device_id),answers,now)?;
+                st.delegation_store.wait_epoch().bump();if let Some(n)=&st.mobile_notifier{n.changed();}
+                Ok(user_input_receipt(st,current,command_id))
+            },
+            MobileOperation::UserInputReceipt{device_id,command_id,..}=>{
+                if device_id!=&device.device_id {return Err("command_origin_changed".into());}
+                if row["command_id"]!=*command_id || row["actor"]!=format!("mobile181:{}",device.device_id) {return Err("not_found".into());}
+                Ok(user_input_receipt(st,row,command_id))
+            },_=>Err("invalid_request".into())
+        }
+    })();result.unwrap_or_else(|e|fail(&e))
+}
+fn user_input_receipt(st:&DaemonState,row:Value,command:&str)->Value {
+    json!({"status":"ok","operation_kind":"user_input_respond","command_id":command,"issue":{"kind":"accepted"},"receipt":{"item_id":row["request_id"],"state":row["state"],"application":{"confirmed":row["state"]=="applied","state":row["state"]}},"item":user_input::public(st,row)})
 }

@@ -9,6 +9,7 @@ mod mobile_admin;
 mod origin_proof;
 mod mobile_operations;
 mod mobile_queue;
+mod user_input;
 mod mobile_artifacts;
 mod mobile_tasks;
 mod mobile_questions;
@@ -1123,6 +1124,7 @@ struct DaemonState {
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
     pending_origin_proofs: HashMap<String,origin_proof::Pending>,
+    user_input_dispatch_after: Option<(i64,String)>,
     mobile_notifier: Option<crate::mobile::notifications::Notifier>,
     pending_candidate_probes: HashMap<String, PendingCandidateProbe>,
     pending_candidate_probes_v2: HashMap<String, PendingCandidateProbeV2>,
@@ -5064,6 +5066,7 @@ impl DaemonState {
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
             pending_origin_proofs: HashMap::new(),
+            user_input_dispatch_after: None,
             mobile_notifier: config.db_path.parent().and_then(crate::mobile::notifications::Notifier::start),
             pending_candidate_probes: HashMap::new(),
             pending_candidate_probes_v2: HashMap::new(),
@@ -7023,6 +7026,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
             let Some(_update_activity) = update_activity(&st_reminder) else {
                 continue;
             };
+            user_input::tick(&st_reminder);
             remote_worker_contact_tick(&st_reminder);
             native_delegation::tick(&st_reminder);
             let wake_clock = Instant::now();
@@ -19442,6 +19446,9 @@ fn handle_wrapper_message_with_peer(
             return None;
         }
     }
+    if let WrapperToDaemon::UserInput { request } = &msg {
+        return Some(user_input::handle(conn_id, request, state, peer));
+    }
     if let WrapperToDaemon::MobileOperation { request } = &msg {
         return Some(mobile_operations::handle(conn_id, request.clone(), state));
     }
@@ -19802,6 +19809,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::ChildRequest { .. }
                 | WrapperToDaemon::ChildRequestAnswered { .. }
                 | WrapperToDaemon::ChildRequestClosed { .. }
+                | WrapperToDaemon::UserInput { .. }
                 | WrapperToDaemon::NativeDelegation { .. }
                 | WrapperToDaemon::NativeDelegationT3 { .. }
                 | WrapperToDaemon::RequestWait { .. }
@@ -19942,6 +19950,7 @@ fn handle_wrapper_message_with_peer(
                 Some(ClientRefusal::CapabilityNotNegotiated)
             }
             Some(ConnectionRole::Client) => match &msg {
+                WrapperToDaemon::UserInput { .. } => None,
                 WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
@@ -21807,12 +21816,14 @@ fn handle_wrapper_message_with_peer(
                         return matches!(
                             capability,
                             ClientCapability::CommunicationProjectsV1
+                                | ClientCapability::UserInputV1
                                 | ClientCapability::ThreadMembersV1
                         );
                     }
                     matches!(
                         capability,
                         ClientCapability::MobileAdministrationV1 | ClientCapability::MobileOperationsV1
+                            | ClientCapability::UserInputV1
                             | ClientCapability::SendIdempotent
                             | ClientCapability::QueueListV1
                             | ClientCapability::QueueEditV1
@@ -23745,6 +23756,7 @@ fn handle_wrapper_message_with_peer(
                 instance_id: st.instance_id.clone(),
                 features: vec![
                     "wait_v1".to_string(),
+                    "user_input_v1".to_string(),
                     "remote_worker_v1".to_string(),
                     "worker_candidate_probe_v1".to_string(),
                     "auto_delegate_v1".to_string(),
@@ -24304,8 +24316,10 @@ fn handle_wrapper_message_with_peer(
             }
         }
 
+        WrapperToDaemon::UserInput { request } => Some(user_input::handle(conn_id, &request, state, None)),
         WrapperToDaemon::ChildRequest { request } => {
-            native_child_requests::receive(conn_id, request, state)
+            let primary={let st=state.lock().unwrap_or_else(|e|e.into_inner());user_input::primary_request(conn_id,&request,&st)};
+            if primary {Some(user_input::receive_native(conn_id,request,state))}else{native_child_requests::receive(conn_id, request, state)}
         }
         WrapperToDaemon::ChildRequestAnswered {
             request_id,
@@ -24313,6 +24327,7 @@ fn handle_wrapper_message_with_peer(
             reason,
         } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if user_input::native_ack(conn_id,&request_id,Some(applied),None,&st){return None;}
             native_child_requests::acknowledged(
                 conn_id,
                 &request_id,
@@ -24327,6 +24342,7 @@ fn handle_wrapper_message_with_peer(
             state: closed_state,
         } => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            if user_input::native_ack(conn_id,&request_id,None,Some(closed_state),&st){return None;}
             native_child_requests::closed(conn_id, &request_id, closed_state, &st);
             None
         }

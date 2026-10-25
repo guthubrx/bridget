@@ -95,6 +95,7 @@ object MobileNotifications {
         } else {
             if (FirebaseApp.getApps(context).isNotEmpty()) FirebaseMessaging.getInstance().isAutoInitEnabled = false
             NotificationManagerCompat.from(context).cancel(177)
+            UserInputNotifications.cancelAll(context)
         }
         synchronize(store)
     }
@@ -139,6 +140,7 @@ object MobileNotifications {
         if (!permitted(context)) return
         val allowed = runCatching { LocalStore(context.applicationContext).use { accepts(it, data) && !quietNow(it) } }.getOrDefault(false)
         if (!allowed) return
+        UserInputNotifications.refresh(context,data)
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, context.getString(R.string.notifications_title), NotificationManager.IMPORTANCE_DEFAULT))
         val intent = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)

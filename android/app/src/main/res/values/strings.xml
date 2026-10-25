@@ -68,7 +68,7 @@
  <string name="cancel_task">Request task cancellation</string>
  <string name="cancel_task_detail">This records a native cancellation request. Read the task again to confirm its state. A result that already arrived is preserved.</string>
  <string name="task_action_semantics">Pause and continuation buttons prepare an instruction for the parent. They do not confirm a provider action.</string>
- <string name="question_semantics">Only offered choices can be sent. A saved choice, producer acknowledgement and confirmed application are separate states.</string>
+ <string name="question_semantics">Choose an option or type your answer. Your draft stays on this device. The engine confirms when it has received your answer.</string>
  <string name="request_facts">Facts supplied by the native request</string>
  <string name="untrusted_text">Quoted model text — verify before deciding</string>
  <string name="confirm_choice">Confirm this choice?</string>
@@ -239,4 +239,28 @@
  <string name="queue_already_sent">This message has already left the queue. This action is unavailable.</string>
  <string name="queue_changed">The message changed. Refresh the queue before trying again.</string>
  <string name="queue_interrupt_unavailable">The engine cannot accept this message now. It remains queued.</string>
+    <string name="user_input_count">Questions (%1$d)</string>
+    <string name="user_input_expand">Expand</string>
+    <string name="user_input_position">Question %1$d of %2$d</string>
+    <string name="user_input_free">Your answer or an additional note</string>
+    <string name="user_input_dictate">Dictate my answer</string>
+    <string name="user_input_previous">Previous</string>
+    <string name="user_input_next">Next</string>
+    <string name="user_input_send">Send my answers</string>
+    <string name="user_input_pending">Waiting for your answer · draft saved on this device</string>
+    <string name="user_input_submitted">Answer recorded · awaiting confirmation</string>
+    <string name="user_input_applied">Answer confirmed by the engine</string>
+    <string name="user_input_unavailable">This question cannot receive an answer right now. Draft saved.</string>
+    <string name="user_input_unknown">Confirmation unavailable · do not send a new answer</string>
+    <string name="user_input_closed">Question resolved or closed · draft saved</string>
+    <string name="user_input_voice_unavailable">Dictation unavailable or text too long. You can type your answer.</string>
+    <string name="user_input_quick">Answer</string>
+    <string name="user_input_notification">A question is waiting for your answer</string>
+    <string name="user_input_clear_choices">Clear my choices</string>
+    <string name="user_input_close">Close</string>
+    <string name="user_input_verify">Check the sent answer</string>
+<string name="user_input_send_saved">Send the saved answer</string>
+<string name="user_input_reply_pending">Check your answer</string>
+<string name="user_input_reply_recovery">Open Bridget to check your answer and the saved outbox on this device.</string>
+<string name="user_input_update_required">Structured questions require a Bridget update on your computer. Existing supported requests remain available.</string>
 </resources>

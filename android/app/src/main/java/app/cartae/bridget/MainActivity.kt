@@ -94,9 +94,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    override fun onNewIntent(intent:Intent) {
+        super.onNewIntent(intent);setIntent(intent)
+        intent.getStringExtra("question_id")?.let(model::openQuestion)
+    }
     override fun onStart() {
         super.onStart()
         model.setVisible(true)
+        intent.getStringExtra("question_id")?.let {model.openQuestion(it);intent.removeExtra("question_id")}
         MobileUpdates.foreground(applicationContext, true)
         MobileNotifications.refresh(applicationContext)
         val manager = getSystemService(ConnectivityManager::class.java)
@@ -119,6 +124,14 @@ class MainActivity : ComponentActivity() {
 private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit, onConfirm: () -> Unit,
     onDismiss: () -> Unit, onPick: () -> Unit, onExport: (JSONObject) -> Unit, onNotifications: () -> Unit) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(vm.requestedQuestion,vm.userInputs,vm.busy) {
+        val id=vm.requestedQuestion
+        if(id!=null && !vm.busy) {
+            val source=vm.userInputs.firstOrNull {it.optString("request_id")==id}?.optJSONObject("source_agent")
+            if(source!=null) {vm.select(source);tab=0} else tab=1
+            vm.questionOpened()
+        }
+    }
     var revoke by remember { mutableStateOf(false) }
     var forget by remember { mutableStateOf(false) }
     BackHandler(enabled = vm.selected != null && tab == 0 && !vm.busy) { vm.select(null) }
@@ -397,6 +410,7 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                         Text("↓  " + stringResource(R.string.latest_messages))
                     }
                 }
+                vm.userInputs.filter {it.optString("owner")==id && it.optString("state") in setOf("pending","submitted","unknown")}.take(2).forEach {UserInputCard(vm,it)}
                 MessageQueue(vm, id)
                 Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
@@ -607,8 +621,11 @@ private fun Questions(vm: MobileViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.questions), style = MaterialTheme.typography.headlineSmall)
         Text(stringResource(R.string.question_semantics), style = MaterialTheme.typography.bodySmall)
+        if(vm.userInputCapability=="unavailable") Text(stringResource(R.string.user_input_update_required),color=MaterialTheme.colorScheme.error)
         TextButton(onClick = { vm.readQuestions() }, enabled = !vm.busy) { Text(stringResource(R.string.refresh)) }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(vm.userInputs,key={"input:"+it.getString("request_id")}) {item->UserInputCard(vm,item)}
+            if(vm.userInputCursor!=null) item {TextButton(onClick={vm.readUserInputs(true)},enabled=!vm.busy) {Text(stringResource(R.string.more))}}
             items(vm.questions, key = { it.getString("item_id") }) { item ->
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -655,10 +672,10 @@ private fun Outbox(vm: MobileViewModel) {
                         Text(stringResource(when (type) {
                             "file" -> R.string.files
                             "task_cancel" -> R.string.cancel_task
-                            "question_respond" -> R.string.questions
+                            "question_respond", "user_input_respond" -> R.string.questions
                             else -> R.string.instruction
                         }), style = MaterialTheme.typography.labelMedium)
-                        SelectionContainer { Text(envelope.optString("body", envelope.optString("file_name",
+                        SelectionContainer { Text(if(type=="user_input_respond") inputAnswerText(entry) else envelope.optString("body", envelope.optString("file_name",
                             envelope.optString("task_id", envelope.optString("choice")))), maxLines = 5) }
                         val observation = entry.optJSONObject("delivery_observation")?.optString("event")
                         Text(when (observation) {

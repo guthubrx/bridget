@@ -1055,7 +1055,7 @@ impl ManagedSession for CodexAppServerTransport {
                         .as_ref()
                         .and_then(Value::as_object)
                         .ok_or_else(|| TransportError::DeliveryFailed("answer_invalid".into()))?;
-                    if serde_json::to_vec(input).map_or(true, |bytes| bytes.len() > 8192)
+                    if serde_json::to_vec(input).map_or(true, |bytes| bytes.len() > 32*1024)
                         || input.len() != entry.request.question_ids.len()
                         || entry.request.question_ids.iter().any(|qid| {
                             !input.get(qid).is_some_and(|value| {
@@ -3553,7 +3553,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 );
                 continue;
             }
-            if forward_child_requests
+            if (forward_child_requests || method==Some("item/tool/requestUserInput"))
                 && value.get("id").is_some()
                 && method.is_some_and(|method| {
                     is_approval_request(method)
@@ -8470,8 +8470,17 @@ for line in sys.stdin:
     /// T014 : secret normatif, puis enveloppe fournisseur distincte de l'API.
     #[test]
     fn native155_transport_user_input_secret_et_reponses() {
+        transport_user_input_roundtrip(true);
+    }
+
+    #[test]
+    fn user_input181_primary_codex_roundtrip() {
+        transport_user_input_roundtrip(false);
+    }
+
+    fn transport_user_input_roundtrip(forward_child_requests: bool) {
         use crate::protocol::{ChildRequestAnswer, ChildRequestDecision};
-        let root = root("155-input");
+        let root = root(if forward_child_requests { "155-input" } else { "181-input" });
         let trace = root.join("trace.jsonl");
         let requests_file = root.join("requests.jsonl");
         let requests: Vec<Value> = ["secret", "accept", "decline", "cancel"].into_iter().map(|id| json!({
@@ -8487,7 +8496,7 @@ for line in sys.stdin:
         )
         .unwrap();
         let mut options = fake_options(&trace);
-        options.child_requests = true;
+        options.child_requests = forward_child_requests;
         let mut transport = CodexAppServerTransport::spawn_with_environment(
             options,
             &[

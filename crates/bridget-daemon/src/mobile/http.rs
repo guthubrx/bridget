@@ -328,6 +328,7 @@ async fn dispatch(gateway: Gateway, request: Request) -> Response {
             | "/v1/devices"
             | "/v1/tasks"
             | "/v1/questions"
+            | "/v1/user-inputs"
     ) || request.uri().path().starts_with("/v1/questions/")
         || (request.uri().path().starts_with("/v1/tasks/")
             && !request.uri().path().contains("/cancel/"))
@@ -462,6 +463,7 @@ enum CommandRequest {
         command_id: String,
         task_id: String,
     },
+    UserInputRespond { device_id:String, command_id:String, request_id:String, revision:String, answers:Value },
     QuestionRespond {
         device_id: String,
         command_id: String,
@@ -515,13 +517,13 @@ fn execute(
         && !(method == Method::GET
             && path.starts_with("/v1/questions/")
             && path.contains("/responses/")))
-        || (path.starts_with("/v1/questions")
+        || ((path.starts_with("/v1/questions") || path.starts_with("/v1/user-inputs"))
             && (query.machine.is_some()
                 || query.project_host.is_some()
                 || query.agent_id.is_some()
                 || query.offset.is_some()
                 || query.after_seq.is_some()))
-        || (path.starts_with("/v1/questions/") && (query.after.is_some() || query.limit.is_some()))
+        || ((path.starts_with("/v1/questions/") || path.starts_with("/v1/user-inputs/")) && (query.after.is_some() || query.limit.is_some()))
         || query.validate().is_err()
         || (!matches!(path, "/v1/events" | "/v1/tasks") && query.agent_id.is_some())
         || (matches!(path, "/v1/federation" | "/v1/devices" | "/v1/events")
@@ -767,6 +769,14 @@ fn execute(
                 command_id: path.trim_start_matches("/v1/artifacts/uploads/").into(),
             },
         )
+    } else if path == "/v1/user-inputs" && method == Method::GET {
+        Some(bridget_transport::protocol::MobileOperation::UserInputs {after:query.after.clone(),limit:query.limit.unwrap_or(50) as u32})
+    } else if path.starts_with("/v1/user-inputs/") && method == Method::GET {
+        match path.trim_start_matches("/v1/user-inputs/").split('/').collect::<Vec<_>>().as_slice() {
+            [id]=>Some(bridget_transport::protocol::MobileOperation::UserInputShow{request_id:(*id).into()}),
+            [id,"responses",command]=>Some(bridget_transport::protocol::MobileOperation::UserInputReceipt{device_id:device.device_id.clone(),request_id:(*id).into(),command_id:(*command).into()}),
+            _=>return failure("invalid_request"),
+        }
     } else if path == "/v1/questions" && method == Method::GET {
         Some(bridget_transport::protocol::MobileOperation::Questions {
             after: query.after.clone(),
@@ -875,6 +885,7 @@ fn execute(
                 command_id,
                 task_id,
             }),
+            Ok(CommandRequest::UserInputRespond {device_id,command_id,request_id,revision,answers})=>Some(bridget_transport::protocol::MobileOperation::UserInputRespond {device_id,command_id,request_id,revision,answers}),
             Ok(CommandRequest::QuestionRespond {
                 device_id,
                 command_id,
@@ -1257,6 +1268,13 @@ pub(crate) mod tests {
             .build()
             .unwrap()
             .block_on(future);
+    }
+    #[test]
+    fn user_input181_http_list_parses_pagination_before_authentication() {
+        run(async {
+            let response=dispatch(fixture(),Request::builder().uri("/v1/user-inputs?limit=20").header("host","bridget.example.net").body(axum::body::Body::empty()).unwrap()).await;
+            assert_eq!(response.status(),StatusCode::UNAUTHORIZED,"A valid list query must reach authentication");
+        });
     }
     fn fixture() -> Gateway {
         Gateway {

@@ -23,6 +23,8 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private val client = BridgetClient(store)
     private var followJob: Job? = null
     private var receiptJob: Job? = null
+    private var questionJob: Job? = null
+    private var userInputPagesLoaded=false
     private var tailPending = true
     var olderBefore by mutableStateOf<Long?>(null); private set
     private var visible = false
@@ -72,6 +74,14 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var taskDetail by mutableStateOf<JSONObject?>(null); private set
     var taskResult by mutableStateOf(""); private set
     var resultOffset by mutableStateOf<Int?>(null); private set
+    var focusedQuestion by mutableStateOf<String?>(null); private set
+    fun questionFocusHandled(id:String) {if(focusedQuestion==id) focusedQuestion=null}
+    var requestedQuestion by mutableStateOf<String?>(null); private set
+    fun openQuestion(id:String) {if(runCatching {java.util.UUID.fromString(id).toString()==id}.getOrDefault(false)) {requestedQuestion=id;focusedQuestion=id;readUserInputs()}}
+    fun questionOpened() {requestedQuestion=null}
+    var userInputCapability by mutableStateOf("unknown"); private set
+    var userInputs by mutableStateOf<List<JSONObject>>(emptyList()); private set
+    var userInputCursor by mutableStateOf<String?>(null); private set
     var questions by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var questionCursor by mutableStateOf<String?>(null); private set
     var devices by mutableStateOf<List<JSONObject>>(emptyList()); private set
@@ -93,6 +103,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             endpoint = session?.getString("endpoint") ?: ""
             if (associated) {
                 loadPreferences()
+                runCatching {refreshUserInputs()}
                 runCatching { MobileUpdates.syncHosts(getApplication()) }
             }
         }
@@ -181,6 +192,13 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setVisible(value: Boolean) {
         visible = value
+        questionJob?.cancel()
+        if(value) questionJob=viewModelScope.launch {
+            while(isActive && visible) {
+                if(associated && !busy) try { refreshUserInputs() } catch(e:CancellationException){throw e} catch(_:Exception){ userInputs=userInputs.map { JSONObject(it.toString()).put("can_respond",false) } }
+                delay(5000)
+            }
+        }
         notificationsEnabled = MobileNotifications.enabled(store)
         notificationsPending = MobileNotifications.pending(store)
         if (!value) { followJob?.cancel(); followJob = null; followState = "stopped" }
@@ -666,8 +684,70 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             if (pause) R.string.pause_instruction else R.string.continue_instruction, task.getString("task_id")))
         notice = "instruction_draft"
     }
+    fun userInputCommandState(item:JSONObject):String? = outbox.lastOrNull {entry->
+        val e=entry.optJSONObject("envelope")
+        e?.optString("type")=="user_input_respond" && e.optString("request_id")==item.optString("request_id") &&
+            runCatching {BridgetClient.requireCommandOrigin(entry,store.get("session")!!);true}.getOrDefault(false)
+    }?.optString("state")
+    fun userInputDraftKey(item:JSONObject)=store.userInputDraftKey(item)
+    fun userInputDraft(item:JSONObject):JSONObject = store.get(store.userInputDraftKey(item))?.optJSONObject("answers") ?: item.optJSONObject("answers") ?: JSONObject()
+    fun saveUserInputDraft(item:JSONObject,key:String,answers:JSONObject) {
+        if(key!=store.userInputDraftKey(item)) return
+        store.put(key,JSONObject().put("answers",answers).put("updated_at",System.currentTimeMillis()))
+    }
+    fun readUserInputs(next:Boolean=false)=act {if(!next) userInputPagesLoaded=false;refreshUserInputs(next)}
+    private suspend fun refreshUserInputs(next:Boolean=false) {
+        val session=store.get("session") ?: return
+        val binding=MobileNotifications.binding(session)
+        val after=if(next) userInputCursor?.let {"&after="+BridgetClient.encode(it)}.orEmpty() else ""
+        val page=try {client.read("/v1/user-inputs?limit=20$after")} catch(e:MobileFailure) {
+            if(e.code in setOf("not_found","capability_unavailable")) {
+                userInputCapability="unavailable";userInputs=userInputs.map {JSONObject(it.toString()).put("can_respond",false)};return
+            };throw e
+        }
+        userInputCapability="available"
+        if(store.get("session")?.let(MobileNotifications::binding)!=binding) return
+        val incoming=objects(page.getJSONArray("items"))
+        val items=(if(next) userInputs else userInputs.filter {it.optString("state") in setOf("pending","submitted","unknown") || it.optLong("updated_at")>System.currentTimeMillis()/1000-300}).associateBy {it.getString("request_id")}.toMutableMap()
+        incoming.forEach {items[it.getString("request_id")]=it}
+        if(!next) for(old in userInputs.filter {old->old.optString("state") in setOf("pending","submitted","unknown") && incoming.none {it.optString("request_id")==old.optString("request_id")}}.take(16)) {
+            try {val current=client.read("/v1/user-inputs/"+old.getString("request_id")).getJSONObject("item");items[current.getString("request_id")]=current}
+            catch(e:CancellationException){throw e}
+            catch(_:MobileFailure){items[old.getString("request_id")]=JSONObject(old.toString()).put("can_respond",false)}
+        }
+        focusedQuestion?.takeIf {it !in items}?.let {id->
+            val current=client.read("/v1/user-inputs/$id").getJSONObject("item");items[id]=current
+        }
+        if(store.get("session")?.let(MobileNotifications::binding)!=binding) return
+        for(entry in store.list("command:").filter {it.getJSONObject("envelope").optString("type")=="user_input_respond" && it.optString("state") in setOf("accepted","outcome_unknown")}.takeLast(8)) {
+            try {client.reconcile(entry)} catch(e:CancellationException){throw e} catch(_:MobileFailure){Unit}
+        }
+        outbox=store.list("command:")
+        userInputs=items.values.toList().takeLast(100)
+        if(next || !userInputPagesLoaded) userInputCursor=cursor(page)
+        if(next) userInputPagesLoaded=true
+        userInputs.forEach {UserInputNotifications.stateChanged(getApplication(),it)}
+    }
+    fun answerUserInput(item:JSONObject,key:String,answers:JSONObject)=act {
+        if(key!=store.userInputDraftKey(item)) throw MobileFailure("command_origin_changed")
+        val current=client.read("/v1/user-inputs/"+item.getString("request_id")).getJSONObject("item")
+        if(current.optString("revision")!=item.getString("revision")) throw MobileFailure("question_changed")
+        val prior=store.list("command:").lastOrNull {entry ->
+            val e=entry.getJSONObject("envelope")
+            e.optString("type")=="user_input_respond" && entry.optString("state")!="rejected" && e.optString("request_id")==item.getString("request_id") &&
+                runCatching {BridgetClient.requireCommandOrigin(entry,store.get("session")!!);true}.getOrDefault(false)
+        }
+        if(prior==null && !current.optBoolean("can_respond")) throw MobileFailure("question_already_resolved")
+        val entry=prior ?: store.enqueueUserInput(current,answers)
+        val result=if(prior?.optString("state") in setOf("accepted","outcome_unknown")) {
+            try {client.reconcile(entry)} catch(e:MobileFailure) {if(e.code=="not_found") client.send(entry) else throw e}
+        } else client.send(entry)
+        result.optJSONObject("item")?.let {updated->userInputs=userInputs.map {if(it.optString("request_id")==updated.optString("request_id")) updated else it}}
+        refreshUserInputs()
+    }
     fun readQuestions(next: Boolean = false) = act {
         val after = if (next) questionCursor?.let { "&after=" + BridgetClient.encode(it) }.orEmpty() else ""
+        if(!next) refreshUserInputs()
         val page = client.read("/v1/questions?limit=50$after")
         questions = bounded(if (next) questions + objects(page.getJSONArray("items")) else objects(page.getJSONArray("items")))
         questionCursor = cursor(page)
@@ -695,7 +775,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         followJob?.cancel(); followJob = null
         store.forgetAuthorization()
         associated = false; endpoint = ""; agents = emptyList(); selected = null
-        questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""
+        userInputs = emptyList(); questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""
         favorites = emptyList(); projects = emptyList(); machines = emptyList(); fresh = false
     }
     fun revokeDevice(id: String) = act {
@@ -713,9 +793,9 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     fun revoke() = act {
         followJob?.cancel(); followJob = null
         client.revokeSelf(); associated = false; endpoint = ""; agents = emptyList(); selected = null
-        questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""; fresh = false
+        userInputs = emptyList(); questions = emptyList(); devices = emptyList(); events = emptyList(); draft = ""; fresh = false
     }
-    override fun onCleared() { followJob?.cancel(); receiptJob?.cancel(); store.close() }
+    override fun onCleared() { questionJob?.cancel(); followJob?.cancel(); receiptJob?.cancel(); store.close() }
     private fun objects(array: JSONArray): List<JSONObject> = (0 until array.length()).map { array.getJSONObject(it) }
     private fun bounded(items: List<JSONObject>): List<JSONObject> {
         if (items.size > 1000) throw MobileFailure("resource_limit")

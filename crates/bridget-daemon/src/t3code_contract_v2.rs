@@ -242,6 +242,20 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
             });
         }
     }
+    let requests = array(projection, "runtimeRequests")?;
+    for item in array(projection, "turnItems")?.iter().filter(|i|i["type"]=="user_input_request") {
+        if string(item,"threadId")? != thread_id {return Err(invalid("user input thread"));}
+        let run = nullable_string(item,"runId")?;
+        if !root_message(item,run.and_then(|id|by_run.get(id).copied()),&nodes)? {continue;}
+        let id = string(item,"requestId")?;
+        let Some(request) = requests.iter().find(|v|v["id"]==id && v["kind"]=="user_input") else {continue;};
+        if request["nodeId"] != item["nodeId"] {return Err(invalid("user input node"));}
+        let questions = item["questions"].clone();
+        // Gardes natives, sans reformuler le texte ou les options du fournisseur.
+        crate::user_input::validate_questions(&questions).map_err(|_|invalid("user input questions"))?;
+        if id.len()>4096 || serde_json::to_vec(request).map_or(true,|b|b.len()>16*1024) {return Err(invalid("user input limit"));}
+        activities.push(Activity{id:format!("v2-user-input:{id}"),kind:"user_input.request".into(),turn_id:run.map(str::to_owned),payload:json!({"request":request,"questions":questions})});
+    }
     Ok(ThreadDetail {
         messages,
         latest_turn: latest.map(|(_, turn)| turn),
@@ -466,7 +480,7 @@ pub(crate) fn rpc(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::t3code_contract::Client;
     use std::io::{BufRead, BufReader};
@@ -529,7 +543,7 @@ mod tests {
         ));
     }
 
-    fn http_reply(listener: &TcpListener, status: u16, body: &str, expected: &str) {
+    pub(crate) fn http_reply(listener: &TcpListener, status: u16, body: &str, expected: &str) {
         let (mut stream, _) = listener.accept().unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -558,7 +572,7 @@ mod tests {
         .unwrap();
     }
 
-    fn rpc_reply(listener: &TcpListener, tag: &str, value: Option<Value>) -> Value {
+    pub(crate) fn rpc_reply(listener: &TcpListener, tag: &str, value: Option<Value>) -> Value {
         let (stream, _) = listener.accept().unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -778,6 +792,40 @@ mod tests {
                 {"id":"child-message","threadId":"t","runId":"r","nodeId":"child","role":"assistant","text":"secret sous-agent","streaming":false,"createdAt":"2026-10-09T00:00:01.000Z"},
                 {"id":"a","threadId":"t","runId":"r","nodeId":"root","role":"assistant","text":"réponse exacte","streaming":false,"createdAt":"2026-10-09T00:00:02.000Z"}],
             "turnItems":[],"runtimeRequests":[],"visibleTurnItems":[]}})
+    }
+
+    #[test]
+    fn user_input181_t3_response_uses_same_command_after_lost_reply() {
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let client=Client::for_base_url(&format!("http://{}",listener.local_addr().unwrap()),"fixture");client.set_test_protocol(true);
+        let server=std::thread::spawn(move || {
+            let first=rpc_reply(&listener,"orchestration.dispatchCommand",None);
+            let second=rpc_reply(&listener,"orchestration.dispatchCommand",Some(json!({"sequence":42})));
+            assert_eq!(first,second);first
+        });
+        let answers=json!({"q":["A","ma précision"]});
+        assert!(client.answer_user_input("t","req181","command181",&answers).is_err());
+        client.answer_user_input("t","req181","command181",&answers).unwrap();
+        assert_eq!(server.join().unwrap(),json!({"type":"runtime-request.respond","commandId":"command181","threadId":"t","requestId":"req181","answers":answers}));
+    }
+
+    #[test]
+    fn user_input181_t3_preserves_questions_and_external_resolution() {
+        let mut value=detail();
+        let questions=json!([{"id":"q","header":"Choix","question":"Lequel ?","options":[{"label":"A","description":"Exact"}],"multiSelect":false,"allowCustomAnswer":true,"initialAnswer":"Brouillon","required":true}]);
+        value["projection"]["turnItems"]=json!([{"id":"ui","type":"user_input_request","threadId":"t","runId":"r","nodeId":"root","status":"pending","requestId":"req181","questions":questions}]);
+        value["projection"]["runtimeRequests"]=json!([{"id":"req181","nodeId":"root","kind":"user_input","status":"pending","responseCapability":{"type":"live","providerSessionId":"sdk181"}}]);
+        let parsed=parse_detail(&value.to_string(),"t").unwrap();
+        let question=parsed.activities.iter().find(|a|a.kind=="user_input.request").unwrap();
+        assert_eq!(question.payload["questions"],questions);
+        value["projection"]["runtimeRequests"][0]["status"]=json!("resolved");
+        value["projection"]["runtimeRequests"][0]["answers"]=json!({"q":["A"]});
+        let parsed=parse_detail(&value.to_string(),"t").unwrap();
+        assert_eq!(parsed.activities.iter().find(|a|a.kind=="user_input.request").unwrap().payload["request"]["status"],"resolved");
+        value["projection"]["runtimeRequests"][0]["responseCapability"]=json!({"type":"not_resumable","reason":"gone"});
+        assert_eq!(parse_detail(&value.to_string(),"t").unwrap().activities.iter().find(|a|a.kind=="user_input.request").unwrap().payload["request"]["responseCapability"]["type"],"not_resumable");
+        value["projection"]["turnItems"][0]["threadId"]=json!("foreign");
+        assert!(parse_detail(&value.to_string(),"t").is_err());
     }
 
     #[test]

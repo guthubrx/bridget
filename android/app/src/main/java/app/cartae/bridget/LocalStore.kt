@@ -71,7 +71,7 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
     }
     @Synchronized fun remove(id: String) { writableDatabase.delete("entries", "id=?", arrayOf(id)) }
     @Synchronized fun list(prefix: String): List<JSONObject> {
-        require(prefix in setOf("command:", "draft:"))
+        require(prefix in setOf("command:", "draft:", "q-notified:"))
         val ids = readableDatabase.query("entries", arrayOf("id"), "id LIKE ?", arrayOf("$prefix%"), null, null, "id", "256").use {
             buildList { while (it.moveToNext()) add(it.getString(0)) }
         }
@@ -137,6 +137,34 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
             .put("created_at", System.currentTimeMillis())
         put("command:" + envelope.getString("command_id"), entry)
         return entry
+    }
+    @Synchronized fun pruneQuestionMetadata() {
+        val ids=readableDatabase.rawQuery("SELECT id FROM entries WHERE id LIKE 'q-%' LIMIT 512",null).use {cursor->buildList {while(cursor.moveToNext()) add(cursor.getString(0))}}
+        val now=System.currentTimeMillis()
+        ids.forEach {id->get(id)?.let {value->
+            val expired=if(id.startsWith("q-action:")) value.optLong("expires")<now else value.optLong("updated_at",value.optLong("at"))<now-7*86_400_000L
+            if(expired) remove(id)
+        }}
+    }
+    @Synchronized fun userInputDraftKey(item: JSONObject): String {
+        val session=get("session") ?: throw MobileFailure("authorization_required")
+        return "q-draft:"+inputDraftScope(MobileNotifications.binding(session),item.getString("request_id"),item.getString("revision"))
+    }
+    @Synchronized fun enqueueUserInput(item: JSONObject, answers: JSONObject, commandId:String=UUID.randomUUID().toString()): JSONObject {
+        val session=get("session") ?: throw MobileFailure("authorization_required")
+        check(list("command:").size<256) {"device_storage_limit"}
+        require(answers.toString().toByteArray(Charsets.UTF_8).size<=32*1024)
+        val envelope=JSONObject().put("type","user_input_respond").put("device_id",session.getJSONObject("device").getString("device_id"))
+            .put("command_id",commandId).put("request_id",item.getString("request_id"))
+            .put("revision",item.getString("revision")).put("answers",JSONObject(answers.toString()))
+        require(UUID.fromString(commandId).toString()==commandId)
+        get("command:$commandId")?.let { prior ->
+            BridgetClient.requireCommandOrigin(prior,session)
+            require(prior.getJSONObject("envelope").toString()==envelope.toString()) {"envelope_mismatch"}
+            return prior
+        }
+        val entry=JSONObject().put("endpoint",session.getString("endpoint")).put("envelope",envelope).put("input_questions",item.optJSONArray("questions")).put("state","local").put("created_at",System.currentTimeMillis())
+        put("command:"+envelope.getString("command_id"),entry);return entry
     }
     @Synchronized fun enqueueFile(agentId: String, name: String, mediaType: String, input: InputStream, commandId: String = UUID.randomUUID().toString()): JSONObject {
         require(name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= 240

@@ -22,6 +22,7 @@ use bridget_transport::journal::{
 use bridget_transport::protocol::{
     CommunicationProjectSource, DaemonToWrapper, PresenceMode, RequestInfo, WrapperToDaemon, decode,
 };
+use serde_json::{Value,json};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
@@ -1729,9 +1730,19 @@ fn spawn_reader(
         .map_err(|error| error.to_string())
 }
 
+fn t3_user_input_answers(answers:&Value)->Option<Value> {
+    let mut out=serde_json::Map::new();
+    for (id,a) in answers.as_object()? {
+        let mut values=a["selected"].as_array()?.clone();
+        if let Some(text)=a["text"].as_str().filter(|t|!t.is_empty()){values.push(json!(text));}
+        out.insert(id.clone(),Value::Array(values));
+    }Some(Value::Object(out))
+}
+
 struct LinkWorker {
     thread_id: String,
     agent_id: String,
+    user_inputs: BTreeMap<String, Value>,
     session: SharedSession,
     writer: Arc<Mutex<Option<BufWriter<UnixStream>>>>,
     stream: UnixStream,
@@ -1855,6 +1866,7 @@ impl LinkWorker {
         let state = paths.load_thread_state(&summary.id);
         let mut worker = Self {
             thread_id: summary.id.clone(),
+            user_inputs: BTreeMap::new(),
             journal_dir: journal_root.join(&agent_id),
             agent_id,
             session,
@@ -1985,6 +1997,7 @@ impl LinkWorker {
                 let key = summary.change_key();
                 self.observe_snapshot_change(&key);
                 if (key != self.last_key
+                    || !self.user_inputs.is_empty()
                     || self.state.pending.iter().any(Pending::needs_correlation)
                     || !self.journal_inflight.is_empty()
                     || self.journal_dirty)
@@ -2055,11 +2068,67 @@ impl LinkWorker {
         }
     }
 
+    fn refresh_user_inputs(&mut self, detail: &ThreadDetail) {
+        use bridget_transport::protocol::{ChildProviderRequest,ChildProviderRequestId,ChildRequestKind,ChildRequestDecision,ChildRequestClosedState};
+        for activity in detail.activities.iter().filter(|a|a.kind=="user_input.request") {
+            let source=&activity.payload["request"]; let Some(source_id)=source["id"].as_str() else{continue;};
+            let existing=self.user_inputs.iter().find(|(_,r)|r["callback"]["provider_request_id"]==source_id).map(|(id,row)|(id.clone(),row.clone()));
+            if source["status"]=="pending" && matches!(source["responseCapability"]["type"].as_str(),Some("live"|"message")) {
+                let questions=&activity.payload["questions"];
+                if let Some((id,row))=&existing {
+                    if row["callback"]["details"]["questions"]!=*questions {
+                        send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequestClosed{request_id:id.clone(),state:ChildRequestClosedState::ClosedBeforeApply});self.user_inputs.remove(id);
+                    }
+                }
+                let request=ChildProviderRequest{version:1,provider_session:self.thread_id.clone(),turn_id:activity.turn_id.clone().unwrap_or_else(||self.thread_id.clone()),provider_request_id:ChildProviderRequestId::String(source_id.into()),kind:ChildRequestKind::UserInput,
+                    details:json!({"method":"t3.runtime-request.respond","questions":questions,"secret":false}),offered:vec![ChildRequestDecision::Accept],question_ids:questions.as_array().into_iter().flatten().filter_map(|q|q["id"].as_str().map(str::to_owned)).collect(),truncated:false};
+                send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequest{request});
+            } else if let Some((id,row))=existing {
+                let expected=t3_user_input_answers(&row["answers"]);
+                let applied=row["state"]=="submitted" && source["status"]=="resolved" && expected.as_ref()==Some(&source["answers"]);
+                send_wrapper_message(&self.writer,WrapperToDaemon::ChildRequestClosed{request_id:id.clone(),state:if applied{ChildRequestClosedState::AlreadyApplied}else{ChildRequestClosedState::ClosedBeforeApply}});
+                self.user_inputs.remove(&id);
+            }
+        }
+    }
+    fn answer_user_input(&mut self, answer: bridget_transport::protocol::ChildRequestAnswer) {
+        use bridget_transport::protocol::{ChildProviderRequestId,ChildRequestDecision};
+        if answer.provider_session != self.thread_id || answer.decision != ChildRequestDecision::Accept {return;}
+        let ChildProviderRequestId::String(source_id)=&answer.provider_request_id else{return;};
+        let Some(row)=self.user_inputs.get_mut(&answer.request_id) else{return;};
+        if row["callback"]["provider_request_id"]!=*source_id || row["callback"]["turn_id"]!=answer.turn_id {return;}
+        // La commande durable appartient à Bridget. Une erreur réseau reprend le même commandId.
+        if uuid::Uuid::parse_str(&answer.outcome).is_err() {return;}
+        let Some(answers)=answer.answer.as_ref() else{return;};
+        let expected_questions=row["callback"]["details"]["questions"].clone();
+        row["state"]=json!("submitted");
+        // Canon commun utilisé pour comparer la résolution relue depuis T3.
+        let mut canonical=serde_json::Map::new();
+        for (id,values) in answers.as_object().into_iter().flatten() {canonical.insert(id.clone(),json!({"selected":values,"text":""}));}
+        row["answers"]=Value::Object(canonical);
+        let detail=match self.session.call(|c|c.thread_detail(&self.thread_id,DETAIL_PAGE)) {Ok(v)=>v,Err(_)=>return,};
+        let pending=detail.activities.iter().any(|a|a.kind=="user_input.request" && a.payload["request"]["id"]==*source_id && a.payload["request"]["status"]=="pending" && a.payload["questions"]==expected_questions && matches!(a.payload["request"]["responseCapability"]["type"].as_str(),Some("live"|"message")));
+        if pending {let _=self.session.call(|c|c.answer_user_input(&self.thread_id,source_id,&answer.outcome,answers));}
+        self.refresh_user_inputs(&detail);
+        self.last_key.clear();
+    }
+
     fn handle_frame(&mut self, frame: DaemonToWrapper) {
         match frame {
             // Verdict de l'annonce propriétaire, pas une livraison ni une
             // réponse de mission. Aucun texte n'est injecté dans le fil.
             DaemonToWrapper::ProjectContextResult { .. } => {}
+            DaemonToWrapper::UserInputResult { result } => {
+                let item=&result["item"];
+                if item["origin"]=="t3" && item["callback"]["provider_session"]==self.thread_id {
+                    if let Some(id)=item["request_id"].as_str() {
+                        if matches!(item["state"].as_str(),Some("pending"|"submitted"|"unknown")) && (self.user_inputs.contains_key(id) || self.user_inputs.len()<32) {if !(item["state"]=="pending" && self.user_inputs.get(id).is_some_and(|r|r["state"]=="submitted")) {self.user_inputs.insert(id.into(),item.clone());}}
+                        else {self.user_inputs.remove(id);}
+                    }
+                }
+            }
+            DaemonToWrapper::ChildRequestAnswer { answer } => self.answer_user_input(answer),
+
             delivery @ (DaemonToWrapper::Deliver { .. }
             | DaemonToWrapper::DeliverIdempotent { .. }) => {
                 if self.queue.len() >= QUEUE_BOUND
@@ -2820,6 +2889,7 @@ impl LinkWorker {
             }
             break detail;
         };
+        self.refresh_user_inputs(&detail);
         let seen_activities: HashSet<_> = self
             .state
             .seen_activities
@@ -5186,6 +5256,50 @@ mod tests {
         )
         .unwrap();
         (worker, peer)
+    }
+
+    #[test]
+    fn user_input181_t3_capacity_updates_existing_receipt_without_eviction() {
+        let (mut worker,_peer)=worker099();
+        let frame=|id:String,state:&str|DaemonToWrapper::UserInputResult{result:json!({"item":{"request_id":id,"origin":"t3","state":state,"callback":{"provider_session":worker.thread_id.clone()}}})};
+        let frames=(0..33).map(|i|frame(format!("input-{i}"),"pending")).collect::<Vec<_>>();
+        for message in frames.iter().take(32) {worker.handle_frame(message.clone());}
+        assert_eq!(worker.user_inputs.len(),32);
+        worker.handle_frame(frames[0].clone());
+        assert_eq!(worker.user_inputs.len(),32,"a replay at capacity must retain the existing request");
+        assert!(worker.user_inputs.contains_key("input-0"));
+        worker.handle_frame(frames[32].clone());
+        assert_eq!(worker.user_inputs.len(),32);
+        assert!(!worker.user_inputs.contains_key("input-32"));
+        let closed=DaemonToWrapper::UserInputResult{result:json!({"item":{"request_id":"input-0","origin":"t3","state":"applied","callback":{"provider_session":worker.thread_id.clone()}}})};
+        worker.handle_frame(closed);assert_eq!(worker.user_inputs.len(),31);
+        worker.relay.shutdown();worker.journal.stop();
+    }
+
+    #[test]
+    fn user_input181_t3_link_publishes_routes_and_reconciles_without_prompt() {
+        use bridget_transport::protocol::{ChildRequestAnswer,ChildRequestDecision,ChildRequestClosedState};
+        use crate::t3code_contract_v2 as v2;
+        let (mut worker,peer)=worker099();peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();let mut reader=BufReader::new(peer);
+        let thread=worker.thread_id.clone();let request_id=uuid::Uuid::new_v4().to_string();let command_id=uuid::Uuid::new_v4().to_string();
+        let questions=serde_json::json!([{"id":"q","header":"Choix","question":"Lequel ?","options":[{"label":"A","description":"Exact"}],"allowCustomAnswer":true}]);
+        let source=|status:&str,answers:serde_json::Value|serde_json::json!({"projection":{"thread":{"id":thread},"runs":[{"id":"r","threadId":thread,"ordinal":1,"userMessageId":"u","rootNodeId":"root","status":"waiting","requestedAt":"2026-10-25T08:00:00Z"}],"nodes":[{"id":"root","kind":"root_turn","parentNodeId":null}],"messages":[],"turnItems":[{"id":"i","threadId":thread,"runId":"r","nodeId":"root","type":"user_input_request","status":"pending","requestId":"source181","questions":questions}],"runtimeRequests":[{"id":"source181","nodeId":"root","kind":"user_input","status":status,"responseCapability":{"type":"live","providerSessionId":"sdk181"},"answers":answers}]}});
+        let pending=source("pending",serde_json::Value::Null);
+        worker.refresh_user_inputs(&v2::parse_detail(&pending.to_string(),&thread).unwrap());
+        let callback=loop {let mut line=String::new();reader.read_line(&mut line).unwrap();if let Ok(WrapperToDaemon::ChildRequest{request})=serde_json::from_str(line.trim()){break request;}};
+        worker.handle_frame(DaemonToWrapper::UserInputResult{result:serde_json::json!({"item":{"request_id":request_id,"origin":"t3","state":"pending","callback":callback}})});
+        let mut answer=ChildRequestAnswer{request_id:request_id.clone(),provider_session:"foreign".into(),turn_id:"r".into(),provider_request_id:callback.provider_request_id.clone(),decision:ChildRequestDecision::Accept,answer:Some(serde_json::json!({"q":["A","complément"]})),outcome:command_id.clone()};
+        worker.answer_user_input(answer.clone());assert_eq!(worker.user_inputs[&request_id]["state"],"pending");
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();
+        {let mut inner=worker.session.lock();inner.runtime.port=port;inner.client=Client::for_base_url(&format!("http://127.0.0.1:{port}"),"fixture");inner.client.set_test_protocol(true);}
+        let body=pending.to_string();let path=format!("GET /api/orchestration/threads/{thread}/bounded ");
+        let server=thread::spawn(move ||{v2::tests::http_reply(&listener,200,&body,&path);v2::tests::rpc_reply(&listener,"orchestration.dispatchCommand",Some(serde_json::json!({"sequence":99})))});
+        answer.provider_session=thread.clone();worker.answer_user_input(answer);
+        let wire=server.join().unwrap();assert_eq!(wire["type"],"runtime-request.respond");assert_eq!(wire["commandId"],command_id);assert_eq!(wire["answers"],serde_json::json!({"q":["A","complément"]}));
+        let resolved=source("resolved",wire["answers"].clone());worker.refresh_user_inputs(&v2::parse_detail(&resolved.to_string(),&thread).unwrap());
+        let closed=loop {let mut line=String::new();reader.read_line(&mut line).unwrap();if let Ok(WrapperToDaemon::ChildRequestClosed{request_id:id,state})=serde_json::from_str(line.trim()){break (id,state);}};
+        assert_eq!(closed,(request_id,ChildRequestClosedState::AlreadyApplied));
+        worker.relay.shutdown();worker.journal.stop();
     }
 
     #[test]

@@ -272,6 +272,7 @@ fn run_with_args(args: Vec<String>) {
         "auto-delegate" => cmd_auto_delegate(&args[2..]),
         "delegate" => cmd_delegate(&args[2..]),
         "task" => cmd_task(&args[2..]),
+        "questions" => cmd_questions(&args[2..]),
         "stop" => cmd_stop(&args[2..]),
         "relaunch" => cmd_relaunch(&args[2..]),
         "decommission" => cmd_decommission(&args[2..]),
@@ -778,6 +779,7 @@ fn print_usage() {
            rename <N>             Renomme l'agent courant\n  \
            control <OP>           Référent : status [--history] | pause | resume | budget | posture | delegations [list|cancel] | halt-delegations [--reason <T>] [--cancel-active] | resume-delegations\n  \
            inbox <OP>             Référent : list [--all] | resolve <ID> <CHOIX>\n  \
+           questions <OP>         Questions humaines : list [AGENT] | show UUID | answer UUID (--help)\n  \
            runtime --model <M>    Déclare le modèle courant [--effort <E>]\n  \
            domain <N> | --reset   Change le domaine de l'agent courant\n  \
            dnd [off]              Ne pas déranger [--duration 30m]\n  \
@@ -12359,4 +12361,26 @@ mod guidance156_tests {
             "seule la lecture du contrôle humain est exposée par MCP"
         );
     }
+}
+
+/// Client humain181 : aucune identité d’agent empruntée, réponse explicite en terminal.
+fn cmd_questions(args:&[String]) {
+    if args.is_empty() || args==["--help"] {
+        println!("bridget questions list [AGENT_UUID] | show REQUEST_UUID | answer REQUEST_UUID --revision SHA256 --command-id UUID --answers-file /chemin/absolu.json");return;
+    }
+    let parsed=(||->Result<serde_json::Value,String>{
+        match args {
+            [action] if action=="list"=>Ok(serde_json::json!({"action":"list"})),
+            [action,agent] if action=="list"=>Ok(serde_json::json!({"action":"list","agent_id":agent})),
+            [action,id] if action=="show"=>Ok(serde_json::json!({"action":"status","request_id":id})),
+            [action,id,revision_flag,revision,command_flag,command,file_flag,file] if action=="answer" && revision_flag=="--revision" && command_flag=="--command-id" && file_flag=="--answers-file"=>{
+                if !require_interactive_terminal("questions answer"){return Err("terminal_humain_requis".into());}
+                let path=Path::new(file);if !path.is_absolute() || !path.is_file() || path.metadata().map_err(|_|"answers_file_unavailable")?.len()>32768 {return Err("answers_file_unavailable".into());}
+                let answers:serde_json::Value=serde_json::from_slice(&std::fs::read(path).map_err(|_|"answers_file_unavailable")?).map_err(|_|"invalid_answer")?;
+                Ok(serde_json::json!({"action":"respond","request_id":id,"revision":revision,"command_id":command,"answers":answers}))
+            },
+            _=>Err("Usage : bridget questions list [AGENT_UUID] | show REQUEST_UUID | answer REQUEST_UUID --revision SHA256 --command-id UUID --answers-file /chemin/absolu.json".into())
+        }
+    })().and_then(|request|crate::communication::client::user_input_request(&socket_path(),None,request).map_err(|e|e.to_string()));
+    match parsed {Ok(value)=>{println!("{}",serde_json::to_string_pretty(&value).unwrap_or_default());if value["status"]!="ok"{std::process::exit(1);}},Err(e)=>{eprintln!("bridget questions : {e}");std::process::exit(1);}}
 }

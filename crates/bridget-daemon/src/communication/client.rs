@@ -2542,3 +2542,27 @@ mod security_tests {
         std::fs::remove_file(path).unwrap();
     }
 }
+
+/// Contrat181 : négociation explicite, preuve d’agent ou principal humain local séparés.
+pub(crate) fn user_input_request(socket:&Path,identity:Option<(&str,&str)>,request:serde_json::Value)->Result<serde_json::Value,ClientError> {
+    let wait=if request["action"]=="wait" {request["wait_timeout"].as_u64().unwrap_or(3600).min(3600)} else {0};
+    let mut connection=DaemonConnection::connect_until(socket,Instant::now()+Duration::from_secs(wait+10))?;
+    let issuer=if let Some((name,instance))=identity {
+        authenticate_auxiliary(&mut connection,name,instance,socket)?;
+        crate::communication::issuer_scope(instance)
+    }else {
+        match connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client})? {
+            DaemonToWrapper::RoleAccepted{role:ConnectionRole::Client}=>{},other=>return unexpected_response(other)
+        }
+        crate::communication::issuer_scope("bridget-control-cli")
+    };
+    let mut capabilities=vec![ClientCapability::UserInputV1];
+    if identity.is_none(){capabilities.push(ClientCapability::ControlStateV1);}
+    match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:issuer,capabilities})? {
+        DaemonToWrapper::ClientWelcome{capabilities,..} if capabilities.contains(&ClientCapability::UserInputV1)=>{},
+        _=>return Err(ClientError::Technical{code:"capability_unavailable",message:"le daemon ne négocie pas user_input_v1".into()})
+    }
+    match connection.send_then_wait(&WrapperToDaemon::UserInput{request})? {
+        DaemonToWrapper::UserInputResult{result}=>Ok(result),other=>unexpected_response(other)
+    }
+}

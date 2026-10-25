@@ -1,0 +1,8 @@
+# Contrat181 — question humaine Bridget
+
+Question : id, header, question, options[{label,description,value?}], multiSelect, allowCustomAnswer. Labels et descriptions inchangés. Une demande porte un identifiant UUIDv4 et une empreinte de la forme complète. Absence/valeur invalide refusée ; pas de troncature ni secret.
+Réponse : {questionId:{selected:[valeurs originales],text:"texte humain"}}. Sélections vérifiées contre les options et la cardinalité ; texte permis selon la capacité. Une réponse vide n’est pas une réponse. Choix et complément restent deux champs distincts dans le reçu natif.
+Opérations producteur : create, status, wait, cancel ; seulement ses demandes, via preuve agent/instance existante. Opérations humaines : list, show, respond ; rôle humain local ou appareil mobile autorisé. Opération interne de callback : acknowledge/close ; seulement le producteur et la référence attestés.
+Mutations : command_id et expected_revision obligatoires ; enveloppe canonique durable. Rejeu strict, refus envelope_mismatch/queue_changed/question_already_resolved/forbidden_scope explicites. Aucun retry sous une nouvelle clé après résultat inconnu.
+Réception native et application distinctes : submitted puis applied sur reçu du producteur. Une réponse source externe peut fermer la projection comme resolved_elsewhere. Les questions non reprenables sont visibles avec motif, sans bouton d’envoi.
+Notification : poussée {version,binding} inchangée ; la question et les actions viennent uniquement d’une lecture authentifiée. Toute réponse directe porte la liaison, l’identifiant et la révision d’origine. Aucune action déduite du titre de notification.

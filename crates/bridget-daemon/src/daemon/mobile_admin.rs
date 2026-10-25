@@ -60,6 +60,8 @@ pub(super) fn handle(
                         || !st.pending_origin_proofs.is_empty()
                         || !st.pending_candidate_probes_v2.is_empty()
                         || !st.pending_attach_sends.is_empty()
+                        || st.active_waits.load(Ordering::Acquire)!=0
+                        || crate::user_input::has_active(st.store.connection(),unix_now_secs()).map_err(|_|"update_activity_unknown")?
                     {
                         return Err("update_missions_active_or_unconfirmed");
                     }

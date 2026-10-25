@@ -4788,7 +4788,7 @@ fn launch_session_with_status(
                 {
                     break;
                 }
-                if forward_child_requests {
+                if forward_child_requests || !child_requests.lock().unwrap_or_else(|e|e.into_inner()).waiting.is_empty() {
                     let pending: Vec<_> = child_requests
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -5029,6 +5029,9 @@ fn launch_session_with_status(
                         command,
                     );
                 }
+                Ok(DaemonToWrapper::UserInputResult { result }) => {
+                    observe_user_input_receipt(&writer,&child_requests,&result);
+                }
                 Ok(message @ DaemonToWrapper::ChildRequestAnswer { .. })
                 | Ok(message @ DaemonToWrapper::ChildRequestCancel { .. }) => {
                     if dispatch_managed_child_request(
@@ -5136,7 +5139,7 @@ fn launch_session_with_status(
                 {
                     break;
                 }
-                if forward_child_requests {
+                if forward_child_requests || !child_requests.lock().unwrap_or_else(|e|e.into_inner()).waiting.is_empty() {
                     let pending: Vec<_> = child_requests
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -12789,5 +12792,16 @@ mod remote162_result_tests {
             )
             .is_err()
         );
+    }
+}
+
+fn observe_user_input_receipt(writer:&Arc<Mutex<Option<BufWriter<UnixStream>>>>,requests:&Mutex<ManagedChildRequests>,result:&serde_json::Value) {
+    if result["status"]!="ok" || !matches!(result["item"]["origin"].as_str(),Some("codex"|"claude")){return;}
+    let Some(id)=result["item"]["request_id"].as_str()else{return;};
+    let Ok(request)=serde_json::from_value::<bridget_transport::protocol::ChildProviderRequest>(result["item"]["callback"].clone())else{return;};
+    let mut requests=requests.lock().unwrap_or_else(|e|e.into_inner());
+    if let Some(waiting)=requests.waiting.iter_mut().find(|w|w.request==request){waiting.request_id=Some(id.into());return;}
+    if let Some(settled)=requests.settled.iter_mut().find(|w|w.request==request){
+        settled.request_id=Some(id.into());let frame=WrapperToDaemon::ChildRequestClosed{request_id:id.into(),state:settled.state};drop(requests);send_wrapper_message(writer,frame);
     }
 }

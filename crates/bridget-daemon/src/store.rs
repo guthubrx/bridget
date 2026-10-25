@@ -147,6 +147,7 @@ impl Store {
         observation_missed::ensure_schema(conn)?;
         crate::referent_control::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         crate::human_inbox::ensure_schema(conn).map_err(StoreError::Sqlite)?;
+        crate::user_input::ensure_schema(conn).map_err(StoreError::Sqlite)?;
         // `result_bytes` a été retirée du schéma canonique : `reply_bytes`
         // porte déjà les octets terminaux rejouables. Les bases antérieures
         // peuvent conserver cette colonne nullable ignorée ; reconstruire la

@@ -68,7 +68,7 @@
  <string name="cancel_task">Demander l’annulation</string>
  <string name="cancel_task_detail">Cette action enregistre une demande native d’annulation. Relisez la tâche pour confirmer son état. Un résultat déjà arrivé est conservé.</string>
  <string name="task_action_semantics">Les boutons de pause et de reprise préparent une instruction au parent. Ils ne confirment pas une action du fournisseur.</string>
- <string name="question_semantics">Seuls les choix proposés peuvent être envoyés. Choix enregistré, acquittement du producteur et application confirmée sont distincts.</string>
+ <string name="question_semantics">Choisissez une option ou écrivez votre réponse. Le brouillon reste sur cet appareil. Le moteur confirme la prise en compte après l’envoi.</string>
  <string name="request_facts">Faits fournis par la demande native</string>
  <string name="untrusted_text">Texte cité du modèle — à vérifier avant de décider</string>
  <string name="confirm_choice">Confirmer ce choix ?</string>
@@ -239,4 +239,28 @@
  <string name="queue_already_sent">Ce message a déjà quitté la file. Cette action est impossible.</string>
  <string name="queue_changed">Le message a changé. Actualisez la file avant de réessayer.</string>
  <string name="queue_interrupt_unavailable">Le moteur ne peut pas prendre ce message maintenant. Il reste dans la file.</string>
+    <string name="user_input_count">Questions (%1$d)</string>
+    <string name="user_input_expand">Agrandir</string>
+    <string name="user_input_position">Question %1$d sur %2$d</string>
+    <string name="user_input_free">Votre réponse ou un complément</string>
+    <string name="user_input_dictate">Dicter ma réponse</string>
+    <string name="user_input_previous">Précédente</string>
+    <string name="user_input_next">Suivante</string>
+    <string name="user_input_send">Envoyer mes réponses</string>
+    <string name="user_input_pending">Réponse attendue · brouillon conservé sur cet appareil</string>
+    <string name="user_input_submitted">Réponse enregistrée · prise en compte en attente</string>
+    <string name="user_input_applied">Réponse prise en compte par le moteur</string>
+    <string name="user_input_unavailable">Cette question ne peut plus recevoir de réponse pour le moment. Brouillon conservé.</string>
+    <string name="user_input_unknown">Prise en compte non confirmée · ne renvoyez pas une nouvelle réponse</string>
+    <string name="user_input_closed">Question résolue ou fermée · brouillon conservé</string>
+    <string name="user_input_voice_unavailable">Dictée indisponible ou texte trop long. Vous pouvez écrire votre réponse.</string>
+    <string name="user_input_quick">Répondre</string>
+    <string name="user_input_notification">Une question attend votre réponse</string>
+    <string name="user_input_clear_choices">Effacer mes choix</string>
+    <string name="user_input_close">Fermer</string>
+    <string name="user_input_verify">Vérifier la réponse envoyée</string>
+<string name="user_input_send_saved">Envoyer la réponse conservée</string>
+<string name="user_input_reply_pending">Réponse à vérifier</string>
+<string name="user_input_reply_recovery">Ouvrez Bridget pour vérifier la réponse et les envois conservés sur cet appareil.</string>
+<string name="user_input_update_required">Les questions structurées nécessitent une mise à jour de Bridget sur votre ordinateur. Les demandes déjà prises en charge restent accessibles.</string>
 </resources>

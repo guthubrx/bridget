@@ -732,6 +732,12 @@ impl Client {
         v2::tool_detail(value,thread,id,run,node)
     }
 
+    pub(crate) fn answer_user_input(&self, thread: &str, request: &str, command: &str, answers: &Value) -> Result<(),ContractError> {
+        if !self.uses_v2() {return Err(shape("user_input","protocol_unavailable"));}
+        let result=v2::rpc(&self.base_url,&self.token,"orchestration.dispatchCommand",&serde_json::json!({"type":"runtime-request.respond","commandId":command,"threadId":thread,"requestId":request,"answers":answers}))?;
+        result["sequence"].as_u64().ok_or_else(||shape("runtime-request.respond","sequence"))?; Ok(())
+    }
+
     pub fn dispatch(
         &self,
         command: &Value,

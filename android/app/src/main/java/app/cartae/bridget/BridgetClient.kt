@@ -162,6 +162,7 @@ class BridgetClient(private val store: LocalStore) {
         val receipt = try {
             request(session.getString("endpoint"), if (upload) "/v1/artifacts" else "/v1/commands", "POST", session.getString("device_key"), payload)
         } catch(e: MobileFailure) {
+            if(envelope.optString("type")=="user_input_respond" && e.code in setOf("invalid_answer","question_changed","question_expired","question_not_resumable","question_already_resolved","forbidden_scope","not_found")) store.setCommandState(id,"rejected")
             if(!upload && envelope.optString("type")=="message" && e.code=="not_found") {
                 // This message was refused before reservation, so its original saved envelope is still unsent.
                 store.setCommandState(id,"local")
@@ -181,6 +182,7 @@ class BridgetClient(private val store: LocalStore) {
         val path = when (envelope.optString("type")) {
             "file" -> "/v1/artifacts/uploads/$id"
             "task_cancel" -> "/v1/tasks/" + envelope.getString("task_id") + "/cancel/$id"
+            "user_input_respond" -> "/v1/user-inputs/" + envelope.getString("request_id") + "/responses/$id"
             "question_respond" -> "/v1/questions/" + envelope.getString("item_id") + "/responses/$id?choice=" + encode(envelope.getString("choice"))
             else -> "/v1/commands/$id"
         }

@@ -196,6 +196,7 @@ pub const HUMAN_INBOX_CONTRACT_VERSION: u16 = 1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientCapability {
+    UserInputV1,
     MobileAdministrationV1,
     MobileOperationsV1,
     RemoteWorkerV1,
@@ -2638,6 +2639,10 @@ pub enum MobileOperation {
     UpdatesConfigure {
         automatic: bool,
     },
+    UserInputs { after: Option<String>, limit: u32 },
+    UserInputShow { request_id: String },
+    UserInputRespond { device_id:String, command_id:String, request_id:String, revision:String, answers:serde_json::Value },
+    UserInputReceipt { device_id:String, command_id:String, request_id:String },
     Questions {
         after: Option<String>,
         limit: u32,
@@ -4899,6 +4904,7 @@ pub enum WrapperToDaemon {
         state: ChildRequestClosedState,
     },
     /// Délégation native : le propriétaire est toujours déduit de la connexion.
+    UserInput { request: serde_json::Value },
     NativeDelegation {
         request: NativeDelegationRequest,
     },
@@ -5941,6 +5947,7 @@ pub enum DaemonToWrapper {
         observation_id: String,
         accepted: bool,
     },
+    UserInputResult { result: serde_json::Value },
     NativeDelegationResult {
         result: serde_json::Value,
     },
