@@ -1,6 +1,6 @@
 # 183 — Raccordement des serveurs OVH
 
-Statut : en cours. Autorisation utilisateur : raccordement, essais réels, notification des trois agents, livraison et nettoyage.
+Statut : livraison partielle ; SYS-LE-2 disponible, KS-STOR en attente de réconciliation. Autorisation utilisateur : raccordement, essais réels, notification des trois agents, livraison et nettoyage.
 
 ## Résultat attendu
 SYS-LE-2 et KS-STOR exécutent une mission native de qualification via le maître Cartae. Le projet est préparé sur le serveur choisi. Les comptes fournisseurs existants restent propres à chaque machine. Aucun travail métier Opus2D n’est rejoué.
