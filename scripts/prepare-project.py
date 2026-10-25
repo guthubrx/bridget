@@ -515,10 +515,6 @@ def prepare(request):
 
 def remote_registry(request):
     expected = absolute(request["registry"])
-    if expected.exists():
-        _, config = registry_read(expected)
-        machine(config, request)
-        return expected
     # Le namespace du tunnel et le registre du worker peuvent être distincts.
     # Lire le lancement du worker local, sans identité fournie par un agent.
     found = set()
@@ -545,11 +541,18 @@ def remote_registry(request):
     require(len(found) <= 1, "project_preparation_registry_ambiguous")
     if found:
         return found.pop()
+    # Le registre du maître peut décrire toute la flotte : sa présence dans le
+    # tunnel ne prouve pas que cette machine est locale. Le registre du worker
+    # local prime et un refus ne doit jamais retomber sur le registre global.
     candidate = Path.home() / ".config/bridget/agents.json"
-    require(candidate.exists(), "project_preparation_registry_missing")
-    _, config = registry_read(candidate)
+    if candidate.exists():
+        _, config = registry_read(candidate)
+        machine(config, request)
+        return candidate
+    require(expected.exists(), "project_preparation_registry_missing")
+    _, config = registry_read(expected)
     machine(config, request)
-    return candidate
+    return expected
 
 def main():
     try:

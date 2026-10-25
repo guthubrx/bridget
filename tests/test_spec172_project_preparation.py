@@ -133,6 +133,23 @@ class PreparationTests(unittest.TestCase):
         with patch.object(Path, "home", return_value=self.home):
             self.assertEqual(prep.remote_registry(request), real)
 
+    def test_registre_global_ne_designe_pas_le_worker_local(self):
+        local = self.home / ".config/bridget/agents.json"
+        local.parent.mkdir(parents=True, mode=0o700)
+        prep.atomic_json(local, {"machines": {"autre": self.config["machines"]["test"]}})
+        request = dict(self.request, registry=str(self.registry))
+        with patch.object(Path, "home", return_value=self.home):
+            with self.assertRaisesRegex(prep.Refused, "machine_mismatch"):
+                prep.remote_registry(request)
+
+    def test_registre_worker_local_prime_sur_registre_global(self):
+        local = self.home / ".config/bridget/agents.json"
+        local.parent.mkdir(parents=True, mode=0o700)
+        prep.atomic_json(local, self.config)
+        request = dict(self.request, registry=str(self.registry))
+        with patch.object(Path, "home", return_value=self.home):
+            self.assertEqual(prep.remote_registry(request), local)
+
     def prepare_via_federation(self, following_requests=()):
         local_home = self.base / "local-home"
         local_home.mkdir(mode=0o700)
