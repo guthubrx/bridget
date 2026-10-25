@@ -12,7 +12,7 @@ La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, e
 
 **Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
 
-Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-1).
 
 Preuves existantes :
 
@@ -20,7 +20,7 @@ Preuves existantes :
 - /Users/moi/.cache/bridget-delivery168/final-health/database-health.json — SHA-256 `98feb24442412b8e2ce12d5c6a92e75605c500bd6f67b4e7fc349fc6cebab147` ;
 - /home/moi/.local/state/bridget-delivery168/final-health/cartae-health.json — SHA-256 `a409e7698a2f7ff7bdede77a2a2126eeda0d835052765473f0ef60850818f32a`.
 
-Limites : FULL unique 2820 PASS/32 FAIL/71 ignorés ; 29 échecs initiaux PASS après reprises, trois annulations 159 non validables sur Linux, cause initiale T3 inconnue malgré replay PASS. Deux LOW rustls-webpki et une INFO unsafe-libyaml restent documentés ; aucun GREEN global. Aucun nouvel audit/FULL/P4/build/service/test/modèle par cette rédaction. Aucun retour direct au binaire 0.3.0 après reçu admission v2. Les commits documentaires descendants conservent la source binaire B et ne nécessitent aucune reconstruction.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-2).
 
 Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les anciennes mentions de publication en préparation. Les DB, preuves et sauvegardes sont protégées.
 
@@ -40,7 +40,7 @@ Une réévaluation de risque ne remplace pas silencieusement cette ETA ; recalib
 
 État : **In Progress**, 45 tâches cochées sur 56 après T036. Le code est réalisé ; Converge P3 est CONVERGED, la contre-revue T037 et ses corrections sont closes, l’audit T038 et la FULL unique T036 ont leurs reçus. T039 est en publication ; T040 et les étapes de livraison restent à suivre. Ce checkpoint ne coche aucune tâche et ne vaut ni installation ni livraison.
 
-FULL : 2 820 PASS / 32 FAIL / 71 ignorés. Après reprises ciblées, 29 des 32 échecs initiaux passent ; trois annulations 159 restent non validables sur Linux (observateur kqueue Darwin/BSD). La cause du premier échec d’identité T3 reste inconnue malgré son replay PASS. Aucun succès global vert n’est déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-3).
 
 Preuves et état de livraison :
 
@@ -52,10 +52,7 @@ Preuves et état de livraison :
 
 ## Contexte technique et socle
 
-Rust, transports natifs Codex/Claude, maître et workers existants, SQLite DelegationStore,
-registre privé, CLI et MCP. Aucune nouvelle base, dépendance T3, file de tâches ou daemon de métriques.
-La version0.3.0 a été activée sur Mac/Cartae selon ROOT ; cette note ne prouve pas168.
-Lire recherche, modèle et contrat avant implémentation ; aucune décision de modèle ne vaut une permission.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-4).
 
 Le socle163 porte déjà le contrôle de concurrence, le service HTTP et la reprise CAS.
 Le socle167 porte les façades CLI. Les versions154/157/160/162 portent workspace, quotas et admission distante.
@@ -82,19 +79,7 @@ sans modifier les sources gérées de SpecKit. Pas de question utilisateur bloqu
 
 ### 1. Registre : connexions, catalogue et politique168
 
-Ajouter une section versionnée facultative, strictement validée, en conservant les données163.
-Une connexion référence un lanceur agent_type existant, son moteur réel et sa machine autorisée.
-Les environnements privés du lanceur isolent le compte. Le modèle n’est pas le nom de connexion.
-Codex consomme les observations model/list du préflight/runtime natif existant ou de l’opérateur T043 ;
-aucun processus depuis le loader de registre ou la lecturecatalogue, aucune découverte automatique nouvelle.
-Claude réemploie les modèles/efforts déclarés et validés par le registre.
-Le catalogue montre leurs identifiants réels et la provenance, jamais une entitlement garantie.
-Lecture exacte horsT3 : bridget delegate --catalogue --json, avec filtre --machine facultatif,
-et rendu humain sans --json. L’opération native routing_catalogue_v1 est décidée sur le canal existant.
-Elle exige le peer UID Unix égal à l’UID du daemon, Role::Client et version négociée, sans identité
-d’agent obligatoire ni lien T3. Réemployer unix_peer_uid, peer_uids et la garde de WakeAction::CliOnce ;
-jamais human_authority_guard, dont le bindingT3 serait une dépendance interdite. La projection est
-une liste publique allowlistée, sans autorité de commande ou de mutation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-5).
 
 Les options sont construites depuis les connexions et modèles, avec filtres indexés. Chaque option porte
 la liste des efforts compatibles ; ne pas matérialiser un produit cartésien par effort. Le choix final
@@ -172,27 +157,7 @@ La recette de service porte sur un ensemble entier qui tient, ≤8au départ ; d
 sont qualifiées par le petit décideur réel et le score, avec skipLaya explicite si nécessaire.
 Aucune obligation d’un serveur nommé Laya : sa sélection vient de la configuration.
 
-Le petit décideur utilise d’abord le transport Claude existant, modèle léger réel configuré.
-Il fonctionne sur la machine du coordinateur avec une connexion déjà authentifiée.
-Il s’agit d’un appel interne borné, sans création de Task, AutoDelegate ou agent récursif.
-Mode requis : contexte enfant isolé, env_clear puis environnement minimal allowlisté,
-cwd temporaire neutre, pas de resume/session_store_root du projet, pas d’injection Bridget/T3,
---safe-mode et --restricted, --tools vide, MCP strict vide, --setting-sources vide,
---disable-slash-commands, sortie JSON validée par schéma en print/stream-json et --no-session-persistence.
---bare est interdit ici : l’aide locale des deux versions limite son authentification aux APIkey/helpers,
-alors que la connexion réelle est OAuth. --disallowedTools "*" reste une défense additionnelle
-seulement si son support est attesté ; il ne remplace pas les autres gardes.
-stdout est borné avant parsing à64Kio et la sortie normalisée à4Kio ; stderr n’est pas conservé
-et aucun nouveau tampon stderr n’est ajouté.
-Ici « sans outils » interdit tout outil métier/système/réseau/MCP. Seul le formateur natif
-StructuredOutput ajouté par json-schema est autorisé, sans droit d’exécution. Contrôler l’allowlist
-des capacités annoncées et rejeter tout autre tool_use ; valider localement son objet fermé
-puis la concordance avec structured_output/resultJSON et les ID/efforts admissibles.
-La préqualification CLI Cartae a observé init.tools=[StructuredOutput], jamais une preuve init.tools=[].
-Cette préqualification n’est pas une recette du transport Bridget168.
-Ne pas contourner les politiques administrées du moteur ; refuser le niveau si elles empêchent ce mode.
-Les écritures natives de renouvellement auth/state du fournisseur ne sont pas des écritures métier.
-Codex n’est pas proposé en rôle décideur tant qu’un mode sans outils n’est pas attesté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-6).
 
 Budget de chaîne proposé10s, configurable1..30s, service2s au plus par défaut,
 petit décideur dans le restant (8s par défaut), sans dépassement de la deadline commune.
@@ -272,10 +237,7 @@ Les anciens workers reçoivent seulement leur protocole ancien.
 Un worker sans capacité168 est exclu avec motif explicite pour une demande168 ; il reste utilisable en163.
 Le mode de transport ne reçoit aucun secret de connexion : l’ID est résolu dans le registre de la machine.
 
-Lineagev4 expose connexion et origine de décision168.
-Pour une tâche168 lue en v3 : projectionv2 inchangée, decision:null, jamais c001 dans le schémav3.
-Ne pas fabriquer un profil163 ou une raison tronquée pour contourner ce validateur.
-Pas de changement T3 : ses lecturesv3 restent valides ; les outils autonomes peuvent négocierv4.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-7).
 
 ## Répartition des futures surfaces d’écriture
 
@@ -295,20 +257,7 @@ ROOT seul intègre, pousse, provisionne et active. Pas de nouveau profil par mod
 
 ## Ordre d’implémentation et validation
 
-1. Après audit réutilisation/revue, figer wire/config et tests de compatibilité ; générer les tâches.
-2. Config/catalogue/connexions et score pur ; fixtures12/128/129, axes indépendants et inconnus.
-3. Probev2/télémétrie et contrôle frais ; absence de capability, ancienne époque, SHA manquant/inexact
-   en Shared et Worktree, base_ref divergente, général Shared horsGit, révocation avant Prepare.
-4. Mode décideur natif sans outils, OAuth avec safe-mode réel, JSON-schema print/stream-json, réponse
-   fermée, stdout borné, stderr non conservé, deadline absolue commune depuis admission et permis jusqu’à arrêt réel ; service entier ou refus de capacité.
-5. Raccord unique chaîne/store/reprise ; concurrence, réponse tardive, crash aux frontières et erreurs SQL.
-6. CLI/MCP/Lineagev4 et compatibilitév1/v3 ; scénario sansT3.
-7. Ciblés T035 → contre-revue/Converge T037 → audit et corrections T038 → FULL unique T036
-   sur source stabilisée → docs T039 et livraison. Converge écrit append-only Tasks, code inchangé ;
-   rapports et corrections se font hors de cette passe.
-8. Construire les paquets nécessaires, intégrer/pousser, activer les connexions réelles, puis recette et nettoyage.
-   Prévoir SemVer0.4.0 pour cette fonction compatible si la source reste0.3.0 ; version/changelog
-   seulement en livraison, paquets/tag/release liés au même commit exact, installation Mac/Cartae et T3 préservé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-8).
 
 Les fixtures ne prétendent pas authentifier un fournisseur réel.
 Un seul compilateur Cargo sur Cartae, CARGO_BUILD_JOBS=2 et deux threads de tests.
@@ -325,15 +274,7 @@ ses permissions réelles. Les flags du décideur doivent être prouvés aussi su
 pas seulement sur le Mac2.1.300. Un second environnement Codex Cartae n’est pas attesté :
 sa déclaration est supportée mais son activation exige une authentification native autorisée hors Bridget.
 
-Sauvegarder registre, unités/plists, binaires et bases cohérentes avant migration.
-Activer d’abord les capacités et vérifications, puis les niveaux configurés par machine.
-Recette native : modèles et machine imposés séparément, compte isolé, saturation contrôlée,
-Laya valide sur ensemble entier compatible puis indisponible, petit décideur réel sur12+options
-puis indisponible, dernier score sur matrice entière, rejeu inchangé ; aucun appel à tous les modèles
-pour prétendre prouver leur entitlement. Un refus fournisseur final reste explicite sans bascule.
-Prouver l’indépendance dans un namespace isolé sans configuration ni pont T3 ; ne pas arrêter
-le T3 de l’utilisateur. Faire trois recettes de décision réelles bornées : LayaON,
-LayaOFF+petit Haiku actif, puis les deuxOFF+score. Les hôtes distants doivent rapporter cartae.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-9).
 
 Dès qu’une ligne v2 existe, un ancien binaire est interdit même si168 est OFF.
 Retour arrière sûr : garder le binaire compatible168 et désactiver les nouveaux automatismes,
@@ -353,17 +294,7 @@ Aucune réalisation ou réussite de tests n’est déduite de ce plan.
 
 ## Précisions ROOT après revueR2 — contrat des tâches
 
-Le plafond128 compte toutes les combinaisons déclarées connexion×modèle, désactivées comprises,
-avant filtre de demande ; les efforts ne multiplient pas ces options.
-routing_catalogue_v1 conserve la version existante du clientcontract et ajoute sa feature/opération
-de lecture, sameUIDUnix/Role::Client, sans human_authority_guard ni T3.
-D force inherit_stderr=false. B possède aussi lineage_protocol.rs et publie tous ses types avant D/C.
-Le collecteurB est réemployé par le ticklocalC existant, sans nouveau thread ; premierCPU=null.
-Le préflight fermé distingue un véritable horsGit d’une erreur technique : une erreur ne vaut jamais outsideGit.
-SansSHA attendu, un candidatGit Shared/Worktree est exclu avec workspace_base_required ;
-si aucun candidat ne reste, ce refus est rendu globalement. Shared horsGit général accepte l’absenceSHA,
-mais un SHA fourni horsGit refuse mismatch. Worktree exigeGit et la base_ref égale au SHA attendu.
-Ces précisions sont reprises dans Tasks sans modifier le parcours163.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/plan.md#extrait-10).
 
 
 ## Analyze avant implémentation — corrections A1 à A4

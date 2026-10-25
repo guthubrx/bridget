@@ -20,7 +20,7 @@ Couverture :22 exigences FR145,8 critères SC145 et20 tâches. Checklist de spé
 | A2 | MEDIUM | Converge final et mise à jour documentaire mélangés ; mini revue ne suffit pas au protocole audit demandé. | T018 première convergence en lecture seule avant audit. T019 audit v14 fix auto_commit=false, cycle final readonly et convergence après dernier fix/rejeu, tâches byte-identiques si aucun manque ; reçus hors phase Converge après comparaison. T020 reçu/journal/statuts hors Converge, sur preuves seulement. |
 | A3 | LOW | Quelques libellés T3ThreadBinding et formulations de plusieurs méthodes RPC subsistaient. | Unifier T3ThreadBindingFact ; une seule RPC bridget.read porte trois actions fermées. |
 
-Les corrections ne changent ni le besoin, ni le périmètre, ni l'autorisation de livraison. Le chemin `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/server/src/server.test.ts` a été confirmé par le principal.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/analyze.md#extrait-1).
 
 ## Passe2 — Vérification documentaire après corrections
 

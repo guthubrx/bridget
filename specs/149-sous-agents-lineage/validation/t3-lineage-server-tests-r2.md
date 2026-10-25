@@ -1,8 +1,6 @@
-# Validation r2 — Lot T3 Lineage serveur (tests GLM)
+# Validation r2 — Lot adaptateur de bureau Lineage serveur (tests GLM)
 
-Session : 149-sous-agents-lineage. Lot : L (serveur), reprise r2.
-Auteur : sous-agent test du lot serveur. Périmètre : 5 fichiers test + ce rapport + le log types.
-Date : 2026-10-10. Worktree : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-server-tests-r2.md#extrait-1).
 
 ## 1. Résultat en une ligne
 
@@ -24,9 +22,7 @@ Total : 106. PASS : 106. Aucun rouge.
 
 ## 3. Commandes exactes et compteurs
 
-Runner : `./node_modules/.bin/vp test run <fichiers>` depuis la racine du worktree.
-Node v24.13.1 (toolchain `/Users/moi/.cache/t3-toolchains/148`, PATH en tête).
-Sortie vérifiée par compteurs stdout (`Test Files` / `Tests`), pas par code de sortie.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-server-tests-r2.md#extrait-2).
 
 Lot des 5 fichiers — état r1 + correctifs Sol, avant mon ajustement T1 :
 
@@ -115,9 +111,7 @@ Répartition des 79 restantes :
 
 **Production 149 (bridget lineage + Orchestrator + instrumentation) : 0 erreur.**
 
-Note de traçabilité : le log `t3-lineage-server-types-r2.log` a été réécrit à 12:43 par une
-session concurrente (permissions r2 fait aussi un typecheck serveur). Contenu repris : même
-compte de 79, mêmes familles. La liste compacte ci-dessus fait foi.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-server-tests-r2.md#extrait-3).
 
 ## 8. Aucun bug runtime détecté
 

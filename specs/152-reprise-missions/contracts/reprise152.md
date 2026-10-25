@@ -79,6 +79,6 @@ demandé au temps restant effectif du parent. La date brute exposée dans le
 statut reste la date durable ; elle ne doit pas être prise pour le temps restant
 pendant une pause.
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme ni de clé. La tâche suspendue y apparaît `working`.

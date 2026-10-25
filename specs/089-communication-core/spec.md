@@ -87,7 +87,7 @@ Un agent Codex envoie une demande à un agent Claude Code ; celui-ci répond ave
 
 ## Hors périmètre et limites assumées
 
-GUI, fork/module T3, AG-UI, rendu HTML/artifacts, conteneurisation de projet, greffière, orchestration autonome métier, remplacement Routr, stockage des secrets fournisseur, nouveau protocole réseau public, multi-maître. Aucun abandon de l'accès par abonnement via CLI.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/089-communication-core/spec.md#extrait-1).
 
 La garantie d'injection n'est pas « exactement une fois quoi qu'il arrive » : les limites du crash wrapper et de l'horizon doivent rester visibles (contrat de communication). SSH protège le canal, pas les actions d'un agent autorisé sous le même compte Unix. Un ACK ne certifie pas l'exécution correcte de la mission.
 

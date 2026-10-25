@@ -1,32 +1,16 @@
 # Plan technique — SPEC147
 
-Date : 2026-10-08 ; extensions US6–US9 approuvées le 2026-10-09. Développement : Implemented, Validé,54/54 tâches ; deux passes Converge couvrent31FR/20SC/9US. Sources committées/fusionnées/poussées. Livraison EN COURS : Bridget installé/actif, T3 package signé prêt et activation pending. Sans PR T3 ; dirty142/145/146 conservés. Reçus runtime et cleanup détaillés dans validation/results.json.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-1).
 
 ## Résumé
 
-## Complément US10 — compatibilité T3 V2 (2026-10-09)
+## Complément US10 — compatibilité adaptateur de bureau V2 (2026-10-09)
 
-Autorisation utilisateur : adapter Bridget et ajouter à147, pas créer148.
-Travail dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/session-147-t3-v2.
-Les US1–US9 restent livrées ; les preuves ci-dessous ne valent pas preuve US10.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-2).
 
-Contrat vérifié sur T3 upstream563645cf6e10, intégré localement1535fc0844 :
-shell HTTP avec x-t3-orchestration-protocol:2 ; détail projection V2 ; mutations
-par RPC WebSocket orchestration.dispatchCommand ; base userdata/statev2.sqlite.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-3).
 
-Réutiliser Client, Snapshot/ThreadSummary/ThreadDetail, la file et la corrélation.
-Lire orchestrationProtocolVersion dans /.well-known/t3/environment au premier
-snapshot. L'absence de ce champ annonce V1 ; une autre version est refusée.
-Confirmer par la lecture authentifiée du snapshot correspondant, puis mémoriser
-seulement dans ce Client
-(réinitialisé lors du changement de runtime). Aucun essai V1 après envoi V2.
-Le chemin V1 reste inchangé ; un refus401/403 ou une panne ne rétrograde pas.
-Le mapping V2 reste dans t3code_contract_v2.rs : runs/messages natifs vers les
-vues internes existantes, statuts validés, pas de résumé ni d'appel de modèle.
-Les messages de sous-agents ne doivent pas devenir la réponse du tour racine.
-Les observations d'outils utilisent uniquement les faits V2 confirmés.
-Ne pas sonder une route absente pour choisir la version : le vrai serveur peut
-renvoyer index.html avec HTTP200. Le test natif a révélé ce cas.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-4).
 
 Une connexion WebSocket courte par dispatch, loopback/auth/délai/taille bornés.
 Dépendance directe tungstenite0.26.2, déjà utilisée par bridget-transport, sans TLS,
@@ -39,30 +23,17 @@ La sélection de base d'identité suit le protocole authentifié, jamais l'exist
 du fichier. Lire les sessions natives V2 en lecture seule ; garder les gardes OS
 et le refus d'ambiguïté. Aucune identité depuis le titre, cwd ou texte du modèle.
 
-Tests : parsing fermé V2 et V1, fin/cancel/queue/steer, RPC idempotent et ambigu,
-identité de version et sessions étrangères, puis vrai serveur T3 privé sans modèle.
-Complexité O(fils + messages + items), lookup indexé ; I/O bornées, pas une requête
-par message. Aucun changement du panneau ou du protocole humain147.
-Le helper de prérequis SpecKit est absent : vérification manuelle des artefacts.
-L'outil Sequential Thinking n'est pas disponible ; choix et invariants explicités ici.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-5).
 
-La fusion T3 est construite mais n'est pas activée tant que ce complément n'est
-pas validé. Aucun push, nouveau PR, restart ou modification de base réelle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-6).
 
-Ajouter un signal de changement humain, sans contenu, au daemon Bridget. Le faire traverser la CLI locale, puis le flux RPC T3 existant. Le panneau utilise ce signal pour relire les vues146 autorisées. Il ne reçoit pas les corps dans l'abonnement.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-7).
 
-Mémoriser seulement le UUID du fil choisi dans le store natif du panneau droit. La clé contient l'environnement, le projet et la conversation T3. Au retour sur une conversation, restaurer ce UUID puis revalider son accès, même s'il n'apparaît pas dans la première page.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-8).
 
 ## Contexte technique et espaces isolés
 
-- Bridget et documents : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant.
-- T3 : /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant.
-- Branche dans chaque dépôt : `session-147-panneau-bridget-vivant`.
-- Socle : sources146 fusionnées, sans importer les changements non committés142/145.
-- Bridget : Rust, protocole IPC local typé, SQLite et verrou de daemon existants.
-- T3 : React, TypeScript, Zustand, Effect, flux RPC et Vitest existants.
-- Dépendances, tables, migrations ou journaux durables nouveaux : aucun.
-- Périmètre initial : consultation humaine et références de navigation, sans changement des missions ni relances. Extension approuvée : UUID des commandes CLI et de l'outil MCP de fils partagés et montage MCP Claude/GLM attesté. Les tests d'écriture interagents sont des fixtures privées distinctes du canal humain FR147-15.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-9).
 
 Les helpers /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/.specify/scripts/bash/setup-plan.sh et check-prerequisites.sh sont absents. Les templates locaux attendus sont absents. La sélection provient de `.specify/feature.json` ; les artefacts suivent manuellement l'outline des compétences. Aucun script absent n'est annoncé comme exécuté.
 
@@ -72,7 +43,7 @@ Les helpers /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-br
 
 Ajouter la seule capacité `HumanThreadWatchV1`, publiée sous `human_thread_watch_v1`. Son contrat est distinct des observations et sollicitations qui réveillent les agents. Les types, noms wire, bornes et commandes sont fixés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/specs/147-panneau-bridget-vivant/contracts/watch.md.
 
-Extraire la garde d'autorité de `handle_human_thread_view`, actuellement /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:11790. Vue et suivi utilisent cette même garde. Elle conserve Client négocié, liaison T3 primaire unique, identité vivante, instance, hôte et projet attestés. La CLI ne fait ni Register, ni autostart, ni découverte d'identité agent.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-10).
 
 Le suivi porte sur tous les fils accessibles de la conversation attestée, pas seulement sur le fil choisi. Il est installé avant son premier `ready`, sous le même verrou qui ordonne les mutations. `ready` seq0 est obligatoire, premier et non coalescible : une rafale avant l'écriture socket ne peut pas l'écraser. Une mutation ne peut donc tomber entre la lecture initiale et l'inscription. Chaque connexion reçoit une génération nouvelle. Chaque reprise déclenche une revalidation complète par les lectures146 ; aucun journal de rejeu durable n'est requis.
 
@@ -82,29 +53,29 @@ Conserver la distinction `ThreadTxOutcome::Done` / `Replayed` avant la projectio
 
 Le registre de suivis et ses files sont en mémoire, bornés. Une saturation remplace les changements perdus par un `resync`, jamais par une fausse continuité. Les écritures socket sont hors verrou ; un lecteur lent ne bloque pas les mutations. Une déconnexion de liaison, une ambiguïté, une perte de projet ou un refus d'accès invalident le suivi. Aucun corps, titre, nom de membre, UUID de fil partagé, prompt ou erreur brute n'est transporté dans les signaux. Un changement de fil étranger à l'appartenance attestée ne produit aucun signal pour cette vue.
 
-### 2. CLI de suivi et ressource T3
+### 2. CLI de suivi et ressource adaptateur de bureau
 
-Étendre le client de lecture humain de /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/communication/client.rs:147. La commande `bridget thread watch --t3-thread UUID --project-root ROOT --json` fournit un flux JSONL. Le handshake a un délai borné ; le flux accepté n'a pas le timeout unary de dix secondes. L'annulation ou la fermeture du pipe ferme la connexion locale.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-11).
 
-Étendre le service existant /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/bridget/BridgetReader.ts:74 avec `watch`. Il résout conversation et projet par `ProjectionSnapshotQuery`, puis transmet `workspaceRoot`. Le navigateur ne fournit aucun chemin racine, agent, instance ou droit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-12).
 
 Réutiliser la résolution d'exécutable de ce service. Pour le flux, utiliser le `ChildProcessSpawner` Effect existant dans une portée annulable. `ProcessRunner.run` collecte une sortie finale avec timeout : il reste correct pour `read`, mais ne convient pas à `watch`. Le décodeur JSONL borne chaque ligne et le tampon partiel avant son décodage Schema. Un stderr brut n'est jamais rendu ni journalisé comme diagnostic métier.
 
 ### 3. RPC et cycle de vie du client
 
-Étendre /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/contracts/src/bridget.ts avec entrée et événement fermés. Ajouter `WS_METHODS.bridgetWatch = "bridget.watch"` au contrat RPC dans /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/contracts/src/rpc.ts, à côté de `bridget.read` (:998). Conserver `AuthOrchestrationReadScope` dans /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/auth/RpcAuthorization.ts.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-13).
 
-Utiliser l'observation de flux existante dans /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/ws.ts:709, puis la factory de subscription native dans /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/runtime.ts. L'adaptation147 de /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/orchestration.ts réutilise `createEnvironmentSubscriptionAtomFamily` pour conserver un `BridgetWatchState` volatil : dernier événement, readyGeneration et subscriptionId local. Fixer `idleTtlMs: 0` : le défaut de cinq minutes laisserait le suivi vivant après fermeture.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-14).
 
 Ready protégé sur le wire ne garantit pas un rendu ready distinct avant changed. L'état sticky conserve sa preuve avant coalescence de l'atome. La cible native ajoute un visitId client local unique ; une visite n'a qu'une subscription et une réponse d'une visite ancienne reste rejetée. visitId/subscriptionId ne traversent pas le wire : RPC garde threadId/projectId seulement.
 
-Le supervisor existant porte les reprises de transport WebSocket T3. Si ce transport reste sain alors que le CLI/daemon de suivi tombe, réutiliser Schedule Effect pour reprendre le seul stream CLI : au plus trois tentatives supplémentaires après l'initiale, seulement pour unavailable/command_failed/timeout. Chaque tentative revalide autorité/handshake ; ready neuf rattrape par lectures146. Durant l'attente, masquer corps et garder UUID. Au plafond, arrêt explicite avec refresh manuel ou nouvelle visite. Invalid_output/version/projet/binding/demande invalide ne sont jamais retryables. Aucun timer de lecture de corps ni retry infini ajouté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-15).
 
 Le panneau ne monte la consommation que lorsqu'il est visible et actif. Fermeture de surface, démontage, changement d'environnement/conversation ou page masquée libèrent abonnement, processus enfant et connexion. Au retour visible, la nouvelle génération impose une revalidation. Il ne faut pas simplement ignorer visuellement un flux resté monté dans une surface cachée.
 
 ### 4. Sélection dans le store existant
 
-Étendre /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/rightPanelStore.ts par une table distincte `bridgetSelectionByContextKey`. La clé est `JSON.stringify([environmentId, projectId, threadId])`. La valeur est seulement un UUID de fil partagé validé. Aucun corps, titre, membre, credential ou message n'est persisté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-16).
 
 Ne pas ajouter cette valeur à `ThreadRightPanelState`. `upsertSurface` le reconstruit (:274) et `updateThread` peut le supprimer (:293). Ces actions natives ne doivent pas effacer le choix Bridget. Réutiliser la persistance et sa validation existantes. Un snapshot ancien sans la nouvelle table équivaut à une table vide.
 
@@ -124,7 +95,7 @@ Un refus autoritaire du fil (`thread_unavailable`) retire la sélection et purge
 
 ### 6. US5 — Destinataires dans la ligne auteur/date
 
-Ajout approuvé le 2026-10-09. La lane Web étend seulement la ligne existante de /Users/moi/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx. Elle affiche Auteur → Noms pour notify targets/all, et Auteur · Sans sollicitation pour none. La date reste dans cette ligne ; aucune hauteur dédiée supplémentaire.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-17).
 
 Utiliser les targets effectifs déjà projetés avec le message, y compris all, auteur exclu selon GO du principal. Résoudre leurs noms avec detail.members autorisé déjà chargé. Ne pas recalculer all depuis les membres actuels. Si un nom n'est pas disponible : libellé honnête Nom indisponible + UUID court, identifiant exact accessible dans les détails existants. Aucun nom inventé, appel d'annuaire, champ wire, API, mutation, notification ou réveil. L'exclusion de l'auteur ne prouve pas une livraison.
 
@@ -132,7 +103,7 @@ L'indication décrit la sollicitation demandée, pas une livraison ou lecture co
 
 ## Réutilisation de l'existant
 
-Le tableau exhaustif figure dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/specs/147-panneau-bridget-vivant/reuse-audit.md. Les principales réutilisations sont la garde humaine145, les lectures et curseurs146, les mutations transactionnelles, l'annuaire, la résolution de contexte T3, les flux RPC, le superviseur, les subscriptions client-runtime et le store du panneau droit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-18).
 
 Seul le contrat de suivi humain est nouveau. Réutiliser les observations d'agents serait incorrect : elles peuvent solliciter un agent et ne constituent pas une invalidation de consultation autorisée. Aucun deuxième service métier, store générique, framework de transport, table SQLite ou modèle n'est créé.
 
@@ -150,19 +121,13 @@ Seul le contrat de suivi humain est nouveau. Réutiliser les observations d'agen
 | XX — responsabilité | PASS avec limite | Noms, refus, bornes, cycle de vie et tests explicites. Rien n'est encore implémenté ni activé. |
 | XXI — contexte partagé | PASS | Propriétaires distincts ; les racines et les changements d'autres sessions ne sont pas édités. |
 
-Les standards génériques Next.js/Axios, les dossiers Cartae et Pytest ne décrivent pas T3/Bridget. Réutiliser les piles React/Effect/Vitest et Rust existantes est une divergence justifiée, pas une omission de tests ou de typage. Les scénarios restent formulés en langage métier, indépendamment de leur runner.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-19).
 
 Réévaluation après conception : mêmes gates ; aucun problème de duplication non arbitré. Le principal a revu le gate avant les tâches, puis autorisé l'implémentation. L'ADR147 consigne le canal humain et la convergence, sans inventer une nouvelle plateforme. Les tableaux de conception ne remplacent pas les preuves de validation finales.
 
 ## Plan de validation
 
-1. Tests Rust protocol/daemon/CLI147 RED sur le socle : capacité inconnue, aucun signal pour Create/Post réel, garde de liaison, inscription initiale, no-replay, annulation et sortie bornée.
-2. Tests Rust GREEN : mutation committée une fois, replay/ACK/read/refus silencieux, rename pertinent, files saturées → resync, ready seq0 préservé en premier même après une rafale supérieure à16 avant écriture, client lent sans blocage, perte d'autorité, daemon redémarré, aucune action agent.
-3. Tests service/RPC/runtime T3 RED puis GREEN : contexte serveur, payload fermé, scope lecture, JSONL fractionné/invalide/trop grand, handshake, EOF, cancellation, idleTtl0 et reprise. Distinguer WebSocket repris par supervisor et CLI rompu sous WebSocket sain, avec initiale + trois reprises maximum uniquement techniques. Tester ready+changed avant premier rendu : état sticky garde readyGeneration, une subscription par visitId, aucun champ wire ajouté. Un refus métier fermé reste arrêté, sans boucle de retries, jusqu'à refresh manuel ou nouvelle visite.
-4. Tests store/panneau RED puis GREEN : A → B → A, projet/environnement, choix hors première page, ancien snapshot, code refus ≠ panne, late response, coalescence, 60s sans relecture, 100 changements et pages déjà chargées. Cas obligatoires : remplacement d'une consigne en page2 pendant le chargement de page3 ; nouveau snapshot commun S, publication atomique, réponse ancienne ignorée et remplacement visible en page2. Plus de50 nouveautés : intervalle entre tête et ancre ancienne complètement rattrapé sous S, pas de trou ni doublon.
-5. Recette intégrée isolée : vrai daemon et CLI147 avec données synthétiques puis surface T3 de test. Observer le délai de deux secondes, focus, texte sélectionné, dépliage, copie, supersession, page masquée et fermeture. Aucun agent ou base T3 actifs.
-6. Contrôles adaptés : format Rust, lint/clippy, tests ciblés puis suites touchées ; typecheck/lint/tests/build T3 selon scripts existants. Journaliser sorties, nombres réels, RED/GREEN et limites.
-7. Contre-revue, audit, Analyze et convergence documentaire. Aucun fournisseur adverse joignable dans le même projet à ce stade ; ne pas contacter un autre projet pour simuler cette preuve. Une revue locale ne sera pas qualifiée d'inter-fournisseurs.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-20).
 
 ## Risques et décisions de sortie
 
@@ -195,22 +160,17 @@ Gate de réutilisation : REUTILISER require_uuid + thread_members + tests coloca
 
 ### US7 — Plan MCP concret validé avant tâches
 
-Gate du principal reçu le2026-10-09 après les amendments de revue. La configuration effective du cas regional-wrkr-1/ClaudeAgent/claude_glm manque Bridget ; T3 injecte t3-code seulement. Aucune exclusion volontaire GLM.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-21).
 
-Préparer le montage avec le SDK natif : mcpServerStatus puis setMcpServers, après création de la query et avant sessions.set/ready ou tout premier prompt. Même garantie pour new et resume ; aucun restart d'une query active. Conserver options.mcpServers.t3-code dans le payload, car setMcpServers remplace les serveurs dynamiques.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-22).
 
-Fichiers production retenus :
-- /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/provider/Drivers/ClaudeMcp.ts : fonction Effect de préparation et politique de compatibilité, pas une classe enveloppe neutre.
-- /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/provider/Drivers/ClaudeSettingsPaths.ts : extraire calcul actuel des sources/settings et findRepositoryRoot depuis ClaudeSkills.ts ; consommateurs réels Skills et MCP. Exception architecture<=3 usages autorisée : même calcul de scope critique pour la sécurité, sémantiques MCP stricte et Skills fail-open préservées.
-- /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/bridget/BridgetExecutable.ts : extraire résolution Reader existante, priorité T3CODE_BRIDGET_EXECUTABLE puis HOME/.local/bin/bridget puis PATH, rejet cmd/bat ; trois usages read/watch/MCP, ordre inchangé.
-- /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/provider/Layers/ClaudeAdapter.ts : interface ClaudeQueryRuntime expose les deux méthodes SDK ; préparation avant premier prompt, mcpServers t3-code conservé.
-- Consommateurs existants : /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/provider/Drivers/ClaudeSkills.ts et /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/bridget/BridgetReader.ts.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-23).
 
 Respecter tout serveur homonyme Bridget déjà effectif dans tous les scopes/statuts, même failed/disabled/plugin/user/managed ; ne pas l'écraser. Opt-out flags/settings et métadonnées invalides/I/O refus conduisent à un skip codé fermé ; distinguer NotFound normal. Identité héritée non vide, y compris espaces : skip codé, jamais modification d'environnement/profil pour contourner ce signal. Aucun champ d'identité dans la configuration stdio MCP ; permissions normales et canUseTool inchangés, aucun alwaysLoad.
 
-Garde conservative MCP validée par le principal : si cwd est un enfant du dépôt, inspecter aussi les métadonnées root/.claude/settings.json et projects[root] de .claude.json pour respecter un refus d'auto-montage T3. Vérifier metadata avant status SDK ; flags/identity refusent sans I/O. Le calcul partagé et comportement Skills restent inchangés. Ne pas prétendre que la CLI charge ces plain settings : le getter MCP privé établit seulement root/.mcp.json scope project ; RC0 sous disabled ne prouve pas que le serveur soit activé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-24).
 
-Initialisation rejetée/pending/deadline : fermer query candidate et annuler son consumer avant ready/prompt. Une promesse SDK résolue tardivement ne monte pas le serveur après timeout. Candidate sous propriétaire/finalizer local unique jusqu'à sessions.set : si prepare réussit mais close ancienne query échoue, fermer candidate/consumer sans ready/prompt ni orphelin. Amendement T050 validé dans FR21/22 existants, pas nouveau framework/helper. Diagnostics codés sans secrets. Aucun endpoint, table, dépendance, profil global ou nouvelle autorité t3-code.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-25).
 
 Six groupes RED dans ClaudeMcp.test.ts, ClaudeSettingsPaths.test.ts, BridgetExecutable.test.ts et ClaudeAdapter.test.ts : new propre, resume, homonymes/scopes/statuts, opt-out/config/I/O, identité héritée, rejet/pending/deadline/tardy. Fixtures SDK sans modèle distinctes d'une vraie façade MCP OS/credentials/daemon privé pour tests d'autorité no-forgery/birthbad. Le stub de handshake UUID102v33 ne prouve pas cette autorité. T035–T041 suivent le gate ; propriétaire Rust AUTH séparé après libération du writer UUID.
 
@@ -220,7 +180,7 @@ Portée UUID US6 : seulement les actions et l'outil de fils partagés create/pos
 
 US147-09 P2/FR29–31/SC19–20 : choix natif en haut, retirer header h2/membres en bas et garder détails accessibles. Main a relu les wrappers Sidebar1449/indexcss1081/PreviewPanelShell133 ; findings Web réutilisés, pas exploration globale répétée. Gate conception avant code, pas nouveau composant/store/API/dépendance/helper.
 
-Dans /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx, surface de liste bg-sidebar pour contraste clair et ligne choisie row-active/foreground. Hover seulement sur les autres lignes, focus-visible anneau inset, aria-current/pressed sur contrôle du choix. Icône et palette natives, pas rebrand.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/plan.md#extrait-26).
 
 Déplacer details sous la ligne courante comme frère du bouton, jamais contrôle interactif imbriqué dans bouton. Si choix absent de page/liste filtrée ET détail autorisé disponible, épingler une seule ligne choisie, même parent/key ; aucune ligne/titre/membres exposés en cas de refus ou masque. Pas nouvel appel ni sélection automatique. En bas, conserver ScrollArea, nœuds de messages par séquence et copie exacte ; retirer seulement le header répété. Détails accessibles et états loading/refused/empty conservés.
 

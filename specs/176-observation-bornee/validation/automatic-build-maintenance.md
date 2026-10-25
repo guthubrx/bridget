@@ -28,14 +28,9 @@ Raw Cargo, custom/cross-target profiles, installed executable copies and backups
 remain outside automatic coverage. Interrupted or killed wrappers cannot promise
 an after-build pass; the next wrapped invocation performs the before-build pass.
 
-## T3 comparison
+## adaptateur de bureau comparison
 
-Read T3's package.json clean command and stageResourceMonitor in
-scripts/build-desktop-artifact.ts at ef86c2bbc3388be8fc593db23a323e3d80b58509.
-T3 reuses its monitor target and provides an explicit broad clean command.
-Those paths do not implement Bridget's per-repository intermediate-cache budget.
-Reuse of the existing target is applicable; broad deletion is not reused because
-Bridget also has running binaries and independent remote work.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/176-observation-bornee/validation/automatic-build-maintenance.md#extrait-1).
 
 ## Validation
 

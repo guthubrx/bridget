@@ -45,7 +45,7 @@ Bash vers `forbidden.txt` est refusée par le CLI (`--disallowedTools Bash`
 hérité du parent) ; `result.permission_denials` corrèle le request_id ; la tâche
 passe `failed` avec `provider_permission_denied` et jamais `result_available`.
 
-## Ordre — T038 (parent externe hors T3)
+## Ordre — T038 (parent externe dans un terminal)
 
 a. **Parent GLM PTY** : mêmes commandes que T037 V1 (session parent externe
    gclaude + profil, voie `NativeDelegation`, aucun `BRIDGET_T3_MCP_*`).
@@ -62,12 +62,4 @@ d. **Parent Codex natif (T037 V2 / T038 parent Codex)** : **BLOQUÉ** — voir
 
 ## Ce que chaque oracle couvre
 
-| Oracle | Où il s'observe |
-|---|---|
-| Politique figée + révisions | `recipe_env.sh` (expected.json, sources-snapshot.json) ; le daemon revalide au spawn |
-| Corrélation unique request_id | `verify_oracles.py` (1 ligne par request_id) |
-| Refus fournisseur G-P-01 | payload `failed` + `provider_permission_denied` |
-| Observer PTY G-P-08 | branche (c) : blocage nommé sans ACK ; artefacts `np-*.sock`/`no-*.json` supprimés en sortie |
-| Composition lanceur+profil | hash gclaude == constante + `CLAUDE_CONFIG_DIR` exporté (capturé de l'environnement source) |
-| Cleanup lifecycle | aucun processus lié au fixture (`ps`), état `cancelled` persistant |
-| Absence T3 | variables `BRIDGET_T3_MCP_*` absentes, voie `NativeDelegation` seule |
+[Note technique de l’adaptateur](../../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/recipes/README.md#extrait-1).

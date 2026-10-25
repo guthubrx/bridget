@@ -47,6 +47,4 @@ Si la recette réelle n'est pas lancée, la consigner « non vérifié » dans
 `validation/tests-153.md`.
 
 
-La livraison finale est distincte de cette recette privée. Le principal vérifie
-Git, disque et runtime, active de façon coordonnée sans interrompre les autres
-fils T3, puis nettoie le worktree153. Aucun succès actif n'est déduit du seul build.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/quickstart.md#extrait-1).

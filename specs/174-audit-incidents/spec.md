@@ -10,7 +10,7 @@ Le plafond de 32 refusait des projets avec des travaux conservés. Le porter à 
 
 Conserver les worktrees actifs, modifiés, verrouillés, imbriqués ou portant des commits non intégrés. Conserver également les fichiers ignorés : un état Git propre ne prouve pas leur absence. Archiver les preuves avant retrait. Utiliser Git sans force. Après la demande utilisateur de retour à un seul main, retirer les branches dont tous les patches sont intégrés, avec une archive Git vérifiée. Recontrôler l’activité et l’état au moment de chaque retrait. Aucun nettoyage périodique installé.
 
-## Référence T3
+## Choix de conception Bridget
 
 Lecture de `apps/server/src/vcs/GitVcsDriverCore.ts`, fonction `createWorktree` : création Git à partir d’une référence explicite, délai borné ; aucun plafond de 32 dans ce chemin. Bridget garde une borne supplémentaire pour les créations distantes et les réservations concurrentes.
 

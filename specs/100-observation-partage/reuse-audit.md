@@ -62,14 +62,7 @@ Aucune. Les nouveaux noms ne remplacent pas les contrats existants.
 
 ## Specs livrees applicables
 
-| Spec | Pattern deja etabli | Impact |
-|---|---|---|
-| 089 | Communication | Pas de nouveau suivi reply |
-| 092–093 | Attach/rejeu | Extraits sur même assemblage |
-| 094 | Parité CLI/MCP | Contrat commun |
-| 097 | Claude natif | Conserver métadonnées outil à la source |
-| 098 | T3 adaptateur | Couverture bornée aux faits remontés |
-| 099 | Identité/remises | Préserver preuves et budgets |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/100-observation-partage/reuse-audit.md#extrait-1).
 
 ## Journal de recherche
 

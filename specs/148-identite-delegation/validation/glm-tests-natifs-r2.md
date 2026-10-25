@@ -4,13 +4,7 @@
 
 ## Verdict
 
-| Étape | Résultat | RC |
-|---|---|---|
-| 1. e2e natif 148 | **PASS** — 1/1 (5,51 s) | 0 |
-| 2. identité T3 | **PASS** — 1 passed, 1 ignored (helper volontaire) | 0 |
-| 3. workspace `--lib` mono-thread | **PASS — 1496 / 0 / 15** sous ENV complet | 0 |
-| 4a. `cargo fmt --check` | **FAIL** — 36 diffs | 101 |
-| 4b. `clippy -D warnings` | **FAIL** — 4 erreurs | 1 |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-tests-natifs-r2.md#extrait-1).
 
 ## Points clés
 

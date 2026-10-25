@@ -2,7 +2,7 @@
 
 ## Entrée existante
 
-Producteur : /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/t3code.rs:3033.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/141-messages-groupes/contracts/grouped-presentation.md#extrait-1).
 
 Le producteur concatène exactement :
 

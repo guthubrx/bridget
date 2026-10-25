@@ -58,12 +58,7 @@ retirer cette protection pour économiser une ouverture SQLite.
 
 ## Projet distant et garde humaine — ec6d4c8a
 
-Le traitement détaillé et la contre-revue R2 figurent dans implementation.md.
-La garde courante exige hôte de présence et hôte de connexion cohérents avec le
-projet distant, plus worker_is_current. Une annonce distante Git n’exécute pas
-la résolution d’origine T3. La perte du worker invalide l’autorité humaine.
-Le projet connu reste conservé pour ne pas transformer un refus interprojet en
-simple avertissement de portée inconnue.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/177-bridget-mobile/validation/audit.md#extrait-1).
 
 Le déplacement du coordinateur doit préserver le droit de déléguer des parents
 existants. Franchir la garde de projet ne vaut pas autorisation de lancement :

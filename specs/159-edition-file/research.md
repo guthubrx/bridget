@@ -1,50 +1,22 @@
 # Recherche - Session159 file retenue par le daemon et édition
 
-Date : 2026-10-11, refondue après la contre-revue (rondes 1 et 2) (`adversarial-review-codex.md`).
-Source historique du2026-10-11 : checkout principal `/Users/moi/Nextcloud/10.Scripts/64.bridget`
-(base `1f2c661d`) et T3 `origin/main`. Ces repères ne sont pas une lecture fraîche
-de la base livrée158B. Session156 livrée ; ses acquis restent réemployés.
-**Base 159A confirmée** : source 158B e52a96240b6168bf4466712e1bda8852b4ecb43f livré ; HEAD de préparation b235998638b3eadf8f8edc0a6e323b762e95cab0. GO159A acquis par ROOT, implémentation A en cours ; held_queue reste fermé. Le candidat 158B 2124 reste historique ; aucune livraison 159A déduite.
-Les consignes de prélecture avant GO ci-dessous restent historiques ; les réponses T002 et les reçus ciblés actuels sont dans validation. Aucune preuve de livraison159A finale déduite.
-Prélectures fraîches du candidat158B :
-/Users/moi/.cache/bridget-prelecture159-20261012/readiness159A-after158B-candidate.md
-/Users/moi/.cache/bridget-plan159-native-evidence-20261012/T002-readonly.md
-Leurs repères doivent être revalidés sur la base livrée avant le GO159A.
-Un ancien PASS de réemploi ne vaut pas un gate frais.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-1).
 
 ## R0 - Cadre de menace
 
-Repris de 156 R0 (ADR 011, ADR 027) : la garde protège contre un agent qui agit par
-ses outils Bridget (MCP, CLI, pont T3, wrapper). Un processus hostile du même compte
-Unix qui forge des trames brutes est hors modèle ; on ne le promet pas. Les tests de
-trames brutes sont de la défense en profondeur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-2).
 
-## R1 - Parité avec T3 (lu dans T3 `origin/main`)
+## R1 - Parité avec adaptateur de bureau (lu dans adaptateur de bureau `origin/main`)
 
 Source : `apps/server/src/mcp/toolkits/thread/tools.ts:80-137`, `handlers.ts:234-293`.
 
-| Outil T3 | Sémantique T3 | Reprise |
-|---|---|---|
-| `t3_queue_list` | liste dans l'ordre de remise | `bridget_queue list` (156, lu dans la base) |
-| `t3_queue_read` | lit 16 000 caractères | écarté : l'aperçu suffit |
-| `t3_queue_edit` | remplace le texte | reporté (R15) |
-| `t3_queue_cancel` | annule un message en file | `cancel` (R7) |
-| `t3_queue_reorder` | `beforeRunId` ou `null` | `reorder` (R8) |
-| `t3_queue_promote_to_steer` | `targetRunId` | `promote` (R9) |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-3).
 
-T3 y arrive parce que ses éditions sont des commandes sur une file durable côté
-serveur (`queued-run.cancel`, `queued-run.edit`, `queued-run.reorder`,
-`queued-message.promote-to-steer`). La leçon pour Bridget : tenir la file dans un
-seul magasin durable.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-4).
 
 ## R2 - Pourquoi l'édition chez le porteur a échoué (première conception)
 
-La première conception éditait la file mémoire de chaque porteur. Les preuves :
-- Codex : `QueueState { messages, steer, active, steering_open }` (`codex_app_server.rs:876-900`) ; `cancel_delivery` annule d'abord le tour actif (`:1081-1093`).
-- ACP : `cancel_delivery` annule aussi le tour actif (`acp.rs:518-531`).
-- Pont T3 : `worker.queue`, borne 64, retrait par `report_discard` qui rend la remise `indeterminate` (`t3code.rs:44`, `:1913-1922`, `:1855-1880`) ; registre `cancelled` en mémoire (`:1926-1929`).
-- Reçu durable du porteur : `Seen` écrit avant l'injection, `Indeterminate` au rejeu (`receipt_store.rs:123-165`).
-- Reprise relit toute remise `dispatching` (`send_delivery.rs:379-449`).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-5).
 
 Il fallait une tombe durable, un accusé, une réconciliation, un ordre répliqué et une
 promotion en deux temps. La contre-revue y a trouvé 11 défauts, tous issus de la
@@ -74,12 +46,7 @@ Transitions : `held → dispatching` (libération), `held → cancelled` (retrai
 
 ## R4 - Règle de rétention
 
-Un message est retenu si et seulement si (FR-002) :
-1. le type du destinataire a `held_queue` dans le registre (`AgentDefinition`, `registry.rs:49-79` ; champ à ajouter avec `#[serde(default)]`, comme `queue_capacity` et `notify_timeout_secs`) ;
-2. envoi client idempotent sans intention ;
-3. origine ni `Human` (un message humain interrompt, `codex_app_server.rs:866`) ni `System` ; ni alerte de fil, observation, incident délégué ; ni message de mission native (`delegation_store.for_mission`, `daemon.rs:4190-4195`) ;
-4. destinataire non T3 (`presence.transport != "t3code"`) et instance ayant déclaré `turn_attest` (R5.1) ;
-5. présence `busy` (signal `TurnState`) ou messages déjà retenus pour ce destinataire.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-6).
 
 Dans tous les autres cas : chemin actuel, inchangé. Le règlement 5, deuxième terme,
 conserve l'ordre : tant qu'il reste un message retenu, un nouveau passe derrière.
@@ -143,7 +110,7 @@ Tout ou rien. Pas d'exécution liée à écrire : un envoi sans intention n'en c
 
 ## R8 - `reorder`
 
-API : `message_id` + `before_message_id` (ou `null` = fin), comme T3. Transaction : lire les lignes `held` du destinataire dans l'ordre de rang, calculer la nouvelle séquence, ré-affecter les valeurs de rang existantes du groupe à cette séquence. Les rangs des autres messages ne bougent pas. Une arrivée concurrente omet queue_rank ; SQLite attribue un nouveau rang AUTOINCREMENT dans sa transaction, sérialisée avant ou après. La permutation passe par des rangs provisoires négatifs dans la même transaction unique pour éviter les collisions de clé primaire ; ils ne sont jamais publiés, sans CHECK positif qui les interdit. [A,B], A placé à la fin, C arrive : si le déplacement valide d'abord, l'ordre est B, A, C ; si l'arrivée valide d'abord, il est B, C, A. Les deux sont valides. L'ordre persistant est l'ordre de validation, celui que la base montre et que la libération suit ; le test vérifie les deux cas (T019). Coût de réordonnancement : O(m log n) pour les écritures indexées, m ≤ queue_capacity ; aucune latence mesurée.
+API : `message_id` + `before_message_id` (ou `null` = fin), par le contrat natif. Transaction : lire les lignes `held` du destinataire dans l'ordre de rang, calculer la nouvelle séquence, ré-affecter les valeurs de rang existantes du groupe à cette séquence. Les rangs des autres messages ne bougent pas. Une arrivée concurrente omet queue_rank ; SQLite attribue un nouveau rang AUTOINCREMENT dans sa transaction, sérialisée avant ou après. La permutation passe par des rangs provisoires négatifs dans la même transaction unique pour éviter les collisions de clé primaire ; ils ne sont jamais publiés, sans CHECK positif qui les interdit. [A,B], A placé à la fin, C arrive : si le déplacement valide d'abord, l'ordre est B, A, C ; si l'arrivée valide d'abord, il est B, C, A. Les deux sont valides. L'ordre persistant est l'ordre de validation, celui que la base montre et que la libération suit ; le test vérifie les deux cas (T019). Coût de réordonnancement : O(m log n) pour les écritures indexées, m ≤ queue_capacity ; aucune latence mesurée.
 
 ## R9 - `promote`
 
@@ -163,7 +130,7 @@ API : `message_id` + `before_message_id` (ou `null` = fin), comme T3. Transactio
 
 ## R11 - Messages jamais retenus ni éditables
 
-Origine humaine ou système, alertes de fil, observations, incidents délégués, missions natives, fils T3, intentions `steer` et `interrupt` (156), types d'agents sans `held_queue`. Un envoi qui n'est pas retenu ne peut pas être édité : `not_held`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-7).
 
 ## R12 - Droits (extension de la matrice de 156)
 
@@ -191,28 +158,9 @@ Rétention : O(log n) (index existant non unique `idx_send_deliveries_recipient_
 
 **Ce que coûte le changement**, surface par surface :
 
-| Surface | Preuve | Effet | Décision |
-|---|---|---|---|
-| Fils T3 : pas de signal de tour | aucune occurrence de `TurnState` dans `t3code.rs` ; le pont interroge T3 toutes les 3 s (`DEFAULT_POLL`, `t3code.rs:36`) | le daemon ne sait pas si un fil est occupé | hors lot ; option 159c |
-| Regroupement de la session 114 | `BATCH_BOUND = 8`, `BATCH_BODY_BOUND`, `batch_family` (`t3code.rs:50-53`, `:3150`) | libérer un message par tour détruirait le regroupement (23 tours au lieu d'un) | hors lot (T3 seulement) |
-| Remise en cours de tour (session 129) | `deliverable_while_busy` (`t3code.rs:3126`) | chemin du pont T3, séparé | inchangé |
-| Échéance de tour | `stamp_turn_deadline_for_delivery` (`daemon.rs:7320-7345`) | posée à la libération, comme la session 112 | cohérent |
-| Suivi de réponse et délais | `track_reply_cycle` à l'admission ; causes d'écart du pont (`t3code.rs:1855-1912`) | une demande peut expirer pendant la rétention | balayage de parité (T007) |
-| Exécution liée | `admit_starting_message` (`daemon.rs:8828-8850`) | seulement `TriggerTurn` / `InterruptAndStart`, jamais retenus | aucun changement |
-| Reprise | `schedule_idempotent_delivery_recovery` (`daemon.rs:4175-4230`) | les lignes `held` ne sont pas rendues par `dispatching_deliveries_for_instance` (filtre de phase) ; libération par déclencheur | T004, T006 |
-| Latence | libération dans le gestionnaire de `TurnState` (`daemon.rs:17812`) : une transaction SQLite + une écriture de socket, contre un transfert en mémoire dans le porteur | un saut de plus ; l'écart est à mesurer, pas à supposer | SC-004 |
-| Signal de tour | `wrapper.rs:6666` envoie `false` sur un refus ; `daemon.rs:5240` remet `busy_since` à zéro | faux repos ; sortie forcée impossible avec des `true` répétés | signal véridique et réattesté, `busy_period_start`, `turn_attest` (R5, T006) |
-| Signal perdu | `release_stale_busy_turns` (`daemon.rs:3496-3520`) | retard borné par la réattestation (30 s) ; si muet, délai configurable `notify_timeout_secs + 30 s`, soit 2730 s par défaut, pour les instances turn_attest | SC-005 corrigé |
-| Porteur ancien | la libération utilise la trame `DeliverIdempotent` existante, mais la rétention exige un signal de tour véridique | non retenu sans `turn_attest` ; chemin actuel | `turn_attest` ; `queue_fallback` pour `promote` seulement |
-| Base de données | `store_schema.rs:4`, migration à sens unique | pas de retour arrière | sauvegarde obligatoire (R6) |
-| Quotas | `queue_capacity` du type | `queue_full` à l'admission | T005 |
-| Dette `execution_queue` / `QueueOnly` | voir plus haut | non traité | noté |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-8).
 
-**Verdict** : la refonte du chemin de remise par défaut en une session est trop
-risquée (reprise, échéances, suivi de réponse, ordre, mesure de latence, tous à la
-fois). Découpage retenu : 159a (la file retenue, réglage fermé par défaut, mesurable),
-puis 159b (les éditions, de simples transactions). Les fils T3 sortent du périmètre
-(159c).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-9).
 
 ## R15 - `edit` reporté
 
@@ -221,11 +169,9 @@ puis 159b (les éditions, de simples transactions). Les fils T3 sortent du péri
 - `cancel` puis nouvel envoi par l'auteur donne le même effet ; il perd seulement sa place.
 - Si l'utilisateur le veut (question 3) : `edit` réservé à l'auteur, nouvel événement de ledger, reçu complet. Hors de cette liste de tâches. Avec la file retenue, il devient une transaction de plus.
 
-## R16 - Option 159c pour les fils T3
+## R16 - Option 159c pour les fils adaptateur de bureau
 
-Deux pistes, non engagées :
-1. Faire émettre `TurnState` au pont et déplacer le regroupement (famille de messages, bornes) du pont vers la libération. Refonte lourde.
-2. Confier à T3 sa file : le pont envoie les messages avec `dispatchMode: queue_after_active` (déjà posé, `t3code_contract_v2.rs:255-272`) et édite par les commandes `queued-run.*`. Reste à vérifier : correspondance `messageId` Bridget et `queuedRunId` T3, accès de la commande par le RPC v2 du pont, compatibilité avec la saga d'accusé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-10).
 
 ## R17 - Garantie après libération : honnêteté
 
@@ -235,16 +181,7 @@ Deux pistes, non engagées :
 
 ## Vérifications ouvertes (levées par T002)
 
-1. Quels modes de porteurs gérés envoient `TurnState` et à quels événements (`wrapper.rs:4757`, `:5403`, `:6103-6224`), y compris les modes interactifs ; comment le wrapper connaît l'état réel de la session (`is_busy`) ; où attacher la réattestation (cadence du battement) ; quels types d'agents peuvent déclarer `turn_attest`.
-2. Période du tick des relances (`collect_reminder_actions`) et possibilité d'y attacher le balayage.
-3. Causes d'écart du pont à reproduire pour les messages retenus, et ce que le daemon fait aujourd'hui à la réception de `DeliveryIndeterminate` pour un message `reply=true` (`t3code.rs:1855-1912`, `daemon.rs:16395-16420`).
-4. Un envoi sans intention ne crée aucune exécution liée (confirmer `admit_starting_message`).
-5. `IdempotencyStore` peut fermer le suivi de réponse dans sa transaction (table `tracked_requests`, ledger).
-6. Les porteurs gérés regroupent-ils des messages (`BatchedDelivery`, `deliver_batch_to_interactive`) ? Si oui, la libération « un par tour » les affecte.
-7. Forme finale de `guidance.rs` et de `bridget_queue list` livrés par 156.
-8. Colonnes de `tracked_requests` à relire dans la transaction de libération (`state`, `deadline_at`) et lien message vers demande.
-9. Où `resume_executions_after_pause` et la levée de la pause peuvent déclencher la libération ; contenu de `control_pause_interruptions` pour décider « reprise en attente ».
-10. Résolution de l'identifiant d'agent à l'admission (`routing_agent_id`, `router.get_agent`) et correspondance avec `final_agent_id` à l'enregistrement.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-11).
 
 Décision ROOT du 12 octobre : AUTOINCREMENT garantit les admissions monotones même après purge, au prix d’un surcoût CPU/E/S SQLite non mesuré ici, nécessaire à FR008. delivery_id UNIQUE NOT NULL conserve la cible des FK. Le mécanisme sqlite_sequence est interne à SQLite, pas un compteur métier nouveau. [SQLite AUTOINCREMENT](https://www.sqlite.org/autoinc.html), [SQLite Foreign Keys](https://www.sqlite.org/foreignkeys.html).
 
@@ -266,13 +203,13 @@ Tous les chemins relatifs cités ci-dessous sont développés dans le manifeste.
 
 2. **Tick des relances.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs:6555–6584 porte la boucle, avec attente nominale1s:6559. `native_delegation::tick` précède l’échantillonnage frais de scheduled_wakes_tick. `collect_reminder_actions`:8718 réemploie cette boucle. Le coût des traitements s’ajoute à l’attente : aucune garantie de latence1s n’est mesurée ici.
 
-3. **Écarts pont et issue indéterminée.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/t3code.rs:1850–1926 traite Saturated, Expired (saga ou demande), RequestClosed et GuidanceUnavailable. `report_discard`:1868 émet DeliveryIndeterminate pour l’idempotent ; il émet aussi DeliveryRejected lorsque reply=true ou guidance indisponible, sauf RequestClosed. Le daemon:19581–19621 appelle `mark_delivery_indeterminate` avec instance/génération attestées ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency/send_delivery.rs:597–618 ne change que dispatching→indeterminate. Cette seule trame ne ferme pas une demande suivie. Wrapper:749–813 renvoie aussi Indeterminate si mauvaise instance, reçu Seen/indéterminé, quota du reçu ou erreur de stockage. Ces causes sont distinctes ; ne pas traduire toute issue indéterminée en non-livraison certaine.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-12).
 
 4. **Aucune intention, aucun lien d’exécution.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs:11333–11361 ne construit DeliveryExecutionLink que pour TriggerTurn ou InterruptAndStart. Le puits réutilisé est `begin_send_delivery_with_guidance`. Une remise retenue sans intention doit rester hors execution_queue ; le nom d’une file ne crée aucun lien d’exécution.
 
 5. **Lecture/fermeture des demandes dans une transaction.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency/send_delivery.rs:89–175 ouvre Immediate, passe le reçu Prepared→Dispatching, insère livraison/ledger/lien puis `tracked_requests` lorsque reply est présent, avant commit. `acknowledge_send_delivery`:768–832 appelle `mark_answered_in_transaction` dans cette transaction. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/store/ledger_requests.rs:699–714 ferme seulement une demande open avec identités sender/target exactes. `cancel_request`:330–358 est une autre transaction Store. La connexion IdempotencyStore connaît donc déjà la table ; une fermeture atomique held devra réutiliser ce patron sur la même transaction, sans appeler une seconde transaction Store comme si elle était atomique.
 
-6. **BatchedDelivery des porteurs gérés.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/wrapper.rs:891–986 contient `deliver_batch_to_interactive` et le type Historic/Idempotent. Son seul appel production trouvé:906 passe un vecteur d’un seul élément. Les appels multiples trouvés sont des tests. Le regroupement effectif de plusieurs livraisons gérées n’est donc pas établi. T3 possède séparément BATCH_BOUND=8 et batch_family:3261 ; ce chemin reste hors159A. Réutiliser le traitement existant lorsque pertinent, sans annoncer un lot géré actuel sur la foi du nom.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/research.md#extrait-13).
 
 7. **Garde et liste156.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/guidance.rs:1–142 fournit la garde pure (source attestée, child proof, projet, pause, mission et taux). QueueList laisse le filtrage au caller après le refus child proof. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs:10749–10841 filtre par droits/auteur/reçu avant le texte preview120 ; la position reste globale, borne200. /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/idempotency/send_delivery.rs:403–425 ne lit actuellement que dispatching non expiré, ordre rowid. Held159 doit étendre ce même puits et sa projection, pas une file parallèle. La surface CLI/MCP entière n’a pas été réauditée dans cette lecture courte.
 
@@ -283,5 +220,3 @@ Tous les chemins relatifs cités ci-dessous sont développés dans le manifeste.
 10. **Destinataire admis et identité enregistrée.** /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158B-reveils-controle/crates/bridget-daemon/src/daemon.rs:9710–9717 traduit uniquement l’alias humain vers UI_HUMAN_AGENT_ID. `prepare_dispatch`:10844–10886 utilise routing_agent_id sur from/to avant les lookups. Register:7952–7971 reprend/remplace les routes puis assigne final_agent_id=agent_id ; presences:8225 et restauration:8259 utilisent cette identité finale. Pour held159, recipient_agent doit désigner la clé de route résolue, distincte de recipient_instance et du nom to brut. L’alias UI n’est pas une preuve de provenance et Human reste exclu du classement held.
 
 ## Limites et suite
-
-R0–R17 de research159 ont été relus, ainsi que T002. Les références T3 externes et les anciennes captures de recherche restent documentaires ; elles ne sont pas des lectures fraîches de T3. Aucun runtime, cadence réelle, reprise après panne ou mesure de latence n’a été exécuté. Les porteurs PTY/tmux/T3 n’ont aucune preuve nouvelle de session ManagedSession attestée dans cette investigation. Held, turn_gate durable, migrationv7 et fraîcheur turn_attest restent absents. Aucun helper ou test nouveau proposé. La préparation de159 attend le GO ROOT après livraison158B.

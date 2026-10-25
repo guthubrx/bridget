@@ -90,10 +90,7 @@ gardent leur sens « faits reçus après abonnement ».
 
 ### D07 — Métadonnée typée d'alerte et capacité explicite
 
-Décision : extension facultative thread_notice, traitée par wrappers/T3 avant
-le chemin de réponse automatique. Alternative rejetée : préfixe texte ou DM normal.
-Impact : tests adaptateurs nécessaires mais impossibilité de forger une alerte
-en citant son texte ; pas de réponses involontaires hors fil.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/research.md#extrait-1).
 
 ### D08 — Pas de limites de rondes métier ni orchestration
 

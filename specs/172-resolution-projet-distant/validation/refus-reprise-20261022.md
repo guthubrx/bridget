@@ -20,19 +20,19 @@ Fichier : /home/moi/10.Scripts/64.bridget/crates/bridget-daemon/src/daemon/nativ
 
 Le message du premier cas dit que la commande est terminée ou son lancement refusé. Il ne prétend pas qu’un processus a existé dans le cas `Refused`. Le message du cas incertain demande de vérifier la tâche sans créer de doublon.
 
-Le client MCP courant ne transmet que `code` et `detail`. Les textes constants sont donc aussi placés dans `detail.message`, déjà transmis par ce client. Aucun rechargement de ce client ni redémarrage T3 ne sont nécessaires pour rendre le conseil lisible. Aucune logique de production du client MCP n’a changé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.md#extrait-1).
 
 La classification n’écrit pas l’enregistrement de tâche. Le gestionnaire entrant réel conserve son comportement antérieur : une observation terminale invalide le bail de flotte et marque l’instance comme arrêtée. Le correctif ne change ni droits, ni reprise automatique, ni protocole worker. Il ne crée aucune ronde ni aucune nouvelle mission.
 
-## Référence T3
+## Choix de conception Bridget
 
-Lecture de /Users/moi/11.Repositories/t3code-local/apps/server/src/mcp/OrchestratorMcpService.ts :
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.md#extrait-2).
 
 - `failure`, vers 213, conserve le code et le message explicatif.
 - `interruptThread`, vers 2740–2780, distingue `no_active_run` et `already_terminal` des contrôles préalables de modes et permissions.
 - `delegateTask`, vers 2090–2118, prend le checkout actuel du parent et son commit ; les fils partagés reprennent aussi `parent.thread.worktreePath`, vers 2440.
 
-Mécanismes repris : distinguer état et droits, conserver une explication et ne pas relancer depuis une erreur. T3 ne couvre pas les phases `WorkerObservation` de Bridget. La preuve de phase distante reste donc propre à son worker. Le transport MCP existant de Bridget via `detail` permet la compatibilité avec les clients déjà chargés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.md#extrait-3).
 
 Le refus `cwd_outside_parent_project` de l’intégrateur opus2D est séparé : il demandait la racine Git depuis un parent attesté dans un worktree. Le checkout et le SHA choisis pour une prochaine revue doivent correspondre. Aucun rejeu de cette demande n’a été effectué.
 
@@ -54,7 +54,7 @@ Le correctif de reconnexion 172-50b0673f reste actif sur le worker Cartae pour l
 
 ## Livraison active
 
-Le maître Mac a été activé sur le build 172-222941e6, source 222941e6d655bc7d3d0735327601c5f992da0755. Binaire signé SHA-256 0b0ad4d076554f81082773360193b70f926d66a276b5c10011bd5857d99bfd46. Nouveau PID 39365. T3, son serveur, le pont et le worker Cartae gardent leurs PID et dates de naissance ; l’ASAR T3 reste identique. Le contrôle avant activation ne trouvait aucun wrapper distant ni commande worker active. Aucun processus métier n’a été interrompu.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/refus-reprise-20261022.md#extrait-4).
 
 La recette officielle bridget_task_continue a utilisé UNE fois la tâche déjà terminée 508c947f-038a-42fe-836f-363d1fad6fda, clé recette172-refus-reprise-terminee-20261022-r1. Le client MCP déjà chargé a reçu remote_execution_ended et detail.message en français : « La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. » Le refus est attendu. Le SHA-256 du payload entier de la tâche reste identique ; ronde 2, résultat et instance enfant sont conservés. Aucun nouveau calcul ni nouvelle tâche.
 

@@ -4,11 +4,7 @@ Version construite depuis `24a6507a99520bf2245caf67fa69cbac40bd300f`.
 
 ## Coordination autonome
 
-- `bridget delegate <MISSION>` permet à un agent Bridget authentifié de créer un enfant et de lui confier une mission en une commande.
-- `bridget task` permet de lister, lire, attendre, continuer, répondre, annuler et accuser lecture depuis un terminal.
-- Le parcours réutilise le moteur natif de Bridget. T3 reste compatible, mais il n’est pas requis.
-- Les choix avancés restent facultatifs. Un choix explicite indisponible est refusé sans substitution silencieuse.
-- La sortie `--json` fournit un objet stable pour les scripts.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/validation/release-notes-0.3.0.md#extrait-1).
 
 ## Sécurité
 

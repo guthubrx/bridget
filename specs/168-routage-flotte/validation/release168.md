@@ -23,11 +23,11 @@ ROOT a clos T045 et donné le GO explicite avant les écritures GitHub. Laya B u
 
 Le rejeu Haiku après redémarrage privé 3804689→3834811 conserve la même Task, le résultat et les trois BLOB canon/metadata/delegate. ACK 1792075876 et cleanup_done=true sont conservés. Le payload brut de Task change ; aucune identité byte-à-byte de ce payload n’est revendiquée. HTTP et nouveaux processus ne sont pas instrumentés.
 
-Les parents, daemons, relais et tunnels privés ont été arrêtés selon les reçus de nettoyage et la clôture ROOT. Cette publication n’effectue aucune action de service. La production B était déjà installée et active. T3 n’est pas relancé ; le serveur T3 97328 est un changement externe signalé par ROOT.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/release168.md#extrait-1).
 
 ## Limites conservées
 
-FULL unique antérieure au correctif B : 2 820 PASS / 32 FAIL / 71 ignorés ; 29 des échecs initiaux PASS au dernier replay, trois annulations159 non validables sur Linux. La cause initiale T3 reste inconnue. Aucun GREEN global. Audit A V15 r2 PASS et delta T045 documenté restent distingués ; pas de nouveau scan, FULL ou passage Converge. Deux LOW RUSTSEC-2026-0098 et RUSTSEC-2026-0099 sur rustls-webpki0.101.7, et un INFO maintenance RUSTSEC-2024-0449 sur unsafe-libyaml0.2.11 restent conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/release168.md#extrait-2).
 
 Après création d’un reçu admission v2, aucun retour direct au binaire 0.3.0. Utiliser un binaire compatible ou une restauration cohérente validée sans perte.
 

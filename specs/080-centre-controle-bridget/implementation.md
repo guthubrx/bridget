@@ -43,16 +43,16 @@ Statut : tranche de centre de contrôle et navigation Projets déployées sur le
 - Le test `message_ledger_et_turn_start_ne_rendent_qu_une_bulle_utilisateur` reproduit le couple observé et impose une seule bulle.
 - Le commit `a40f97d` est validé sur Linux : `ui_relay_test` 25/25 vert et l'asset servi contient la garde de déduplication.
 
-## Portage de finition T3 Code
+## Portage de finition adaptateur de bureau Code
 
-La finition de l'overlay conserve les fonds sombres et les variables de couleurs Bridget. Le gabarit des réglages est en revanche porté du composant de réglages T3 Code installé :
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/080-centre-controle-bridget/implementation.md#extrait-1).
 
 - grille à deux colonnes `SettingsRow`, libellé et sous-titre à gauche, contrôle à droite ;
 - tailles, densité, hiérarchie typographique, focus et sélecteurs de type `SelectTrigger` repris dans la feuille de style locale ;
 - aperçus sous leur ligne de réglage et non dans une carte générique ;
 - bordure d'overlay unique, fine, et coins très légèrement arrondis, conformément au choix Bridget.
 
-Les contrôles restent des éléments HTML natifs et accessibles. Seule leur présentation a été adaptée, aucune couleur de fond Bridget n'a été remplacée par le thème T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/080-centre-controle-bridget/implementation.md#extrait-2).
 
 ## Déploiement attesté
 
@@ -117,9 +117,7 @@ Le binaire release courant a été construit depuis le checkout isolé du commit
 
 ## Limites explicites avant clôture
 
-- Le paquet corrigé doit être installé dans `/Applications/Bridget.app` seulement après fermeture explicite de l'instance en cours, puis validé visuellement avec Loin et Carte.
-- La validation humaine de la vue Typographie après le portage T3 reste requise. Aucun résultat de clic ou de capture externe ambiguë n'est compté comme acceptation.
-- Les coûts restent indisponibles sans tarifs versionnés. Les filtres avancés, la courbe quotidienne et les autres réglages serveur écrits restent des tâches non cochées dans `tasks.md`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/080-centre-controle-bridget/implementation.md#extrait-3).
 
 ## Correctif de l'overlay, des polices et des notifications
 

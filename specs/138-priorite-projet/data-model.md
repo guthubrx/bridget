@@ -2,10 +2,7 @@
 
 ## Fait de projet de communication
 
-Fait attaché à une connexion et son instance déjà attestées. Champs minimaux:
-hôte attesté, racine canonique commune, origine de preuve T3 ou wrapper.
-La clé de comparaison dérive de l'hôte et de la racine. Aucun identifiant de
-registre runtime retiré n'est accepté comme autorité.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/data-model.md#extrait-1).
 
 L'absence est représentée explicitement comme inconnue. Un label domain ne
 participe pas à la clé. Un message ne peut pas fournir son projet pour remplacer
@@ -63,14 +60,7 @@ rappels de ces attributions. Un changement de cible n'hérite pas de ce motif.
 Les runs legacy sans preuve sont inconnus ; ils ne recrutent pas automatiquement.
 Les missions existantes ne sont pas converties ni réaffectées.
 
-Le client de fond porte la racine explicite sur sa propre connexion négociée.
-Le daemon valide ce contexte sans créer d'agent et sans emprunter d'identité T3.
-Un auxiliaire conserve le fait parent. Un run ancien sans racine reste inconnu.
-L'outbox fige racine, motif et destinataire avant la première tentative ; un
-rejeu ne les reprend pas depuis la configuration courante du run.
-Le résultat publié, son result_path et son archive restent cohérents sous le
-verrou commun existant. Une publication concurrente ne devient pas une archive
-obsolète après une réservation CAS. T020 couvre cet interleave.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/data-model.md#extrait-2).
 
 ## Résultat émetteur
 

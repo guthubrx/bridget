@@ -1,12 +1,6 @@
 # Spécification 135 — Contrôle silencieux des missions
 
-**Branche** : session-135-controle-missions-silencieux
-**Date** : 2026-10-05
-**Statut** : Implemented
-**Priorité** : P1
-**Demande** : réduire les messages répétés des boucles et rendre le suivi des
-missions plus contraignant.
-**Dépendances** : 098 (pont T3), 114 (lots), 133 (relais sous-agents), agent-loop.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/135-controle-missions-silencieux/spec.md#extrait-1).
 
 ## Pourquoi
 
@@ -106,7 +100,4 @@ sans décision. Accepter la clôture lorsque toutes les obligations sont levées
 
 ## Hors périmètre
 
-- Forcer un agent à produire un raisonnement.
-- Évaluer automatiquement la qualité métier d'un résultat.
-- Réaffecter automatiquement une mission sans politique explicite.
-- Modifier Bridget, T3 ou les fournisseurs de modèles.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/135-controle-missions-silencieux/spec.md#extrait-2).

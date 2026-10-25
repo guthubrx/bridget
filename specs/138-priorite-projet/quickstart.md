@@ -68,12 +68,7 @@ export BRIDGET_SPEC138_BIN="$CARGO_TARGET_DIR/debug/bridget"
 /Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec138_real_agent_loop_cli_daemon_scoped_replay -- --ignored --nocapture
 ```
 
-Cette commande et ces variables correspondent au passage réel consigné dans
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/facades.md
-et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/facades-loop-real.log.
-Le harnais injecte AGENT_LOOP_BRIDGET_BIN dans le script et retire l'identité
-T3 héritée. Il contrôle le mandat attach-agent, le corps, les warnings et le
-reçu rejoué sans quatrième remise. Aucun heartbeat ou LaunchAgent n'est lancé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/quickstart.md#extrait-1).
 
 ## Consolider
 

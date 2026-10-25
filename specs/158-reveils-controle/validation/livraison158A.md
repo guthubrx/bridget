@@ -29,11 +29,7 @@ Build release : 113,53 s, RC0, jobs 2, nice 10. Signature vérifiée. Binaire in
 /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget
 SHA256 : 2d71f7d35a6a63b19bc064abb5ae22a699b13d3ba74849f9e220190967b96501.
 
-Activation réelle :daemon 53200 né le 12 octobre à 12:27:36 CEST ;pont Bridget 53329
-né à 12:27:39 CEST. Status RC0 :build 80b434079361, 23 agents connectés.
-Zéro mission native non terminale avant remplacement et avant chaque SIGTERM
-individuel. T3 reste inchangé :PID 60116/60228, naissances le 11 octobre à 01:13:35/36.
-Aucune relance de l’application T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/158-reveils-controle/validation/livraison158A.md#extrait-1).
 
 Nettoyage terminé le 12 octobre à 12:28:42 CEST. Worktree et branche retirés :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle

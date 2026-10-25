@@ -60,10 +60,9 @@ L’audit V15 r2 précédent et son archive restent immuables. Sa décision `pas
 
 Les neuf fichiers modifiés après la FULL contiennent seulement des correctifs de fixtures et une instrumentation conditionnelle de test. Le code produit reste inchangé. Deux contre-lectures indépendantes ont approuvé les deltas dans leur périmètre :
 
-- /home/moi/.local/state/bridget-delivery168/full-triage/review-fixtures-post-full168.md — SHA-256 `c8240ff0386b00d27214c776028c8237b300f79dc1173b9983336bd3369737bd`.
-- /home/moi/.local/state/bridget-delivery168/full-triage/review-fixtures-delta-core-t3.md — SHA-256 `42ea238ebad7c0a9e89c431bdba77f12ba3ce70129a34e3bf334d373a34068e2`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/audit168.md#extrait-1).
 
-Les limitations de ces revues restent : la sentinelle Docker observe les appels par son PATH, sans prouver tous les chemins absolus ; le PATH transmis est celui du lanceur qualifié ; le diagnostic T3 n’a pas été atteint au replay PASS et ne ferme pas la cause initiale inconnue.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/audit168.md#extrait-2).
 
 Le reçu final T036 est publié dans /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/tests168.md. Chronologie : FULL unique RC101, **2 820 PASS / 32 FAIL / 71 ignorés** ; neuf migrations PASS au binaire original ; r1 **12 PASS / 3 FAIL / 8 différés** ; r2 **8 PASS**, compilation `test-support`, umask 0077, sources stables. Bilan des échecs initiaux : **29 PASS après reprise et trois annulations 159 non validables sur Linux**, faute d’observateur kqueue dans cette plateforme. Aucun `ignored` n’a été ajouté ; aucun GREEN global n’est revendiqué.
 

@@ -3,11 +3,8 @@
 [English](delegation-native.md) · [Français](delegation-native.fr.md)
 
 
-Bridget possède son moteur de délégation. T3 peut être absent. Le connecteur T3
-atteste seulement la session qui appelle les outils. Il ne crée pas les tâches.
-
-Ce moteur n'est pas l'outil `delegate_task` de T3. L'exécution ne dépend pas de T3.
-T3 sert seulement à attester la session MCP.
+Bridget possède son moteur de délégation. La CLI et MCP utilisent le même contrat
+natif pour créer, suivre et conserver les tâches.
 
 Le parent consulte `bridget_capabilities`. Il choisit une entrée réellement
 disponible. Le catalogue provient du registre natif Bridget. Les noms de modèle
@@ -30,10 +27,12 @@ de forme d'appel, à adapter au catalogue de la session :
 du parent (voir plus bas).
 
 `glm` est le nom du profil Bridget observé dans le registre de cette session.
-Le nom d'instance T3 `claude_glm` n'est pas un type du registre Bridget.
+Le nom d'instance l’adaptateur de bureau `claude_glm` n'est pas un type du registre Bridget.
 Cet exemple ne prouve pas que ce profil existe dans tous les registres.
 Un profil absent, un modèle différent ou un effort non déclaré produit un refus.
 Sans fallback explicite, Bridget ne remplace pas la cible demandée.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-40).
 
 ## Choisir le dossier source et le commit
 
@@ -58,7 +57,7 @@ continuable.
 ## Choisir une combinaison de flotte — routage 168
 
 Cette interface exige un binaire chargé et une politique 168 active. La présence du texte ne
-prouve aucune recette, installation ou activation. Bridget reste autonome, avec ou sans T3.
+prouve aucune recette, installation ou activation. Bridget possède ses contrats et son moteur natif.
 
 ~~~sh
 bridget delegate --catalogue
@@ -366,7 +365,7 @@ Ce contrat158A s’applique au binaire et au catalogue effectivement chargés.
 Ce texte ne prouve pas leur activation. 158B reste spécifiée seulement :
 réveils, déclencheur local, faits manqués et secrets ne sont pas livrés ici.
 
-### Voir et arrêter sans fil T3
+### Voir et arrêter les délégations
 
 ```sh
 bridget control delegations
@@ -378,13 +377,7 @@ bridget control resume-delegations
 bridget control status
 ```
 
-La liste est globale, réservée à l’humain attesté, sans --t3-thread ni
---project-root. Défaut : active, 50 lignes ;maximum 100. Les tâches récentes
-viennent d’abord. Une ligne porte task_id, propriétaire, enfant, état, âge,
-échéance restante et parent_task_id ; aucun corps de mission ou résultat.
-Actif suit l’occupation d’un slot (holds_slot) : tâche non terminale, ou tâche
-gardée tant que cleanup_done est faux. Un résultat rendu peut donc rester actif.
-Le suivi Lineage ciblé dans T3 garde sa voie existante.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-41).
 
 ControlStateV1 et un acteur humain attesté sont requis. La capacité seule
 n’accorde pas cette autorité ; un client agent négocié reste refusé. À requête
@@ -681,10 +674,11 @@ Elle ne donne aucune permission Git supplémentaire au daemon ni à l’enfant.
 6. Il compare les SHA attendus sur chaque machine avant le nettoyage autorisé
    des branches, worktrees et temporaires du lot. Il conserve les travaux étrangers.
 
-L’auto-pull T3 est un confort facultatif des projets où il est activé.
-Il ne synchronise pas la flotte Bridget et ne remplace pas cette vérification.
-Bridget reste indépendant de T3 : aucun pull, merge ou sondage Git périodique
-n’est ajouté au daemon pour synchroniser les machines.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-42).
+
+La vue humaine globale utilise `bridget control delegations`. Elle présente les tâches
+récentes sans sélection de conversation ou de projet. La consultation ne donne
+aucun droit de mutation supplémentaire.
 
 ## Demandes de l’enfant — contrat155
 
@@ -1055,7 +1049,9 @@ Le parent doit être inscrit dans Bridget avec une identité et un projet attest
 Il ne choisit pas son identité dans les arguments des outils. L'enfant reçoit
 la mission demandée et les faits natifs d'identité et de Git utiles à sa reprise.
 Ces faits sont joints au premier tour. Il ne reçoit ni la conversation du parent
-ni ses credentials T3.
+ni ses credentials l’adaptateur de bureau.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-43).
 
 Le catalogue indique le périmètre du dossier avec `cwd_scope` :
 
@@ -1116,26 +1112,11 @@ même après changement d'instance, héritage compris (`delegation_grant_require
 Seul un nouveau grant humain explicite lève ce refus durable. Elle ne transforme pas
 le rejeu d'une demande déjà acceptée en une nouvelle mission.
 
-## Identité dans T3
+## Identité du client de bureau
 
-Deux conversations peuvent partager un processus fournisseur. Chaque montage
-MCP Bridget reçoit une preuve privée distincte. Bridget la vérifie auprès du
-serveur T3 à chaque opération, puis vérifie son inscription vivante au daemon.
-Une preuve partielle, périmée ou révoquée produit un refus explicite.
-Bridget n'emprunte jamais l'identité d'une conversation voisine.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-44).
 
-Un credential retiré, révoqué ou tourné ferme tous les outils Bridget de cette
-session avec `t3_session_unavailable`. Ce refus n'a ni repli par PID ni repli en
-lecture seule. Avec T3 Code `0.0.45-local.166` ou plus récent, une reprise Codex
-compare la preuve privée courante à la preuve montée avant le premier tour. Si
-elles diffèrent, T3 reprend le même fil natif et remonte Bridget avec la preuve
-courante. Il attend la fin de ce remontage avant de publier les droits et avant
-`turn/start`. Un échec bloque le tour ; il ne réutilise pas l'ancienne preuve et
-n'emprunte pas celle d'un autre fil. Une session qui n'a jamais eu de fait de
-droits garde l'identité seule (version 1) pour les lectures et le rejeu d'une
-demande déjà admise. Une admission héritée ou `development` exige la version 2 :
-sans elle, la réponse est
-`permission_attestation_unavailable`, sans grant ni repli vers `discovery`.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-45).
 
 Les options MCP humaines existantes et les désactivations restent prioritaires.
 Les outils148 deviennent disponibles au chargement des nouveaux processus.
@@ -1163,16 +1144,9 @@ Cette fermeture termine aussi la pause liée. Elle ne crée aucune reprise.
 
 ## Suivi humain et panneau Lineage
 
-Le terminal humain lit une tâche avec `bridget lineage inspect`, `watch` et `cancel`.
-Ces commandes demandent `--t3-thread` (fil T3 du parent) et `--project-root` (chemin
-absolu). Elles n'utilisent pas le MCP. Le fil T3 sert à la lecture : il ne crée pas la
-tâche.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-46).
 
-Dans T3, le panneau Lineage affiche l'arbre des tâches du fil parent : la tâche
-racine, puis les enfants imbriqués. Une tâche se lit dans son journal et son résultat.
-Ce panneau n'est pas un fil de conversation. Il n'a pas de zone de saisie, et l'enfant
-ne reçoit aucun tour. Le bouton Arrêter demande l'annulation native de la tâche et de
-ses descendants.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-47).
 
 Statuts natifs : `queued`, `starting`, `mission_pending`, `working`,
 `waiting_for_children`, `cancelling`, `result_available`, `failed`, `cancelled`. Un
@@ -1359,12 +1333,14 @@ publié sur un hébergeur. Le transport réutilise les clés locales sans les co
 Les correspondances sont publiées après préparation, relues à chaud et figées
 dans l'admission. Le worker garde ses contrôles habituels avant lancement.
 
-Le helper ne dépend d'aucune API T3. Il requiert Python 3 et Git sur les deux
+Il requiert Python 3 et Git sur les deux
 machines, et une fédération SSH installée valide. Les échecs project_preparation_*
 nomment la préparation ; ils ne deviennent pas une panne de modèle générique.
 Un rejeu reprend les mêmes chemins. Les fichiers distants existants ne sont
 jamais écrasés par le transfert ; le worker contrôle l'actualisation du checkout.
-Comme un worktree T3, le code transféré est celui du commit demandé.
+Comme un worktree l’adaptateur de bureau, le code transféré est celui du commit demandé.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-48).
 
 
 ### Délai de préparation distante (172)
@@ -1373,8 +1349,10 @@ préparation Git et SSH. Les autres lectures conservent leur budget court.
 Le worker annonce ReleaseLeaseV2 seulement à un maître compatible. Après Ready,
 la libération reste bornée à 60 secondes avec cette capacité, à 5 secondes pour
 un worker ancien. Chaque revalidation des droits demeure obligatoire.
-L'adaptateur T3 tolère 10 secondes par requête HTTP d'attestation. Cela ne crée
-aucune dépendance T3 pour les parents natifs Bridget.
+L'adaptateur l’adaptateur de bureau tolère 10 secondes par requête HTTP d'attestation. Cela ne crée
+aucune dépendance l’adaptateur de bureau pour les parents natifs Bridget.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-49).
 
 ### Plafond de worktrees
 

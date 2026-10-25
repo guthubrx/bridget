@@ -1,8 +1,6 @@
-# Validation r1 — Lot T3 Lineage serveur (tests GLM)
+# Validation r1 — Lot adaptateur de bureau Lineage serveur (tests GLM)
 
-Session : 149-sous-agents-lineage. Lot : L (serveur).
-Auteur : sous-agent test du lot serveur. Périmètre : 5 fichiers test + ce rapport.
-Date : 2026-10-10. Worktree : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-server-tests-r1.md#extrait-1).
 
 ## 1. Résultat en une ligne
 
@@ -164,9 +162,4 @@ Lot complet relancé après : 105/106 (§3).
 
 ## 10. Garanties de mission
 
-- Oracles issus du contrat fermé lineage.md. Jamais adaptés au code, sauf deux cas
-  documentés : budget journal (§6, constante hors contrat) et branche stop re-ciblée (§9).
-- Aucune édition production. Aucun fichier d'un autre agent touché.
-- Aucun cochage Git. Aucun commit. Aucun restart. Aucune config/DB de production.
-- Aucun `pnpm install`. Aucune copie node_modules. Cache `t3-final-148` intact.
-- Aucun succès 149 affirmé au-delà des preuves ci-dessus.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-server-tests-r1.md#extrait-2).

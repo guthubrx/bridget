@@ -167,7 +167,7 @@ sans réponse les trames nouvelles : c'est pourquoi la sonde les précède.
 | `wait_timeout_default_secs` | 600 (nouveau) |
 | `wait_timeout_max_secs` | 3600 (nouveau) |
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme ni de génération. `acknowledged_at` n'est pas projeté.
 

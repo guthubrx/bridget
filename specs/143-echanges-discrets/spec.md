@@ -1,4 +1,4 @@
-# SPEC143 — Échanges Bridget discrets dans T3
+# SPEC143 — Échanges Bridget discrets dans adaptateur de bureau
 
 Date : 2026-10-07. Statut : Implemented — non installé, non activé.13/13 tâches vérifiées. Convergence principale US4 CONVERGED à11:39:54 CEST, puis clôture documentaire distincte. Session initiale autorisée par `my-specify-all`.
 Historique du socle US1–US3 : baseline143 294/294 PASS en 4,92 s, puis 346/346 GREEN (252 logique, 94 UI), rejoués par l'audit en 2,97 s. Recette réelle isolée PASS ; audit final grade A sur le diff de quatre fichiers, aucun résidu. Ces preuves portent sur le socle avant US4 ; elles ne valident pas le complément. Aucune mise en production.

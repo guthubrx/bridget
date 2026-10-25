@@ -9,7 +9,7 @@ Pipeline : Livré
 
 Un agent Bridget authentifié peut maintenant créer un agent enfant et lui confier une mission avec `bridget delegate <MISSION>`. Le groupe `bridget task` couvre la liste, l’état, l’attente, la continuation, la réponse, l’annulation et l’accusé de lecture.
 
-Le parcours réutilise le moteur natif `delegation_mcp::execute`. Il n’ajoute ni protocole, ni base, ni service. T3 reste compatible, mais il n’est pas requis.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/validation/livraison167.md#extrait-1).
 
 Un terminal humain sans identité d’agent reçoit `identity_not_found` avant tout effet métier. Aucune identité humaine synthétique n’est créée.
 
@@ -35,7 +35,7 @@ Un terminal humain sans identité d’agent reçoit `identity_not_found` avant t
 ## Validation
 
 - Tests ciblés : 87 PASS et 2 ignored.
-- Recette E2E native sans T3 : création, rejeu, réponse corrélée, annulation et reprise PASS.
+- Recette E2E native par le parcours natif Bridget : création, rejeu, réponse corrélée, annulation et reprise PASS.
 - Client installé : `task list --json` rend un objet machine valide.
 - Refus sans identité : code retour 1, `identity_not_found`, aucune tâche créée.
 - Build release macOS et Linux verrouillés et hors ligne : conformes.
@@ -47,14 +47,7 @@ La suite globale initiale a rendu 1 949 PASS, 91 FAIL et 16 ignored. Un échec a
 
 ## État actif
 
-- Le client 0.3.0 est actif sur disque pour toute nouvelle commande.
-- Le daemon PID 68982 et le pont PID 68977 n’ont pas été relancés. Ils servent encore le Build ID `3b4f101e0732`.
-- Cette conservation est volontaire. La version 167 ajoute une façade client et réutilise le protocole natif déjà actif. Une relance aurait interrompu 58 agents sans bénéfice pour cette livraison.
-- Le pont reste `running` avec 32 fils.
-- Le pont conserve 173 fichiers ouverts. Le daemon en conserve 126.
-- T3 reste sur les PID 65544 et 65608. Il n’a pas été relancé.
-- La tâche parasite `com.bridget.t3-activate166` est absente.
-- Aucun `auth_failed`, HTTP 401, `EMFILE` ou `Too many open files` récent n’apparaît dans le journal du pont.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/validation/livraison167.md#extrait-2).
 
 ## Retour arrière
 

@@ -12,11 +12,4 @@ Branche: session-127-corrections-simples | Retour d'expérience de l'agent d'ét
 - UUID complet exigé, préfixes refusés (27/09).
 - `~/.local/share/bridget/bridget.db` : fichier vide de l'ancien Bridget, source de confusion.
 
-## Exigences
-- **FR-001** : une consigne commune `NO_REPLY_NOTICE` distingue « pas d'accusé de réception » et
-  « action éventuelle à faire », et dit comment rendre un résultat ; reprise par tous les pilotes
-  et par le pont T3 (message seul, lot, notification).
-- **FR-002** : un type absent du registre est refusé `UnknownType` (types connus, registre).
-- **FR-003** : `send` CLI et MCP résolvent un nom exact ou un début d'UUID (≥ 6) unique ; toute
-  ambiguïté est refusée.
-- **FR-004** : le fichier vide de l'ancien Bridget est retiré.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/127-corrections-simples/spec.md#extrait-1).

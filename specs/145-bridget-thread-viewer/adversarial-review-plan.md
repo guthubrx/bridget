@@ -8,18 +8,11 @@ Le constat `who same_project` transmis par le principal ne montre que l'agent Co
 
 ## Périmètre de la revue
 
-Bridget : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/`.
-T3 : `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/`.
-Référentiel : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/specs/145-bridget-thread-viewer/spec.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/specs/145-bridget-thread-viewer/contracts/human-thread-view.md` et preuves145 distinctes des anciennes sessions.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review-plan.md#extrait-1).
 
 ## Attaques et preuves à examiner
 
-1. Autorisation : forger conversation, agent, racine et fil ; essayer autre projet/fournisseur ; supprimer ou dupliquer une liaison ; faire varier source T3 et Git ; déconnecter pendant lecture. Vérifier refus fermé, root canonisée et aucune utilisation last_known.
-2. Non-mutation : ouvrir/fermer, list/show/history, recherche, refresh et refus. Vérifier handlers avant maintenance et CLI avant init/autostart. Comparer données métier et compteurs d'ACK, dispatch, réveil, reçu, mission et appel modèle.
-3. Protocole : ancien daemon, capability absente, version inconnue, action agent injectée, JSON/UTF-8 invalide, sortie trop grande, exit2, timeout et stderr sensible. Vérifier enum fermé, argv sans shell et caps.
-4. Pagination : trois pages au moins, from/to/limit invalides, ordre ASC, snapshot stable, ajout entre pages et refresh. Vérifier corps source exact, membres/noms groupés bornés et absence de trous/doublons sur données stables.
-5. Contexte UI : A → B → A, fermeture, refresh répété, changement de fil, révocation et réponses désordonnées. Vérifier générations, vidage des données et aucune publication tardive.
-6. Natif et accessibilité : icône b neutre, store/migration, menus/tabs, clavier/focus, recherche portée chargée, erreurs/retry, Sheet/panneau étroit et route Pull requests. Examiner l'interaction observée ; un snapshot seul ne suffit pas.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review-plan.md#extrait-2).
 
 ## Scoring factuel
 

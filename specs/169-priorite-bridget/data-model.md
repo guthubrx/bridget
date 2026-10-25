@@ -4,10 +4,7 @@ Date : 2026-10-15.
 
 ## Réglage persistant existant étendu
 
-| Élément | Forme | Règle |
-|---|---|---|
-| `preferBridgetDelegation` | Booléen neuf dans `ServerSettings` existant, exclu de `ServerSettingsPatch`. | Défaut `false`. Clé absente dans un document valide : OFF. Valeur non booléenne : décodage invalide. Un patch d'un autre réglage conserve la valeur lue. |
-| Fichier de réglages | Fichier résolu par le service T3 existant. | Pas de second fichier ni de réglage par projet. Les autres valeurs sont conservées. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/data-model.md#extrait-1).
 
 Le fichier absent dans une installation sans réglages conserve le défaut normal OFF. Une erreur de lecture autre que cette absence normale ne prouve pas OFF. Aucun schéma de base, migration, index ni fichier de politique n'est ajouté.
 
@@ -40,7 +37,7 @@ Tous les changements prennent effet dans les nouvelles consignes du prochain tou
 
 La configuration MCP, si elle existe, et les faits de permissions conservent leurs références et leur cycle existants. La simple préférence ne change ni endpoint, ni credential, ni identité du fil, ni fait de permissions. Son portage utilise le contexte par tour, pas cet objet de configuration. Aucune map, mutation MCP ou faux credential n'est nécessaire.
 
-Le registre existant compare les objets par référence dans /Users/moi/11.Repositories/t3code-local/packages/provider-core/src/server/mcpSession.ts:153. Remplacer cet objet pour actualiser le mode est donc interdit. Une véritable rotation continue à suivre SPEC-166.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/data-model.md#extrait-2).
 
 ## État d'injection des fournisseurs
 

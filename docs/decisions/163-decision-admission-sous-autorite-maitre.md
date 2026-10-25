@@ -16,7 +16,7 @@ La politique est relue pour chaque nouvelle admission puis figée. coordinator_e
 
 La frontière réseau reste un module étroit et le client minreq existant. Une tâche réseau unique possède le permis jusqu’à son vrai retour ; le demandeur dispose d’un budget distinct de deux secondes. with_timeout est exclu car il détache un thread interne. send_lazy impose les bornes réelles de corps, en-têtes et ligne de statut ; redirects 0. HTTPS utilise https-rustls et la validation normale du certificat. Aucun nouveau client HTTP, runtime async, tokenizer ou gestionnaire de secrets.
 
-Bridget expose le résumé sans T3. Les projections Lineage v1/v2 restent inchangées ; v3 négocie le résumé. Le lecteur passe de v3 à v2 uniquement sur unsupported_version structuré. Le passage historique de v2 à v1 reste permis sur unsupported_version ou invalid_request structurés. invalid_request en v3, timeout et refus d’autorisation ne provoquent aucun repli ; pages homogènes, journal/cancel sans repli.
+Bridget expose le résumé par le parcours natif Bridget. Les projections Lineage v1/v2 restent inchangées ; v3 négocie le résumé. Le lecteur passe de v3 à v2 uniquement sur unsupported_version structuré. Le passage historique de v2 à v1 reste permis sur unsupported_version ou invalid_request structurés. invalid_request en v3, timeout et refus d’autorisation ne provoquent aucun repli ; pages homogènes, journal/cancel sans repli.
 
 ## Alternatives écartées
 
@@ -44,8 +44,8 @@ Le plafond UNION inclut les refus auto. Sous pression, seuls les refus auto term
 
 ## Lieux de réalisation et provenance — orientation utilisateur retenue
 
-Le développement Rust, les compilations et les tests Linux de 163 sont réalisés sur Cartae. Utiliser un checkout de session et un namespace privé avec umask 077, TMPDIR court et fixtures isolées. Ne jamais toucher le worker actif 471321, son socket ni son état pour ces essais. Le défaut de rattachement du connecteur est hors fonctionnalité 163. ROOT rapporte son rétablissement opérationnel : limite du seul pont passée de 4096 à 8192 et pont seul relancé ; daemon et T3 protégés. Le checkout distant de session existe, branche session-163-decision-admission, base dcfd9bc29140457b1fa016c276f5a48933415a5c propre selon ROOT. Le rédacteur n’a exécuté aucun SSH ; ce checkpoint ne prouve pas encore le lancement de DEV_CARTAE163.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/163-decision-admission-sous-autorite-maitre.md#extrait-1).
 
-Les modifications T3, les tests propres à macOS, la signature et l’installation Mac restent sur le Mac. La recette du serveur de décision part du maître Mac : un succès Linux ne vaut pas validation du chemin réseau ni du comportement macOS. Les builds Linux et Mac doivent attester le même commit source et les empreintes des sources utilisées. Aucun redémarrage de T3.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/163-decision-admission-sous-autorite-maitre.md#extrait-2).
 
 Une seule compilation active à la fois dans toute la flotte, jobs=2, nice=10 et tests=2. Regrouper les tests prévus ; une suite FULL unique seulement si un gate la prévoit. Ne pas relancer une suite longue à chaque tâche ni après succès sans changement affectant ses résultats. Rejouer les seuls contrôles affectés après correction. Les preuves distinguent Linux, macOS, recette réelle et provenance installée.

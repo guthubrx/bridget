@@ -14,13 +14,9 @@ Le transport clôturait toute mission dès un `result` Claude réussi. Il ne
 suivait pas les tâches du fournisseur. Le résultat et le rapport Git sont
 ensuite figés par ronde : le dernier rapport ne pouvait plus les remplacer.
 
-## Référence T3 et correction
+## Choix de conception Bridget
 
-Lecture de `ClaudeAdapter.ts` (événements `task_started`, `task_updated`,
-`task_notification`), `ThreadBackgroundLiveness.ts` et `ThreadSettlementPolicy.ts`
-dans T3. T3 sépare la fin du tour de la fin de ses tâches et suspend la clôture
-quand une tâche reste active. Le SDK installé documente aussi les tâches Bash.
-Le binaire Claude installé émet ces événements pour les tâches enregistrées.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/claude-background-result.md#extrait-1).
 
 Bridget reprend ce suivi structuré dans son transport, sans nouveau service,
 schéma durable ou droit. Une réussite provisoire conserve la même mission,
@@ -62,10 +58,7 @@ uniquement sur `task_started`. Les mises à jour ne créent aucune entrée et
 une fin est traitée avant le filtre d’affichage. Les deux scénarios sont testés.
 Aucun second registre ni mécanisme de reprise n’a été ajouté.
 
-La revue utilisait un SDK plus ancien. Les champs `ambient`,
-`task_started.is_backgrounded` et `patch.status=paused` sont présents dans
-le SDK 0.3.260 lu dans T3 et ne sont pas des champs inventés. Le suivi ne
-suppose pas une garantie d’ordre des événements de progression.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/claude-background-result.md#extrait-2).
 
 ## Livraison
 
@@ -76,13 +69,7 @@ profil pour accélérer la compilation. Signature macOS vérifiée.
 - SHA-256 Linux : `d6256639fb9a6d4e807fde52e7b5469834a932d6c3a15e6ecb827e4b41292f23`.
 - SHA-256 macOS : `a9226281b33535638c4d0b7708cf6d98361859a71bacf29c23c726f207ed69c3`.
 
-Worker Cartae activé sur `174-be00ace5-opt`, reconnexion attestée dans le
-journal maître. Le service conserve `KillMode=process` et `SendSIGKILL=no`.
-Les quatre enfants encore actifs ont conservé leur PID et leur naissance ;
-leurs douze processus observés ont survécu. Les trois autres processus de
-l’instantané appartenaient à une tâche déjà terminale avant l’activation.
-Aucune nouvelle mission applicative, reprise ou modification Opus2D.
-Le maître, le pont et T3 n’ont pas été relancés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/claude-background-result.md#extrait-3).
 
 Les wrappers déjà actifs gardent leur code. La correction est disponible pour
 les nouveaux enfants ; aucune prétention de correction à chaud des missions

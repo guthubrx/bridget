@@ -13,10 +13,7 @@ Binaire signé ad hoc, vérification stricte :
 SHA256 : `39834b7d36bd184842ea8cf99994a08e92af583178a97b0dba537643e52ffaa8`.
 Le fichier installé a été rehashé et correspond au reçu d’activation.
 
-Activation constatée le 12 octobre : daemon 67985 depuis 01:25:36 CEST et
-pont 68081 depuis 01:25:39 CEST ; statut RC0, build 806d0984fe45 chargé.
-T3 reste inchangé : PID 60116/60228, naissances du 11 octobre à 01:13:35/36.
-Aucune relance T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/154-isolation-worktree/validation/livraison154.md#extrait-1).
 
 ## Vérification et limites
 
@@ -44,12 +41,7 @@ Nettoyage du build : 0,29 Gio logiques d’intermédiaires retirés. Cache debug
 commandes. Le seuil de nettoyage de ce build était dépassé ; les caches protégés
 ont été conservés. Aucun réglage global n’a été changé.
 
-Complément à 01:27 CEST : 18 TMPDIR attestés, aucun fichier ouvert. Sept racines
-vides retirées ; 74 937 515 octets logiques de fichiers hors base retirés. Toutes
-les bases synthétiques et leurs fichiers SQLite auxiliaires restent conservés,
-conformément à la règle « aucune suppression DB ». Aucun gain physique revendiqué.
-Bases de production et conversations T3 intactes. Sauvegarde du binaire 153 :
-/Users/moi/.cache/bridget-delivery154.l50umk90/rollback153-bridget
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/154-isolation-worktree/validation/livraison154.md#extrait-2).
 
 ## Preuves
 

@@ -88,7 +88,7 @@ Le principal doit donner le GO implémentation aux propriétaires Rust/RPC/Web a
 
 ## Addendum de convergence autorisé
 
-Le statut0/26 ci-dessus décrit la passe initiale avant GO. Le principal a depuis autorisé les lanes ; les preuves courantes restent dans le journal et les résultats147. Les trois cas observés en implémentation ont été intégrés aux artefacts : ready coalescé côté atome malgré protection wire ; rupture CLI/daemon sous WebSocket T3 sain ; intervalle de plus de50 nouveautés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-1).
 
 Le runtime conserve event/readyGeneration/subscriptionId sous un visitId local. Le wire reste inchangé. La reprise technique du seul CLI réutilise Schedule, initiale plus trois reprises maximum, unavailable/command_failed/timeout seulement ; aucun retry métier ni polling de corps. L'historique relit tête, intervalle jusqu'à l'ancre et segment consulté sous S commun avant publication atomique. Coût O(nouveautés + pages consultées).
 
@@ -102,38 +102,19 @@ Réutilisation : ligne et données autorisées existantes, item16 du gate18/18. 
 
 ## Convergence des preuves — état avant le gate final, historique
 
-Référentiel courant : 18 exigences, 10 critères, 5 scénarios utilisateurs et 30 tâches. Les tests finaux couvrent les branches de protocole, d'autorité, de processus, de reprise, de pagination, de sélection et de présentation. Rust 16PASS ; transport 298PASS ; tests threads 16PASS ; T3 contracts/Reader/auth/runtime 136PASS ; WebSocket 1PASS ; Web 116PASS. Les tests ignorés et avertissements préexistants restent dans le journal et les reçus, sans faux résultat zéro alerte.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-2).
 
 La recette native isolée utilise des données synthétiques. Elle valide choix hors première page, retour A→B→A, focus, sélection de texte, dépliages, copie brute, recherche, supersession pendant pagination en vol, silence supérieur à 60 secondes et dix cycles de libération. L'interop daemon/socket/CLI/Reader/runtime réelle est une preuve distincte avec relais RPC synthétique. Aucun parcours WebSocket/DOM intégral réel n'est revendiqué.
 
 Les cinq variantes métier US5 ont un RED ciblé, un GREEN 116PASS et une recette native de la ligne auteur/date. Les mesures de modification sous deux secondes valent pour l'opération native saine avec fixture ; les essais d'aperçu inactif plus lents restent consignés. Aucun benchmark de production ni essai 128 clients simultanés n'est prétendu.
 
-Les deux audits v14 sont bornés au diff : 6 fichiers source Rust et 17 fichiers source/test T3. Les constats historiques sont conservés, les contre-revues finales sont APPROVE, le scoring readonly ne trouve aucun défaut résiduel confirmé. Les deux validateurs sortent RC0 avec zéro erreur et zéro warning. Aucun constat documentaire CRITICAL persistant. Cette consolidation a précédé le gate final du principal, désormais validé. T025/T026/T030 sont cochées sur les preuves. Aucun commit, fusion, push, installation ou activation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-3).
 
 ## Passe finale code ↔ exigences — lecture seule des propriétaires
 
 Sources de cette passe : `/root/rust147`, `/root/rpc147` et `/root/web147`. Aucun nouveau test ni édition produit. Leurs lignes sont celles des sources147 finales. Aucun symbole ou exigence orphelin constaté ; contributions entre lanes distinguées.
 
-| Exigence | Points d’entrée vérifiés | Preuve / responsabilité |
-|---|---|---|
-| FR147-01 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:12939 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/bridget/BridgetReader.ts:241 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:664 | Signal→stream→relecture native, fixtures interop et recette séparées. |
-| FR147-02 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/threads.rs:568 ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:12964 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:253 | Done≠Replayed, mutations disponibles, noms pertinents et tri récent. |
-| FR147-03 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:11541 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/orchestration.ts:35 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:171 | Aucun pollingcorps, garde idle sans scan, silence natif69s. |
-| FR147-04 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:807 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:130 | File16/coalescence/overflow et un groupe courant+dirty ; rafale100. |
-| FR147-05 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/orchestration.ts:50 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:316 | Retry technique borné, newready, rattrapage sous S. |
-| FR147-06 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/bridget/BridgetReader.ts:346 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/runtime.ts:346 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:97 | EOF/cancel scoped, visibilité et visite obsolète, dix cycles. |
-| FR147-07 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/rightPanelStore.ts:503 | Clé environnement/projet/conversation, choix indépendant. |
-| FR147-08 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:220 | show/history explicites hors page1, A103 restauré. |
-| FR147-09 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:449 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/orchestration.ts:43 | Contexte/panne masque mais gardeUUID ; seul refus confirmé du fil retirechoix. |
-| FR147-10 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:12795 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/bridget/BridgetReader.ts:105 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/auth/RpcAuthorization.ts:26 | Autorité serveur avant lectures/flux, réattestation avant émission. |
-| FR147-11 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-transport/src/protocol.rs:2205 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/contracts/src/bridget.ts:19 | Schémas fermés contrôle seul, canaris et champs inconnus rejetés. |
-| FR147-12 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/rightPanelStore.ts:942 | UUID seul réhydraté ; aucune copie de corps/titre/membres. |
-| FR147-13 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:332 | Pont nouveautés/anciensegment, to_seq S commun, staging atomique. |
-| FR147-14 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:414 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:849 | Identité DOM et keys stables ; recette focus/Range/détails/copie brute. |
-| FR147-15 | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs:11255 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/ws.ts:2144 | Tables/cursors/verdicts identiques, aucun Deliver/dispatch/ACK/modèle. |
-| FR147-16 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:76 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/packages/client-runtime/src/state/orchestration.ts:43 | Codes neutres, masque/refus, pas refonte visuelle large. |
-| FR147-17 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:877 | Auteur→destinataires ou Sans sollicitation, date unique même ligne. |
-| FR147-18 | /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:731 ; /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx:827 | Targets effectifs auteur exclu, noms autorisés/fallbackUUID, aucun appel extra. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-4).
 
 | Critère | Preuves finales et limite |
 |---|---|
@@ -152,7 +133,7 @@ Cette passe confirme la couverture18/18 et10/10 avec les limites explicites. Ell
 
 ## Gate final du principal
 
-Deux passes Converge lecture seule validées, zéro exigence orpheline, zéro finding actif. Les limites de preuve native/synthétique et les avertissements préexistants sont conservés. Les audits Rust et T3 sont mécaniquement conformes (RC0, zéro erreur/alerte). Session Implemented/Validé en isolé, NON installée et NON activée. Aucun chantier148 incorporé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-5).
 
 ## Réouverture — cohérence du périmètre, pas validation anticipée
 
@@ -178,7 +159,7 @@ Statut In Progress,43 tâches cochées sur GO précédents. Tableau de préparat
 |US8 membres | FR24–28 ; SC15–18 | T042–T048, revue fonctionnelle APPROVE ; reçus finaux/audit frais et gate global encore attendus. |
 |US9 visuel | FR29–31 ; SC19/20 | T051–T054, RED métier et GREEN provisoire signalés ; correctifs show-date/ScrollArea et preuves finales/recette encore attendus. |
 
-Les audits initiaux du08/10 ne couvrent pas les extensions. Audits frais Rust/T3 du09/10 délégués aux reviewers, reçus et validateurs encore attendus. Ancien timeout CLI de qualification US8 corrigé par propriétaire : sortie64KiB/attente2s/global10s et garde PID. Revue du correctif et succès natif ne valent pas injection de timeout RED/GREEN. Vérification finale code↔tous FR/SC, absence d'orphelin et stabilité byte-à-byte des tâches restent à faire par le principal après gel des sources. Aucun commit/installation/activation/restart ou modèle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-6).
 
 ## Converge passage1 principal — lecture seule, avant correction FR31
 
@@ -186,10 +167,7 @@ SHA256 tasks avant contrôle : dbde969d79be9397992de8c061785995f8245455728880793
 
 FR01–18/SC01–10 : table de code initiale et121 tests de conservation réutilisés. Sources vérifiées par les owners gelés et le principal ; aucun nouveau test exécuté par l'owner documentaire. Références actuelles des extensions :
 
-- UUID/ACK : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/threads.rs ; CLI : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/cli.rs.
-- MCP : /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/provider/Drivers/ClaudeMcp.ts ; Adapter : /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/server/src/provider/Layers/ClaudeAdapter.ts.
-- Store : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/store/threads.rs ; Daemon : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/daemon.rs.
-- Refresh : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/147-panneau-bridget-vivant/crates/bridget-daemon/src/t3code_identity.rs ; Panel : /Volumes/8TB2/50-repos-archives/11.Repositories/t3code-local/.worktrees/147-panneau-bridget-vivant/apps/web/src/components/BridgetPanel.tsx.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-7).
 
 | Exigence | Code / preuve responsable |
 |---|---|
@@ -211,11 +189,7 @@ SC11/12 : UUID10tests/replay/non-régressions, aucune autorité déduite de la c
 
 Le mapping initial ne trouvait pas d'exigence sans source/test. La revue approfondie du passage1 confirme ensuite un MEDIUM FR31/US9acceptation5 : titre/membres tronqués, details limités aux dates/état. Le principal autorise correction minimale dans details existant avec textes complets qui reviennent à la ligne et RED longtitre/multimembres. Aucune tâche nouvelle, T051–T054 restent ouvertes ;121PASS et build30.12s deviennent pré-correction. Conserver ce finding historique même après son éventuelle correction.
 
-| Gates réellement restants | État |
-|---|---|
-|FR31 titre/membres complets | RED1FAIL puisGREEN122PASS et statiquesRC0 ; main relit les deux paragraphes wrapping. Correctif code reçu, validation native dans QA restante. |
-|Recette native US9 | Aperçu interrompu après resize ; evaluate échoué ne prouve pas0h2. Charte/clavier/DOM/copie complets encore à reprendre en isolé. |
-|Audit frais T3 extensions | Final encore à recevoir. Audit Rust neuf validé RC0/0erreur/0warning par reviewer et principal, A/zéro actif limité à US6/US8/T040 et8fichiers/hunks ; pas toutSPEC147 ni réutilisation grade08/10. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-8).
 
 Passage2 et GO final à consigner après ces gates. Commentaire coût de ClaudeMcp : annotation seule vérifiée, sans benchmark ou comportement nouveau. Aucun commit/install/activation/restart/modèle.
 
@@ -223,7 +197,7 @@ Passage2 et GO final à consigner après ces gates. Commentaire coût de ClaudeM
 
 Le principal a validé require_uuid493, canonical_uuid350 et thread_members1519 avant implémentation UUID. FR19/20↔SC11/12↔T031–T034 correspondent aux seules actions de fils partagés. Sept cas comportementaux, parsing CLI et non-régressions102/127/145/146/147 ; aucune normalisation de l'acteur d'autorité ni des IDs send opaques. Après reçus et contre-revue APPROVE, le principal autorise34 tâches cochées. Deux passes Analyze main, avant/après resserrage de portée, ne laissent aucun finding CRITICAL persistant. FR23 part UUID relève de T031–T034 ; FR21/22 et montage FR23 relèvent de T035–T041, désormais conçues mais non validées GREEN. Aucun faux PASS global des extensions.
 
-Le diagnostic assaini regional-wrkr-1/claude_glm/.claude-glm constate configuration sans Bridget et injection T3 t3-code seulement ; aucun secret ni modèle lancé. Après gate US7, FR21/22/23↔SC13/14↔T035–T041 possédaient reçus SDK292PASS/1SKIP, façade MCPnative3PASS et qualification refresh1PASS avec régressions22/14. Deux revues locales finales APPROVE puis GO principal permettaient leur cochage. Ce paragraphe est historique, avant T049/T050 et les gates globaux ci-dessous. Les preuves demeurent distinctes, pas SDK+modèleE2E.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-9).
 
 ## Converge passage2 final —31FR/20SC/9US
 
@@ -231,10 +205,10 @@ Le principal confirme CONVERGED après relecture du code gelé, notamment Panel6
 
 US8 :11PASS, transport3PASS, régressions103PASS/2ignored et10PASS ; interop native CLI/MCP privée137entrées/3pages, silence d'adhésion et cibles futures corroborés. US7 final294PASS/1SKIP, preuves MCP OS3PASS et refresh1PASS distinctes. US9 final122PASS, build post-FR31RC0, recette native finale PASS : charte claire/sombre, titre/membres complets, clavier, pin/recherche/horspage/A→B→A, pagination et stabilité de copie/détails ; masques sans fuite.
 
-Audits frais Rust A et T3 A99.86, zéro actif ; validateurs relus/re-exécutés par principal RC0/0erreur/0warning. Historique MEDIUM corrigé conservé, pas grade initial réutilisé ni dépôt global certifié. QA /Users/moi/.cache/t3-spec147-preview.457DX8/us9-final-native.json lue intégralement. Panneau CSS360px, viewport1843×1152, captures1280×800 ; composants/CSS/store réels, RPC/données/clipboard synthétiques. Aucune chaîne transport/provider/modèle E2E intégrale revendiquée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-10).
 
 SHA256 tasks avant/après les passes : dbde969d79be9397992de8c061785995f8245455728880793486a70d92c99654, strictement identique. Le principal autorise ensuite seulement le cochage des onze dernières tâches.54/54, Implemented/Validé en environnement isolé. À cette clôture, NON installé et NON activé ; aucun commit/fusion/push/restart/cleanup.
 
 ## Autorisation de livraison distincte, après convergence
 
-L'utilisateur autorise ensuite commit/fusion/push/installation et redémarrage T3. Livraison EN COURS par principal, sans PR T3 ni cleanup142/145. Ce mandat ne transforme pas les preuves isolées en preuves de production. Reçus de sauvegarde ciblée app/binaire/DB Bridget (pas DB T3), installation/hashes/processus et smoke encore attendus. Aucun finding de développement rouvert ni task décomptée ;54/54 demeure validé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/analysis-report.md#extrait-11).

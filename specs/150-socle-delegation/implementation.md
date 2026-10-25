@@ -54,11 +54,7 @@ Total `native150` : 50 tests daemon (`cargo test -p bridget-daemon native150`) +
 
 ## Non vérifié
 
-- `run_maintenance` complet (il écrit dans `$HOME/Library/Logs`) : seul
-  `maintain_stores` est testé.
-- Aucun lecteur T3 réel ; aucun daemon réel ; aucune relance.
-- Les 8 échecs préexistants de la suite complète (hors délégation) ne sont pas
-  diagnostiqués : ils appartiennent au fil « Complément149 identité durable ».
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/implementation.md#extrait-1).
 
 ## Convergence
 

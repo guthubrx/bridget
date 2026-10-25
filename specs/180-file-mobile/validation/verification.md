@@ -6,8 +6,8 @@ Rust : dernier lot mobile77PASS/1ignored ; guidage6PASS. Un passage intermédiai
 
 Android : JVM20PASS/0échec, lintRelease et assembleRelease passent. Un test instrumenté QueueStoreTest passe sur Pixel10a Android17 dans le paquet de recette distinct, ensuite désinstallé. Les XML privés et leur archive vérifiée sont conservés.
 
-Recette réelle Android vers un destinataire natif contrôlé : envoi normal, volet replié/déplié, édition persistante, annulation, guidage explicite, remise au repos avec application arrêtée, réouverture. Trois commandes natives : un cancelled, deux acked ; témoin destinataire : exactement deux IDs uniques, aucun message annulé. Le moteur de recette est contrôlé et ne lance aucun modèle. Le guidage Codex/T3 est qualifié par les tests ciblés et la lecture de son adaptateur ; aucun nouvel envoi de test dans un vrai fil utilisateur.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/180-file-mobile/validation/verification.md#extrait-1).
 
-Preuves : diaporama vérifié,13étapes/7clics,338660octets. Première pulsation/curseur visibles ; lecture/pause, précédent/suivant et dernière étape vérifiés dans T3. Aucun message réel des autres fils dans les images versionnées. Captures originales, manifestes et témoins natifs hors Git. Avant du lien non capturé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/180-file-mobile/validation/verification.md#extrait-2).
 
 Les réglages de filtre et favoris ont été remis. Pixel laissé sur Commander Bridget depuis Android. Aucun test envoyé aux autres conversations. Agent de recette fermé proprement. La revue indépendante et ses limites figurent dans revue.md.

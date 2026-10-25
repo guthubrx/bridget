@@ -13,6 +13,6 @@ Points d’entrée localisés :
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/daemon/native_delegation.rs:2612 — tick
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/158-reveils-controle/crates/bridget-daemon/src/cli.rs:6041 — apply_control_mutation
 
-Menaces préparatoires : entrées CLI/MCP et agents locaux, contrôle global/portées/identités/missions. Gardes et attaques non vérifiées. UI absente si aucun marqueur inventorié ; T3 externe hors périmètre. SLO et performances non évalués.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-12/session-2026-10-12-spec-158A-01/01_Decouverte.md#extrait-1).
 
 ROOT rafraîchit les SHA et le delta après formatage/Converge. La préparation n’autorise aucune lecture thématique avant GO/gel final.

@@ -22,7 +22,7 @@
 - **Preuve** : `protocol::tests::le_daemon_atteste_sa_machine_sa_base_et_son_instance`
   ferme à `1 passed; 0 failed`.
 
-## T3 — État du daemon et rôles
+## adaptateur de bureau — État du daemon et rôles
 
 - **Statut** : terminé.
 - **Modification** : `DaemonState::new` produit `Uuid::new_v4()` une fois ;

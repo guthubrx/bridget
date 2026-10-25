@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Cycle de vie des liens T3
+# Specification Quality Checklist: Cycle de vie des liens adaptateur de bureau
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-10-14  

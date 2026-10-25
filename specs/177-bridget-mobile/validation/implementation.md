@@ -16,7 +16,7 @@ La copie hors ligne a conservé exactement 353 Tasks et 424 reçus d'admission, 
 
 Le maître Cartae, le backend loopback et HTTPS ont démarré. Le contrôle HTTPS sans autorisation a reçu 401 avec certificat valide. Le premier relais Mac avait un défaut duplex : cat rencontrait EAGAIN après le premier échange. Le runner observe maintenant le premier octet avec MSG_PEEK sans le consommer, puis laisse SSH posséder son flux. Le test natif sous macOS couvre deux échanges espacés et la sonde vide ; 23 tests scripts095 passent.
 
-La recette d'autorité complète a ensuite refusé les permissions car le projet T3 et la garde humaine supposaient encore que présence et coordinateur partageaient leur hôte. Le maître a donc été remis sur le Mac avec le NOUVEAU binaire optimisé r2, après copie de l'état courant de Cartae. T3 n'a pas été relancé. Le catalogue natif et le statut réel fonctionnent de nouveau. La route mobile serveur est préparée mais son backend arrêté pendant cette correction. La migration permanente n'est donc pas déclarée livrée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/177-bridget-mobile/validation/implementation.md#extrait-1).
 
 La correction en cours résout le projet sur le worker d'origine authentifié, via le lecteur existant et le canal corrélé à l'époque. La publication revérifie l'identité et l'hôte ; absence de worker invalide le fait, sans repli local. La garde humaine garde son binding strict et accepte l'hôte du projet vérifié. Une contre-revue indépendante est en cours. Aucune nouvelle autorité de lancement n'est accordée au téléphone.
 
@@ -28,11 +28,11 @@ Le Pixel a validé 14 tests de stockage/gardes sur 0.5.0 debug. L'APK release si
 
 ## Revue d’autorité de projet — décision de traitement
 
-R1 (Task ec6d4c8a-9c67-4a6a-ba26-dba94dec89a1) relève deux défauts confirmés : une présence locale retenue pouvait être incohérente avec la connexion distante ; la garde humaine ne contrôlait pas la disponibilité du worker d’origine. Les deux sont corrigés. Le test couvre présence, connexion et projet divergents, perte du worker et absence de repli local. Le helper de fraîcheur est commun à la garde et à l’échange. La perte du worker invalide les vues humaines. Les faits connus de portée projet restent connus : les effacer pourrait transformer un refus interprojet en simple avertissement pour portée inconnue. La résolution distante est limitée aux annonces T3 de leur présence primaire cohérente ; une annonce Git distante ne fait aucun RPC. Lot final mobile177 : 57 PASS, 1 recette explicite ignorée par défaut.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/177-bridget-mobile/validation/implementation.md#extrait-2).
 
 L’objection selon laquelle franchir une garde distante serait en soi un gain de droits n’est pas retenue comme défaut : le déplacement du coordinateur sans perte du droit de déléguer des parents existants est le parcours autorisé. La garde de projet n’accorde pas une posture ; les permissions HTTP fraîches sur le worker, les identités, les révisions, les sources, la politique enfant et la remise native restent obligatoires. Un second avis indépendant est demandé sur ce raisonnement et les renforcements.
 
-La lecture de canonicalité d’un projet T3 non Git n’est pas limitée à une liste de projets déjà configurés : cela casserait les nouveaux projets et les conversations dont la racine est le dossier personnel. Le namespace privé, la liaison SSH du même compte, la présence primaire T3 cohérente, le worker provisionné et le résultat borné limitent ce parcours. Aucun contenu de fichier, secret ou droit de lancement n’est retourné par cette lecture. Les différences de projets désormais connues restent soumises aux refus interprojets natifs.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/177-bridget-mobile/validation/implementation.md#extrait-3).
 
 La rotation Android a dû conserver la capacité permission de l’ancien certificat privé pour la permission signature DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION générée par AndroidX. Sans cette capacité, Android refusait la mise à jour DUPLICATE_PERMISSION. L’ancien keystore reste privé 0600, hors dépôt ; aucun nouveau droit serveur ou permission d’agent n’est donné. Les capacités shared-uid, rollback et auth de cet ancien certificat restent désactivées. L’APK public ne contient aucune clé privée ni certificat de signature debug additionnel en tant que signataire courant : sa signature courante est celle de production, avec historique de rotation.
 

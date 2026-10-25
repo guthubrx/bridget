@@ -6,7 +6,7 @@
 |---|---|---|---|
 | `child_requests` | `Option<String>` (`"deny"` / `"forward"`) | `deny` | Mode choisi à la délégation, figé |
 
-Aucun nouvel état de tâche. La vue Lineage T3 ne change pas.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/155-demandes-enfant/data-model.md#extrait-1).
 
 ## Table `native_child_requests` (base de la saga native)
 

@@ -11,12 +11,6 @@ sépare parent/destination, HEAD shared/commit demandé, mode imposé/worktree
 autorisé, rejeu strict/demande modifiée. Les contrôles, droits, reçus et tâches
 ne changent pas. Aucun fetch ni mission métier automatique.
 
-Référence T3 lue : `GitVcsDriverCore.ts`, `resolveCommit` et
-`fetchPullRequestHeadCommit`. Résolution dans le cwd fourni, récupération explicite
-avant résolution ; distinction conservée. Bridget doit en plus expliquer l’hôte
-source et l’identité durable des demandes distantes. Aucun déplacement forcé
-de branche n’est repris.
-
 Validation ciblée : trois tests `spec174_workspace_` réussis et un test socket
 MCP réussi. Le nouveau cas passe par le vrai contrôle d’un cwd absent, en shared
 et sans mode explicite, puis vérifie la projection du refus. Les suffixes privés
@@ -38,14 +32,7 @@ reste non terminal. La proposition de la revue fondée sur la seule absence de
 tâche n’a pas été reprise. La règle AGENTS correspond à l’autorisation explicite
 de l’utilisateur ; elle reste conservée. Les quatre tests ciblés passent à nouveau après ces précisions.
 
-Livraison : source finale 06b1da2336f18245565bb53076412e9ea7dcb532 poussée sur main.
-Binaire macOS optimisé et signé, compilation finale 189,98 secondes, code retour 0.
-SHA-256 : e49e231b877a18225d11dd2e29831a4469c8852e0eda942df0bd9d8b22ea186c.
-Seule la build finale a été activée sur le maître. Le MCP officiel confirme
-`running=true`, `build_id=06b1da2336f1`. Une réinscription transitoire du lien de
-ce fil a précédé ce contrôle. T3 et le worker distant sont restés en place.
-Les 16 tâches du parent incident ont conservé leurs instances et erreurs ; une
-ronde est devenue result_available sans erreur entre les deux observations.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/shared-source-guidance.md#extrait-1).
 
 Circuit réel : appel MCP shared avec cwd volontairement absent et destination
 distante. Le refus contient le message et le conseil complets. Les lectures

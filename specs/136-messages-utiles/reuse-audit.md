@@ -64,12 +64,7 @@ Mémoire personnalisée Bridget: aucun MEMORY.md trouvé dans le chemin déclar�
 
 ## Journal de recherche
 
-| Requete | Portee | Resultat |
-|---|---|---|
-| rg supersed/replaces/revision | core, transport, daemon | pas de remplacement d'entrée |
-| rg silent/silenc/ThreadNotify | threads/store/t3code | mécanisme102 adapté |
-| rg ThreadAction::Post/read_range/thread_read | contrat/CLI/MCP/store | points d'extension retrouvés |
-| rg --files specs/docs/tests | artefacts | pas de136 ; Gherkin102 réutilisable |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/136-messages-utiles/reuse-audit.md#extrait-1).
 
 ## Arbitrages
 

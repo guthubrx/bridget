@@ -1,8 +1,6 @@
 # Contre-revue adverse - Session151
 
-Date : 2026-10-11. Fournisseur Claude, modèle Sonnet 5.5, canal T3 délégué.
-Ronde plan : clientRequestId 151-plan-review-20261011-r1, borne 8 minutes.
-Verdict : APPROVE_WITH_CHANGES. Revue en lecture seule.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/adversarial-review-claude.md#extrait-1).
 
 | Objection | Vérification | Retenue | Réponse |
 |---|---|---|---|

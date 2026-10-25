@@ -2,9 +2,8 @@
 
 [English](delegation-native.md) · [Français](delegation-native.fr.md) · [Documentation](README.md)
 
-Bridget owns its task engine. T3 is optional: its connector attests the calling
-session, but does not create Bridget tasks. Bridget native delegation is distinct
-from T3's own task tools. Manage each existing task through the engine that created it.
+Bridget owns its task engine. It creates and stores native tasks through its CLI
+and MCP contracts. Manage each existing task through the engine that created it.
 
 ## A short workflow
 
@@ -282,8 +281,7 @@ in-progress reservations.
    dirty or divergent copies instead of forcing them.
 6. Clean only resources confirmed unused after work and evidence are retained.
 
-T3 auto-pull is optional host behavior. It is not fleet synchronization.
-Bridget adds no background pull/merge loop to synchronize repositories.
+[Adapter contract details](adapters/t3.md#note-38).
 
 ## Wait, read and acknowledge
 
@@ -381,9 +379,11 @@ remain in their messages.
 
 `continuable:true` is not a promise that a later call will pass fresh checks.
 The guard, child presence, rights, pause and round limit are rechecked.
-Compatible T3 provider-session renewal does not change task ownership; a
+Compatible the desktop adapter provider-session renewal does not change task ownership; a
 different permission policy still fails. A terminated execution cannot be
 revived merely by changing its request key.
+
+[Adapter contract details](adapters/t3.md#note-39).
 
 `brief` requires objective and summary, with optional findings, decisions,
 questions, next steps, references and limits. The rendered brief is bounded

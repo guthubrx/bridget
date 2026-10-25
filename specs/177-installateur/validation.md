@@ -46,11 +46,4 @@ limites à la fin. Pas de DMG ni de modification des releases historiques.
 La somme SHA-256 provient du même éditeur que l'archive, sans signature tierce.
 La construction source exécute le code du dépôt explicitement choisi par l'utilisateur.
 
-Analyse de cohérence : spec, plan, tâches, code et documents comparés ; les deux
-canaux et la version figée utilisent le même chemin de validation/remplacement.
-Complexité linéaire dans la taille de l'archive/binaire, nombre de profils borné.
-Minimalisme : aucun framework ni dépendance Python pour la release ; T3 ne
-fournit pas d'installateur Rust réutilisable. Charge future limitée à un script
-et ses tests. Le script est public et la redirection du site vise cette source
-unique. Potentiel minimalisme retenu : 0 ligne supprimable sans perdre un
-contrôle d'installation ou de conservation demandé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-installateur/validation.md#extrait-1).

@@ -35,4 +35,4 @@ Keeping minreq 2.14.1 would preserve the old dependency findings. System certifi
 
 ## Validation
 
-The session 174 validation records the pin, decision-service, T3, permission and transport tests, the complete remote delegation path and the dependency scan. Builds and tests use the repository's scripts/build.py wrapper. The dependency graph is checked with cargo tree; no new HTTP client or unsafe TLS option is introduced.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/170-minreq-3-et-serde-saphyr.md#extrait-1).

@@ -12,7 +12,7 @@ La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, e
 
 **Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
 
-Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/preflight-activation168.md#extrait-1).
 
 Preuves existantes :
 
@@ -20,7 +20,7 @@ Preuves existantes :
 - /Users/moi/.cache/bridget-delivery168/final-health/database-health.json — SHA-256 `98feb24442412b8e2ce12d5c6a92e75605c500bd6f67b4e7fc349fc6cebab147` ;
 - /home/moi/.local/state/bridget-delivery168/final-health/cartae-health.json — SHA-256 `a409e7698a2f7ff7bdede77a2a2126eeda0d835052765473f0ef60850818f32a`.
 
-Limites : FULL unique 2820 PASS/32 FAIL/71 ignorés ; 29 échecs initiaux PASS après reprises, trois annulations 159 non validables sur Linux, cause initiale T3 inconnue malgré replay PASS. Deux LOW rustls-webpki et une INFO unsafe-libyaml restent documentés ; aucun GREEN global. Aucun nouvel audit/FULL/P4/build/service/test/modèle par cette rédaction. Aucun retour direct au binaire 0.3.0 après reçu admission v2. Les commits documentaires descendants conservent la source binaire B et ne nécessitent aucune reconstruction.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/preflight-activation168.md#extrait-2).
 
 Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les anciennes mentions de publication en préparation. Les DB, preuves et sauvegardes sont protégées.
 
@@ -55,7 +55,7 @@ Ces nombres représentent des combinaisons déclarées/observées, pas un droit 
 
 ## Deux qualifications isolées réellement exécutées
 
-Le binaire source A démarre un daemon de premier plan dans chaque namespace neuf, sans identité T3 ni copie d’authentification. Les lectures version, catalogue JSON global/local/Cartae et catalogue humain terminent RC0. Après lecture, seul le daemon enfant attesté est arrêté par SIGTERM ; aucun enfant fournisseur n’est présent. L’environnement utilise HOME réel et les seuls réglages Bridget privés nécessaires.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/preflight-activation168.md#extrait-3).
 
 - Mac : /private/tmp/bq168-m-f7f9378117/namespace-receipt.json ; SHA-256 `6102143e8e1e9482f269ea93dfecd751813be1b4a6b65786bdd4313d791fedce`.
 - Cartae : /tmp/bq168-w-186aa1df7e/namespace-receipt.json ; SHA-256 `d75123b1c0942e6810e85ba24f1035c7ff314a42f7064d7e4e63f69c533bafec`.
@@ -82,7 +82,7 @@ La copie SQLite Mac par l’API de sauvegarde porte SHA-256 `8515e26223c976773cc
 
 ## Historique et rollback
 
-Le premier freeze est refusé avant mutation après la sortie naturelle du renderer T3 34864. Le garde corrigé et contre-relu conserve les deux ancres stables application/serveur par chemin exact, parenté, PID et naissance, ainsi que le tunnel. Il ne prétend pas préserver un renderer déjà sorti. Les anciens reçus restent conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/preflight-activation168.md#extrait-4).
 
 - /Users/moi/.cache/bridget-delivery168/activation/renderer-guard168.json — SHA-256 `4b4f1b29e46ea3136a37b15ff55dc6efac300998944fbb4c59d07e3877e73e46`.
 
@@ -95,7 +95,7 @@ L’activation exécutée et ses contrôles sont consignés séparément : /home
 
 ## Checkpoint B courant — qualification et préflight du registre
 
-Source B : `431b78f72bdd73eac4772af17bf36879d7a629d2`. Les qualifications A restent historiques. Les deux registres B ont été qualifiés par le même helper relu, sans modèle ni fournisseur, sans T3 et sans mutation de production pendant la qualification. Les nouveaux namespaces sont distincts de ceux de A :
+Source B : `431b78f72bdd73eac4772af17bf36879d7a629d2`. Les qualifications A restent historiques. Les deux registres B ont été qualifiés par le même helper relu, sans modèle ni fournisseur, par le parcours natif Bridget et sans mutation de production pendant la qualification. Les nouveaux namespaces sont distincts de ceux de A :
 
 - /private/tmp/bq168-mB-ddec62bb33/namespace-receipt.json ; SHA-256 `c157657acd053ba04b26325c581b4eb21e380ac99580434bdefd6487c3baf325`.
 - /tmp/bq168-wB-9506f9378c/namespace-receipt.json ; SHA-256 `6e2d7bf1ae19afd0cfc8020e0a22e16c966167d8b250f77ab0910496c08625f2`.
@@ -119,9 +119,9 @@ Le préflight B termine RC0 avec total_active=0 et les huit compteurs de quiesce
 
 /home/moi/.local/state/bridget-delivery168/activation/backup-431b78f72bdd-B
 
-La copie SQLite de sauvegarde B porte SHA-256 `2f35681bf722dc6f62610c9349cd439b767771dfbc5f7774a8142a45c03035a7`, quick_check ok/FK0. Les schémas de migration restent 7/12. Les unités/plists, état worker, anciens binaires et registres restent sauvegardés. Les gardes T3/tunnel, CAS et absence d’écrivain sont conservées. Aucun rollback automatique de DB ; un ancien binaire reste interdit sur des lignes metadata_version=2.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/preflight-activation168.md#extrait-5).
 
 - /Users/moi/.cache/bridget-delivery168/activation/B-preflight-command.json ; SHA-256 `0dec216d0ebc179c5ba0cadd7034d4f61bcefa88ac7564308541f0da5303cc83`.
 - /Users/moi/.cache/bridget-delivery168/activation/backup-431b78f72bdd-B/activation.json ; SHA-256 `a55769f921f1cdd6e1fa51075c726a55309aa399a67f6cca5583180688369ba2`.
 
-État ROOT au présent mandat : 51/56, sans cochage par cette rédaction. Les recettes réelles T045 sur B sont en cours ; la release n’est pas publiée. La session reste In Progress. Les limites de T036 sont conservées : FULL unique 2 820 PASS / 32 FAIL / 71 ignorés ; 29 des 32 échecs initiaux PASS après reprise ; trois annulations 159 non validables sur Linux ; cause initiale T3 inconnue malgré replay PASS. Aucun GREEN global.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/preflight-activation168.md#extrait-6).

@@ -12,11 +12,7 @@ Date : 2026-10-10. Testeur : Claude Sonnet 5.5 (claudeAgent). Statut : **CHECKPO
 
 ## État des scripts `recipes/` (relus, non modifiés)
 
-- `make_fixture_registry.py`, `run_parent_pty.py`, `verify_oracles.py` : compilation Python OK. `recipe_env.sh`, `run_fixture_daemon.sh` : `bash -n` OK.
-- `run_parent_pty.py` : arrêt par SIGTERM sur un seul PID vérifié, attente 3 s, aucun `killpg`, `pkill` ni `-9`.
-- `recipe_env.sh` r2 : refus global des règles retiré. Fixture positive `<cwd>/.claude/settings.json` (allow Read/Glob/Grep/`Edit(/allowed/**)`, deny `Bash` et `Edit(/forbidden/**)`). Note d'oracle : selon la doc permissions, les chemins ne sont évalués que pour `Edit(path)` (qui couvre Write) et `Read(path)` ; une règle `Write(path)` serait ignorée. Les règles d'outil ne sont pas un confinement OS.
-- Garde-fous : baseline filesystem avant/après, snapshot des sources, empreintes lanceur gclaude (`dd8dee...`) et CLI résolu, absence des variables T3.
-- Prompts présents : `parent_delegate_glm.md`, `parent_delegate_glm_from_codex.md`, `parent_delegate_codex_child.md`, `parent_delegate_cancel.md`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-real-recipes-sonnet-r3.md#extrait-1).
 
 ## Obstacle exact
 

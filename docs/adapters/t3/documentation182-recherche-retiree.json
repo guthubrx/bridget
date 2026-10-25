@@ -1,0 +1,314 @@
+[
+  {
+    "file": "specs/081-conversation-renderer/plan.md",
+    "sha256": "81398ed2269e26091e4800ea2a08ebbc7c497f3c3094a3d3b2a0ace4fdf8c622"
+  },
+  {
+    "file": "specs/141-messages-groupes/adversarial-review-local.md",
+    "sha256": "2124e0a838d1fc40fd02391b37d4da8cba388f985444649e4a9f4c63aab95adc"
+  },
+  {
+    "file": "specs/141-messages-groupes/converge.md",
+    "sha256": "fd0caf3f149f1be138dabe0bce35a840226971c5a066523ccf4450f4250a1e68"
+  },
+  {
+    "file": "specs/141-messages-groupes/implementation.md",
+    "sha256": "b43d9cddd195da0c7346fce14df5de6d8a81cfed2dcc4e4a67e0eb0f3f6b334f"
+  },
+  {
+    "file": "specs/141-messages-groupes/implementation.md",
+    "sha256": "ebbe7c1ddca6e8f99ce9bbbb15735cec692a8a10ac724b5172a12797080f1b1a"
+  },
+  {
+    "file": "specs/141-messages-groupes/plan.md",
+    "sha256": "eea2510b9b0c0d5d52a1ab2ec7bb7e1b639bc7d352f82acdbbc1bbc5b7ea927a"
+  },
+  {
+    "file": "specs/141-messages-groupes/research.md",
+    "sha256": "490e84637630d50aed83f43bed46427b4ebc7d2bb450270bb3549a6c5e480955"
+  },
+  {
+    "file": "specs/141-messages-groupes/reuse-audit.md",
+    "sha256": "fc18e99db01147eca3509d41676c96ca8930db2fc56e642823b6dc127d30cfce"
+  },
+  {
+    "file": "specs/141-messages-groupes/tasks.md",
+    "sha256": "af67af37c40e01cd1c988df094298b6f56afce4e7f0c23c154d178b6d1dd2f1b"
+  },
+  {
+    "file": "specs/153-rondes-contexte/research.md",
+    "sha256": "551406af8ab292034af9f982f1c6981c1bbdbe5fb87f114b315d3ca5cd1d4f12"
+  },
+  {
+    "file": "specs/154-isolation-worktree/contracts/workspace154.md",
+    "sha256": "44fc2bee281214f116e717f76b83ed0b03a0ff7416e431a59f76ebe1b6db6990"
+  },
+  {
+    "file": "specs/154-isolation-worktree/research.md",
+    "sha256": "7378ac73b70607250aed79156087bf875110be5e416583334ae73ce610aaf088"
+  },
+  {
+    "file": "specs/154-isolation-worktree/tasks.md",
+    "sha256": "7ce0d11210c20af2263799341d8c671287f18eb6e33fb2727746cd1d1d0aaf8a"
+  },
+  {
+    "file": "specs/155-demandes-enfant/spec.md",
+    "sha256": "da197116f16bbd60b3e82daeadc6422f5d6c078f731fb84fe64ea1c51cdeed12"
+  },
+  {
+    "file": "specs/157-catalogue-quotas/spec.md",
+    "sha256": "9e107b9731946b536c6ec8f86dba913970c3c04cb35e6e0ce76740ee9e5a66b9"
+  },
+  {
+    "file": "specs/158-reveils-controle/plan-158B.md",
+    "sha256": "9da0aa67a0496680cb646967b118891eb16bcf85937ef5dfa7985c1734b34639"
+  },
+  {
+    "file": "specs/158-reveils-controle/reuse-audit-158B.md",
+    "sha256": "bae272159f369dfd6167928eb496e288d721bc0030cf7765b1793f5646ceba79"
+  },
+  {
+    "file": "specs/159-edition-file/research.md",
+    "sha256": "048617065e4de08e848d160fb0ab3ff176513ef3c589328ab027be89db760ed8"
+  },
+  {
+    "file": "specs/159-edition-file/validation/T002-readonly.md",
+    "sha256": "048617065e4de08e848d160fb0ab3ff176513ef3c589328ab027be89db760ed8"
+  },
+  {
+    "file": "specs/162-execution-distante/reuse-audit.md",
+    "sha256": "5d1d9985cd29507d4c027d152aa7458cf367a33b71e1a8257e0b007185517dba"
+  },
+  {
+    "file": "specs/164-conversation-t3-distante/validation/converge164-p1.md",
+    "sha256": "037ebbfe4bc95d850de1b96e13e06f421d06febc9f0353d5421f9952e261922c"
+  },
+  {
+    "file": "specs/164-conversation-t3-distante/validation/implementation164.md",
+    "sha256": "875d4234fae0505f04dbf9c1164f716c1a5b872827fa7db8280f559200bb14cc"
+  },
+  {
+    "file": "specs/164-conversation-t3-distante/validation/implementation164.md",
+    "sha256": "3437c04f433a2c819247ee285db63369d3dc6a2d3a4f1b35d44dff0055db9bba"
+  },
+  {
+    "file": "specs/164-conversation-t3-distante/validation/tests164.md",
+    "sha256": "875d4234fae0505f04dbf9c1164f716c1a5b872827fa7db8280f559200bb14cc"
+  },
+  {
+    "file": "specs/164-conversation-t3-distante/validation/tests164.md",
+    "sha256": "3437c04f433a2c819247ee285db63369d3dc6a2d3a4f1b35d44dff0055db9bba"
+  },
+  {
+    "file": "specs/169-priorite-bridget/plan.md",
+    "sha256": "cf1ade2899ab896dd0d13f45d75753f48810d72827c2912373e72c7806ddffc3"
+  },
+  {
+    "file": "specs/169-priorite-bridget/validation/livraison169.md",
+    "sha256": "5712eb06cc0df22799bb4319b2ea8beedd6cfcfc5d15b4d388d881445e035b95"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "234145939202d9a6e0a2494fc06af5113232569133c694f8fd6b493b59855f53"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "0fd77da9c48dc754575f9ff370cb3136f55cf38ba966795a8caf7947e265df86"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "d9a391dda1500080f652d2b1fb153c9ad6526533aadb5a180e9476becc61c5d3"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "f8228663ff0524b3b271b970ba1203e8f5894e9e8e9364aa6696e93918813d43"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "a88639e3e64be9382257bc496b94c2ecafc3cbf34115514cce2e14332d940429"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "e1b474e981fe768e592fb67cb6dcac401a378124bf3f099919a759f79fa9a98f"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "00dc47d2ce3ec78474c05cbc1085032256e563da8f9a5f345d69262a4b7c2c40"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "97cdc3241184e0d7ae4256195cca001eb257c1edd0409f2274989059c0345715"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "70c66dd2c8d10f328acd143b444e35f3b0874cadaf5ced3d2ea204c5c15841f3"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "c65d1d912c383ecf99910f3928c250bd89181e6e2fe17609f2eca4356a38246a"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "fe0b1322ec0eeb56996d706e1c10d8ca53e3a2daf8a869078ead6d51c3dda98b"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "4afd74790e7d4749e97cf25e7970f90f772aed6c9f0f961af00735370a4c0b0a"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "b35711b3456be13c08f95efbdc500bebfac42f8cb9bcf85c668357eebf0dc43b"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "b4e3b38ae1df2cdaaefec951dbf457ced9a3ce0697e4053650fd210860b6020e"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "1af0a67a324ccb5c07b1e6467940e742fcd33269507a4a16632b3dc3e429a56f"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "a182208054a5620c5ba39064a799b5e3a18dda9a7224a437fc2f5e06ac8cbaf6"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "8247ddd461b55acf2ac370bd43098be5b4c6679a7e026b72460ba00caa8a0e3b"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "7603e19fb12d5e05cf616cd239c354f69b91d0c254c8dfda79b090408cac1d7f"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "6722f7582b0590a421f7c221c7013affa1c8a2fc80d0d505647c6df4b6b42770"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "bf64b7eb30233cd7cd8ab4776be3c8725332c8dcabef22c90b4a45073e4670d6"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "5dfccda2e29da8d6d45eb24e67814dab0ff3336a1bb8670351c34a991b5ad75f"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "b4ac4430e481c7ef28035dc6658edf8e816fb5b8f26cf76db213807075c614d6"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "f2f1e6fe599a4a0e18ca2a84dbda1938306b5f2c7505a8147057683e8bcd0a02"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "6e0ce9b3b44b051a9e7232d48ccbe2e1ae61651923cc3304f4ab52a2853b85d6"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "3bba523a00d5de65178a96ec77bf202843357718955b45e57bb6c0555b8acec4"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "3e3742fca5a806843a2ef3cf3b232de367099370610620b7e1e633fe677192b9"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "21a4041ac37637f673853ea05e46094d673c17d4d05f8ef1f6dccee4a138cd8f"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "f56439bc067884d66a032024851106a8dce5f5c0acdd871904683108a5a85a63"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "12437c778efa0ea5ea135a51de559652a4a84ed46298caa776e50ddba0d6ae93"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "662a9ea9270fbd09eedc5d0c8a10b46f262305fef04fc8b63a974b51b428b6ec"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "363421cf66b442eaf2307a3991196c318e0d759f4f5e1a0dc6a72ab04e16a3eb"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/implementation.md",
+    "sha256": "96347b5d7595f525834cdacbfc83b7d818fec5f08cedd5f897d4a1154d2a5e03"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/bundles-divergents-20261022.md",
+    "sha256": "7c9574a8651f097e72a2eaaae9a4f0893b72449e0f3157e2295bceef8d56549f"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/livraison172.md",
+    "sha256": "5aca5537944b536636a48a6a60e34988ce565fb2e827d9a36b6c139e2288e141"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md",
+    "sha256": "908e9b581e897baa00c1ac56bb81c75a2b77910ad161089aa0e2de476287d2d6"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/reconnexion-wrapper-20261022.md",
+    "sha256": "d1336012ee9a3455a2dee61324d6353c4565746b5b6817296547fca379c816e3"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/reservation-budget-20261022.md",
+    "sha256": "97a7ecc34566d5bbd6601b400d6c9b12c41051ef0404ffc2cbc543ab62027079"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md",
+    "sha256": "ca5f4f61a48ed0aa04b0912f8292d76a8b3fe32c867d461f54e3f5726ae6e33a"
+  },
+  {
+    "file": "specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md",
+    "sha256": "e80a4a354bd6e8a8ba826a27884bdf0892bfbbef9de25554f80cd6c0d2d27cc3"
+  },
+  {
+    "file": "specs/174-audit-incidents/validation/disconnect-guidance.md",
+    "sha256": "fb65acd6095c5cba824da904b2564cd5e91a167745acd079c4b59f9ed48ff67c"
+  },
+  {
+    "file": "specs/174-audit-incidents/validation/shared-source-guidance.md",
+    "sha256": "10c366633abb64d26adba87caf16d94188efd7534c567db67ea4b22425907f56"
+  },
+  {
+    "file": "specs/174-audit-incidents/validation/source-base-recovery.md",
+    "sha256": "a080326c9110ab4745577701e55117b00fe2c42016c66016f9f88486ae8a4f60"
+  },
+  {
+    "file": "specs/177-bridget-mobile/reuse-audit.md",
+    "sha256": "512167535fde68e4628c83f1ca570671f3589a17161b8e46cb845b1d60639846"
+  },
+  {
+    "file": "specs/177-bridget-mobile/reuse-audit.md",
+    "sha256": "87268be31d835a6962e2c98eeac79fd59d797f473d7df11363733b4d5656cfaa"
+  },
+  {
+    "file": "specs/177-bridget-mobile/reuse-audit.md",
+    "sha256": "a80728cd4b9f94f612e938ac46c6cf825b9975cd63047f6ffd2501447d564971"
+  },
+  {
+    "file": "specs/177-installateur/autostart.md",
+    "sha256": "3f08d69f88024443ca19eb5c020d0714925e3ea0f806056a8bbfdb0683c0f7db"
+  },
+  {
+    "file": "specs/177-installateur/plan.md",
+    "sha256": "9a2d2d26b3982108b86c16f28b0ea79f1639da11321d570049dfe8a82ef8110e"
+  },
+  {
+    "file": "specs/177-installateur/tasks.md",
+    "sha256": "b365534e3aff11e4006777a0f66d639f5ad4d2a41358189a6ecf3befd98e04fd"
+  },
+  {
+    "file": "specs/178-securite-dependances/plan.md",
+    "sha256": "39fada4009250c467c806f1e78411b6dff2b0e9e3085430a0d2f4cdfbdea4630"
+  },
+  {
+    "file": "specs/178-securite-dependances/validation/livraison178.md",
+    "sha256": "e98d55e6b73a37a5ae8f695fd61501d9d33098dced2dc028fba6d3ad37f1ad92"
+  },
+  {
+    "file": "specs/181-questions-mobile/research.md",
+    "sha256": "cae549a3ac2ceb2541f8efe1844a1e08b942a0ce5afdc9cdd881ac9682c382ec"
+  }
+]

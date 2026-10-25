@@ -6,13 +6,7 @@ Source e6812e3e7b2d051d630192857cc3f440180d51fa intégrée en avance rapide sur 
 poussée vers github/main et vérifiée. Le commit de métadonnées de ce reçu reste
 inconnu ; il sera attesté par la preuve Git externe finale de ROOT.
 
-Build 117.6415s, RC0. Binaire signé, vérifié, installé atomiquement et actif :
-/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget
-SHA b714c65644ec1bc9cfea676cd2104561711434e3479f723b8401a10a77581aed.
-Daemon 20937 né 00:25:51 CEST ; pont 21097 né 00:25:54 CEST. Native0 vérifié avant
-remplacement et chaque SIGTERM individuel. Schéma idempotence 7, exécutions 12,
-quick_check OK/FK0. T3 PID 60116/60228 et naissances 11 octobre 01:13:35/36 inchangés.
-Aucune relance T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/160-reprise-quota/validation/livraison160.md#extrait-1).
 
 Audit ciblé A99.65, 0C/0H/1M/1L, validateur RC0 ; couverture partielle 6.22% des
 hunks côté courant. PERF001 MEDIUM et DUP001 LOW conservés. La couverture du diff

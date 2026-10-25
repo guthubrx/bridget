@@ -26,16 +26,20 @@ Après bascule, le programme vérifie les services et l'exécutable réellement 
 
 L'appareil Android doit recevoir le droit de gérer les mises à jour depuis l'administration humaine. Cette capacité n'est pas ajoutée aux agents ni automatiquement aux autres appareils. Les paramètres de mise à jour ne permettent pas d'envoyer une URL, un chemin ou une commande arbitraire.
 
-Le fichier privé BRIDGET_HOME/update-host.json contient seulement host et services. Les rôles sont core/mobile/worker sur Linux, t3 sur macOS. Le rôle worker vise bridget-worker-cartae.service. Les services supervisés doivent utiliser ~/.local/bin/bridget. Python 3.9 ou supérieur est requis.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-52).
+
+Le programme stable est `~/.local/bin/bridget`. Le surveillant intégré utilise Python3.9 ou plus et la commande `bridget updates watch`. Son fichier privé `BRIDGET_HOME/update-host.json` contient `host` et `services`. Les rôles Linux sont `core`, `mobile` et `worker`. Le service worker est `bridget-worker-cartae.service`. Les services supervisés utilisent le lien stable. La configuration ne contient aucune commande téléchargée.
 
 ## Actions manuelles et état réel
 
 « bridget updates status » affiche le choix et les observations datées des hôtes. « bridget updates check » demande une recherche. « bridget updates install 0.6.0 » demande cette version exacte. « bridget updates auto off » désactive l'automatisme et efface une demande manuelle encore en attente.
 
-Un fichier téléchargé n'est pas une version active. Un client MCP déjà lancé garde son ancien code jusqu'à son rechargement par T3. Bridget ne redémarre pas T3 et ne copie aucune identité. Deux identifiants de build différents ne prouvent pas que le daemon est ancien.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-53).
 
 Le nettoyeur conserve l'exécutable actif, un retour vérifié et toutes les copies encore utilisées. Un inventaire de processus incomplet interdit le retrait. Les autres installations, travaux, preuves et tâches en attente sont conservés. Les caches de compilation continuent de passer par scripts/build.py.
 
 Le premier déploiement doit installer un binaire capable de gérer les mises à jour et configurer ses services. Il suit les mêmes précautions que les livraisons ordinaires. Le reçu de la session 179 distingue les versions installées, actives et encore différées.
 
 Le droit de mise à jour est enregistré séparément des permissions historiques de l’appareil. Leur format reste lisible par la version de retour. Chaque appel vérifie toujours la révocation et l’expiration de l’association.
+
+Un fichier téléchargé n’est pas une version active. Un processus MCP conserve son code chargé jusqu’à un remontage pris en charge. Conserver les credentials de session. Deux identifiants de build différents ne prouvent pas à eux seuls que le daemon est ancien.

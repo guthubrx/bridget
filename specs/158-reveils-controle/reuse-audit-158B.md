@@ -93,14 +93,6 @@ Les deux réserves initiales sont fermées dans les candidats finaux : canal ret
 
 ## Limites et six réponses ArticleXX
 
-1. Nécessaire : FR101–107 et US5–US7 demandés, US8 hors plan tant que consommateur absent.
-2. Simple : greffe sur tick/Store/099/102/worker ; nouveaux modules séparent seulement domaine et SQL.
-3. Hypothèses : identité/projets attestés, données durables lisibles, calendrier dans le domaine annoncé, mêmeUIDADR011 pour CLIagent.
-4. Vérifié : lectures candidates/code ciblé et comparaison de clôture des29 empreintes intermédiaires, sans Git.
-5. Non vérifié : testsB, mesureCOUNT/CPUcalendrier, runtime/DB/provider/T3/activation, code futur. Aucune assertion de parité T3 actuelle.
-6. Conservé : preuve pending/cutoff/UUID/issued_at nécessaire au crash ; pas helper de confort, ni reçu/quota doublon, ni dépendance supplémentaire.
-Le PASS couvre le réemploi du plan candidat, pas sa réalisation. Les trente oracles sélectionnés restent une preuve historique A ; pas baseline B nouvellement exécutée.
-
 ## Objection finale ROOT — borne physique FR101
 
 La version finale data-model-158B.md:21–23 conserve cancelled_at et annonce16 programmations actives/owner,128total. Le plan ne ferme pas les reliquats annulés/pending. Des créations/annulations répétées peuvent donc conserver un historique illimité si seul le compteur actif est contrôlé. Choix nécessaire : borne16/128 de toutes les lignes conservées, ou retrait des annulées une fois leur occurrence terminale prouvée via entretien existant. Aucun nouveau registre de cancel. Après retrait, le devenir de la lecture/rejeu cancel connu doit être explicite (reçu099 conservé ou refus de cible supprimée), sans promesse illimitée. Aucune tâche/test/code supplémentaire créé ici. Cette réserve suspend le PASS de réemploi publié quelques instants auparavant.

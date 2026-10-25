@@ -1,16 +1,12 @@
-# Revue de code T3 — Permissions héritées (T004–T008) — r1
+# Revue de code adaptateur de bureau — Permissions héritées (T004–T008) — r1
 
-Date : 2026-10-10
-Réviseur : sous-agent de revue indépendante (GLM 5.3 Flash)
-Périmètre : code T3 T004–T008, contre `contracts/permissions.md` (contrat normatif permissions-149), plan r2 APPROVE (`validation/plan-permissions-r2.md`), data-model, ADR 149, ADR 017.
-Worktree : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`
-Baseline T3 : `33f6d04e116430bf7f0011902d6af3868163f2d1` (tout le delta T004–T008 est non committé, relu par `git diff`).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-code-review-r1.md#extrait-1).
 
 ---
 
 ## Verdict
 
-**APPROVE** — code T3 T004–T008 uniquement.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-code-review-r1.md#extrait-2).
 
 Les obligations contractuelles sont implantées dans le code, pas seulement décrites. Aucune violation bloquante trouvée. Deux constats mineurs de durcissement et des observations non bloquantes sont listés plus bas. Le Rust natif (T009+, Sol) est hors périmètre. Je ne confirme aucune exécution de test ni preuve runtime : ce n'est pas ma mission.
 
@@ -110,10 +106,7 @@ Les obligations contractuelles sont implantées dans le code, pas seulement déc
 
 ### C-02 (Mineur — durcissement) — Champs SDK de médiation non couverts par `permissionsRepresented`
 
-- Emplacement : `apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts:850-851`.
-- Constat : la condition ne vérifie pas `permissionPromptToolName`, `permissionPrompts`, `spawnClaudeCodeProcess`, `hooks` dans `input.options`. Aucun chemin T3 ne les pose aujourd'hui (vérifié dans le constructeur des options de requête). Si un chemin futur les introduisait, la médiation réelle changerait sans invalider le fait publié (`tool_approval: "prompt"` resterait annoncé).
-- Oracle de déclenchement : `options.permissionPromptToolName = "x"` + `canUseTool` défini → fait publié alors que la médiation ne passe plus par le callback T3.
-- Fix minimal pour Sol : exiger `undefined` pour ces quatre champs dans la condition de la ligne 850.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-code-review-r1.md#extrait-3).
 
 ### Observations non bloquantes
 
@@ -135,16 +128,12 @@ Les obligations contractuelles sont implantées dans le code, pas seulement déc
 
 ## Limites réelles de cette revue
 
-- Aucun `tsc`, build, lint ou test exécuté. La validité à la compilation n'est pas prouvée par cette revue.
-- Aucune preuve runtime, aucun appel modèle, aucune preuve standalone. Je n'en annonce pas.
-- Le Rust natif T009+ (admission inherit/development côté GP) est en cours chez Sol. Non relu. Les oracles G-P-01/G-P-02 sont post-native : non évaluables ici.
-- Les tests permissions T3 ne sont pas encore écrits (lot de l'agent de tests). Je ne les demande pas en double. Un regret : la couverture visée devrait inclure l'oracle C-01 (clé `allowedMcpServers` dans settings inline) et C-02 (champ `permissionPromptToolName`).
-- Le registre actif réel (`/Users/moi/.cache/bridget-core/agents.json`, entrée glm : `gclaude`, profil `claude-glm`) et la faute r1 corrigée du plan r2 sont conformes à ce que le code exige (hash launcher connu présent dans le code).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-code-review-r1.md#extrait-4).
 
 ---
 
 ## Conclusion
 
-Le code T004–T008 tient le contrat permissions-149 côté T3 : héritage vrai attesté depuis l'état réel du provider, aucune autorité forgeable depuis MCP ou le prompt parent, faits privés par run/attempt/fil provider, liaison par objet credential, union v1/v2 avec tombes anti-downgrade, refus nommés conservateurs, hygiène des secrets respectée sur tout le chemin de publication.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-code-review-r1.md#extrait-5).
 
 **Verdict : APPROVE.** C-01 et C-02 sont des durcissements à planifier, pas des bloquants. Aucun changement de contrat n'est requis : le contrat est déjà plus strict que le code sur ces deux points, et c'est le code qui doit rejoindre le contrat, pas l'inverse.

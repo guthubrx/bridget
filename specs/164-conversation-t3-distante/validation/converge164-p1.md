@@ -21,37 +21,11 @@ Preuves contrôlées :
 
 Les références H/W/M/C/R/E/T ci-dessous désignent ces chemins complets :
 
-- H : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/packages/client-runtime/src/bridgetJournalPresentation.ts
-- W : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/apps/web/src/components/BridgetTaskJournal.tsx
-- M : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/apps/mobile/src/features/threads/BridgetTaskJournal.tsx
-- C : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/apps/web/src/components/ChatMarkdown.tsx
-- R : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/packages/client-runtime/src/state/orchestration.ts
-- E : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/packages/client-runtime/package.json
-- T : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/vite.config.ts
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/validation/converge164-p1.md#extrait-1).
 
 Oracles exacts et résultats : fichiers/noms dans `/Users/moi/.cache/bridget-delivery164-20261013/tests/affected-test-results164-r4.json`. Les noms abrégés ci-dessous reprennent leurs intitulés uniques.
 
 ## Couverture des17FR
-
-| Exigence | Réalisation source | Preuve ou gate | Verdict P1 |
-|---|---|---|---|
-| FR-001 | Douze sources T3 seules ; H1 importe les contrats T3, aucun Rust | Inventaire de transfert et diff relu ; aucune dépendance publique neuve | Satisfaite par source |
-| FR-002 | W260–276, M551–553 : tâche native existante ; aucun tour/provider fabriqué | « présente les fragments exacts et les activités sans fabriquer un tour fournisseur » | Satisfaite par source |
-| FR-003 | H92–115,374–460,468–500 ; clés au premier seq et projection commune | « garde le premier rejeu, expose un conflit et réemploie les blocs clos » | Satisfaite par source |
-| FR-004 | H290–294,301–325,398 ; join sans séparateur, domaine session/livraison | « concatène les fragments Unicode exacts sans séparateur inventé » | Satisfaite par source |
-| FR-005 | H301–325 ; W455–464 ; M572–581 | « distingue les frontières de livraison et session des extraits réellement coupés », deux oracles de reprise partielle | Satisfaite par source |
-| FR-006 | C2426,2444,2727,2927,3203,3341,3452 ; W194/618 ; M75–94,226–247 | Markdown inerte R1 et mobile « rend titres, code et liens dans le lecteur sélectionnable aux préférences T3 » ; recette future | Satisfaite par source, limite native conservée |
-| FR-007 | H245–287 ; W195–213 ; M279–299 | « ne corrèle pas started et completed et n’invente aucun succès » | Satisfaite par source |
-| FR-008 | H399 garde les références originales ; W166–176 et M334–344 omettent v/ts au rendu | Les oracles n’ouvrent pas un original complet ni un conflit de métadonnée | **Écart C164-01/T021** |
-| FR-009 | W436–437,485–497 ; M551–624 : métier/contact séparés de caughtUp | Tests statut/panne et métadonnées distantes | Satisfaite par source |
-| FR-010 | W418–434,499–525 ; M530–550,652–695 ; barre/parent existants hors delta | Tests annulation native/refus, aucun tour T3 ; lecture seule conservée | Satisfaite par source |
-| FR-011 | W325–355 ; M452–482 : abort/cursor et fusion atomique ; H57–83 compare métadonnées | Reprises aprèsSeq5 PASS ; conflits détectés mais témoin incomplet à l’écran | **Écart C164-01/T021** |
-| FR-012 | H4–5,109–115,130–180 ; R135–168 ; W380–408 ; M512–515 | Borne4096, gap64, pruning hors fenêtre, headCut sticky ; tests pression/éviction | Satisfaite par source |
-| FR-013 | W398–413,595–634 ; M503–525,697–729 | Tests résultat16KiB/pagination100/copie chargé/refus | Satisfaite par source |
-| FR-014 | H partagé importé par W/M ; rendu adapté à chaque plateforme | Tests projection commune et deux composants ; recette T017 future | Satisfaite par source |
-| FR-015 | W139–224,530–634 ; M102–247,254–349,596–735 | Styles/préférences/sélection et détail replié ; navigation, largeur et rendu réels attendent S164-12 | Source présente, recette future |
-| FR-016 | H40–115,374–500 ; W139/185/438 ; M226/254/555 ; E export seulement | Pureté, mémo/identités, montage brut différé ; complexité ci-dessous | Satisfaite par source |
-| FR-017 | Aucun Git/paquet/runtime modifié par la feature à ce stade | T015–T020 existantes : après source163 validée/intégrée/poussée, push fork, signature/install/cleanup | Gate de livraison future, pas nouvelle tâche |
 
 ## Couverture des6SC et4US
 
@@ -82,10 +56,10 @@ La projection pure coûte O(n+c) sur la fenêtre4096, avec au plus64 lacunes ; l
 
 Les nouvelles unités restent la projection/merge commune et son oracle, justifiées par deux clients et la contrainte de parité. Les adaptations web/mobile portent des règles de sécurité et les préférences natives existantes ; aucun framework, fournisseur, runtime, service ou bibliothèque ajouté. L’export E porte seulement le sous-chemin. T ajoute une seule entrée dans la liste interop native avec sévérité error inchangée, car les props Markdown natives ne prennent pas className.
 
-Hypothèses : séquences propres au journal d’une tâche, enveloppes natives validées par les contrats actuels, lacunes explicites seules faisant autorité. Le journal ne prouve pas des tours fournisseur ni un statut distant frais. Aucune donnée média/outil ne s’exécute. Aucun import T3 n’entre dans Bridget.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/validation/converge164-p1.md#extrait-2).
 
 ## Limites et prochaine action
 
-36 PASS de tests ciblés ne prouvent ni rendu natif iOS/Android, ni capture Electron, ni paquet installé. AST stricte RC1 et qualification Babel RC0 restent deux faits distincts. Aucun GREEN global, recette, audit code final, push, installation, nettoyage ou changement de runtime T3 déduit.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/validation/converge164-p1.md#extrait-3).
 
 Prochaine action : ROOT fait exécuter T021 sur Cartae, recueille les deux bancs affectés et un transfert stable, puis relance la lecture Converge. Les gates dépendantes163/livraison164 continuent en parallèle dans leurs périmètres.

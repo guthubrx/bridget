@@ -1,31 +1,16 @@
 # Plan141 — Présentation des lots directs
 
-Date : 2026-10-07. Statut : Implemented, installé, activation différée. Gate de réutilisation, Converge passe 2 et audit final validés.
-Début de préparation : 07:30 CEST. Estimation totale : 20–35 minutes, hors livraison de production.
-Branche Bridget : session-141-messages-groupes.
-Artefacts : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes
-Code T3 : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped
-Maquette : /Users/moi/.cache/bridget-grouped-mockup-20261007/index.html
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/plan.md#extrait-1).
 
 ## Contexte technique
 
-Le frontend T3 utilise React, TypeScript et Vite Plus/Vitest. SPEC140 fournit une projection pure puis BridgetMessageBody dans la timeline existante. Le format Rust est déjà produit par batch_envelope. Aucun changement Rust n'est prévu.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/plan.md#extrait-2).
 
 La maquette sert de référence pour les noms visibles, les sections et le groupe compact. Les sujets illustratifs et les blocs source sont supprimés du comportement cible. Le logo et les thèmes existants sont réutilisés.
 
 ## Réutilisation de l'existant
 
-| Élément | Source vérifiée | Changement prévu |
-|---|---|---|
-| Type de projection | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts:86 | Ajouter une collection facultative de messages directs projetés. |
-| Projection pure | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts:105 | Étendre la branche des lots directs avec un découpage conservateur. |
-| Branche des lots | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts:163 | Garder le comportement des notifications. |
-| Carte existante | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx:4034 | Ajouter les sections dans BridgetMessageBody, sans seconde timeline. |
-| Corps Markdown | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx:4119 | Réutiliser UserMessageBody pour chaque corps complet et le repli sûr. |
-| Clé fil/message | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx:2239 | Conserver l'isolation de l'état local. |
-| Ancrage | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx:4049 | Appeler ctx.onToggleWorkEntry lors des replis imbriqués. |
-| Copie et actions | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx:2264 | Réutiliser MessageCopyButton avec row.message.text original pour les seuls lots directs ; préserver les autres copies et les pièces jointes. |
-| Tests existants | /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.test.ts:208 et /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.test.tsx:287 | Étendre ces suites avec les cas SPEC141. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/plan.md#extrait-3).
 
 ## Conception
 
@@ -43,8 +28,6 @@ La maquette sert de référence pour les noms visibles, les sections et le group
 Phase 0 : recherche ciblée, spécification, plan et audit de réutilisation. Lire et valider le gate avant de générer les tâches.
 
 Phase 1 : écrire les tests de projection en échec (TDD). Couvrir le format réel, LF/CRLF, les indices, noms longs, corps vides ou longs, séparateurs dans le corps et suffixes inconnus. Implémenter ensuite la projection minimale.
-
-Phase 2 : écrire les tests de rendu puis modifier BridgetMessageBody et le choix du texte transmis à MessageCopyButton pour les seuls lots directs. Vérifier sections indépendantes, noms et UUID seuls, aperçus littéraux, absence de sources, copie originale avec référence t3-context sans contexte structuré, pièces jointes/actions et isolation fil/message.
 
 Phase 3 : contrôles ciblés de tests, format, lint, types du package web et build web isolé. Recette du vrai composant : clavier, largeur 320, thèmes, textes longs, ancrage et repli sûr. Aucun service actif n'est redémarré.
 
@@ -66,9 +49,9 @@ Phase 4 : Converge relie chaque FR/SC à une preuve code/test/recette. Analyse d
 
 Les scripts et modèles locaux SpecKit sont absents. Le protocole est appliqué manuellement ; aucune phase n'est supprimée. La synchronisation utilisateur a été effectuée avant cette préparation.
 
-Les prescriptions génériques Next.js, frontend-v2, next-intl et Pytest ne correspondent pas au frontend T3 React/Vite/Vitest vérifié. Les tests sont ajoutés aux suites existantes avec un titre SPEC141. Aucun framework, dossier de traduction ou outil de test n'est ajouté pour satisfaire une règle d'un autre projet. Les contrôles restent sur les fichiers et le package web concernés. Aucun lint, test ou build global du monorepo n'est imposé. Cette exception suit le périmètre explicite de la session et évite une correction de travaux étrangers.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/plan.md#extrait-5).
 
-Aucune décision architecturale nouvelle ni reconstruction de composant. L'implémentation et la recette ne redémarrent ni n'installent la production. La livraison autorisée ensuite forme une phase distincte, sans relance de T3. Aucun nettoyage d'autres branches ou worktrees. Les artefacts SpecKit restent dans le dépôt Bridget ; le dépôt T3 reçoit uniquement les changements d'implémentation nécessaires.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/plan.md#extrait-6).
 
 ## Clôture documentaire
 
@@ -77,4 +60,4 @@ Dix tâches validées sur preuves. Converge passe 2 : CONVERGED, 22 exigences/cr
 Audit : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/audits/2026-10-07/session-2026-10-07-spec141-01
 Résultats : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/validation/results.json
 
-Le statut Implemented ne signifie pas activé dans l'application en cours. La session141 a suivi commit, fusion, push et installation autorisés, sans relancer T3. Le principal a installé et vérifié /Applications/T3 Code (Local SPEC141).app à côté de /Applications/T3 Code (Local).app, restée active et intacte. Les preuves sont consignées dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/livraison.md. L'utilisateur devra fermer volontairement l'ancienne application puis ouvrir la nouvelle pour activer141. Relancer l'ancienne ne charge pas ces changements.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/plan.md#extrait-7).

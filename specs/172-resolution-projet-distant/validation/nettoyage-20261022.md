@@ -49,12 +49,7 @@ reste hors de ce commit, avec la même empreinte f0eb89de95fbd0bccb2759b51b2612d
 
 ## Services et preuves
 
-Le maître Bridget 3688, le pont 898 et T3 1372/1435 gardent leurs dates de naissance.
-Le worker Cartae reste actif sur 589872, NRestarts=0.
-Build actif inchangé : 172-e5195b7d. Aucun service ni mission métier relancé.
-Binaires actifs conservés : Mac 20a44e11b74ebbe92e118fee4152cec6874270542aa5d6a895bd31e01860511c ;
-Cartae 2b3f36fc577a08fa41ac55cbb6c69b6e4f925463d688077f6188cb486dc4574c.
-Bases, données métier, sauvegardes de retour arrière et historiques conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/nettoyage-20261022.md#extrait-1).
 
 Index durable :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/nettoyage-20261022.json

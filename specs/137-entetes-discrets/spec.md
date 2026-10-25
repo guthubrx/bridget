@@ -1,6 +1,4 @@
-# SPEC137 — En-têtes Bridget discrets
-Statut: Implemented (code et aperçu ; non installé) | Date: 2026-10-06 | Tests: 200/200 ciblés
-Branches: session-137-entetes-discrets (Bridget), session-137-entetes-bridget (T3).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/137-entetes-discrets/spec.md#extrait-1).
 
 ## Pourquoi et scénarios
 US1 (P1): le contenu doit attirer l'œil avant l'en-tête technique.

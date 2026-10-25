@@ -85,10 +85,7 @@ Un digest ne fusionne que des contextes racine/motif identiques. Deux mandats
 différents pour le même UUID utilisent deferred existant : R1 au premier tick,
 R2 au deuxième, silence au troisième. Toujours un digest par UUID et par tick.
 
-Le transport passe les options structurées depuis le lot figé et retire toute
-identité T3 héritée. Seules les lignes AVERTISSEMENT PROJET avec JSON de code
-cross_project/project_unknown sont rendues au caller. Le stderr libre et les
-champs body supplémentaires restent absents du rendu. Le corps livré est exact.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/138-priorite-projet/evidence/loop.md#extrait-1).
 
 ## T013 — Skill et copie Claude
 

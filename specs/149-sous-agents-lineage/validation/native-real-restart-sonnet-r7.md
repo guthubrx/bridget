@@ -1,9 +1,6 @@
 # Redémarrage réel du daemon avec un parent Codex vivant - ronde Sonnet r7
 
-Date : 2026-10-10. Ronde exécutée de 22:04:27 à 22:06:26 (1 min 59 s). Testeur : Claude Sonnet 5.5.
-Modèles réels : Codex `gpt-6.1-sol` effort `high`, un parent et un enfant. Aucun modèle GLM.
-Aucune case de `tasks.md` cochée. Aucun Git, Cargo, build, ni fichier de production modifié.
-Aucun service, aucune configuration ni base de production touchés. T3 non lancé. Aucun port TCP.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-real-restart-sonnet-r7.md#extrait-1).
 
 ## 1. Verdict
 

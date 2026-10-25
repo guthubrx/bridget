@@ -1,10 +1,8 @@
 # État runtime avant correction — SPEC-165
 
-Date : 2026-10-14  
-Pont : PID 66786, démarré le 2026-10-14 à 19:23:19 CEST  
-Serveur T3 : PID 30234, `http://127.0.0.1:3773`
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/runtime-before.md#extrait-1).
 
-## Inventaire T3 observé
+## Inventaire adaptateur de bureau observé
 
 | Mesure | Valeur |
 |---|---:|
@@ -16,7 +14,7 @@ Serveur T3 : PID 30234, `http://127.0.0.1:3773`
 | Activités courantes observées | 2 |
 | Liens annoncés par le pont à 19:42 CEST | 1 121 |
 
-Les 834 sous-agents terminés restent dans l'historique T3. Ils ne doivent pas rester connectés à Bridget.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/runtime-before.md#extrait-2).
 
 ## Ressources du PID 66786 à 19:47 CEST
 
@@ -35,7 +33,7 @@ Le LaunchAgent actif fixe `maxfiles (soft)` à 16 384. Cette valeur a restauré 
 
 ## Cause vérifiée
 
-La boucle ouvre un lien complet pour chaque fil T3 non archivé. Elle ne distingue pas une conversation principale d'un sous-agent historique terminé. Le nombre de descripteurs croît donc avec l'historique des délégations.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/runtime-before.md#extrait-3).
 
 ## Preuve du contrat V2 réel
 

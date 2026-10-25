@@ -1,7 +1,6 @@
 # Vérifications prévues — SPEC143
 
-Frontend : `/Users/moi/11.Repositories/t3code-local/.worktrees/143-bridget-discreet/apps/web/`.
-Documents : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/143-echanges-discrets/quickstart.md#extrait-1).
 
 ## Tests ciblés
 
@@ -31,4 +30,4 @@ Révision gelée392 PASS (283 logique/109 UI), soit46 cas ajoutés au socle346. 
 
 Contrat conservateur : terminé/préfixe strict seulement, noms antérieurs même fil, notes canonique simple/gras après frontière explicite. Tout `[` hors fence dans une réponse mixte, HTML hors code ou frontière ambiguë garde le natif complet. Le corps agent mixte reste monté sous `display:none` pour les citations ; copie originale et métadonnées inchangées. Aucun nouveau panneau Sources ni bénéfice de calcul revendiqué.
 
-Recette détaillée : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/143-echanges-discrets/specs/143-echanges-discrets/ui-recipe-US4.json`. Clone arrêté proprement à11:35:22, fixtures et onglet masqué conservés. Convergence principale CONVERGED à11:39:54 sur tâches12/13 byte-identiques ; clôture T013 ensuite,13/13. Aucune installation, activation, commit, fusion, push ou restart T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/143-echanges-discrets/quickstart.md#extrait-2).

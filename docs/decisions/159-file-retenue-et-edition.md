@@ -8,10 +8,7 @@ Statut B : adoptée, implémentée et livrée le 12 octobre 2026 ; source 928631
 
 ## Contexte
 
-La remise durable099 et sa saga existent dans le daemon. Retenir un message
-dans une file de porteur rend les retraits et changements d'ordre répartis
-entre processus. Le lot A place la rétention dans send_deliveries, avant toute
-poussée. Le lot B d'édition et les fils T3 restent distincts et différés.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/159-file-retenue-et-edition.md#extrait-1).
 
 ## Décision A
 
@@ -89,7 +86,7 @@ fournisseur réel ou cause du surcoût n'est établi. Le reçu canonique est :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/latence-159a.md
 
 À l'enregistrement d'une nouvelle instance attestée, avec held_queue ouvert
-et hors T3, le daemon rattache d'abord les retenus et les remises ordinaires
+et dans un terminal, le daemon rattache d'abord les retenus et les remises ordinaires
 encore dispatching, non ACKées et non expirées de l'ancienne instance. Le
 rattachement conserve identité, génération, octets et rang ; la remise
 encore dispatching réserve le tour avant libération du message suivant.
@@ -160,12 +157,7 @@ State protège tour et identité jusqu'au commit. La transaction relit pause,
 interruptions, réservation, saga et demande sur la même connexion. Aucun writer
 socket sous transaction ; le push vient après commit et relâchement de State.
 
-La table `execution_queue` d’ExecutionStore est écartée : elle porte des
-exécutions, sans échéance de remise, instance ni lien à la saga d’envoi. Sa
-connexion distincte ne devient pas un second writer sous cette transaction.
-La conception antérieure d’édition dans les files mémoire des porteurs
-présentait onze défauts liés au partage d’état entre processus (research R2). Le découpage A/B conserve l'envoi fermé d'A et
-limite B aux trois actions. `edit`, les fils T3 et 159c restent différés.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/159-file-retenue-et-edition.md#extrait-2).
 
 Cancel réemploie clôture et notice durable existantes, sans interrupt. Reorder
 permute les rangs existants dans une transaction, avec valeurs temporaires
@@ -180,23 +172,7 @@ Codex ambigu après guidage : doublon possible. Aucun avis universel ajouté
 pour `reply=false`. Rejeu sous droits frais : reçu historique, jamais nouvelle
 émission.
 
-Les droits restent frais avant toute lecture du reçu. Si l’auteur ne peut
-plus être vérifié parce que l’envoi d’origine a été purgé ou que message_bytes
-est absent, son seul statut d’auteur ne permet plus cancel : refus
-`intent_not_permitted` avant le reçu. `receipt.actor` est une trace, pas un
-grant persistant. Les autres droits exigent toujours leur propre preuve fraîche.
-Le réglage held reste fermé par défaut. Les preuves ciblées des mutations,
-transports et façades sont consignées dans :
-/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/tests-159.md
-Les coûts B non mesurés ne deviennent pas une latence promise. Le FULL, les
-replays, la revue et l’audit ont des périmètres distincts ; leurs reçus conservent
-les limites. La livraison B ne se déduit pas d’un PASS ciblé.
-La recette SC010 est privée : ses marqueurs enfant149 et PID/naissance ne
-prouvent pas une interopérabilité T3 réelle. La reprise E2E cancel emploie une
-pause explicite ; SC007 commence au commit Applied, sans preuve de retry
-gagné contre une libération non pausée.
-Choix des trois questions : destinataire sans droit d’édition ; held fermé
-par défaut ; modification du corps différée. Aucun choix supplémentaire exigé.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/159-file-retenue-et-edition.md#extrait-3).
 
 Contrat et droits :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/contracts/edition159.md

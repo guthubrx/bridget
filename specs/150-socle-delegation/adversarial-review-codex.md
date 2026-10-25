@@ -2,16 +2,7 @@
 
 ## Ronde 1 (plan)
 
-- **Date** : 2026-10-11
-- **Agent** : Codex, modèle GPT-6.1-Sol, effort élevé, mode plan (lecture seule),
-  tâche T3 `s150-contre-revue-plan-r1`
-- **Canal** : délégation T3. La délégation Bridget a d'abord été refusée
-  (`permission_source_unavailable`) alors que le catalogue annonce
-  `discovery: true` : incohérence notée pour la session157.
-- **Question** : réalisabilité de la reprise après pause, sûreté de la purge par
-  arbre, compatibilité de la génération de projection, enveloppe de lancement,
-  autres défauts.
-- **Verdict reçu** : BLOCKED
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/adversarial-review-codex.md#extrait-1).
 
 | # | Objection | Vérifiée comment | Retenue | Raison |
 |---|---|---|---|---|

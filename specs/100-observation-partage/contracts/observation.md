@@ -30,11 +30,4 @@ et `daemon_instance`. La file de sortie de 64 éléments expire après 5 s ;
 chaque tentative d'écriture est bornée à 1 s. Les pertes source sont journalisées
 comme `observation_gap`, sans garantie de rejeu ou de livraison durable.
 
-Couverture : fins de tour corrélées ACP/Claude stream-json/Codex app-server ;
-permissions effectivement journalisées (ACP/Codex), éventuellement déjà traitées.
-Pas de fin de tour déduite d'un état idle natif/T3, du silence ou d'une déconnexion.
-Écritures confirmées des outils reconnus Claude/ACP et items Codex fileChange
-completed ; aucun shell arbitraire, lecture seule ou écriture échouée.
-Les tours liés aux messages `bridget-observation:` ne produisent pas de faits.
-Cache de collisions : 4096 chemins, normalisation lexicale sans suivre les
-symlinks, même hôte et deux auteurs dans 30 s. Pas de fédération d'événements.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/100-observation-partage/contracts/observation.md#extrait-1).

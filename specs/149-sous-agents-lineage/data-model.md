@@ -1,7 +1,6 @@
 # Données149 — permissions et descendance native
 
-Statut : proposé pour gate GLM. Le magasin SQLite natif reste source unique.
-T3 conserve une projection de présentation, sans exécution parallèle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/data-model.md#extrait-1).
 
 ## Tâche native
 
@@ -92,23 +91,15 @@ L'arrêt/nettoyage retire les processus et liens runtime, pas les fichiers journ
 La vue humaine contrôlée choisit les fichiers depuis la tâche; le RPC n'accepte
 aucun chemin libre. Les lacunes et erreurs de lecture restent explicites.
 
-## Projection T3
+## Projection adaptateur de bureau
 
 Les tables existantes de fils, nœuds et sous-agents conservent les enfants de
 présentation. IDs déterministes et origine bridget_native. Le marqueur facultatif
 bridgetTaskRef contient version/taskId/rootThreadId/parentTaskId/generation/seq/status.
 Il est ajouté aux résumés de fil pour filtrer le réimport vers Bridget.
 
-La transaction de projection reçoit le snapshot complet vérifié. Elle prépare
-les liens depuis parent_task_id, écrit les états observés, puis conserve son reçu
-idempotent. Aucun provider session, turn ou effet fournisseur n'est ajouté.
-La disponibilité du connecteur est séparée de l'état natif historique.
-Le résultat n'est jamais re-routé au parent par T3. La remise native148 reste unique.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/data-model.md#extrait-2).
 
 ## Transitions
 
-queued → starting → mission_pending → working → waiting_for_children → result_available.
-Un échec prouvé donne failed. Une annulation donne cancelling puis cancelled
-après arrêt prouvé. Le résultat capturé attend les descendants. Une sortie de
-processus ou une fin de tour seule ne prouve pas result_available.
-Les dates et la séquence suivent ces transitions natives, pas un tour T3 fictif.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/data-model.md#extrait-3).

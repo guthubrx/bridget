@@ -10,7 +10,7 @@ SC01→T002/4/5 ; SC02→T002/4/7 ; SC03→T002/3/4/5 ; SC04→T006 ; SC05→T00
 
 Pass2 cohérence confirme premier ouvert puis choix conservés, extraits ≤120, seuls lots 📥, aucun panneau source même fallback, copie lot originale, ordre TDD, O(n), recette isolée.
 
-Exceptions Next/Pytest et contrôles non globaux écrites et limitées à T3. Prochain pas T002 RED, aucune correction documentaire bloquante.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/analyze.md#extrait-1).
 
 ## Reprise après revue indépendante
 

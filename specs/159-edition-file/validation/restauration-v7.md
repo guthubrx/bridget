@@ -1,6 +1,6 @@
 # T011 — répétition réelle de restauration v7
 
-PASS en isolation le 12 octobre 2026, à partir de la référence v6 fraîche. ROOT a exécuté la recette. Le binaire testé est le debug 159A déjà compilé ; cette preuve ne décrit pas le futur binaire release installé. Aucun service de production, modèle ou T3 n'a été lancé par cette répétition. Les deux daemons privés ouverts ont été arrêtés par SIGTERM sur leur seul PID attesté ; disparition confirmée après trois secondes.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/validation/restauration-v7.md#extrait-1).
 
 | Étape | Résultat |
 |---|---|

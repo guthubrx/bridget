@@ -45,8 +45,7 @@ en `--json`.
 
 ## Commandes de vérification
 
-Depuis le worktree, `umask 077`, `BRIDGET_HOME` pointant sur un répertoire vide (sinon l'identité T3 du poste
-est héritée par les tests CLI) :
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/104-recherche-echanges/quickstart.md#extrait-1).
 
 ```sh
 cargo fmt --all -- --check
@@ -71,6 +70,4 @@ Régressions voisines exécutées : `spec102_threads_test`, `handoff_103_test`, 
 
 ## État Git et prochaines actions
 
-Commits et fusion : selon l'autorisation en vigueur pour cette session (voir `implementation.md`).
-Prochaine action technique après fusion : reconstruire le daemon installé (`t3-local-build` ou script 106) et
-relancer `com.bridget.daemon` sur autorisation, puis exécuter la recette humaine ci-dessus.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/104-recherche-echanges/quickstart.md#extrait-2).

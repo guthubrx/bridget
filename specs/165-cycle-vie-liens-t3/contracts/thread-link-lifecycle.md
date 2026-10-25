@@ -1,8 +1,8 @@
-# Contrat interne — Cycle de vie d’un lien T3
+# Contrat interne — Cycle de vie d’un lien adaptateur de bureau
 
 ## Entrée
 
-Un résumé de fil validé à la frontière HTTP T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/contracts/thread-link-lifecycle.md#extrait-1).
 
 ## Sortie
 
@@ -10,9 +10,7 @@ Une décision pure : le fil exige ou non un agent Bridget connecté.
 
 ## Préconditions
 
-- Le résumé respecte le schéma V1 ou V2 déjà accepté.
-- La filiation, si elle existe, vient du contrat T3. Elle n’est jamais déduite du titre.
-- Une relation V2 présente accepte seulement `subagent`, `fork` ou `null`. Toute autre forme est invalide.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/contracts/thread-link-lifecycle.md#extrait-2).
 
 ## Postconditions
 
@@ -54,4 +52,3 @@ Le contrat V1 ne fournit pas la filiation. Dans ce cas, un fil vivant reste expo
 ## Décision testable
 
 Une fonction pure reçoit les faits du snapshot, du lien et des obligations. Elle retourne `ouvrir`, `rafraîchir`, `drainer`, `fermer` ou `ignorer`. Le test de fermeture utilise un `Link` construit à partir de handles et de sockets de test. Il ne dépend pas d'un daemon réel.
-

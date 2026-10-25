@@ -8,7 +8,7 @@ Gates acquises : contre-revues R1/R2 corrigées et vérifiées par ROOT ; audit 
 
 ## Propriété et validation
 
-Les owners sont des responsabilités, affectées à une personne/agent par ROOT avant édition. Aucun fichier ne reçoit deux écrivains simultanés. MASTER garde daemon.rs et native_delegation.rs ; WORKER garde remote_worker.rs et wrapper.rs ; PERMISSIONS garde native_permissions.rs ; TRANSPORT garde les contrats wire ; REGISTRY garde registry.rs ; T3 garde son dépôt ; ROOT garde Git, production, reçus et vérifications. Une tâche touchant une interface partagée exige une passation explicite de fichier, pas une édition concurrente. Ne jamais révoquer le travail étranger.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-1).
 
 [P] signifie exécutable en parallèle après ses dépendances explicites seulement, dans des fichiers distincts. Aucune compilation concurrente. Les tests demandés sont groupés en T014/T020/T028/T032/T039 puis contrôle final T040 ; les tâches de code ajoutent les oracles pertinents dans les suites existantes. Rejouer seulement les cas affectés après correction. Aucune case cochée avant preuve.
 
@@ -90,17 +90,17 @@ Oracle indépendant : aucune duplication aux frontières de panne, résultat ré
 
 ## Phase 6 — US4 : journal, résultat et annulation natifs
 
-Oracle indépendant : suivre/annuler depuis Bridget sans T3, avec indisponibilité distante explicite.
+Oracle indépendant : suivre/annuler depuis Bridget par le parcours natif Bridget, avec indisponibilité distante explicite.
 
 - [x] T029 [US4] Owner MASTER (passation temporaire de remote_worker.rs par WORKER après T027, rendue avant T031) — Servir journal_page froid autorisé avec racine dérivée instance/génération attestées, sans chemin fourni par l’appelant. Réemployer lecteur local borné ; côté maître conserver LiveJournalFragment/AttachView pour live et reprise du gap via page froide, sans miroir ni nouvelle famille follow. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/remote_worker.rs ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/attach.rs ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/daemon.rs. Dépendances : T010, T027. Couverture : FR-018, FR-019, FR-023 ; SC-007.
 
-- [x] T030 [US4] Owner MASTER — Raccorder résultat accepté à complétion/notification/wait 149–153 et demandes 155 existantes. Parent absent retrouve résultat, notification perdue ne le supprime pas ; suivre enfants sans T3 et sans seconde mécanique métier. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/daemon/native_delegation.rs ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs. Dépendances : T023, T025, T026. Couverture : FR-004, FR-018, FR-019, FR-029 ; SC-007.
+- [x] T030 [US4] Owner MASTER — Raccorder résultat accepté à complétion/notification/wait 149–153 et demandes 155 existantes. Parent absent retrouve résultat, notification perdue ne le supprime pas ; suivre enfants par le parcours natif Bridget et sans seconde mécanique métier. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/daemon/native_delegation.rs ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/daemon/native_delegation_wait155_tests.rs. Dépendances : T023, T025, T026. Couverture : FR-004, FR-018, FR-019, FR-029 ; SC-007.
 
 - [x] T031 [US4] Owner WORKER — Implémenter cancel uniquement sur tuple/PID/naissance attestés. Réception de cancel distincte de mort ; contact perdu garde pending, résultat tardif suit CAS existants. Aucun kill par nom ni reset unknown. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/remote_worker.rs ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/managed_process.rs. Dépendances : T010, T026. Couverture : FR-012, FR-015, FR-018, FR-019 ; SC-005, SC-007.
 
-- [x] T032 [US4] Owner ROOT — Exécuter groupe US4 sans T3 : journaux froid/live/gap/worker perdu, résultat retenu/parent absent, demandes 155 et cancelavecPID recyclé. Vérifier droits/pagination et distinction arrêtworker/arrêtmission. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. Dépendances : T029, T030, T031. Couverture : FR-015, FR-018, FR-019, FR-023, FR-029 ; SC-005, SC-007.
+- [x] T032 [US4] Owner ROOT — Exécuter groupe US4 par le parcours natif Bridget : journaux froid/live/gap/worker perdu, résultat retenu/parent absent, demandes 155 et cancelavecPID recyclé. Vérifier droits/pagination et distinction arrêtworker/arrêtmission. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. Dépendances : T029, T030, T031. Couverture : FR-015, FR-018, FR-019, FR-023, FR-029 ; SC-005, SC-007.
 
-## Phase 7 — US5 : Lineage T3 compatible
+## Phase 7 — US5 : Lineage adaptateur de bureau compatible
 
 Oracle indépendant : tests intégrés isolés montrant machine/contact, v1 inchangée et reprise de vue sans fournisseur.
 
@@ -108,15 +108,15 @@ Oracle indépendant : tests intégrés isolés montrant machine/contact, v1 inch
 
 - [x] T034 [US5] Owner MASTER — Étendre Heartbeat unitaire selon la connexion worker et son epoch ; last_contact volatile par page, transitions contact_state→seq/cursorinvalidé, pas génération à chaque heartbeat. Projection v2 placement/contact distinct de available au maître, droits/pagination de 4 096 conservés. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/daemon.rs ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/crates/bridget-daemon/src/delegation_lineage.rs. Dépendances : T008, T026, T033. Couverture : FR-020, FR-021, FR-022, FR-023 ; SC-008, SC-009.
 
-- [x] T035 [P] [US5] Owner T3 — Étendre schémas T3 avec v2 et métadonnées optionnelles distinctes de v1 ; garder ancien décodeur strict et fixture v1 gelée. Aucun nouveau store ou fil fournisseur. Fichiers : /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/packages/contracts/src/bridgetLineage.ts. Dépendances : T002. Couverture : FR-020, FR-021, FR-022 ; SC-008, SC-009.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-2).
 
-- [x] T036 [US5] Owner T3 — Négocier v2 puis une lecture v1 seulement sur invalid_request/unsupported_version. Abandonner tout le staging avant curseur nul ; timeout/auth/malformation restent erreurs. Mêmes RPC et gardes, aucun repli de mutation. Fichiers : /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/apps/server/src/bridget/BridgetReader.ts ; /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/apps/server/src/bridget/BridgetLineage.ts. Dépendances : T033, T035. Couverture : FR-019, FR-020, FR-022, FR-023 ; SC-008, SC-009.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-3).
 
-- [x] T037 [US5] Owner T3 — Propager placement/contact dans la projection thread:bridget-task existante, activeProviderThreadId nul et pas de colonne conversation. Préserver root/projet, profondeur 8, historique et atomicité des pages ; reprise de vue sans lancement fournisseur. Fichiers : /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/apps/server/src/orchestration-v2/Orchestrator.ts. Dépendances : T034, T036. Couverture : FR-019, FR-020, FR-021, FR-023 ; SC-008, SC-009.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-4).
 
-- [x] T038 [US5] Owner T3 — Afficher machine/moteur/date du contact observée par page et fraîcheur dans le Lineage et les détails existants. Distinguer maître accessible/worker perdu et métadonnées v1 indisponibles ; journal indisponible explicite, pas d’âge vivant inventé. Fichiers : /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/apps/web/src/components/chat/ThreadRelationshipsControl.tsx ; /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/apps/web/src/components/chat/SubagentTooltipContent.tsx ; /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant/apps/web/src/components/BridgetTaskJournal.tsx. Dépendances : T035, T037. Couverture : FR-020, FR-021, FR-022, FR-023, FR-027 ; SC-008, SC-009, SC-011.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-5).
 
-- [x] T039 [US5] Owner ROOT — Exécuter les suites ciblées 149 des contrats/reader/orchestrateur/composants étendues : v1 stricte, v2 avec version erronée, erreurs v1, repli unique, page 2 refusée, transition de contact, droits, ouverture/fermeture sans lancement. Pas suite T3 globale, navigateur ou redémarrage. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. Dépendances : T032, T034, T038. Couverture : FR-019, FR-020, FR-021, FR-022, FR-023, FR-027 ; SC-008, SC-009, SC-011.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-6).
 
 ## Préparation finale de livraison
 
@@ -124,7 +124,7 @@ Vérifications finales et dossier opérationnel prêts ; cette phase ne vaut pas
 
 - [x] T040 Owner ROOT — Exécuter les contrôles finaux adaptés et au plus une FULL Rust si requise, après stabilisation T001–T039. Jobs 2/nice 10/threads 2 et une compilation active ; jamais de FULL par groupe. Format/types/lint sur les surfaces requises ; conserver échecs préexistants et replays affectés sans GREEN global inventé. Conserver le cache utile 162/163 sous budget de rétention temporaire 45 Gio (pas plafond strict) ; historique /Users/moi/.cache/bridget-delivery162-20261013/cache-preflight.txt, mesure initiale 32,80 Gio ; checkpoint R3 à 38,74 Gio consigné dans tests162.md. Ne pas déclencher une purge du profil debug utile. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. Dépendances : T014, T020, T028, T032, T039. Couverture : FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-015, FR-016, FR-017, FR-018, FR-019, FR-020, FR-021, FR-022, FR-023, FR-024, FR-025, FR-029, FR-030 ; SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, SC-008, SC-009, SC-010.
 
-- [x] T041 Owner ROOT — Préparer procédure exécutable et reçu NON EXÉCUTÉ : sauvegarde jointe et rollback strict, unité utilisateur bridget-worker-cartae.service avec SIGTERM/KillModeprocess/SendSIGKILLno, credential en 0600 / état en 0700, route désactivée puis activation autorisée. Lier préflight des missions et recette enfant synthétique survivantredémarrage worker, sans relance T3. Inventorier TMP/WT/branches/rollback. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/quickstart.md ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/livraison162.md. Dépendances : T032, T039. Couverture : FR-024, FR-025, FR-026, FR-027, FR-028 ; SC-001, SC-005, SC-007, SC-011, SC-012.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-7).
 
 - [x] T042 Owner ROOT — Relire diff complet et mapping FR/SC, minimalisme/complexité/charge future ; supprimer tout helper nouveau sans justification. Consigner preuves et limites, ADR finale, état développement 42/42 seulement si vérifié. Préparer Converge/revue/audit et gates G8/G9 sans les déclarer exécutés. Fichiers : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/implementation.md ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/livraison162.md ; /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/docs/decisions/162-execution-distante-sous-autorite-unique.md. Dépendances : T040, T041. Couverture : FR-001, FR-002, FR-003, FR-004, FR-005, FR-006, FR-007, FR-008, FR-009, FR-010, FR-011, FR-012, FR-013, FR-014, FR-015, FR-016, FR-017, FR-018, FR-019, FR-020, FR-021, FR-022, FR-023, FR-024, FR-025, FR-026, FR-027, FR-028, FR-029, FR-030 ; SC-001, SC-002, SC-003, SC-004, SC-005, SC-006, SC-007, SC-008, SC-009, SC-010, SC-011, SC-012.
 
@@ -132,37 +132,25 @@ Vérifications finales et dossier opérationnel prêts ; cette phase ne vaut pas
 
 Owner ROOT. Preuves dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/livraison162.md, puis copie durable au checkout principal avant retrait des worktrees.
 
-1. Exécuter Converge sur le développement, sans modifier tasks.md durant ses passes. Réaliser contre-revue de code et audit requis ; traiter leurs blocages. Les corrections testées ne nécessitent pas une seconde FULL sans raison nouvelle.
-2. Commits avec identité utilisateur, hooks normaux ; intégrer Bridget vers github/main et T3 vers fork/local/main-20261009, vérifier les références distantes. Aucun push upstream ni PR T3. Un commit de préparation ne vaut pas livraison opérationnelle.
-3. Depuis les sources intégrées, construire, signer et installer les binaires/paquets avec provenance. T3 est livré sur disque uniquement ; PID/naissances restent inchangés.
-4. Avant activation Bridget : fermer nouvelles admissions si nécessaire, attester missions actives et sauvegarde cohérente DB/Fleet/registre/worker. Aucun arrêt forcé inconnu ni downgrade des stores 162 sur ancien binaire. Conserver preuves post-162 ; rollback joint seulement sans perte nouvelle, sinon rester en 162 route désactivée.
-5. Installer l’unité utilisateur worker, credential privé et état sans secret exposé ; tunnel 095 existant conservé. Tester avec enfant synthétique que l’arrêt du worker ne vaut pas annulation des missions et que la reprise réconcilie sans doublon.
-6. Activer uniquement les projets autorisés après réponse utilisateur et preuve fournisseur réelle. Exécuter recette Linux bornée pour chaque route autorisée : machine/cwd/moteur, résultat unique, parent retrouvé, journal et annulation attestée. Aucun choix de projet par défaut déduit d’une question utilisateur. Si route non autorisée, la nommer non activée ; ne pas déclarer SC-001 réel satisfait pour elle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-8).
 
 ## G9 — Nettoyage et clôture obligatoires
 
 Owner ROOT. Même reçu durable, avec preuves de retrait ou de conservation par ressource.
 
-1. Archiver et vérifier les empreintes des preuves, reçu compact, sauvegardes utiles et état post-162 avant tout retrait.
-2. Ne jamais collecter une exécution inconnue, un résultat différé, un blob dont le producteur vit, une branche non récupérée ou un worker injoignable. Aucun effacement de base. Suivre les règles de collecte du contrat.
-3. Retirer sans force les deux worktrees 162 propres et intégrés ainsi que leurs branches devenues inutiles. Les17worktreesT3préexistants restent hors périmètre. Nettoyer seulement TMP/stages/caches propres attestés avec les gardes du projet ; justifier les conservations sans faux gain physique.
-4. Commiter/pousser les métadonnées finales depuis le checkout durable, vérifier état Git et références distantes. Nommer séparément source binaire, commit de clôture, runtime actif et T3 ancien chargé. Clôturer l’objectif seulement après G8 et G9 prouvés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-9).
 
 ## Dépendances et parallélisme utile
 
 Les dépendances de chaque tâche font foi. Chemin principal : fondations → US1 → US2 → US3 → US4 → validation finale → G8/G9. US5 peut avancer sur ses contrats et son reader dès les schémas stabilisés ; son intégration finale attend les projections Bridget. Les gates de projets réels n’empêchent pas ces développements et recettes isolées.
 
-- US1 : T002 et T003 sont indépendantes après T001 ; aucun autre chevauchement implicite des fichiers Rust.
-- US2 : T015 peut préparer les fixtures pendant US1 après T002/T003, puis propriétaire PERMISSIONS jusqu’à passation T019.
-- US3 : construction du blob et admission maître ont des fichiers distincts mais une frontière de contrat commune ; ROOT peut les alterner après T021, sans faire écrire deux agents sur remote_worker.rs ou native_delegation.rs.
-- US4 : journal worker et notification parent ont des fichiers distincts après US3 ; sérialiser annulation et journal si même owner/fichier worker.
-- US5 : T035 contrats T3 est indépendante du code Rust après T002 ; T036 peut suivre pendant US2/US3. T037 attend T034, puis T038/T039.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-10).
 
 ## Maintenance et limites
 
-Réemplois réduisant la charge future : lifecycle/managed_process, mêmes stores métier, mêmes notifications/wait, journal vivant existant, lecteur Lineage et vues T3. Complexité nouvelle justifiée par ADR : frontière worker, store technique avec un écrivain par fichier, parent_proof, résultat durable et réserve technique. Aucun moteur Git, miroir de journal, seconde Fleet, nouvelle dépendance ou outil de maintenance générique.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-11).
 
-Le quota Fleet global peut être réduit par un unknown distant. Les modes0600/0700 ne séparent pas des fournisseurs du même UID ; les gardes de chemins évitent l’exposition explicite, pas un accès global hostile. Le credential reste hors environnement enfant. Les blobs vivants non clôturés peuvent saturer le budget. T3 n’est pas relancé. Ces limites doivent rester dans le reçu, sans masquer une absence de recette réelle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/tasks.md#extrait-12).
 
 ## Convergence
 

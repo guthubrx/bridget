@@ -8,9 +8,9 @@ Release publiée : https://github.com/guthubrx/bridget/releases/tag/v0.6.2 . Six
 
 ## Résultat et périmètre conservé
 
-Question et réponse stockées par Bridget. Android et le terminal répondent au même identifiant durable. T3 reste un adaptateur facultatif. Choix simple/multiple, descriptions, texte libre seul ou complément, formulaire agrandi et volet repliable sont réalisés. La réponse est consignée avant remise, puis confirmée par le producteur. Une commande incertaine reprend le même identifiant.
+Question et réponse stockées par Bridget. Android et le terminal répondent au même identifiant durable. Le contrat central appartient à Bridget. Choix simple/multiple, descriptions, texte libre seul ou complément, formulaire agrandi et volet repliable sont réalisés. La réponse est consignée avant remise, puis confirmée par le producteur. Une commande incertaine reprend le même identifiant.
 
-Le brouillon reste sur son appareil. Aucun partage des réponses en cours de rédaction. Aucun protocole ni serveur T3 requis pour le parcours natif. Les sessions terminal capables d’un callback structuré et l’outil MCP bridget_ask_user sont pris en charge. Une TUI opaque exige cet outil MCP ; sa boîte native n’est pas capturée par simulation de touches. Les nouveaux lancements utilisent0.6.2. Les anciens clientsMCP déjà chargés ne sont pas déclarés rechargés ; aucun redémarrage de T3 ou de fournisseur.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/livraison.md#extrait-1).
 
 Cadrage antérieur conservé, avec la correction de portée explicite de l’utilisateur. Apport : la continuité porte sur la question et la réponse envoyée, avec une identité native, au lieu de lier le produit à son interface.
 
@@ -20,13 +20,7 @@ Réemploi :14éléments tranchés dans /Users/moi/Nextcloud/10.Scripts/64.bridge
 
 ## Vérifications et limites
 
-- Dernier lotRust181 :19PASS. Transports3PASS ; HTTP13PASS ; scopesMCP4PASS ; contratT3 19PASS/1ignored. Régression155 :62PASS/1FAIL initial puis cas de corrélation isolé corrigé1PASS. Aucune FULL ni succès global inventé.
-- JVM23PASS, lintAndroid et assemblages concernés PASS ; buildsrelease Linux/macOS/Android PASS. Un espace final dans le test vocal a été retiré avant commit ; diff staged vérifié.
-- Émulateur : choix+complément, multiples, fermeture forcée/brouillon, réponse terminal, FCM réel, bouton de notification, texte RemoteInput, coupure et reprise mêmecommande, redémarrage du daemon puis réponse confirmée.
-- Saturation :32reçusT3 conservés après rejeu ; notification après onze demandes actives désormais présentée et sa réponse confirmée ; seconde lecture d’un tombstone purgé ne réécrit plus les données. Assertions avant/après atteintes.
-- Reconnaissance vocale réelle **non validée** : injection audio officielle a fait crasher QEMUAndroid16. Retour vocal contrôlé : texte éditable, aucun envoi automatique. Android15 sert aux autres essais ; aucun enregistrement du micro du Mac.
-- AdaptateurT3 : worker réel et serveurHTTP/WS contractuel contrôlé. Pas de question réellement générée dans l’application T3 active revendiquée.
-- Contre-revue plan : api_error. Code : demandeR1 refusée pour références sans host, corrigée ; R2 d3a4073d-bc4c-449b-b31a-3e047ab65a18 a dépassé180 s. Aucun verdict indépendant reçu. Pas de boucle de délégation, aucun APPROVE inventé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/livraison.md#extrait-2).
 
 ## AuditV15
 
@@ -57,21 +51,14 @@ Potentiel minimalisme : environ12lignes d’orchestration Android communes, esti
 
 ## Disque, runtime et retour
 
-| Composant | Vérification |
-|---|---|
-| Cartae | Noyau2600399, worker2600652, mobile2600610 ;0.6.2 chargée, exécutables installés et empreintes vérifiés |
-| Mac | Connecteur26001 ;0.6.2 chargée, signature vérifiée |
-| T3 | PID650/975 et dates de naissance inchangés ; aucune relance |
-| Bases | quick_check ok sur les deux bases ; tâche historiquee595 inchangée par empreinte |
-| Retour |0.6.1 vérifiée sur Mac/Cartae, politique rollback mise à jour et persistée après rechargement des seuls services de mise à jour |
-| Android | APKrelease signé, même certificat,6002/version0.6.2 installé sur émulateur ; APKdebug et compagnon de test retirés |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/livraison.md#extrait-3).
 
 SHA256Mac :08baf3dba13b97bebe04a13f48ee67d0d13f455b5bacdd025e57ebbe60cd6643 .
 SHA256Linux :cbde800c5facb37a7883f72d929f1d69329d4022a259afa1f9c875d82e5eb723 .
 SHA256APK :efdb954c7509c8f96ed5f4017bf597da9cb23a82d9f1830034abf5712a3e17e2 .
 CertificatAndroid :0c43c621254d9a6e0dbe148466f453f1aaba1a62bf23bd7332c61086f16a6588 .
 
-Installations : /Users/moi/.local/lib/bridget-communication/181-dd1410f43dc2/bin/bridget et /home/moi/.local/lib/bridget-communication/181-dd1410f43dc2/bin/bridget . Versions de retour : /Users/moi/.local/lib/bridget-communication/180-21a16c374d71/bin/bridget et /home/moi/.local/lib/bridget-communication/180-21a16c374d71/bin/bridget . L’ancienne politique avait été réécrite par le watcher vivant ; arrêt normal/relecture de son état/rechargement corrigent ce problème de procédure, sans relancer T3 ni modifier du code fonctionnel.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/livraison.md#extrait-4).
 
 Le verrou de maintenance est terminé. Les mises à jour automatiques restentON. La tâche historiquee5959986-e426-422d-956f-e035dbcf89be, cancelling sans mission émise, reste un blocage connu de la prochaine activation automatique ; elle n’a pas été falsifiée pour livrer181. L’activation181 utilise la maintenance contrôlée, gardes et empreinte conservées.
 

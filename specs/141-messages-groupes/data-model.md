@@ -2,7 +2,7 @@
 
 ## Source immuable
 
-Le message T3 existant conserve son texte original, son identifiant, ses pièces jointes et ses actions. Aucune donnée persistée ne change.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/data-model.md#extrait-1).
 
 ## Projection éphémère
 
@@ -22,4 +22,4 @@ Le groupe passe de fermé à ouvert et inversement. Sa première ouverture ouvre
 
 ## Invariants
 
-Même nombre et même ordre de sections que les messages du lot reconnu. Corps complets et copie row.message.text originale identiques aux références, y compris les liens t3-context sans contexte structuré. Aucune source technique secondaire pour un lot direct. Toutes les autres familles SPEC140 gardent leur projection, leur présentation et leur copie.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/data-model.md#extrait-2).

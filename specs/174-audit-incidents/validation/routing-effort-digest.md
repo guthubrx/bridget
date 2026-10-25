@@ -40,13 +40,9 @@ refus durable. Le texte n'invite pas à contourner les contraintes. Les motifs
 fermés reçus restent présents dans `detail.reasons` ; sans motif, aucune cause
 n’est inventée. Le sort de la demande reste distinct de l’éligibilité du candidat.
 
-## Référence T3
+## Choix de conception Bridget
 
-Dans T3, `ProviderCommandReactor::ensureSessionForThread` vérifie l'identité
-de l'instance. `CodexAdapter::sendTurn` transmet séparément l'option
-`reasoningEffort` pour cette instance. Ce mécanisme confirme la distinction
-entre identité du fournisseur et option du tour. T3 n'a pas la sonde distante
-de Bridget ; il ne justifie aucune suppression de nos preuves de droits.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/routing-effort-digest.md#extrait-1).
 
 Pour le guidage, `ClaudeModelCatalog::formatClaudeVersionUpgradeMessage` relie
 une version constatée à une action précise. `applyAntigravityAcpModelSelection`

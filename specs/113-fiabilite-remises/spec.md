@@ -1,18 +1,8 @@
 # Spécification 113 — Une remise écartée par le pont n'est plus « en vol »
 
-## Fiche synthèse
-Spec: 113-fiabilite-remises | Statut: Implemented (livré 2026-09-19) | Priorité: P1 | Date: 2026-09-19
-Branche: session-113-tete-de-file | Dépend de 111 et 112 (attente en file du pont T3).
-Origine : contre-revue adverse d'evols-t3 (Codex) du 2026-09-19, voir `adversarial-review-evols-t3.md`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/113-fiabilite-remises/spec.md#extrait-1).
 
-## Problème observé
-Le pont T3 écarte une remise dans quatre cas : file saturée (64 remises), échéance passée avant
-démarrage, demande suivie close côté daemon, annulation. Dans les quatre, il ne dit rien au daemon.
-La saga d'envoi idempotent reste en phase `dispatching` jusqu'à son expiration (7 jours) et
-l'expéditeur voit « remise en vol » pour un message que le pont a jeté. Le 2026-09-19, la base de
-production comptait 40 sagas `dispatching`, dont 33 d'août ; 14 remises « périmées avant démarrage »
-ont été jetées en silence dans la journée. Le wrapper ACP, lui, signale déjà une injection ratée
-(`DeliveryRejected` + `DeliveryIndeterminate`).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/113-fiabilite-remises/spec.md#extrait-2).
 
 ## Exigences
 - **FR-001** : toute remise écartée par le pont, quel que soit le motif, est rapportée au daemon.
@@ -27,11 +17,7 @@ ont été jetées en silence dans la journée. Le wrapper ACP, lui, signale déj
   disparaît.
 - **FR-006** : aucun changement de protocole ni côté daemon ; les règles 111 et 112 sont inchangées.
 
-## Hors périmètre
-- Regrouper plusieurs remises dans un même tour (proposition écartée par la contre-revue pour les
-  `reply=true` : une réponse par tour).
-- `SteerCurrent` sur le pont : dépend du support T3.
-- Balayage des 33 sagas d'août : elles expirent d'elles-mêmes à 7 jours.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/113-fiabilite-remises/spec.md#extrait-3).
 
 ## Critères de succès
 - **SC-001** : saturation → saga close + expéditeur prévenu avec motif « saturée ».

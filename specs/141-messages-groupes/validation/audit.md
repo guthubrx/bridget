@@ -1,6 +1,6 @@
 # Audit final141
 
-Mode : audit canonique v14, readonly, un cycle. Périmètre : régions modifiées des quatre fichiers T3 contre 9706acbde648e581d4c41302a0f4ce8e4ac20a9d, avec contexte d'appel. Aucun code modifié par l'audit.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/141-messages-groupes/validation/audit.md#extrait-1).
 
 Résultat : A pour le diff corrigé ; zéro défaut ouvert prouvé, zéro CRITICAL/HIGH, aucune suppression. La note ne décrit pas le monorepo. Les quatre fichiers représentent 0,0990099 % des 4040 fichiers source suivis ; ce ratio n'est pas une couverture instrumentée des tests.
 

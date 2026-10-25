@@ -1,12 +1,6 @@
 # Revue G-P r2 — plan permissions, attestation et héritage
 
-Date : 2026-10-10. Revueuse : GLM 5.3 Flash, indépendante. Ronde r2.
-Périmètre : `contracts/permissions.md`, `plan.md`, `tasks.md`, `spec.md`,
-`data-model.md`, `test-strategy.md`, `research-native.md`, `research-t3.md`,
-ADR149 (`docs/decisions/149-permissions-heritees-et-lineage-native.md`),
-rapport r1 (`validation/plan-permissions-r1.md`), sondes ciblées du code et de
-l'environnement en lecture seule.
-Verdict demandé : APPROVE ou REQUEST_CHANGES sur le volet G-P.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/plan-permissions-r2.md#extrait-1).
 
 **Verdict : APPROVE.** Les six findings r1 sont fermés par des changements
 concrets, vérifiés dans les fichiers actuels, pas seulement déclarés. La
@@ -183,13 +177,13 @@ Sévérités r1 : G-P-01, G-P-02 majeurs ; G-P-03 à G-P-05 moyens ; G-P-06 mine
 |---|---|---|
 | FR007 — bornes parent, aucun gain | Couverte | S149-01, 02, 06, 07, 10, 15, 24, 25, 31 ; invariant 5 du plan. |
 | FR008 — lecture/écriture GLM+Codex, sans grant, héritage, refus nommés | Couverte | S149-06, 07, 10, 14, 15, 24, 29, 31 ; T011-T015, T037-T038. Le refus en cours de mission a désormais son oracle (S149-29). |
-| FR009 — identique sans T3 | Couverte | S149-12, 14 variante (a), T038 ; SC004 ; invariant 6. |
+| FR009 — identique par le parcours natif Bridget | Couverte | S149-12, 14 variante (a), T038 ; SC004 ; invariant 6. |
 | FR011 — opt-outs et révocation, aucune projection sans preuve | Couverte | S149-03, 13, 19, 20, 21, 25, 26 ; contrat `permissions.md:32-34`. |
 | FR012 — choix humains MCP conservés, grants hors MCP | Couverte | S149-03, 06, 21, 22 ; T005-T009, T013 ; règle transversale correction 4 : le grant pty reste hors de tout chemin positif 149. |
 | FR018 — permissions préservées, retrait de garde limité à l'héritage | Couverte | Texte corrigé ; S149-02, 15, 20, 24 ; wrapper limité à la définition enfant (`plan.md:78`). |
 | FR019 — figeage avant effet, retry sans élargissement, mode UI sans effet | Couverte | S149-09, 24, 26, 30, 31 ; contrat `:26-30` et `:222-228` ; `data-model.md:64-71`. La divergence de digest a désormais ses deux oracles. |
 | SC003 — écriture permise réussit, hors politique refusée, découverte = lecture | Couverte | S149-10, 14, 15, 24, 29, 30, 31 ; découverte = réduction explicite (contrat `:15-16`, registre `--restricted --permission-mode plan`). |
-| SC004 — même délégation sans T3 | Couverte | S149-12, S149-14(a), T038, avec séparation premier parent externe / descendant managed. |
+| SC004 — même délégation par le parcours natif Bridget | Couverte | S149-12, S149-14(a), T038, avec séparation premier parent externe / descendant managed. |
 | SC005 — opt-outs masquent, preuve révoquée ferme, moteur survit | Couverte | S149-03, 18, 19, 20, 21, 25, 26. |
 
 Point de besoin « standalone, premier parent externe réel Codex et GLM, PTY
@@ -283,7 +277,7 @@ un refus, pas une invention.
 ### Modèles réels
 
 - Le refus corrélé réel, l'écriture réelle GLM `glm-5.3-flash` et Codex, la
-  recette standalone avec T3 absent restent attendus en T015, T037, T038, puis
+  recette standalone avec dans un environnement natif isolé restent attendus en T015, T037, T038, puis
   relecture T041. Aucun n'est exigé avant le GO code, aucun n'est affirmé ici.
 - Le modèle exigé reste exactement `glm-5.3-flash`, sans repli
   (`test-strategy.md:252`). Toute autre valeur fait échouer le test.

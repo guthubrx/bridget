@@ -9,8 +9,7 @@ Champ ajouté, optionnel pour garder les payloads 148-149 lisibles :
 | `reply_timeout` | `Option<i64>` | 3600 | Délai de réponse choisi à la délégation |
 | `delivery_acked` | `bool` | `false` | Preuve durable que la remise du résultat ou de l'avis d'échec a été accusée |
 
-Aucun nouvel état. États terminaux inchangés : `result_available`, `failed`,
-`cancelled`. La vue Lineage T3 ne change pas.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/data-model.md#extrait-1).
 
 ## Arbre purgeable
 

@@ -7,7 +7,7 @@ Tests : 16/16 synchronisation PASS par l'équipier puis rejoués par le principa
 
 Présenter trois compétences sous les noms `bridget`, `bridget-loop` et `bridget-handoff`, dans Codex et Claude. Décrire leur rôle en français. Garder les trois anciens noms utilisables. Corriger les appels documentaires qui utilisent encore ces noms. Publier les instructions depuis une source choisie, sans réintroduire un ancien protocole.
 
-Aucun changement de moteur, transport, daemon, T3, missions, modèle, API ou politique de boucle. Aucun redémarrage. Aucun lancement de modèle payant. Aucun commit, fusion ou push n'est autorisé par cette seule préparation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/142-skills-bridget/spec.md#extrait-1).
 
 ## Histoires utilisateur
 

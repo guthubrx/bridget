@@ -40,7 +40,7 @@ La LOW connue de json_extract sans json_valid dans unique_held_public_id reste e
 
 applied prouve **le commit du daemon**, pas l'injection, l'accusé du fournisseur ni la consommation par un modèle. La FIFO pleine et l'erreur ambiguë après guidage Codex restent des issues déclaréesR17 ; un doublon fournisseur peut arriver. Aucun avis universel n'est ajouté pour ordinary reply=false.
 
-Les tests lus exercent les handlers, SQLite, sockets et transactions réels du périmètre : panne entre écritures, deux écrivains, conservation des octets, refus par identité et pause, réouverturev7, réinscription et reprise. Le scénario froidcancel utilise la pause explicite pendant la reprise : il ne prouve pas une annulation gagnée contre une libération automatique sans pause. Le scénario ouvert vérifie les24 appels CLI/MCP SC010 avec propriétaires/auxiliaires réels de la fixture privée. Ce n'est pas une preuve T3 réelle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/implementation-b.md#extrait-1).
 
 Les **9 noms T020 sont comptés une seule fois** :6 Codex,1 Claude,1 ACP,1 wrapper. La saturation marquée du nom historique est un nouvel oracle du lotB, pas une régression du chemin sans marqueur. Les oracles SC014 appartiennent aux sept SQL promote ; ils ne forment pas deux tests additionnels.
 

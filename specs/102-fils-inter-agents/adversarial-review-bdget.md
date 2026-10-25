@@ -1,18 +1,13 @@
 # Contre-revue du plan102 — bdget
 
-Date : 2026-09-16. Demande20:58:05CEST, réponse reçue avant21:01:08CEST,
-borne annoncée5min. Agent127bccff-8490-453a-8182-884b749ec41e, client Claude/T3.
-Fournisseur/modèle déclarés par le relecteur : Claude, Fable5.1
-(`claude-fable-5-1`) ; annuaire modèle inconnu, déclaration non attestée séparément.
-Relecture indépendante d'un client/fournisseur déclaré différent de Codex/OpenAI.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/adversarial-review-bdget.md#extrait-1).
 
-Demande Bridget : mcp-99715-6aaae6bd-1 ; réponse :
-t3-982430dd-54e8-4d86-81d0-b412314e2a9d. Verdict : **APPROVE_WITH_CHANGES**.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/adversarial-review-bdget.md#extrait-2).
 
 ## Question et périmètre
 
 Challenger post→wake→ACK, plages de lecture perdues, confidentialité du ledger,
-anti-relais DM T3/wrappers et complexité. Cinq artefacts lus : spec, plan,
+anti-relais DM adaptateur/wrappers et complexité. Cinq artefacts lus : spec, plan,
 data-model, contracts/thread-api, reuse-audit. Tasks non encore créées.
 Consigne : lecture seule, aucun fichier modifié/commit/test/service/API payante/GPU.
 Le relecteur a confirmé n'avoir rien écrit ni lancé.

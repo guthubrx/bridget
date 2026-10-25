@@ -19,8 +19,7 @@ Copies canoniques byte-identiques des preuves de construction et d'installation 
 Le manifeste décrit l'étape avant installation. Le reçu confirme l'installation ultérieure.
 Stage conservé : /Users/moi/.cache/bridget-delivery150-151.v6wl8m5a
 
-Les PID et leurs dates de naissance sont inchangés : daemon 30562 depuis 02:17:41 CEST, pont 30974 depuis 02:17:48 CEST, T3 60116 depuis 01:13:35 CEST et serveur T3 60228 depuis 01:13:36 CEST.
-Aucun service ni T3 n'a été relancé. L'installation du fichier n'active pas le nouveau code dans ces processus.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/validation/livraison150-151.md#extrait-1).
 
 Recette finale sur main : 59 PASS, 0 FAIL, RC0. Temps : 13,20 s de tests et 48,13 s au total.
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/151-attente-fin-de-tache/validation/delivery-native151.json
@@ -35,11 +34,6 @@ SHA256 : b6c9015006443a1c9e78960889ab5d9d231996b730887314f411001986ef2820
 Reçu : /Users/moi/.cache/bridget-delivery151.dv7g3wq7/main-transfer151-receipt.json
 Les preuves historiques restent inchangées. Les anciens chemins de worktree qu'elles contiennent sont historiques.
 
-Le principal a retiré les worktrees 149/150/151 sans force. Il a d'abord contrôlé leur propreté, leur ascendance, leur push et l'absence de processus ouverts.
-Les trois branches locales ont été retirées. Aucune branche distante correspondante n'existait.
-Le constructeur a retiré 69,42 Gio logiques de cache : 6,80 Gio dans main et 62,62 Gio dans le worktree 150. Le retrait du worktree 150 a ensuite retiré son reliquat de 1,50 Gio.
-Ces volumes sont logiques. APFS et l'activité concurrente empêchent d'attribuer un gain physique à ces suppressions.
-Espace libre final mesuré par le principal : 40013060 Kio, soit environ 38,16 Gio.
-Les bases de données, la production T3, les sauvegardes 149, le stage T3 en attente et les liens symboliques étrangers sont conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/validation/livraison150-151.md#extrait-2).
 
 Ce reçu et les deux copies JSON complètent la livraison. Les documents de validation figés, les spécifications et les tâches restent inchangés.

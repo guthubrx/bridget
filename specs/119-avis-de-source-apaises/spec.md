@@ -19,9 +19,7 @@ changement du nombre de sources compatibles, sans aucun amortissement.
   bascules, au plus une fois toutes les 5 minutes.
 - **FR-004** : les fins de tour, permissions, écritures et lacunes sont remises comme avant.
 
-## Hors périmètre
-- Remettre des avis sans démarrer de tour : T3 n'offre qu'une activité (`thread.activity.append`),
-  invisible pour l'agent ; l'avis doit lui parvenir.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/119-avis-de-source-apaises/spec.md#extrait-1).
 
 ## Critères de succès
 - **SC-001** : dix minutes de bascules toutes les 3 s produisent un seul avis, « source instable ».

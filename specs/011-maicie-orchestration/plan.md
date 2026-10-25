@@ -179,10 +179,4 @@ un mécanisme dynamique de chargement.
 
 ## Hors périmètre explicite
 
-- GUI, TUI et synchronisation visuelle multi-canal ;
-- DSH, T3 Code et toute dépendance d'interface externe ;
-- DAG, planificateur, cron/ticks, worktrees, gestion de projet ou exécution de
-  code dans les agents ;
-- apprentissage automatique de durée, auto-réveil, délégation autonome,
-  compréhension de texte libre, synthèse par LLM ou rapport sémantique MCP/ACP ;
-- gestion multi-utilisateur, authentification distante et sécurité inter-tenant.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/011-maicie-orchestration/plan.md#extrait-1).

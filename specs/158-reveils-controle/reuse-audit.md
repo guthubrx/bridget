@@ -62,12 +62,7 @@ compteur existant n'est pas réutilisable en l'état. Aucune duplication.
 
 ## Specs livrees applicables
 
-| Spec | Pattern deja etabli | Impact |
-|---|---|---|
-| 087 | plan de contrôle, `ControlStateV1` | base de la CLI |
-| 148, 149, 150 | contrat de délégation, `human_cancel`, ordre des refus | `delegations_halted` dans l'ordre |
-| 151 à 157 | nouveaux outils MCP, rondes (153), posture | classés par le test exhaustif ; plafond suit la vie de l'enfant |
-| 145-147 | vue Lineage T3 | aucun changement de forme |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/158-reveils-controle/reuse-audit.md#extrait-1).
 
 ## Journal de recherche
 

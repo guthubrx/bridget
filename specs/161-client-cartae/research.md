@@ -49,11 +49,11 @@ Lecture directe de scripts/deploy-remote.sh:1–93, scripts/tests/federation_089
 
 ## Inconnues restant opérationnelles
 
-Cache offline complet, temps réel de compilation, résultat des recettes et disponibilité du préfixe neuf sont à constater pendant l'implémentation. Les conduites d'échec sont spécifiées ; aucune décision architecturale suspendue. Les paramètres des serveurs de décision par machine et du Lineage T3 appartiennent à162/163 et ne bloquent pas161.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/161-client-cartae/research.md#extrait-1).
 
 ## Compléments de préflight ROOT et audit de réemploi
 
-Lecture distante fraîche ROOT : status RC0, maître e6812e3e7b2d ; le vieux client096 émet un avertissement trompeur qui accuse le daemon. Ne pas suivre sa suggestion de relance. PID maître20937, pont21097, T3 60116/60228 inchangés au relevé. Python3.12.3 et /usr/bin/lsof disponibles sur Cartae. L'audit de réemploi séparé recherche la réutilisation de SOURCE-MANIFEST.sha256 de package089 et du nettoyage existant build.py. Ces constats guident la future implémentation ; ce document ne remplace pas reuse-audit.md ni son gate.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/161-client-cartae/research.md#extrait-2).
 
 ## Précisions après contre-revue
 

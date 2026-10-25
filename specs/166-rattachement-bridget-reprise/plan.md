@@ -1,4 +1,4 @@
-# Plan d’implémentation — SPEC-166 Rattachement Bridget après reprise T3
+# Plan d’implémentation — SPEC-166 Rattachement Bridget après reprise adaptateur de bureau
 
 ## Résumé
 
@@ -8,14 +8,7 @@ La correction réutilise la reprise native `thread/resume`. Juste avant `turn/st
 
 ## Contexte technique
 
-- Projet modifié : T3 Code.
-- Langage : TypeScript.
-- Périmètre principal : `apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts`.
-- Test de régression : `apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts`.
-- Dépendance nouvelle : aucune.
-- Persistance nouvelle : aucune.
-- Interface publique nouvelle : aucune.
-- Modification Bridget : documentation de livraison seulement.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/plan.md#extrait-1).
 
 ## Cause établie
 
@@ -27,16 +20,7 @@ Le défaut apparaît après une rotation sur une session fournisseur partagée. 
 
 ## Constitution Check
 
-| Règle | Décision |
-|---|---|
-| Processus SpecKit | Session 166 isolée avec spec, plan, tâches, analyse et reçu. |
-| Worktrees dédiés | Artefacts Bridget et source T3 isolés sur des branches de session. |
-| Diagnostic avant modification | Échec réel, état SQLite et flux de reprise observés avant le code. |
-| Réutiliser avant de créer | Réutiliser `threadRuntimeParams`, `thread/resume` et la carte de preuves. |
-| Minimalisme | Deux fichiers T3 prévus. Aucun service ni stockage. |
-| Refus sûr | Aucun repli vers une autre identité. Un échec de reprise bloque le tour. |
-| Tests | Oracle RED de rotation, puis régressions démarrage, reprise, bifurcation et tours. |
-| Livraison | Build signé, sauvegarde, installation et recette réelle avant clôture. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/plan.md#extrait-2).
 
 Aucune violation constitutionnelle n’est nécessaire.
 
@@ -71,9 +55,7 @@ Le chemin public `resumeThread()` et le nouveau contrôle utilisent un petit hel
 
 ## Divergences volontaires
 
-- Aucun renouvellement périodique n’est ajouté. Le contrôle au début du tour couvre le besoin avec une portée plus petite.
-- Aucun redémarrage automatique de T3 ou de Bridget n’est ajouté.
-- Aucune identité de secours fondée sur le processus, le dossier ou le fil voisin n’est acceptée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/plan.md#extrait-3).
 
 ## Fichiers prévus
 
@@ -86,16 +68,7 @@ Le chemin public `resumeThread()` et le nouveau contrôle utilisent un petit hel
 
 ## Phases d’implémentation
 
-1. Figer le diagnostic et l’audit de réutilisation.
-2. Ajouter un rejeu RED : preuve A montée, rotation vers B, puis début de tour.
-3. Extraire le helper interne de reprise native.
-4. Remonter B avant `turn/start` seulement si A et B diffèrent.
-5. Prouver que le chemin stable n’ajoute aucune requête.
-6. Exécuter les tests ciblés, le typecheck et les contrôles proportionnés.
-7. Intégrer et pousser les sources validées.
-8. Construire, signer, sauvegarder, installer et activer T3.
-9. Reprendre un fil réel et vérifier Bridget sans réinstaller le pont.
-10. Finaliser les reçus et nettoyer les worktrees.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/plan.md#extrait-4).
 
 ## Stratégie de test
 

@@ -7,11 +7,7 @@ n’est créé par cet ADR.
 
 ## Contexte
 
-La vue Lineage exige un fil T3 et ne remplace pas une vue globale humaine.
-La pause de l’ADR027 diffère les effets autonomes ;elle n’est pas un arrêt
-persistant des nouvelles délégations. Le catalogue MCP n’impose pas de portée
-par action. Un enfant discovery peut rester vivant entre rondes ou après un
-résultat ; un plafond limité aux tâches non terminales serait donc insuffisant.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/158-controle-global-portees.md#extrait-1).
 
 Base préparée158A : bd37e927eee0b28f058df9d6a6992e38665a6ad0, sources157
 8f21dfd7b553e822fcabe0a0e7eabc6741a8e45b livrées. Réemploi avant création :
@@ -21,7 +17,7 @@ Les reçus d’arrêt ne transforment pas control_events ni ses contraintes CHEC
 
 ## Décisions R1 à R8
 
-- **R1** : vue globale par le plan de contrôle, sans fil T3. Négociation puis
+- **R1** : vue globale par le plan de contrôle, sans fil d’un client externe. Négociation puis
   capacité ControlStateV1 puis acteur humain attesté. La capacité seule et un
   alias from=humain ne donnent aucune autorité. Vue bornée à 100, sans corps de
   mission/résultat/chemins ; active reprend holds_slot, garde comprise.
@@ -158,7 +154,7 @@ fixe vieille de plus de 600s est sautée. Prepared conserve sa grâce 600s initi
 Fuseau observé du daemon ; domaine offsets en minutes entières±24h, premier
 UTC d’une heure double DST ou non-DST, heure inexistante sautée. La date civile
 précédente et les occurrences gelées survivent au changement TZ. Aucune garantie
-exactly-once fournisseur illimitée ni parité T3 mesurée.
+exactly-once fournisseur illimitée ni comparaison de produits mesurée.
 
 L’origine native Task/instance est gelée et revérifiée au gel/départ avec
 for_child et les preuves existantes. Fin connue : annulation des futures

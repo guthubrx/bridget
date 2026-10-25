@@ -113,7 +113,7 @@ Sans `fallback` : le refus de la cible demandée est rendu tel quel. Avec
 `fallback` : refus non remplaçable de la cible demandée rendu tel quel ; sinon
 `fallback_exhausted` si tous échouent.
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme. `agent_type` et `model` de la projection sont ceux de
 la cible effective. Aucun état nouveau.

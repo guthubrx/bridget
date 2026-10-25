@@ -28,8 +28,7 @@ Aucune mission de remplacement n’a été lancée dans ce lot.
 
 ## Référence et validation
 
-Les mécanismes T3 lus et les adaptations distantes sont consignés dans :
-/home/moi/10.Scripts/64.bridget/specs/172-resolution-projet-distant/implementation.md
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/erreurs-preparation172.md#extrait-1).
 
 14 tests distincts PASS, nouveaux tests et régressions ciblées. Aucune suite
 complète. Les dix filtres, la liste exacte et les comptes d’exécution sont dans :
@@ -71,15 +70,9 @@ f758f6d2-308d-4d28-aa0f-bfd70b134975, expiration1792574512.
 Une fin de tour ne prouve ni succès ni fin de mission. À ce signal, relire les
 gardes des tâches et admissions. Aucun minuteur ni activation automatique.
 
-Les processus actuels sont conservés : maître16326/source7085b77c,
-worker624845/source72a8e8f8, T3 Beta91019/91105, pont898. Les anciens
-PID T330609/30660 des reçus du 19 octobre sont historiques.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/erreurs-preparation172.md#extrait-2).
 
-Avant activation, revérifier PID, dates de naissance, empreintes et absence de
-tâche active ou gardée non nettoyée. Activer le maître corrigé, puis seulement
-le worker corrigé. Un ancien maître ne décode pas les nouveaux motifs.
-Retour arrière : ancien worker, client et unité d’abord, ancien maître ensuite.
-Aucun redémarrage T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/erreurs-preparation172.md#extrait-3).
 
 Après activation, demander au propriétaire de ba369015 une seule lecture MCP
 officielle de son ancien reçu. Cette lecture vérifie error_message dans son

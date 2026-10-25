@@ -12,6 +12,6 @@ Relire l'alignement des capacités145 etRecent, la borne before inclusive, la pr
 
 ## Suite autorisée
 
-Le principal a donné le GO code aux trois responsables Rust, frontière T3 et panneau. Statut : In Progress ;0/10 terminées. Ce contrôle documentaire ne prouve aucun test ni succès d'implémentation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/146-bridget-panel-lisible/analyze.md#extrait-1).
 
 Converge doit préserver les tâches existantes et ajouter seulement les manques constatés. Après ce contrôle, l'audit corrige les défauts prouvés ; le scoring reste en lecture seule. Si une correction touche le code, les validations concernées puis Converge sont rejoués avant clôture.

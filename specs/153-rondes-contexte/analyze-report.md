@@ -116,9 +116,4 @@ sans nouveaux IDs ni scénarios ; reçu :
 
 ## Prochaine étape et limites
 
-T001 seule peut être cochée. T002/T003 fondations coordonnées ; T004 après T003.
-Owners proposés : protocole/MCP qualité ; magasin/projection/index persistance ;
-moteur natif/E2E façade. Aucun code/test153 encore produit par ce gate.
-Pas de modèle réel, T3, activation153, benchmark, mutation ou couverture mesurés.
-Les déclarations historiques de research restent marquées historiques et
-sont remplacées pour l'exécution par la carte actuelle de couplage.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/analyze-report.md#extrait-1).

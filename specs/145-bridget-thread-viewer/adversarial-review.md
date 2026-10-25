@@ -1,12 +1,12 @@
 # Revue hostile — SPEC145
 
-Date : 2026-10-07. Statut : final accepté. Revue du code en lecture seule terminée à 16:17:04 UTC. Verdicts : APPROVE Rust et APPROVE T3. Artefacts audit v14 validés deux fois par le principal, exit 0, zéro erreur, zéro warning. T020 suit Converge2 hors comparaison.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review.md#extrait-1).
 
 ## Périmètre et gel
 
-Deux worktrees145 seulement : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/` et `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review.md#extrait-2).
 
-La revue finale porte sur31 sources/tests :8 Rust et23 T3. Hash agrégé avant et après la revue readonly : `7c765f38d24163def6fe80a1b4c792aca1b954e3f6612ee63ac1215a40456bc6`, identique selon le principal. Aucun source n'est modifié pendant ce cycle final. Les hashes du gel initial sont conservés séparément.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review.md#extrait-3).
 
 Artefacts audit : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/audits/2026-10-07/session-2026-10-07-spec-145-01/`. Les constats et corrections du cycle1 sont présents ; la validation finale des artefacts n'est pas déduite de leur seule présence.
 
@@ -20,13 +20,13 @@ Les revues ont lieu chez le même fournisseur. Aucun agent d'un fournisseur diff
 | REL-145001 | MEDIUM | Le helper partagé écrit toujours la chaîne source en text/plain quand clipboardData existe, même sans format additionnel. | Vrai fallback HTTP RED puis GREEN, CRLF/Unicode conservés ; rejeu principal helper+panneau30 PASS. Le presse-papiers système du navigateur complet n'est pas testé. |
 | MIN-145001 | LOW | Supprimer quatre lignes du second dispatch CLI inspect devenu inaccessible. | Interception unique dans run avant initialisation conservée ; revue Rust APPROVE, build/clippy/format et tests ciblés PASS. |
 
-Sources corrigées : `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/server/src/bridget/BridgetReader.ts`, `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web/src/hooks/useCopyToClipboard.ts` et `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/crates/bridget-daemon/src/cli.rs`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review.md#extrait-4).
 
 Les deux MEDIUM et le LOW sont FIXED selon les reçus principal et relecteurs. Aucun constat CRITICAL/HIGH reçu. Aucun échec de baseline n'est réparé hors périmètre pour modifier artificiellement ce résultat.
 
 ## Vérifications finales utiles au verdict
 
-Le vrai AtomRegistry et la factory native de `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/client-runtime/src/state/orchestration.test.ts` couvrent A → B → A avec ancien RPC non interruptible. Le résultat tardif ancien n'est pas publié. Cette preuve porte sur le runtime natif, pas seulement sur une UI mockée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/adversarial-review.md#extrait-5).
 
 Backend/runtime : quatre suites50 PASS, puis rejeu principal indépendant50 PASS exit0. Test RPC ciblé1 PASS ;210 non sélectionnés ne sont pas déclarés exécutés. Types contracts/server/runtime exit0.
 

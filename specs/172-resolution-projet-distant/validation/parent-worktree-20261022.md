@@ -10,9 +10,9 @@ La racine autorisée reste la référence du mapping de projet. Le checkout rée
 
 La première correction remplaçait trop tôt la racine autorisée. La revue a montré que le premier worktree puis la racine pouvaient alors créer deux mappings automatiques. La version finale conserve une seule identité de projet pour les deux ordres d’utilisation, sans déclaration manuelle.
 
-## Référence T3
+## Choix de conception Bridget
 
-Fichier lu : /Users/moi/11.Repositories/t3code/apps/server/src/vcs/GitVcsDriverCore.ts, fonction resolveRepositoryPathsUncached, lignes 1038–1110 au moment de la lecture. T3 distingue commonDir et worktreeRoot depuis le dossier demandé. Bridget reprend cette séparation. Le contrôle de portée du parent et la confirmation distante restent nécessaires pour son exécution distante.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-worktree-20261022.md#extrait-1).
 
 ## Sources et contrôles
 
@@ -39,13 +39,9 @@ Le maître a été remplacé : PID 64762 vers 76289. Le contrôle officiel bridg
 
 Une première tentative s’est arrêtée avant toute mutation à l’arrivée d’une nouvelle mission. L’activation suivante a utilisé la reconnexion déjà présente dans le worker, avec contrôle des identités avant et après :
 
-- Worker Cartae : PID 2219043, zéro redémarrage, build 172-76b682d6.
-- Mission Notre-Dame : 28da9844-0695-4f99-9159-b9beeab9bd6d, même instance et génération 714.
-- Wrapper : PID 2350358, naissance 218843575, inchangés.
-- Fournisseur Claude : PID 2351171, naissance 218844336, inchangés.
-- Pont : PID 898 ; T3 : PID 28528 et 28591, préservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-worktree-20261022.md#extrait-2).
 
-La lecture durable après activation donne result_available, ronde 1, error=null pour cette mission. Cela confirme la continuité de cette mission pendant le remplacement du maître. Aucune annulation, duplication ou nouvelle mission métier n’a été envoyée par ce correctif. Le worker et T3 n’ont pas été redémarrés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-worktree-20261022.md#extrait-3).
 
 ## Qualification depuis le contexte monuments
 

@@ -9,7 +9,7 @@ Binaire signé installé atomiquement :
 SHA2562152455f09cd963250a58ae4b6034b5b83a94c09bb28638e8c11d564b57d2717.
 Build release unique,124,64secondes,2jobs, priorité10, hors ligne, aucune nouvelle suite. Signatures strictes validées.
 
-Activation après trois contrôles distincts Nativeprod0 en SQLite lecture seule. SIGTERM individuel, remplacement automatique launchd ; daemon55530 depuis08:38:09CEST, pont55643 depuis08:38:12. StatusRC0, daemon en ligne et build-id cf498755dc87. T3 PID60116/60228 et naissances11octobre01:13:35/36 inchangés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/156-guidage-file/validation/livraison156.md#extrait-1).
 
 Tests : suite complète unique avant T0322350PASS Cargo+3PASS enfants séparés/11FAIL/73ignored. Trois fixtures reprises2+1PASS ; huit échecs hérités documentés. T032RED0PASS/1FAIL, puis93PASS ciblés et3E2E PASS. T032 ajouté par Converge passage1 pour FR016 ; aucun scénario de confort, aucun nouveau FULL.
 

@@ -6,18 +6,11 @@ Source dbec83e64c8cccfa8b228d2e82ea3156855a0538, build 172-dbec83e6.
 Le maître Mac PID 47204 charge le correctif. Binaire signé, SHA-256 :
 7bd41314c7b8318ad3155f383f8b6fac48824a4df8a1063844119dc978edca32.
 
-Le worker Cartae PID 2219043 reste sur 172-76b682d6. Aucun redémarrage du worker
-ni de T3. Pont 898, application 50681 et serveur 50799 préservés.
-La mission becec88c-197d-4653-8452-0b936d04945e a gardé son wrapper
-2479540, sa naissance 219447002 et les processus fournisseur mesurés pendant
-l'activation. Son état après activation est working, sans erreur.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md#extrait-1).
 
 ## Défaut et correction
 
-La continuation d'un même propriétaire T3 était refusée quand Codex renouvelait
-son identifiant de session. Le fil, l'instance fournisseur et la politique
-restaient identiques. Le comparateur traitait pourtant cet identifiant technique
-comme un changement de droits.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md#extrait-2).
 
 Pour une preuve provider_turn réattestée, la comparaison neutralise maintenant
 provider_session_id, comme run_id et revision. Les deux gardes de propriétaire,
@@ -25,20 +18,9 @@ l'instance, le répertoire, les modes et la politique restent vérifiés.
 Le chemin native_wrapper garde son égalité stricte. Le snapshot durable et la
 preuve du worker ne changent pas. Aucun droit ni mécanisme de relance ajouté.
 
-Référence T3 lue :
-/Users/moi/11.Repositories/t3code/apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts,
-source ef86c2bbc3388be8fc593db23a323e3d80b58509, lignes 1483–1503, 1530–1532,
-1581–1585 et 1630–1643. T3 conserve thread.id lors d'un nouveau session.started.
-Bridget doit conserver l'autorité de ce même fil, sans transposer ce principe
-aux identités de wrappers natifs.
-
 ## Validation
 
-Neuf tests ciblés PASS, sans suite complète. RED puis GREEN sur la comparaison.
-Les tests couvrent le renouvellement, les changements de politique refusés, les
-deux gardes, la même ronde rejouée et la liaison T3 opaque.
-La revue 9e5b4b1c-cfbb-449a-9f8b-5809f2b69f7f rend APPROVE. Résultat lu,
-acquitté et garde clôturée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md#extrait-3).
 
 Recette réelle après activation :
 Task 492cf951-4ad6-4f1e-97e8-32a2b3cb9706,
@@ -62,19 +44,11 @@ Aucune continuation métier relancée.
 aaba664f-b773-44b3-849b-8e651af88c1f : ancien refus de réservation antérieur
 au budget de 15 s, tâche annulée et nettoyage confirmé. Aucun remplacement.
 
-L'admission monuments-notre-dame-qualification-intrants-reels-20261022-01
-était restée chosen, sans Task, depuis 13:52 UTC. Le propriétaire a confirmé son
-abandon dans t3-8f8ffab4-341b-4441-9851-571267a62568. Sa récupération native au
-redémarrage l'a refusée avec permission_not_inherited ; TaskID toujours nul.
-Aucun rejeu manuel, changement de clé ni mutation SQL opérateur.
-La qualification sur une nouvelle base reste au propriétaire.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md#extrait-4).
 
 ## Cas distinct : Codex lancé directement dans un terminal
 
-identity_not_found signifie qu'aucune identité Bridget vérifiable n'est liée
-à cet appel. La seule présence du connecteur MCP ne fait pas cette inscription.
-Le parcours interactif actuel est bridget codex, ou bridget codex resume pour
-reprendre une conversation existante. Il ne dépend pas de T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/parent-session-renouvelee-20261022.md#extrait-5).
 
 Deux processus locaux lancés directement par codex, sans marqueur Bridget,
 ont été observés. La commande du terminal de recherche signalé n'a pas été

@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Rattachement Bridget après reprise T3
+# Specification Quality Checklist: Rattachement Bridget après reprise adaptateur de bureau
 
 **Purpose**: Valider la complétude et la qualité de la spécification avant la planification  
 **Created**: 2026-10-15  

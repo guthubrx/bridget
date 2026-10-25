@@ -28,7 +28,7 @@ La session ajoute une façade CLI courte. Elle reste un adaptateur vers `delegat
 | Minimalisme | Un groupe de commandes et un formateur. Aucun nouveau moteur ou protocole. |
 | Refus sûr | Sans identité, aucune tâche n’est créée. Le message indique le rattachement requis. |
 | Tests | Parseurs, sorties, refus d’identité et régressions des commandes historiques. |
-| Livraison | Build signé, installation atomique et recette sans T3 si les gardes runtime le permettent. |
+| Livraison | Build signé, installation atomique et recette par le parcours natif Bridget si les gardes runtime le permettent. |
 
 Aucune violation constitutionnelle n’est nécessaire.
 
@@ -62,7 +62,7 @@ Les actions qui appartiennent au parent appellent les outils natifs existants. `
 
 `resolve_current_identity()` reste la source d’identité. La CLI ne déduit rien du dossier, du terminal ou du processus. Une invocation non rattachée refuse avant la connexion métier.
 
-Cette règle permet deux usages sans T3 :
+Cette règle permet deux usages par le parcours natif Bridget :
 
 1. un agent lancé par un wrapper Bridget utilise directement les commandes ;
 2. un utilisateur demande à cet agent coordinateur de déléguer et de suivre les tâches.
@@ -92,7 +92,7 @@ La sortie humaine montre les identifiants durables, l’état, l’agent choisi 
 |---|---|
 | `crates/bridget-daemon/src/cli.rs` | Parser `delegate`, groupe `task`, exécution commune, aide et tests unitaires. |
 | `docs/decisions/167-coordination-cli-autonome.md` | Invariant d’identité et architecture de façade. |
-| `docs/reference-communication.md` | Parcours nominal sans T3 et commandes de cycle de vie. |
+| `docs/reference-communication.md` | Parcours nominal par le parcours natif Bridget et commandes de cycle de vie. |
 | `README.md` | Exemple court si le point d’entrée utilisateur n’est pas déjà visible. |
 | `CHANGELOG.md` | Résumé utilisateur de la nouvelle façade. |
 | `specs/167-coordination-cli-autonome/*` | Artefacts, preuves et reçu. |
@@ -108,18 +108,11 @@ La sortie humaine montre les identifiants durables, l’état, l’agent choisi 
 7. Exécuter les tests ciblés puis la suite adaptée au risque.
 8. Mettre à jour la documentation et la décision d’architecture.
 9. Contre-relire, auditer, intégrer, pousser, construire et activer.
-10. Faire une recette sans T3 et nettoyer la branche de session.
+10. Faire une recette par le parcours natif Bridget et nettoyer la branche de session.
 
 ## Stratégie de test
 
-- Parser nominal : mission seule, dossier courant, clé générée.
-- Options : type, modèle, effort, posture, délai, garde, demande enfant, urgence et livrable.
-- Refus : option inconnue, doublon, mission vide, borne dépassée et identité absente.
-- Cycle : chaque sous-commande produit le nom d’outil et la charge attendus.
-- Rejeu : une clé fournie est conservée à l’octet près.
-- Sortie : JSON unique sur stdout ; vue humaine avec identifiants utiles.
-- Compatibilité : tests existants de `auto-delegate`, délégation MCP et garde CLI.
-- Recette : agent Bridget actif, T3 arrêté, délégation puis status/wait/ack.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/plan.md#extrait-1).
 
 ## Observabilité et preuve
 
@@ -131,7 +124,7 @@ La validation conserve :
 - le résultat de la contre-revue ;
 - le hash du binaire installé ;
 - l’état du daemon avant et après activation ;
-- une recette sans processus T3 ;
+- une recette dans un environnement natif isolé ;
 - la preuve que les commandes historiques restent reconnues.
 
 ## Risques et protections

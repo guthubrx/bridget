@@ -70,12 +70,7 @@ Aucune duplication évidente détectée.
 
 ## Journal de recherche
 
-| Requete | Portee | Resultat |
-|---|---|---|
-| `rg WebviewBuilder|bridget-open|DesktopPreferences|RemoteBrowser` | `apps/bridget-desktop/` | enfants WebView, ouverture externe et préférences existants ; RemoteBrowser non implémenté. |
-| `find capabilities -type f` | Desktop capabilities | main privilégié, panneaux relayés sans core Tauri. |
-| `rg projectTimeline|renderMessageMarkdown|content_security` | renderer relayé | timeline factuelle et Markdown assaini confirmés. |
-| inspection T3 `PanelLayoutControls.tsx` | `/Users/moi/11.Repositories/t3code` | icônes et états exacts pour panneau/agrandissement observés sous MIT. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/083-artefacts-html-sandbox/reuse-audit.md#extrait-1).
 
 ## Arbitrages
 

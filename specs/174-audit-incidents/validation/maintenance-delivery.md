@@ -2,9 +2,7 @@
 
 ## Livré
 
-Source de production : `34405ea280834fb06ac4d3367ae5fa1ab897eab0`.
-Build optimisé `174-34405ea2` actif sur le maître macOS et le worker Cartae.
-Le client CLI Cartae pointe également vers ce build. T3 et le pont sont restés sur leurs processus existants. Aucun travail métier n'a été créé ni rejoué.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/maintenance-delivery.md#extrait-1).
 
 - macOS signé : `9b6ebba9fd819aa4d2a91d8670a36a6d83ba13c5684e0487472ab69567f95e37`.
 - Linux : `7899f1ff66050b59cda92754c76c3bf66ab5f321d561473207b1c6c644a0e4d9`.

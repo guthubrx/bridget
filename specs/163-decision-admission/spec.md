@@ -38,7 +38,7 @@ L’utilisateur peut choisir explicitement une machine avec le socle 162. Il veu
 
 Ajouter un choix initial facultatif. Bridget prépare une liste bornée de candidats autorisés. Le serveur de décision propose un candidat de cette liste ; Bridget contrôle à nouveau ses droits avant admission. Le moteur et la machine peuvent être automatiques indépendamment. Les demandes explicites restent prioritaires. La décision retenue est conservée : panne, rejeu ou reprise ne déplacent pas une mission déjà décidée.
 
-Le service de décision est générique. Sa machine d’hébergement, son adresse et son protocole sont déclarés. Laya est un premier profil étudié ; la compatibilité de Jev n’est pas attestée. Le lieu de décision ne détermine pas le lieu d’exécution. Bridget reste utilisable sans T3.
+Le service de décision est générique. Sa machine d’hébergement, son adresse et son protocole sont déclarés. Laya est un premier profil étudié ; la compatibilité de Jev n’est pas attestée. Le lieu de décision ne détermine pas le lieu d’exécution. Bridget reste utilisable par le parcours natif Bridget.
 
 ## Histoires utilisateur et acceptation
 
@@ -81,9 +81,7 @@ Un rejeu identique retrouve la même admission, même si la politique a changé 
 
 L’auteur voit le couple retenu, le mode explicite/automatique/repli et une raison courte. Les lecteurs anciens conservent leur fonctionnement.
 
-- Bridget montre ces informations sans T3. T3 les présente uniquement lorsque le contrat enrichi est supporté.
-- Une réponse du décideur ne devient jamais une consigne à exécuter ni une autorisation supplémentaire.
-- La livraison comprend preuves, intégration, push vérifié, installation applicable, recette et nettoyage ciblé. L’application T3 n’est pas relancée sans nouvelle autorisation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-1).
 
 ## Exigences fonctionnelles
 
@@ -126,7 +124,7 @@ L’auteur voit le couple retenu, le mode explicite/automatique/repli et une rai
 
 Politique de choix, profil candidat, service de décision, observation de santé, reçu d’admission et résumé de décision. Le maître demeure l’autorité métier. Dépendances : 149 identité et droits ; 152 reprises ; 154 worktrees ; 155 demandes enfant ; 157 catalogue et limites ; 160 reprises quota ; 162 placement et résultat distant.
 
-Socle livré : source Bridget 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437 et T3 174a9d04554758aacffb4aade588e61c810faf5a intégrées et poussées. Le checkout de départ est dcfd9bc29140457b1fa016c276f5a48933415a5c. La session 162 est achevée, 46/46, G8/G9 validés avec conservations justifiées. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/162-execution-distante/validation/livraison162.md et /Users/moi/.cache/bridget-delivery162-20261013/git-final162.json.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-2).
 
 ## Hypothèses et limites
 
@@ -142,11 +140,11 @@ Ces réserves ne réduisent aucun FR/SC et ne sont pas déclarées corrigées. F
 
 ## Hors périmètre
 
-Nouveau scheduler, choix à chaque tick, migration d’une mission active, nouveau moteur Git, vue globale T3, fournisseur ou checkpoint universellement meilleur, réplication métier, nouvelle base distante, découverte automatique de services, démarrage d’un serveur de décision, installation de Jev ou du modèle de décision.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-3).
 
 ## Orientation de réalisation retenue
 
-Développement Rust et tests Linux sur Cartae, dans un espace privé isolé du worker actif. Modifications T3, contrôles macOS, signature et installation sur le Mac. La recette du décideur est émise par le maître Mac ; les validations Linux et Mac restent distinctes et attestent le même commit source. ROOT rapporte le rattachement du connecteur rétabli et le checkout distant préparé ; aucun lancement de développement n’est présumé par la spec. Une compilation active à la fois dans toute la flotte, tests regroupés et aucune FULL répétée par tâche.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-4).
 
 Limite réseau : DNS, connexion, TLS, écriture ou lecture du serveur peuvent retenir le seul travail réseau indéfiniment. Après deux secondes, le demandeur reçoit son repli autorisé ou son refus ; les suivants n’ajoutent aucun travail et exposent la raison de capacité occupée. Le refus d’une configuration non sûre reste visible et ne bloque pas les délégations explicites.
 
@@ -160,7 +158,7 @@ R8 : 16 PASS ciblés indépendamment attestés (deux natifs T024/T025, dix Git e
 
 CODE R3 APPROVE_WITH_CHANGES confirme la perte de classe Technical en String : workspace_path_unsafe peut encore terminer un reçu après une erreur E/S. ROOT retient la correction R9 dans T057, sans nouvelle tâche. R9 code-only préparé sur native_delegation.rs et workspace_git.rs ; trois replays affectés attendus, aucun résultat R9 encore attesté. L’oracle EIO typé prévu vérifiera le passage par la méthode de production et la fermeture, chosen/noTask/rx0 ; il ne forcera pas une syscall OS réellement en erreur.
 
-31/31 couverture documentaire et 4/57 inchangés, aucun cochage. T033 quatre contrôles nominativement prouvés, sans extrapolation vers nouveau runtime T3. P3 NONCONVERGED historique/phase 5 corrective autorisée conservés, aucun P4 formel. Audit final/delta R9, builds, recette T040, Git, G8/G9 et livraison restent ouverts. T039 prépare quatre profils off/on moteur/placement sans appliquer la configuration ; quota CLI à 100 % et nouveaux children ne prouvent pas l’usage opérationnel de ces profils en production.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-5).
 
 ## Checkpoint R9 final ciblé — 14 octobre 2026
 
@@ -190,7 +188,7 @@ Audit final readonly : grade A/99,047619 ; 0 CRITICAL, 0 HIGH, 3 MEDIUM, 2 LOW ;
 
 ROOT accepte T038/T040/T041/T042 sur leurs preuves réelles. Bridget source 5105378bf4f03376e9bc93e52065cb022f81dee5 installé : Mac SHA-256 6c8f89203c85c76e7add2a4d06bb86eedd6cdb3f74470eac11920cc0f6068063, Linux SHA-256 6e5d9717d6054511326f84c684d65c3f3bc1a5086cb514b2d6b64a03ad9b97e0. Maître 44553 né 04:55:03 CEST et pont 44667 né 04:55:05 utilisent /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget ; worker 1411115, naissance 146166371 utilise /home/moi/.local/lib/bridget-communication/163-5105378bf4f0/bin/bridget.
 
-T3 /Applications/T3 Code (Local).app remplacée atomiquement en 0.0.45-local.164/source 511190beb307e0952066fe1a4b511cb9dd7adb18, signature stricte/deep RC0 et entitlements préservés. PID 704/969 et naissances 17:31:27/33 du 13 octobre restent inchangés : aucun redémarrage, ancien code encore chargé. Aucun réveil différé programmé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-6).
 
 Sauvegarde retry : phase_complete/activate, projection173→174 de même génération et 33 autres tables exactes, schéma/count inchangés ; halt humain complet préservé. Migration additive reçusauto, quick_check ok/FK0, schémas 7/12/Fleet5. Sauvegarde jointe vérifiée ; après activation, toute rétrogradation exige une nouvelle sauvegarde jointe sans perte. La sauvegarde préactivation ne couvre pas les nouveaux reçus. L’incident171→172 et les anciens PID 86807/86830/1403968 restent uniquement historiques.
 
@@ -202,15 +200,13 @@ Ordre réel : sources committées/intégrées/poussées avant laboratoire T040, 
 
 Reçus :
 
-- /Users/moi/.cache/bridget-delivery163-20261013/joint-backup-20261014-163164-retry-projection/progress.json ; SHA-256 b6da23d355fbb396b50fab7c946dd5693dd6ced27aafe5ae3ac2aaffaf7cef16
-- /Users/moi/.cache/bridget-delivery163-20261013/t3-backup163164/T3-install-receipt.json ; SHA-256 b73ddc5019a644fc9964372816089f95cfffdd276b319ad0bbef5196429fa2f0
-- /Users/moi/.cache/bridget-delivery163-20261013/g8-registry-off-applied.json ; SHA-256 ed358ea42dc927adf19d4c4e7cca2ecdd0de76e2aa2a213116f6b15049b26aae
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-7).
 
 ## Correctif G8 — façade MCP T058, 14 octobre 2026
 
-Le MCP propre à la nouvelle commande annonce bridget_auto_delegate dans tools/list, mais tools/call renvoie JSON-RPC -32602, message outil inconnu, request_id g8-spec163-a73f9432-53d5-46b5-94b9-e8f0ee3cfe7e. Les attestations officielles immédiatement avant appel portent version2 et permissions_present=true ; provider codex-pro déclaré disponible et capacité maître contrôlée. Aucun reçu auto/Task sous cette clé selon la vérification durable ROOT. La cause confirmée ROOT est le dispatcher de /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/mcp.rs:753–760 : routage auto omis malgré l’annonce. Scope/hook/wrapper doivent être raccordés à la voie native existante. Ce refus ne démontre pas un problème de quota ou d’authentification et ne nécessite pas de redémarrage T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-8).
 
-T058 reste dans la session163 autorisée : correctif minimal sur Cartae, oracles MCP existants affectés, contre-revue/delta d’audit ciblés, build et livraison du correctif avant reprise G8. Aucun nouveau framework, banc de confort ou FULL. Le prochain commit source sera différent de5105378bf4f03376e9bc93e52065cb022f81dee5 ; aucun hash futur fixé. T038/T042 demeurent cochées pour les builds/installations réellement prouvés du510, pas pour le futur correctif. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18/version164 est déjà installée et inchangée. Aucun résultat antérieur effacé, aucun livré final ou G8/G9 déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/spec.md#extrait-9).
 
 Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brute est conservée : /Users/moi/.cache/bridget-delivery163-20261013/g8-mcp-off-error-observation.log ; SHA-256 03e823bb6a993a7f1b8b546edc53f6aeded6e163bcd9ed507b22a68dc28f2f47. P3 NONCONVERGED historique et poursuite corrective sous mandat utilisateur restent explicites ; aucun P4 formel inventé.
 

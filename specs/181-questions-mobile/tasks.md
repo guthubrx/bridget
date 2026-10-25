@@ -4,19 +4,12 @@ Ordre : fondations -> US1/US5 -> US2/US4 -> US3 -> recette. Responsable unique ;
 
 ## Préparation
 
-- [x] T001 Cadrage, spec, plan, recherche et audit de réutilisation dans specs/181-questions-mobile ; indépendance T3 et exclusions utilisateur vérifiables.
+- [x] T001 Cadrage, spec, plan, recherche et audit de réutilisation dans specs/181-questions-mobile ; autorité native Bridget et exclusions utilisateur vérifiables.
 - [x] T002 Installer et démarrer l’émulateur Android ; conserver versions, commande et contrôle de boot dans le reçu privé181.
 
 ## Fondations et US1/US5 — Demande native, terminal et adaptateurs
 
-- [x] T003 Écrire les tests de validation, propriété, révision, course et rejeu du contrat dans crates/bridget-daemon/src/user_input.rs et les lancer avant la réalisation complète ; états et refus observables.
-- [x] T004 Implémenter le magasin natif et ses transitions bornées dans crates/bridget-daemon/src/user_input.rs, store.rs, protocol.rs et daemon.rs ; les tests T003 passent sans affaiblir087/155.
-- [x] T005 Exposer l’outil MCP natif et la commande humaine terminal dans mcp.rs, mcp_scopes.rs, cli.rs et communication/client.rs ; test d’identité négatif et réponse reçue sans T3.
-- [x] T006 Réemployer le callback Codex natif pour les agents principaux dans wrapper.rs/codex_app_server.rs et daemon/native_child_requests.rs ; le routage155 reste couvert et inchangé.
-- [x] T007 Traiter AskUserQuestion dans claude_stream_json.rs via le même contrat ; conserver le refus des autres permissions et vérifier corrélation/réponse native dans les tests du transport.
-- [x] T008 Lire les demandes T3 dans t3code_contract_v2.rs et conserver la forme/questions originales ; tests de demande résolue/non reprenable/étrangère et borne.
-- [x] T009 Brancher publication, réponse et réconciliation de l’adaptateur dans t3code.rs/t3code_contract.rs ; commandId stable, clôture externe et aucune réinjection de prompt testés.
-- [x] T010 Étendre les opérations Questions/HTTP dans daemon/mobile_questions.rs et mobile/http.rs ; tests Rust autorisé/refusé, entrée périmée et origine appareil.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/181-questions-mobile/tasks.md#extrait-1).
 
 ## US2/US4 — Formulaire et réponse libre persistante
 
@@ -32,12 +25,7 @@ Ordre : fondations -> US1/US5 -> US2/US4 -> US3 -> recette. Responsable unique ;
 
 ## Vérifications des stories complètes
 
-- [x] T017 Ajouter et lancer les tests instrumentés Android du formulaire, reprise, agrandissement, résultat vocal contrôlé et notification ; rapports conservés hors Git.
-- [x] T018 Recette réelle sur émulateur avec producteur/commandant terminal natif, sans T3 : choix/libre/complément, fermeture et réponse reçue une seule fois ; reçus181 privés.
-- [x] T019 Recette réelle notification en arrière-plan et dictée ; qualifier le moteur vocal présent et les limites éventuelles, sans présenter une injection de résultat comme reconnaissance réelle.
-- [x] T020 Recette contrôlée de l’adaptateur T3 et modes terminal ; préserver les vrais fils, aucun redémarrage fournisseur/T3 pour répondre ; modes indisponibles affichés avec guidage.
-- [x] T021 Lancer les tests ciblés Rust/JVM, lint et builds concernés ; fault injection réseau/reprise, révocation et course entre clients ; aucune régression nouvelle bloquante.
-- [x] T022 Produire et vérifier le diaporama des circuits réels dans preuves-corrections/2026-10-25-questions-mobile/preuves.html ; rapports, manifestes, captures et reçus privés protégés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/181-questions-mobile/tasks.md#extrait-2).
 
 ## Dépendances et contrôle final
 
@@ -47,7 +35,7 @@ Converge, contre-revue adverse du code, audit, livraison Git/binaires et nettoya
 
 ## Correction issue de l’audit
 
-- [x] T023 Préserver les reçus existants à capacité32 dans l’adaptateur T3 ; test avant/après et fermeture explicite.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/181-questions-mobile/tasks.md#extrait-3).
 
 - [x] T024 Parcourir les pages des notifications natives pour ne pas ignorer une question au-delà des dix plus anciennes ; recette avec plus de10questions actives.
 

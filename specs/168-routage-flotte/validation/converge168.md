@@ -106,7 +106,7 @@ Ce rapport ne présente aucune nouvelle exécution de ces tests.
 
 - P1 NON CONVERGED,54tâches ;32cochées après rattachementT025,22ouvertes.
 - T050–T054 non cochées avant correction et preuve d’exécution. T033 et T034 restent ouvertes.
-- Les recettes sansT3, service/Haiku réels, preuve distante et récupération restent T042–T049.
+- Les recettes natifBridget, service/Haiku réels, preuve distante et récupération restent T042–T049.
 - Borne ETA révisée annoncée par ROOT pour le15octobre2026 :18h50CEST, inchangée par ce rapport. C’est une estimation, pas une preuve de fin.
 - Corrections hors passe → campagne affectée groupée ROOT → nouveau gel documentaire avantP2.
 - Pendant une passe, seule une écriture append-only dans Tasks explicitement ordonnée par ROOT est autorisée.

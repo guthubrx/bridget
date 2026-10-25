@@ -48,8 +48,7 @@ Le cas de r3 (orphelin 18,3 s) est fermé. Le cas 6,38 s signalé dans le brief 
 
 ### 3.2 E2 - `queued` imbriqué à propriétaire perdu (6/6)
 
-Fixture de départ : racine réelle `waiting_for_children` avec résultat réel `fixture149-answer:e1` et exécution racine `completed`. Le descendant réel est `working`.
-**SIMULÉ** (E2r4.b) : daemon arrêté, transaction exacte d'admission rejouée par `craft-queued.py` pour deux lignes `queued` : un clone du descendant (propriétaire = enfant natif, parent = racine) et un clone externe (propriétaire = fil T3 A). Après la relance, la recette n'écrit plus rien en base.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-network-proofs-r4.md#extrait-1).
 
 | Étape | Niveau | Observé |
 |---|---|---|

@@ -1,0 +1,21 @@
+# Archives techniques de l’adaptateur T3
+
+Document d’origine : [specs/048-identite-instance-daemon/tasks.md](../../../../../../specs/048-identite-instance-daemon/tasks.md).
+
+Ces extraits conservent les faits, contrats, limites et références techniques
+datés de l’intégration. Ils ne définissent pas les parcours du produit.
+Les liens de navigation sont adaptés au dossier d’archive. Les chemins des
+exemples techniques gardent leur valeur d’origine. Les comptes rendus ne prouvent pas le runtime actuel.
+
+<a id="extrait-1"></a>
+
+## Extrait 1
+
+- [x] T1 — Écrire et mesurer l’oracle rouge de redémarrage local-vers-local
+  sur une socket Unix réelle (rouge initial 0/1, vert après correctif 1/1).
+- [x] T2 — Étendre le contrat `DaemonIdentityReport` et son oracle de
+  sérialisation (1/1).
+- [x] T3 — Générer l’identité au démarrage, la conserver dans l’état et la
+  retourner sur les rôles Client et Service (2 rôles couverts par 1 oracle).
+- [x] T4 — Rejouer le mutant de valeur stable, valider le banc ciblé et
+  consigner les résultats (mutant 0/1, code restauré 1/1).

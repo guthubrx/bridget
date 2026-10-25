@@ -8,12 +8,6 @@
    Construction réelle sur Cartae, sans modifier son installation active.
 4. Documentation EN/FR, push et redirection cartae.app vers le script GitHub.
 
-T3 consulté : docs/user/install.md, scripts/release-smoke.ts et
-.github/workflows/release.yml dans le checkout T3 de référence.
-Réemploi : distinction paquet publié/code de développement et essais de paquet
-isolés. T3 utilise npm/Electron ; Bridget est un exécutable Rust, donc archive
-native et compilation par le wrapper existant.
-
 Correction de démarrage : reprendre le mécanisme de
 apps/server/src/cloud/bootService.ts (renderBootServiceUnit, launchdManager et
 systemdManager) : service utilisateur natif, PATH explicite, bootstrap sans

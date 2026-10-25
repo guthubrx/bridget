@@ -6,13 +6,11 @@ Source du binaire : b8406f6c2d2c6abf5e09493a81d1fabaa8104fb1. Build actif du ma�
 
 SHA-256 du binaire signé : e5c325591d447ce8e71e41a1f4a52bcc417e7ae5b22b8b8588013055b076af66.
 
-Le worker Cartae reste au build 172-76b682d6, PID 2219043. Le maître transmet le helper à chaque appel SSH ; aucun remplacement du worker n'est requis. Pont PID 898 et T3 PID 28528/28591 préservés, dates de naissance et ASAR inchangés. L'activation a contrôlé l'absence de commande Bridget distante non terminale et de wrapper actif. Elle n'affirme rien sur les calculs T3 ou SSH indépendants.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/bundles-divergents-20261022.md#extrait-1).
 
 ## Défaut et correction
 
 Lors d'une divergence, le HEAD distant n'est pas ancêtre de la base source. L'ancienne préparation abandonnait l'exclusion et pouvait exporter tout l'historique. La correction calcule une base commune, fait confirmer sa présence par l'inspection distante existante, puis exporte seulement la partie postérieure. Le distant vérifie le bundle avant import. Les droits, hooks, mappings et HEAD existants restent protégés.
-
-T3 de référence : /Users/moi/11.Repositories/t3code/apps/server/src/vcs/GitVcsDriverCore.ts, fetchRemote 3040–3055, merge-base 2541–2555, timeout avec nom d'opération 839–858. T3 laisse Git négocier les objets lors du fetch. Il ne couvre pas les bundles de la fédération Bridget. Cette différence explique la confirmation distante supplémentaire.
 
 Références Git : https://git-scm.com/docs/git-bundle et https://git-scm.com/docs/git-merge-base. Les prérequis d'un bundle sont vérifiés par Git avant son import.
 

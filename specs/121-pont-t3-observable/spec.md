@@ -1,17 +1,8 @@
-# Spécification 121 - Pont T3 : fils Claude observables, journal sobre, réponses incertaines transmises
+# Spécification 121 - Pont adaptateur de bureau : fils Claude observables, journal sobre, réponses incertaines transmises
 
-## Fiche synthèse
-Spec: 121-pont-t3-observable | Statut: Implemented | Priorité: P1 | Date: 2026-09-25
-Branche: session-121-pont-t3-observable | Points 1, 3 et 6 du plan d'amélioration.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/121-pont-t3-observable/spec.md#extrait-1).
 
-## Problèmes observés
-1. Les workers Claude de `sol_city_ai` (glmwrk1, glmwrk2, glmkrkr4) déclaraient `events: []` : le
-   dernier tour, un réveil d'arrière-plan sans message déclencheur, n'avait pas d'origine prouvée ;
-   tout le fil devenait inobservable et le coordinateur devait réclamer des bilans.
-3. « journal du fil … : journal ACP saturé » répété 94 fois : ce chemin écrivait à chaque lecture
-   au lieu du signalement unique de la 117.
-6. Le 25/09, deux réponses (GLM3, GLM4) sont restées dans leur fil : tours faussés par une seconde
-   application T3, appariement impossible, rien n'était transmis.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/121-pont-t3-observable/spec.md#extrait-2).
 
 ## Exigences
 - **FR-001** : un tour dont la page lue couvre la demande sans message utilisateur à son

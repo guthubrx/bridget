@@ -1,4 +1,4 @@
-# Journal 118 — Un grand fil T3 n'est recopié qu'une fois
+# Journal 118 — Un grand fil adaptateur de bureau n'est recopié qu'une fois
 
 - **Base** : main `f165f47c` — **Date** : 2026-09-25 — **Statut** : Implemented, livré le 2026-09-25 03:36
 
@@ -13,12 +13,7 @@
   prête avant la projection, puis indisponible après : deux notifications par lecture.
 - L'instrumentation 117 a bien nommé le motif (« journal non rattrapé »).
 
-## Correction (`t3code.rs`)
-- `ThreadState::forget_invisible` : au-delà de SEEN_BOUND, n'oublie que les identifiants que T3 ne
-  montre plus (messages, et faits d'activité par leur activité) ; `remember` n'évince plus.
-- Index `HashSet` des messages recopiés dans `project_journal` : O(S + M) au lieu de O(S × M).
-- Annonce « prête » anticipée gardée pour les seules lectures qui portent une lacune : le daemon
-  ignore la lacune d'une source non déclarée (test `spec101_http_capacites_honnetes…`).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/118-memoire-des-messages/implementation.md#extrait-1).
 
 ## Écarté
 - `glmwrk1`, `glmwrk2`, `opus_city_ai` sans événement déclaré : dernier tour sans origine prouvée
@@ -31,8 +26,4 @@
   l'ancien code (le dernier rend exactement `[prête, vide, prête, vide]`).
 - fmt OK ; clippy `-D warnings` OK ; recette complète : **1550 réussis, 0 échec, 52 ignorés**.
 
-## Livraison
-- 03:36 : fusion `e63a7abd`, construction, relance du pont seul (`kickstart -k com.bridget.t3`).
-- Après relance : `seen` du fil = 1 363, relus depuis le journal existant, aucune recopie ; journal
-  +0 octet en 2 min ; source `ea69b65b` stable avec ses deux événements ; deux notifications à la
-  relance elle-même, plus aucune ensuite.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/118-memoire-des-messages/implementation.md#extrait-2).

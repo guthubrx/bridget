@@ -17,6 +17,4 @@ export BRIDGET_SOCKET="$BRIDGET_HOME/b.sock"
 /Users/moi/.cargo/bin/cargo build --offline --locked --workspace --release
 ```
 
-Les tests ne lisent pas l'état T3 réel. Ils utilisent des inventaires, arbres de
-processus, fichiers privés et connexions daemon synthétiques. Supprimer le dossier
-temporaire seulement après la fin des processus du test.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/133-relais-sous-agents/quickstart.md#extrait-1).

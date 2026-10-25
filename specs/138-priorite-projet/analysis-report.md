@@ -44,12 +44,7 @@ existants. Elles utilisent la garde partagée daemon, sans abstraction nouvelle.
 
 ## Anomalies corrigées
 
-| Finding | Preuve observée par le principal | Correction retenue | Vérification prévue |
-|---|---|---|---|
-| Client background sans contexte utilisable | /Users/moi/.codex/skills/agent-loop/scripts/agent_loop.py:350 retire l'identité T3 héritée | Contexte autonome sur connexion Client négociée, racine/hôte validés, sans Register d'agent ni identité empruntée ; plan/modèle/contrat et T004 alignés | T003/T004 et scénario du client de fond |
-| Reprise d'outbox sous un mandat modifié | /Users/moi/.codex/skills/agent-loop/scripts/agent_loop.py:3602 et :3626 décrivent l'enveloppe de notification/reprise | Racine, motif, destinataire et corps figés avant la première tentative ; T011 teste modification après échec | T011/T012 et scénario de reprise d'outbox |
-| Ancien serveur susceptible d'ignorer un champ | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-core/src/message.rs:74 ne porte pas deny_unknown_fields | Le client exige la capacité138 avant l'enveloppe à motif ; aucun downgrade sans motif | T009/T010 et scénario serveur sans capacité |
-| Membre inconnu susceptible de masquer une divergence connue | Matrice du fil A/B/U relue avec FR-13804/05/08 | Vérifier chaque lecteur ; l'inconnu U ne supprime pas le contrôle A/B ; T014 complété | Fil A/B/U sans motif refusé avant dépôt |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/analysis-report.md#extrait-1).
 
 La preuve est une lecture du code. Le comportement corrigé devra être démontré
 par les tests. Aucune capacité du vieux serveur n'est supposée depuis sa seule
@@ -291,7 +286,7 @@ DirectoryScoped B:11515 appartient à handle_wrapper_message B:10927.
 - Test `test_publication_result_write_failure_restores_previous_exact_document` : 478.
 - Test `test_only_structured_project_warning_is_returned_to_loop_caller` : 498.
 
-#### M — /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/t3code_contract.rs
+#### M — /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/adaptateur de bureau_contract.rs
 
 - Fonction `parse_snapshot` : 271.
 - Test `spec138_snapshot_uses_project_id_not_worktree_or_title` : 749.
@@ -302,7 +297,7 @@ DirectoryScoped B:11515 appartient à handle_wrapper_message B:10927.
 - Fonction `announce_wrapper_project` : 1637.
 - Test `spec138_owner_announces_git_cwd_on_each_registration_without_consuming_frames` : 6841.
 
-#### O — /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/t3code.rs
+#### O — /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/adaptateur de bureau.rs
 
 - Fonction `report_project_context` : 1532.
 - Test `spec138_t3_owner_announces_unknown_project_instead_of_using_adapter_cwd` : 4181.

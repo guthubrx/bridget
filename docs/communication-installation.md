@@ -4,7 +4,7 @@
 
 Build and try Bridget in a private namespace before replacing an existing
 installation. A built binary does not update a running daemon, MCP server,
-worker or T3 application.
+worker or host application.
 
 ## Install or update in one command
 
@@ -78,7 +78,7 @@ federation is reused without interruption, and its service definition is preserv
 A failed federation or ambiguous existing socket is refused rather than replaced
 by another local master. Existing running services keep their loaded version
 until deliberately restarted. Accounts and data are preserved; no worker, tunnel
-or T3 process is restarted. A newly started service that fails its readiness check
+or host process is restarted. A newly started service that fails its readiness check
 is deactivated, keeping the program and data for repair.
 
 PATH and the selected namespace are saved for subsequent terminals. Start a
@@ -241,23 +241,13 @@ The catalog does not test authentication. Verify a selected account through
 an authorized real task. A slow managed launch can use its explicit
 `--timeout` budget; do not infer success from a connected presence alone.
 
-## T3 integration
+## Adapter integration
 
-T3 attests the calling conversation. Bridget still owns its native tasks.
-Installing files does not reload an already running T3, bridge or MCP process.
+[Adapter contract details](adapters/t3.md#note-1).
 
-For `t3_session_unavailable`, inspect the specific binding/transport reason and
-the loaded versions. Compatible T3 resume handling remounts the current private
-proof before a new turn; a failed remount must not borrow another thread's
-identity. Do not loop through uninstall/reinstall operations.
+[Adapter contract details](adapters/t3.md#note-2).
 
-For `identity_not_found`, the MCP process has no usable identity. This does
-not establish that the caller is an internal child. In T3, call
-`t3_code.bridget_session`. If attestation succeeds but Bridget still refuses,
-compare the real path of `mcp_servers.bridget.command` in the effective Codex
-configuration with the executable selected by T3: `T3CODE_BRIDGET_EXECUTABLE`
-when set, otherwise the installed `$HOME/.local/bin/bridget` link. T3 will not
-pass its session proof to a different executable, even one named `bridget`.
+[Adapter contract details](adapters/t3.md#note-3).
 
 For a stale official entry, change only its command to the stable installed
 link. Preserve other settings, custom servers and explicit opt-outs. Never
@@ -265,13 +255,7 @@ store a session proof in user configuration. A `target/release` path or a
 versioned release path can become stale after delivery. Check this connection
 at every installation, in addition to connector health.
 
-Changing configuration does not update an already running MCP process. The
-native thread attachment or resume must remount the verified definition. Do
-not interrupt other threads or replay a mission to force this. A new turn alone
-is not a guarantee: the provider may retain its mount. Recovery requires a
-successful `bridget_status` in the affected thread, not just T3 attestation.
-Outside T3, use `bridget codex` or `bridget claude`; an internal child returns
-its result to its parent.
+[Adapter contract details](adapters/t3.md#note-4).
 
 For `permission_attestation_unavailable`, an identity exists but the required
 permission proof is unavailable. A successful catalog or session call does

@@ -2,7 +2,7 @@
 
 ## 1. Lancer un coordinateur Bridget
 
-L’agent doit être lancé ou rattaché par Bridget. T3 n’est pas requis.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/quickstart.md#extrait-1).
 
 ## 2. Confier une mission
 

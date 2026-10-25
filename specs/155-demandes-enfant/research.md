@@ -1,9 +1,6 @@
 # Recherche - Session155 remontée des demandes de l'enfant
 
-Date : 2026-10-11. Source : lecture du checkout principal
-`/Users/moi/Nextcloud/10.Scripts/64.bridget` (base `1f2c661d`), lecture seule, et du
-code T3 `origin/main` par `git show`. Ce checkpoint historique supposait150 livrée ; les acquis150–154 sont désormais livrés. Le passageR16 ci-dessous remplace les hypothèses fournisseur. Les
-lignes citées sont celles du checkout principal.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/155-demandes-enfant/research.md#extrait-1).
 
 ## R1 - Aujourd'hui, une approbation Codex est tranchée par un réglage
 
@@ -219,13 +216,9 @@ lignes citées sont celles du checkout principal.
   pas répondre. Tests de liste : `wrapper.rs` autour de `:8116-8172` et
   `crates/bridget-daemon/tests/claude_native_permissions_test.rs:400`.
 
-## Comparaison T3 (point A11 de `research-t3-bridget.md`)
+## Comparaison adaptateur de bureau (point A11 de `research-adaptateur de bureau-bridget.md`)
 
-- T3 : `t3_pending_request_list/read/respond` ne couvre que `user_input`. Les
-  approbations restent à l'humain.
-- Bridget 155 : questions au parent, approbations à l'humain dans une limite absolue
-  vérifiée, issue explicite. Un point T3 reste meilleur : son affichage dans une
-  interface. Il est hors périmètre ici.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/155-demandes-enfant/research.md#extrait-2).
 
 ## Alternatives rejetées
 

@@ -1,8 +1,6 @@
 # Contre-revue finale locale — SPEC-133
 
-Date : 2026-10-04.
-Portée : implémentation, contrats, tests et incident de production T3.
-Verdict : **APPROVE** après correction d'un défaut de compatibilité détecté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/133-relais-sous-agents/adversarial-review-final.md#extrait-1).
 
 ## Vérifications hostiles
 
@@ -26,7 +24,4 @@ Verdict : **APPROVE** après correction d'un défaut de compatibilité détecté
 
 ## Limite de la revue
 
-Cette revue finale est locale. Bridget ne permettait pas de joindre un relecteur
-externe avant son propre redémarrage. La contre-revue distincte du plan reste
-consignée dans `adversarial-review-claude.md`. La livraison exige donc aussi une
-vérification post-déploiement des marqueurs T3 réels.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/133-relais-sous-agents/adversarial-review-final.md#extrait-2).

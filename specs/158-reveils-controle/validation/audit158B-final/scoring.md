@@ -18,7 +18,7 @@ Potentiel minimalisme : ~2 lignes suppressibles à comportement constant. MIN001
 
 ## Vertus LLM & Responsabilité Future
 
-États/cutoffs répondentàdurabilité ;invariants/limites documentés. Volumecode/tests ne constituepas preuve de problème ou de couverture. Formatagelegacy resteaudénominateur,pas créditmétier automatique. T3/provider/runtimeglobalnon vérifiés.
+[Note technique de l’adaptateur](../../../../docs/adapters/t3/archives/specs/158-reveils-controle/validation/audit158B-final/scoring.md#extrait-1).
 
 ## Tests et limites
 

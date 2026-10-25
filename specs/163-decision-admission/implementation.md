@@ -6,7 +6,7 @@ Les tâches sont dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-
 
 ## Propriétaires et limites
 
-ROOT a transféré au second développeur Cartae, nommé DEV_WORKER_CARTAE163 dans ces documents, seulement /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission/crates/bridget-daemon/src/remote_worker.rs, /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission/crates/bridget-daemon/src/workspace_git.rs et /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission/crates/bridget-daemon/tests/fixtures/remote_worker_162.rs. DEV_CARTAE163 principal conserve daemon, protocole, store, registre, HTTP, admission, CLI/MCP, Lineage et intégration maître. Le second prépare les gardes/probe/oracles existants de T012/T013/T015 ; il transmet les signatures ou branches nécessaires au principal et n’édite jamais ses fichiers. Les deux partagent le même worktree distant isolé, avec frontières de fichiers exclusives. Tous ces fichiers sont dans /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission, espace déjà attesté ROOT. DEV_T3 : lecteur/contrats/infobulle et tests T3 dans /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission, après binding et wire figé. ROOT : coordination, permis de compilation de flotte, Git, livraison, recette maître Mac et nettoyage. Le miroir documentaire est /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission. Ne jamais éditer main ou production depuis un agent développeur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-1).
 
 ## Première action initiale — historique
 
@@ -18,17 +18,15 @@ Pour chaque tâche réellement exécutée : ID/statut, propriétaire, chemins ab
 
 ## Checkpoint préparatoire transmis par ROOT
 
-Accès Bridget rétabli opérationnellement : limite du seul pont4096→8192, pont seul relancé ; daemon/T3 protégés. ROOT atteste le checkout distant /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission, branche session-163-decision-admission, baseDCFD propre. Cache CargoLinux utile existant /home/moi/.local/lib/bridget-communication/162-611bfa7557b9/source/target, à réemployer sans toucher workerprod. Constitution globale présente sur Cartae, aucun outil/skill supplémentaire à installer. Ces faits sont transmis par ROOT, non observés par SSH par le rédacteur ; T001 est cochée sur le reçu préparatoire ROOT et le succès MCP ; aucun lancement de développeur requis pour ce cochage.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-2).
 
-ROOT rapporte aussi le worktree T3 /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission créé et vérifié sur source 174a9d04554758aacffb4aade588e61c810faf5a. Ordre final confirmé : convergence/tests → contre-revue/audit → checkpoint/build Mac → paramètres/recette → intégration/installation → G8 → G9. Aucun contrôle futur coché.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-3).
 
 ## T001–T003 — préparation validée par ROOT
 
-- T001 complétée : worktree Cartae créé par Git/SSH ROOT, baseDCFD propre et rattachement confirmé par bridget_capabilities réussi (dev=true, Codex gpt-5.6-terra). La condition est l’attestation du rattachement avant lancement ; aucun développement lancé n’est déduit.
-- T002 complétée : ROOT atteste le worktree T3 créé sur174a, branche session163 et espace distinct confirmé ; le code consommateur reste interdit avant wire figé.
-- T003 complétée, attribution initiale historique : DEV_CARTAE163 était propriétaire de toutes surfaces Rust/Linux ; DEV_T3 consommateur distinct ; jobs2/nice10/threads2 et compilation unique dans toute la flotte. Git/services/livraison sous ROOT ; aucun redémarrageT3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-4).
 
-Preuves : /Users/moi/.cache/bridget-delivery163-20261013/bridge-limit163-before.json et /Users/moi/.cache/bridget-delivery163-20261013/bridge-limit163-after.json. Le pont2525 a soft8192 et limite dure inchangée ; T3 704/969, daemon71469, LayaSSH81748 protégés. Facts transmis par ROOT, non observés par le rédacteur. Ces tâches préparatoires ne requièrent ni build ni test produit ; leur validation porte sur isolation, autorité et disponibilité du connecteur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-5).
 
 Tous gates avant implémentation sont soldés. Les gates d’activation endpoint/protocole/profils/checkpoint/recette réelle restent ouverts et explicitement différés à G8 ; aucune disponibilité future inventée. Checkpoint préparatoire historique : 3/45 et T004 alors non cochée ; voir la progression T004 plus récente ci-dessous.
 
@@ -40,7 +38,7 @@ Commande Linux rapportée : cargo test -p bridget-transport spec163 --lib. Premi
 
 Artefact local : /Users/moi/.cache/bridget-delivery163-20261013/wire163.json. SHA-256 : 099acf8194bcecb26d71e08cd97e9096575503498188b135d24505cd2c0524c8. Origine distante : /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/validation/wire163.json. Aucun commit ni SHA de sources compilées non vérifié n’est affirmé. La copie lineage postérieure à T004 diffère et reste source en cours ; son comportement n’est pas couvert implicitement par ce replay.
 
-T031 préparation/codage autorisés après T004 figé et binding T002 confirmé. Les tests unitaires préparatoires de fixtures peuvent être exécutés avant T030 après copie/cache contrôlés et permis ROOT. Validation finale d’interopérabilité/runtime et cochage de T031–T035 attendent T030 ; succès préparatoire ne vaut pas ce gate. Au checkpoint T004, la borne candidate_id restait en clarification interne ; la précision publiée ensuite est consignée ci-dessous. Aucun consommateur ni test futur coché. T034 réemploie /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission/apps/server/src/bridget/BridgetReader149.test.ts, /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission/packages/contracts/src/bridgetLineage149.test.ts et /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission/apps/web/src/components/chat/ThreadRelationshipsControl.bridget149.test.tsx. L’oracle de persistance existant /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission/apps/server/src/orchestration-v2/Orchestrator.bridget149.test.ts est autorisé ; aucune nouvelle tâche ou campagne autonome.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-6).
 
 ## Préflight service de décision — lecture seule rapportée, pas recette
 
@@ -62,23 +60,23 @@ IDs opaques strictement c01–c08 pour probe, décision Lineage v3 et projection
 
 DEV_T3 est instruit de remplacer sa borne provisoire par cette règle exacte. C’est le plafond de huit candidats déjà planifié, pas un nouveau besoin. Le wire SHA 099acf8194bcecb26d71e08cd97e9096575503498188b135d24505cd2c0524c8 reste la preuve historique T004. Aucune source transport corrigée ni replay du correctif déclaré PASS ; aucun cochage, compteur, scope, tâche ou G8 changé. Contrats synchronisés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/contracts/auto-admission.md et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/contracts/decision-service.md.
 
-## Autorisation ROOT du créneau T3 — essais préparatoires seulement
+## Autorisation ROOT du créneau adaptateur de bureau — essais préparatoires seulement
 
 ROOT autorise les tests unitaires préparatoires Reader/contrats/infobulle/store sur le wire T004 figé après copie/cache contrôlés. Groupe unique des cinq bancs existants, maxWorkers=2, nice=10, puis format/lint des sept fichiers et typechecks ciblés. Si une correction est nécessaire, rejouer les seuls contrôles affectés. Aucun banc neuf, suite supplémentaire ou tâche ajoutée.
 
-DEV_CARTAE a confirmé dans son journal la suspension de Cargo jusqu’à restitution du slot. ROOT rapporte ps Linux à 21:02:13 CEST sans cargo/rustc ; le rédacteur n’a pas exécuté ce contrôle. DEV_CARTAE peut continuer l’édition du code Rust pendant les essais T3, sans compiler. ROOT conserve le permis unique de compilation de la flotte.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-7).
 
 Ces essais autonomes de fixtures sont permis avant T030. Ils ne valident ni l’interopérabilité ni le runtime de T030, et n’autorisent pas le cochage de T031–T035. T030 conserve les gates finaux ; la formulation précédente « validation attend T030 » désigne cette seule validation finale, pas l’essai unitaire préparatoire. Aucun résultat de tests futurs, cochage, compteur ou G8 déduit de cette autorisation.
 
-## Campagne préparatoire T3 — résultats conservés, gates finaux ouverts
+## Campagne préparatoire adaptateur de bureau — résultats conservés, gates finaux ouverts
 
-Le reçu /Users/moi/.cache/bridget-delivery163-20261013/t3-validation163-final.json, SHA-256 9076676edfd08d77d0e489d8ab740ad9e6fb5fe758a7237c7e5b9a9c557e13e2, rapporte 191 PASS/0 FAIL sur cinq bancs existants en 12,439 s ; format/lint des sept fichiers RC0 avec cinq warnings historiques ; typechecks contracts RC0 en 2,547 s et server RC0 en 40,914 s.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-8).
 
 Le typecheck web initial produit dix diagnostics hérités dans deux fixtures MessagesTimeline identiques au HEAD174a9d04554758aacffb4aade588e61c810faf5a. ROOT a autorisé uniquement deux lignes providerThreadId:null pour satisfaire le champ nullable requis de dynamic_tool, distinct du champ optionnel de l’union fork. Aucun code de production ni scénario nouveau. Après correction : format/lint des deux fixtures RC0 et deux warnings historiques ; typecheck web RC0/zéro diagnostic en 9,969 s ; deux bancs affectés : 446 PASS/0 FAIL en 6,621 s. Aucun replay des 191tests du consommateur.
 
-Le reçu initial non globalement réussi est conservé : /Users/moi/.cache/bridget-delivery163-20261013/t3-validation163-before-fixture-correction.json, SHA-256 e5c765649cb9e2f1444b0eb3628ee1d967c3171ed6740bc703c7cf46d1c005ed. Les deux empreintes ont été vérifiées localement par le rédacteur. Le détail est archivé dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/validation/tests163.md ; aucun test exécuté par ce journal.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-9).
 
-Préparation des dépendances : /Users/moi/.cache/bridget-delivery163-20261013/t3-dependencies163-preparation.json, SHA-256 5201168f1eba80280f87f9b3cc6ba1922f7d2757cab57a38dd1f552ee287c585 vérifié. ROOT rapporte 24copies indépendantes, 6452 liens internes et 676 rebases ; 18 pyc passent de 0600 à 0700 par projection ExFAT qualifiée. Aucune conservation fictive des modes Unix ; paquet final à contrôler sur stage Mac natif. Interopérabilité/runtime T030 et cochage T031–T035 restent attendus.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-10).
 
 ## Reprise Cartae après échéance du driver Codex
 
@@ -110,7 +108,7 @@ ROOT rapporte que les trois fichiers étaient inchangés dans le statut Git avan
 
 Second admis : task 70aea08d-b411-4141-9f3e-2efc2df13df2 ; child 605c9b05-9e05-4baa-ba1a-a1be59185a1f ; request aea964ae-b4c2-4a90-a24b-0c60dde3be05. Reçu local /Users/moi/.cache/bridget-delivery163-20261013/delegation-worker163.json, SHA-256 90157c119ff6255b6e7d90de25875a1a49ac8f7b5f9c8a3bf49c3efe292dba29 vérifié. Ces faits de transfert sont transmis par ROOT ; le rédacteur n’a interrogé ni serveur ni processus.
 
-Le principal conserve Cargo et l’intégration maître. Le second ne compile, teste ou lance un lint sans permis ; il propose les signatures/branches hors de ses fichiers sans les modifier. Contrôles groupés après interface stable, aucune suite par agent. La préparation T3 est terminée, T030/interopérabilité/cochage finaux restent ouverts. G8/G9 ouverts, compteur 4/45 inchangé. Aucun nouveau scope, pipeline, tâche ou outil ; les développeurs n’éditent pas les documents du rédacteur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-11).
 
 ## État constaté à 22:10 CEST — seconde mission principale arrêtée
 
@@ -130,7 +128,7 @@ Cet artefact atteste seulement une construction préparatoire locale. Il ne prou
 
 Copie figée fournie par ROOT : /Users/moi/.cache/bridget-delivery163-20261013/developpement-cartae163-before-reprise2.md, SHA-256 f823a32857ccd039a146fdff41299bd9e6cc14ad4d199c18acda77206bb01216 vérifié. Origine : /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/validation/developpement-cartae163.md. Le rédacteur a lu cette copie ; ce n’est ni une contre-validation ROOT des sources ni un replay de tests. Aucun fichier du worktree distant n’a été écrasé ou synchronisé par le rédacteur.
 
-Le développeur rapporte en dernière campagne ciblée : cargo test -p bridget-daemon spec163 --lib -- --nocapture, RC0, 12 PASS/0 FAIL, 2010 filtrés ; cargo test -p bridget-transport spec163 --lib -- --nocapture, RC0, 2 PASS/0 FAIL, 351 filtrés. Son git diff --check est rapporté RC0. Warnings de style/interfaces privées/noms hérités signalés. Aucune FULL workspace, essai Mac, T3, service réel ou production par cette campagne.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-12).
 
 Le journal conserve l’échec historique transport codex_app_server::tests::stop_pendant_un_tour_termine_le_groupe_enfant et son rejeu exact échoué, ainsi que l’écart cargo fmt global hors périmètre. Ils ne sont pas transformés en succès par les deux tests spec163. Les SHA de sources listés dans ce manifeste sont déclarés par le développeur ; ils ne sont pas requalifiés en sources compilées contre-vérifiées par ROOT dans ce document.
 
@@ -138,12 +136,7 @@ Le même journal déclare localement les types wire, reçu additif, extraction d
 
 ## Reste précis au checkpoint du journal — tâches existantes seulement
 
-- Achever et raccorder le probe worker distant T012–T015. Le maître refuse actuellement auto_remote_probe_unavailable avant HTTP dès qu’un catalogue multi-profils contient un profil distant ; aucun fait worker de capacité/droit n’est encore fabriqué comme disponible.
-- Achever la reprise par entretien existant T025 et ses oracles durables T027. Le journal exclut ce parcours de la preuve du reçu/puit/MCP ; il ne démontre pas encore le traitement sans demandeur des reçus d’époque précédente.
-- Achever le comptage UNION et la purge sous pression T026, puis la campagne durable correspondante T027. Le journal lu ne fournit pas de preuve de ces transitions ni de tombstone/request_expired sous pression.
-- Achever la sous-commande CLI native T028 et ses contrôles T029. L’outil MCP est rapporté, mais le journal place explicitement la CLI hors de cette preuve ; une preuve MCP seule ne solde pas l’ensemble.
-- Corriger l’adaptation du constructeur au contrat Laya existant, puis réaliser la recette T040 et les paramètres T039. L’artefact max8 est préparatoire seulement : questions est une liste là où le préflight exige un objet. Ni tokenisation maximale ni POST réel ne sont encore attestés.
-- Achever le raccord Lineage T030 et l’interopérabilité T3 avant validation/cochage T031–T035. Les contrôles unitaires préparatoires T3 sont conservés ; ils ne valident pas le runtime du producteur Rust en cours.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-13).
 
 Les tâches finales de convergence/revue/audit, provenance/build, installation, G8 et G9 restent celles déjà prévues. Aucun scénario, taskID ou campagne ajouté. La liste décrit les manques explicites et les domaines sans preuve dans le journal figé ; elle ne prétend pas à une inspection fraîche de tous les modules. Le second développeur poursuit ses trois fichiers autorisés. Progression 4/45 et 45 tâches inchangées, aucun cochage futur.
 
@@ -155,7 +148,7 @@ ROOT a ajouté au registre maître un miroir complet de la définition builtin c
 
 Nouveau principal : child 26a3400e-8f93-4811-a251-de84dd17e6b2 ; tâche 65c12f09-412b-46de-92d2-261339bd4244 ; request 6f661422-04fb-4d51-80f2-130656333067, working selon ROOT. Admission archivée dans /Users/moi/.cache/bridget-delivery163-20261013/delegation-cartae163-reprise2.json, SHA-256 ce3057aaa299c51b424014c64d9c2113f129f25b32ff94c8e30e05e10be2c2d1 vérifié localement.
 
-L’attestation réelle de cette mission à 20:13:26Z fixe timeout 21600 et deadline 1791944006, soit le 14 octobre 2026 à 04:13:26 CEST. Wrapper 761744, naissance 143755967, UID 1002 et cwd de session correct : /home/moi/10.Scripts/64.bridget/.worktrees/163-decision-admission. Commande worker génération 472, fichier /home/moi/.local/share/bridget-worker/cartae/store/commands/7a8b4216a5039ec7a10e190d7fbba21027a9492fbec8a253d4ee1a98473770c3.json ; SHA du snapshot distant rapporté 35319752b11da54380f5b2c9c040f36150eaf915e949c6a7aa22abdcf7345eb6. Worker parent 471321 et processus T3 inchangés selon ROOT.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-14).
 
 Ces faits attestent la valeur effective de la nouvelle mission, pas l’achèvement du développement ou une livraison du produit. Les anciens échecs et leurs preuves restent conservés. Progression 4/45 et 45 tâches inchangées ; aucun cochage futur, recette ou G8/G9 déduit. Le rédacteur vérifie seulement les empreintes des reçus locaux ; il ne relit ni registre distant ni processus et ne synchronise aucun fichier distant. Aucun nouveau scope ou pipeline.
 
@@ -195,7 +188,7 @@ Aucun changement du nombre de tâches ou cochage, progression 4/45 ; Cargo et co
 
 ## Convergence passage 1 — six corrections ajoutées par ROOT, pas une clôture
 
-ROOT a ajouté uniquement T046–T051 dans la section Convergence de /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/tasks.md. Le rédacteur ne modifie ni ce fichier, ni spec/plan, ni les sources. Périmètre des corrections : placement nullable manquant dans list/show v3 ; cohérence CLI/Reader des versions ; plafonds avant réservation et absence de double compte du reçu propre ; refus de fallback filtré et ordre du permis HTTP ; texte affichable T3 ; validation sanitaire HTTP et délai de reprise T051. Ces corrections servent les contrats existants, sans nouvelle fonctionnalité.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-15).
 
 Progression actuelle 4 cochées/51, In Progress. Les mentions antérieures 4/45 et 45 tâches décrivent les checkpoints précédant cette extension de convergence ; elles restent historiques. Aucune des nouvelles tâches ou validation future n’est cochée. G8/G9 et livraison restent ouverts.
 
@@ -217,13 +210,13 @@ ROOT recommande 210–330 minutes restantes, fin prévue le 14 octobre 2026 entr
 
 ## Mise à jour du 14 octobre 2026 — ronde 1 attestée, ronde 2 distincte
 
-Total contrôlé dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/tasks.md : 51 tâches, quatre cochées (T001–T004), In Progress. La tâche T051 santé HTTP est ajoutée aux corrections T046–T050 déjà consignées ; elle couvre le schéma sanitaire, statut ok, santé négative/malformée/expirée, délai de reprise et permis, selon les oracles de T021 déjà prévus. T046–T049 et T051 sont en correction Cartae. T050 a été préparée dans deux fichiers T3, mais ceux-ci n’ont PAS été testés depuis cette modification ; les anciens 191 PASS ne prouvent pas les nouveaux hash de ces fichiers.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-16).
 
 Reçu indépendant Linux R1 : /Users/moi/.cache/bridget-delivery163-20261013/linux-validation163-final.json, SHA-256 7dc90d5eb8f824bf4d6a6a746010cdd6521ebb42419f8f5951883682581f4791 vérifié localement par le rédacteur. À 21:30:35 UTC le 13 octobre 2026, avant R2, la comparaison est concordante : 21 sources du WT Mac, 23 surfaces du bundle et 23 surfaces distantes. La réception porte observed_at_utc 21:30:35.836416 ; l’observation de compilateur est datée 21:30:35.890266 UTC. Les deux preuves du bundle ne doivent pas obligatoirement être présentes dans le WT Mac. Manifeste R1 : /Users/moi/.cache/bridget-delivery163-20261013/source-manifest163.json, SHA-256 54b4b59d39b45ec39ed549d55e55b1b959c31b8068ad45374ba23a032e3fddf7 vérifié.
 
 Les 27 PASS Linux R1 sont attestés indépendamment depuis les sorties complètes et les commandes liées, et non extrapolés des seules fins de journal. Le premier filtre worker --exact incomplet avait exécuté zéro test ; le replay avec namespace complet apporte le PASS worker compté. L’autre filtre E2E spec163_ exécutant zéro test ne compte pas comme validation. Les échecs historiques restent conservés. Aucun hash par test au début d’exécution n’avait été relevé : la concordance du snapshot final ne prouve pas que chaque essai antérieur utilisait exactement ces octets. Les temps de compilation et de harness restent séparés ; aucune durée totale ou comparaison Mac/Linux n’est inventée.
 
-Le contrôle indépendant est une attestation en lecture seule, pas un replay par le rédacteur. Les modifications R2 en cours et les nouvelles raisons T3 de T050 sont hors de cette preuve. Aucun POST, inférence, T040, G8/G9, Converged ou pipeline terminé déduit. ETA de fin 02:57–04:57 CEST le 14 octobre 2026 inchangée, hors quota/panne externe. Aucun document synchronisé sur le worktree distant ; ownership rendu à ROOT après ce complément.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-17).
 
 ## Checkpoint P2 et contre-revue de code R1 — 14 octobre 2026
 
@@ -231,9 +224,9 @@ Inventaire réel relu sans modification de /Users/moi/Nextcloud/10.Scripts/64.br
 
 P2 conclut « quatre tâches ajoutées », pas Converged. Reçu /Users/moi/.cache/bridget-delivery163-20261013/converge163-p2.json, SHA-256 5242b7ab5ec8e2aa7113dacb6f03bb5977ce82e913a5cafe7302c4ba003db879 vérifié. Sources R2 Mac figées : /Users/moi/.cache/bridget-delivery163-20261013/source-manifest163-r2.json, SHA-256 1901f295c99b8fec80e70d569e6ce9c8e57ef6527f6a3cdd27c21562f553bbae. Le développeur déclare 17 PASS R2 : huit HTTP, six contrôles bibliothèque d’un test et trois CLI. Commandes RC0, copies et empreintes sont conservées ; cette campagne n’a pas encore une attestation indépendante fraîche de ses traces complètes. Elle ne devient pas un GREEN global. Les27PASS distincts R1 restent attestés sur leur ancienne provenance, sans attribution aux sources R3 en modification.
 
-T050 dispose maintenant de 30 PASS sur le banc de contrats existant : /Users/moi/.cache/bridget-delivery163-20261013/t3-t050163-r3.json et son log /Users/moi/.cache/bridget-delivery163-20261013/t3-t050-contracts-tests163-r3.log. Lint/typecheck RC0, deux warnings de regex intentionnels ; format initial RC1 conservé. Après correction de format uniquement, /Users/moi/.cache/bridget-delivery163-20261013/t3-t050163-r4.json, SHA-256 70b55b393a098bbe245b2c81caa439e70fd5c80c9b3e2c8690df33ebb3c3e4bb, atteste format RC0 et égalité exacte des tokens TypeScript : 2041/5814. Aucun replay des 30 tests, du Reader ou du groupe 191. Cette preuve plus récente précise le checkpoint précédent où les deux fichiers n’avaient pas encore été testés après la modification T050.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-18).
 
-Sources après format : /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission/packages/contracts/src/bridgetLineage.ts, SHA-256 093c288b6e6a2ddb0473719231966d2bffadd61dcba6c727b63de208a62f5fce ; /Users/moi/11.Repositories/t3code-local/.worktrees/163-decision-admission/packages/contracts/src/bridgetLineage149.test.ts, SHA-256 724d3d178909088d31644dbd5feecdaf9515abfae1a6bfb8f3b870c50eb1d274. Les empreintes sont attestées par le reçu, sans nouvelle exécution ou modification de source par le rédacteur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-19).
 
 ## Reprise R3 et santé nominale encore à adapter
 
@@ -254,9 +247,9 @@ R3 : ROOT et attestation_cartae163 rapportent 30 PASS indépendamment attestés,
 
 Sources R3 : /Users/moi/.cache/bridget-delivery163-20261013/source-manifest163-r3.json, SHA-256 61356696baec516dd789b31b118fb696d0b11cc20369574dd1a43705ce22353c. Sources R4 transférées : /Users/moi/.cache/bridget-delivery163-20261013/source-manifest163-r4.json, SHA-256 0a9b6eb57f9cc2ad0948dca0ea1eb4b861c0dd7a47ec098d1ddf30c24255f015. Le transfert rapporte 21 sources Mac identiques au snapshot et au distant après copie, cinq changements et seize sources R3 inchangées. Quatorze logs/manifestes et le journal privé sont copiés byte-identiques. Native round 3 et révision source R4 sont deux informations distinctes. Le transfert n’est ni un nouveau test ni Converge.
 
-R4 : les trois PASS ciblés et le format RC0, d’abord déclarés par le producteur, sont maintenant attestés indépendamment par attestation_cartae163 et transmis par ROOT. Les logs complets et les RC d’exécution concordent : concurrence 7,93 s, réouverture 5,83 s, worker 4,73 s ; format final RC0 en 1,44 s. Deux FAIL historiques RC101, 13,79 s et 6,94 s, restent conservés. Références de trace transmises : lignes 878, 882, 924 et 930 du même déroulé distant ; aucun reçu local neuf créé par l’agent en lecture seule. Reçu /Users/moi/.cache/bridget-delivery163-20261013/retour-cartae163-r4.json, SHA-256 3b69f02faa0719fd6269143d25723094901319b12862c4bce9baf79573690ec1 ; journal /Users/moi/.cache/bridget-delivery163-20261013/remote-r4-developpement-cartae163.md, SHA-256 89e9eb5a68d06eb31374a25a9cdafc3a6130d3982c2f79c9e6ffb678f414a308. Les 30 PASS R3 n’ont pas été rejoués et ne constituent pas 30 PASS nouveaux sur les cinq sources R4 modifiées. Les 27 PASS R1, 17 PASS déclarés R2 et preuves T3 restent sur leurs provenances respectives.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-20).
 
-Le rapport en lecture seule t3_consumer163, rendu le 14 octobre à 01:03:56 CEST, ne relève aucune objection nouvelle dans neuf fichiers correspondant aux empreintes finales. Il rapproche les preuves 191 PASS préparatoires, 30 PASS T050 et 446 PASS des fixtures affectées, sans nouveau replay. La consommation des trois modes et de decision:null est couverte côté T3 ; la projection Rust finale et l’interopérabilité restent à rapprocher par ROOT. Ce rapport contribue à T035, sans valider T054 ni l’audit final.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-21).
 
 La lecture ROOT de R4 et la clôture Converge P3 restent attendues. Aucun CONVERGED, audit final, build de livraison, recette T040, G8/G9, commit/push, installation ou nettoyage 163 n’est déduit. Aucun POST sur le modèle de production n’a été exécuté par le rédacteur ; les GET/POST R4 décrits ci-dessous visent le serveur HTTP contrôlé du test.
 
@@ -264,67 +257,13 @@ La lecture ROOT de R4 et la clôture Converge P3 restent attendues. Aucun CONVER
 
 Chaque ligne associe exigence, tâches et dossier de preuve. La colonne de preuve indique sa portée ; elle ne déclare pas toute l’exigence satisfaite. Les oracles précis et leurs limites sont dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/validation/tests163.md. ROOT doit lire les sources R4 et rapprocher chaque garantie avant toute clôture.
 
-| Exigence | Tâches associées | État du dossier de preuve |
-|---|---|---|
-| FR-001 | T007, T008, T009, T010, T039, T043 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-002 | T007, T009, T010, T017, T039 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-003 | T007, T008, T009, T017, T019, T021, T039, T043 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-004 | T019, T021, T051, T052 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-005 | T008, T009, T011, T012, T015, T016, T028, T029, T037, T039, T053, T055 | Probe et droits R3 attestés ; complément Worktree/base future R4 attesté ; lecture finale ROOT ouverte. |
-| FR-006 | T007, T011, T012, T013, T014, T015, T053 | Probe et droits R3 attestés ; complément Worktree/base future R4 attesté ; lecture finale ROOT ouverte. |
-| FR-007 | T012, T013, T015, T016, T036, T037, T053 | Probe et droits R3 attestés ; complément Worktree/base future R4 attesté ; lecture finale ROOT ouverte. |
-| FR-008 | T007, T009, T011, T014, T015, T019, T040, T056 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. Préférences non consommées : T056 ouverte. |
-| FR-009 | T017, T020, T021, T029, T055, T056 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. Préférences non consommées : T056 ouverte. |
-| FR-010 | T017, T020, T021, T022, T040, T049, T051, T056 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. Préférences non consommées : T056 ouverte. |
-| FR-011 | T017, T018, T019, T021, T036, T049, T051 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-012 | T017, T018, T021, T022, T036, T049, T051, T052 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-013 | T005, T006, T023, T024, T027, T048, T049, T054 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| FR-014 | T005, T008, T009, T023, T024, T026, T027, T028, T029, T048, T054 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| FR-015 | T006, T023, T024, T025, T027, T036, T037, T048, T049, T054 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| FR-016 | T006, T014, T015, T024, T025, T027, T040, T053 | Probe et droits R3 attestés ; complément Worktree/base future R4 attesté ; lecture finale ROOT ouverte. |
-| FR-017 | T014, T018, T020, T021, T023, T024, T027, T040, T049 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| FR-018 | T025, T027, T036, T042, T043, T054 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| FR-019 | T002, T004, T013, T015, T016, T028, T029, T030, T031, T033, T034, T035, T036, T037, T038, T042, T046, T047, T053, T055 | Code/projections et preuves T3 rapprochés par lecture ; R3 ciblé attesté, interopérabilité finale ROOT encore ouverte. |
-| FR-020 | T004, T028, T029, T030, T031, T032, T033, T034, T035, T040, T043, T046, T050 | Code/projections et preuves T3 rapprochés par lecture ; R3 ciblé attesté, interopérabilité finale ROOT encore ouverte. |
-| FR-021 | T005, T017, T021, T026, T027, T029, T036, T037, T048, T055 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| FR-022 | T001, T002, T003, T035, T037, T038, T039, T040, T041, T042, T043, T044, T045 | T001–T004 préparatoires prouvées ; audit/build/recette/Git/installation/G8/G9 non exécutés à ce checkpoint. |
-| SC-001 | T007, T008, T009, T010, T036, T039, T043 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| SC-002 | T007, T009, T011, T015, T017, T019, T021, T036, T039, T040, T043, T051, T052, T056 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. Préférences non consommées : T056 ouverte. |
-| SC-003 | T008, T011, T012, T013, T014, T015, T016, T020, T024, T025, T027, T028, T029, T036, T037, T040, T053, T055, T056 | Probe et droits R3 attestés ; complément Worktree/base future R4 attesté ; lecture finale ROOT ouverte. Préférences non consommées : T056 ouverte. |
-| SC-004 | T017, T018, T019, T021, T022, T036, T049, T051, T052 | Dossier politique/HTTP R3 attesté ; gardes et résultat final R4 à rapprocher ROOT. |
-| SC-005 | T005, T006, T021, T023, T024, T025, T026, T027, T028, T029, T036, T037, T048, T049, T054, T055 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| SC-006 | T014, T015, T025, T027, T036, T040, T042, T043, T053, T054 | Store/admission R3 attestés ; concurrence, disque et rollback R4 attestés ; Start émis, pas processus fournisseur observé. |
-| SC-007 | T002, T004, T013, T016, T028, T029, T030, T031, T032, T033, T034, T035, T036, T037, T038, T040, T042, T043, T046, T047, T050, T053, T055 | Code/projections et preuves T3 rapprochés par lecture ; R3 ciblé attesté, interopérabilité finale ROOT encore ouverte. |
-| SC-008 | T020, T022, T039, T040, T043, T052, T056 | Corps/tokenizer et normalisation préparés ; recette réelle T040 du service/checkpoint non réalisée. Préférences non consommées : T056 ouverte. |
-| SC-009 | T001, T002, T003, T010, T035, T037, T038, T039, T041, T042, T043, T044, T045 | Préparation prouvée seulement ; provenance des livrables, push, activation et nettoyage restent à attester. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-22).
 
 ### Rapprochement des 56 tâches — états de preuve, pas cochage
 
 Les groupes couvrent maintenant exactement T001–T056. ROOT a ajouté T056 après confirmation d’un écart réel de code P3. Toutes les tâches après T004 restent ouvertes dans tasks.md. Les résultats ciblés ci-dessus sont des éléments de preuve ; ils ne remplacent pas les contrôles ROOT prévus.
 
-| Tâches | Dossier actuel / contrôle restant |
-|---|---|
-| T001, T002, T003, T004 | Préparation et wire cochés sur preuves ROOT existantes. |
-| T005, T006 | Reçus/transaction : dossier R3 ; complément disque R4 attesté. |
-| T007, T008, T009 | Politique/axes : campagne R3 ciblée attestée. |
-| T010 | Relecture configuration ROOT à rapprocher ; activation ouverte. |
-| T011, T012, T013, T014, T015 | Candidats/probe : R3 attesté ; complément R4 attesté et transféré. |
-| T016 | Relecture des routes/droits ROOT à rapprocher. |
-| T017, T018, T019, T020, T021 | HTTP/adaptateur : R3 ciblé attesté ; aucun protocole réel activé. |
-| T022 | Relecture des limites ROOT à rapprocher ; recette réelle ouverte. |
-| T023, T024, T025, T026, T027 | Admission/store : R3 attesté ; concurrence/disque/rollback R4 attesté. |
-| T028, T029 | PASS CLI R3 attesté ; oracle MCP de bornes/parent forgé hors filtre spec163_, exécution non attestée. |
-| T030, T033 | Projection Rust : dossier code/oracles ; interopérabilité finale ouverte. |
-| T031, T032, T034, T050 | Consommateur T3 : preuves ciblées et self-review neuf hashes ; gate runtime encore ouvert. |
-| T035 | Lecture T3 acquise ; rapprochement transversal final ROOT ouvert. |
-| T036 | Converge P3 final en préparation ; aucune clôture déclarée. |
-| T037 | Contre-revue CODE R1 historique reçue ; audit final non lancé. |
-| T038, T039, T040, T041, T042, T043, T044, T045 | Build/provenance, recette, Git, installation, G8/G9 et clôture non exécutés. |
-| T046, T047, T048, T049 | Corrections de convergence : dossier R3 ; vérification finale ROOT sur R4 requise. |
-| T051, T052 | Santé : correction R3 avec corps connu ; recette service réel non réalisée. |
-| T053, T054 | Trois oracles R4 attestés PASS, logs transférés ; lecture finale ROOT ouverte. |
-| T055 | Code et PASS CLI R3 disponibles ; PASS MCP closed_arguments_reject_forged_parent_without_connecting non visible dans la trace, preuve d’exécution encore requise. |
-| T056 | Préférences configurées et figées non consommées par la demande de décision : écart réel confirmé ROOT ; correction et oracle ciblé requis. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-23).
 
 ### Nuance de provenance des empreintes R4
 
@@ -370,7 +309,7 @@ Manifest R6 transmis : /Users/moi/.cache/bridget-delivery163-20261013/source-man
 
 Verdict externe APPROVE_WITH_CHANGES, Claude Sonnet 5.5 en lecture seule sur 21 sources R6 concordantes. Reçu /Users/moi/.cache/bridget-delivery163-20261013/code-review163-r2-final.json, SHA-256 8477c4e88a67f0ce5d3d65680d5475c6b4a1aff38247de14870889c0f3c71c3c, relu localement. ROOT confirme F1 moyenne : un refus local avant la clôture, notamment reply_timeout=10 ou base_ref inconnue en Worktree, peut laisser chosen actif ; le rejeu retourne admission_pending et le slot reste pris. T057 réemploie validation et refus CAS locaux Shared/Worktree/reprise, sans nouveau banc. Les preuves R6 antérieures restent distinctes ; aucune correction R7 encore attestée.
 
-R7 admise selon ROOT : tâche 94799f7a-d849-43cf-aab4-6be90eb318bc, enfant 336d8ef8-795f-450f-950b-eeaa971aa3b5, native round 7 ; ownership exclusif native_delegation.rs et ses oracles affectés. Permis Cargo ciblé jobs2/nice10/tests2, sans replay des 28 bibliothèque, neuf HTTP, worker, T3 ou FULL. Aucun test lancé par le rédacteur ; admission ne vaut pas résultat.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-24).
 
 F2, faible à moyenne, reste une réserve de cadence : reprise jusqu’à 128 reçus, Prepare synchrone jusqu’à trente secondes et erreurs techniques réentretenues. ROOT précise que les pending/started/chosen sont compris dans le plafond global 128 ; l’affamement SQL permanent allégué par le reviewer n’est pas prouvé par LIMIT 128 seul. F3 faible reste une réserve sur le résultat de probe après cinq secondes, rejet CommandMismatch/WorkerRejected et reconnexion possible. Aucun chrono ni correctif de scheduler/connexion prétendu ; limites détaillées dans spec/plan et reçu de revue.
 
@@ -398,7 +337,7 @@ R8 : 16 PASS ciblés indépendamment attestés (deux natifs T024/T025, dix Git e
 
 CODE R3 APPROVE_WITH_CHANGES confirme la perte de classe Technical en String : workspace_path_unsafe peut encore terminer un reçu après une erreur E/S. ROOT retient la correction R9 dans T057, sans nouvelle tâche. R9 code-only préparé sur native_delegation.rs et workspace_git.rs ; trois replays affectés attendus, aucun résultat R9 encore attesté. L’oracle EIO typé prévu vérifiera le passage par la méthode de production et la fermeture, chosen/noTask/rx0 ; il ne forcera pas une syscall OS réellement en erreur.
 
-31/31 couverture documentaire et 4/57 inchangés, aucun cochage. T033 quatre contrôles nominativement prouvés, sans extrapolation vers nouveau runtime T3. P3 NONCONVERGED historique/phase 5 corrective autorisée conservés, aucun P4 formel. Audit final/delta R9, builds, recette T040, Git, G8/G9 et livraison restent ouverts. T039 prépare quatre profils off/on moteur/placement sans appliquer la configuration ; quota CLI à 100 % et nouveaux children ne prouvent pas l’usage opérationnel de ces profils en production.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-25).
 
 ## Checkpoint R9 final ciblé — 14 octobre 2026
 
@@ -428,7 +367,7 @@ Audit final readonly : grade A/99,047619 ; 0 CRITICAL, 0 HIGH, 3 MEDIUM, 2 LOW ;
 
 ROOT accepte T038/T040/T041/T042 sur leurs preuves réelles. Bridget source 5105378bf4f03376e9bc93e52065cb022f81dee5 installé : Mac SHA-256 6c8f89203c85c76e7add2a4d06bb86eedd6cdb3f74470eac11920cc0f6068063, Linux SHA-256 6e5d9717d6054511326f84c684d65c3f3bc1a5086cb514b2d6b64a03ad9b97e0. Maître 44553 né 04:55:03 CEST et pont 44667 né 04:55:05 utilisent /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget ; worker 1411115, naissance 146166371 utilise /home/moi/.local/lib/bridget-communication/163-5105378bf4f0/bin/bridget.
 
-T3 /Applications/T3 Code (Local).app remplacée atomiquement en 0.0.45-local.164/source 511190beb307e0952066fe1a4b511cb9dd7adb18, signature stricte/deep RC0 et entitlements préservés. PID 704/969 et naissances 17:31:27/33 du 13 octobre restent inchangés : aucun redémarrage, ancien code encore chargé. Aucun réveil différé programmé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-26).
 
 Sauvegarde retry : phase_complete/activate, projection173→174 de même génération et 33 autres tables exactes, schéma/count inchangés ; halt humain complet préservé. Migration additive reçusauto, quick_check ok/FK0, schémas 7/12/Fleet5. Sauvegarde jointe vérifiée ; après activation, toute rétrogradation exige une nouvelle sauvegarde jointe sans perte. La sauvegarde préactivation ne couvre pas les nouveaux reçus. L’incident171→172 et les anciens PID 86807/86830/1403968 restent uniquement historiques.
 
@@ -440,15 +379,13 @@ Ordre réel : sources committées/intégrées/poussées avant laboratoire T040, 
 
 Reçus :
 
-- /Users/moi/.cache/bridget-delivery163-20261013/joint-backup-20261014-163164-retry-projection/progress.json ; SHA-256 b6da23d355fbb396b50fab7c946dd5693dd6ced27aafe5ae3ac2aaffaf7cef16
-- /Users/moi/.cache/bridget-delivery163-20261013/t3-backup163164/T3-install-receipt.json ; SHA-256 b73ddc5019a644fc9964372816089f95cfffdd276b319ad0bbef5196429fa2f0
-- /Users/moi/.cache/bridget-delivery163-20261013/g8-registry-off-applied.json ; SHA-256 ed358ea42dc927adf19d4c4e7cca2ecdd0de76e2aa2a213116f6b15049b26aae
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-27).
 
 ## Correctif G8 — façade MCP T058, 14 octobre 2026
 
-Le MCP propre à la nouvelle commande annonce bridget_auto_delegate dans tools/list, mais tools/call renvoie JSON-RPC -32602, message outil inconnu, request_id g8-spec163-a73f9432-53d5-46b5-94b9-e8f0ee3cfe7e. Les attestations officielles immédiatement avant appel portent version2 et permissions_present=true ; provider codex-pro déclaré disponible et capacité maître contrôlée. Aucun reçu auto/Task sous cette clé selon la vérification durable ROOT. La cause confirmée ROOT est le dispatcher de /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/mcp.rs:753–760 : routage auto omis malgré l’annonce. Scope/hook/wrapper doivent être raccordés à la voie native existante. Ce refus ne démontre pas un problème de quota ou d’authentification et ne nécessite pas de redémarrage T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-28).
 
-T058 reste dans la session163 autorisée : correctif minimal sur Cartae, oracles MCP existants affectés, contre-revue/delta d’audit ciblés, build et livraison du correctif avant reprise G8. Aucun nouveau framework, banc de confort ou FULL. Le prochain commit source sera différent de5105378bf4f03376e9bc93e52065cb022f81dee5 ; aucun hash futur fixé. T038/T042 demeurent cochées pour les builds/installations réellement prouvés du510, pas pour le futur correctif. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18/version164 est déjà installée et inchangée. Aucun résultat antérieur effacé, aucun livré final ou G8/G9 déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-29).
 
 Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brute est conservée : /Users/moi/.cache/bridget-delivery163-20261013/g8-mcp-off-error-observation.log ; SHA-256 03e823bb6a993a7f1b8b546edc53f6aeded6e163bcd9ed507b22a68dc28f2f47. P3 NONCONVERGED historique et poursuite corrective sous mandat utilisateur restent explicites ; aucun P4 formel inventé.
 
@@ -463,7 +400,7 @@ L’audit T058 readonly conclut A/100 sur le delta lu, avec 0C/0H/0M/0L actif. S
 
 Limite conservée : le refus du hook AutoDelegate sans request_id est vérifié par lecture de la garde, sans oracle négatif auto spécifique. L’oracle public tools/call prouve le raccord du wire sur un daemon simulé ; il ne prouve pas une Task durable ni un processus fournisseur réel.
 
-T058 reste ouverte. Reconstruction, réinstallation du correctif et recette G8 réelle restent à faire. Compteurs inchangés : SPEC163 53/58, SPEC164 19/22. La source5105378bf4f03376e9bc93e52065cb022f81dee5 reste chargée au dernier checkpoint de runtime ; aucun nouveau commit, binaire ou succès G8/G9 n’est anticipé. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18 reste inchangée. P3 NONCONVERGED historique et poursuite corrective autorisée sont conservés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-30).
 
 
 ## Acceptation opérationnelle ROOT — historique57/58 intégré dans c57, 14 octobre 2026
@@ -472,7 +409,7 @@ ROOT accepte T039/T043/T044/T058 sur les preuves de configuration effective, de 
 
 Reçus : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-final.json ; SHA-256 5b1c00923f2f307136b5831cc8d3328227b7284deacf44c793d71542e3ceb52c. /Users/moi/.cache/bridget-delivery163-20261013/g9-t058-cleanup-final.json ; SHA-256 08091fc94791644308b258f2eb912ee375145d66004ef9f9c5e0d822a34fb5c3. Les faits et limites sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md. Les anciens chemins de worktrees Mac retirés désignent des lieux historiques, sans nouvelle copie de travail active.
 
-P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 restent conservés, sans P4 formel inventé. Les anciennes FULL avec échecs, l’audit163 partiel 3M/2L, le delta T058 partiel sans finding et le delta T3 R6 sans finding restent distincts ; aucun GREEN global déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/implementation.md#extrait-31).
 
 
 ## Clôture T045 — 58/58, 14 octobre 2026

@@ -1,17 +1,10 @@
 # Spécification 134 — Noms humains dans les messages Bridget
 
-**Branche** : session-134-noms-humains-messages
-**Date** : 2026-10-05
-**Statut** : Implemented
-**Priorité** : P1
-**Demande** : afficher un nom humain à côté de l’identifiant de l’expéditeur dans les messages Bridget.
-**Dépendances** : 098 (pont T3), 101 (identité T3), 110 (profil et nom de présentation), 114 (lots de messages), 133 (provenance des sous-agents).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/spec.md#extrait-1).
 
 ## Pourquoi
 
-Les messages Bridget affichent aujourd’hui un identifiant long. L’utilisateur ne
-peut pas savoir rapidement quel agent parle. Le pont T3 connaît pourtant le titre
-humain du fil, et Bridget possède déjà un champ de nom de présentation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/spec.md#extrait-2).
 
 Le résultat attendu est un libellé lisible et sûr. Le nom aide la lecture. L’UUID
 reste visible et reste la seule identité utilisée pour le routage.
@@ -85,16 +78,7 @@ l’enregistrement, publier un nom et vérifier sa présence dans le message liv
 
 ## Critères de succès
 
-- **SC-13401** : 100 % des messages de test avec un nom exploitable affichent
-  `nom (UUID)` dans leur en-tête.
-- **SC-13402** : 100 % des messages sans nom exploitable gardent le rendu UUID
-  historique et sont remis sans erreur.
-- **SC-13403** : 100 % des éléments de lots testés affichent le bon nom et le bon
-  UUID.
-- **SC-13404** : 100 % des identités de test privées de profil retrouvent un
-  profil après un nouvel enregistrement, sans créer une seconde identité.
-- **SC-13405** : les suites de messages, profils, T3 et espace de travail passent,
-  ainsi que le formatage, l’analyse statique et la construction de production.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/spec.md#extrait-3).
 
 ## Hypothèses et limites
 
@@ -106,8 +90,4 @@ modifié tant qu’il ne s’enregistre pas à nouveau.
 
 ## Hors périmètre
 
-- Masquer ou raccourcir l’UUID.
-- Renommer automatiquement les agents sans titre T3.
-- Modifier T3 Code ou les fournisseurs.
-- Réécrire les anciens messages stockés.
-- Créer une migration globale des profils en production.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/spec.md#extrait-4).

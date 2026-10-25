@@ -1,9 +1,6 @@
 # Plan 102 — Fils inter-agents
 
-État : préparation documentaire, sans implémentation. Spécification : spec.md.
-Racine de travail : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/102-fils-inter-agents
-Base Git examinée : 1738a072 ; complément examiné en lecture seule :
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/101-abonnements-t3
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/plan.md#extrait-1).
 
 ## 1. Résultat attendu et règle de lecture
 
@@ -23,14 +20,7 @@ Rust 2024, crates bridget-core / bridget-transport / bridget-daemon, JSONL sur
 socket Unix, SQLite rusqlite, serde/serde_json, UUID et SHA-256 déjà disponibles.
 Pas de nouveau service, broker, dépendance, interface Web ou appel LLM.
 
-Socle fonctionnel : 089 (identités/routage/journaux), 094 (parité), 099 (preuve
-auxiliaire et idempotence de remise), 100 (lecture bornée et observations).
-Compatibilité obligatoire : 097 (Claude interactif), 098 (T3), 101 (identité MCP
-T3 et observations attestées). Les modifications non commitées de 101 ne sont PAS
-présentes dans cette branche. T001 doit identifier leur commit intégré ou obtenir
-un arbitrage d'intégration avant de modifier les composants communs. Ne pas
-réimplémenter 101, copier son arbre, lancer un rebase sur une branche sale ou
-confondre version installée et version Git. Cela n'empêche pas la préparation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/plan.md#extrait-2).
 
 ## 3. Périmètre technique fixé
 
@@ -265,12 +255,7 @@ interne de fil. Un corps commençant par « Bridget thread » ne suffit jamais.
 Contenu de l'alerte : version, thread_id, through_seq, génération et conduite de
 lecture ; aucun historique, aucun texte posté, aucun titre dans le ledger général.
 
-Pour T3 (101 t3code.rs:1659 et :2375), ne pas ajouter cette remise au `pending`
-des DM qui relayent automatiquement la réponse finale. Produire une enveloppe
-« Consulte ce fil via bridget_thread/read ; publie dans le fil si utile ; ne fais
-pas de réponse directe à cette alerte ». Même exigence dans les injections Codex
-gérées/interactives et Claude gérées/interactives. Une réponse finale ordinaire
-reste dans la conversation fournisseur ; elle n'est pas extraite et publiée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/plan.md#extrait-3).
 
 Ne pas utiliser le préfixe `bridget-observation:` : il signifie observation sans
 réponse requise et entraîne des exclusions101 différentes. Les vraies activités
@@ -284,13 +269,7 @@ Ne pas annoncer une recette nominale si l'outil read/post n'est pas accessible
 au destinataire. La capacité de transport ne prouve pas le catalogue d'un serveur
 MCP déjà vivant : vérifier celui-ci séparément lors de la recette de version.
 
-Négociation concrète, sans nouveau handshake : Register.thread_notice_versions
-(Vec<u16>, default vide) ; Registered.thread_notice_version (Option<u16>, absent
-par défaut). Adaptateurs implémentés annoncent [1] ; daemon choisit1 ouNone.
-Sélection par connexion wrapper, effacée à déconnexion, revérifiée avant chaque
-remise ou récupération. Adapter connect_and_register_at (wrapper.rs:1570) et son
-appel T3 (101:1070). Ne pas utiliser ClientCapability (client auxiliaire) ni
-ObservationCapabilities101 (sources de faits) pour cette capacité de réception.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/plan.md#extrait-4).
 
 Le raccourci `bridget reply` ne doit pas viser un ancien DM après cette alerte.
 Dans le contexte last-sender propre à l'agent, écrire un marqueur de dernier

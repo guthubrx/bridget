@@ -40,12 +40,7 @@ Les comptes SQL restent inclusifs ; retry_after exact réutilise guidance_events
 Les 31 IDs, cases non cochées et 87 références d’oracles sont conservés à cette
 correction. Les faits de T002 et l’audit d’existant frais sont encore attendus.
 
-LU : revue brute, review.md, response.md, artefacts actuels, pré-analyse et
-arbitrages du principal sur la projection temporelle et les trames.
-NON LU par ce rédacteur : T3 complet, nouveaux résultats d’exécution156 ou
-inspection runtime ; les prélectures source des owners restent attribuées.
-Aucune promesse d’Analyze PASS courant ou de réutilisation gate 5/5 n’est copiée
-sans la preuve fraîche de ces owners. Aucun nouveau test, helper ou outil.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/156-guidage-file/adversarial-review-claude.md#extrait-1).
 
 Empreintes de provenance :
 
@@ -67,16 +62,9 @@ couple/THIRD_LATESTcible précisent le délai exact, sans état dérivé persist
 
 ## État courant après T001
 
-T001 est acquise et cochée par root : baseline 774 PASS/0 FAIL/7 ignored,
-214 sources stables, sur métadonnées be7957ee après livraison155. Les anciennes
-phrases «toutes les cases non cochées» décrivent la préparation avant ce reçu.
-T002 et les 29 tâches d’implémentation restent ouvertes à ce checkpoint.
-Aucune case cochée par le rédacteur. Les corrections normatives FR006/US4/FR022
-sont Claude seul ; T029 trace Cursor refusé/busy attend parmi les changements
-visibles acceptés. Build/install/activation Bridget autorisés 152–160 avec zéro
-mission native non terminale, puis nettoyage ; aucune relance explicite T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/156-guidage-file/adversarial-review-claude.md#extrait-2).
 
-## Limite de compatibilité REST/V1 du pont T3
+## Limite de compatibilité REST/V1 du pont adaptateur de bureau
 
 La voie REST/V1 Client.dispatch ignore l’ancien booléen et ne sait pas exprimer
 deliveryIntent. Elle refuse donc localement toute intention explicite avant
@@ -100,7 +88,7 @@ le gel courant ; aucun Analyze concurrent n’est déclaré par ce rédacteur.
 
 ## Contre-revue implementation156 R1 — 2026-10-12
 
-Fournisseur : claudeAgent ; modèle : claude-opus-5-5. Revue T3 déléguée après Converge2. Verdict reçu : APPROVE, limité au code lu. Aucun CRITICAL/HIGH/MEDIUM annoncé. Aucun test/build exécuté par le relecteur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/156-guidage-file/adversarial-review-claude.md#extrait-3).
 
 Le résultat intégral et ses zones non lues sont conservés dans validation/code-review156-r1.md et validation/code-review156-r1.json.
 

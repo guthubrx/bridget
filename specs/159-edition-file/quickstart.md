@@ -18,11 +18,7 @@ env -i HOME=$HOME TMPDIR=$R BRIDGET_HOME=$R/ns \
   cargo test -p bridget-daemon --features test-support <filtre> -- --test-threads=4
 ```
 
-Tests du crate transport : même environnement, `cargo test -p bridget-transport <filtre>`.
-Suite complète avant clôture : même environnement,
-`cargo test --workspace --features bridget-daemon/test-support --no-fail-fast`.
-Un changement de trame, de reçu ou de file exige aussi tous les tests `t3code`,
-`mcp::`, `guidance156` et transport, pas seulement les nouveaux.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/quickstart.md#extrait-1).
 
 **Migration** : ne jamais l'essayer sur la base réelle. Copier la base dans le
 répertoire privé de test (`$R/ns`) avec `.backup`, puis ouvrir la copie.
@@ -46,11 +42,11 @@ Lot B (159b) :
 12. Outil et CLI : filtres `edit159_mcp`, `edit159_cli`.
 13. Bout en bout : `cargo test -p bridget-daemon --features test-support --test edit159_e2e`.
 
-Non-régression : filtres `spec_087`, `native148`, `native149`, `native150`, `guidance156`, `t3code`, `mcp::`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/quickstart.md#extrait-2).
 
 ## Recette manuelle B (après validation et activation par ROOT)
 
-La série autorisée permet build signé, installation et activation Bridget après vérification de zéro mission native non terminale. T3 reste protégé, sans relance. Aucun succès de recette B n’est annoncé ici. Après activation :
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/quickstart.md#extrait-3).
 
 ```sh
 bridget queue --target <enfant>
@@ -66,16 +62,7 @@ par receipt.actor : intent_not_permitted avant le reçu. La CLI humaine sans
 contexte agent reste Attach autorisée ; un contexte agent invalide ne donne
 aucun repli humain.
 
-SC010 étend la recette ouverte existante : 24 appels privés, quatre acteurs,
-trois mutations et deux façades. Aucun T3 réel n’est impliqué. Les délais
-d’attente tiennent compte de la réservation FR024 (ACK + 30 s) ; un timeout
-de fixture trop court n’est pas une preuve de libération défectueuse. Les
-24 assertions des façades ont réussi dans la recette ouverte privée.
-La recette ouverte a réussi au run final ; la recette fermée avait réussi
-dans le lot précédent. Deux recettes distinctes PASS cumulées, pas un run
-unique 2/2. Le FULL unique et ses replays sont conservés séparément dans le reçu.
-La livraison reste distincte des gates techniques. Reçus :
-/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/tests-159.md
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/quickstart.md#extrait-4).
 
 Pour une ouverture ultérieure du réglage, obtenir d'abord les mesuresSC004/SC005
 comparées à T001 et la décision associée. L'ouverture éventuelle pour `codex`

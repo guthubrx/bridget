@@ -53,14 +53,13 @@ Publication et vérification :
 /home/moi/.local/state/bridget-delivery170/release-0.4.1-57f2fff31b1c/publication170.json
 /home/moi/.local/state/bridget-delivery170/release-0.4.1-57f2fff31b1c/verification170.json
 
-## Activation et conservation de T3
+## Activation et conservation de adaptateur de bureau
 
 Maître Bridget : PID 55610, né à 06:27:39 CEST.
 Pont Bridget : PID 55688, né à 06:27:42 CEST.
 Worker Cartae : PID 560830, naissance Linux 164002582, binaire 0.4.1 exact.
 
-T3 conserve ses PID 4717 et 4792 et leurs naissances du 15 octobre à 22:09:38/40 CEST. Le tunnel conserve le PID 60206. Aucun signal ni relance T3 ou tunnel.
-Les configurations des moteurs, plists et credentials sont conservées. Le catalogue reste à 27 choix : 17 locaux et 10 sur Cartae. Le contrôle d’arrêt des délégations reste inchangé. Les bases passent quick_check et foreign_key_check ; leurs schémas et versions restent identiques. Aucune restauration de base.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/170-delais-reponses-distantes/validation/livraison170.md#extrait-1).
 
 Une ancienne admission Revue était `chosen`, sans Task, depuis plus de vingt minutes. Son empreinte exacte a été vérifiée avant les arrêts et conservée dans la sauvegarde froide. Aucune migration n’est faite en170. Après démarrage, le mécanisme natif de reprise l’a refusée avec `permission_not_inherited`, sans création de Task. Aucune ligne n’a été supprimée ou corrigée manuellement.
 

@@ -91,8 +91,7 @@ Préfixe absolu de tous les chemins ci-dessous :
 - crates/bridget-daemon/tests/core_089_skill_test.rs : maintenir les exemples existants.
 - skills/bridget/SKILL.md, skills/bridget/references/commandes.md, README.md : recettes.
 
-Ne pas ajouter Python/Pytest à ce projet Rust : tests cargo natifs et scénarios
-Given/When/Then dans test-plan.md. Pas de GUI, de changement T3 ou de service annexe.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/103-dossier-passation/plan.md#extrait-1).
 
 ## Constitution et gates
 

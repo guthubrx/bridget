@@ -8,7 +8,7 @@ Analyse en lecture seule, sans écriture de code.
 ## Verdict
 
 PASS initial (historique avant contre-revueR1 ; statut actuel en cours ci-dessous). Arbitrage utilisateur reçu le 2026-10-11 : le daemon exécute Git pour tout
-parent autorisé, comme T3, durci. 28 tâches. Constats : 0 critique, 0 élevé, 1
+parent autorisé, exécution directe de Git, durcie. 28 tâches. Constats : 0 critique, 0 élevé, 1
 risque accepté (A0), 3 moyens, 4 faibles.
 
 ## Couverture des exigences
@@ -67,7 +67,7 @@ sont des tâches de méthode.
 
 | # | Gravité | Constat | Sort |
 |---|---|---|---|
-| A0 | accepté | Un parent confiné qui peut modifier la configuration du dépôt entre le contrôle et l'exécution de Git peut faire exécuter du code avec les droits du daemon. Ce risque est accepté explicitement, au même niveau que T3, dans le cadre de menace de l'ADR 011. Les durcissements réduisent la surface sans la fermer. | Accepté par l'utilisateur (2026-10-11). Écrit dans la spec et dans l'ADR 154 (T024). |
+| A0 | accepté | Un parent confiné qui peut modifier la configuration du dépôt entre le contrôle et l'exécution de Git peut faire exécuter du code avec les droits du daemon. Ce risque est accepté explicitement, selon les gardes natives, dans le cadre de menace de l'ADR 011. Les durcissements réduisent la surface sans la fermer. | Accepté par l'utilisateur (2026-10-11). Écrit dans la spec et dans l'ADR 154 (T024). |
 | A1 | moyen | Le flux le plus courant (parent Claude, enfant GLM) est refusé : la règle de droits exige le même dossier. | Défaut conservateur confirmé : refus explicite ; élargissement hors périmètre. |
 | A2 | moyen | Un enfant sous bac à sable Codex `workspace-write` ne peut pas commiter dans un worktree lié. Le rapport dira « 0 commit, modifications non commitées ». | Défaut conservateur confirmé : ne rien élargir. Documenté en T023. |
 | A3 | moyen | Fenêtre de course sur un lien `.worktrees` remplacé entre le contrôle et Git. Aucun descripteur ouvert ne peut être donné à Git sur macOS. | Recontrôle du chemin canonique après création ; attaquant = parent délégant ; effet = extrait propre. Résiduel accepté, noté dans l'ADR (T024). |

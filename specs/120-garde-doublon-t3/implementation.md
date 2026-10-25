@@ -1,13 +1,8 @@
-# Journal 120 - Se protéger d'une seconde application T3
+# Journal 120 - Se protéger d'une seconde application adaptateur de bureau
 
 - **Base** : main `ae4b864e` - **Date** : 2026-09-25 - **Statut** : Implemented
 
-## Incident déclencheur (05:18Z)
-Doublon `T3 Code (Alpha).app` (pid 8275, serveur 8352, port 3774) ouvert par un agent via `getApp`.
-Tours de GLM3 (`dfccceef`) et GLM4 (`106521cc`) marqués en erreur à 05:18:59Z, nouveaux tours
-`pending` sans `started_at` ; processus Claude 1286 et 8742 (enfants du serveur Local 22214) actifs
-d'après leurs transcrits. Pont resté sur 3773 (garde 114), mais appariement impossible. Doublon
-quitté par l'agent ; fichier d'état réécrit à la main.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/120-garde-doublon-t3/implementation.md#extrait-1).
 
 ## Correction
 - La déclaration de notre serveur est lue au démarrage du pont et liée au `ServerRuntime` qu'elle

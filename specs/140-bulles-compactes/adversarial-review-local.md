@@ -1,6 +1,6 @@
 # Contre-revue SPEC140
 
-Date :2026-10-07. Scope :diff Bridget + frontend T3. Aucun commit ou déploiement.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/adversarial-review-local.md#extrait-1).
 
 ## Disponibilité et mandat
 

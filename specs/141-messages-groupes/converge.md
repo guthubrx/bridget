@@ -46,12 +46,7 @@ Les empreintes sont identiques. Les cases T002–T007 et T009/T010 ont été mis
 
 ### Sources relues
 
-Projection : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts
-Tests de projection : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.test.ts
-Rendu : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx
-Tests de rendu : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.test.tsx
-Recette et contrôles : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/implementation.md
-Résultats structurés : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/validation/results.json
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/converge.md#extrait-2).
 
 ### Couverture des 22 exigences et critères
 
@@ -90,9 +85,7 @@ La projection reste linéaire ; ses aperçus sont bornés à 120. Le prédicat d
 
 ### Preuves de recette supplémentaires et limites
 
-Le principal a inspecté visuellement les deux captures sombre/claire du nom long dans 320 pixels. Le bouton Copy message du vrai T3 a été cliqué via le navigateur natif. L'appel de copie a été intercepté localement puis restauré ; le presse-papiers système a été préservé. La chaîne capturée de 3421 caractères est strictement égale au texte JSON SQLite de la fixture spec141-valid-batch. Aucun contenu synthétique n'a été imprimé.
-
-La copie native d'une fixture avec référence t3-context n'a pas été exécutée ; les tests du vrai composant couvrent ce cas. Aucun essai fournisseur de bout en bout ou de production n'est revendiqué. Le redimensionnement natif a expiré deux fois ; les essais de largeur utilisent une iframe native avec le CSS T3 réel. Une attente de disponibilité de fixture a résolu les lectures trop précoces après rechargement ; aucun défaut produit ni correction produit supplémentaire n'en découle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/converge.md#extrait-3).
 
 Converge conclut CONVERGED pour le périmètre demandé. Le statut documentaire reste In Progress et T008 attend le verdict d'audit final. Le fichier d'audit appartient à un autre agent et n'est pas modifié par cette passe.
 

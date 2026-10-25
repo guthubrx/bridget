@@ -6,17 +6,7 @@ Périmètre : dépôt Bridget sur Mac et Cartae. Aucun autre projet nettoyé.
 
 ## Git et publication
 
-- Les corrections de la session 176 étaient déjà intégrées et poussées :
-  code `98e187e264d7c9136896ed0803ba2b1d4327ea9b`.
-- La livraison documentaire correspond à
-  `78d5278d764f1a81b7a1182fec0e33f5a0f64a08`.
-- La consigne T3 encore non commitée dans AGENTS.md a été enregistrée dans
-  `33d0103e50cbce919d83043ed5d0adc1ac8a18a1`, puis poussée sur main.
-- Les deux checkouts principaux étaient propres et alignés sur ce commit
-  avant l'ajout de ce reçu.
-- Deux branches distantes fusionnées ont été supprimées :
-  `session-172-identifiants-t3` et
-  `session-172-reconnexion-wrapper-distant`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/176-observation-bornee/validation/nettoyage-20261024.md#extrait-1).
 
 ## Retraits effectués
 
@@ -62,10 +52,7 @@ présents sur chaque machine. Les caches récents réutilisables sont conservés
 Les dossiers d'anciennes versions qui portent encore des sources ou des reçus
 restent présents. Seuls 49 répertoires devenus vides ont été retirés sur Cartae.
 
-Aucun service, fournisseur, daemon ou T3 n'a été redémarré.
-La projection Bridget après nettoyage indique running=true,
-build_id=175-10a375e3 et 323 agents. Le lot 176 modifie le script d'observation,
-pas le binaire Rust.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/176-observation-bornee/validation/nettoyage-20261024.md#extrait-2).
 
 ## Vérification et preuves
 

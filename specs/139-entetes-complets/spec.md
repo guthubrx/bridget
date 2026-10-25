@@ -12,11 +12,4 @@ Les citations, messages ordinaires et enveloppes incomplètes restent ordinaires
 US3 (P1) : recevoir un paquet réellement préparé, sans interrompre les agents.
 Acceptation : archive construite, vérifiée et identifiée ; installation distincte.
 
-## Exigences et succès
-FR01 : tous les formats Bridget émis par le pont T3 sont couverts.
-FR02 : seul le premier paragraphe de l'enveloppe complète est atténué.
-FR03 : texte, copie, historique, transport et relances inchangés.
-FR04 : tests ciblés et aperçu isolé ; aucune écriture dans les données actives.
-FR05 : arrêter proprement l'application avant remplacement ; livrer un paquet
-traçable avec sauvegarde, contrôle santé et retour arrière. Ne pas modifier les données.
-Succès : tests positifs/négatifs PASS, mesures visuelles et archive vérifiées.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/139-entetes-complets/spec.md#extrait-1).

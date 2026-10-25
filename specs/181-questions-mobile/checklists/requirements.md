@@ -4,7 +4,7 @@
 - [x] Résultats utilisateurs distincts des choix techniques.
 - [x] Exigences mesurables et scénarios de recette définis.
 - [x] Réponse libre, complément, dictée et notifications couverts.
-- [x] Indépendance T3 prioritaire ; brouillons locaux uniquement.
+- [x] Autorité native Bridget prioritaire ; brouillons locaux uniquement.
 - [x] Rejeux, concurrence, révocation et capacités indisponibles définis.
 - [x] Dépendances et exclusions explicites ; aucun arbitrage produit ouvert.
 

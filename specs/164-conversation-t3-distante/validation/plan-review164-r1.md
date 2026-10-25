@@ -5,7 +5,7 @@
 **Résultat durable privé :** /Users/moi/.cache/bridget-delivery164-20261013/plan-review164-r1-final.json
 **Portée :** clôture des objections documentaires avant GO code. Aucun succès d’implémentation n’en découle.
 
-ROOT a vérifié les objections dans les sources T3 et les exemples de journal public existant. DOC164 a appliqué les décisions dans spec/plan/contrat/audit/stratégie/Tasks. Une nouvelle contre-revue de plan n’est pas requise par ROOT si cette relecture ferme toutes les objections. La contre-revue de code reste T014.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/validation/plan-review164-r1.md#extrait-1).
 
 | Objection | Preuve et décision ROOT | Correction documentaire | État |
 |---|---|---|---|

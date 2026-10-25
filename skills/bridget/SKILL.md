@@ -68,7 +68,7 @@ Après préparation, reprendre un seul usage réel autorisé. Respecter l'idempo
 une issue inconnue conserve sa clé et son enveloppe ; une mission terminée en
 échec nécessite une nouvelle demande identifiée, pas un rejeu présenté comme neuf.
 Une connexion configurée ou un statut de login ne garantit pas que le fournisseur
-acceptera la mission. Annoncer le résultat réel. Ne pas relancer T3 ou les services
+acceptera la mission. Annoncer le résultat réel. Ne pas relancer les applications ou les services
 par défaut ; utiliser le rechargement existant s'il suffit.
 
 ### Lire le verdict avant de déléguer (157)
@@ -191,7 +191,7 @@ US8 ni HTTP ; le reçu 158A reste distinct.
 
 ### Choisir une combinaison de flotte — contrat168
 
-Lire bridget delegate --catalogue --json hors T3 ; --machine filtre cette lecture.
+Lire bridget delegate --catalogue --json dans un terminal ; --machine filtre cette lecture.
 Le catalogue sépare modèle réel, connexion, moteur, machine et effort. entitlement=unknown
 ne prouve aucun accès fournisseur. Une connexion décrit un environnement configuré ;
 son authentification peut expirer. Ne copier aucun secret et ne lancer aucun login
@@ -231,8 +231,10 @@ et postures accessibles. Puis appeler `bridget_delegate` avec `request_id`,
 `agent_type`, `model`, `task` et `cwd` absolu. `posture` est facultatif : sans lui,
 l'enfant hérite de la politique prouvée du parent. Fournir `effort` seulement
 si le catalogue le déclare. Bridget crée l'enfant, remet la mission et conserve
-la tâche. Aucun appel à l'orchestrateur T3 n'est nécessaire. Cette voie fonctionne
-aussi hors T3. Elle ne remplace pas un envoi à un agent déjà présent.
+la tâche. Aucun appel à l'orchestrateur l’adaptateur de bureau n'est nécessaire. Cette voie fonctionne
+aussi dans un terminal. Elle ne remplace pas un envoi à un agent déjà présent.
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-54).
 
 Conserver le `task_id` rendu. Rejouer avec le même `request_id` et exactement
 les mêmes arguments si la réponse est perdue. Ne pas changer de fournisseur,
@@ -260,7 +262,7 @@ conservées, aucune purgeable), `reply_timeout_out_of_range`,
 référent illisible : refus fermé). Une tâche purgée rend `task_unavailable` au statut.
 
 Le parent doit déjà avoir une identité et un projet attestés. L'enfant ne reçoit
-pas les credentials de session T3. Le catalogue annonce les refus par posture.
+pas les credentials de session l’adaptateur de bureau. Le catalogue annonce les refus par posture.
 Sans posture, l'enfant hérite de la politique prouvée du parent ; aucun grant
 n'est demandé. La posture `development` exige une politique parent qui permet
 l'écriture et une cible compatible. Un parent en `workspaceWrite` vers Claude ou
@@ -271,16 +273,16 @@ d'instance, héritage compris. Seul un nouveau grant humain explicite la lève. 
 parent encore vivant garde sa tâche. Une nouvelle instance ne la reprend qu'après la
 fin de l'ancienne, si le daemon reconnaît la même identité et une autorisation valable.
 
-Dans T3, une preuve MCP privée est attachée à chaque session. Une preuve invalide
-produit `t3_session_unavailable` à l'appel suivant. Un credential retiré, révoqué ou
-tourné ferme tous les outils Bridget de la session avec le même code. Ne pas fournir une identité
-en argument, emprunter celle d'un autre fil ou contourner ce refus par la CLI.
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-55).
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-56).
 
 Les comportements 149 (héritage, posture facultative) exigent le binaire et les
 processus chargés en version 149. Leur présence dans les sources ne prouve pas leur
-activation dans la session. Le suivi149 ciblé passe par `bridget lineage` dans un terminal, avec
-`--t3-thread` et `--project-root`.158A ajoute la vue globale humaine
+activation dans la session. Le suivi spécifique au client de bureau est décrit dans la note de l’adaptateur.158A ajoute la vue globale humaine
 `bridget control delegations`, sans ces paramètres ; ce n’est pas un outil MCP.
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-57).
 
 ### Demandes de l’enfant — contrat155
 
@@ -374,9 +376,11 @@ sans respecter le choix de l'utilisateur. Aucun fetch réseau implicite.
 L’enfant committe/pousse sa seule branche si la mission et ses droits l’autorisent.
 Un intégrateur unique vérifie, intègre, pousse et compare les SHA des machines.
 `result_available` ne vaut pas intégration ; préserver toute copie modifiée ou
-divergente. L’auto-pull T3 facultatif ne synchronise pas la flotte Bridget.
+divergente. L’auto-pull l’adaptateur de bureau facultatif ne synchronise pas la flotte Bridget.
 Procédure « Livraison Git entre machines » :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/docs/delegation-native.md.
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-58).
 
 ### Rondes et brief - contrat153
 
@@ -564,7 +568,7 @@ est une étiquette ; un worktree ou un lien symbolique peut appartenir au même
 projet. Ne pas déduire cette appartenance depuis un nom ou un champ du message.
 Un client CLI autonome sans --project-root ni rattachement reste inconnu,
 même pour who/agents. Aucun cwd caché ; l'annuaire local est vide avec warning.
-Les agents T3/wrapper héritent automatiquement de leur contexte attesté.
+Les agents adaptateur/wrapper héritent automatiquement de leur contexte attesté.
 
 Pour chercher volontairement ailleurs, choisir `scope:"global"` en MCP ou
 `--global` en CLI. Cette vue montre les autres projets et les inconnus. Elle
@@ -615,7 +619,7 @@ fournisseur. `auto`, une valeur inconnue et steer+reply=true rendent
 
 Seuls Attach attesté et parent par lien ouvert ou tâche native peuvent demander
 ce contrôle. Un client CLI nu ne devient pas humain par `from=human`.
-Les pairs, la cible elle-même et les preuves enfants internes T3 sont refusés.
+Les pairs, la cible elle-même et les preuves enfants internes l’adaptateur de bureau sont refusés.
 La preuve enfant ferme contrôle et queue à la frontière CLI/MCP avant connexion.
 Un agent ne guide ni n’interrompt pendant la pause. Il n’interrompt pas une
 mission native active :152 reprend pause/panne, pas une interruption utilisateur.
@@ -624,12 +628,9 @@ Son rythme d’interruption est de 1 par couple en 30 s et de 3 par cible en
 l’interruption interne de pause reste admise sans quota. Aucun steer agent
 ne devient automatiquement interrupt. L’UI attestée reste Client.
 
-T3 steer vise Claude seul. Cursor steer est refusé et un fil Cursor occupé
-attend, même avec mid_turn_ok=true. Pour Claude, le guidage implicite des
-messages déjà groupables reste réservé à Attach, UI attestée, système interne,
-parent/enfant, avec le flag calculé sur les deux trames Deliver en envoi/reprise.
-Pairs, clients nus et flag absent attendent. REST/V1 refuse toute intention
-explicite avant émission ; sa remise ordinaire reste inchangée.
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-59).
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-60).
 
 `bridget_queue` lit les remises idempotentes de `target` : held/released dans
 le contrat 159A, 200 entrées au plus, aperçu120 caractères. queue_bound vaut
@@ -656,9 +657,11 @@ menace ADR011/027 figurent dans la référence de communication156.
 `held_queue` reste fermé après SC004. Ouvert, il retient les envois clients
 idempotents ordinaires vers une instance `turn_attest` occupée ou déjà pourvue
 de retenus. Human/System, steer/interrupt, alertes, observations, incidents
-délégués, missions natives et fils T3 sont exclus ; sans attestation, chemin actuel.
+délégués, missions natives et fils l’adaptateur de bureau sont exclus ; sans attestation, chemin actuel.
 `bridget_queue` liste held/released par rang, au plus 200 entrées ; queue_full
 est un refus mémorisé. Les droits156 restent appliqués ; aucune édition en A.
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-61).
 
 La réattestation périodique reste vraie sous trafic continu. La réservation
 empêche une seconde libération dans le même cycle. Register attesté avec
@@ -708,10 +711,12 @@ Une réponse directe liée peut reprendre le motif durable d'une demande OPEN
 acceptée, avec participants inversés. Une référence forgée ne suffit pas.
 
 Un client de fond utilise `--project-root` avec la racine absolue du run.
-Le daemon valide son contexte propre sans Register d'agent ni identité T3
+Le daemon valide son contexte propre sans Register d'agent ni identité l’adaptateur de bureau
 empruntée. L'option ne remplace pas le projet d'une identité auxiliaire attestée.
 Sans racine explicite, un ancien envoi de fond reste inconnu ; ne pas lui
 attribuer automatiquement le répertoire courant.
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-62).
 
 Le client exige `CommunicationProjectsV1` avant de transmettre un motif ou la
 nouvelle portée. Un ancien serveur sans cette capacité provoque un refus client.
@@ -794,7 +799,9 @@ validation de mission ni la réponse exigée par un `reply`.
 | Reprendre une conversation humaine | `bridget codex … resume` ou `bridget claude --resume` |
 | Session Claude Code interactive joignable | `bridget claude` dans un terminal, sans tmux ; présence `claude_pty` |
 | Administrer une fédération SSH | CLI humain `bridget federate …`; jamais MCP ni repli automatique |
-| Joindre un fil t3code | `bridget_send` vers l'agent du fil (transport `t3code`) ; installation par l'humain avec `bridget t3 install` |
+
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-63).
 
 La skill est le mode d'emploi, pas une alternative au MCP. Les outils du guichet
 éventuellement exposés parlent à un service extérieur ; leur présence ne prouve
@@ -833,12 +840,7 @@ enregistrée ni `known_hosts`. Un retrait par alias DNS exige `--label` hors
 double-TTY, ou une confirmation affichant la cible enregistrée dans un vrai
 double-TTY. Ne jamais retirer ou recréer un tunnel pour contourner une panne MCP.
 
-Un fil t3code apparaît dans `bridget_who` avec le transport `t3code`, le mode
-`cli` et le titre du fil comme nom. Lui écrire démarre un tour dans
-l'application ; avec `reply=true`, la réponse finale revient comme réponse liée, sans que
-l'agent du fil dispose de Bridget. Le fil peut être occupé : la remise attend
-jusqu'à deux minutes, puis échoue nommément. L'installation, le statut et le
-retrait (`bridget t3 install|status|uninstall`) sont des actions humaines.
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-64).
 
 ## Fils partagés : publier, solliciter, lire
 
@@ -967,8 +969,10 @@ lancement. `relaunch` conserve la définition figée, donc n'élargit pas les dr
 connus) ou `capacité manquante posture_decouverte` signifie que ce type, ou sa
 variante lecture seule, n'est pas déclaré dans le registre du daemon
 (`~/.cache/bridget-core/agents.json`) : le dire tel quel à l'utilisateur, ne pas
-l'attribuer à la règle du terminal. Les fils T3 d'un fournisseur (par exemple GLM)
+l'attribuer à la règle du terminal. Les fils l’adaptateur de bureau d'un fournisseur (par exemple GLM)
 n'impliquent pas que Bridget sache lancer ce type.
+
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-65).
 
 ```sh
 bridget control status
@@ -1043,7 +1047,7 @@ utilisent MCP sans nouvelle demande de réponse. Les métadonnées reçues font 
 Reprendre l'identifiant INTÉGRAL du message reçu dans `in_reply_to`. Répondre au
 UUID de son émetteur. Une réponse sans ce champ ne clôt pas la demande suivie.
 Le champ `reply` demande une réponse supplémentaire ; ne pas l'activer pour un
-résultat final. T3 et les wrappers gérés ne relaient automatiquement que la
+résultat final. Les adaptateurs et les wrappers gérés ne relaient automatiquement que la
 réponse à une demande `reply=true` ; ils ne filtrent pas son texte. Une réponse
 très courte peut être légitime si elle répond réellement à la question.
 
@@ -1073,17 +1077,9 @@ clé ne promet pas de rejeu idempotent : pour cet usage, préférer MCP ou fourn
 `--id` + `--issued-at`, sa portée étant dérivée de l'instance courante. Ne pas
 reconstruire soi-même cette dérivation ni convertir une clé d'une autre instance.
 
-## Ne jamais ouvrir une seconde application T3
+## Ne jamais ouvrir une seconde application l’adaptateur de bureau
 
-Une seule application T3 tourne : « T3 Code (Local) ». N'ouvrir, ne lancer ni
-n'inspecter par automatisation d'interface (`getApp`, `open -a`, Finder)
-aucune autre application T3, notamment `/Applications/T3 Code (Alpha).app` :
-elle partage `~/.t3/userdata`, marque en échec les tours en cours de tous les
-fils (« Provider session did not survive a server restart ») et efface
-`server-runtime.json` en se fermant. Pour diagnostiquer T3, lire
-`~/.t3/userdata/state.sqlite` en lecture seule ou utiliser `bridget t3 status`.
-Si une seconde application est ouverte, demander à l'humain de la quitter
-(Cmd+Q) ; le pont rétablit ensuite seul le fichier d'état.
+[Détail du contrat de l’adaptateur](../../docs/adapters/t3.md#note-66).
 
 ## Session Codex interactive native
 

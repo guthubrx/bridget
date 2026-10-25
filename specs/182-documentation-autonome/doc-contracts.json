@@ -1,0 +1,11 @@
+{
+  "skills/bridget/SKILL.md": {
+    "json_examples": 10,
+    "identical": true
+  },
+  "skills/bridget/references/commandes.md": {
+    "json_examples": 29,
+    "identical": true
+  },
+  "command_inventory": "all previous root commands retained"
+}

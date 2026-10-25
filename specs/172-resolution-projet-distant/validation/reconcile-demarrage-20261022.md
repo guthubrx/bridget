@@ -10,9 +10,9 @@ La maintenance envoie Reconcile sans attente corrélée dès l’état starting.
 
 Les réponses Rejected sans attente sont maintenant ignorées uniquement après validation de la connexion, de son époque et de la commande distante connue (instance et génération comprises), comme les observations spontanées. Aucun succès, état de tâche ou droit n’est fabriqué. Les refus corrélés continuent de parvenir à l’appelant.
 
-## Référence T3
+## Choix de conception Bridget
 
-/Users/moi/11.Repositories/t3code/packages/effect-codex-app-server/src/protocol.ts, resolvePending : une réponse dont l’identifiant n’est plus attendu produit Effect.void et ne ferme pas le transport. Bridget garde en plus la vérification du worker et de la commande distante, nécessaire au partage du canal entre missions.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/reconcile-demarrage-20261022.md#extrait-1).
 
 ## Vérification et livraison
 
@@ -22,6 +22,6 @@ Preuves privées : /home/moi/.cache/bridget-reconcile172/red.log et /home/moi/.c
 
 ## Activation
 
-Source ffea39ba8544c1f3b665a57c19aa27a5c936ab83 poussée sur GitHub/main. Maître macOS activé en build release optimisé signé 172-ffea39ba, PID 54465, SHA-256 6c18535edb20da7f48bfdad171763600aa4743019701e38dc9084f4c06dfc682. Compilation rc 0 en 313,18 s. T3 et pont préservés (PID et naissance), worker Cartae 2948540 inchangé. Aucune commande distante active dans le contrôle final après activation.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/reconcile-demarrage-20261022.md#extrait-2).
 
 Reçu privé : /Users/moi/.cache/bridget-reconcile172/activation.json. Avis de résolution envoyé sans délai de réponse à Monuments : bridget172-reconcile-start-livre-20261022-01, livraison b363f974-8fdc-480d-9f94-8b51d47704e9, en vol à ce checkpoint. Aucune revue métier relancée ; aucun succès de la tâche échouée revendiqué.

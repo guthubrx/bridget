@@ -4,13 +4,7 @@ Agent Claude : 29aaed9b-9f6f-4849-87a5-1a23bbe01948.
 Demandeur : 04be44f3-3725-4991-85dd-ffe87cba7ed7.
 Lecture seule. Aucun appel fournisseur, déploiement ou écriture autorisé.
 
-| Revue | Message de résultat | Verdict |
-|---|---|---|
-| Plan, borne 3 minutes | t3-c94b7751-48c9-45a3-9aed-f2a29bcdae11 | APPROVE_WITH_CHANGES |
-| Implémentation, borne 3 minutes | t3-3a1e931c-c2ef-40f2-9d89-5a916c6ed057 | APPROVE |
-| Conservation concurrente, borne 3 minutes | t3-67cc506b-2e2e-478e-95ff-b1226b4c8626 | APPROVE |
-| Anti-rejeu A/B/A, borne 2 minutes | t3-f0ff3b9b-915c-4ea7-ad08-c6007ed2f2c2 | APPROVE |
-| Cas réel de transport, borne 2 minutes | t3-cca10ba1-0c17-4119-91e8-fd143530a625 | APPROVE |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/135-controle-missions-silencieux/adversarial-review-29aaed9b.md#extrait-1).
 
 | Objection | Vérification | Retenue | Décision |
 |---|---|---|---|

@@ -1,4 +1,4 @@
-# Checklist qualité de spécification : 098 — Adaptateur t3code
+# Checklist qualité de spécification : 098 — Adaptateur adaptateur de bureau
 
 **Créée** : 2026-09-14 · **Feature** : [spec.md](../spec.md)
 
@@ -22,6 +22,4 @@
 - [x] Les scénarios couvrent les parcours principaux
 - [x] Aucun détail d'implémentation ne fuit dans la spec
 
-## Notes
-- « Tour », « fil », « réglages » sont le vocabulaire utilisateur de t3code, pas des choix techniques.
-- Le choix « un seul point de contrat t3code » (FR-09811) est une exigence de maintenabilité, pas un détail d'implémentation.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/098-t3code-adapter/checklists/requirements.md#extrait-1).

@@ -107,11 +107,7 @@ puis seconde lecture : aucune contradiction restante dans ces six points.
 | RUN5 | faible | nombre d'outils sûrs 21 au lieu de 23 | audit corrigé, test fermé maintenu |
 | RUN6 | moyenne | deux cases de forme ouvertes | levées explicitement avec justification dans la checklist |
 
-Inventaire : 39 FR, 13 SC, 26 tâches, couverture documentaire 100 %.
-0 CRITICAL. Aucun service/table/module/dépendance inutile identifié.
-Contre-revue du plan demandée à Claude Sonnet 5.5 via T3, en cours.
-Les vérifications empiriques T001 se terminent avant tout code.
-Les questions avec valeurs par défaut ne bloquent pas l'exécution complète.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/analyze-report.md#extrait-1).
 
 ### Troisième lecture après contre-revue inter-fournisseurs
 

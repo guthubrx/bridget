@@ -75,8 +75,6 @@ Réemploi des trente oracles historiques : /Users/moi/.cache/bridget-plan158B-te
 
 ## Limites et post-design
 
-Aucun test B, DB ou service touché. Pas autorité d'un label/texte, pas champ libre owner. Conservation bornée puis lacuneglobale datée, pas histoire attribuable illimitée. US8 exige encore un consommateur secret désigné ; aucune tâche ou scaffold. Calendriercontractuel et tempsdeCPU restent à vérifier en RED/GREEN, pas par une assertion de parité T3 historique.
-
 ## Fermetures finales du contrat ROOT
 
 **Fuseau observé.** Le daemon relève le fingerprint de la zone effectivement rendue par libc (nom de zone et offset) au tick et avant le gel. Un changement observé recalcule seulement les échéances futures non gelées. FrozenWake et previous_calendar_date restent inchangés. Le résultat d'un calcul hors verrou porte son fingerprint ; le CAS refuse un résultat devenu périmé. Aucune promesse de zone figée ou de changement uniquement au restart. Les changements DST du fingerprint n'autorisent pas une seconde occurrence de la même date.

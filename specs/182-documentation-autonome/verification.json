@@ -1,0 +1,50 @@
+{
+  "markdown_html_files": 2911,
+  "brand_mentions_outside_adapter": [],
+  "archive_records": 3026,
+  "archive_files": 765,
+  "new_note_links": 3106,
+  "errors": [],
+  "images": [
+    {
+      "file": "preuves-corrections/2026-10-25-mises-a-jour/preuves.html",
+      "images": 9,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-24-mobile-conversation/preuves.html",
+      "images": 4,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-24-mobile-pairing/preuves.html",
+      "images": 2,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-24-177-android-system-bars/preuves.html",
+      "images": 2,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-25-questions-mobile/preuves.html",
+      "images": 10,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-25-mobile-rendu-riche/preuves.html",
+      "images": 7,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-25-file-mobile/preuves.html",
+      "images": 12,
+      "unchanged": true
+    },
+    {
+      "file": "preuves-corrections/2026-10-25-webview-securise/preuves.html",
+      "images": 3,
+      "unchanged": true
+    }
+  ]
+}

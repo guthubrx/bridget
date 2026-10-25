@@ -19,15 +19,6 @@ nommée plutôt que retry implicite pouvant doubler une exécution.
 SendIdempotent exige une identité attestée correspondant à from avant admission.
 L'identifiant de rejeu ne vaut pas une autorisation d'emprunter une autre identité.
 
-## t3code
+## adaptateur de bureau
 
-CancelDelivery s'applique aussi au transport t3code. Une demande non encore démarrée
-est retirée sans ouvrir un nouveau tour fournisseur. Aucune promesse d'interruption
-atomique d'un tour accepté par le fournisseur.
-Les rappels doux/fermes ne deviennent pas des tours t3code supplémentaires ;
-l'expiration conserve son état terminal et utilise un contrôle structuré.
-Les réponses attendent une confirmation ; les états terminaux du daemon permettent
-de réconcilier un accusé perdu. Le redémarrage ne réexécute pas un tour pour refaire
-une réponse déjà préparée.
-Le journal ne coupe pas un texte sans signal ; un refus d'écriture n'avance pas
-silencieusement le repère d'observation.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/099-fiabilite-communications/contracts/communication.md#extrait-1).

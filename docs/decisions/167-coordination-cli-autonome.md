@@ -8,7 +8,7 @@ Acceptée le 15 octobre 2026.
 
 Le moteur natif sait déjà choisir un profil, créer un agent et gérer sa tâche. MCP expose aussi l’état, l’attente, la continuation, les réponses, l’annulation et l’accusé de lecture. La CLI exposait seulement `auto-delegate`, avec plusieurs paramètres techniques.
 
-Un utilisateur qui travaille sans T3 doit pouvoir demander à son agent coordinateur de créer et piloter des enfants. Bridget doit rester le moteur de communication et de coordination interagent. Il ne doit pas reproduire l’interface de T3.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/167-coordination-cli-autonome.md#extrait-1).
 
 ## Décision
 
@@ -25,15 +25,8 @@ Le parent reste un agent Bridget authentifié. Un processus humain sans identit�
 
 ## Conséquences
 
-- T3 n’est pas requis pour déléguer ou suivre une tâche.
-- Les identifiants et états ont le même sens en CLI et par MCP.
-- Une clé générée est ajoutée au reçu affiché. Un script critique peut fournir `--request-id`.
-- Les commandes historiques restent disponibles.
-- Aucun protocole, service, stockage ou fournisseur n’est ajouté.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/167-coordination-cli-autonome.md#extrait-2).
 
 ## Alternatives rejetées
 
-- `spawn` puis `send` : deux effets sans reçu de tâche commun.
-- principal humain synthétique : filiation et remise des résultats incorrectes.
-- moteur CLI séparé : duplication des règles natives.
-- copie du coordinateur T3 : hors du métier de Bridget.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/167-coordination-cli-autonome.md#extrait-3).

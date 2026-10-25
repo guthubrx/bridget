@@ -128,9 +128,6 @@ La ligne est ajoutée à chaque passage à `result_available`, avant la publicat
 
 ## Ce que Bridget fait côté Git
 
-Comme T3, le daemon exécute Git avec ses droits, pour tout parent autorisé. Il
-durcit ce que T3 ne durcit pas. Risque résiduel accepté : Un parent confiné qui peut modifier la configuration du dépôt entre le contrôle et l'exécution de Git peut faire exécuter du code avec les droits du daemon. Ce risque est accepté explicitement, au même niveau que T3, dans le cadre de menace de l'ADR 011.
-
 Liste blanche : `--version`, `rev-parse`, `symbolic-ref`, `check-ref-format`,
 `check-ignore`, `show-ref`, `config --get-regexp`, `worktree add -b`,
 `worktree list`, `rev-list`, `log`, `status`. Aucune autre commande.
@@ -147,7 +144,7 @@ git -C <depot> worktree remove <chemin>      # refuse si modifications
 git -C <depot> branch -d <branche>           # après intégration
 ```
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme ni d'état. L'objet `workspace` n'apparaît pas dans le
 panneau.

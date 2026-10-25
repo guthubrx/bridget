@@ -4,7 +4,7 @@ Ronde Sonnet r5, 2026-10-10. Binaire RELEASE `bridget-abfb346e23cc` (SHA256 `abf
 
 ## 1. GLM → GLM (`recipe149-t037-glm-r5-04`, task `2a5c6c2f-238e-449f-92b2-ea74523fd0b9`)
 
-- Parent : `bridget gclaude` réel dans un PTY, hors T3, mode réel observé par l'ACK du hook : `auto` / `default`.
+- Parent : `bridget gclaude` réel dans un PTY, dans un terminal, mode réel observé par l'ACK du hook : `auto` / `default`.
 - Règles préexistantes (settings projet fixture) : allow `Edit(/allowed/**)`, `Read`, `Glob`, `Grep` ; deny `Bash`, `Edit(/forbidden/**)`.
 - Écriture autorisée : outil `Write` sur `allowed/write-ok.md` → « File created successfully ». Contenu `recette149 ok` (13 octets).
 - Écriture hors politique : outil `Write` sur `forbidden/write-denied.md` → `File is in a directory that is denied by your permission settings.` Fichier **absent** ; `forbidden/` vide.

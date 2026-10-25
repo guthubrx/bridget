@@ -59,22 +59,13 @@ La suite complète unique T025 est terminée : 2396 PASS Cargo, 9 FAIL, 74 ignor
 
 Reçu : /Users/moi/.cache/bridget-plan157-20261012-r1/T025-full157-once.json, SHA256 : 442d5b063c06fd01697bf32dfc5631356ebb053088c02b06ed2f0bedc1fa398c. Log : /Users/moi/.cache/bridget-plan157-20261012-r1/T025-full157-once.log, SHA256 : 0a85192a923d137ecc0471306658d170980bb4717c826e23c3cdda92f676191e. L’exécution commence le 2026-10-12 à 07:31:21,425 UTC selon le reçu, plutôt que l’heure approximative 07:32 annoncée pendant son lancement. Ses 217 sources sont strictement stables avant/après.
 
-Méthode de comptage : chaque marqueur Cargo Running ou Doc-tests ouvre une cible ; seule sa dernière ligne test result compte. La somme brute du runner est 2399/9/74. Une ligne enfant 1 PASS apparaît dans daemon lib, ligne 460 ; deux lignes enfant 1 PASS apparaissent dans transport lib, lignes 3113 et 3117. Ces trois résultats restent des exécutions embarquées, exclues du total 2396/9/74 des 95 cibles Cargo. Les cibles échouées sont daemon lib (1669/1/15), core_089_contract_test (1/2/1), core_089_crash_test (11/1/2), core_089_identity_test (1/3/1), core_089_reply_test (0/1/1) et t3code_098_test (2/1/1).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/157-catalogue-quotas/validation/tests-157.md#extrait-1).
 
 ### Huit échecs historiques comparés à FULL156
 
-La liste157 hors oracle154 est exactement celle des huit modes hérités de156. Les sites d’assertion sont identiques. Sept payloads d’erreur sont identiques ; T3 conserve la même première assertion «1 agent attendu, aucun vu» et le même refus HTTP404, avec ses dates/ports/session propres. Les causes sous-jacentes ne sont pas nouvellement diagnostiquées ni corrigées en157.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/157-catalogue-quotas/validation/tests-157.md#extrait-2).
 
-| Test | Site absolu dans le worktree157 | Symptôme inchangé |
-|---|---|---|
-| cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_contract_test.rs:400 | Identité --from non attestée |
-| client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_contract_test.rs:180 | Identité auxiliaire indisponible |
-| binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_crash_test.rs:634 | Identité auxiliaire indisponible |
-| noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_identity_test.rs:32 | auxiliary_credential_required |
-| deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_identity_test.rs:32 | auxiliary_credential_required |
-| spec094_mcp_modifie_uniquement_sa_propre_presence | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_identity_test.rs:32 | auxiliary_credential_required |
-| cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/core_089_reply_test.rs:48 | Identité auxiliaire indisponible |
-| spec098_pont_expose_remet_repond_renouvelle_et_retire | /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/157-catalogue-quotas/crates/bridget-daemon/tests/t3code_098_test.rs:159 | Aucun agent T3 observé, snapshot HTTP404 |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/157-catalogue-quotas/validation/tests-157.md#extrait-3).
 
 Référence FULL156 : /Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.json, SHA256 : 888957018e258ed5a5d83113e791e23f485f844f47fcf33ee37f9fc24c0b08f5. Log /Users/moi/.cache/bridget-delivery156.iuy6stuo/T030-full156-once.log, SHA256 : fdb7deaff78eb9fa82a7af2879f59c3a0dd5858300450e8e198d80bd891e0274. Classification antérieure : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/156-guidage-file/validation/T029-full156-once-comparison.json, SHA256 : 218af3b449aab1af086d29ebf1b5168a12adb1b6a3a1832e96823026db03f27c.
 

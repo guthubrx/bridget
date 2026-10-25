@@ -7,9 +7,7 @@
 
 ## Limites déclarées
 
-- Le parent est une **fixture Codex synthétique**. Aucun modèle Codex réel n'est exécuté.
-- L'enfant GLM est réel (daemon, MCP, flotte, wrapper réels). Aucun serveur T3 ne fait partie du chemin natif de l'enfant. Le fait que le testeur soit lui-même lancé par T3 est hors du chemin testé.
-- Aucun effort (effort level) n'a été fourni : le catalogue source n'en déclare pas.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-recette-reelle-r1.md#extrait-1).
 
 ## Environnement d'exécution
 
@@ -19,17 +17,7 @@
 
 ## Étapes 1 à 4 — PASS
 
-| Étape | Commande | Résultat | RC |
-|---|---|---|---|
-| Tests lib ciblés | `--lib native148` | 23 passed, 0 failed | 0 |
-| Tests lib ciblés | `--lib matrice_fr009` | 1 passed | 0 |
-| Tests lib ciblés | `--lib mcp_identity` | 15 passed | 0 |
-| Tests lib ciblés | `--lib t3code_mcp` | 6 passed | 0 |
-| E2E | `--test native_delegation_e2e` | 1 passed, 1 ignored | 0 |
-| E2E | `--test t3_session_identity_env` | 1 passed, 1 ignored | 0 |
-| Format | `cargo fmt --all -- --check` | 0 diff | 0 |
-| Clippy | `--workspace --lib -- -D warnings -A clippy::too_many_arguments` | 0 warning, 0 error | 0 |
-| Compilation | `--test native_delegation_real_glm --no-run` | binaire `native_delegation_real_glm-888c55e9145aadf8` | 0 |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-recette-reelle-r1.md#extrait-2).
 
 Note clippy : l'exception `-A clippy::too_many_arguments` est explicite (catégorie préexistante, ancrée `store/threads.rs:728`). Je n'affirme pas un zéro-warning strict sans exception. Les 1496 tests workspace ne sont pas répétés : seules 3 syntaxes et le format ont changé depuis le dernier PASS complet, et les ciblés couvrent leurs effets.
 

@@ -58,11 +58,6 @@ après coup (`crates/bridget-daemon/src/wrapper.rs:5741`).
 **Défaut 4 - Pas de réponse possible.** Aucun outil ne permet au parent de répondre à
 son enfant (`crates/bridget-daemon/src/delegation_mcp.rs:11-17`).
 
-**Comparaison T3 (lecture seule, `origin/main`).** T3 remonte seulement les questions
-`user_input` au parent. Les approbations restent à l'humain par alerte
-(`research-t3-bridget.md`, A11). Bridget fait la même répartition, avec en plus un
-plafond de droits vérifié par le daemon, une issue explicite et une trace durable.
-
 **Répartition retenue (réduction de périmètre après contre-revue).**
 
 | Demande | Décideur | Pourquoi |
@@ -94,28 +89,7 @@ dialogue humain Bridget ». La session 155 change cette décision de façon limi
 
 **Hors périmètre** :
 
-- Réponse du parent à une approbation (question 2, défaut : non).
-- Enfants Claude (flux `claude_stream_json`, y compris GLM) : leurs invites sont
-  désactivées au lancement (`--permission-prompts none`,
-  `crates/bridget-daemon/src/native_permissions.rs:313`). Session suivante
-  (question 3).
-- Enfants ACP (Cursor) et agents hors moteur natif.
-- Réponse humaine en texte libre. La boîte humaine ne porte que des choix fermés.
-- Interface graphique des demandes dans T3 ou dans le panneau Bridget.
-- Décisions durables (« toujours autoriser », « pour la session », amendements de
-  règles) : jamais proposées, jamais relayées.
-- Méthode item/permissions/requestApproval (octroi additionnel à scope turn/session, hors périmètre v1) et toute autre méthode `item/*/requestApproval` inconnue :
-  refus automatique `approval_method_unsupported`.
-- Questions à secret (`isSecret`) : refus `secret_not_forwardable`. Élicitations en
-  mode URL : refus `url_mode_unsupported`.
-- Approbations d'écriture de fichier sous un parent `workspaceWrite` : refusées en v1
-  (`file_confinement_unproven`). Elles reviendront avec une preuve de confinement à
-  l'exécution, dans une session future.
-- Parent dont `approvals_reviewer` n'est pas `user` (relecteur automatique Codex) :
-  refus à l'admission en mode `forward`.
-- Transfert d'une demande au grand-parent quand le parent se tait : un seul saut.
-- Gel des délais pendant l'attente (session152) et budgets (session158).
-- Réutilisation d'un enfant (session153).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/155-demandes-enfant/spec.md#extrait-1).
 
 ## Scénarios utilisateur
 

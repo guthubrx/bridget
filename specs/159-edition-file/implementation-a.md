@@ -25,7 +25,7 @@ SHA256 ef4c01667fb9102efbffca25234eb81bbdb8d57c0dda6533ab02d5a147b9bf4d
 SHA256 cfb77a6552e97b28fd092ecbd73e82fbfcaa59694264b354fe593cb63e64018c
 Préserver les faits plus récents avant un éventuel rollback. Native0 reste daté ; recontrôle avant activation.
 
-ROOT a coché A14, intégré et poussé source53863bd09a4ff364dc2b412519b343c77e163685, installé et activé le release signé. Basev7 contrôlée, T3 inchangé ; branche/worktree/stage retirés, archive vérifiée et sauvegardes conservées. Reçu actuel : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/159-edition-file/validation/livraison159A.md
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/implementation-a.md#extrait-1).
 
 Preuves/gates A14 et détails de tests :
 /Users/moi/.cache/bridget-docs159A-final-preparation-20261012/matrice-A14-gates.md

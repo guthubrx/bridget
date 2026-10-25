@@ -81,9 +81,7 @@ Scénarios ciblés :
 
 ## 4. Prouver les trois niveaux en recette réelle bornée
 
-Préparer un namespace de recette isolé sans serveur, pont ni configurationT3.
-Ne pas arrêter ou redémarrer le T3 de l’utilisateur.
-Limiter les appels modèles aux recettes nécessaires, sans essayer cent fois chaque modèle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/quickstart.md#extrait-1).
 
 - Service décisionON : prouver une sélection réelle sur un ensemble entier qui tient dans ses
   limites attestées (≤8options par prudence initiale), avec tous les faits FR021 et réponse fermée ;

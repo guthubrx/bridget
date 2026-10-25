@@ -12,11 +12,7 @@ Source : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/133-relais-sous-a
 
 ## Complétude
 
-- [x] Les cas nominaux, refus, ambiguïtés, péremption et compatibilité sont couverts.
-- [x] Les droits permis et interdits sont explicites.
-- [x] Les exigences de sécurité, confidentialité et compatibilité sont mesurables.
-- [x] Les dépendances pertinentes sont déclarées.
-- [x] Le périmètre exclut modification de T3, nouveau service et déploiement.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/133-relais-sous-agents/checklists/requirements.md#extrait-1).
 
 ## Préparation
 

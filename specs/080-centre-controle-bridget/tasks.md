@@ -4,7 +4,7 @@
 
 ## État correctif - 2026-08-31
 
-Les tâches T010 à T013 sont réalisées dans le relais : structure de l'overlay, navigation locale, roue basse, styles accessibles, tests Node et portage de finition T3. Leur résultat est décrit dans `implementation.md` et les preuves dans `evidence/validation.md`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/080-centre-controle-bridget/tasks.md#extrait-1).
 
 T041 reste volontairement ouverte : aucune validation visuelle humaine ne peut être remplacée par une capture ambiguë. Le paquet macOS est maintenant construit et signé localement, mais la copie ouverte dans /Applications n'est pas écrasée sans choix explicite.
 

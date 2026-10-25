@@ -1,9 +1,6 @@
 # Recherche - Session160 reprise après une limite d'usage
 
-Date : 2026-10-11. Sources : lecture du checkout principal `1f2c661d` (avant la
-session 150), des artefacts de 152 (révisés ronde 2) et de 157 dans le worktree,
-et de T3 `origin/main` par `git show`. Aucun appel à un fournisseur. Les lignes
-citées sont celles de cette base. Les sessions 150, 152 et 157 les déplacent.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/160-reprise-quota/research.md#extrait-1).
 
 ## R1 - Les deux chemins par lesquels une mission échoue sur un quota
 
@@ -23,18 +20,9 @@ citées sont celles de cette base. Les sessions 150, 152 et 157 les déplacent.
   raison. T002 le cherche dans le journal (lecture seule). Sans exemple, tous les
   tests de cette session sont synthétiques et la validation le dit.
 
-## R2 - Modèle T3 et ce que Bridget reprend
+## R2 - Modèle adaptateur de bureau et ce que Bridget reprend
 
-- `limitRecoveryCommand` (T3) : état `failed`, classe d'erreur `usage_limit`, une
-  heure de retour, pas de PR en attente ; heure de retour postérieure à la fin du
-  run ; identité `thread:run:resetMs` ; première étape « armer » (persistée),
-  seconde « relancer » (`message.dispatch`) avec `commandId` dérivé de
-  l'identité. Dérivé de faits persistés, donc sans minuterie.
-- **Repris** : armement persisté puis relance (nos trois étapes de FR-011),
-  identité dérivée, garde « retour futur », absence de minuterie.
-- **Mieux que T3** : opt-in par tâche (T3 : réglage global), borne de rondes et
-  d'attente, aucun changement de fournisseur, qualification attestée par fenêtre,
-  fonctionne sans T3 et entre outils.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/160-reprise-quota/research.md#extrait-2).
 
 ## R3 - Défaut 1 : compteur de rondes durable
 
@@ -233,13 +221,7 @@ citées sont celles de cette base. Les sessions 150, 152 et 157 les déplacent.
 
 ## R11 - Bornes et anti-boucle
 
-- Attente d'au plus 6 h (21 600 s) : couvre la fenêtre de 5 h, exclut la
-  fenêtre hebdomadaire.
-- Au plus 2 rondes par tâche (longueur de `quota_waits`).
-- Le retour doit être postérieur à l'instant de l'échec (garde de T3).
-- Une fenêtre d'une ronde précédente ne qualifie pas la suivante : le fait doit
-  avoir été observé après la fin de la dernière attente.
-- Une identité ne sert qu'une fois (clé unique).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/160-reprise-quota/research.md#extrait-3).
 
 ## R12 - Pas de substitution
 

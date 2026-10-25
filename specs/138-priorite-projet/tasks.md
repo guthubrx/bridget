@@ -7,10 +7,7 @@ Le principal exécute Analyze avant l'implémentation.
 
 ## Propriétaires et règles communes
 
-Noyau: protocol/message/communication/daemon/threads, leurs tests et le harnais
-Rust existant. Façades: cli/mcp/communication-client/wrapper/T3 et leurs tests.
-Agent Loop: sources, tests et skill dans le worktree dotfiles isolé. Principal:
-Gherkin138, documentation, journal, preuves, Analyze, Converge et audit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/tasks.md#extrait-1).
 
 Les propriétaires ne modifient pas les fichiers d'un autre groupe sans transfert
 explicite. Ils conservent les éditions existantes. Le noyau définit le contrat.
@@ -36,10 +33,7 @@ But: proposer les agents locaux, permettre la vue globale volontaire et rendre
 l'inconnu visible. Test indépendant: deux projets et un agent inconnu ; vérifier
 les UUID réellement rendus, puis le diagnostic global historique.
 
-- [x] T003 [US1] Noyau — Ajouter d'abord les tests RED de fait projet, annonce propriétaire, auxiliaire, identité forgée et annuaire same/global/unknown dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/daemon.rs et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/tests/spec102_threads_test.rs ; conserver ListAgents global. Preuve: échanges avec le vrai daemon, zéro candidat local si l'émetteur est inconnu ; FR-13801–04, SC-13801/05/06.
-- [x] T004 [US1] Noyau — Étendre /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-transport/src/protocol.rs, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/communication.rs et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/daemon.rs : CommunicationProjectFact distinct de Register, fait de connexion vivant, comparaison hôte/racine commune Git, DirectoryScoped et réponse ScopedAgentInfo aplatie distincte du diagnostic. Inclure le contexte Client autonome validé depuis racine/hôte, sans Register d'agent ni identité T3 empruntée ; il ne remplace jamais un fait auxiliaire parent. Preuve: T003 GREEN, annonce forgée refusée, fait supprimé à la fin de connexion et contexte background exploitable ; FR-13801–04/14, SC-13801/05.
-- [x] T005 [US1] Façades — Ajouter les tests RED des annonces T3/wrapper et de who/agents local ou --global dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/cli.rs, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/mcp.rs, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/wrapper.rs et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/t3code.rs. Preuve: contrats caller vérifiés, reconnexion et workspace attesté couverts ; FR-13801–04/13, SC-13801/05/06.
-- [x] T006 [US1] Façades — Étendre les chemins de T005 ainsi que /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/t3code_contract.rs et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/communication/client.rs pour annoncer le fait, consommer l'annuaire scoped et rendre l'inconnu. Preuve: T005 GREEN et matrice réelle CLI/MCP du daemon ; aucun repli extérieur, domain reste cosmétique ; FR-13801–04/13, SC-13801/05/06.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/tasks.md#extrait-2).
 
 ## US2 — Échange interprojets volontaire
 

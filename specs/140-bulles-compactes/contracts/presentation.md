@@ -14,7 +14,7 @@ L'en-tête historique de sollicitation conserve exactement sa syntaxe et ses ide
 Titre du fil Bridget : "Organisation politique"
 ```
 
-La valeur après le séparateur est une chaîne JSON, pas une interpolation brute. Le pont normalise contrôles et espaces, puis limite à200 caractères. Cette ligne est facultative. T3 ne la consomme que dans la position attendue et avec une valeur JSON valide ; une ligne invalide reste du texte, sans titre prétendu. Le brut conserve la ligne même après projection.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/140-bulles-compactes/contracts/presentation.md#extrait-1).
 
 ## Libellés visibles
 

@@ -44,10 +44,4 @@ Limites natives : 16 tâches actives par parent, 128 globales, 4096 enregistreme
 profondeur maximale8. Aucun recrutement interprojet automatique.
 Un refus métier rend une erreur MCP explicite, sans substitution ni retry caché.
 
-Les grants humains passent par le protocole de contrôle natif et la CLI humaine.
-Ils ne sont pas accessibles aux quatre outils MCP. Les secrets de session T3
-sont exclus de l'environnement enfant même si `pass_env` les demande.
-La révocation est conservée par AgentId stable jusqu'à un nouveau grant humain.
-Une reprise d'instance exige une preuve native et le départ de l'ancienne
-présence et de sa connexion primaire. Une erreur de capture persistante produit
-`native_result_not_persisted`, sans accusé ni livraison directe hors de la saga.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/contracts/delegation.md#extrait-1).

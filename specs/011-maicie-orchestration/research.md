@@ -69,13 +69,11 @@ session 009. Aucun `Child`, `Command::spawn`, arrêt ou reconnexion dans Maicie.
 **Rationale** : un spawn local dans Maicie lui ferait récupérer le superviseur
 historique par morceaux et introduirait une faille TOCTOU.
 
-## R-007 — DSH et T3 Code ne sont pas le noyau
+## R-007 — DSH et adaptateur de bureau Code ne sont pas le noyau
 
-**Décision** : DSH et T3 Code restent des références. Aucune dépendance,
-interface ou source d'état externe n'est ajoutée. GUI et TUI sont des specs
-ultérieures consommatrices du contrat CLI/JSON.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/011-maicie-orchestration/research.md#extrait-1).
 
-**Sources** : [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) et [T3 Code](https://github.com/pingdotgg/t3code), consultés le 2026-08-22.
+**Sources** : [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) et [adaptateur Code](https://github.com/pingdotgg/t3code), consultés le 2026-08-22.
 
 ## R-008 — ActivationOutbox est une seconde saga, non une transaction distribuée
 

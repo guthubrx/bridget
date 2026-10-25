@@ -103,7 +103,7 @@ Mission : corps = `<dossier rendu>\n\n--- Consigne ---\n<consigne>` avec brief, 
 consigne seule sans brief. Résultat de la ronde N >= 2 : identifiant
 `native-result-<task_id>-r<N>`, `in_reply_to` = mission de la ronde.
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme. Une ronde ouverte est une mutation visible
 (`result_available` vers `mission_pending`). Le lecteur relit la tâche. La fin

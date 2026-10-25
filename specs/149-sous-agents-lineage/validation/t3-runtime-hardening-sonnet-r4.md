@@ -1,7 +1,6 @@
 # Session 149 - validation delta r4 (F1 sûreté, F2 interface)
 
-Testeur : Sonnet 5.5 normal, effort high. Date : 2026-10-10.
-Base T3 : `33f6d04e116430bf7f0011902d6af3868163f2d1`. WT : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-1).
 
 ## Verdict : APPROVE
 
@@ -12,27 +11,11 @@ Limite à lire d'abord : le daemon Bridget est SIMULÉ (`bridget_fixture.mjs`, m
 
 ## Couches réelles et simulées
 
-| Couche | Statut |
-|---|---|
-| Serveur T3 du WT (`apps/server/src/bin.ts`, Node 24.13.1, `127.0.0.1:14775`), auth bearer scopée, RPC WebSocket, `BridgetLineage`, `Orchestrator`, projection SQL privée | RÉEL |
-| UI web du WT (Vite+ `localhost:15735`), navigateur preview T3 (onglet à moi, profil incognito, fermé en fin de recette) | RÉEL |
-| Daemon Bridget (CLI `bridget_fixture.mjs` sur `store.json` privé) | SIMULÉ, nommé |
-| Données de tâches, journaux, résultats | SYNTHÉTIQUES |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-2).
 
 ## Compteurs exécutés
 
-| Volet | PASS | FAIL | SKIP / note |
-|---|---|---|---|
-| Tests serveur 149 (5 fichiers : Lineage, Reader, Orchestrator, ProjectionStore, ThreadLaunch) | 120 | 0 | 115 avant, +5 nouveaux tests F1 |
-| Tests UI/client ciblés (journal, ThreadRelationshipsControl, client-runtime) | 22 | 0 | journal 7 -> 9 (+2 tests F2) |
-| `BridgetLineage149.test.ts` seul | 23 | 0 | 7 échecs AVANT adaptation du harnais (voir plus bas) |
-| Matrice réseau `matrix149.mjs all` (serveur r4 neuf) | 38 | 0 | |
-| Rejeux r3 `replay_r3.mjs all` (22 + Z1) | 23 | 0 | Z1 était un FINDING en r3 ; il passe |
-| Rejeux F1 `replay_r4.mjs all` (nouveau) | 22 | 0 | ZD-1 est une observation, limite fixture |
-| Mesures navigateur F2 (preview T3) | 9 | 0 | 9 captures |
-| `tsc --noEmit` serveur | - | - | 16 erreurs, toutes baseline, 0 dans les fichiers 149 |
-| `tsc --noEmit` web | - | - | 10 erreurs, toutes baseline (`MessagesTimeline.logic.test.ts`), 0 dans les fichiers Bridget |
-| Compteurs SQL en fin de recette | runs 0, run_attempts 0, provider_turns 0, provider_sessions 0, provider_threads 0, bindings 0, runtime_requests 0, workflows 0, messages 0 | | `effect_outbox` = 4, voir ci-dessous |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-3).
 
 `effect_outbox = 4` : ce sont 2 x (`terminal.cleanup` + `preview.cleanup`), statut `succeeded`, créés par les 2 `thread.delete` de MON groupe `deleted` (rejeu ZD-1 lancé deux fois). Zéro effet fournisseur. Cause prouvée par lecture des 4 lignes.
 
@@ -91,16 +74,9 @@ Code lu : `useLayoutEffect` mesure `[data-chat-composer-overlay]` dans son `[dat
 - Hauteur 40 px -> `calc(0.75rem + 40px)` ; redimensionnement à 72 px suivi sans rechargement ; `disconnect` appelé une fois au démontage.
 - Sans barre flottante : `calc(0.75rem + 0px)`.
 
-### Mesures dans le vrai navigateur (journal long, 36 lignes sur T1, 31 sur T2, 22 + résultat sur T3)
+### Mesures dans le vrai navigateur (journal long, 36 lignes sur T1, 31 sur T2, 22 + résultat sur adaptateur de bureau)
 
-| Largeur x hauteur | Hauteur barre | `paddingBottom` | Écart dernière ligne / barre | Composeur | « Arrêter » (elementFromPoint) |
-|---|---|---|---|---|---|
-| 1280 x 800, carte « Thread details » ouverte | 60 px | 72 px | 12 px | aucun | atteignable |
-| 480 x 800 | 54 px | 66 px | 12 px | aucun | atteignable |
-| 375 x 800 | 54 px | 66 px | 12 px | aucun | atteignable |
-| 1280 x 800 après redimensionnement 375 -> 1280 sans rechargement | 60 px | 72 px | 12 px | aucun | - |
-| Après clic « Reconnecter » (démontage/remontage du flux) | 60 px | 72 px (pas de doublement) | 12 px | aucun | - |
-| T3 (résultat disponible, 2 + 20 lignes de journal, résultat lu) | 60 px | 72 px | 12 px | aucun | - |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-4).
 
 La dernière ligne (#36) est entièrement au-dessus de la barre à défilement maximal (bas de ligne 728, haut de barre 740). En r3, environ 40 px étaient masqués.
 
@@ -121,13 +97,11 @@ Dossier : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents
 8. `08-f1-autorite-reelle-project-mismatch-natif-lineage-indisponible.png`
 9. `09-f1-reprise-apres-reconnecter-lineage-disponible.png`
 
-Sorties brutes (même dossier de validation) : `network149-matrix-run-r4.txt`, `t3-runtime-r4-replay-r3.txt`, `t3-runtime-r4-replay-r4.txt`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-5).
 
 ## Observations sans correction demandée
 
-1. Un `snapshot_changed` épuisé dégrade les 135 fils d'un coup (`thread.metadata-updated` x135), comme en r3.
-2. Après panne globale, la bannière d'indisponibilité du flux watch exige un clic « Reconnecter Bridget » alors que la projection est déjà rétablie (design, test existant).
-3. Limites de ma fixture : le CLI ignore `--t3-thread` (S149-19 non prouvé), refuse le namespace `mcp`, et un second fil hôte du même projet ne peut pas être lié (ZD-1).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-6).
 
 ## Fichiers et empreintes (sha256, 16 premiers caractères)
 
@@ -143,20 +117,8 @@ Fichiers que j'ai modifiés (tests et outils seulement) :
 
 ## Commandes
 
-```
-export C=/Users/moi/.cache/bridget149-ui.r4 RECIPE149_CACHE=$C RECIPE149_T3_PORT=14775 RECIPE149_WEB_PORT=15735
-PATH=/Users/moi/.cache/t3-toolchains/148/node-v24.13.1-darwin-arm64/bin:$PATH
-# tests (racine du WT)
-./node_modules/.bin/vp test run apps/server/src/bridget/BridgetLineage149.test.ts apps/server/src/bridget/BridgetReader149.test.ts apps/server/src/orchestration-v2/Orchestrator.bridget149.test.ts apps/server/src/orchestration-v2/ProjectionStore.bridget149.test.ts apps/server/src/orchestration-v2/ThreadLaunchService.bridget149.test.ts
-./node_modules/.bin/vp test run apps/web/src/components/BridgetTaskJournal149.test.tsx apps/web/src/components/chat/ThreadRelationshipsControl.bridget149.test.tsx packages/client-runtime/src/state/orchestration.bridget149.test.ts
-# recette (depuis ui-recipes/)
-node fixture_store_init.mjs $C/store.json $C/proj ; zsh run_recipe_server.sh start
-T3CODE_HOME=$C/t3home node apps/server/src/bin.ts auth session issue --ttl 3h --token-only --scope ...   # jetons read, operate, settings:write
-node --no-warnings rpc149.ts setup|setup2 $C/tok-operate.txt
-node --no-warnings matrix149.mjs all ; node --no-warnings replay_r3.mjs all ; node --no-warnings replay_r4.mjs all
-vp dev (apps/web, PORT=15735 T3CODE_PORT=14775) ; T3CODE_HOME=$C/t3home node apps/server/src/bin.ts auth pairing create --ttl 10m --base-url http://localhost:15735
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-7).
 
 ## Nettoyage
 
-Onglet preview fermé. Listener Vite 72503 arrêté en SIGTERM (cwd WT vérifié) ; shell Vite 72488 déjà terminé ; serveur T3 56889 arrêté par `run_recipe_server.sh stop` (SIGTERM, PID et cwd vérifiés, pas Firefox). Ports 14775 et 15735 libres, 0 processus fixture. Jetons bearer, jeton de recette et pidfiles supprimés ; jeton d'appairage consommé. Aucun job différé. Conservés : `/Users/moi/.cache/bridget149-ui.r4` (DB privée `t3home`, `store.json` et copies `store.json.r4*`, `logs/`).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-runtime-hardening-sonnet-r4.md#extrait-8).

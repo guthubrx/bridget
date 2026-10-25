@@ -30,4 +30,4 @@ Format6, format final et comparaison AST stricte RC0. Babel non exécuté et non
 
 Le correctif a été réalisé directement sur Cartae par ROOT en repli opérationnel. La mission native de remplacement c5ce2e7a-f726-44c4-8b87-bcc94e926005 est attestée cancelled ; son fournisseur n'a pas réalisé ces éditions. Source-code receipt : `/Users/moi/.cache/bridget-delivery164-20261013/tests/source164-r6-code.json`, SHA-256 `a0f3a69085e17b69dc9c438cbec27b06c87c54937df2dbdcaa4908de6fa385a9`. Les admissions/DND historiques sont conservées.
 
-P3 CONVERGED source. Audit incrémental : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/audits/2026-10-14/session-2026-10-14-spec-164-delta-r6-01`. R5b reste intact. Le gradeA100 concerne seulement le delta de six sources lu,309lignes sur1573753 (0,0196345932%). Aucun succès Git, paquet, recette web/desktop/mobile, installation ou G8/G9 n'est déduit. Bridget garde son indépendance de T3 ; aucun protocole, service ou code Rust modifié pour164.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/validation/code-review164-r2.md#extrait-1).

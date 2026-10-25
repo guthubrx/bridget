@@ -19,7 +19,7 @@ Hook PreToolUse du vrai CLI + ACK daemon réel passent. Le parent GLM a délégu
 
 | # | Scénario | request_id | Résultat |
 |---|---|---|---|
-| R1 | Parent GLM PTY (gclaude, premier parent, sans T3) → enfant GLM `glm-5.3-flash` | `recipe149-t037-glm-r5-04` | **PASS** : écriture `allowed/write-ok.md` réelle ; `Write forbidden/write-denied.md` refusé par la règle `Edit(/forbidden/**)` du settings projet préexistant ; fichier absent ; tâche `failed` + `provider_permission_denied` (G-P-01) |
+| R1 | Parent GLM PTY (gclaude, premier parent, par le parcours natif Bridget) → enfant GLM `glm-5.3-flash` | `recipe149-t037-glm-r5-04` | **PASS** : écriture `allowed/write-ok.md` réelle ; `Write forbidden/write-denied.md` refusé par la règle `Edit(/forbidden/**)` du settings projet préexistant ; fichier absent ; tâche `failed` + `provider_permission_denied` (G-P-01) |
 | R2a | Parent Codex `danger-full-access -a never` → enfant GLM | `recipe149-t037-fullcodex-r5-01` | **PASS** `result_available`, `allowed/write-glm-from-codex.md` écrit |
 | R2b | Parent Codex `workspace-write -a never` → enfant GLM | `recipe149-t037-confinement-r5-01` | **PASS (refus nommé)** `provider_confinement_unavailable`, 0 ligne en base |
 | R2c | Parent Codex `workspace-write` → enfant Codex `gpt-6.1-sol` high | `recipe149-t037-codexchild-r5-01` | **PASS** `result_available` ; écriture OK, refus bac à sable hors workspace |
@@ -78,16 +78,7 @@ Enfant Codex, commande `python3` qui ajoute une ligne à `allowed/compte.txt` to
 
 ## Mapping G-P / S149 (preuves mesurées)
 
-| Exigence | Preuve r5 |
-|---|---|
-| G-P-01 refus fournisseur corrélé, pas de faux succès | R1 : `failed` + `provider_permission_denied`, task unique |
-| Héritage sans grant | table grants = 0 partout ; R1, R2a, R2c |
-| Même famille, règles préexistantes révisionnées | R3 (17 sources, project settings `df145aa2…`) |
-| Confinement non représentable → refus nommé, pas de repli | R2b `provider_confinement_unavailable` |
-| Politique Codex héritée exactement | R2c `workspaceWrite` / `never` ; enfant `gpt-6.1-sol` high |
-| Observer : branche négative | R4a `permission_source_unavailable`, R4b `permission_attestation_unavailable` |
-| Annulation native, descendants stoppés | R5 |
-| Hors T3 | aucune variable T3, aucun processus T3 |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-real-recipes-sonnet-r5.md#extrait-1).
 
 ## Outils modifiés (propriété : `recipes/`)
 

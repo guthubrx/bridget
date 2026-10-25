@@ -1,10 +1,6 @@
 # Audit de Code — SPEC143 échanges discrets
 
-Date : 2026-10-07. Audit de07:08:49 à07:17:18UTC,509s, validation incluse.
-Mode : cycle1 fix délégué au propriétaire, puis scoring readonly. Aucun patch source ou commit par cet auditeur.
-Grille : pre-merge +08. Scope : diff contre5724eb7f12e4556327efa14f51f43b9caf404e25.
-Racine : /Users/moi/11.Repositories/t3code-local/.worktrees/143-bridget-discreet
-Score global : A,100 sur les domaines applicables au diff final.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-07/session-2026-10-07-spec-143-01/scoring.md#extrait-1).
 
 ## Résumé exécutif
 

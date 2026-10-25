@@ -1,4 +1,4 @@
-# Validation r1 — tests UI client T3 Lineage 149
+# Validation r1 — tests UI client adaptateur de bureau Lineage 149
 
 Date : 2026-10-10. Sous-agent test dédié (lots client). Périmètre : couche
 état client-runtime, journal Bridget web, panneau Lineage web, journal Bridget
@@ -16,12 +16,7 @@ Le typecheck reste bloqué par des erreurs d'autres lots, signalées sans patch
 
 Fichiers de test créés (ownership exclusif, aucun autre fichier touché) :
 
-| Fichier (worktree T3 `149-sous-agents-lineage`) | Heure | Tests | Cible |
-|---|---|---|---|
-| `packages/client-runtime/src/state/orchestration.bridget149.test.ts` | 11:48 | 9 | Dérivation d'état : journal, watch, 9 statuts natifs, runless, détachement |
-| `apps/web/src/components/BridgetTaskJournal149.test.tsx` | 10:58 | 7 | Journal web : flux, pagination, gaps, unsubscribe, arrêt |
-| `apps/web/src/components/chat/ThreadRelationshipsControl.bridget149.test.tsx` | 11:51 | 4 | Panneau Lineage : stop natif, fermetures, relation, sidebar |
-| `apps/mobile/src/features/threads/BridgetTaskJournal149.test.tsx` | 11:51 | 2 | Journal mobile : focus/arrière-plan/afterSeq, résultat paginé, arrêt |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r1.md#extrait-1).
 
 Production couverte (toute lue, aucune modifiée) : `orchestration.ts`,
 `threadExecution.ts`, `threadWorkflows.ts` (état) ; `BridgetTaskJournal.tsx`
@@ -30,20 +25,11 @@ web et mobile ; `ThreadRelationshipsControl.tsx` ; `Sidebar.logic.ts` ;
 
 ## 2. Commandes exactes et compteurs
 
-Environnement : Node 24 toolchain `/Users/moi/.cache/t3-toolchains/148/`,
-pnpm du checkout principal, deps du WT via symlinks préexistants (aucun
-`pnpm install`, aucune duplication `node_modules`).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r1.md#extrait-2).
 
 Run consolidé final (après toutes corrections TS) :
 
-```
-cd /Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage
-./node_modules/.bin/vp test run \
-  packages/client-runtime/src/state/orchestration.bridget149.test.ts \
-  apps/web/src/components/BridgetTaskJournal149.test.tsx \
-  apps/web/src/components/chat/ThreadRelationshipsControl.bridget149.test.tsx \
-  apps/mobile/src/features/threads/BridgetTaskJournal149.test.tsx
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r1.md#extrait-3).
 
 Sortie : `Test Files 4 passed (4)` / `Tests 22 passed (22)` / Duration 1.87s.
 Décomptes par fichier : 9/9, 7/7, 4/4, 2/2.
@@ -73,13 +59,7 @@ jamais inventé), secondes Unix → ISO avec absences à null et priorité tâch
 Bridget sur le tour racine, `startedAt` runless seulement pour un travail
 Bridget actif, détachement fermé sur un fil Bridget même avec session vivante.
 
-**Journal web (7)** — souscription watch+journal à l'écran actif, pli et rendu,
-gap transport affiché, pagination résultat 16 Kio UTF-8 multioctet, recharge
-après `snapshot_changed` avec contenu conservé, unsubscribe à la fermeture et
-au changement de sélection (reads en vol avortés), arrêt redirigé vers
-`bridget-lineage-cancel` natif (jamais `interrupt` T3, jamais navigate),
-« Dernier état connu » sans fausse disponibilité ni bouton Arrêter, scope
-`canOperate` false → pas d'arrêt.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r1.md#extrait-4).
 
 **Panneau Lineage web (4)** — stop bridget → `cancelNative` avec
 `{projectId, threadId racine, taskId, requestId UUID}` (variante imbriquée :
@@ -90,13 +70,7 @@ côtés (vrai `<h3>` « Lineage » côté parent, hint « Open parent agent in t
 chat » côté enfant, titre exact « Lineage · Bridget indisponible ») ;
 sidebar : enfant subagent masquée, parent et fils ordinaires visibles.
 
-**Journal mobile (2)** — écran actif → watch+journal souscrits avec
-`afterSeq:0`, arrière-plan → désabonnement + reads avortés, retour → reprise
-depuis `afterSeq:8` (nextSeq du dernier pli) ; résultat paginé 16 Kio
-(`offset:0, limit:16384` → `offset:16384`), panne `snapshot_changed` en pleine
-pagination avec contenu conservé, reprise jusqu'à la fin (bouton « Suite du
-résultat » retiré), arrêt = annulation native UUID local, jamais un tour T3 ;
-« Dernier état connu » / tâche terminale / `canOperate` false → pas d'arrêt.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r1.md#extrait-5).
 
 ## 4. Corrections faites dans mes fichiers (passe typecheck)
 

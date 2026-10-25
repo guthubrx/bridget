@@ -20,7 +20,7 @@ Suite complète avant clôture : même environnement,
 
 ## Scénarios à observer
 
-1. Vue globale sans T3, client agent refusé : filtre `control158_overview`.
+1. Vue globale par le parcours natif Bridget, client agent refusé : filtre `control158_overview`.
 2. Arrêt global (4 combinaisons avec la pause, reçus A-B-rejeu, annulation en cascade) : filtre `control158_halt`.
 3. Portées MCP (table, plafond, fils en lecture et ACK, surface) : filtre `mcp158_`.
 4. Non-régression : filtres `native148`, `native149`, `native150`, `delegation149`, `spec_087`.

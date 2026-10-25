@@ -10,16 +10,7 @@ Cette empreinte est le commit des sources. Aucun commit documentaire ultérieur
 n'est annoncé par ce reçu préparatoire.
 Preuve : /Users/moi/.cache/bridget-delivery158B-preparation-20261012/source-delivery158B.json
 
-Build e52a96240b61 : **221,74 s, RC0**, signature vérifiée.
-Binaire installé : /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget
-SHA256 : cfb77a6552e97b28fd092ecbd73e82fbfcaa59694264b354fe593cb63e64018c.
-Daemon 20530 actif depuis 15:21:38 CEST ; pont 20607 depuis 15:21:41 CEST.
-Le statut relu annonce le build e52a96240b61 et 29 agents connectés.
-Aucune mission native non terminale avant remplacement et chaque SIGTERM,
-puis au contrôle final. T3 inchangé : PID 60116/60228, naissances du 11 octobre
-01:13:35/36. Aucun redémarrage de T3.
-Preuves : /Users/moi/.cache/bridget-delivery158B-preparation-20261012/build158B.json
-et /Users/moi/.cache/bridget-delivery158B-preparation-20261012/install158B.json
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/158-reveils-controle/validation/livraison158B.md#extrait-1).
 
 Audit final **A 99,95**, 0 CRITICAL / 0 HIGH / 0 MEDIUM / 1 LOW conservé.
 Couverture partielle : **7,9 %**, 32/405 hunks entièrement lus. Ce taux décrit

@@ -123,9 +123,7 @@ Log SHA256 156443d79eb6d65891a47f35681198f8b753f08bac4ea3d1d57a9fb116ba6c38
 Noms exacts, cinq reçus/logs, classification des non-preuves et empreintes :
 /Users/moi/.cache/bridget-analysis159B-20261012/documentary-proof-preparation/T021-SC014-progress/proof-T021-SC014.json
 
-T023 et sa recette privée SC010 restent à prouver. Cette recette ne sera pas
-une preuve T3 réelle. T024/T025 attendent le checkpoint final, FULL et scoring.
-Aucun cochage, livraison B, Converge ou succès global n’est annoncé ici.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/validation/tests-159.md#extrait-1).
 
 
 ## T026 final — FULL unique et disposition ROOT
@@ -146,13 +144,7 @@ RC0/6,33 s. Aucun changement de code, aucune seconde suite complète. ROOT
 retient le FAIL et les deux replays : défaut de production non reproduit,
 aucune cause précise du noyau affirmée, aucun GREEN global inventé.
 
-Le FULL courant réussit les cinq E2E B : trois cancel et deux recettes,
-plus un worker ignoré. SC010 garde ses 24 assertions privées ; aucune interop
-T3 réelle ni consommation par un modèle réel. La pause explicite des E2E
-cancel et la portée SC007 après Applied restent inchangées.
-Proxy SC004 B : p95 fermé 41,385 ms, ouvert 1026,412 ms, delta 985,027 ms ;
-daemon_idle_measured=false. Ce proxy ne prouve pas une latence de repos attesté.
-held_queue reste fermé, aucune activation du réglage déduite.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/validation/tests-159.md#extrait-2).
 
 FULL :
 /Users/moi/.cache/bridget-tests159B-20261012/T026-FULL159B-once-final-source.json

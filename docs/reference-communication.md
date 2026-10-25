@@ -38,9 +38,7 @@ local view and a warning. An unreachable inventory is an error, not an empty lis
 The UUID, instance, messages and retry identity remain. Names in received text
 are display data, never authority.
 
-An attested internal T3 subagent can use only the supported MCP directory/send
-path with child provenance under its parent. It has no separate durable mailbox
-or registration. Replies return to the parent. Ambiguous lineage is refused.
+[Adapter contract details](adapters/t3.md#note-8).
 
 ## Send and reply
 
@@ -148,10 +146,12 @@ is invalid. A receipt for guidance reports `effect:"unconfirmed"`.
 Changing intent under the same key is an envelope mismatch.
 
 Only an attested human Attach actor or an authorized parent can explicitly
-steer/interrupt. A peer, bare client, self-targeting recipient or internal T3
+steer/interrupt. A peer, bare client, self-targeting recipient or internal the desktop adapter
 child cannot acquire that right by writing `from=human`.
 An attested UI retains its Client role; UI provenance alone is not human
 control authority.
+
+[Adapter contract details](adapters/t3.md#note-9).
 
 During pause, agent guidance is refused with `referent_paused`; ordinary
 queueing remains available. Agent interruption of a child with an active
@@ -159,10 +159,7 @@ mission can return `mission_active`. Agent rate limits are one interruption
 per pair in 30 seconds and three per target in 600 seconds. Refusals do not
 consume that allowance. Human and internal pause controls have distinct rules.
 
-For the T3 path, native active steering is qualified for Claude. Unsupported
-providers return `steer_unavailable`. Busy Cursor waits even when a
-`mid_turn_ok` flag is present. No unused steer automatically becomes an interrupt.
-Provider capabilities and the source's actual authority determine delivery.
+[Adapter contract details](adapters/t3.md#note-10).
 
 ### Read a queue
 
@@ -174,7 +171,9 @@ The view requires `QueueListV1` and returns at most 200 entries, with
 `message_id`, `from`, `intent`, `reply`, `age_secs`, a 120-character
 preview, `position` and state. Authorized parents, recipients, human Attach
 and attested UI clients can see the full permitted queue; other authors see
-their own messages. Internal T3 child proofs are refused.
+their own messages. Internal the desktop adapter child proofs are refused.
+
+[Adapter contract details](adapters/t3.md#note-11).
 
 The view covers held/dispatching idempotent deliveries, not every internal
 provider queue. Reading it neither starts a turn nor establishes provider order.
@@ -187,8 +186,10 @@ the source for availability, not this document.
 
 When enabled for an instance with `turn_attest`, ordinary idempotent client
 messages can be held while busy or behind older held messages. Human/system
-origins, guidance, thread alerts, observations, native missions and T3 threads
+origins, guidance, thread alerts, observations, native missions and the desktop adapter threads
 follow their own paths.
+
+[Adapter contract details](adapters/t3.md#note-12).
 
 `held` means durably stored before dispatch. `released` means dispatch began;
 it does not prove injection. `queue_full` is a recorded admission refusal.
@@ -287,10 +288,7 @@ A failed domain persistence write is not a durable success or a rollback.
 Health projections keep unavailable values unknown, not zero. Control status
 is a read, not permission to perform human-only mutations.
 
-The [installation guide](communication-installation.md) covers terminal agents
-and T3. The [SSH guide](federation-services.md) covers one-master federation.
-The [delegation guide](delegation-native.md) covers tasks and child permissions.
-The packaged [agent instructions](../skills/bridget/SKILL.md) remain in French.
+[Adapter contract details](adapters/t3.md#note-13).
 
 Private credentials protect cooperative clients, not hostile processes with
 control over the same operating-system account. Keep that account private.

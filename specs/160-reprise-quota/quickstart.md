@@ -35,4 +35,4 @@ d'exécution `failed`, `DeliveryRejected`) par le gestionnaire complet du daemon
 dans les deux ordres. Les sorties sont consignées dans
 `specs/160-reprise-quota/validation/`.
 
-Base160 : `6907df9ba15b58df05c2041631005beb57a1bed6`. T001 baseline attestée par ROOT :276PASS/0FAIL/2ignored sur les sept filtres prescrits ; ce reçu n’est pas un FULL ni une preuve160. Livraison : ROOT assure Git/build/installation/activation Bridget après les gates et absence de mission non terminale ; pas de redémarrage T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/160-reprise-quota/quickstart.md#extrait-1).

@@ -37,10 +37,7 @@ Aucune dérogation de production accordée. Un échec externe bloquant doit rest
 
 ## Frontières cibles
 
-1. **bridget-core** : identifiants, enveloppes et invariants de communication purs.
-2. **bridget-transport** : protocole public, codecs et contrat ManagedSession ; adaptateurs ACP/Codex/Claude ; journal et provenance.
-3. **bridget-daemon** : transactions, annuaire, requests, delivery, ledger, lifecycle de processus et reprise. CLI/MCP/attach sont des façades de ces mêmes services.
-4. **Consommateurs extérieurs** : Maicie, future UI/T3 et Routr n'importent pas le store. Ils utilisent les interfaces publiques autorisées.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/089-communication-core/plan.md#extrait-1).
 
 Les modules de stockage et de transport ne doivent jamais importer cli.rs/mcp.rs pour construire un canon, une identité ou une issue. Les helpers réellement partagés sont déplacés vers un module neutre, non recopiés. Pas de trait générique de repository pour masquer SQLite : la transaction constitue ici l'autorité.
 
@@ -88,7 +85,7 @@ Réutiliser le transfert de socket, pas un protocole réseau additionnel. Préfl
 
 ### P4 — Durcir et préparer l'adoption (T029–T036)
 
-Refus hostiles, concurrence, compétences déclarées, métriques avant/après, corpus complet, documentation d'installation isolée/retour arrière et revue. Installation/bascule de la flotte sur décision utilisateur séparée. T3 reste une suite éventuelle, pas une dépendance à la clôture de 089.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/089-communication-core/plan.md#extrait-2).
 
 ## Stratégie de preuve
 

@@ -19,7 +19,7 @@ Ces constats étaient documentaires. Aucun constat de code, aucune nouvelle arch
 
 42 tâches séquentiellement identifiées, 0 cochée. Dépendances acycliques vérifiées. Chaque tâche a owner, fichiers absolus, résultat observable, dépendances et mapping FR/SC. Les seules cibles encore absentes sont le module worker justifié et les futurs reçus/journaux documentaires. Les fichiers sources existants cités ont été vérifiés par existence. Les cinq US ont leur oracle indépendant et un groupe de tests prévu.
 
-**Constats actifs : aucun.** Les quatre constats de passe1 sont résolus. Aucun conflit constitutionnel actif : les demandes utilisateur de tests ciblés et de livraison complète prennent priorité sur une batterie générique répétée par tâche. T3 impose également des tests ciblés. Aucun nouveau test de confort ni outil de maintenance.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/analysis.md#extrait-1).
 
 ## Couverture
 
@@ -93,7 +93,7 @@ La nouvelle frontière distante augmente la charge de maintenance ; le plan la r
 
 Répartition : préparation1, fondations5, US1=8, US2=6, US3=8, US4=4, US5=7, final3. Quatre tâches marquées parallélisables : T002, T003, T015 et T035 sont des possibilités selon leurs dépendances. Elles n’autorisent ni compilation concurrente ni propriétaire concurrent d’un fichier.
 
-T3 peut démarrer T035 après T002 (schémas wire fermés), puis T036 après T033 et T035. T033 dépend seulement T002/T004. Il n’est pas nécessaire d’attendre le worker terminé. T037 attend T034 pour l’intégration maître ; tests et livraison finaux attendent le reste du lot.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/analysis.md#extrait-2).
 
 Les projets réels restent en attente d’autorisation et de paramètres. Cela ne bloque pas le code complet ni les recettes isolées ; cela bloque uniquement la route réelle concernée en G8. Aucun choix par défaut inventé.
 

@@ -145,8 +145,7 @@ critères de succès.
 
 ## Livraison
 
-Livraison Git, binaire signé installé, activation Bridget et nettoyage autorisés
-à chaque spec. T3 reste ouvert. Diff cumulé enregistré dans `validation/diff-157.patch`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/157-catalogue-quotas/plan.md#extrait-1).
 
 ## Précisions retenues de la revue157-r1 — appliquées au GO157
 

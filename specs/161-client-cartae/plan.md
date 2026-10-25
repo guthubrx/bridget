@@ -7,7 +7,7 @@
 
 ## Résumé
 
-Étendre l'outil client-only existant pour borner les ressources et contrôler les octets transférés avant build. Exécuter cet outil 161 depuis le worktree, avec une source Git isolée et propre exactement au commit 160. Installer dans un préfixe neuf, vérifier le client par le tunnel existant, puis basculer la commande courante de façon atomique. Le maître et T3 restent actifs sans intervention.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/161-client-cartae/plan.md#extrait-1).
 
 ## Contexte technique
 

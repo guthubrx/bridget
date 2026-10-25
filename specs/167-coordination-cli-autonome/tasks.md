@@ -51,18 +51,18 @@ Chaque tâche reste ouverte jusqu’à sa preuve. Le moteur natif reste la seule
 - [x] T020 [US3] Ajouter `task list` comme alias documenté de la projection humaine globale existante dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
 - [x] T021 [US3] Mutualiser l’exécution, la traduction des erreurs et l’affichage des résultats dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
 
-## Phase 6 — US4 Automatiser sans T3
+## Phase 6 — US4 Automatiser par le parcours natif Bridget
 
-**But :** les scripts utilisent une sortie stable et le même moteur sans processus T3.
-**Test indépendant :** `--json` produit un objet unique et la recette passe avec T3 absent.
+**But :** les scripts utilisent une sortie stable et le même moteur dans un environnement natif isolé.
+**Test indépendant :** `--json` produit un objet unique et la recette passe avec dans un environnement natif isolé.
 
 - [x] T022 [US4] Implémenter la sortie JSON pure et la vue humaine concise dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
 - [x] T023 [US4] Prouver le rejeu par clé explicite et la compatibilité de `auto-delegate` dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/cli.rs`
-- [x] T024 [US4] Ajouter une recette isolée sans T3 et consigner son résultat dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/tests.md`
+- [x] T024 [US4] Ajouter une recette isolée par le parcours natif Bridget et consigner son résultat dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/tests.md`
 
 ## Phase 7 — Documentation, qualité et livraison
 
-- [x] T025 Documenter l’invariant d’identité et le parcours sans T3 dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/167-coordination-cli-autonome.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/README.md` et `/Users/moi/Nextcloud/10.Scripts/64.bridget/CHANGELOG.md`
+- [x] T025 Documenter l’invariant d’identité et le parcours par le parcours natif Bridget dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/decisions/167-coordination-cli-autonome.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/docs/reference-communication.md`, `/Users/moi/Nextcloud/10.Scripts/64.bridget/README.md` et `/Users/moi/Nextcloud/10.Scripts/64.bridget/CHANGELOG.md`
 - [x] T026 Exécuter format, tests ciblés, régressions et suite proportionnée ; consigner les codes retour dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/tests.md`
 - [x] T027 Faire converger l’implémentation, tenter la contre-revue inter-fournisseur et produire l’audit final dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/`
 - [x] T028 Intégrer, pousser, construire, signer, sauvegarder, installer, vérifier le runtime et nettoyer sans force ; finaliser `/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/167-coordination-cli-autonome/validation/livraison167.md`

@@ -27,16 +27,7 @@ ne duplique pas un explorateur, un shell ou un service de fichiers.
 
 ## Reutilisations correctement identifiees
 
-| Item du plan | Existant reutilise | Preuve | Commentaire |
-|---|---|---|---|
-| Projection de tours | `projectTimeline` | `crates/bridget-daemon/assets/ui/app.js:5177` | Extraire une projection de présentation au-dessus des faits déjà corrélés, sans toucher au journal. |
-| Markdown sûr | `sanitizeMessageHtml` et `renderMessageMarkdown` | `crates/bridget-daemon/assets/ui/app.js:5638`, `crates/bridget-daemon/assets/ui/app.js:5669` | Étendre par classification et nœuds contrôlés, jamais en supprimant l'assainissement. |
-| Préférences navigateur | Store du centre de contrôle | `crates/bridget-daemon/assets/ui/app.js:5822`, `crates/bridget-daemon/assets/ui/app.js:5851`, `crates/bridget-daemon/assets/ui/app.js:5885` | Version suivante du document existant, pas une nouvelle clé de stockage concurrente. |
-| Préférences macOS | `DesktopPreferences` et `PreferencesStore` | `apps/bridget-desktop/src-tauri/src/preferences_store.rs:17`, `apps/bridget-desktop/src-tauri/src/preferences_store.rs:70` | Ajouter les booléens de contenu au store atomique existant. |
-| Injection dans le panneau | WebView relayé isolé | `apps/bridget-desktop/src-tauri/src/lib.rs:597` | Ajouter un script d'initialisation lecture seule au WebView, sans modifier sa capability. |
-| Fichiers projet | `ProjectRootPolicy` | `crates/bridget-daemon/src/project_policy.rs:50`, `crates/bridget-daemon/src/project_policy.rs:68` | Canonicaliser et comparer aux racines existantes, sans seconde allowlist. |
-| Routes relay | Routeur UI tokenisé | `crates/bridget-daemon/src/ui.rs:1369`, `crates/bridget-daemon/src/ui.rs:1381` | Ajouter un GET spécialisé avec les mêmes bornes de corps et d'authentification. |
-| Assets UI | Vendor markdown et sommes SHA | `crates/bridget-daemon/assets/ui/vendor/NOTICE.md:1`, `crates/bridget-daemon/assets/ui/vendor/SHA256SUMS:3` | Ajouter le colorateur et la notice T3 dans l'inventaire existant. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/081-conversation-renderer/reuse-audit.md#extrait-1).
 
 ## Existant potentiellement pertinent non mentionne
 
@@ -72,24 +63,11 @@ Aucune duplication évidente détectée.
 
 ## Journal de recherche
 
-| Requete | Portee | Resultat |
-|---|---|---|
-| `rg projectTimeline|renderMessageMarkdown|preferences` | `crates/bridget-daemon/assets/ui/app.js` | Projection, Markdown assaini et store local présents. |
-| `rg PreferencesStore|WebviewBuilder|preferences_save` | `apps/bridget-desktop/src-tauri/src/` | Store local atomique et panneau externe isolé présents. |
-| `rg ProjectRootPolicy|file-preview|content/file` | `crates/bridget-daemon/src/` | Politique de racines présente, aucun preview de fichier existant. |
-| `rg marked|DOMPurify|SHA256` | `assets/ui/` | Vendor, licences et hashes déjà structurés. |
-| `rg` sur `specs/069`, `074`, `076`, `080` | `specs/` | Dépendances fonctionnelles et limites existantes vérifiées. |
-| Lecture T3 Code | `/Users/moi/11.Repositories/t3code` | Timeline, ChatMarkdown, licence MIT et dépendances relevées. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/081-conversation-renderer/reuse-audit.md#extrait-2).
 
 ## Arbitrages
 
-| Sujet | Decision | Justification | Date |
-|---|---|---|---|
-| Tour de conversation | reutiliser etendre | `projectTimeline` est déjà l'autorité factuelle ; la nouveauté est une projection de présentation. | 2026-08-31 |
-| Préférences de sécurité | reutiliser etendre | Les deux stores existants deviennent V2 ; pas de stockage alternatif ni de transfert serveur. | 2026-08-31 |
-| Fichier lié par agent | creer nouveau | Aucun endpoint de lecture bornée n'existe. La route nouvelle s'appuie exclusivement sur `ProjectRootPolicy`. | 2026-08-31 |
-| Coloration de code | creer nouveau sous vendor existant | Aucun moteur statique n'est déjà embarqué. Il sera ajouté seulement avec licence et somme de contrôle. | 2026-08-31 |
-| Réemploi T3 | reutiliser principes et helpers ciblés | React et LegendList ne sont pas compatibles avec l'UI statique ; toute reprise directe sera attribuée. | 2026-08-31 |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/081-conversation-renderer/reuse-audit.md#extrait-3).
 
 ## Gate avant tasks
 

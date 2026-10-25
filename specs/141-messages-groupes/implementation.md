@@ -1,7 +1,6 @@
 # Journal141 — Préparation et implémentation
 
-Date : 2026-10-07. Début : 07:30 CEST. Estimation totale : 20–35 minutes.
-Statut : Implemented, installé, activation différée. Code gelé à 07:50:41 CEST. Dix tâches validées sur preuves. Installation adjacente vérifiée sans relance ni activation de T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-1).
 
 Session validée explicitement. Deux worktrees isolés déjà disponibles. Synchronisation SpecKit effectuée. Scripts et modèles locaux absents ; protocole appliqué manuellement. Format réel et composants SPEC140 vérifiés. La demande complémentaire exclut Sources et détails techniques pour les lots directs.
 
@@ -10,8 +9,6 @@ Spécification, checklist, plan, recherche, modèle et contrat préparés. Tests
 Gate de réutilisation lu et validé par le principal : PASS, dix items, aucune duplication ni arbitrage. Huit tâches générées ; seule T001 préparation est cochée. Analyze exécuté en lecture seule en deux passes : 22 exigences/critères couverts sur 22, aucun finding bloquant. Le rapport a ensuite été consigné dans une phase documentaire distincte autorisée.
 
 Les résultats ciblés, la recette, Converge et l'audit sont ajoutés avec leurs preuves. Les constats préparatoires ci-dessus sont historiques ; ils ne constituent pas le statut final de la session.
-
-Revue indépendante APPROVE_WITH_CHANGES intégrée aux artefacts : copie row.message.text originale pour les seuls lots directs, références t3-context conservées sans contexte structuré, autres copies inchangées. Un UUID seul reste visible. T004/T005, contrat et plan précisent ces cas. Aucun code modifié ni tâche d'implémentation cochée pendant cette correction documentaire.
 
 ## Preuves d'implémentation transmises par le principal
 
@@ -43,20 +40,17 @@ T009/T010 ont produit trois échecs RED pour fin de ligne LF/CRLF incohérente, 
 
 Format, lint ciblé, types web et build web : PASS. Build : 30,31 secondes. Le lint rapporte 22 avertissements historiques, identiques à la baseline de 22. Aucun avertissement nouveau n'est attribué au changement.
 
-## Recette native T3 après gel
+## Recette native adaptateur de bureau après gel
 
 Le principal a observé le composant réel. États initiaux des trois sections : true/false/false. Tab puis Espace produit false/false/false. Tab puis Entrée produit false/true/false. Le focus visible mesure 2 pixels. Fermer puis rouvrir le groupe conserve false/true/false. L'ancrage reste à 905 avant et après ouverture.
 
 Un lot incomplet 4/3 conserve ses trois corps, ne produit aucune section membre et aucune source secondaire. Un lot de notifications conserve ses trois corps et son contrôle historique de détails. Un message ordinaire reste inchangé.
 
-Deux essais preview_resize ont expiré ; le viewport natif est resté à 2074 pixels. La largeur réelle de 320 pixels a donc été testée dans une iframe du T3 natif, avec son CSS réel. En sombre, un nom long de 300 caractères Unicode garde largeur et débordement mesurés à 320 ; carte à 259,2656, libellé réparti sur 300 pixels de hauteur, overflow-wrap:anywhere. Une iframe fraîche en clair avec le même nom garde largeur et débordement à 320, classe de thème vide, fond de corps relevé à .992 et aucune source. Le premier corps long reste complet sur dix paragraphes à 320 pixels, sans source secondaire ni exécution de contenu hostile.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-2).
 
-Capture sombre : /Users/moi/.t3/userdata/browser-artifacts/browser-screenshot-127-0-0-1-muxp14lx-25fd3477.png
-Capture claire : /Users/moi/.t3/userdata/browser-artifacts/browser-screenshot-127-0-0-1-muxp1vid-2e2033d4.png
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-3).
 
 Deux contrôles de base isolée : première base avec dix messages, seconde avec deux messages ; zéro fournisseur et zéro session dans les deux cas. Contrôle rapide d'intégrité OK. Aucun accès de recette à une session fournisseur ou à la production.
-
-La copie exacte et les pièces jointes sont validées par les tests du vrai composant. Le principal a ensuite cliqué Copy message dans le vrai navigateur T3 : appel de copie intercepté localement puis restauré, presse-papiers système préservé. Les 3421 caractères capturés correspondent strictement au texte JSON SQLite de la fixture spec141-valid-batch. Aucun contenu synthétique imprimé. La fixture avec référence t3-context n'a pas été copiée dans le navigateur natif ; ce cas reste couvert par les tests du vrai composant. Aucun essai de bout en bout avec fournisseur et aucun essai de production n'est revendiqué.
 
 Les cases T002–T007 et T009/T010 sont cochées dans cette phase documentaire après les preuves. T008 reste décochée. La prochaine passe Converge relit le diff gelé et les artefacts en lecture seule, avec empreinte du fichier des tâches avant et après. Le verdict JSON d'audit reste attendu ; son fichier appartient à l'autre agent.
 
@@ -72,36 +66,36 @@ Le principal a lu le périmètre de quatre fichiers, le score et la note : audit
 
 T008 cochée après cette preuve, hors de la passe Converge. Dix tâches sur dix validées. Statuts finaux Implemented, non installé. La source reste gelée. Le fichier d'audit de l'autre agent n'est pas modifié par cette clôture.
 
-Capture finale du renderer inspectée par le principal : /Users/moi/.t3/userdata/browser-artifacts/browser-screenshot-127-0-0-1-muxp5nb3-4bb46026.png.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-4).
 
-Temps de réalisation transmis par le principal : environ trente minutes depuis 07:30 CEST. Le bilan inclut 294 tests PASS, contrôles web, recette native, copie exacte interceptée/restaurée, Converge et audit. Aucun essai fournisseur de bout en bout ni installation de production. La copie native de fixture t3-context reste couverte uniquement par les tests du composant.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-5).
 
 À cette clôture initiale, aucune livraison n'était autorisée et aucune opération Git ou d'installation n'a été effectuée dans la phase documentaire.
 
 ## Autorisation de livraison reçue après clôture
 
-Le 2026-10-07, l'utilisateur a autorisé commit, fusion, push et installation de la session141. Il a interdit de relancer T3. Le principal réalise les opérations Git et l'installation. Les processus et conversations T3 en cours doivent être conservés. La nouvelle présentation reste non activée jusqu'à une preuve distincte.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-6).
 
 Journal créé en état préparation autorisée : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/141-messages-groupes/specs/141-messages-groupes/livraison.md. Aucune installation ni activation n'est revendiquée par cette mise à jour documentaire.
 
 ## Journal Git avant installation
 
-Preuves transmises par le principal : commit T3 5724eb7f12e4556327efa14f51f43b9caf404e25 ; avance rapide vers local/v0.0.45 ; pushes sur fork confirmés pour local/v0.0.45 et session141. Commit portable cf0bd9903181327a793be06ccc23b2d402090abd poussé et présence distante vérifiée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-7).
 
-Le paquet adjacent /Applications/T3 Code (Local SPEC141).app est en préparation dans /Users/moi/.cache/t3-spec141-package.OaEnOF. L'application active /Applications/T3 Code (Local).app reste en place. Les PID 85017 et 85080 ont les mêmes dates de démarrage à 07:21 ; son archive a pour SHA256 dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1 et son contrôle codesign strict passe. La sauvegarde privée /Users/moi/.cache/t3-adoptions/spec141-20261007.llKRu1/state-before-install.sqlite a suivi VACUUM depuis la source en lecture seule puis quick_check=ok, sortie 0. Aucune installation, activation ou relance n'est déclarée terminée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-8).
 
 Le principal coordonne le commit Bridget, l'installation et un second commit de preuves. Les écritures documentaires s'arrêtent après transmission de cette préparation, jusqu'à sa prochaine consigne.
 
 ## Journal post-installation — preuves transmises par le principal
 
-Artefacts préparatoires Bridget : commit 7f4d65fb04261c09f420a2c907b6eeeecd1e9eaf, avance rapide vers main, pushes github main et session141 confirmés, valeurs distantes ls-remote identiques. Code T3 : 5724eb7f12e4556327efa14f51f43b9caf404e25 ; commit portable : cf0bd9903181327a793be06ccc23b2d402090abd, déjà poussés. Tests fraîchement rejoués : 294/294 PASS.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-9).
 
-Packaging normal --target zip : sortie 0, environ 89 secondes, source 5724eb7f12e4, version 0.0.45-local.141. L'application /Applications/T3 Code (Local SPEC141).app est installée à côté. Signature ad hoc appliquée par le principal après packaging. Vérification codesign stricte et profonde : sortie 0 sur l'application de staging et sur l'application installée. SHA256 ASAR installé : f4fd81f645b81c65bd8a0471022931c9e2e789df837d1b42c9ffa693151c90da.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-10).
 
-Le principal a extrait le chunk _chat-DqlgvoJO.js de l'application installée et comparé son SHA256 53aa48551495f867385170d4e5a490aac82004ce5932bff1a291295533b32505. Comparaison et présence des marqueurs data-bridget-member-toggle / Messages groupés : PASS. L'archive zip non signée reste conservée dans /Users/moi/.cache/t3-spec141-package.OaEnOF/T3-Code-0.0.45-local.141-arm64.zip, SHA256 f38ae9b8322061d6d762e6b3fbe6dfd2b4d67dc330a167b230befa00beb53c9c. La signature porte sur l'application après packaging ; elle n'est pas revendiquée pour le zip.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-11).
 
-L'application active /Applications/T3 Code (Local).app reste intacte, archive SHA256 dab141939a4171c3b4e7169fc68346b498ce179c414f9e2e8ee6acdb42f89ba1 et signature stricte PASS. PID 85017/85080 et dates de démarrage à 07:21 inchangés. L'endpoint public de l'environnement dont l'identifiant commence par 3b1ba3d1 répond en HTTP après installation. La sauvegarde d'état a un quick_check=ok. Aucun quit, open ou restart. Aucun changement du daemon ni d'Agent Loop.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-12).
 
-La présentation141 n'est pas activée. Quand l'utilisateur choisira de quitter l'ancienne application, il devra ouvrir /Applications/T3 Code (Local SPEC141).app. Relancer /Applications/T3 Code (Local).app ne charge pas141. L'audit et les rapports précédents restent les preuves historiques de la source validée ; la livraison est prouvée séparément ici.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/implementation.md#extrait-13).
 
 Le commit du présent journal post-installation n'est pas encore connu. Il sera consigné par le principal après son exécution. Aucun commit ni lancement d'application effectué par l'agent documentaire.

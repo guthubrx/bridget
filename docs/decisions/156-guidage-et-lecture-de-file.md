@@ -7,12 +7,7 @@ les tests ou le runtime sont terminés.
 
 ## Contexte et cadre de menace
 
-Le protocole porte déjà SteerCurrent, InterruptAndStart et Interrupt. Les
-façades ne les exposent pas et plusieurs chemins échappent aux droits entre
-agents. Une origine Human cliente peut aussi provoquer une interruption.
-La CLI sans preuve peut signer human. Le pont T3 peut guider implicitement un
-pair et convertir un steer Cursor en interrupt_restart. CancelDelivery ACP
-peut interrompre un tour actif alors que l’outil décrit une annulation de demande.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/156-guidage-et-lecture-de-file.md#extrait-1).
 
 Le modèle couvre les agents utilisant MCP, CLI, pont et wrapper. Un processus
 hostile du même compte Unix qui lit les preuves privées, forge une connexion
@@ -59,17 +54,7 @@ et un message déjà groupable de Attach/UI attestée/système interne/parent/en
 Les pairs, clients nus et valeurs absentes attendent. REST/V1 ferme les
 intentions explicites avant émission ; None reste. Le trajet installé149 est V2.
 
-Ajouter seulement la lecture bridget_queue/CLI queue --target, sous QueueListV1.
-Projection send_deliveries idempotent dispatching :200 entrées maximum,
-preview120 caractères, état pending_or_injecting, borne64 T3/null sinon.
-Destinataire/parent/Attach/UI Client attestée lisent toute la projection ; autres : leurs messages.
-Attach négocie ClientHello uniquement avec la liste exacte [QueueListV1].
-Son rôle reste Attach, sans identité agent/conn_names ni autres capacités.
-L’UI Client attestée peut lire toute la projection ; elle reste Client et
-n’acquiert aucun droit de contrôle explicite par cette lecture.
-ChildProof est refusée. Ni Send historique ni files internes n’entrent dans la
-vue. La lecture n’écrit rien. LIMIT200 ne borne que la sortie ; le scan coûte
-O(log n+s) plus jointures indexées, s candidats examinés incluant les expirés.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/156-guidage-et-lecture-de-file.md#extrait-2).
 
 Cancel d’une demande retire sa remise en attente. Il atteint le tour actif
 seulement après la garde commune ; sinon le tour continue. Un ancien wrapper
@@ -84,11 +69,7 @@ garde l’ancien comportement jusqu’à sa relance.
   réserver durablement avant émission, enregistrer l’accusé durable, réconcilier
   avant relivraison et prévoir une phase d’annulation ainsi qu’une saga de promotion.
 
-Les trois choix de la spec sont retenus : pairs sans contrôle, édition reportée,
-pairs T3 occupés en attente et CLI nue sans contrôle. Root accepte également la
-fermeture Cursor et REST/V1. Aucune nouvelle commande de supervision, droit humain
-ou configuration fournisseur n’est ajouté. Les tests prévus156 devront prouver
-les gardes et la compatibilité ; leur succès n’est pas acquis par cette ADR.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/156-guidage-et-lecture-de-file.md#extrait-3).
 
 ## Réutilisation du montage T013
 

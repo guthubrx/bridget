@@ -1,7 +1,6 @@
 # Smoke réel T037/T038 sur la release r8 - ronde Sonnet r6
 
-Date : 2026-10-10, 18:59 à 19:10. Testeur : Claude Sonnet 5.5. Modèles réels : GLM `glm-5.3-flash`, Codex `gpt-6.1-sol` effort `high`.
-Aucune case de `tasks.md` cochée. Aucun Git, Cargo, build, ni fichier de production modifié. Aucun service, aucune configuration ni base de production touchés. T3 non lancé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-real-smoke-sonnet-r6.md#extrait-1).
 
 ## 1. Verdict
 
@@ -32,7 +31,7 @@ Le correctif O4 de r8 est prouvé sur un vrai `codex app-server` : le SIGTERM du
 
 ## 3. Scénario A - parent GLM vers enfant GLM (`r6-glm-smoke-01`)
 
-Parent : `bridget gclaude` réel dans un PTY, hors T3, profil `/Users/moi/.claude-glm`. Durée de la session : 167 s.
+Parent : `bridget gclaude` réel dans un PTY, dans un terminal, profil `/Users/moi/.claude-glm`. Durée de la session : 167 s.
 
 | Contrôle | Observé |
 |---|---|

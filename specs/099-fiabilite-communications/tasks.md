@@ -16,18 +16,11 @@ Tests avant correction. Pas de livraison partielle déclarée terminée.
 - [x] T005 [US2] Étendre Registered/RegisterAuxiliary et l'identité privée dans crates/bridget-transport/src/protocol.rs, crates/bridget-daemon/src/mcp_identity.rs et wrapper.rs ; sérialisation compatible, secret masqué, fichier privé borné et sans symlink.
 - [x] T006 [US2] Raccorder les clients et verrouiller toutes les admissions dans crates/bridget-daemon/src/communication/client.rs, mcp.rs, cli.rs et daemon.rs ; adapter les fixtures aux preuves réelles, aucun bypass test et aucun emprunt d'UUID par un humain externe.
 
-## US3 — Contrôle t3code pendant l'attente
-- [x] T007 [P] [US3] Ajouter les régressions spec099 attente/annulation/expiration/daemon absent dans crates/bridget-daemon/src/t3code.rs et audits/2026-09-16/session-2026-09-16-bridget-global-01/reproduce_t3.py ; faux HTTP existant, aucun tour post-annulation.
-- [x] T008 [US3] Rendre l'attente LinkWorker réactive dans crates/bridget-daemon/src/t3code.rs sans doubler IdempotentDeliveryTracker ; contrôler les bornes avant dispatch et préserver les demandes suivantes.
-- [x] T009 [US3] Étendre la notification CancelDelivery au transport t3code dans crates/bridget-daemon/src/daemon.rs ; aucun tour textuel supplémentaire pour annuler.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/tasks.md#extrait-1).
 
-## US4 — Réponses récupérables
-- [x] T010 [US4] Ajouter les régressions spec099 destinataire absent, reprise/redémarrage, ACK perdu et plusieurs attentes dans crates/bridget-daemon/src/t3code.rs et audits/2026-09-16/session-2026-09-16-bridget-global-01/reproduce_t3.py ; une absence dans ListRequests bornée ne signifie jamais clôture.
-- [x] T011 [US4] Conserver réponse et attentes jusqu'à confirmation dans crates/bridget-daemon/src/t3code.rs ; réutiliser la persistance atomique, aucune sauvegarde d'un préfixe de pending et aucune réexécution fournisseur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/tasks.md#extrait-2).
 
-## US5 — Observation honnête
-- [x] T012 [US5] Tester texte Unicode long et refus de journalisation dans crates/bridget-daemon/src/t3code.rs ; tenir compte du failure sink de JournalWriter et de la borne de ligne 4 Mio.
-- [x] T013 [US5] Corriger coupe silencieuse et repère après échec dans crates/bridget-daemon/src/t3code.rs ; contenu complet dans les bornes, lacune explicite sinon.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/tasks.md#extrait-3).
 
 ## Vérifications transverses
 - [x] T014 Documenter les garanties, refus anciens auxiliaires et limites de confiance dans README.md, README.en.md et specs/099-fiabilite-communications/implementation.md ; tenir à jour quickstart.md avec commandes exactes.
@@ -63,4 +56,3 @@ laissés par l'implémentation initiale, qui n'avait exécuté que des modules c
 - [x] T020 [US2] Aligner le faux daemon de core_089_security_test sur l'ordre réel des trames (attestation avant négociation) : 8/8.
 - [x] T021 [US1] Observer l'état busy par attente dans managed_parity_test (remise asynchrone) et inscrire un diagnostic des tours métier en cas d'écart ; 3 passages verts à vide, un tour en trop vu une fois sous charge (piste ouverte).
 - [x] T022 Documenter l'amendement « humain et annuaire » dans docs/decisions/035.
-

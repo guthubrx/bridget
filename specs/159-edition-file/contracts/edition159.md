@@ -5,10 +5,7 @@ appel et sa remise produisent les mêmes octets et le même comportement qu'avan
 
 ## Réglage `held_queue` (lot A)
 
-Champ booléen de la définition d'un type d'agent dans le registre (défaut faux).
-Ouvert, il retient en base du daemon les messages ordinaires destinés à un agent de
-ce type tant qu'il est occupé (règle complète : `research.md` R4). Les fils T3 ne
-sont jamais concernés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/contracts/edition159.md#extrait-1).
 
 La rétention n'est active que pour une instance qui a déclaré un signal de tour
 véridique (`turn_attest` à l'enregistrement). Sinon, chemin actuel.
@@ -20,8 +17,7 @@ Ce refus est distinct de la saturation de la FIFO après une promotion libérée
 
 ## Messages jamais retenus
 
-Origine humaine ou système, `intent` `steer` ou `interrupt`, alertes de fil,
-observations, incidents délégués, missions natives, fils T3, types sans réglage.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/contracts/edition159.md#extrait-2).
 
 ## `bridget_queue list` (156, étendu)
 
@@ -162,9 +158,9 @@ réouvrent puis appliquent la première édition. Pas de v8, reconstruction
 ou nouvelle sauvegarde de migration. Le précontrôle livré accepte7 et refuse8 ;
 un binaire antérieur à159A continue à refuser la basev7.
 
-## Lineage T3 et pont
+## Lineage adaptateur de bureau et pont
 
-Aucun changement de forme de la projection Lineage. Le pont T3 n'est pas modifié.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/contracts/edition159.md#extrait-3).
 
 
 ### Résolution déterministe du message public — arbitrage ROOT B

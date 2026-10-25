@@ -27,27 +27,11 @@ et pause interne sont exempts. Une mission native active interdit interrupt
 agent ;152 reprend pause/panne, pas une interruption utilisateur terminale.
 Aucun steer agent expiré ne devient automatiquement une interruption.
 
-QueueList lit seulement les remises idempotentes dispatching non expirées,
-par rowid, au plus 200 entrées et aperçu 120 caractères. La borne est 64 T3/null
-sinon. Destinataire/parent/Attach/UI attestée voient la projection ; les autres
-voient leurs messages. Attach ne négocie que [QueueListV1], sans changement
-de rôle ni identité agent. LIMIT200 borne la sortie, pas le scan O(log n+s).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/156-guidage-file/implementation.md#extrait-1).
 
-T3 conserve ses lots et exige mid_turn_ok. Claude seul possède une capacité
-native activeSteering prouvée dans le bundle149. Cursor occupé attend même
-flagtrue ; son steer est refusé. REST/V1 ferme toute intention explicite.
-L’immédiat utilise la connexion source ; recovery ne déduit jamais une route
-UI/humaine de from. Sans preuve UI persistée, attente normale ; liens UUID
-agents recalculés. Cancel retire en attente ; l’interruption active passe la
-garde. ACP retire atomiquement sous le verrou existant.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/156-guidage-file/implementation.md#extrait-2).
 
-Réemplois : MessageIntent/canon, reçus idempotents, SendDelivery, ReplyTracking,
-DeliveryExecutionLink, transaction SQLite, identité149, liens et Task, pause087,
-ManagedSession, ACK/reprise et dispatch T3. Créations demandées : guidance pur,
-guidance_events/deux index, index recipient/phase, lectures de rythme/file,
-QueueListV1/trames et NotPermitted. Extensions : flags facultatifs de remise,
-interrupt_active et cancel_queued. Aucun service, dépendance ou framework nouveau.
-T013 reprend le montage E2E prévu dans son seul fichier, pour trois scénarios.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/156-guidage-file/implementation.md#extrait-3).
 
 ## Tests et limites de preuve
 

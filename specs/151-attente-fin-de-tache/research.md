@@ -1,11 +1,6 @@
 # Recherche - Session151 attente et boîte de fin de tâche
 
-Date : 2026-10-11 (révisée après la contre-revue Codex, voir
-`adversarial-review-codex.md`). Source : lecture du dépôt principal non modifié
-(`/Users/moi/Nextcloud/10.Scripts/64.bridget`, base `1f2c661d`) et de
-`specs/150-socle-delegation/` (acquis supposé livré). Les lignes citées sont
-celles de cette base. Mécanismes T3 : `specs/150-socle-delegation/research-t3-bridget.md`
-(A1, B1, B3, B4). Aucun test ni build lancé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/research.md#extrait-1).
 
 ## R1 - Deux outils d'attente dédiés, en lecture pure
 
@@ -17,7 +12,7 @@ celles de cette base. Mécanismes T3 : `specs/150-socle-delegation/research-t3-b
   l'attente : après une coupure de l'hôte, rien ne pousse l'agent à renvoyer
   (`mcp.rs:725-740`, contre-revue objection 7). Cela évite aussi toute négociation de
   capacité de client.
-- **Alternatives** : `mode:"wait"` dans `bridget_delegate` comme T3 (rejetée :
+- **Alternatives** : `mode:"wait"` dans `bridget_delegate` par le contrat natif (rejetée :
   champ d'enveloppe de plus, aucun gain) ; `wait_timeout` dans `bridget_send` avec
   `id` et `issued_at` imposés (rejetée : `issued_at` doit être proche de l'heure
   du daemon, un agent ne la connaît pas de façon fiable) ; polling de
@@ -27,18 +22,7 @@ celles de cette base. Mécanismes T3 : `specs/150-socle-delegation/research-t3-b
 
 ## R2 - L'attente vit dans le daemon, sur le thread de la connexion
 
-- **Décision** : `NativeDelegationRequest::Wait` est traité dans `handle_with_fact`
-  (`native_delegation.rs:280-320`) avant la prise du verrou d'état. La boucle prend le
-  verrou le temps d'une lecture, puis le relâche.
-- **Preuve** : un thread par connexion (`daemon.rs:4965-4970`, `handle_connection`
-  `:4988`). `handle_with_fact` relâche déjà le verrou avant `tick`
-  (`native_delegation.rs:313-319`).
-- **Alternatives** : `bridget_events` avec `once` (`mcp.rs:2001`) observe des fins de
-  tour, pas des résultats de tâche ; abonnement Lineage (`native_lineage.rs`) est la
-  voie humaine et exige `--t3-thread`.
-- **À vérifier (T001)** : aucune coupure d'inactivité sur une connexion client du
-  daemon. La lecture de trame a un délai de 10 s seulement après le premier octet
-  (`daemon.rs:5040`).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/research.md#extrait-2).
 
 ## R3 - Curseur d'événements : compteur, condvar, ordre des verrous
 
@@ -73,12 +57,7 @@ celles de cette base. Mécanismes T3 : `specs/150-socle-delegation/research-t3-b
 
 ## R4 - Expiration : jamais d'annulation
 
-- **Décision** : à l'expiration, `timed_out: true` et les tâches telles qu'elles sont.
-- **Raison** : T3 ne tue pas l'enfant à l'expiration (A1). Le délai d'attente est
-  indépendant de `mission_deadline_at` (150 : `reply_timeout`).
-- **Réveil garanti** : l'attente n'écrit rien (R6) et `tick` ne la connaît pas. Le message
-  de résultat part donc exactement comme sans attente. Le test
-  `native151_boite_message_apres_attente_expiree` le prouve.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/research.md#extrait-3).
 
 ## R5 - La boîte de fin est une vue calculée, sans table neuve
 
@@ -93,7 +72,7 @@ celles de cette base. Mécanismes T3 : `specs/150-socle-delegation/research-t3-b
   - `disposed` : tâche purgée par 150 (`task_unavailable`).
 - **Raison** : la tâche durable (`delegation.rs:20-61`) et les remises à phases
   (`idempotency.rs:527`) existent. Une table de plus créerait une divergence possible.
-- **Alternatives** : table outbox à cinq états comme T3 (rejetée) ; état stocké à chaque
+- **Alternatives** : table outbox à cinq états par le contrat natif (rejetée) ; état stocké à chaque
   transition (rejeté : `delivered` vit déjà dans `send_deliveries`).
 
 ## R6 - Simplification retenue : l'attente est une lecture pure

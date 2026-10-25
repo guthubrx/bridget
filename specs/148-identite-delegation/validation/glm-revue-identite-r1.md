@@ -10,10 +10,7 @@ Toutes les preuches sont closes. Voici le rapport final.
 
 ## Finding 1 — CRITIQUE (bloquant) : le client MCP Bridget ne gère pas l'en-tête de session `mcp-session-id`
 
-**Fichiers :**
-- `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/session-148-identite-delegation/crates/bridget-daemon/src/t3code_mcp.rs:85-111` (fonction `post`) et `:148` (`notifications/initialized`)
-- Serveur : `.../node_modules/effect/.../src/ai/internal/mcpRuntime.ts:443-450`, `.../src/ai/McpServer.ts:869-887`, `.../src/ai/McpProtocol.ts:229`
-- Montage : `/Users/moi/11.Repositories/t3code-local/.worktrees/session-148-identite-delegation/apps/server/src/mcp/McpHttpServer.ts:846-850`
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-1).
 
 **Preuve (sources des deux côtés) :**
 
@@ -35,11 +32,11 @@ Le patch pnpm `effect@4.0.1` n'ajoute que `DELETE /mcp` et des correctifs ping. 
 2. `notifications/initialized` part sans en-tête → serveur répond **400**.
 3. `post()` refuse (`!(200..300)`, ligne 97-99) → `T3SessionUnavailable`.
 
-**Conséquence :** chaque appel d'outil sous montage T3 échoue sur le serveur réel. US1 et SC001 sont inatteignables. L'échec est fermé (fail-closed) : aucune faille d'identité, mais la fonctionnalité est morte.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-2).
 
-**Pourquoi les tests passent quand même :** ils sont synthétiques. Le serveur TCP factice de `t3code_mcp.rs:255-328` répond 202 à `notifications/initialized` **sans vérifier l'en-tête** (ligne 303-306). `BridgetSession.test.ts` mocke la couche service, sans transport HTTP.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-3).
 
-**Test négatif requis :** interop réelle contre le serveur T3 (ou un faux serveur qui applique la règle d'admission : 400 sur tout POST non-initialize sans `mcp-session-id`). Attendu : échec avant correction, succès après.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-4).
 
 **Direction de correction :** capturer `mcp-session-id` dans la réponse d'initialize. Le renvoyer sur `notifications/initialized` et `tools/call`.
 
@@ -47,7 +44,7 @@ Le patch pnpm `effect@4.0.1` n'ajoute que `DELETE /mcp` et des correctifs ping. 
 
 ## Finding 2 — MAJEUR : sessions HTTP accumulées et coût par appel
 
-**Fichier :** `t3code_mcp.rs:130-157` (`attest`, appelé à chaque résolution d'identité)
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-5).
 
 Chaque appel d'outil refait un `initialize` complet (3 allers-retours HTTP). Les sessions créées ne sont jamais terminées. Elles s'accumulent dans la map `bySessionId` du serveur. Le patch Effect fournit justement `DELETE /mcp` pour ce nettoyage.
 
@@ -64,20 +61,10 @@ Chaque appel d'outil refait un `initialize` complet (3 allers-retours HTTP). Les
 
 ## Propriétés approuvées (avec limites)
 
-1. **Fail-closed intégral.** Paire d'env partielle, token invalide, T3 arrêté, daemon injoignable : tout refuse sans repli sur l'identité PID (`t3code_mcp.rs:22-41`). FR003 respectée.
-2. **Anti-SSRF solide.** Allowlist exacte de 3 formes loopback sur le port du runtime validé par PID vivant. Token contraint en charset et longueur. CRLF refusé (test ligne 196-203). Redirections refusées (minreq `max_redirects(0)` → erreur). Timeout 3 s. Corps plafonné à 64 KiB. SSE limité à une seule frame JSON.
-3. **Rejeu et révocation.** Registre en mémoire, hash SHA-256, `revokeThread` à chaque émission, fenêtre de vie 24 h. Côté Bridget, la preuve est revalidée **à chaque appel d'outil**. Le test `http_keeps_sessions_distinct_and_checks_revocation_on_next_call` prouve la distinction de sessions et la révocation à l'appel suivant — sur faux serveur seulement.
-4. **Bug originel couvert.** Processus Codex partagé sur 17 sessions : chaque façade reçoit son propre token par thread. Les identités restent distinctes malgré le PID commun.
-5. **Rename et reconnexion sûrs.** `stable_uuid` (UUIDv5 sur `thread_id`) ignore le titre du thread. Après reconnexion du daemon, `resolve_binding` revalide l'enregistrement auxiliaire et la connexion authentifiée (`t3code_mcp.rs:44-61`). Le daemon exige une route vivante avec credential identique (`daemon.rs` `register_auxiliary`).
-6. **Secrets protégés.** Token jamais loggé côté Rust (erreur opaque unique). Côté T3 : token limité à l'env du sous-processus (`BridgetMcp.ts:44-51`), rien au repos (`mcpSession.ts:46-58`, registry = hash seul).
-7. **Périmètre serveur.** `bridget_session` : args fermés vides, refus client externe, refus sans capacité orchestration, refus si le run actif n'appartient pas au provider (`OrchestratorMcpService.ts:1777-1791`).
-8. **Indépendance du moteur.** `t3code_mcp` est un connecteur pur, sans appel d'orchestration T3. FR025/FR026 respectées.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-6).
 
 ---
 
 ## Limites de la revue
 
-- Montage T3 déclaré non final. Le code bougeait pendant la revue.
-- Tests unitaires non exécutés (cible test cassée par le WIP hors volet).
-- Interop réelle non exécutée (interdit prod/modèle). Le finding 1 est établi par lecture croisée des deux sources, vérifiée deux fois à la verbatim.
-- Moteur de délégation natif hors volet, conformément à la consigne.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-identite-r1.md#extrait-7).

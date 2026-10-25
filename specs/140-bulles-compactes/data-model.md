@@ -2,7 +2,7 @@
 
 ## Message source
 
-Le texte, l'identifiant, le fil T3, les pièces jointes et les actions existants restent les données de référence. Aucun changement SQL ou de stockage T3. La copie conserve le texte source, pas le résumé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/data-model.md#extrait-1).
 
 ## Métadonnée de remise Bridget
 
@@ -10,7 +10,7 @@ BridgetMessage reçoit thread_display_title facultatif au niveau racine. Champ a
 
 ThreadNotice ne change pas. La branche idempotente et la branche classique de remise appliquent la même règle. En cas d'absence, d'échec de lecture ou de refus d'appartenance, aucune valeur de titre n'est remise.
 
-## Projection T3 mémoire
+## Projection adaptateur de bureau mémoire
 
 Une projection pure d'une enveloppe complète fournit : famille, libellé, nom d'émetteur connu, compteur de lot connu, titre facultatif du fil, corps lisible et texte brut original. Elle ne fournit ni agent destinataire supposé ni type de publication inféré. Une sollicitation sans titre a le libellé « Fil partagé · Nouveautés ».
 
@@ -18,7 +18,7 @@ Les cinq familles sont direct, thread-notice, observation, direct-batch et obser
 
 ## États de présentation
 
-État local ouvert/replié, par identité composée fil T3 + message. Valeur initiale : replié. Les détails techniques peuvent être ouverts seulement depuis la bulle. Changer de fil ou recycler une ligne ne transmet pas l'état à un autre message. L'état n'est pas une prise en charge ou un ACK Bridget.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/data-model.md#extrait-2).
 
 ## Invariants
 

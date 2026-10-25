@@ -1,10 +1,7 @@
 # Session 176 — Observation fiable et bornée des worktrees
 Statut : Implemented
 
-## Demande et cadrage
-Demande utilisateur : « go, fais tout », après cinq axes proposés pour améliorer le lot175.
-Résultat : une observation locale exploitable sur Cartae, sans confondre une information absente avec un espace libre ; un inventaire dont temps, mémoire et parcours sont bornés ; une mesure avant/après et des scores réévalués sur preuves. Réutiliser T3 quand le mécanisme existe.
-Portée : scripts/build.py, ses tests, guides FR/EN, preuves d'audit et livraison. Aucun nouveau daemon, droit, format durable de tâche ou exécution métier. La suppression existante reste sans force et interdit tout espace dont l'inactivité n'est pas prouvée. Les inconnus conservent le travail.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/176-observation-bornee/spec.md#extrait-1).
 
 ## Exigences
 - FR01 : détecter un fichier ouvert depuis un autre cwd, y compris un chemin avec espaces et un fichier supprimé encore ouvert.

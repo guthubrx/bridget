@@ -1,18 +1,10 @@
 # Checkpoint181 — implémentation vérifiée, livraison en cours
 
-Le contrat central appartient à Bridget. T3 reste facultatif. Les brouillons sont locaux à chaque appareil. Cadrage approuvé conservé. Émulateurs ARM64 Android16/API36 puis Android15/API35 installés ; aucun usage du Pixel.
+Le contrat central appartient à Bridget. Le contrat central appartient à Bridget. Les brouillons sont locaux à chaque appareil. Cadrage approuvé conservé. Émulateurs ARM64 Android16/API36 puis Android15/API35 installés ; aucun usage du Pixel.
 
 ## Résultats observés
 
-- Rust : dernier lot181 17PASS ; transports3PASS ; HTTP13PASS ; scopesMCP4PASS ; contratT3 19PASS/1ignored. Régression155 :62PASS/1FAIL initial, cas de corrélation isolé PASS après garde de session. Aucune FULL et aucun GREEN global déduit.
-- JVM23PASS ; lint, assemblages debug/application de test PASS. Dernier changement limité à la sélection exacte de la notification dans la fixture, assemblage de test PASS.
-- Android réel : choix simple+complément, choix multiples, fermeture forcée/reprise du brouillon et confirmation MCP sans T3. Réponse TTY depuis un autre client, même demande appliquée.
-- FCM réel en arrière-plan : choix via bouton système UiAutomation, une seule commande applied. Hors réseau : bouton système Valider, sauvegarde locale avant accès réseau, test1PASS4,124s ; rétablissement puis appui Envoyer la réponse conservée : même commande7af1bf1f-972f-4563-8f28-41eb1d6df779 applied. Aucune seconde commande.
-- RemoteInput : vrai PendingIntent de la notification, résultat texte SDK ajouté dans le test ; une commande, sélection vide et texte exact, confirmation producteur,1PASS0,811s. Ce test vérifie le traitement Android, pas la frappe manuelle du clavier de notification.
-- Reprise daemon isolé : demande8f0d762c-66c3-4c70-94ae-26550181d1ad pending avant/après arrêt normal et reprise avec même instance ; réponse TTY ultérieure applied. Production intacte.
-- Lien de question : formulaire ciblé dans la conversation de l’agent attesté, provenance/machine affichées ; capture finale. La fixture ne fournit pas de journal d’agent : suivi interrompu attendu, questions fonctionnelles.
-- Dictée contrôlée :1PASS3,494s, intention système observée, texte éditable, aucun envoi automatique. Reconnaissance vocale réelle NON VALIDÉE : transfert audio refusé par Android puis injectAudio officiel a fait crasher QEMU. Après deux essais, voie abandonnée et passage Android15 ; aucune capture du micro du Mac.
-- Adaptateur T3 : worker réel, serveur HTTP/WS contractuel contrôlé, publication/réponse/réconciliation sans prompt,1PASS. Pas d’essai d’une question réellement générée dans l’application T3 active ; aucun redémarrage T3/fournisseur.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/checkpoint.md#extrait-1).
 
 ## Preuves
 
@@ -24,7 +16,7 @@ Diaporama autonome13étapes,469207octets,10captures originales compressées. htm
 
 ## Entretien et retrait requis
 
-RouteCaddy temporaire @id bridget-questions181-qa vers127.0.0.1:19581 à retirer seule par CAS/ETag. NamespaceQA /home/moi/.cache/bq181 ; producteurs/core/mobile181 propres à arrêter normalement après recette. Émulateur35 à conserver utilisable, AVD36 instable à examiner sans perte des preuves. Budget caches10Gio/7j, nettoyage automatique différé car observation processus incomplète ; garde non contournée. Tâche historiquee595 non réconciliée préservée. T3 et autres travaux protégés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/checkpoint.md#extrait-2).
 
 ETA après Tasks150–240min depuis09:34:47CET. Borne haute dépassée, annoncé : crash audio/Android16 puis nouvel émulateur, durcissement notification et recette de reprise. Nouveau reste estimé60–120min pour revue/audit et livraison, sous réserve de leurs findings.
 

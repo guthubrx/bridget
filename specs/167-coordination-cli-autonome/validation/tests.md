@@ -15,7 +15,7 @@ Date : 2026-10-15
 
 Total sans double compte : 87 PASS et 2 ignored.
 
-Le test `native148_sans_t3_retry_reponse_correllee_annulation_et_reprise_durable` passe dans la recette E2E. Il couvre la création, le rejeu, la réponse corrélée, l’annulation et la reprise sans T3. Les tests SPEC-167 couvrent la traduction de chaque nouvelle sous-commande vers ce même moteur.
+Le test `native148_sans_t3_retry_reponse_correllee_annulation_et_reprise_durable` passe dans la recette E2E. Il couvre la création, le rejeu, la réponse corrélée, l’annulation et la reprise par le parcours natif Bridget. Les tests SPEC-167 couvrent la traduction de chaque nouvelle sous-commande vers ce même moteur.
 
 ## Contrôles du binaire de développement
 

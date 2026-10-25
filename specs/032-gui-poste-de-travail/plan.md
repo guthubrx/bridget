@@ -57,18 +57,14 @@ chronologique. **Ajout au snapshot**, pas une route nouvelle.
 Brancher `item/reasoning/summaryTextDelta`, `summaryPartAdded`, `textDelta`
 dans l'aiguillage existant.
 
-**Fichiers** : `crates/bridget-transport/src/codex_app_server.rs`
-**Référence** : `~/11.Repositories/t3code/packages/effect-codex-app-server`
-**Critères** : AC7, AC8.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/plan.md#extrait-1).
 
 ### L4 — Raisonnement Cursor
 
 Cesser d'écarter `agent_thought_chunk` (`acp.rs:1500`). Ajouter aussi
 `tool_call` / `tool_call_update` pour le niveau 1.
 
-**Fichiers** : `crates/bridget-transport/src/acp.rs`
-**Référence** : `~/11.Repositories/t3code/packages/effect-acp`
-**Critères** : AC7, AC8.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/plan.md#extrait-2).
 
 ### L5 — Page : liste + fil *(le gros morceau)*
 
@@ -114,19 +110,13 @@ des tâches, pas à supposer.
 
 ## 3bis. Emprunts — méthode et frontière
 
-**`~/11.Repositories/t3code` est sous licence MIT.** Reprise de code autorisée
-avec conservation de la mention de copyright. Dans les faits marginal —
-TypeScript/React d'un côté, Rust/JS nu de l'autre.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/plan.md#extrait-3).
 
-> **RÈGLE STRUCTURANTE : conception de Grok Bot, rendu de T3 Code.**
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/plan.md#extrait-4).
 
 **Pourquoi cette séparation, et elle commande le modèle de données :**
 
-| | à gauche | modèle mental |
-|---|---|---|
-| **T3 Code** | des **conversations** — fils de travail, éphémères, qui se closent | *un sujet, une discussion* |
-| **Grok Bot** | des **agents** — permanents, avec identité et métier | *un collègue, joignable* |
-| **Nous** | **des agents** | `rc1` existe indépendamment de ce dont on parle avec lui |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/plan.md#extrait-5).
 
 **Conséquence sur la ligne de liste** — elle porte plus que chez eux :
 nom · **état** (vivant / occupé / éteint) · **machine** · dernier message ·

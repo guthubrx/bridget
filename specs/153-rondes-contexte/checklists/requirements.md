@@ -47,8 +47,4 @@
 - Ces cases contrôlent la qualité du contrat. Elles ne déclarent aucun scénario153
   exécuté ni critère de succès runtime satisfait avant les preuves des tâches.
 
-- Clôture T027 :29/29 ;41 PASS natifs/E2E finaux,179 références lib confirmées,
-  16 intégrations maintenues par preuve/impact. Workspace R1 antérieur et échecs
-  restent distincts. Ces cases de qualité ne prouvent pas un modèle réel,
-  sa mémoire, UI T3 ou activation de production.
-- Converge, audit et livraison restent des phases séparées.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/153-rondes-contexte/checklists/requirements.md#extrait-1).

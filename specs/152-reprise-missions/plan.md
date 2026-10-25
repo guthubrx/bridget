@@ -140,11 +140,7 @@ d'arrêt).
 
 ### Responsabilité future (Article XX)
 
-- Chaque décision a sa preuve `fichier:ligne` dans `research.md`.
-- Le risque principal est l'environnement natif d'un enfant relancé (H4). Un
-  test rouge le prouve avant le code.
-- Non vérifiable dans ce dépôt : le comportement réel de T3 sur un fil `working`
-  pendant la pause. La vue reste `working` (question 3).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/152-reprise-missions/plan.md#extrait-1).
 
 ## Stratégie de test
 
@@ -178,13 +174,7 @@ d'arrêt).
 
 ## Livraison
 
-Après les gates de validation : commits, livraison et nettoyage de la session
-152, puis exécution séquentielle des sessions 153 à 160, avec leur propre
-livraison et nettoyage. Le principal coordonne Git, les fichiers installés et
-l'activation de production. La référence historique 147 à 151 installait les
-fichiers sans relance ; elle n'autorise pas à interrompre les autres fils T3.
-Le diff 152 est enregistré dans
-`/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/diff-152.patch`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/152-reprise-missions/plan.md#extrait-2).
 
 FR-029 ne promet pas la réparation d’un fichier de marqueur corrompu ou
 illisible. `load` rend une erreur et la réconciliation ne supprime un marqueur

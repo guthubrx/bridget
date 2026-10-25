@@ -40,7 +40,7 @@ HTML et JavaScript, donc ne peuvent pas partager la confiance du renderer normal
   blobs canoniques référencés, échecs de publication, restaurations et
   évictions. Ils ne contiennent ni titre, ni URL de source, ni identité.
 
-## Dépendances UI et réemploi T3
+## Dépendances de rendu
 
 Les dépendances de rendu sont strictement locales, versions et empreintes
 contrôlées par `crates/bridget-daemon/assets/ui/vendor/manifest.json` :
@@ -48,11 +48,9 @@ ECharts 6.1.0 (Apache-2.0) et Tabulator 6.5.2 (MIT). La procédure de contrôle
 est `npm run vendor:check` depuis le dossier UI. Les licences et notices sont
 conservées dans `vendor/NOTICE.md` et les fichiers associés.
 
-Les contrôles de disposition de T3 seront seulement repris comme référence de
-forme, conformément à sa licence MIT. Aucun composant, CSS ou runtime T3 n'est
-importé dans Bridget. Les futures actions DOM par agent sont explicitement hors
-de portée : elles exigent une spécification, une autorisation explicite et une
-politique distinctes.
+Les contrôles de disposition sont définis pour les artefacts Bridget. Les futures
+actions DOM par agent exigent une spécification, une autorisation explicite et
+une politique distinctes.
 
 ## Runtime HTML et Browser opérateur
 

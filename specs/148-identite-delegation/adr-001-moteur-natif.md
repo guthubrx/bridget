@@ -4,9 +4,7 @@ Statut : retenu pour l'implémentation. Date : 2026-10-10.
 
 ## Pourquoi
 
-La délégation doit fonctionner depuis n'importe quel hôte Bridget. Utiliser
-l'orchestrateur T3 pour créer les enfants imposerait T3 au produit. L'utilisateur
-a explicitement exclu cette dépendance.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/148-identite-delegation/adr-001-moteur-natif.md#extrait-1).
 
 ## Décision
 
@@ -15,11 +13,7 @@ Le daemon Bridget porte le catalogue, la sélection exacte, les tâches, les
 registre, sa flotte gérée, ses remises idempotentes et ses exécutions existantes.
 Les références et la définition fournisseur sont conservées avant les effets.
 
-Le connecteur T3 atteste seulement la session courante. Il fournit au MCP Bridget
-un credential privé lié au fil. Bridget le vérifie à chaque opération. Une
-preuve invalide ou un rattachement daemon révoqué produit un refus fermé.
-Les processus partagés ne servent plus à choisir la session de ce connecteur.
-Les identités de wrappers natifs conservent leur mécanisme existant.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/148-identite-delegation/adr-001-moteur-natif.md#extrait-2).
 
 Les permissions de délégation sont des permissions natives Bridget. Un parent
 géré peut transmettre ses limites prouvées. Un parent externe avec projet attesté
@@ -30,14 +24,8 @@ La commande humaine ne devient pas un outil d'agent. Un choix explicite ne peut
 ni inventer un modèle ni élargir les permissions du parent. Le catalogue affiche
 les postures réellement utilisables et les raisons d'un refus.
 
-Les revues et tests GLM lancés par T3 sont un choix de validation de cette
-session. Ils ne constituent pas une dépendance d'exécution de Bridget.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/148-identite-delegation/adr-001-moteur-natif.md#extrait-3).
 
 ## Conséquences à vérifier
 
-- La recette du moteur natif se déroule avec T3 absent.
-- Un rejeu conserve l'enfant et la mission initiaux, même après coupure.
-- Une fin de tour avec enfants actifs ne publie pas le résultat final.
-- La révocation ferme les nouveaux accès ; lire un résultat ne relance rien.
-- Aucun jeton T3 ne rejoint le prompt, la ligne de commande ou les journaux.
-- Aucun processus de production n'est redémarré pendant cette session.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/148-identite-delegation/adr-001-moteur-natif.md#extrait-4).

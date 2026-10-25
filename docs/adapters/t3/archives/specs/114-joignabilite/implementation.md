@@ -1,0 +1,114 @@
+# Archives techniques de l’adaptateur T3
+
+Document d’origine : [specs/114-joignabilite/implementation.md](../../../../../../specs/114-joignabilite/implementation.md).
+
+Ces extraits conservent les faits, contrats, limites et références techniques
+datés de l’intégration. Ils ne définissent pas les parcours du produit.
+Les liens de navigation sont adaptés au dossier d’archive. Les chemins des
+exemples techniques gardent leur valeur d’origine. Les comptes rendus ne prouvent pas le runtime actuel.
+
+<a id="extrait-1"></a>
+
+## Extrait 1
+
+### Diagnostic
+L'application officielle t3code 0.0.42, réinstallée le 2026-09-20 à 05:45 et lancée à 06:03, a
+tourné à côté de l'application locale 0.0.40 qui héberge les agents. Les deux partagent
+`~/.t3/userdata/` : la seconde s'est déclarée dans `server-runtime.json` avec son port 3774.
+`refresh_inner` comparait ce fichier à son propre serveur et, en cas d'écart, révoquait tous les
+marqueurs. Résultat : `identity_not_found` sur les appels MCP de tous les fils, pas seulement
+celui qui s'en plaignait, et 456 avertissements identiques dans la journée.
+
+<a id="extrait-2"></a>
+
+## Extrait 2
+
+### Correction (`t3code_identity.rs`)
+Le contrôle visait une course : le serveur ne doit pas changer pendant la collecte. C'est la
+**naissance** du processus qui le prouve, relevée avant et après `collect_processes`. Elle est
+strictement plus forte que la comparaison de fichier — elle voit le recyclage de PID — et immune à
+un tiers qui réécrit un fichier partagé. Les attestations ne dépendent que de notre serveur : les
+descendants collectés sont les siens, les liens vivants viennent de notre propre snapshot.
+
+<a id="extrait-3"></a>
+
+## Extrait 3
+
+### Signalement (`t3code.rs`)
+- `report_foreign_runtime` : un avertissement par changement, nommant le PID, le port de l'autre
+  application et le fichier partagé ; un retour à la normale est dit une fois.
+- Les échecs d'attestation ne sont journalisés qu'au changement de motif ; le rétablissement l'est.
+- `bridget t3 status` nomme les deux cas : le fichier désigne une autre application, ou il a été
+  effacé alors que le pont tourne (le prochain démarrage ne trouvera rien).
+- Le pont n'écrit pas dans l'état de t3code : cet invariant est conservé.
+
+<a id="extrait-4"></a>
+
+## Extrait 4
+
+### Correction (`t3code.rs`, `wrapper.rs`)
+- `batchable_prefix` : longueur du lot en tête de file, bornée par `BATCH_BOUND` (8) et
+  `BATCH_BODY_BOUND` (32 Kio), arrêtée au premier message non groupable ou déjà écarté.
+- `groupable` : ni demande suivie, ni sollicitation de fil, ni notification — chacune porte une
+  consigne propre, et la réponse d'un tour ne se répartit pas entre deux demandes.
+- `batch_envelope` : à un seul message, rend exactement l'enveloppe historique ; au-delà, un
+  en-tête de lot et un séparateur nommant l'expéditeur et l'identifiant de chaque message.
+- `dispatch_batch` remplace `dispatch_with_id` en production ; `commandId` reste l'identifiant du
+  premier message, donc le rejeu après panne reconstruit la même commande.
+- `deliver_batch_to_interactive` (`wrapper.rs`) : le tracker juge chaque remise séparément, seules
+  les remises retenues entrent dans l'injection unique, et chacune reçoit ensuite son accusé.
+  `deliver_idempotent_to_interactive` devient un appel à un lot d'un élément : aucune duplication.
+- Le paramètre `command_id` de `dispatch_with_id` n'avait qu'une valeur effective ; il est retiré.
+
+<a id="extrait-5"></a>
+
+## Extrait 5
+
+### Diagnostic
+`collect_processes` ne reconnaissait que `codex app-server` et `claude`. `cursor-agent` ne porte
+pas son identifiant de session en ligne de commande — il l'a négocié par le protocole ACP — mais il
+tient ouvert `~/.cursor/acp-sessions/<sessionId>/store.db`, et T3 enregistre ce même `sessionId`
+dans `provider_session_runtime`. La preuve est donc de même nature que le rollout Codex.
+
+<a id="extrait-6"></a>
+
+## Extrait 6
+
+### Correction (`t3code_identity.rs`, `runtime.rs`)
+- `cursor_session` extrait l'identifiant du composant qui suit `acp-sessions`, validé.
+- `collect_processes` accepte `cursor-agent` lancé en mode `acp` ; `read_sessions` lit `sessionId`.
+- `open_session_files` reçoit désormais le prédicat d'acceptation de l'appelant : élargir le filtre
+  pour tout le monde aurait fait classer à `open_session_file` un fichier qui n'est pas un rollout.
+- `complete_session_inventory` trie les fichiers ouverts par fournisseur avant de les lire : un
+  fichier étranger n'invalide plus le cycle, et la complétude par fournisseur est préservée.
+
+<a id="extrait-7"></a>
+
+## Extrait 7
+
+## Vérifications
+- Tests `spec114_*` : 8 (identité 3, pont 4, lot idempotent 1), tous verts.
+- `t3code` et `t3code_identity` : 77/77. fmt OK ; clippy `-D warnings` OK.
+- Recette complète (`cargo test --workspace --no-fail-fast`, umask 077, `BRIDGET_HOME` privé) :
+  **1532 réussis, 0 échec, 52 ignorés** sur 80 binaires — les huit tests ajoutés, aucune régression.
+
+<a id="extrait-8"></a>
+
+## Extrait 8
+
+## T008 — Livraison
+Commit `c64b6cb3` fusionné dans main en fast-forward ; binaire reconstruit à 07:07 ; seul le service
+du pont (`com.bridget.t3`) a été relancé. Le daemon n'est pas touché : aucun changement de protocole
+ni de code daemon dans cette session, et les agents connectés n'ont pas été coupés.
+
+<a id="extrait-9"></a>
+
+## Extrait 9
+
+Vérifications en production :
+- Attestation Cursor : le processus `cursor-agent` du fil « Explorer le projet » porte désormais un
+  marqueur lié à son propre identité. Avant la 114, aucun fil Cursor n'était attestable.
+- Journal du pont : plus aucun avertissement depuis la relance ; `bridget t3 status` ne signale
+  aucun partage de dossier, l'application officielle ayant été quittée.
+- Le regroupement attend une rafale réelle pour être observé en production ; aucun message d'essai
+  n'a été envoyé à un agent tiers pour le provoquer. Il est couvert par quatre tests.

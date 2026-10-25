@@ -1,17 +1,10 @@
 # Validation des tests — SPEC-165
 
-Date : 2026-10-14  
-Worktree : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/165-cycle-vie-liens-t3`
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/tests.md#extrait-1).
 
 ## Résultat ciblé
 
-| Contrôle | Résultat |
-|---|---|
-| `rustfmt --edition 2024` sur les trois fichiers Rust affectés | RC 0 |
-| `git diff --check` | RC 0 |
-| `cargo test -p bridget-daemon spec165_ -- --nocapture` | 13 PASS, 0 FAIL |
-| `cargo test -p bridget-daemon 't3code::tests' -- --nocapture` | 102 PASS, 0 FAIL |
-| `cargo test -p bridget-daemon t3code_contract -- --nocapture` | 22 PASS, 0 FAIL, 1 ignored |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/tests.md#extrait-2).
 
 La panique affichée par `spec165_panique_worker_ferme_et_joint_le_lecteur_une_fois` est volontaire. Le test vérifie que le propriétaire ferme le flux et joint le lecteur après cette panique.
 
@@ -25,7 +18,7 @@ Commande : `cargo test -p bridget-daemon`
 
 Résultat final après le correctif : 1 944 PASS, 91 FAIL, 16 ignored, RC 101.
 
-Ce résultat n'est pas déclaré GREEN. Les 91 échecs sont hors des trois fichiers affectés. Les causes visibles sont déjà présentes dans l'environnement de test global : chemins de sockets Unix trop longs, différence macOS `/private/var` contre `/var`, fixtures de migration absentes, environnement fournisseur non apte et matrices de commandes historiques désynchronisées. Le test T3 historique `spec147_native_t3_refresh_publishes_and_revokes_real_os_processes` échoue aussi sur `SUN_LEN`. Les 102 tests du module affecté et les 23 tests de contrat ne reproduisent aucun de ces échecs.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/tests.md#extrait-3).
 
 ## Clippy
 

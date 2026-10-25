@@ -154,7 +154,7 @@ cité ne prouve ni l’exécution dans ce dossier ni un confinement ou un droit.
 Le dépôt et le lien sont durables avant la notification du canal. La notification
 se fait hors verrou commun et son écriture et son attente sont bornées.
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme. Les demandes n'ajoutent aucun état de tâche.
 

@@ -8,31 +8,27 @@ Contrat du mode et de la continuité : /Users/moi/Nextcloud/10.Scripts/64.bridge
 
 ## Comportement actif
 
-Les nouvelles délégations vont à Bridget lorsque `preferBridgetDelegation=true`. Bridget choisit la machine, le moteur, la connexion, le modèle et l’effort que vous ne fixez pas. Les tâches T3 déjà lancées restent suivies sur leur moteur d'origine. Un refus Bridget ne déclenche pas de fallback silencieux vers T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-1).
 
 La recette réellement observée a repris le fil ordinal48 avec un wake scoped. Elle a produit une tâche Bridget et un résultat corrélé ; son rejeu était identique. Elle ne qualifie pas tous les modèles, moteurs ou fournisseurs.
 
 ## Contrôles historiques réalisés
 
-Le paquet T3 signé `0.0.45-local.169` a été construit une seule fois, installé puis activé une seule fois. ASAR SHA-256 : `a23d41088ed6aa3671a129778efc42736089f68b433d7f4dd946bc25888fb52c`. Les preuves opératoires privées sont dans /home/moi/.local/state/bridget-delivery169/operational169/operational169-proofs.json. Les nouveaux processus T3 sont main4717/serveur4792. Bridget71927/72468 et le tunnel60206 sont conservés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-2).
 
 La réponse HTTP officielle complète fait 7508698 octets et conserve les données utiles avec `projection.visibleTurnItems=[]`. La réponse bornée fait 2661116 octets, fournit un curseur et indique explicitement `payloadBudgetExceeded=true`. Ni token ni corps de conversation ne sont publiés.
 
 ## Vérifier le comportement ciblé (historique)
 
-Depuis le worktree T3 confirmé par ROOT, utiliser les bancs existants et compléter leurs cas utiles. Exemple pour la cible de développement prévue :
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-3).
 
-```sh
-cd /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget
-vp test run /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/apps/server/src/serverSettings.test.ts /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/packages/provider-core/src/server/orchestrationInstructions.test.ts /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
-vp test run /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/apps/server/src/provider/CodexDeveloperInstructions.test.ts /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/apps/server/src/provider/Drivers/CodexMcp.test.ts /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts /home/moi/11.Repositories/t3code-local/.worktrees/169-priorite-bridget/apps/server/src/bridget/BridgetLineage149.test.ts
-```
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-4).
 
 Les tests d'adaptateurs ACP/OpenCode/Cursor/Pi complètent ce socle. Prouver les transitions réelles, le champ par tour sans MCP et vers legacy, la stabilité d'identité et la conservation byte-identique d'un fichier invalide après refus d'écriture. Claude doit transmettre `snapshot: false` et attendre son travail de fond sans employer un mode périmé. Pi exige reçu privé du bon mode corrélé à la tentative ET ACK avant le premier vrai prompt, même OFF ; l'ACK seul ou un ancien reçu ne suffit pas. Aucun fournisseur supplémentaire n'est lancé pour obtenir une preuve.
 
 Pi est limité aux contrats et fixtures : son binaire est hors PATH. Ne pas annoncer de recette réelle Pi ni installer ce fournisseur pour ce lot.
 
-Faire le lint des seuls fichiers changés et les types des paquets affectés selon /Users/moi/11.Repositories/t3code-local/AGENTS.md. Ne pas lancer de contrôle global du dépôt. Conserver les sorties exactes et les limites, sans annoncer de succès global.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-5).
 
 ## Régler la préférence à l'avenir
 
@@ -44,9 +40,9 @@ Relever le chemin absolu réellement résolu par `ServerSettingsService` dans l'
 
 Cet extrait n'est pas un fichier complet à substituer aux réglages. `false`, ou une clé absente dans un fichier valide, donne OFF. Un document invalide ou une lecture en erreur donne un diagnostic et `blocked`, jamais un OFF prétendument lu. Le changement prend effet dans les nouvelles consignes avant le tour suivant.
 
-Avec ON, Codex et Claude demandent l'outil automatique Bridget s'il est réellement exposé. ACP, OpenCode, Cursor et Pi annoncent son absence de montage. Les droits existants restent applicables et un refus ne lance pas T3 en secours. OFF restitue les consignes habituelles. Les tâches déjà lancées gardent leur moteur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-6).
 
-Pour désactiver, mettre `preferBridgetDelegation=false` dans /Users/moi/.t3/userdata/settings.json en conservant toutes les autres valeurs. Il n'y a pas de fallback silencieux en cas de refus Bridget.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-7).
 
 ## Installer puis activer (historique ROOT)
 
@@ -68,4 +64,4 @@ Une query Claude blocked peut le rester jusqu'à réouverture ou changement de c
 
 ## Checkpoint historique après clôture J1
 
-J1 est clos : P2 CONVERGED sans ajout, contre-revue R2 arbitrée et audit source pass. Les12 notes par axe,42 critères et réserves exactes sont dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/169-priorite-bridget/validation/audit169.md ; le score de pénalités100 n'est pas une qualité100 ni un GREEN global. J2 est documenté : source T3 `58ddcf3a16205a24f940164cba500089f49ec6c0` et documents Bridget `f4cb623aed57ce251bbd0b1f293f9b0c2b6f2c11` sont intégrés/poussés ; le C2 Git reste à ROOT. J3–J5 sont clos sur les preuves privées et publiables ; J6 reste ouvert. Suite canonique : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/169-priorite-bridget/validation/livraison169.md.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/169-priorite-bridget/quickstart.md#extrait-8).

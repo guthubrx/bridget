@@ -157,10 +157,4 @@ Acceptation :
 
 ## Cas limites à couvrir
 
-Noms identiques ou renommés ; mention de soi ; cible non membre ; citation de
-`@all` ; perte du premier reçu ; publications concurrentes ; reprise après crash ;
-lecture ancienne et nouvelle simultanées ; membre hors ligne ; client ancien ;
-agent occupé ; DND ; saturation ; corps Unicode ; pagination coupant avant une
-grosse entrée ; clôture pendant une remise ; nouvelle mention pendant un ACK ;
-réponse finale T3/native non relayée en DM ; contenu malveillant conservé comme
-donnée et non exécuté ; synthèse tronquée et désaccord conservé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/spec.md#extrait-1).

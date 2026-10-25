@@ -2,7 +2,7 @@
 
 Date : 2026-10-10. Testeur : Claude Sonnet 5.5 (claudeAgent), r2. Aucun edit de production, aucun commit, aucune case cochée.
 
-**Statut : PARTIEL.** La couche T3 est prouvée (serveur réel, auth réelle, RPC réels). La couche native (MCP privé authentifié, deux sessions, rotation/révocation, identité étrangère) n'est PAS prouvée : le reçu `native149-debug-receipt.json` n'existe pas. T036 ne peut pas être coché.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-1).
 
 ## Compteurs
 
@@ -19,29 +19,13 @@ Sortie brute de la matrice : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktr
 
 ## Couches réelles et simulées
 
-| Couche | État |
-|---|---|
-| Serveur T3 du WT (`apps/server/src/bin.ts`, Node 24.13.1, PID 74293, `127.0.0.1:14773`) | RÉEL |
-| Auth : jetons bearer émis par `bin.ts auth session issue`, ticket WS `/api/auth/websocket-ticket`, scopes vérifiés par `RpcAuthorization` | RÉEL |
-| Transport : WebSocket + Effect RPC JSON (client `rpc149.ts` avec `WsRpcGroup`, et trames brutes) | RÉEL |
-| Lecteur `BridgetReader`, service `BridgetLineage`, projection SQL `statev2.sqlite` privée | RÉEL |
-| Daemon Bridget | SIMULÉ : `bridget_fixture.mjs` (CLI Node qui lit un magasin JSON privé). Il ne lance aucun modèle, aucune mission. |
-| Données | Synthétiques et nommées `[recette149]`. Elles ne valident ni SC001 de bout en bout, ni T037. |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-2).
 
-Isolation : cache `/Users/moi/.cache/bridget149-ui` (0700), T3 home privé, ports loopback 14773 et 15733, aucune base, config, secret ni service de production, aucune app T3 Desktop.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-3).
 
 ## Commandes exactes
 
-```
-# jetons (CLI d'auth du WT, base privée T3CODE_HOME=$C/t3home, fichiers 0600 sous $C)
-node apps/server/src/bin.ts auth session issue --ttl 2h --token-only --scope orchestration:read --scope orchestration:operate   # operate
-node apps/server/src/bin.ts auth session issue --ttl 2h --token-only --scope orchestration:read                                  # read
-node apps/server/src/bin.ts auth session issue --ttl 2h --token-only --scope settings:write                                      # noorch
-node rpc149.ts setup <tok-operate>                 # project.create (HTTP) + thread.create (RPC dispatchCommand), zéro tour
-node rpc149.ts call <tok> <méthode> '<json>' [--take N] [--wait-ms M] [--repeat N]   # client Effect typé
-node rpc149.ts raw  <tok> <méthode> '<json>'                                          # trame brute, le serveur reçoit la charge telle quelle
-node matrix149.mjs all
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-4).
 
 Répertoire des outils : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/149-sous-agents-lineage/specs/149-sous-agents-lineage/validation/ui-recipes/`. Le lien `ui-recipes/node_modules` pointe vers `apps/server/node_modules` du WT (symlink, aucune copie).
 
@@ -55,26 +39,17 @@ Répertoire des outils : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/
 
 **Cancel (C1-C3).** Rejeu avec le même `request_id` et la même enveloppe : même reçu. Même `request_id` avec une autre tâche : `envelope_mismatch`.
 
-**Curseur et génération (pagination).** Avec 134 tâches (2 pages), le serveur fusionne les pages et projette 134 fils virtuels. Une mutation entre deux pages rend `snapshot_changed` côté CLI ; T3 repart de la page 1 et réussit (P2). Quand les trois tentatives échouent, T3 rend `snapshot_changed` et le nombre de fils virtuels reste 134 (P3). Limite : le watch du navigateur tournait en parallèle et a pu consommer des mutations ; la preuve « aucun snapshot partiel » repose sur le décompte stable des fils, pas sur une exclusion stricte.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-5).
 
 **Fils virtuels en lecture seule.** `message.dispatch` (modes `start_immediately`, `queue_after_active`, `defer_start`), `provider.switch`, `thread.model-selection.set`, `thread.runtime-mode.set`, `thread.metadata.update`, `thread.fork`, `checkpoint.rollback`, `thread.delete` sont refusés sur `thread:bridget-task:<uuid>` (`OrchestratorSubagentThreadReadOnlyError`). `thread.visit` est accepté. Après tout cela : 0 run, 0 tentative, 0 tour fournisseur, 0 session fournisseur, 0 effet en attente, 0 message.
 
 ## Limites et obstacles
 
-- **MCP privé (bloquant pour T036 complet).** La fixture refuse le namespace `mcp` (`unavailable`). Les scopes MCP read/operate, les deux sessions authentifiées, la rotation/révocation et le refus d'identité étrangère exigent le binaire natif 149. Reprise : quand `native149-debug-receipt.json` existe et que son hash correspond à `/Volumes/8TB2/50-repos-archives/validation-cache/bridget149-target/debug/bridget`, relancer le serveur avec `T3CODE_BRIDGET_EXECUTABLE` pointant ce binaire et un registre privé de recette.
-- S149-19 (conversation B du même projet ne voit pas la lineage de A) : non prouvé. La fixture ignore `--t3-thread` ; seul le daemon natif sélectionne par conversation racine.
-- `orchestration.launchThread` sur fil virtuel : non exécuté. Un échec de la garde (`ThreadLaunchService.ts:728`) aurait pu démarrer un vrai fournisseur avec les identifiants de l'utilisateur. La garde est couverte par les tests serveur r2.
-- Les refus de charge invalide sortent en `Die` (défaut) avec le message de schéma, pas en erreur typée. Le refus est fermé ; je le signale pour information.
-- Le message « This subagent is run by its provider and cannot take messages » s'affiche aussi pour `thread.delete`, `fork`, `rollback`. Cosmétique.
-- Les comptages d'invocations CLI individuelles n'existent pas : la fixture ne journalise pas ses appels. « Aucun double lancement » est prouvé au niveau T3 (compteurs de runs, tours, sessions, effets à 0), pas au niveau du daemon natif.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-6).
 
 ## Défauts de mes outils corrigés pendant la recette (aucun code de production touché)
 
-1. `bridget_fixture.mjs` n'avait pas le bit exécutable (644) : `unavailable` sur le tout premier appel. Corrigé par `chmod 755`.
-2. `process.exit` final tuait `lineage watch` après `ready` (31 ms) : `command_failed`. Corrigé.
-3. Le suivi `--follow` ré-émettait seq 1-2 : le lecteur T3 le refuse à raison (`invalid_output`). Corrigé (seulement les événements après le dernier `next_seq`).
-4. Le suivi `--follow` s'arrêtait seul à 60 s, ce qui coupait le flux. Plafond remonté à 20 min.
-5. `rpc149.ts` tronquait stdout au-delà de 64 Ko (`process.exit` sur pipe). Corrigé (vidage avant sortie).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-7).
 
 ## Empreintes
 
@@ -87,8 +62,8 @@ Répertoire des outils : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/
 | `db_counts.sh` | `244eb028ac9de785` |
 | `fixture_store_init.mjs` | `eaf326e07019147d` |
 
-Source T3 : WT `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`, base `33f6d04e116430bf7f0011902d6af3868163f2d1`, `git diff HEAD` sha `c938b430c79493f0`, 48 fichiers modifiés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-8).
 
 ## État final et nettoyage
 
-Les trois processus owned ont été arrêtés un par un (SIGTERM, sans `-9`) : serveur T3 74293, shell Vite 76196, listener Vite 76205 (orphelin, cwd vérifié). Ports 14773 et 15733 libres, 0 processus fixture. Jetons bearer et pairing supprimés. Conservés pour examen : `/Users/moi/.cache/bridget149-ui/t3home` (DB privée), `store.json`, `store.json.bak149`, `ids.json`, `ids2.json`, `logs/`. Aucun job différé, aucune activation planifiée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/network149.md#extrait-9).

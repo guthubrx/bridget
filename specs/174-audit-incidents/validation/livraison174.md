@@ -4,11 +4,7 @@ Date : 23 octobre 2026.
 
 ## Livraison
 
-Source du binaire : `b8857dfbaa56e36af0641409a5806a030d8b671a`.
-Build `174-b8857dfb`, version 0.4.1, profil release optimisé.
-Sources publiées sur GitHub/main, maître Mac et worker Cartae actifs.
-T3 et le pont existant n’ont pas été redémarrés.
-Les binaires de retour arrière sont conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/livraison174.md#extrait-1).
 
 - SHA-256 macOS : `8daadfea43516a2517a6e166af472dba6b00fb8bd0601e354d39fa92cdb55d12`.
 - SHA-256 Linux : `3bfcd6a0cbab6cbf0acc322649f8635f3e677d6cf7ad013df3ea7b2c7165fe58`.

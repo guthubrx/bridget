@@ -16,11 +16,7 @@ scopes. Résolution held de la cible bornée à deux lignes ; exactement une
 correspondance, sinon refused/not_held avec delivery_id NULL. Cette règle est
 normative ; les chemins de mutations restent à vérifier par leurs tests prévus.
 
-T024/T025 : hunks documentaires préparés, aucune application WT ni tâche cochée.
-Syntaxe fondée sur les candidats CLI/MCP T022, pas sur un runtime validé.
-Le reçu de promotion atteste le commit ; effect unconfirmed, repli FIFO,
-rejet si pleine, doublon Codex possible après erreur ambiguë. Aucun avis
-universel neuf pour reply=false. held_queue reste fermé ; T3, edit et159c différés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/159-edition-file/implementation-b-foundations-annexe.md#extrait-1).
 
 Preuve GREEN :
 /Users/moi/.cache/bridget-tests159B-20261012/T014-T015-foundations-GREEN.json

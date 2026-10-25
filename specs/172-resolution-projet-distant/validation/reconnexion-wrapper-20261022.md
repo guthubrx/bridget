@@ -35,11 +35,6 @@ peut dépasser d'environ20s. Chaque coupure réinitialise la grâce. Après expi
 le fournisseur est arrêté. Cette valeur est retenue par le responsable de correction
 avec environ4s de redémarrage observé ; ce n'est pas un engagement de disponibilité.
 
-Référence T3 lue avant correction :
-/Users/moi/11.Repositories/t3code-local/apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts
-T3 prépare et réconcilie la reprise sur tout le cycle. Bridget réutilise son worker
-qui demeure présent pour garder le même fournisseur, sans rejouer le travail.
-
 Sept tests distincts passent sur la source du paquet. Vrais daemon, worker et wrapper,
 fournisseur simulé sans réseau : coupure/restart du maître en cours de tour, résultat
 terminé pendant la coupure, grâce de reconnexion, panne native locale, expiration
@@ -50,12 +45,7 @@ Revue r2 9d063b81-c2e1-412a-b2d7-f5cf897bd78e : APPROVE, réserves mineures lev�
 
 ## Activation et recette réelle
 
-Seul le worker est remplacé, KillMode=process et SendSIGKILL=no. Le maître82087,
-le pont898 et T3(28528/28591) gardent PID et date de naissance ; ASAR inchangé.
-Le processus distant déjà actif conserve PID2027384 et naissance217334127.
-Son journal avant/après livraison conserve la sessionclaude-stream-json-2027660.
-Les wrappers antérieurs gardent leur ancien binaire jusqu'à leur fin ; le maître
-n'est pas redémarré pour cette livraison. Les nouveaux wrappers utilisent le build corrigé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/reconnexion-wrapper-20261022.md#extrait-1).
 
 Recette MCP officielle réelle : Task508c947f-038a-42fe-836f-363d1fad6fda, même enfant
 e0c802bc-0b5b-41bf-945c-b303c949205b, deux rondes de lecture seule. Marqueurs

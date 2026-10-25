@@ -5,23 +5,12 @@ présentées comme déjà disponibles dans le binaire installé.
 
 ## Annuaire
 
-Nouvelle variante DirectoryScoped avec scope: same_project | global.
-Réponse CommunicationDirectory séparée: ScopedAgentInfo avec AgentInfo aplati,
-communication_project optionnel et project_relation same/other/unknown.
-AgentInfo et ListAgents de diagnostic restent inchangés.
-CommunicationProjectFact est une annonce séparée après Register. Seul le
-transport propriétaire vivant peut l'écrire ; les auxiliaires en héritent.
-Un client CLI de fond négocié peut établir son propre contexte depuis la racine
-explicite du run, validée avec son hôte par le daemon. Aucun Register d'agent ni
-identité T3 empruntée. Ce contexte n'écrase jamais celui d'un auxiliaire.
-Le projet appelant vient de la connexion attestée. La requête ne reçoit pas
-un project_id choisi librement comme autorité. Défaut de communication:
-same_project. ListAgents reste un diagnostic global compatible.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/138-priorite-projet/contracts/communication.md#extrait-1).
 
 CLI: who/agents sans option utilisent le projet ; --global choisit la vue globale.
 Sans rattachement attesté ni --project-root explicite, un client CLI autonome
 reste inconnu, y compris who/agents : zéro suggestion locale et warning.
-Le cwd n'est jamais ajouté implicitement. T3/wrapper transmettent leur contexte.
+Le cwd n'est jamais ajouté implicitement. adaptateur/wrapper transmettent leur contexte.
 MCP: who expose scope avec défaut same_project. Les résultats contiennent les
 agents retenus et des métadonnées de portée, hors du corps des messages.
 Un projet inconnu renvoie une liste locale vide avec project_unknown.

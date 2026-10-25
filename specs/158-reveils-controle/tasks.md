@@ -22,7 +22,7 @@ Règle : une tâche n'est cochée qu'après son test vert. Les tests marqués
 - [x] T004 [P] Dans `crates/bridget-daemon/src/referent_control.rs` : fonction pure `admit_native_delegation(control, halt)` qui compose pause et arrêt dans la garde de l'ADR 027 (arrêt prioritaire : motif `delegations_halted`, sinon `pause`, sinon admis) ; réemployer `AutonomousEffect::NativeDelegation`, déjà présent sur la source157 préparée, et vérifier sa présence sur la base livrée ; tests table de vérité `control158_halt_admission_4_combinaisons`
 - [x] T005 [P] Créer `crates/bridget-daemon/src/mcp_scopes.rs` (déclaré dans `lib.rs`) : types `Scope`, `ToolScope { tool, base, read_actions, own_state_actions }` et `scope_of(tool, arguments)` rendant `None` pour un outil inconnu ; table vide pour l'instant ; annoter la complexité (O(1) par recherche, table bornée)
 
-## Phase 3 - US1 Vue globale sans T3 (P1)
+## Phase 3 - US1 Vue globale par le parcours natif Bridget (P1)
 
 **Test indépendant** : filtre `control158_overview`.
 
@@ -77,12 +77,7 @@ buildable et testable.
 
 ## Charge future (Article XX)
 
-- Réduisent la charge : T016 (un outil sans portée échoue en CI), T009 (une vue
-  pour tous les parents), T004 (une seule décision d'admission).
-- Complexité justifiée : T017 (plafond, comble l'écart de sécurité avec T3),
-  T003 (reçus bornés, évitent de remettre un arrêt par un rejeu).
-- Non faits volontairement : budget de tours et de tokens (compteur non fiable),
-  historique d'audit de l'arrêt, enveloppe de compilation des outils.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/158-reveils-controle/tasks.md#extrait-1).
 
 ## Base158A vérifiée par le principal
 
@@ -163,7 +158,7 @@ Groupes1=T102 ;2–3=T104 ;4–6=T107 ;7=T111 ;8–10=T114. Les formulationsR1 f
 
 ### Pipeline final hors cases techniques
 
-Après toutes les preuves et la relecture : Analyze si delta contractuel, Converge code/artefacts dans la borne 3 passages, contre-revue puis audit selon my-specify-all, enfin commit/intégration/push/buildsigné/install/activation autorisée avec zéro mission native non terminale et nettoyage, reçus séparés. ROOT conserve ce pipeline ; aucun cochage technique de ces phases ni commit parcase. T3 ne redémarre pas sans consigne explicite. Le reçu158A reste historique et autonome.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/158-reveils-controle/tasks.md#extrait-2).
 
 ### ArticleXIX/XX et estimation proposée
 

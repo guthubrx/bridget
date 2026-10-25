@@ -44,6 +44,4 @@ Négatives et limites :
 
 ## Validation prévue
 
-- `cargo build -p bridget-daemon`, avec un compilateur C disponible.
-- Tests ciblés : `reprise::tests::pin_yaml`, `decision_service`, `t3code` et `t3code_opaque_identifiers149_test`.
-- `cargo tree -p bridget-daemon -d` pour détecter les doublons de versions.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/170-minreq-3-et-serde-saphyr.fr.md#extrait-1).

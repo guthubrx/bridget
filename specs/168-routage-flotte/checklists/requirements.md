@@ -15,7 +15,7 @@ Portée : revue de la spécification, pas preuve d’implémentation ou de tests
 - [x] Les 35 exigences sont vérifiables et les 11 critères de succès mesurables.
 - [x] Les sept histoires couvrent contraintes, comptes, charge, chaîne de choix, reprise et Git.
 - [x] Les cas limites, dépendances et exclusions sont explicites.
-- [x] La compatibilité et l’indépendance de T3 sont requises.
+- [x] Le contrat natif Bridget reste l’autorité des adaptateurs.
 - [x] Le petit décideur de secours appartient bien au périmètre complet.
 
 ## Préparation de la suite
@@ -27,6 +27,6 @@ Portée : revue de la spécification, pas preuve d’implémentation ou de tests
 ## Notes
 Revue documentaire initiale et corrections ciblées r1 terminées. Les cases attestent la qualité du besoin seulement.
 Corrections intégrées : charge/workload explicite hors HandoffV1, SHA attendu aussi en Shared Git,
-accès catalogue local sans T3, sûreté OAuth safe-mode, borne globale128, efforts natifs null,
+accès catalogue local par le parcours natif Bridget, sûreté OAuth safe-mode, borne globale128, efforts natifs null,
 recettes Laya compatible versus12+LLM/score et garantie de non-injection limitée aux données automatiques.
 Le plan doit encore passer l’audit de réutilisation et la revue contradictoire avant génération des tâches.

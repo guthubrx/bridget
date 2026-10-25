@@ -8,16 +8,9 @@ Les neuf replays vérifiés sont RC0 ;214 sources stables dans chacun. Le lot na
 
 Les sept nouveaux échecs ont chacun un PASS sur le même nom et la même cible :
 
-- exemples_skill_envoient_repondent_et_cloturent_sans_service_compagnon — skill089-postfix-r1
-- daemon::native_delegation::native_workspace154_tests::native154_partage_discovery_termine_et_statut_compatibles150 — workspace154-schema-postfix-r1
-- daemon::native_delegation::tests::native152_rouge_annulation_multi_ticks — annulation152-postfix-r1
-- daemon::native_delegation::tests::native152_rouge_annulation_partielle — annulation152-postfix-r1
-- mcp::tests::matrice_fr009_couvre_les_quinze_cas — mcp155-matrix-postfix-r1
-- mcp::tests::native151_ack_facade_schema_ferme_bornes_et_annotations — mcp151-schema-postfix-r1
-- t3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation — http099-final-r2
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/155-demandes-enfant/validation/final155-cumulative-gate.md#extrait-1).
 
-099 final : 1 PASS, RC0, sans diagnostic ; t3code.rs SHA256 df87e858f675681cd7d9f495a5e37fc831c0e0d12825d519e629a8fe4a95e858.
-Les huit premiers replays diffèrent du dernier instantané uniquement par t3code.rs. Les214 hashes actuels correspondent au dernier reçu099 et sont restés égaux pendant cette vérification.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/155-demandes-enfant/validation/final155-cumulative-gate.md#extrait-2).
 
 **Limite** : aucune suite workspace sur le dernier instantané. Les compteurs des passages ciblés ne sont pas additionnés au total workspace. Les huit échecs historiques ne sont pas déclarés corrigés.
 

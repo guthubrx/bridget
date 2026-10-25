@@ -2,18 +2,9 @@
 
 ## Preuve de délégation locale
 
-| Champ | Règle |
-|---|---|
-| `pid` | PID du fournisseur interne, supérieur à 1 |
-| `birth` | naissance OS exacte du PID |
-| `parent_instance_id` | instance Bridget principale existante |
-| `parent_name_file` | fichier privé qui livre le nom courant du parent |
-| `provider` | valeur fermée et bornée issue de l'inventaire T3 |
-| `child_ref` | empreinte opaque stable et bornée de la session interne |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/133-relais-sous-agents/data-model.md#extrait-1).
 
-Le fichier vit dans `delegated-pids/<pid>`. Il est privé, atomique, non
-symbolique et possédé par une instance du pont T3. Il n'est pas une identité
-Bridget et ne contient aucune preuve secrète du parent.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/133-relais-sous-agents/data-model.md#extrait-2).
 
 Cycle : observé → publié → relu par MCP → retiré à la disparition, au changement
 de naissance, à l'ambiguïté ou à l'arrêt du pont. Aucun état historique n'est

@@ -1,8 +1,6 @@
 # SPEC141 — Messages Bridget groupés
 
-Date : 2026-10-07. Statut : Implemented, installé, activation différée.
-Autorisation : session 141 validée explicitement par « oui ».
-Tests: 294/294 (100%) — suites ciblées fraîchement rejouées. Convergence et audit validés. Application adjacente installée et vérifiée, aucune activation dans T3 en cours.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/spec.md#extrait-1).
 
 ## Besoin
 
@@ -72,4 +70,4 @@ La maquette utilise trois messages pour illustrer le rendu. Le nombre réel rest
 
 SPEC114 fournit le format des lots. SPEC134 fournit les noms affichés. SPEC139 et SPEC140 fournissent la reconnaissance, la carte compacte, le rendu lisible, la copie et l'ancrage existants. Cette session modifie leur présentation pour les lots directs seulement. Elle ne change pas leur autorité ni les données remises aux agents.
 
-Le 2026-10-07, l'utilisateur a autorisé commit, fusion, push et installation de cette session. Il a interdit de relancer T3. La nouvelle application est installée à côté et vérifiée, avec activation différée. L'application en cours garde son ancien code. Le nettoyage d'autres travaux reste hors périmètre.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/141-messages-groupes/spec.md#extrait-2).

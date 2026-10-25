@@ -6,7 +6,7 @@ The tick now starts at most one result-slot operation in the background. A recei
 
 The targeted test passes: each tick returns in less than 500 ms, the first worker request reaches its real five-second timeout outside the tick, concurrent ticks create no duplicate reservation, three tasks are visited in order, and no mission is dispatched without a proof. Further integration checks are recorded in the delivery receipt.
 
-T3 reference: ProviderSessionReaper starts its periodic sweep with forkParked and Schedule.spaced. Its asynchronous effect does not monopolize the other control operations. Bridget retains its existing synchronous RPC implementation in a single bounded background operation because remote result-slot identity and permission proofs have no counterpart in T3's local session reaper.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/remaining-maintenance.md#extrait-1).
 
 The SQL pending-task scan remains O(n). Only one candidate performs network operations. This change removes the result-slot wait from the shared tick; it does not claim a total latency bound for every other maintenance operation or increase the one-operation concurrency limit.
 

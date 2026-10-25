@@ -100,9 +100,7 @@ Hiérarchisés **par nature, pas par volume** :
 **La trace inter-agents appartient au niveau 1** : c'est un acte, au même titre
 qu'un test lancé.
 
-**Sources disponibles — relevées le 2026-08-25 dans une implémentation de
-référence** (`~/11.Repositories/t3code`, paquets `effect-acp` et
-`effect-codex-app-server`). **Toutes traversent déjà nos connexions.**
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/spec.md#extrait-1).
 
 **Codex** — `item/*` :
 
@@ -291,9 +289,7 @@ locale. Aucune étape de compilation, aucune installation.
 
 ## 8ter. Référence de lecture
 
-`~/11.Repositories/t3code` — monorepo TypeScript, paquets **`effect-acp`** et
-**`effect-codex-app-server`** : implémentation de référence des deux protocoles,
-avec la liste exhaustive des événements (§4.4).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/032-gui-poste-de-travail/spec.md#extrait-2).
 
 > **On lit, on ne copie pas.** La **forme des protocoles** est publique et
 > documentée ; s'en inspirer ne pose aucun problème. **Reprendre du code en

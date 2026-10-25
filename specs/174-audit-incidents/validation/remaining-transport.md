@@ -33,13 +33,11 @@ Correction :
 - `communication/client.rs` : `spec174_wake_coupure_socket_reelle_sans_rejeu_ni_lecture_modifiee`. Socket Unix réel, Disconnect puis EOF, une mutation et une lecture.
 - `mcp.rs` : `spec174_publication_coupure_apres_ecriture_reste_issue_inconnue`. Socket Unix réel, Disconnect puis EOF, pont dynamique.
 
-## Référence T3
+## Choix de conception Bridget
 
-Copies lues dans `/home/moi/.cache/bridget-174-remaining/t3`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/remaining-transport.md#extrait-1).
 
-- `supervisor.ts` (`retryDelayMs`, ligne 104) : échelle fixe plafonnée, sans gigue. Ce fichier ne fournit donc pas de modèle de gigue à reprendre.
-- `session.ts` (`onDisconnect`, `RpcClientError`) : toute coupure devient une erreur transitoire de type `transport`. T3 ne distingue pas une coupure avant ou après écriture. Cette distinction, qui porte `outcome_unknown`, n'a donc pas d'équivalent dans T3.
-- `transport.ts` : `sanitizeThreadErrorMessage` masque les erreurs de transport dans l'interface. Ce masquage ne doit pas s'appliquer à `outcome_unknown`. Nous ne l'avons pas modifié ; les consommateurs d'interface restent à vérifier.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/remaining-transport.md#extrait-2).
 
 ## Verdict
 

@@ -106,6 +106,6 @@ PASS. Le design s'appuie sur les chemins d'autorité existants et ajoute seuleme
 
 ## Rectification de finition - 2026-08-31
 
-La finition du centre est un portage structurel de la surface de réglages T3 Code, et non une interprétation visuelle : `SettingsSection`, `SettingsRow` et la géométrie de `SelectTrigger` fournissent la grille, le rythme et les contrôles. Bridget conserve son fond sombre, ses gris, son accent et son overlay modal. Cette décision évite de maintenir une deuxième grammaire de réglages imprécise.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/080-centre-controle-bridget/plan.md#extrait-1).
 
 La validation finale est séparée en deux preuves : les tests automatisés assurent le contrat et les dimensions CSS, puis l'opérateur évalue le rendu réel de l'overlay. Un clic ou une capture qui ne cible pas Bridget ne vaut pas validation.

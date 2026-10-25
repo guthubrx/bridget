@@ -10,14 +10,7 @@ Source compilée : 21a16c374d71319155b13728261d62535dedfacf, intégrée et pouss
 
 ## Installation et santé
 
-| Composant | Observation après installation finale |
-|---|---|
-| Core Cartae | PID2153657, actif, build180-21a16c374d71 |
-| Worker Cartae | PID2156728, actif, même exécutable final |
-| Mobile Cartae | PID2153921, actif, même exécutable final |
-| Connecteur Mac | PID46375, chargé depuis le répertoire180-21a16c374d71 |
-| Pixel | Bridget0.6.1, versionCode6001, association conservée |
-| T3 | PID650/975 et dates de naissance conservés, aucune relance |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/180-file-mobile/validation/livraison.md#extrait-1).
 
 Mac signé : SHA-256 1f011009873b342bbb3b8ce065d7879d131cc237e3def3c4194333586f24f1af.
 Linux : SHA-256 4d12c54d189f92a1a59f277c9b7bf5821ce83da659bf3b18b4cb79d5d5eb32fa.
@@ -32,13 +25,13 @@ Bases bridget.db et mobile-devices.db : quick_check=ok, zéro violation de clé 
 
 La tâche historique e5959986-e426-422d-956f-e035dbcf89be reste cancelling, guarded=false et mission_issued_at=null. Son payload conserve l’empreinte 650b6528636b25cc3954f9e1907abca0b185d4af564f77f96192c6e2a020b3f3. Aucun état de tâche corrigé artificiellement. La préparation automatique reste soumise au refus update_missions_active_or_unconfirmed jusqu’à réconciliation.
 
-La maintenance manuelle réemploie la procédure179 : contrôle des admissions et commandes worker, sauvegardes, arrêt propre du mobile/core, vérification des cgroups sans enfant de mission, arrêt worker, barrière privée bornée180s, liens stables commutés, reprise et contrôle de santé Mac/Cartae, libération de la barrière. Aucun fournisseur ni T3 arrêté. Les reçus et sauvegardes de l’installation candidate restent distincts de ceux de l’installation finale.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/180-file-mobile/validation/livraison.md#extrait-2).
 
 ## Vérifications et preuves
 
 Rust : lot mobile77PASS/1ignored, guidage6PASS ; six tests180 finaux PASS. Android JVM20PASS/0échec, lintRelease et assembleRelease réussis. Pixel : QueueStoreTest instrumenté1PASS ; paquet de test distinct ensuite désinstallé. Revue indépendante terminée : référence et limites dans revue.md. Aucune suite globale ni qualification globale déduite.
 
-La recette Pixel emploie un destinataire natif contrôlé, sans modèle. Trois messages : édition puis annulation sans remise ; interruption reçue une seule fois avec steer_current ; message normal remis au retour au repos pendant que l’application était arrêtée. Le témoin contient deux IDs uniques, la base un cancelled et deux acked. Aucun message de test dans les vrais fils utilisateurs. Le guidage Codex/T3 est vérifié par les tests ciblés et la lecture de l’adaptateur, pas par une nouvelle interruption d’un vrai tour utilisateur. Les filtres/favoris ont été remis et Bridget laissé sur le fil courant.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/180-file-mobile/validation/livraison.md#extrait-3).
 
 Preuves : diaporama vérifié,13étapes,7clics relevés. HTML autonome338660octets inclus dans le même commit que le correctif. Avant de l’ancien lien non capturé ; cette limite est affichée. Les captures originales, manifestes, journaux et témoins natifs restent hors Git. Les22fichiers de rapports Android sont archivés et relus byte à byte ; archive SHA-256 096706673c6ae918b2af0db57d7153dbda8c87c029b670baf4b9fc01e08c691f. Le contrôle de secrets du commit source n’a trouvé aucun secret.
 

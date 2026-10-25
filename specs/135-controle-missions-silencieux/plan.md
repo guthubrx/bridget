@@ -33,12 +33,7 @@ charge, le progrès et l'escalade.
 
 ## Réutilisation de l'existant
 
-- Conserver `events.jsonl`, les tâches JSON et `heartbeat-state.json`.
-- Conserver `ack`, `resolve-task`, `relaunch` et les sessions Bridget.
-- Étendre les reçus de continuation au lieu de créer un second journal.
-- Conserver le LaunchAgent. Remplacer les deux surcharges Politique par l'appel
-  direct au script officiel, qui porte désormais leurs garanties utiles.
-- Ne pas modifier Bridget, T3, tmux ou les fichiers métier Politique.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/135-controle-missions-silencieux/plan.md#extrait-1).
 
 ## Fichiers
 

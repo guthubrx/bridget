@@ -4,7 +4,7 @@
 
 ## Besoin
 
-Exécuter une tâche sur une machine explicitement choisie, sans déplacer l’autorité métier ni perdre les droits du parent. Suivre la tâche depuis Bridget et le Lineage T3. Une coupure ne doit produire ni doublon ni résultat perdu après sa persistance technique.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/162-execution-distante-sous-autorite-unique.md#extrait-1).
 
 ## Décision
 
@@ -16,7 +16,7 @@ Les preuves parent sont relues sur leur hôte réel. Origine et cwd d’exécuti
 
 Le résultat final distant est publié atomiquement par le wrapper dans un blob immutable préalloué. Le worker écrit seul les métadonnées du store technique distinct de ReceiptStore. Aucun fichier mutable partagé entre ces deux écrivains. Le worker peut relayer le blob après mort du wrapper via capture_remote_result, qui contrôle placement, époque et identités d’exécution. Une disposition spécifique atteste le canon et la transaction maître : accepted, discarded_terminal, rejected_conflict ou deferred. RetainedResultAuthority ne sert qu’à la notification sortante après capture. Réemployer ensuite la complétion, l’attente et les notifications existantes. Le journal entier reste sur le worker, lu à la demande via Attach ; aucune réplication permanente.
 
-Lineage conserve v1 par défaut. Une projection v2 est demandée explicitement sans modifier l’authentification humaine. T3 reste un lecteur ; ses fichiers sont livrés sans relancer le runtime actuel. Le worker ne dépend pas de T3.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/162-execution-distante-sous-autorite-unique.md#extrait-2).
 
 ## Alternatives écartées
 

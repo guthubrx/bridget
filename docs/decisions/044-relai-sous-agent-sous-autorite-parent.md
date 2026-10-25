@@ -20,8 +20,4 @@ les autres outils refusent cette preuve. Les réponses reviennent au parent.
 
 ## Conséquences
 
-- Positives : le sous-agent peut contacter un autre agent ; le parent reste
-  responsable ; les droits sont bornés ; aucun registre enfant durable.
-- Négatives : le sous-agent ne reçoit pas directement une réponse ; la fonction
-  dépend d'une filiation T3 attestable ; deux répertoires de marqueurs doivent
-  être nettoyés ensemble.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/044-relai-sous-agent-sous-autorite-parent.md#extrait-1).

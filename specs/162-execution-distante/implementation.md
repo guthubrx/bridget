@@ -10,15 +10,15 @@ Relecture ROOT d’Analyze et du préflight ; provenance et travaux étrangers d
 
 ROOT a relu le diff de cli_lineage.rs, lineage_client.rs et du contrat Lineage T002. L’option --response-version est réservée à list/show. Le défaut reste v1 ; une lecture v2 accepte les erreurs historiques v1 mais exige v2 pour un succès. Les capacités et les autres actions restent en v1. Quatre oracles CLI sont ajoutés aux tests du module ; ils ne sont pas encore exécutés.
 
-Réemploi : requête versionnée, client négocié et méthode de validation du contrat existant. Aucun fichier produit, dépendance ou canal nouveau pour cette tâche. Le contrôle de version évite qu’un résultat ancien soit pris pour une projection enrichie. La réponse réelle du maître, le décodage T3 et les tests restent à vérifier. T033 reste ouverte.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-1).
 
 ## Bilan tests — 13 octobre 2026, T035/T036 validées
 
-ROOT a exécuté le groupe T3 Lineage :125 PASS sur3 fichiers, RC0,5,76s. Contrats et Reader de production relus conformes ; leur owner atteste les quatre fichiers inchangés depuis le run. Empreintes après exécution et commandes attestées dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. T035 et T036 cochées ; progression3/42 avec T001. Aucun runtimeT3 nouveau déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-2).
 
 TransportR1 :7 PASS/1 FAIL, RC101, défaut des variantes unités internally tagged acceptant un champ inconnu. Correctif ciblé de cinq variantes struct{} ; replay exact R2 :1 PASS, RC0. Hashes sources prétestR2 conservés ; aucun hash prétestR1 inventé. T002 reste ouverte. T033 :4 tests unitaires CLI et3 intégration écrits, non exécutés ; registre et permissions non exécutés à ce checkpoint.
 
-Groupe T3 UI suivant :67 PASS sur3 fichiers, RC0,6,30s. Empreintes actuelles capturées ; relecture ROOT et raccordementRust T034 encore attendus. T037/T038/T039 restent ouvertes. Aucun GREEN global, aucun build/service/Git lancé par le rédacteur documentaire.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-3).
 
 ## Fondations validées — checkpoint après daemon R2 / Lineage R3
 
@@ -26,9 +26,9 @@ ROOT a relu le registre de production et les trois APIs de permissions ; l’own
 
 T003 (registre, 7 PASS), T004 (persistance/canon, 4 PASS) et T015/T016/T018 (permissions, 10 PASS au total) sont cochées après ces preuves. Progression 8/42 avec T001/T035/T036. T005 reste ouverte malgré 9 PASS historiques, car le conflit de publication est encore corrigé. Les quatre tests CLI T033 ont réussi ; ses trois tests d’intégration restent non exécutés. T034 runtime reste ouvert.
 
-Les trois fichiers de production UI T3 et leurs trois tests ont été relus conformes par ROOT ; intégration 162 encore ouverte. Lint RC0 avec 8 warnings, dont 2 nouveaux corrigés ensuite ; types contrats RC0, serveur R1 RC1 sur nouvel oracle corrigé, web R1 RC1 hors diff en classification. Aucun test T3 final à jour n’est déduit après le correctif Reader. Preuves et limites : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-4).
 
-## Complément T3 après corrections — aucun cochage supplémentaire
+## Complément adaptateur de bureau après corrections — aucun cochage supplémentaire
 
 Types serveur R2 : RC0 après correction Effect.asVoid du nouvel oracle. Replay contrats et Reader : 102 PASS sur 2 fichiers, RC0, 1,63s. Lint final des dix fichiers : RC0, cinq warnings Reader historiques, comparaison des lignes avec la base attestée par ROOT. Format initial RC1 sur le seul Reader149.test.ts, puis correction de retour à la ligne et recheck ciblé RC0. Aucun replay de tests après ce pur format sans changement sémantique.
 
@@ -36,13 +36,13 @@ Trois empreintes actuelles seulement sont ajoutées au registre de preuves, dist
 
 Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. Aucun changement de tasks.md, aucune exécution de test/build/Git/service par ce complément documentaire.
 
-## Runtime R3 et permutation atomique T3 — validations partielles
+## Runtime R3 et permutation atomique adaptateur de bureau — validations partielles
 
 Transport runtime R1 : 8 PASS, RC0, 17,52 s au total. Daemon runtime R2 : RC101 après 15,96 s, erreur de type dans une fixture, aucun test exécuté ; ROOT a corrigé cette fixture. Daemon runtime R3 compile en 40,59 s puis exécute 55 tests en 11,10 s : 53 PASS, 2 FAIL, RC101, durée totale 51,76 s. Les deux échecs concernent l’erreur attendue après overrun du journal vivant et la sonde du maître compatible. Les propriétaires les diagnostiquent ; aucun succès global n’est annoncé.
 
 La récupération du vrai blob depuis starting après perte de l’événement terminal, les permissions de sous-dossier et la lecture froide distante avec ses gardes sont couvertes par les réussites R3, selon le journal et la confirmation de ROOT. Ces preuves restent rattachées aux manifestes prétest. Les correctifs suivants ne les héritent pas automatiquement.
 
-L’essai réel renamex_np RENAME_SWAP=2 a réussi sur deux dossiers synthétiques privés sous /Applications : permutation puis retour vérifiés sur le même volume, dossier de sonde supprimé, application intacte. La primitive peut servir à G8 après copie et signature ; aucune installation ni relance T3 n’est déduite.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-5).
 
 Registre détaillé, commandes, deux assertions échouées et empreintes : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/tests162.md. Aucun cochage supplémentaire. T002 reste ouverte ici malgré les huit réussites transport, car ROOT corrige encore RejectedPrepare. Aucun test, build, Git ou service lancé par le rédacteur de ce complément.
 
@@ -66,7 +66,7 @@ Commandes, manifestes, empreintes et noms des oracles : /Users/moi/Nextcloud/10.
 
 AgentInfo/reprise managed : 1 PASS. Les quatre E2E R1 échouent : trois refus au démarrage causés par la socket de fixture sous une racine0755 ; un oracle nominal compare à tort groupe fournisseur et groupe wrapper. ROOT a identifié des corrections de fixtures ; aucun replay n’est encore repris ici. La commande worker est compilée et exécutée en fixture, mais aucune recette E2E complète n’est déclarée réussie. RC101, 51,80 s, preuves et manifestes dans le registre de tests.
 
-La procédure /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/specs/162-execution-distante/validation/livraison162.md renseigne maintenant ExecStart avec préfixe162-SHA12 contrôlé, registre privé et socket à réattester. Elle conserve NON EXÉCUTÉ, projets en attente, routes désactivées et aucun redémarrage T3. Quatre points précis restent avant cochage T041 : commandes/chemins de quiescence et sauvegarde ; provisionnement et unité finalisés ; preuve de survie/reprise worker ; quickstart et relecture dépendante T032/T039. Aucun résultat de production inventé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-6).
 
 Format : ROOT atteste treize fichiers traités avec rustfmt édition2024 RC0 après correction d’un premier paramètre édition2021 incorrect. Pur format, sans valeur de recette. Progression documentaire inchangée : 11/42.
 
@@ -115,9 +115,9 @@ ROOT atteste le replay unitaire R1 à 125 PASS, incluant les 68 échecs libdaemo
 
 Replay R2 : 83 PASS/0 FAIL, RC0, 206,675 s, répartis 60 daemon/9 transport/4 E2E/3 edit159/7 held159. Les quatre défauts de T042 sont corrigés et relus ; les oracles parent courant, ParentProof, posture héritée et reprise après deadline/machine désactivée passent. T017/T019/T020/T040/T042 sont cochées sur ces preuves. T041 était déjà validée comme préparation seulement.
 
-Les 122 échecs historiques de l’unique FULL ont un rejeu PASS : 112 dans R1 puis 10 dans R2, rapprochement vérifié par ROOT. R1 totalisait 173 PASS/10 FAIL ; le compteur 125 était son seul libdaemon. Aucun cumul de passages en tests uniques, aucune réécriture du RC101 de la FULL en GREEN global. Les limites web/T3 et les fixtures isolées restent explicites dans le registre de tests.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-7).
 
-La lecture indépendante rapproche les 30 exigences FR et 12 critères SC. Mapping : FR001–002 admission/registre ; FR003/025 auth/époque/sonde ; FR004 autorité maître ; FR005/030 mapping/Git154 ; FR006–008 preuves/rechecks ; FR009–011/014 reçu/marqueur/RELEASE/Connected ; FR012–013 inconnus/bornes/collecte ; FR015 cancel ; FR016–017 reprise/slots/délais ; FR018–019/029 journal/blob/résultat/parent ; FR020–023 Lineage/contact ; FR024 configuration privée ; FR026–028 procédures G8/G9. SC001–002 admission/refus ; SC003 permissions ; SC004 frontières ; SC005 cancel ; SC006 reprise ; SC007 journal/résultat155 ; SC008–009 T3/wire ; SC010 bornes ; SC011–012 procédures de livraison/nettoyage. Les exigences opérationnelles restent attendues en G8/G9, pas réputées exécutées par 42/42.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-8).
 
 Converge n’a pas été effectué par le rédacteur. Les artefacts sont figés pour son lancement par ROOT. tasks.md SHA-256 : e6e74f828c0498cb41b3d78d4473e63677a181d82eb77d494e6528ccab01e33b. Aucun changement de tâches ne doit intervenir pendant ce passage. Git, build release, installation, activation et nettoyage final restent à réaliser après les gates. Aucun source, test, service ou Git modifié par cette clôture documentaire.
 
@@ -139,7 +139,7 @@ T043 cochée, statut Implemented pour le développement et la préparation uniqu
 
 Le passage 2 ciblé est terminé : CONVERGED, aucune tâche ajoutée. L’agent de lecture a capturé la même empreinte tasks.md avant et après : SHA-256 71115d7c1ebffd0aa5d29368b52a6bc6874ceda66f2a5f7006ba8e43ecfd84ae. Le rédacteur l’a réattestée sans modifier ce fichier. Les 43 tâches restent validées ; ce verdict ne clôt pas la livraison.
 
-La correction T043 est relue sur daemon.rs SHA-256 71c5b7065eb8e1133edbbc6a56a14165a0768fd7bd89a1ae6317e3b9c389abe4 : trace après drop(st), machine/worker et deux époques, sans credential. L’oracle existant auth/epoch a 1 PASS, RC0 en 48,95 s. Le contenu du logger est prouvé par lecture, pas par une assertion de capture ajoutée. Le mapping 30 FR/12 SC et la lecture effective T3 du passage précédent sont conservés sur code inchangé. Aucun test, build, Git ou service exécuté pendant ce passage.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-9).
 
 La contre-revue Claude code R1 est lancée, verdict en attente, borne 15 minutes. Identifiant de délégation : node:delegated-task:command%3Amcp%3A3fa5c3d9-0ca4-4322-8649-ec020a6fcfe7%3Adelegate-task%3A162-code-review-20261013-r1. L’audit est préparé en parallèle sur les sources gelées ; aucun verdict favorable n’est anticipé. G8/G9 restent ouverts. Aucun GREEN global, installation, activation ou nettoyage final déduit de CONVERGED.
 
@@ -179,7 +179,7 @@ T044 est cochée après lecture des reçus R4/R5 et de cette correction. État c
 
 Le troisième passage est terminé : **CONVERGED, zéro tâche ajoutée, 44/44**. SHA-256 de tasks.md identique avant et après : 746adf1b544e476ffe21e79131cb9ec2ad0b89c6bd90c0870475ecd242e800ea. Le worker final est vérifié à 7b749f35859b85487792afd82af409db672687abf347146e26770fb5b898229e. Aucun fichier de tâches ou code n’a été modifié pendant ce passage.
 
-La lecture fraîche porte sur le delta T044 : une sonde starting par cadence hors mutex puis contrôle complet de l’identité au handler ; Terminal/Refused avant DesiredStopped ; conservation du Child sur les erreurs EOF/StartupFailed ou de marqueur ; clôture des slots après preuve d’arrêt ; inventaire groupé en maintenance. Le mapping 30 FR/12 SC et les lectures T3 des passages précédents sont réutilisés explicitement sur les parties inchangées. Le raccord T044 couvre FR-009/012/014/015, avec FR-013 pour les bornes, et SC-004/005/007.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-10).
 
 Précision de rétention validée par ROOT : une disposition Deferred conserve le canon, le reçu, le blob et le décompte des octets réels. La réserve de publication de 2 Mio peut être libérée après preuve de mort du producteur exact et fermeture irrévocable du slot. Cette libération n’est ni une purge du résultat différé ni l’autorisation d’un nouvel écrivain. Les formulations antérieures « réservation Deferred conservée » désignent la conservation de sa preuve et de ses octets ; elles n’imposent pas de conserver une réserve de publication devenue inutilisable après cette double preuve.
 
@@ -235,7 +235,7 @@ Les gates de test et de revue propres à D1 sont clos. Le verdict R2 APPROVE_WIT
 
 L’audit final après correction D1 reçoit **A, 99,095238/100**, avec **0 CRITICAL, 0 HIGH, 3 MEDIUM et 1 LOW**. Le validateur termine avec **RC0, zéro erreur et zéro warning**. D1 est corrigé et réattesté par R6/R7 ; les trois MEDIUM et le LOW du rapport restent ouverts.
 
-La couverture de lecture est de **7 898 lignes uniques sur 186 764 lignes du périmètre, soit 4,228866 %**. Il s’agit d’un échantillon des sources Bridget et T3 : les lectures antérieures ne sont reprises que sur les lignes inchangées, avec lecture fraîche des deltas D1. Cette note ne certifie pas tout le produit, ne remplace pas les résultats de tests et ne constitue pas un GREEN global.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-11).
 
 Reçu relu : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/162-execution-distante/audits/2026-10-13/session-2026-10-13-spec-162-01/validation-final.json. SHA-256 : 85884560f21e2c4029d98ad6bfeab479df676ca843b9d7ec8432ae51e6f00170. Le reçu date de 2026-10-13T12:56:07.662381+00:00. Les empreintes de grade.json et coverage.json ont été vérifiées conformes à ce reçu : e68398193480b829418ab9349adb8192ec8ef7bc5875c50c9156afd87e851bad et df5fa5b02f4822f5ab449f2f4769004dccbf7ce17878cb487ed7273bcb570694.
 
@@ -304,7 +304,7 @@ Les preuves corrélées transmises par ROOT sont conservées avec leurs empreint
 
 Le maître n’a plus de tâche active et les admissions sont ouvertes : /Users/moi/.cache/bridget-delivery162-20261013/cancel162-rerun-active-after.json porte total_active=0, items=[], halted=false. Le parent Opus de recette a été arrêté proprement par la commande e27086a3-3a46-45da-aaca-7862f4e61a66, puis décommissionné par 13c264d9-7bc1-428f-9476-896fcd037d3f ; son historique reste conservé.
 
-L’activation est attestée par /Users/moi/.cache/bridget-delivery162-20261013/rollback611bfa-20261013-cancel-1dc0c602-r3/progress.json : phase activate réussie ; daemon Mac 71469 né à 17:53:53 CEST, pont 71567 né à 17:53:55 ; worker Linux 471321, naissance 142199350, exécutable du préfixe /home/moi/.local/lib/bridget-communication/162-1dc0c6022e8d. Les SHA des binaires actifs sont d9e09a78a0d0ff2a70b152f78e42ac994aea53094202f23f8ceb91f6b6bedc44 sur Mac et 2131f9a1f2f1b33e39096d3618e012fb7bb2465966f8cef9b6fb7832c4e71352 sur Linux. DB quick_check ok, zéro erreur de clé étrangère, schémas 7/12 et Fleet 5. T3 704/969 et le tunnel 1384 restent inchangés par rapport au préflight après le redémarrage externe.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-12).
 
 T046 est cochée : 46/46, statut Implemented, G8 validé. Les deux tests de bibliothèque et cinq E2E Linux, la contre-revue R2 APPROVE et l’annexe d’audit sans constat critique ou élevé restent les preuves ciblées du correctif. ROOT a relu le rapprochement code/documents/tests sans nouvel écart retenu. Ce checkpoint ne remplace ni la FULL historique ni l’audit global ; aucun GREEN global n’est revendiqué. G9 reste ouvert jusqu’au nettoyage final exécuté par ROOT.
 
@@ -313,17 +313,15 @@ T046 est cochée : 46/46, statut Implemented, G8 validé. Les deux tests de bibl
 
 La session 162 est livrée : 46/46 tâches, G8 et G9 validés. Le code actif reste 1dc0c6022e8d0712fbc4c65a8c20be7b2ea8a437. Les documents précédents ont été intégrés et poussés au commit 4cf50b68688b2d28872f67ae32e129f989d22449. Le présent checkpoint documentaire doit encore être committé et poussé par ROOT ; aucun SHA futur n’est présumé.
 
-Le worktree Bridget 162 et sa branche ont été retirés sans force. Le worktree et la branche T3 du lot avaient déjà été retirés. Les 45 fichiers ignorés inventoriés possèdent chacun une copie durable byte-identique. Preuve de retrait : /Users/moi/.cache/bridget-delivery162-20261013/cleanup162-cancel-worktree-result.json. Les chemins de worktrees dans la chronologie sont désormais historiques ; aucun worktree n’a été recréé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-13).
 
-Les intermédiaires du stage Mac ont été retirés par la commande existante build.py installed : 0,31 Gio logiques, binaire source conservé. Le retrait antérieur du stage T3 représente 840 737 986 octets logiques et son archive de 59 preuves reste vérifiée. Aucun gain physique de volume n’est déduit de ces tailles.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-14).
 
 Conservations décidées après inventaire :
 
-- Cache debug Mac de 44,96 Gio, utile pour 163, budget temporaire de rétention 46 Gio ; cache Cargo Linux utile également conservé.
-- Stage Git distant d’environ 3,45 Go et préfixes de validation d’environ 276 Mo : garde d’usage lsof incomplète, y compris avec root, à cause du montage /run/user/1002/doc. Aucun retrait forcé ni masquage de cette limite.
-- Git 2.56 installé, profil /etc/apparmor.d/bwrap-userns-restrict, sauvegardes de rollback, bases, preuves et cache source T3 contenant cache.db : nécessaires au fonctionnement, au retour arrière ou à 163.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-15).
 
-L’inventaire et la qualification sont conservés dans /Users/moi/.cache/bridget-delivery162-20261013/cleanup162-cancel-inventory.md et /Users/moi/.cache/bridget-delivery162-20261013/cleanup162-cancel-priority-inventory.json. L’inventaire initial était en lecture seule ; les retraits réellement effectués sont distingués ici des conservations. Les 17 worktrees T3 étrangers restent hors périmètre.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/implementation.md#extrait-16).
 
 Le lien client /home/moi/.local/bin/bridget a été basculé après comparaison de sa cible 611bfa vers /home/moi/.local/lib/bridget-communication/162-1dc0c6022e8d/bin/bridget. SHA effectif : 2131f9a1f2f1b33e39096d3618e012fb7bb2465966f8cef9b6fb7832c4e71352. Le parent Opus de recette est arrêté et décommissionné, historique conservé.
 

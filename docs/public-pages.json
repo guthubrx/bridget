@@ -47,6 +47,10 @@
     {
       "en": "docs/mobile.md",
       "fr": "docs/mobile.fr.md"
+    },
+    {
+      "en": "docs/automatic-updates.md",
+      "fr": "docs/automatic-updates.fr.md"
     }
   ],
   "additional": [
@@ -54,6 +58,7 @@
     "docs/decisions/README.md",
     "docs/rapports/README.md",
     "docs/cartes-reprise-28-08/README.md",
-    "specs/README.md"
+    "specs/README.md",
+    "docs/adapters/t3.md"
   ]
 }

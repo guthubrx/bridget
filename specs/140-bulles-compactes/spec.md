@@ -1,4 +1,4 @@
-# SPEC140 — Bulles Bridget compactes dans T3
+# SPEC140 — Bulles Bridget compactes dans adaptateur de bureau
 
 Date : 2026-10-07. Statut : Implemented, non déployé.
 Autorisation : maquette validée puis « my-specify-all go ». Le titre réel du fil est inclus par autorisation complémentaire.
@@ -23,7 +23,7 @@ Acceptation : les identifiants techniques ne prennent pas la place principale. U
 
 ### US3 — Voir le vrai titre du fil quand il est disponible (P1)
 
-Bridget fournit le titre du fil seulement lors d'une remise à un membre autorisé. T3 l'affiche sans consulter d'autres données. Une ancienne sollicitation sans titre affiche « Fil partagé ». Son identifiant reste accessible dans les détails.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/spec.md#extrait-1).
 
 Acceptation : absence de titre, ancien format et destinataire non membre n'exposent aucun titre indu. Un titre hostile ne casse ni l'enveloppe ni le rendu.
 

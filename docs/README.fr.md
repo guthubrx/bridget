@@ -25,3 +25,7 @@ prouvent pas l’état de la version active.
 Mettre à jour les deux langues lorsqu’un contrat public change. Conserver les
 noms de commandes, champs JSON et codes d’erreur. Utiliser des adresses
 d’exemple, jamais des secrets ou des exports bruts de l’exploitation.
+
+## Adaptateurs de clients
+
+- [adaptateur — adaptateur](adapters/t3.md).

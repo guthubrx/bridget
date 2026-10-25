@@ -1,4 +1,4 @@
-# Validation r2 — tests UI client T3 Lineage 149 (après corrections Sol)
+# Validation r2 — tests UI client adaptateur de bureau Lineage 149 (après corrections Sol)
 
 Date : 2026-10-10. Sous-agent test r2, ownership exclusif des 4 fichiers de test
 r1. Objet : vérifier les 4 corrections ciblées de Sol, relancer les 22 tests et
@@ -28,20 +28,11 @@ Mobile : le composant passe par `apps/mobile/src/lib/uuid.ts` (`uuidv4` →
 
 ## 2. Commandes exactes et compteurs
 
-Environnement identique au r1 : Node 24 `/Users/moi/.cache/t3-toolchains/148/`,
-deps du WT via symlinks préexistants, aucun install, aucune duplication
-`node_modules`. Runs de validation exécutée ; grande revue T040 reste future.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r2.md#extrait-1).
 
 Run entrant (avant mes édits, preuve de l'état reçu) :
 
-```
-cd /Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage
-./node_modules/.bin/vp test run \
-  packages/client-runtime/src/state/orchestration.bridget149.test.ts \
-  apps/web/src/components/BridgetTaskJournal149.test.tsx \
-  apps/web/src/components/chat/ThreadRelationshipsControl.bridget149.test.tsx \
-  apps/mobile/src/features/threads/BridgetTaskJournal149.test.tsx
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lineage-client-ui-tests-r2.md#extrait-2).
 
 Sortie : `Test Files 4 passed (4)` / `Tests 22 passed (22)` / 2.20s.
 

@@ -32,7 +32,7 @@ C1historique0C/0H/2M/1L→scoring0C/0H/1M/1L. REL001e7f5155c4440 résolu. PERF00
 
 FULLunique historiqueRC101,900,75s :2683PASS/6FAIL/76ignored sur97ciblesparentes. SeptPASS de sous-processus exclus. Les sixFAIL viennent de l’oracle154 sansquota_wait:null et de cinq tests exigeant encoreversion11. Deux fichiers de tests seulement corrigés ;rejeuxdistincts1541PASS/7,88s et migrations5PASS/4,99s,RC0,sourcesstables. Aucun deuxièmeFULL niGLOBALGREEN revendiqué. Les19sources présentes pendantFULL sont inchangées après ces correctifs de tests.
 
-La migration12 est exigée par T011 et le test native160_execution_quota_creation. Les anciennes assertions restent strictes, seules les valeurs prévues ont changé. Pas de résultat de modèle réel, quota réel, T3/production ou mémoire d’un modèle. Couverture de tests/mutation/performance mesurées:null. Les zones non comprises dans les read_manifest restent non examinées.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/160-reprise-quota/validation/audit160-scoring.md#extrait-1).
 
 ## Minimalisme
 

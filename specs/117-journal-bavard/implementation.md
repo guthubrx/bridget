@@ -26,6 +26,4 @@ Relance du pont à 21:49 : `opus-city-glmwrk1` annonce de nouveau `turn_ended` e
 `permission_required`, 24 sources sur 24 ; aucun blocage signalé. `sol_city_ai` prévenu (contournement
 puis rétablissement).
 
-## Vérifications
-Test `spec117_*` ; `t3code` 83/83 ; clippy OK. Recette complète : 1544 réussis, 3 échecs dans
-`search_104_test` sous une charge de 72, 23/23 relancé seul deux fois. 0 fixture restante.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/117-journal-bavard/implementation.md#extrait-1).

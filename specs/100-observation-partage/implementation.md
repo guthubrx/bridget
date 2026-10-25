@@ -98,15 +98,7 @@ indépendante est justifiée par le drain conditionnel de la file attach, pas
 par un besoin futur imaginaire. Deux aides de chemin servent les trois pilotes.
 Arbitrages tracés dans reuse-audit.md avant création.
 
-Vérifié : données Unicode, 50/200 entrées, lacune, délai10s serveur muet,
-parité des façades, refus owner/source non autorisés, TTL/once/filtres,
-collision et quatre témoins négatifs, saturation, reply et annuaire pendant
-writer verrouillé, notification exclue des observations suivantes.
-Non vérifié : fournisseurs réels, T3 natif universel, performances production,
-fédération des faits, reprise durable après redémarrage et suite globale.
-Ce ne sont pas des promesses cachées : couverture et pertes sont documentées.
-Code évité : second lecteur JSONL, watcher récursif, moteur de règles libre,
-BDD d'abonnements, boucle LLM, mandat et verrou de fichiers.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/100-observation-partage/implementation.md#extrait-1).
 
 ### Revue externe
 
@@ -175,9 +167,7 @@ et identités réutilisés ; validations locales ciblées rapides, suite intégr
 non exécutée pour le motif de sécurité documenté. Ce gain ne prouve pas une
 validation fournisseur de production. Attentes externes et déploiement hors ETA.
 
-Prochaine action recommandée : revue du diff puis recette avec fournisseurs
-dans un namespace isolé avant toute installation. La couverture native/T3
-universelle et l'adaptation des anciens harnais sont des travaux séparés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/100-observation-partage/implementation.md#extrait-2).
 
 ## Intégration et recette de livraison du 2026-09-16
 
@@ -233,14 +223,7 @@ individuel après contrôle PID/parent/commande ; aucun fournisseur lancé.
 Script reproductible conservé dans la sauvegarde de livraison :
 /Users/moi/.cache/bridget-adoptions/100-20260916.iMZZbR/smoke.rb
 
-Limites : la suite workspace intégrale n'a pas été lancée, car ses harnais
-SIGKILL/groupes restent interdits. La recette1345/0/49 de la099 est celle de
-l'autre intervenant, pas une preuve de cette intégration. La chaîne avec un
-fournisseur réel et un retour de notification est testée par tronçons, pas
-par un scénario fournisseur bout-en-bout. Aucun comportement universel T3/natif
-ou shell n'est annoncé. Sauvegarde binaire099, base SQLite cohérente vérifiée
-quick_check=ok, plists inchangés et état du pont avant adoption :
-/Users/moi/.cache/bridget-adoptions/100-20260916.iMZZbR
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/100-observation-partage/implementation.md#extrait-3).
 
 Précision de FR05 à la relecture : « futur » est ordonné par la réception du
 fait au daemon, et non par une horloge source. Aucun rejeu du journal, mais un
@@ -258,15 +241,7 @@ PASS. SHA256 du binaire installé :
 Smoke rejoué avec la release : PASS sur sept contrôles ; namespace privé
 /tmp/b100.20260916-81555-1tifwwb, processus arrêté proprement ensuite.
 
-Adoption : SIGTERM individuel après vérification PID/commande pour le daemon
-94616 puis le pont94724. Les plists KeepAlive inchangés ont relancé les seuls
-services Bridget, daemon82429 et pont83263 ; l'application T3 et les processus
-fournisseurs n'ont pas été arrêtés. Retour des neuf fils T3 (quatre busy/cinq
-connected au contrôle), trois anciennes présences gérées toujours stopped.
-`bridget status` confirme build-id c680c6ce36c5 sans avertissement de version.
-Lecture réelle du journal bdget : une entrée, seq220, complete=true ; contenu
-non recopié dans ce reçu. Nouveau MCP : 18 outils au total, dont14 Bridget
-et4 Maicie déjà existants ; bridget_journal/bridget_events présents.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/100-observation-partage/implementation.md#extrait-4).
 
 Les clients MCP déjà vivants peuvent garder leur ancien catalogue. Renouveler
 leur connexion ou ouvrir une nouvelle session est nécessaire selon le client,

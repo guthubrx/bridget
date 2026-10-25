@@ -4,12 +4,7 @@ Date : 2026-09-16. Deux passes réalisées sur spec/plan/tasks et règles.
 Primitive : protocole speckit-analyze appliqué ; script local check-prerequisites
 absent (commande tentée, exit 127). Aucun gate n'est sauté.
 
-| ID | Catégorie | Gravité | Emplacement | Constat | Correction |
-|---|---|---|---|---|---|
-| A1 | Précision | LOW | tasks T010 | Chemin tests/t3code_098_test.rs abrégé | Chemin complet depuis dépôt |
-| A2 | Vérification | MEDIUM | plan/US5 | enqueue n'est pas l'append disque | T012 couvre le failure sink existant |
-| A3 | Couverture | MEDIUM | US2 | Trois voies d'envoi, pas seulement Register MCP | T004/T006 couvrent MCP, CLI, Client |
-| A4 | Dégradation | INFO | contre-revue | Outil refuse identity_not_found | Fait documenté, aucune équivalence de revue prétendue |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/analysis.md#extrait-1).
 
 Auto-fix non ambigu permis par my-specify-all : A1 appliqué après la passe de
 lecture. A2/A3 déjà résolus dans les tâches avant cette deuxième passe.

@@ -167,7 +167,7 @@ PYBLOCK
 "${bridget161_ssh[@]}" '/home/moi/.local/bin/bridget status'
 ```
 
-Si un tiers a changé le lien, arrêter sans écraser sa cible. Même réussi, ce rollback signifie lot161 non livré. Aucun redémarrage de T3, maître, pont ou fédération.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/161-client-cartae/quickstart.md#extrait-1).
 
 ## Préparer le nettoyage, puis l'exécuter après preuve de livraison
 

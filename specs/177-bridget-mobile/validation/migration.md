@@ -37,7 +37,7 @@ La borne de 1024 canaux évite l’absence de limite par défaut de socat. Elle 
 
 ## Seconde bascule réelle — r6, 24 octobre 2026
 
-Le maître optimisé r6 est actif sur Cartae. Le maître Mac est arrêté et désactivé ; T3 reste chargé. La copie hors ligne récente contient 360 Tasks et 431 reçus. Toutes les tables applicatives ont le même nombre de lignes et le même SHA-256 de lignes avant et après copie, avant démarrage. quick_check est ok et foreign_key_check ne donne aucune erreur. Les tâches distantes conservent leurs placements ; les processus métier du worker n’ont pas été tués. Les anciens fichiers de cible sont conservés dans une sauvegarde privée distincte. Aucun maître n’a été actif simultanément.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/177-bridget-mobile/validation/migration.md#extrait-1).
 
 Les services utilisateur core, mobile et worker Cartae sont actifs et persistants, linger=yes. Le worker d’origine Mac et le relais to-master sont actifs. Le statut MCP réel de ce fil retourne cartae, build r6. Le catalogue réel retourne dix profils, dont huit autorisés, avec verdict_context.machine_id=monordinateur et cwd_root Mac exact. Cela vérifie la lecture d’origine et la réattestation du parent après déplacement du coordinateur ; ce n’est pas un lancement de mission. Le premier appel pendant la reconnexion a donné primary_absent ; après reconnexion native du pont, les mêmes lectures passent.
 

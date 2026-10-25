@@ -1,4 +1,4 @@
-# Liaison des identifiants T3 — 22 octobre 2026
+# Liaison des identifiants adaptateur de bureau — 22 octobre 2026
 
 Le maître Bridget exécute le correctif `172-31f42307` depuis 2026-10-22T09:36:59.188552+02:00.
 Source de production : `31f42307efd5c3d490a2fdb8e2c09c49f0b0a30b`. Le numéro de paquet reste 0.4.1 ;
@@ -6,30 +6,13 @@ le build chargé distingue cette correction.
 
 ## Défaut et correction
 
-La preuve T3 est valide pour un fil `mcp:…`, mais l'ancienne liaison exigeait un UUID.
-Cette contradiction causait `permission_attestation_unavailable` avant les droits métier.
-La liaison accepte maintenant les identifiants exacts UUID, `mcp:…` et `thread:mcp:…` :
-1 à 2048 octets, filtre commun des contrôles Cc/Cf, connexion primaire, identité exacte,
-projet attesté et absence de contradiction. Les droits et la propriété restent inchangés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/identifiants-t3-20261022.md#extrait-1).
 
-Référence lue avant correction :
-/Users/moi/11.Repositories/t3code-local/apps/server/src/mcp/OrchestratorMcpService.ts
-(`stableThreadId`, `sessionIdentity`) et
-/Users/moi/11.Repositories/t3code-local/packages/provider-core/src/server/mcpSession.ts.
-T3 utilise des identifiants opaques et revalide l'identité du tour. Bridget conserve
-ses contrôles de provenance, requis pour son pont et le travail distant.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/identifiants-t3-20261022.md#extrait-2).
 
 ## Validation et déploiement
 
-- RED initial : 1 PASS / 1 FAIL sur le véritable préfixe `mcp:`.
-- RED Unicode Cf : 0 PASS / 1 FAIL, puis correction par le filtre commun de lineage.
-- GREEN : 7 tests distincts PASS, source SHA-256 vérifiée sur le commit livré.
-- Contre-revue r2 `65b3fdfb-431c-40af-a5e1-e6b00d473bc4` : APPROVE ; résultat intégral lu puis ACK.
-- Une compilation finale macOS, signature adhoc vérifiée ; SHA-256 `6f53d2601ff8aac635cffd93612a4bf39c4f0c0e7bdc43e593dda6c4679ae486`.
-- Source fusionnée et poussée sur `main` ; maître 3688 remplacé par 82087.
-- T3, son serveur, le pont et le worker Cartae 589872 sont préservés. Worker : zéro redémarrage.
-- Les deux missions Cartae conservent tâche, mission, placement, instance et compteur de reprise 0.
-- Aucun changement de protocole worker : aucun paquet Linux ni redémarrage Cartae nécessaires.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/identifiants-t3-20261022.md#extrait-3).
 
 Le premier préflight a refusé une tâche locale encore active. Elle a ensuite terminé
 avec `cleanup_done=true`, sans intervention. L'activation a repris après constat de
@@ -41,15 +24,7 @@ Le correctif du wrapper et sa recette complète sont suivis dans le lot suivant.
 
 ## Parcours réel et limites
 
-Le statut MCP du maître confirme `172-31f42307` actif. La lecture officielle unique
-`bridget_capabilities({})` réussit depuis le véritable fil opaque
-`mcp:f5a66bd1-7cef-4d2c-888b-06dd7d8263d3` le 22 octobre à 09:38:18 CEST.
-Preuve T3 : item 3469, confirmation 3475 ; rapport Bridget `mcp-33631-6ad9bd74-6`.
-Le catalogue rend la portée projet et le bon worktree, sans
-`permission_attestation_unavailable`. Le défaut d'accès de ce contexte est corrigé.
-La recette ne lance aucune mission ; elle ne qualifie pas l'authentification fournisseur
-ni une nouvelle exécution distante. L'ancienne tâche d'un autre propriétaire n'est pas relue.
-Aucune suite complète et aucun test fournisseur ne sont déduits des tests de bibliothèque.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/identifiants-t3-20261022.md#extrait-4).
 
 L'ancienne tâche façades `837972ad-ad58-4512-9a71-fd2843ab5be5` reste `failed`,
 `cleanup_done=true`, `guard_released=true`, avec son worktree propre conservé.

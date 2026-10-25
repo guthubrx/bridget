@@ -13,7 +13,7 @@ Réutiliser tracked_requests et les états open/answered/cancelled/timed_out.
 Préparer durablement le suivi avant d'exposer une réponse immédiate.
 Aucune issue terminale ne revient à open lors de la finalisation d'une écriture.
 
-## Fil t3code
+## Fil adaptateur de bureau
 
 ThreadState conserve seen/ended_turns/pending/seeded.
 Pending garde l'identité/corrélation existantes et, si prêt, le contenu de réponse

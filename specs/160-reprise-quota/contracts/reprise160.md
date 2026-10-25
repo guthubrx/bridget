@@ -104,7 +104,7 @@ est figée (`observed_at` initial de la continuation), conservée et relue sans 
 | `native_child_env`, `current_command` | 152 T022, T043 |
 | `provider_limits`, `Quota`, épuisement attesté par fenêtre | 157 T004, T014 |
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme. La tâche en attente apparaît `working`.
 

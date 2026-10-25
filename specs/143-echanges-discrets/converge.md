@@ -25,4 +25,4 @@ Comparaison lecture seule terminée le2026-10-07 à11:39:54 CEST. Le principal c
 
 Tâches12/13 pendant la lecture, avant/après byte-identiques : `64f824f0ce21ba2a0c9d1cbf6cd4591b92065a17c1554f4c0e5d1711ebb6f8f6`. Les quatre hashes source392 restent identiques. Aucun document ni tâche modifié pendant cette comparaison.
 
-Après verdict seulement, phase documentaire distincte : T013 cochée,13/13 et statut Implemented non installé/non activé. Cette journalisation ne prétend pas qu'une seconde comparaison a été faite après la coche.392 tests et revue APPROVE ; audit A du socle conservé uniquement comme histoire. Limites de la recette US4 explicites. Aucun commit, merge, push, installation, activation ou restart T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/143-echanges-discrets/converge.md#extrait-1).

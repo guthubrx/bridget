@@ -25,8 +25,7 @@ capacité en passant.
 
 ## Ce qui existe ailleurs, et qu'il ne faut pas réinventer
 
-Le dépôt de référence `~/11.Repositories/t3code` pilote quatre fournisseurs et
-implémente l'interruption pour chacun.
+[Note technique de l’adaptateur](adapters/t3/archives/docs/demande-interruption-de-tour.md#extrait-1).
 
 **Codex** — `apps/server/src/provider/Layers/CodexSessionRuntime.ts:1866` :
 une requête `turn/interrupt` sur le protocole de l'agent, avec un délai de 3 s,
@@ -96,10 +95,7 @@ entier — référent compris, donc sans moyen de se faire aider à réparer. C'
 arrivé le 28/08 au matin : le service arrêté a rendu `attach` inutilisable, donc
 impossible d'observer ce qui se passait.
 
-**Contrainte de langage** : le kit de référence est en TypeScript, Bridget est en
-Rust. Deux voies — reproduire le protocole d'interruption en Rust en s'inspirant
-de `t3code`, ou faire passer le pilotage par un programme intermédiaire. Le choix
-appartient à celui qui prend le lot ; qu'il l'écrive.
+[Note technique de l’adaptateur](adapters/t3/archives/docs/demande-interruption-de-tour.md#extrait-2).
 
 **Point de vigilance sur les agents Codex** : ils sont majoritaires dans le parc
 et leur protocole expose déjà `turn/interrupt`. C'est le cas le plus simple et le

@@ -14,7 +14,7 @@ Le wrapper valide le marker à la naissance : `/Users/moi/Nextcloud/10.Scripts/6
 
 **Pas de nouveau droit par marker.** Le wrapper ne fabrique aucune mission. La carte se joint seulement à un message entrant dont l'id égale `mission_id` (`wrapper.rs:438`). La carte elle-même dit qu'elle ne crée ni ne relance rien (`wrapper.rs:391`). Aucune logique de permission ne lit ce marker. Test : `wrapper.rs:6243-6254` (instance étrangère, JSON vide, mission non-UUID rejetés).
 
-**Pas de fuite credential ni d'historique parent.** La carte contient l'identité figée et des faits Git seulement : `wrapper.rs:329-392` (nom, type, protocole, digest, worktree, branche, tête, 40 fichiers max). Pas de conversation parent. Le fixture affirme l'absence d'environnement T3 (`tests/fixtures/native_delegation_148.py:13`). La recette réelle interdit les secrets dans le registre (`tests/native_delegation_real_glm.rs:310-317`).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-native-r3.md#extrait-1).
 
 **Idempotence et corrélation inchangées.** Les trois chemins de remise passent l'enveloppe d'origine au suivi ; seul le texte fournisseur est projeté (`wrapper.rs:4181`, `4215`, `4268`, commentaire lignes 430-432). Test d'égalité enveloppe : `wrapper.rs:6285-6289`. Rejeu ×10 : mêmes `task_id`, `child_agent_id`, `message_id` (`tests/native_delegation_e2e.rs:305-310`).
 
@@ -28,7 +28,7 @@ Le wrapper valide le marker à la naissance : `/Users/moi/Nextcloud/10.Scripts/6
 
 **Preuve E2E correcte.** Le fixture écrit lui-même ses preuves : exactement 1 « started », exactement 1 « prompt », et ce prompt unique contient carte ET mission (`native_delegation_e2e.rs:337-356`, `native_delegation_148.py:36`). Réponse corrélée unique (lignes 328-336). Annulation sans fuite (lignes 371-401).
 
-**Docs.** `docs/delegation-native.md:47-51` décrit exactement le comportement : faits natifs joints au premier tour, ni conversation parent ni credentials T3. `specs/148-identite-delegation/contracts/delegation.md:38-41` (SendIdempotent, capture avant accusé) et lignes 15-20 (périmètres `same_project`/`root`) restent exacts. Aucun doc obsolète ne décrit l'ancien comportement à deux prompts.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-revue-native-r3.md#extrait-2).
 
 ## 3. Observations non bloquantes
 

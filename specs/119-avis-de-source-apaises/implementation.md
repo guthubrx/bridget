@@ -2,11 +2,7 @@
 
 - **Base** : main `6b920ad4` - **Date** : 2026-09-25 - **Statut** : Implemented, livré le 2026-09-25 06:04
 
-## Mesures
-- Nuit du 25/09 : 222 avis d'observation vers `sol_city_ai`, 197 tours démarrés (GPT-6 astra,
-  réflexion élevée), 37 réponses de simple commentaire. Base T3 lue en lecture seule.
-- T3 propose `thread.activity.append` sans tour, mais l'activité n'entre pas dans le contexte de
-  l'agent : piste écartée, l'avis doit lui parvenir.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/119-avis-de-source-apaises/implementation.md#extrait-1).
 
 ## Correction
 - `observation.rs` : `refresh_sources` met à jour l'état consultable sans émettre ; nouveaux champs

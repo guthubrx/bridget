@@ -12,15 +12,7 @@ autre ou un client non enregistré. La socket Unix n'est pas un endpoint Interne
 Assets : corps/provenance, curseurs/reçus, identités, opérations de rejeu.
 Aucune commande fournisseur, exécution de mission, dépendance ou réseau ajouté.
 
-## Découverte et limites
-Rust + serde/rusqlite ; harnais Python externes existants. Pas d'UI dans ce
-périmètre, pas de conteneur, pas de workflow CI repéré. Cargo.lock conservé.
-La page T3 est une interface externe, non auditée ici. SLO proposé, non mesuré.
-Baseline absente = vide. Première session pour le scope136.
-Couverture de lignes et CVE non mesurées ; cargo-llvm-cov absent, cargo audit
-non exécuté (scan CVE non requis par le diff sans dépendance).
-L'analyse des migrations et des contrôles d'identité comprend une seconde
-lecture ciblée. Aucun fichier de production modifié pendant l'audit.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-06/session-2026-10-06-spec-136-01/01_Decouverte.md#extrait-1).
 
 ## Passe préparatoire interrompue
 La première suite s'est arrêtée sur spec102_v34 : MAX(version) attendu1,

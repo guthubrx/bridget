@@ -20,17 +20,11 @@ Logs : `01-native-e2e.log` … `10-clippy-lib.log` dans ce dossier.
 
 ## Étape 1 — e2e natif 148 : PASS
 
-Le correctif R1 est vérifié par les assertions mêmes du test (toutes passées) :
-- **un seul `started` et un seul `prompt`** avant redémarrage ; l'unique prompt porte `resume_card=true` ET `mission=true` (carte+mission jointes au premier tour du nouvel enfant natif).
-- refus sans grant (`delegation_grant_required`), puis grant humain via CLI réel.
-- idempotence : 10 replays ⇒ mêmes `task_id`/`child_agent_id`/`message_id`.
-- réponse corrélée unique (`replies.len()==1`, `in_reply_to` = message d'origine, corps = réponse attendue).
-- SQLite : 1 ligne `native_delegations` ; `t3_present=false` ; aucun répertoire `.t3` chez le fournisseur.
-- **recette cancel/restart VRAIMENT atteinte** : mission `WAIT_CANCEL_148` bloquée chez le fournisseur factice, `Cancel` ⇒ `cancelled` avec résultat nul et aucune réponse corrélée ; `StopOrder` du premier enfant ; arrêt puis relance du daemon (2 générations) ; replay de la requête d'origine ⇒ résultat durable identique (`recovered == finished`) ; `cancelled` préservé après restart ; `started == 2` au total. Le test est une fonction unique sans sortie anticipée : son PASS prouve l'exécution de toutes ces assertions.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-tests-natifs-r2-complet.md#extrait-1).
 
-## Étape 2 — identité T3 : PASS
+## Étape 2 — identité adaptateur de bureau : PASS
 
-`partial_or_invalid_t3_proof_never_falls_back_to_pid` : les 4 cas (endpoint seul, authorization seule, paire invalide, paire vide) passent. Le helper ignoré `isolated_identity_entrypoint` écrit un marqueur PID réellement valide, résout l'identité native par le marqueur, et `bridget_who` répond `isError=true` + `t3_session_unavailable` — refus T3 malgré marqueur PID valide, sans repli PID. 1 ignored volontaire (helper).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-tests-natifs-r2-complet.md#extrait-2).
 
 ## Étape 3 — suite workspace lib mono-thread
 
@@ -74,9 +68,7 @@ J'ai appliqué `umask 077` uniquement à la création du répertoire privé, pas
 
 ## Résidus
 
-- **Aucun processus résiduel** de mes tests (worktree, daemons de test, fixtures python : rien). Les ~22 processus `bridget` présents (daemon production, `t3 serve`, MCP de sessions) préexistaient à la ronde — inchangés, non touchés.
-- 4 répertoires `/tmp` issus de mes 2 exécutions en échec (umask 022) supprimés après inspection : `bg908-e2e-89339-b4e6777b`, `bg907-e2e-89339-64846808`, `bg908-e2e-4907-c9183c55`, `bg907-e2e-5470-925ab367`. Les autres répertoires `/tmp` (runs antérieurs du dev/R1) n'ont pas été touchés.
-- Scratch TMPDIR privé nettoyé ; seuls les logs et empreintes sont conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-tests-natifs-r2-complet.md#extrait-3).
 
 ## Limites
 

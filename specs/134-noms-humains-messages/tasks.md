@@ -13,14 +13,14 @@ produisent exactement le libellé du contrat.
 
 - [x] T002 [US1] [US3] Ajouter les tests rouges `spec134` puis implémenter le libellé `nom (UUID)` avec repli UUID et provenance conservée dans `crates/bridget-core/src/message.rs`
 
-## Phase 3 — Lots T3
+## Phase 3 — Lots adaptateur de bureau
 
 Objectif : appliquer le libellé commun à chaque message groupé.
 
 Test indépendant : un lot de deux expéditeurs nommés associe chaque nom au bon
 UUID complet.
 
-- [x] T003 [US2] Ajouter le test rouge `spec134` puis remplacer l’accès direct à l’expéditeur par `sender_label()` dans `crates/bridget-daemon/src/t3code.rs`
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/tasks.md#extrait-1).
 
 ## Phase 4 — Réparation du profil
 
@@ -35,15 +35,11 @@ Test indépendant : conserver une identité, retirer son profil, rappeler deux f
 
 ## Phase 5 — Validation et livraison
 
-- [x] T005 Exécuter les tests ciblés, `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` et `cargo build --locked --release -p bridget-daemon`, puis consigner les preuves dans `specs/134-noms-humains-messages/implementation.md`
-- [x] T006 Faire la self-review Article XIX/XX, la contre-revue adverse post-implémentation, la convergence des artefacts et l’audit final ; résultat observable dans `specs/134-noms-humains-messages/implementation.md` et `specs/134-noms-humains-messages/validation/results.json`
-- [x] T007 Fusionner dans `main`, construire depuis la racine principale, sauvegarder le binaire actif, déployer, relancer uniquement `com.bridget.daemon` et `com.bridget.t3`, vérifier le build-id et un message réel, pousser vers `https://github.com/guthubrx/bridget.git`, puis nettoyer le worktree et la branche
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/tasks.md#extrait-2).
 
 ## Correctif de saturation — reprise du 2026-10-05
 
-- [x] T008 Reproduire les 1 000 noms provisoires occupés sur les schémas actuel et historique ; vérifier l'échec avant correction.
-- [x] T009 Supprimer le plafond arbitraire dans l'allocation existante, borner la recherche par le nombre de profils et rendre les échecs d'enregistrement visibles ; vérifier réparation, renommage T3 et absence de régression.
-- [x] T010 Livrer le correctif autorisé de SPEC-134 avec sauvegarde, vérifier les noms des fils connectés et un message réel, puis consigner les limites.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/tasks.md#extrait-3).
 
 ## Dépendances initiales
 
@@ -61,10 +57,7 @@ Test indépendant : conserver une identité, retirer son profil, rappeler deux f
 
 ## Stratégie d’implémentation
 
-Le premier incrément utile est T002 : les transports qui utilisent déjà
-`sender_label()` deviennent lisibles. T003 ferme l’écart des lots. T004 répare la
-cause qui empêche certains titres T3 d’atteindre le message. Aucun incrément
-n’ajoute une dépendance, une table ou un service.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/tasks.md#extrait-4).
 
 ## Validation Article XIX/XX
 

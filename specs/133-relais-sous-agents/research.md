@@ -40,8 +40,7 @@ politique sans usage prouvé. L'interdiction totale ne répond pas au besoin.
 
 ## Décision 3 — Preuve locale distincte et non transmissible
 
-**Décision** : le pont T3 publie un marqueur enfant privé distinct des marqueurs
-d'identité principale. La CLI refuse ce marqueur. Seule la façade MCP le comprend.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/133-relais-sous-agents/research.md#extrait-1).
 
 **Raison** : le contrat MCP décrit une identité de client/session et exige une
 autorisation explicite. Ses recommandations de sécurité refusent le passage

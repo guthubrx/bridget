@@ -16,13 +16,9 @@ interprojet n'est inventé. Les envois directs restent soumis à ce motif.
 Le statut explique aussi que ce code décrit l'échec de remise et non celui de
 la lecture. Il conserve le code initial. Il ne relance ni ne modifie la tâche.
 
-## Référence T3
+## Choix de conception Bridget
 
-`apps/server/src/orchestration/decider.ts` rattache un fil à `projectId`,
-indépendamment de son `worktreePath`. La comparaison de projet lors d'une
-reprise de plan porte sur cette identité logique. Bridget réutilise ce principe
-pour sa relation native déjà admise. T3 ne fournit pas la preuve de placement
-multi-hôte de Bridget : celle-ci et les droits hérités restent obligatoires.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/native-project-scope.md#extrait-1).
 
 ## Validation ciblée
 

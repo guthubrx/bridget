@@ -67,11 +67,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Ajouter cargo test -p bridget-transport spec104 pour les trames et les régressions102 ciblées.
 
-Faire correspondre les noms de tests au filtre spec104, et vérifier qu'un filtre ne lance
-pas zéro test. Régressions089/094/099/100 et autres surfaces touchées seulement après audit
-de leur isolation ; ne pas lancer aveuglément tout workspace en release sur ce poste partagé.
-Les tests fonctionnels ne nécessitent pas T3 vivant. Toute recette réelle ou installation
-future requiert une nouvelle autorisation, pas un héritage de l'accord donné pour101.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/104-recherche-echanges/test-plan.md#extrait-1).
 
 ## Négatifs indispensables
 

@@ -66,10 +66,7 @@ Huit échecs préexistants gardent causes et sources. Les deux nouveaux et FR-01
 sont résolus par contrôles affectés. Comparaison200 sources/lock :197 identiques,
 seuls N/store/MCP changent. Aucun workspace sur hash final ou GREEN global prétendu.
 
-Mémoire réelle/Claude CLI/UI T3 non vérifiées ; T024 consigne le non-lancement
-volontaire autorisé. E2E = daemon réel et fournisseur privé synthétique.
-Couverture/mutation/benchmark/délai mural60s de production non mesurés.
-EXPLAIN, horloges de test et cadence tick ne constituent pas un banc réel.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/implementation.md#extrait-1).
 
 ## Six réponses Articles XIX/XX
 

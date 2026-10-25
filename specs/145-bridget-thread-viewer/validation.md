@@ -10,23 +10,19 @@ ThreadRow84–85 déclare created_at:i64 et closed_at:Option<i64> ; entry_json62
 
 Le principal a approuvé cet alignement conservateur du contrat Rust/TypeScript. Les résultats de compatibilité reçus ensuite sont décrits ci-dessous. Cette lecture de source seule ne prouve pas les tests GREEN.
 
-## Overlays privés de dépendances T3
+## Overlays privés de dépendances adaptateur de bureau
 
 Reçu du principal : cinq liens de workspace remplacés dans les overlays privés145 ; trois dossiers shared/ssh/tailscale préparés ; imports Node contracts/runtime145 prouvés. Aucun arbre principal ni installation active modifié. Cette préparation réutilise les dépendances installées, sans nouvelle dépendance produit.
 
 Inspection directe `ls -ld` : les cinq dossiers sont privés et présents :
 
-- `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/node_modules/`.
-- `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web/node_modules/`.
-- `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/server/node_modules/`.
-- `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/contracts/node_modules/`.
-- `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/client-runtime/node_modules/`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-1).
 
-Les liens @t3tools/contracts et @t3tools/client-runtime observés dans le root/web, ainsi que contracts/shared/ssh/tailscale/web côté serveur, ciblent tous ce worktree145. Exemples de cibles exactes : `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/contracts`, `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/client-runtime`, `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/shared`, `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/ssh` et `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/packages/tailscale`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-2).
 
 La preuve de résolution des imports Node est transmise par le principal, sans rejeu par l'agent documentaire. Les commandes et sorties exactes des tests/typecheck/build doivent garder leurs propres reçus. Aucun succès applicatif n'est inféré de la seule résolution des liens.
 
-## Contrôles backend T3 reçus
+## Contrôles backend adaptateur de bureau reçus
 
 Reçus du principal et du travailleur backend :46 tests PASS dans quatre suites ; trois contrôles de types PASS ; contrôle de format sur13 fichiers PASS. Lint :26 avertissements de baseline, zéro nouvel avertissement reçu. Les chemins et commandes exacts restent à joindre au reçu final ; ces compteurs ne constituent pas un build global final.
 
@@ -56,7 +52,7 @@ L'application active, le daemon actif et les installations ne sont pas concerné
 
 ## Contrôle documentaire
 
-Accord opérationnel transmis par le principal : CLI exit3 pour daemon absent ou namespace indisponible ; T3 mappe unavailable sans parser stderr. Exit2 JSON métier reste inchangé. Aucun nouveau code métier. Cette décision contractuelle devra être vérifiée par les tests CLI/service ; elle ne constitue pas leur résultat.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-3).
 
 Le contrôle précédent git diff --check était PASS. Analyze passe3 se limite au contrat d'interopérabilité I004. Les tests et observations reçus ci-dessus restent partiels. Clippy/régressions Rust, recette du masque corrigé, contrôles globaux finaux, audit v14, convergences et clôture T020 restent attendus sur preuves réelles. Aucune case de tâche n'est modifiée par ce reçu.
 
@@ -66,17 +62,17 @@ Ce complément est écrit hors phase Converge, après sa clôture à16:01:21 UTC
 
 ### Rust — résultats finaux des contrôles ciblés reçus
 
-Reçu du travailleur Rust transmis par le principal :10 tests SPEC145 PASS,4 tests CLI PASS,9 tests threads PASS,2 tests SPEC138 T3 PASS et295 tests transport PASS. Un test transport de baseline reste ignoré ; il n'est pas déclaré exécuté. Format, clippy avec -D warnings, build et diff passent avec exit0.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-4).
 
 Ces contrôles ciblés remplacent l'état partiel9unitaires/3CLI du reçu antérieur. Ils ne prouvent aucune activation du daemon ou des processus installés.
 
-### T3 frontend — contrôles reçus
+### adaptateur de bureau frontend — contrôles reçus
 
 Cinq suites,500 tests PASS :68 cas store,22 cas onglets,18 cas panneau et392 cas timeline. Contrôle de types web exit0, format et lint exit0. Le panneau conserve trois avertissements liés aux synchronisations de pages/rafraîchissement ;89 autres avertissements de baseline sont déclarés préexistants. Le succès lint signifie exit0, pas zéro avertissement.
 
 Build web reçu :25,3secondes, exit0 ; sortie isolée `/private/tmp/bridget-145-web-build.OQa6ep`. L'agent documentaire a confirmé la présence de ce dossier par ls -ld, sans reconstruire. Aucun paquet installé ni build de l'application active n'est annoncé modifié.
 
-### T3 backend et interopérabilité — relectures principales
+### adaptateur de bureau backend et interopérabilité — relectures principales
 
 Backend :46 tests PASS et test de montage RPC ciblé PASS. Le principal a rejoué les46 tests backend avec exit0. Le test ciblé RPC n'étend pas sa preuve aux210 cas non sélectionnés dans son reçu antérieur.
 
@@ -102,7 +98,7 @@ Ce complément est écrit hors Converge. Il remplace l'état « revue en cours �
 
 ### Revue et corrections
 
-Revue finale31 sources/tests, dont8 Rust et23 T3. Hash agrégé avant/après identique selon le principal : `7c765f38d24163def6fe80a1b4c792aca1b954e3f6612ee63ac1215a40456bc6`. Verdicts Rust et T3 : APPROVE. Les relecteurs appartiennent au même fournisseur ; aucun fournisseur différent n'est disponible.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-5).
 
 Deux constats MEDIUM corrigés : copier les CRLF exacts avec le vrai helper partagé HTTP, puis rejeter cmd/bat après résolution finale config/HOME/PATH. Un LOW corrigé : retirer quatre lignes de dispatch inspect inaccessible. Tests RED puis GREEN reçus pour les corrections. Le détail et le score19/20 sont dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/specs/145-bridget-thread-viewer/adversarial-review.md`. La validation des artefacts v14 n'est pas remplacée par ce document.
 
@@ -124,7 +120,7 @@ Trois pages, six articles ; copie source strictement exacte dans le puits privé
 
 Révocation sur la page suivante : deux articles deviennent zéro, puis zéro bouton de fil. Rafraîchissement manuel : compteur48→51, lectures seulement. Fermeture :51→51 après400ms, zéro article. Largeur360px sans débordement ; logo neutre avec masque valide. Toutes les listes d'appels externes observés restent external[].
 
-Les outils de capture native échouent sur une incohérence de redimensionnement de la plateforme. Aucune capture finale n'est revendiquée et le harness n'est pas modifié pour l'obtenir. Les22 cas clavier des onglets sont de vraies interactions JSDOM. Aucune preuve clavier complète de T3 sur matériel natif ou application installée n'est ajoutée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-6).
 
 ### Temps et limites de clôture
 
@@ -144,7 +140,7 @@ Commandes exactes, répertoires et résultats : `/Users/moi/Nextcloud/10.Scripts
 
 Frontend : 96 avertissements consignés, aucun zéro warning revendiqué. La répartition finale est 69 ChatView, 18 route Pull requests, 1 RightPanelTabs, 3 BridgetPanel et 5 helper copie. Aucun lint de baseline séparé ne permet d'attribuer globalement 91 avertissements au préexistant.
 
-Le principal confirme les deux branches session-145-bridget-thread-viewer et la préservation des travaux extérieurs. Main Bridget conserve ses six chemins sales142 connus. Main T3 conserve seulement `/Users/moi/11.Repositories/t3code-local/native/resource-monitor/._target`. Aucun source ou harness n'est modifié par T020.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/validation.md#extrait-7).
 
 L'aperçu répond à `http://127.0.0.1:5845/` dans tab_5 : deux articles dans l'état actuel, masque valide et externalAttempts=[] selon le dernier reçu principal. show:true ne prouve pas une fenêtre visible. Aucune capture finale revendiquée. Aucune installation, publication, fusion, commit, push ou relance.
 

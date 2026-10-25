@@ -157,8 +157,7 @@ borné par les six exigences d'entrée.
 
 ## Livraison
 
-Base livrée : `6907df9ba15b58df05c2041631005beb57a1bed6` (159B livrée, active, nettoyée). ROOT assure Git, build, installation et activation Bridget après les gates et l’absence de mission non terminale ; aucun redémarrage T3. Aucun commit automatique durant les phases de code/audit.
-Diff cumulé enregistré dans `validation/diff-160.patch`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/160-reprise-quota/plan.md#extrait-1).
 
 ## Réponses retenues à R1
 

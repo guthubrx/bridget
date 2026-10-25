@@ -2,13 +2,7 @@
 
 ## État existant utilisé
 
-| Élément | Rôle | Changement |
-|---|---|---|
-| `ThreadId` | Identité T3 du fil | Aucun |
-| `ProviderThreadId` | Identité du fil natif Codex | Aucun |
-| `McpProviderSessionConfig` | Preuve privée courante du fil | Aucun |
-| `bridgetCredentialsByThread` | Preuve effectivement montée par fil | Aucun schéma ; invariant renforcé |
-| Fait `provider_turn` | Droits du run actif | Aucun format |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/data-model.md#extrait-1).
 
 ## Invariant
 

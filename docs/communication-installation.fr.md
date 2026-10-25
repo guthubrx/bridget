@@ -74,7 +74,7 @@ Le service s'appelle `app.cartae.bridget`. Un daemon ou une fédération qui ré
 déjà est réutilisé sans interruption ni modification de sa définition. Une
 fédération en panne ou une socket ambiguë est refusée ; aucun deuxième maître
 n'est démarré. Les comptes et données sont conservés. Aucun worker, tunnel ou
-processus T3 n'est relancé. Les services actifs gardent leur version chargée
+processus hôte n'est relancé. Les services actifs gardent leur version chargée
 jusqu'à une relance volontaire. Un service créé ici qui ne répond pas est
 désactivé ; le programme et les données restent disponibles pour réparation.
 
@@ -149,7 +149,7 @@ L'annuaire de communication est local au projet par défaut (138). Le diagnostic
 Depuis un client autonome, donner la racine explicite du projet à consulter :
 `"$bridget_bin" who --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget`.
 Sans racine attestée, le projet est inconnu : liste locale vide et avertissement,
-pas panne d'inventaire. Les agents T3/wrapper héritent de leur contexte.
+pas panne d'inventaire. Les agents adaptateur/wrapper héritent de leur contexte.
 Pour envoyer vers un autre projet connu, porter `--cross-project-reason 'motif'`
 sur send/thread, ou `cross_project_reason` en MCP. Les clients vérifient
 `communication_projects_v1` ; mettre à jour les composants ensemble, sans
@@ -277,17 +277,9 @@ Le retour arrière de cette adoption consiste à arrêter le seul daemon, restau
 le binaire sauvegardé (et l'état arrêté sauvegardé si nécessaire), puis relancer
 son plist inchangé. Ce n'est pas la procédure d'installation isolée ci-dessous.
 
-### Dépanner le pont T3
+### Dépanner l’adaptateur de bureau
 
-`identity_not_found` signifie que le processus MCP n'a reçu aucune identité
-utilisable. Ce code ne prouve pas que l'appelant est un sous-agent interne.
-Dans un fil T3, appeler `t3_code.bridget_session` pour distinguer une attestation
-absente d'un mauvais montage MCP. Si cette lecture réussit mais que Bridget
-refuse toujours, comparer le chemin réel de `mcp_servers.bridget.command` dans
-la configuration Codex effective avec l'exécutable choisi par T3 :
-`T3CODE_BRIDGET_EXECUTABLE` s'il est défini, sinon le lien installé
-`$HOME/.local/bin/bridget`. T3 refuse de transmettre sa preuve à un autre
-exécutable, même si son nom est aussi `bridget`.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-5).
 
 Pour une ancienne entrée officielle, remplacer uniquement son chemin de
 commande par le lien installé stable. Conserver ses autres réglages, les
@@ -296,21 +288,9 @@ une preuve de session dans la configuration. Un chemin `target/release` ou
 celui d'une release datée devient périmé après une livraison. Vérifier ce
 raccordement à chaque installation, en plus de la santé du connecteur.
 
-Une configuration corrigée ne modifie pas un processus MCP déjà lancé.
-Le rattachement ou la reprise native du fil doit remonter la définition
-vérifiée. Ne pas interrompre les autres fils ni relancer une mission pour
-provoquer ce remontage. Un nouveau tour seul n'est pas une garantie : le
-fournisseur peut conserver son montage. Le rétablissement est acquis après
-un `bridget_status` réussi dans le fil concerné, pas après la seule attestation
-T3. Hors T3, lancer l'agent avec `bridget codex` ou `bridget claude` ; un
-sous-agent interne rend son résultat à son parent.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-6).
 
-`t3_session_unavailable` signifie que la preuve privée présentée par le fil n'est
-plus acceptée. Avec T3 Code `0.0.45-local.166` ou plus récent, une reprise Codex
-remonte automatiquement la preuve courante avant son premier tour. Si le remontage
-échoue, T3 bloque ce tour. Il ne faut pas enchaîner les désinstallations et les
-réinstallations. Vérifier d'abord les versions réellement chargées, puis relancer
-T3 une fois seulement si l'application ouverte exécute encore une ancienne version.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-7).
 
 `Too many open files` indique un défaut de cycle de vie des liens ou un ancien
 pont encore chargé. Le pont corrigé ferme les liens des sous-agents terminés après

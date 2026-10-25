@@ -4,23 +4,11 @@ Statut : contrat proposé pour gate GLM. Version native :1. Date :2026-10-10.
 
 ## Autorité et invariants
 
-Bridget crée, exécute, reprend et annule les tâches. T3 projette leurs faits.
-Chaque tâche conserve son identifiant natif et sa corrélation148. Une lecture,
-une souscription ou une projection n'exécute jamais une tâche.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-1).
 
-La requête humaine porte `t3_thread_id` et `project_root`. Le daemon résout le
-projet canonique hors verrou, puis applique les deux gardes147 sous verrou.
-La connexion doit être un client humain négocié. Le binding primaire T3 doit
-être vivant, unique, local et propriétaire du même projet. Un client auxiliaire
-ou un AgentId fourni par l'UI ne remplace jamais cette autorité.
-Le fil T3 est opaque, borné à2048octets, non vide et sans caractères de contrôle.
-La garde d'identité stable reste celle148; elle ne réinterprète pas le texte comme UUID obligatoire.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-2).
 
-Le root owner natif vient de ce binding. La tâche demandée doit avoir le même
-`root_owner_agent_id`. La profondeur maximale reste8. Une identité d'enfant
-connue ou un chemin de journal ne donne aucun droit de lecture.
-Révoquer le binding ou perdre le projet ferme les accès courants. Les fils T3
-déjà projetés restent historiques et portent un état de disponibilité séparé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-3).
 
 ## Commandes CLI fermées
 
@@ -28,13 +16,7 @@ Toutes les commandes emploient le namespace courant et le binaire sélectionné1
 Les options inconnues, dupliquées ou incompatibles avec l'action sont refusées.
 Les chemins ROOT sont absolus et canoniques après résolution.
 
-```text
-bridget lineage inspect --t3-thread ID --project-root ROOT --action list --limit N [--cursor CURSOR] --json
-bridget lineage inspect --t3-thread ID --project-root ROOT --action show --task UUID [--offset N] [--limit N] --json
-bridget lineage inspect --t3-thread ID --project-root ROOT --action journal --task UUID [--after-seq N] [--limit N] [--follow] --json
-bridget lineage watch --t3-thread ID --project-root ROOT --json
-bridget lineage cancel --t3-thread ID --project-root ROOT --task UUID --request-id UUID --json
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-4).
 
 `task` et `request-id` sont des UUID canoniques. `limit` est optionnel. Pour list
 et journal, défaut50 et intervalle1..100. Pour show, il borne les octets du
@@ -111,11 +93,7 @@ encode root/génération/seq/dernière clé. Aucun identifiant du curseur n'est 
 autorisation. Le daemon recontrôle le binding et l'appartenance à chaque page.
 Le nombre de lignes peut être réduit pour respecter la borne d'octets.
 
-Une première page fixe S. Chaque page suivante vérifie la même génération et
-séquence. Une mutation entre pages rend `snapshot_changed`; le client abandonne
-le staging et reprend à la première page. T3 publie toutes les pages en une
-transaction de projection. Aucun snapshot partiel n'est visible.
-La limite totale reste4096tâches. Pas de snapshot durable dupliqué ni cache de corps.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-5).
 
 ## Détail et résultat
 
@@ -140,11 +118,7 @@ La frontière de sortie est celle du journal réellement durable. Une lacune
 reste explicite. Les protections de rendu et de masquage existantes s'appliquent.
 Un journal absent rend `journal_unavailable`, sans inventer de lignes.
 
-Avec `--follow`, le lecteur réutilise le relai attach existant : rejeu borné,
-frontière caught-up, puis événements live et lacunes. L'autorité de tâche est
-recontrôlée avant ouverture et avant chaque publication. Une perte de binding
-ferme le flux. T3 n'interroge pas périodiquement les corps. Le suivi se ferme
-quand le fil enfant n'est plus affiché ou quand la page est masquée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-6).
 
 ## Invalidation des tâches
 
@@ -177,33 +151,15 @@ L'enveloppe contient task_id. Un rejeu identique retourne le reçu natif stable;
 une enveloppe différente donne envelope_mismatch. Le reçu contient version1,
 task_id et status observé. Il n'annonce jamais cancelled avant la fin prouvée.
 
-Après garde, le daemon appelle l'annulation native existante de tâche et de
-descendance. Une tâche d'un autre root rend task_unavailable. Une tâche déjà
-terminale rend son état courant. Aucun nouveau tour T3 ni contrôle fournisseur
-T3 n'est créé. Arrêter le parent utilise ce même moteur pour ses descendants.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-7).
 
-## Projection T3 et boucle de pont
+## Projection adaptateur de bureau et boucle de pont
 
-T3 utilise les fils/relations/sous-agents existants. Identifiants déterministes :
-`thread:bridget-task:<task_id>` et `node:bridget-task:<task_id>`.
-Origine : `bridget_native`. Relation : `subagent`. Parent d'une tâche racine :
-fil T3 attesté qui l'a demandée. Parent d'une tâche imbriquée : fil projeté parent_task_id.
-Une racine T3 déjà forkée garde ses relations existantes; le binding désigne son
-fil courant, pas une racine de lineage reconstruite comme autorité.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-8).
 
-Le fil projeté porte exactement le marqueur T3 suivant, en camelCase :
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-9).
 
-```json
-{
-  "version": 1,
-  "taskId": "UUID",
-  "rootThreadId": "fil T3 attesté",
-  "parentTaskId": null,
-  "generation": "UUID",
-  "seq": 42,
-  "status": "working"
-}
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-10).
 
 Ce marqueur est le champ facultatif `bridgetTaskRef`. Les données historiques
 sans ce champ gardent leur comportement. Le connecteur Rust valide le marqueur
@@ -211,11 +167,7 @@ puis exclut le fil de tout montage wrapper/presence/binding Bridget. Un marqueur
 présent mais invalide est fermé, sans repli en fil ordinaire. Un simple préfixe
 d'identifiant n'est pas suffisant comme autorité.
 
-T3 ne crée aucun provider session, turn, lancement, outbox fournisseur ni retour
-de résultat orchestré. La commande de projection écrit seulement événements,
-projection et reçu existants, atomiquement. Une mise à jour stale est ignorée
-par generation/seq. Une nouvelle génération exige un snapshot complet vérifié.
-Le fil affiche le statut natif; activeTurnId reste null.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-11).
 
 Lineage ouvre le fil enfant et son journal. Les descendants sont masqués dans
 la colonne de gauche par la relation subagent existante. Le composeur est en
@@ -232,5 +184,4 @@ Un refus d'autorité ne révèle pas l'existence d'une tâche étrangère.
 La disponibilité technique peut donner un retry borné. Un refus métier ne
 déclenche ni repli d'identité, ni permission humaine supplémentaire, ni retry infini.
 
-La pagination indexée vise O(log N + P), P<=100. La réconciliation T3 vise O(N)
-avec Maps, N<=4096. Aucun parcours ou requête par enfant dans un hot path.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/contracts/lineage.md#extrait-12).

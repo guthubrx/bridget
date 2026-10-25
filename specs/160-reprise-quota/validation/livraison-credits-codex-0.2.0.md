@@ -51,7 +51,7 @@ La nouvelle observation est validée dans /Users/moi/.cache/bridget-credits-deli
 
 Le premier ordre d’arrêt a provoqué le départ automatique du worker quand son maître a disparu. Le second passage a livré les binaires et démarré les services. Le premier worker `1740440` a ensuite quitté sur `worker_capability_unavailable` pendant le démarrage. Le worker `1740608` a pris la suite. Les erreurs et les anciens reçus restent conservés.
 
-T3 a changé de processus depuis le préflight. La nouvelle observation atteste la stabilité des processus T3 et du tunnel pendant son propre intervalle. Elle ne prétend pas leur conservation depuis l’ancien checkpoint.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/160-reprise-quota/validation/livraison-credits-codex-0.2.0.md#extrait-1).
 
 Fleet a pu évoluer lors de la création de la nouvelle tâche. Son égalité complète avec le préflight n’est pas déduite. Le registre et les LaunchAgents sont comparés aux preuves d’installation.
 

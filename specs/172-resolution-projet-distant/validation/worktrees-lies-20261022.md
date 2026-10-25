@@ -5,24 +5,9 @@
 Le build 172-76b682d6 est actif sur Mac et Cartae. Source de code :
 76b682d6bfdf315a9a3d10de6dc75d0879a265ae, fusionnée dans main et poussée.
 
-- Maître Mac PID 68244, SHA-256 248755a6f69f20665743e7fb289b73c50083bb12a2cd67849421425b2f934c4e.
-- Worker Cartae PID 2219043, SHA-256 4cc657c2c8e287a85160d9359a8d587422308210fe00c250557254bf396040cd.
-- Application T3, serveur et pont : PID 28528, 28591 et 898 conservés, ASAR inchangé.
-- Zéro commande worker et zéro wrapper Bridget actif avant les deux bascules.
-  Ce contrôle ne prétend pas inventorier les calculs T3/SSH indépendants ; aucun n'a été arrêté.
-- 21 tests Python, quatre tests Rust distincts affectés et contre-revue APPROVE.
-  Le test intégré final comprend cinq scénarios. Aucun succès de suite globale déduit.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md#extrait-1).
 
-Recette réelle depuis le contexte T3 Architecture Opus2D :
-Task fdd9c6e9-e16d-4994-a763-e7185870cfca, machine cartae,
-package opus2d@0.1.0, checkout :
-/home/moi/10.Scripts/69.opus2D/.worktrees/158-integration-continuite256
-HEAD directement lu et base attendue identiques :
-ecef0730a9c3b5e7c6381c954537659f07baac99.
-Marqueur effectivement émis : BRIDGET172_WORKTREE_SHARED_LIVE_OK.
-Résultat intégral lu, ACK et clôture par son propriétaire ; aucune erreur,
-continuable=false, cleanup_done=true. Mode Shared : aucune garde Worktree acquise.
-Aucune copie du mandat métier parcs/eau ; sa fabrication reste sous T3.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md#extrait-2).
 
 La première recette dccaf64a a exécuté les lectures correctes, mais n'a pas
 émis son marqueur : le parent avait ajouté une commande Git incompatible avec
@@ -74,12 +59,9 @@ Les correspondances Opus2D des deux hôtes sont identiques. Le commit est déjà
 présent sur Cartae. Le dossier distant attendu est absent. Le helper importe
 les objets Git du dépôt principal, puis la sonde exige le dossier inexistant.
 
-## Référence T3 et correction
+## Choix de conception Bridget
 
-Code relu : /Users/moi/11.Repositories/t3code-local/apps/server/src/vcs/GitVcsDriverCore.ts,
-fonction resolveRepositoryPathsUncached, lignes 1290–1367.
-T3 distingue le répertoire Git commun, résolu en chemin réel, du dossier
-de travail. Bridget reprend cette preuve pour reconnaître un checkout lié.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md#extrait-3).
 
 Différence distante : le helper prépare ce checkout sur Cartae, via la
 fédération SSH existante. Son .git doit être un fichier et son répertoire
@@ -129,24 +111,12 @@ est maintenant bornee au checkout reel. Le repertoire Git commun doit rester
 celui du mapping. Une correspondance limitee a un sous-dossier ne gagne aucun
 droit de rafraichir son parent.
 
-Reference T3 relue : GitVcsDriverCore.refreshCheckedOutBranch (3668–3726)
-applique statut, filiation et avance rapide dans input.cwd. Bridget conserve
-son avance rapide seule, sans le reset que T3 autorise dans certains cas.
-Les gardes de missions actives restent appliquees a ce checkout.
-
 Le mode isole part aussi du checkout source reel. Son nouveau dossier et la
 projection des droits sont relies a ce checkout, puis revalides avant remise.
 Le mapping du registre reste inchange. Le mode partage ne bouge jamais le
 principal pour satisfaire le commit d'un autre worktree.
 
-Un recu prive est ecrit avant extraction, puis marque termine seulement apres
-le succes de Git. Un recu incomplet est refuse au rejeu, sans suppression ni
-reprise automatique. Un ancien dossier sans recu et avec des fichiers suivis
-manquants ou modifies est aussi refuse. Le format du commit est verifie au
-depart et a destination. T3 arme une transaction de liaison et un rollback
-apres creation dans WorktreeMcpService (235–278) ; Bridget conserve plutot le
-recu distant incomplet et les fichiers, pour eviter une suppression distante
-non verifiee.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md#extrait-4).
 
 Decision sur un checkout existant : le helper ne le deplace pas. Un commit
 ancien valide reste soumis a la sonde du worker. Une avance rapide ne se fait
@@ -156,15 +126,7 @@ existant ; imposer l'egalite dans le helper aurait interdit sa mise a jour sure.
 
 ## Git Cartae : correction durable de l'environnement
 
-Cause observee : SSH non interactif choisit /usr/bin/git (2.43.0), alors que le
-service choisit deja /home/moi/.local/lib/bridget-tools/git-2.56.0/bin/git.
-Le choix est maintenant place avant le retour non interactif dans
-/home/moi/dotfiles/bash/.bashrc, cible du lien /home/moi/.bashrc, conserve.
-Le lien stable /home/moi/.local/lib/bridget-tools/git-current pointe vers 2.56.0.
-Une connexion SSH neuve et un shell de connexion choisissent tous deux 2.56.0,
-sans PATH ajoute a leur commande. Sauvegarde et empreintes privees conservees.
-T3 resout aussi la commande Git depuis l'environnement du processus
-(GitVcsDriverCore.executeGit) ; cette correction de shell appartient a Cartae.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/worktrees-lies-20261022.md#extrait-5).
 
 Le checkpoint final des tests, la revue et les activations doivent suivre.
 
@@ -185,7 +147,5 @@ Echec synchrone de creation : le recu est retire uniquement si Git a termine ave
 21 tests Python PASS. RED cible avec le script fadd74df : la liste des recus n est pas vide apres un echec propre, donc le test echoue. GREEN sur la meme fixture avec le correctif. Tests supplementaires sur inscription sans dossier, delai sans dossier et adoption sans recu. Le test du worker passe sur cinq scenarios, dont HEAD lie C0 vers descendant B : seule la cible avance, principal inchange, recheck reussi. Les trois autres tests Rust de r3 restent valides : code de production worker byte-identique, seul le test est etendu.
 
 mapping.source_root n est pas une ecriture morte : inspect_candidate et recheck transmettent le mapping a native_permissions, qui lit source_root pour traduire le cwd du parent. Le registre reste inchange. Les fichiers ignore du projet ne sont pas modifies ; la proprete du principal reste une garde quand on demande son rafraichissement.
-
-Reference T3 pour ce delta : WorktreeMcpService arme une transaction apres creation reussie et un rollback. Bridget exige une preuve d absence de toute creation avant de retirer son recu distant ; une issue inconnue reste fermee. Pas de nouveau parcours T3 equivalent pour un worker distant.
 
 Preuves : /home/moi/.cache/bridget-worktrees172/tests-r4.json, /home/moi/.cache/bridget-worktrees172/clean-failure-red.log, /home/moi/.cache/bridget-worktrees172/python-r4.log, /home/moi/.cache/bridget-worktrees172/worker-green-r4.log.

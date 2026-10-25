@@ -2,18 +2,7 @@
 
 ## Reprise autorisée à16:52 CEST
 
-Analyze réexécuté dans ce tour : spec/plan/tasks, checklist, contrats et code
-de rattachement/recette relus. Primitive analyze lue ; script prerequisites
-toujours absent, protocole manuel appliqué. A1 est levé par l'accord explicite
-de l'utilisateur : installation après tests, sauvegarde, relance seulement
-Bridget/pont ; aucun arrêt T3/fournisseur, aucun commit. T011 reste à prouver.
-Audit-existing relu : PASS, mêmes éléments et arbitrages, aucun nouveau code.
-10FR/13tâches, toutes les exigences ont des tâches, aucun CRITICAL ou doublon.
-Seconde lecture : aucun écart supplémentaire ; documentation de l'autorité
-actualisée, aucune réduction de la recette. Checklist9/9, gate réemploi5/5.
-Build séparé et réutilisation du test101 en release, pas de nouveau harnais.
-Contre-revue avant adoption : MCPwho toujours identity_not_found, à retenter
-après installation ; aucun contournement d'identité.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/101-abonnements-t3/analysis.md#extrait-1).
 
 Phase Analyze exécutée dans ce tour suivant la primitive speckit-analyze,
 initialisation manuelle car scripts du projet absents. Spec/plan/tasks lus ensemble.

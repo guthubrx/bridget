@@ -17,17 +17,9 @@ alternatives rejetées ; ne pas les réintroduire sans preuve nouvelle.
 
 ## 2. Vérifier la base AVANT le code
 
-La branche102 part de main1738a072 et ne contient pas les changements non commitées
-de101. Leur emplacement connu est :
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/101-abonnements-t3
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/quickstart.md#extrait-1).
 
-T001 impose de relever git status et worktree list, retrouver le commit intégrant
-101 s'il existe désormais, vérifier ses contrats (preuve MCP T3, observations),
-puis documenter la base utilisée. Ne jamais faire git reset/checkout destructif,
-copier les fichiers101, ni committer le travail d'un autre agent. Si101 reste
-non intégré, demander à son propriétaire/utilisateur comment intégrer avant
-d'éditer les fichiers communs. Le binaire actuellement installé n'est pas une
-preuve d'intégration Git.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/quickstart.md#extrait-2).
 
 L'arbre principal contenait déjà README.md, la skill et une ADR037 modifiés lors
 de la préparation102. Ils ne sont pas à écraser. Vérifier à nouveau au démarrage.
@@ -40,7 +32,7 @@ Plus de cinq worktrees étaient présents : avertissement, aucun nettoyage deman
 3. `posted`, alerte `dispatched` et page `acknowledged` sont trois faits distincts.
 4. Post + clé de rejeu + intentions de mention : une transaction Store.
 5. Pas de curseur avancé par un envoi de réponse MCP, un post sans ACK ou une fin de tour.
-6. Une alerte de fil n'entre jamais dans le relais automatique de DM de T3/wrappers.
+6. Une alerte de fil n'entre jamais dans le relais automatique de DM de adaptateur/wrappers.
 
 Le chemin normal d'un agent : recevoir une petite alerte → read → prendre
 connaissance de la page → ack (ou post avec ack_receipt) → répondre dans le fil
@@ -107,10 +99,7 @@ Ne pas lancer aveuglément `cargo test --workspace --release` sur le poste parta
 Un test préexistant non exécutable doit être annoncé avec la cause ; aucune
 couverture simulée ne doit être appelée recette fournisseur réelle.
 
-Les tests fonctionnels ne nécessitent aucun appel de modèle payant : fake
-provider au bord du système, vraie DB/socket locale. Une recette avec agents
-réels et un déploiement demandent une autorisation nouvelle et des preuves de
-version/capacité chargée ; on ne relance pas T3 ni ses agents pour installer la skill.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/102-fils-inter-agents/quickstart.md#extrait-3).
 
 ## 7. Rendre la suite du travail vérifiable
 

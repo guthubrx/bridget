@@ -41,7 +41,7 @@ Phase `cancelled` : terminale, absorbante. Jamais relivrée, jamais listée comm
 
 - `turn_gate = 1` : posé par la libération, sur la remise libérée. Levé par : `TurnState true` observé pour l'agent après la libération ; sortie de `dispatching` sans accusé ; accusé depuis plus de 30 s avec l'agent non occupé. Une libération exige qu'aucune remise de `recipient_agent` n'ait `turn_gate = 1`.
 - `adopt_held_for_agent(agent_id, instance_id, recover_dispatching)` : appelé après établissement de l’identité finale de `Register`. Rattache les lignes `held` du même agent, même si l’ancienne présence a disparu.
-  Si `recover_dispatching` est vrai, rattache aussi les lignes `dispatching` non expirées d’une autre instance du même agent et pose `turn_gate = 1`. Le caller active ce mode seulement pour une instance `turn_attest`, un type `held_queue` ouvert et un transport hors T3.
+  Si `recover_dispatching` est vrai, rattache aussi les lignes `dispatching` non expirées d’une autre instance du même agent et pose `turn_gate = 1`. Le caller active ce mode seulement pour une instance `turn_attest`, un type `held_queue` ouvert et un transport dans un terminal.
   Les trois scopes internes de réveil et les alertes de fil restent exclus de ce raccord `dispatching`. ID, génération, octets, phase et rang sont conservés ; une réinscription de la même instance ne réarme pas ses réservations courantes. Le chemin `held` reste inchangé.
 
 ### Présence (mémoire du daemon)

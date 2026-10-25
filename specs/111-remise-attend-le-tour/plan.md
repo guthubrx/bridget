@@ -2,9 +2,7 @@
 
 ## Décision
 
-Dans `crates/bridget-daemon/src/t3code.rs`, retirer la condition `received.elapsed() >= turn_wait`
-des deux points de filtrage de la file. Les autres motifs d'écartement, tous fondés sur une échéance
-réellement portée par le message, restent inchangés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/111-remise-attend-le-tour/plan.md#extrait-1).
 
 Le délai servait de garde-fou mémoire. Il est remplacé par une borne explicite en nombre :
 `QUEUE_BOUND`, appliquée à l'insertion. Un dépassement écarte la plus ancienne remise avec un
@@ -21,8 +19,7 @@ Un message sans échéance n'a aucune raison de périmer : c'est à l'expéditeu
 
 ## Tests
 
-Unitaires dans `t3code.rs` : une remise sans échéance survit à une attente supérieure à l'ancien
-délai ; une remise avec échéance dépassée est écartée ; la borne de file écarte la plus ancienne.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/111-remise-attend-le-tour/plan.md#extrait-2).
 
 ## Livraison
 

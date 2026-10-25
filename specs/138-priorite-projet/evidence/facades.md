@@ -37,8 +37,7 @@ Le harnais réel réutilise `start_real_daemon`, `owner_connection` et
 `cfg(test)` évite un second daemon de tests. Le scénario local partagé entre
 la recette ordinaire et la variante opt-in évite de copier ce harnais.
 
-L'annonce propriétaire wrapper/T3 est détaillée dans
-/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/transport-facades.md.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/138-priorite-projet/evidence/facades.md#extrait-1).
 
 ## RED exécuté et limites
 
@@ -61,12 +60,7 @@ Isolation : umask 077, BRIDGET_HOME et TMPDIR dans un dossier privé court,
 CARGO_INCREMENTAL=0, target isolé
 /Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG.
 
-Commande : `/Users/moi/.cargo/bin/cargo test -p bridget-daemon --lib spec138_ -- --nocapture`.
-Première vague intégrée : 20 PASS, 1 FAIL. Tous les tests façades et les cinq
-tests wrapper/T3 passent. Le seul échec est une fixture auxiliaire du noyau
-avec un issuer_scope plus court que sa borne contractuelle. Le noyau a depuis
-corrigé cette fixture ; cette vague ne revendique pas un PASS global.
-Log : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/facades-green-138.log.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/138-priorite-projet/evidence/facades.md#extrait-2).
 
 Suites historiques exécutées après la correction de notre fixture ancien
 serveur, avant l'ajout du scénario réel :
@@ -108,10 +102,7 @@ inchangé. La lecture de `ControlExecutionResult` et `ExecutionControlRefusal`
 dans ce périmètre n'a trouvé aucune façade SteerCurrent existante. Aucune
 commande de contrôle nouvelle n'est créée. Le noyau et le store couvrent T019.
 
-L'index T3 a été corrigé sur demande du principal : une HashMap locale est
-construite une fois pendant la lecture des projets. Les identifiants dupliqués
-restent inconnus. Le coût ajouté est O(P+T), et non O(P×T). Les tests de
-référence manquante et ambiguë restent présents et passent.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/138-priorite-projet/evidence/facades.md#extrait-3).
 
 La recette réelle a d'abord montré deux erreurs de fixture, pas deux défauts
 de production : le refus MCP expose le statut catégorisé
@@ -144,9 +135,7 @@ CARGO_TARGET_DIR=/Volumes/8TB2/01-workflow/bridget-138-cargo.HjVvbG
 CARGO_INCREMENTAL=0
 ```
 
-Le test fixe en plus BRIDGET_HOME, BRIDGET_SOCKET et TMPDIR au namespace du
-harnais privé et désactive les caches Python. Il retire l'identité T3 héritée
-via le véritable `bridget_background_environment` du script.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/138-priorite-projet/evidence/facades.md#extrait-4).
 
 La recette passe par `cmd_attach_agent` : sans motif, refus interprojets et
 tous les fichiers du run restent byte-identiques ; avec motif, la session

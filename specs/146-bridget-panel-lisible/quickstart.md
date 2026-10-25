@@ -4,7 +4,7 @@ Date : 2026-10-08. Guide de contrôle, pas preuve d'exécution.
 
 ## Préparation
 
-Utiliser les worktrees146 et le socle145 identifié par le manifeste d'import. Ne pas démarrer un serveur contre la base T3 réelle. Ne pas relancer l'application installée ou Bridget actif.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/146-bridget-panel-lisible/quickstart.md#extrait-1).
 
 Préparer des données de test : plus d'une page de fils ; un ancien fil au dernier échange le plus récent ; un fil vide ; des activités égales ; trois pages de messages ; des auteurs distincts ; les quatre types ; un remplacement ; des corps courts et longs avec lignes blanches et Unicode.
 

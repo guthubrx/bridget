@@ -10,12 +10,7 @@ tout lancement exigeait un terminal humain, et a utilisé des sous-agents plus c
 plaçait la garde du terminal (propre à `--posture development`) au cœur de la section de
 lancement, et la référence classait `spawn`/`stop` comme « CLI humain ».
 
-Vérifications du 2026-10-02 :
-- `bridget spawn claude` sans `--posture`, depuis une session sans terminal : accepté, type
-  `project-discovery-claude` (lecture seule), arrêté proprement par `bridget stop`.
-- `bridget spawn glm` : refusé « capacité manquante posture_decouverte » : aucun type `glm` dans le
-  registre du daemon (`~/.cache/bridget-core/agents.json` absent ; types par défaut codex, claude,
-  cursor, gemini), et la clé `ZAI_API_KEY` du lanceur `gclaude` n'est connue que de T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/126-lancement-lecture-seule/spec.md#extrait-1).
 
 ## Exigences
 - **FR-001** : la skill autorise d'office le lancement en lecture seule pour une tâche de lecture,

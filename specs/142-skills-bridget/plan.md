@@ -17,7 +17,7 @@ Les anciens fichiers Claude ne sont pas sources d'autorité pour ces noms. Le pu
 
 ## Constitution et périmètre
 
-Une branche par session, travail isolé, tests avant correction et sauvegardes avant publication. Aucun nouveau framework, service, modèle persistant ou dépendance. Les standards Next.js et tests Cartae ne s'appliquent pas à cette modification documentaire/Bash : utiliser des contrôles de format et des fixtures de publication ciblées. Aucun build Rust/T3 ni contrôle global des autres compétences. La session141 et l'application T3 restent intactes.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/142-skills-bridget/plan.md#extrait-1).
 
 ## Items et réutilisation de l'existant
 

@@ -13,11 +13,11 @@
 | `BridgetRustInterop.testkit.ts` | `72808e22…f330f43d` | Conforme au correctif annoncé |
 | `BridgetRustInteropObserver.test.ts` | `51a4b806…9a2a87a3` | Conforme |
 
-Le binaire n'a pas été recompilé. Les 389 tests T3 déjà PASS en R2/R3 n'ont pas été rejoués.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-tests-identite-r4.md#extrait-1).
 
 ## 2. Résultat d'exécution
 
-Commande exacte du brief, depuis T3 `apps/server`, `BRIDGET_148_RUST_EXECUTABLE` positionné. Deux exécutions (normale puis verbose) : RC=0 chacune, 5,6 s puis 5,5 s.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/148-identite-delegation/validation/glm-tests-identite-r4.md#extrait-2).
 
 - `BridgetRustInteropObserver.test.ts` — 5 PASS : surcharges `writeHead` dont `undefined` en 3e argument, headers bruts alternés, conservation du header préexistant.
 - `BridgetRustInterop.test.ts > native148 Rust uses real HTTP session headers, closes sessions, and refuses revoked credentials` — **1 PASS en 587 ms**. Le test a réellement tourné (portail `it.effect` actif grâce à la variable d'environnement, pas de skip).

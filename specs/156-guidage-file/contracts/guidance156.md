@@ -32,14 +32,7 @@ l'état actuel de la cible. Autre intention sous la même clé :
 
 ## Refus
 
-| Code | Quand | Mémorisé |
-|---|---|---|
-| `invalid_intent` | valeur inconnue ou steer+reply=true | non (aucune clé réservée) |
-| `intent_not_permitted` (motif : `not_parent`, `cross_project`, `self_target`, `identity_unattested`) | appelant sans droit | oui, par `reject_idempotent_send` |
-| `referent_paused` | `steer`/`interrupt` d'un agent pendant la pause | oui |
-| `mission_active` | interrupt agent vers enfant en mission ; humain explicite exempt | oui |
-| `interrupt_rate_limited` (`retry_after_secs`) | 1 par 30 s par couple, 3 par 10 min par cible | oui |
-| `steer_unavailable` | fil T3 dont le fournisseur n'a pas de guidage natif prouvé | rapporté par le pont comme remise rejetée |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/156-guidage-file/contracts/guidance156.md#extrait-1).
 
 « Mémorisé » : pour réessayer, utiliser une nouvelle clé (comportement actuel
 de tout refus de `SendIdempotent`). Sur `Send` historique, chaque refus est un
@@ -62,12 +55,7 @@ Pour ControlExecution, reserve_control_command conserve canon et rejeu AVANT la 
 
 ## Chemins couverts par la même garde
 
-`bridget_send` (MCP), `bridget send` (CLI), `SendIdempotent`, `Send`
-historique (y compris `intent` bruts `SteerCurrent`/`InterruptAndStart` et
-`origin=Human`, en défense en profondeur), `ControlExecution` (`SteerCurrent`,
-`Interrupt`, avec normalisation de l'origine du message), guidage implicite du
-pont T3, `bridget_cancel`. Exception interne : l'interruption de pause (sans
-connexion cliente).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/156-guidage-file/contracts/guidance156.md#extrait-2).
 
 Humain attesté = connexion de rôle attach. Un client nu `from=human` garde
 l'envoi en file et reçoit `identity_unattested` pour le contrôle.
@@ -76,7 +64,7 @@ Cadre de menace : la garde protège contre un agent qui utilise ses outils. Un
 processus hostile du même compte qui forge des trames brutes est hors modèle
 (ADR 011) ; le contrat ne le couvre pas.
 
-## Guidage implicite du pont T3 (changement visible)
+## Guidage implicite du pont adaptateur de bureau (changement visible)
 
 DeliverIdempotent ET Deliver historique portent mid_turn_ok optionnel calculé
 au daemon à chaque envoi/reprise. Sans le champ, forme historique compatible ;
@@ -108,10 +96,7 @@ de rythme.
 
 Réponse :
 
-| Champ | Sens |
-|---|---|
-| `entries[]` | au plus 200 ; `message_id`, `from`, `intent`, `reply`, `age_secs`, `preview` (120 caractères), `position`, `state: "pending_or_injecting"` |
-| `queue_bound` | 64 pour un fil T3, `null` sinon |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/156-guidage-file/contracts/guidance156.md#extrait-3).
 
 Périmètre : seulement send_deliveries idempotent en phase dispatching ; aucun
 Send historique ni file interne de transport.
@@ -144,7 +129,7 @@ la projection ; autres appelants : leurs propres messages. Preuve enfant refusé
 - Les trames sont classées dans la matrice exhaustive de `daemon.rs` (aucun `_`).
 - `ExecutionControlRefusal::NotPermitted` ajouté.
 
-## Pont T3
+## Pont adaptateur de bureau
 
 Aucun changement de forme de la projection Lineage. Le pont pose
 `deliveryIntent: "steer"` (Claude seul, activeSteering natif prouvé) ou
@@ -158,7 +143,7 @@ La remise Claude requiert aussi la garde de provenance et le flag ; cela ne
 change pas le transport Codex natif. Ces changements visibles ferment un repli
 non sûr dans T012/T021/T029 existants, sans nouveau scénario ou permission.
 
-## Limite de compatibilité REST/V1 du pont T3
+## Limite de compatibilité REST/V1 du pont adaptateur de bureau
 
 La voie REST/V1 Client.dispatch ignore l’ancien booléen et ne sait pas exprimer
 deliveryIntent. Elle refuse donc localement toute intention explicite avant

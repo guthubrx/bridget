@@ -4,8 +4,7 @@
 
 **Décision** : enrichir `BridgetMessage::sender_label()`.
 
-**Raison** : ACP, Codex et le rendu T3 unitaire l’utilisent déjà. Une seule règle
-évite des formats divergents.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/research.md#extrait-1).
 
 **Alternatives étudiées** : modifier chaque transport ; enrichir le corps du
 message ; remplacer l’UUID par le nom. Elles dupliquent la règle, mélangent les
@@ -22,9 +21,7 @@ et l’état d’application.
 transaction et connaît l’identité exacte. Il évite une migration globale de la
 base de production.
 
-**Alternatives étudiées** : migration de masse au démarrage ; commande de
-réparation séparée ; lecture du titre T3 directement pendant chaque rendu. Ces
-options ajoutent du risque, une commande ou un couplage inutile.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/134-noms-humains-messages/research.md#extrait-2).
 
 **Impact mainteneur** : l’invariant est local et vérifiable par un test SQLite.
 

@@ -75,11 +75,7 @@ Potentiel minimalisme : environ 15 lignes supprimées.
 
 ### Responsabilité future (Article XX)
 
-- Chaque décision a sa preuve `fichier:ligne` dans `research.md`.
-- La contre-revue et le sort de chaque objection sont dans
-  `adversarial-review-codex.md`.
-- Non vérifiable dans ce dépôt : la réconciliation de liste côté T3 après purge.
-  R9 contourne ce point par un snapshot complet, déjà exigé par le contrat 149.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/plan.md#extrait-1).
 
 ## Stratégie de test
 
@@ -93,12 +89,7 @@ Potentiel minimalisme : environ 15 lignes supprimées.
 
 ## Risques
 
-| Risque | Parade |
-|---|---|
-| Purge d'un arbre avec remise en vol | exiger la phase `acked` ; test avec `OutcomeUnknown` |
-| Purge d'un arbre dont l'enfant tourne | contrôle présence + flotte + lancement sous verrou ; test de relance après nettoyage |
-| Lecteur T3 garde une tâche fantôme | nouvelle génération + signal après commit |
-| Remises indéterminées qui saturent la borne | refus `retention_saturated` explicite, documenté |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/plan.md#extrait-2).
 
 ## Livraison
 

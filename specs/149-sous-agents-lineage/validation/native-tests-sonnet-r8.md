@@ -103,25 +103,9 @@ Journaux : `native-r8-final-transport.log` (sha `ff26f65e…`), `native-r8-final
 
 ## Mutations (oracles de sensibilité)
 
-Méthode : copie jetable `/tmp/b149t-r8/mut` (supprimée), cible Cargo **séparée** (`bridget149-target-mut`, supprimée). Un motif unique est remplacé par mutation. L'arbre de travail n'est jamais modifié. Outil : `native-r8-mutate.py`. Résumés : `native-r8-mutations-summary.txt` (F1 à F10 valides ; ses lignes O, T2 et T4 sont périmées, banc moins strict), `-2.txt` (F10, O1 à O4, T4 avec le banc final) et `-3.txt` (T0 à T3 avec le faux serveur réactif) ; un journal par mutation `native-r8-mutation-*.log`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-tests-sonnet-r8.md#extrait-1).
 
-| Id | Mutation | Tests qui échouent |
-|---|---|---|
-| F1 | `prepare_restart` ne ferme plus l'exécution | 5 (descendant perdu, capture réelle, hors ligne, mission engagée, terminal) |
-| F2 | `prepare_restart` rouvre aussi les terminaux | terminal |
-| F3 | exécution d'un autre agent acceptée | mauvais agent |
-| F4 | autorité sans contrôle du corps | autorité retenue |
-| F5 | autorité sans contrôle du destinataire | autorité retenue |
-| F6 | autorité sans contrôle de révocation | autorité retenue |
-| F7 | propriétaire hors ligne : faux `result_sent` | hors ligne |
-| F8 | garde expéditeur par défaut relâché | message externe |
-| F9 | autorité sans contrôle du propriétaire vivant | autorité retenue |
-| F10 | `descendants_busy` ignore les missions fermées | ligne de reprise (test ajouté après un premier survivant) |
-| O1 | wrapper sans gestionnaire SIGTERM | SIGTERM natif |
-| O3 | wrapper natif se reconnecte sur EOF | EOF natif |
-| T1 | arrêt Codex sans `turn/interrupt` | tour exact, idempotence |
-| T2 | arrêt Codex sans fermeture d'admission | drainage (test durci après un premier survivant, voir plus bas) |
-| T3 | arrêt Codex interrompt un autre tour | mission étrangère |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/native-tests-sonnet-r8.md#extrait-2).
 
 Témoins sans mutation (F0, T0) : tous les tests passent.
 

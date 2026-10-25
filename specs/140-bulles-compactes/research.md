@@ -6,11 +6,11 @@ Date : 2026-10-07. Sources et décisions préparatoires, pas une preuve de livra
 
 MessagesTimeline.logic.ts reconnaît déjà les en-têtes Bridget. UserTimelineRow fournit l'alignement droit, les pièces jointes et la copie. CollapsibleUserMessageBody et UserMessageBody portent déjà le repli et le rendu. onToggleWorkEntry et la mesure de ligne gèrent l'ancrage. Les modifier localement évite un moteur de cartes et un store supplémentaires.
 
-Le modèle de message T3 ne fournit pas de provenance structurée utilisable pour identifier le destinataire. Un nom de fil T3 n'est pas un nom d'agent attesté. Seuls les noms présents dans l'enveloppe sont affichés. Une correspondance de texte n'est pas une preuve d'identité.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/research.md#extrait-1).
 
 Le contrat Bridget distingue les publications de fil action, blocker, decision et history. Une alerte de nouveautés ne transporte pas ce type. Un message direct ne devient pas une demande sur la base de son texte. Les libellés de la maquette ne doivent pas ajouter de faits.
 
-Le logo Bridget existe dans /Users/moi/Nextcloud/10.Scripts/64.bridget/assets/branding/bridget-logo.svg. Aucun logo Bridget équivalent n'a été retrouvé dans les assets T3. Son import local n'exige pas de dépendance ni de réseau.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/research.md#extrait-2).
 
 ## Titre et compatibilité
 
@@ -18,7 +18,7 @@ Le logo Bridget existe dans /Users/moi/Nextcloud/10.Scripts/64.bridget/assets/br
 
 Le titre est une information d'affichage résolue à la remise, comme from_display_name. Store.thread_show contrôle déjà l'appartenance du destinataire. Réutiliser ce contrôle empêche un titre obtenu hors audience. Ne pas modifier project_thread_wake conserve les octets persistés, le journal et l'idempotence. L'en-tête de sollicitation reste identique ; une ligne de métadonnée JSON facultative est ajoutée après celui-ci.
 
-La normalisation des contrôles et espaces puis la borne de200 caractères réduisent la surface d'affichage hostile. L'échappement JSON évite qu'un titre injecte une seconde ligne de consigne ou casse les guillemets. T3 lit une valeur de présentation, jamais du HTML. Cette protection n'atteste pas l'auteur d'un texte.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/research.md#extrait-3).
 
 ## Accessibilité et charge de lecture
 

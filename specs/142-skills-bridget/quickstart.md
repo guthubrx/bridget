@@ -20,7 +20,7 @@ Exécuter les tests ciblés de synchronisation isolée créés en T002/T004 : `/
 
 Valider les nouveaux frontmatter et métadonnées avec le validateur local existant : `/Users/moi/.codex/skills/.system/skill-creator/scripts/quick_validate.py`. Donner à chaque invocation un dossier exact, pas une racine large. La validation de forme ne prouve pas la découverte native.
 
-Inspecter le diff et les huit appelants. Vérifier que les quatre lignes CLI historiques de `horizon-new-episode` n'ont pas changé. Vérifier l'absence de fichiers moteur, daemon, T3 ou LaunchAgent modifiés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/142-skills-bridget/quickstart.md#extrait-1).
 
 ## Recette de publication
 
@@ -30,8 +30,8 @@ Réutiliser la sonde native Codex isolée `/tmp/bridget-spec142-catalog.jreUv2/p
 
 ## Limites et livraison
 
-Publication globale des six identités vérifiée. Tests synchronisation 16/16 et boucle isolée 152/152 PASS par l'équipier. La seconde publication est un no-op sur 36 fichiers d'instructions/métadonnées, trois racines, avec octets, chemins réels, dates et modes inchangés. Le lecteur natif Codex et le lecteur Claude de T3 découvrent les six identités invocables via fixtures isolées des fichiers publiés ; aucun modèle n'a été exécuté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/142-skills-bridget/quickstart.md#extrait-2).
 
 Archives récupérables : `/Users/moi/dotfiles/archives/skills/spec142/codex/agent-bridge.pre-104-20260713-082347/` et `/Users/moi/dotfiles/archives/skills/spec142/claude/agent-bridge.pre-104-20260713-082347/`. Reçu détaillé : `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/142-skills-bridget/specs/142-skills-bridget/results.json`.
 
-Pas de commit/fusion/push142 : autorisation distincte non reçue. Aucun restart T3, daemon ou LaunchAgent. Aucun appel de modèle ni API payante. Une session déjà ouverte peut conserver son catalogue ; ne pas prétendre l'avoir rechargée. Aucun rendu du menu natif Claude ni comportement implicite du modèle n'est garanti par ces contrôles.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/142-skills-bridget/quickstart.md#extrait-3).

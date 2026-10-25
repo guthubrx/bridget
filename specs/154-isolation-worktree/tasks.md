@@ -7,7 +7,7 @@
 **Recette de test** : `quickstart.md` (`umask 077`, racine `/tmp/b.XXXX`,
 `BRIDGET_HOME` privé, `--features test-support`, variables `GIT_*` de test).
 
-**Arbitrage reçu (2026-10-11)** : option « comme T3, durcie » (`spec.md`,
+**Arbitrage reçu (2026-10-11)** : option « exécution directe de Git, durcie » (`spec.md`,
 « Arbitrage utilisateur - exécution de Git »). Le daemon exécute Git pour tout
 parent autorisé. Total : 28 tâches (T001 à T028). Les variantes Git confiné et
 isolation coopérative sont écartées.
@@ -79,12 +79,6 @@ de branche.
 
 ## Phase 8 - Finitions
 
-- [x] T022 [P] Faire passer les lectures Git du wrapper (`managed_resume_worktree`, `is_protected_principal_checkout`, `crates/bridget-daemon/src/wrapper.rs:572-590` et `:623-641`) par l'exécuteur de `workspace_git` en lecture seule : `rev-parse`, `symbolic-ref`, `status`, `worktree list` ; sortie et temps bornés (plus de `.output()` sans borne) ; `status` omis, avec la mention « indisponible (configuration exécutable) » dans la carte, si la configuration locale contient un filtre exécutable ; rouge d'abord : tests `native154_wrapper_*` : marqueur d'un `core.fsmonitor` hostile absent, marqueur d'un filtre `clean` hostile absent, sortie énorme tronquée sans épuiser la mémoire, délai respecté (dépend de T006)
-- [x] T023 [P] Documenter dans `docs/delegation-native.md` (section « Espace de travail ») : stratégies, treize refus, ce que Bridget fait et ne fait pas côté Git, aucune suppression, recette de nettoyage humain (`git worktree list`, `git branch --list 'bridget/*'`, `git worktree remove`), dépôts refusés (LFS, filtres, inclusions, clone partiel), Git 2.44, `.worktrees/` à ignorer dans le dépôt, plafond de 32, différence avec les modifications non commitées du parent, fichiers ignorés, limite du bac à sable ; reporter l'essentiel dans `skills/bridget/SKILL.md` et `skills/bridget/references/commandes.md`
-- [x] T024 [P] Écrire l'ADR `docs/decisions/154-isolation-worktree-optionnelle.md` (contexte, décisions D1 à D11, rejet de la création par le wrapper et du nettoyage automatique avec les raisons de la contre-revue, conséquences positives et négatives dont l'accumulation des worktrees et le résiduel de course sur `.worktrees`, **section « Risque accepté » reprenant le texte de l'arbitrage et renvoyant au cadre de menace de l'ADR 011**, comparaison avec T3 (`GitVcsDriverCore.ts:3418-3419`, `:3789`), alternatives écartées, statut Accepté)
-- [x] T025 Comparer aux compteurs de `validation/baseline.md` (T001) : aucun test 148, 149, 150, 087 ou 100 ne passe de vert à rouge ; lancer une seule fois la suite complète finale (`cargo test --workspace --features bridget-daemon/test-support --no-fail-fast` avec la recette) ; rejouer seuls les tests connus sensibles à la charge avant de conclure ; consigner dans `validation/tests-154.md` ; vérifier que `git worktree list` du dépôt Bridget ne contient aucun reste de test
-- [x] T026 Relire le diff complet (Articles XIX et XX : lignes suppressibles, abstractions, chemins d'erreur, usage de `unwrap`), écrire `specs/154-isolation-worktree/implementation.md` et enregistrer `git diff` dans `specs/154-isolation-worktree/validation/diff-154.patch`
-
 ## Dépendances
 
 - T001 et T002 avant tout ; T002 règle un délai, pas l'architecture.
@@ -118,6 +112,6 @@ finitions.
   sécurité testé), T008 (refus des configurations exécutables, imposé par la
   contre-revue), T009 (deux passes, imposées par le verrou global), T015
   (rapport lu dans Git, imposé par l'exigence « faits non forgeables »).
-- Risque résiduel accepté par l'utilisateur : Un parent confiné qui peut modifier la configuration du dépôt entre le contrôle et l'exécution de Git peut faire exécuter du code avec les droits du daemon. Ce risque est accepté explicitement, au même niveau que T3, dans le cadre de menace de l'ADR 011. Il est écrit dans l'ADR 154 (T024).
+- Risque résiduel accepté par l'utilisateur : Un parent confiné qui peut modifier la configuration du dépôt entre le contrôle et l'exécution de Git peut faire exécuter du code avec les droits du daemon. Ce risque est accepté explicitement, selon les gardes natives, dans le cadre de menace de l'ADR 011. Il est écrit dans l'ADR 154 (T024).
 - Coût porté par l'humain : le nettoyage des worktrees `kept`, borné par le
   plafond de 32 et décrit dans la documentation.

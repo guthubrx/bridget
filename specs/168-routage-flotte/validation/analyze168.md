@@ -12,7 +12,7 @@ La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, e
 
 **Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
 
-Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/analyze168.md#extrait-1).
 
 Preuves existantes :
 
@@ -20,7 +20,7 @@ Preuves existantes :
 - /Users/moi/.cache/bridget-delivery168/final-health/database-health.json — SHA-256 `98feb24442412b8e2ce12d5c6a92e75605c500bd6f67b4e7fc349fc6cebab147` ;
 - /home/moi/.local/state/bridget-delivery168/final-health/cartae-health.json — SHA-256 `a409e7698a2f7ff7bdede77a2a2126eeda0d835052765473f0ef60850818f32a`.
 
-Limites : FULL unique 2820 PASS/32 FAIL/71 ignorés ; 29 échecs initiaux PASS après reprises, trois annulations 159 non validables sur Linux, cause initiale T3 inconnue malgré replay PASS. Deux LOW rustls-webpki et une INFO unsafe-libyaml restent documentés ; aucun GREEN global. Aucun nouvel audit/FULL/P4/build/service/test/modèle par cette rédaction. Aucun retour direct au binaire 0.3.0 après reçu admission v2. Les commits documentaires descendants conservent la source binaire B et ne nécessitent aucune reconstruction.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/analyze168.md#extrait-2).
 
 Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les anciennes mentions de publication en préparation. Les DB, preuves et sauvegardes sont protégées.
 
@@ -103,7 +103,7 @@ La recette matrice Haiku finale est maintenant vérifiée par /home/moi/.local/s
 
 La source B, les paquets et l’activation déjà documentés restent acquis. État : 51/56 au mandat ROOT, T045 prête à clore par ROOT. La publication reste en préparation, sans release publiée ni statut Livré/Implemented déclaré. La suite T046–T049 relève de ROOT ; aucun nouvel audit, FULL, P4 ou build n’est requis par ce seul rapprochement documentaire.
 
-Les PID de production du checkpoint d’activation ne sont pas recontrôlés par cette rédaction. Pour T3, ROOT précise : application 65544 et tunnel 60206 inchangés ; remplacement extérieur du serveur 65608 par 97328, né à 16:51:02 CEST pendant les restrictions. Aucun signal T3 de notre part.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/analyze168.md#extrait-3).
 
 
 ## Analyse finale de livraison

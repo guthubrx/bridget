@@ -15,12 +15,7 @@ notifications ordinaires sans reply, aucun script arbitraire et aucun nouveau
 processus de coordination. Limites : 16/agent,128 total,TTL1h/max7j ; files256/64,
 cinq notifications/s/abonnement, tentative1s/expiration5s ; cache4096/30s.
 
-Les identifiants internes de notifications portent `bridget-observation:`.
-Le journal ignore les observations issues de ces tours corrélés, pour empêcher
-les boucles entre abonnés. Une fin de tour non corrélée (idle natif/T3 seul)
-n'est pas un substitut fiable. Cette couverture limitée est explicite, pas
-une prétention d'observation universelle. Les notifications ne clôturent jamais
-les demandes de réponse et n'imposent aucune action aux destinataires.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/036-observation-non-bloquante.md#extrait-1).
 
 ## Compromis
 
@@ -30,8 +25,7 @@ pertes source dans les logs. Pas de rattrapage historique. Collisions seulement
 sur signaux d'écritures confirmées, même hôte/chemin lexical ; ni shell, ni
 symlink/casse canonisés, ni analyse Git. Un avertissement n'empêche rien.
 
-Pas de migration DB, dépendance externe, verrou de fichier, formulaire, mandat,
-moteur de règles général ni couche le service compagnon/T3 obligatoire.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/036-observation-non-bloquante.md#extrait-2).
 
 ## Vérification
 

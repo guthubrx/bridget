@@ -23,12 +23,7 @@ Portée : revue documentaire de la spécification. Cette liste ne prouve ni impl
 
 ## Préparation de la suite
 
-- [x] Chaque histoire possède un test indépendant et des scénarios d'acceptation.
-- [x] Le choix et les droits restent dans Bridget ; aucun second moteur n'est demandé.
-- [x] Le maintien des tâches déjà lancées et des outils T3 hors délégation est explicite.
-- [x] La couverture des six raccords distingue montage existant et indisponibilité explicite.
-- [x] Les états validé, installé et chargé sont distingués ; l'activation est requise et déjà autorisée.
-- [x] Aucun statut Implemented ni succès d'exécution n'est anticipé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/169-priorite-bridget/checklists/requirements.md#extrait-1).
 
 ## Notes
 

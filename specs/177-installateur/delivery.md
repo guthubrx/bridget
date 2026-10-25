@@ -30,11 +30,7 @@ Revue initiale BLOCKED traitée, contre-revue APPROVE_WITH_CHANGES sans blocage,
 remarques vérifiées/corrigées dans review.md. Résultats lus/ACK ; clôture des deux
 continuations demandée, sans en déduire l'absence de processus.
 
-Les HOME jetables, leurs binaires et checkouts sources ont été retirés après
-conservation des reçus et journaux privés. Aucun compte utilisateur réel, daemon,
-tunnel ou processus T3 remplacé. Branche de travail locale fusionnée puis retirée.
-Worktrees de revue distants conservés : leur statut ne prouve pas à lui seul
-l'absence de processus ni de fichiers ignorés. Aucun retrait forcé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-installateur/delivery.md#extrait-1).
 
 SYS-LE-2 et KS-STOR ne sont pas installés par cette livraison. Le DMG, la
 publication d'une nouvelle release binaire et le rattachement de ces serveurs

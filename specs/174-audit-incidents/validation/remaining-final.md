@@ -24,10 +24,7 @@ Independent review 93b0bd7d found no authority bypass. Its concrete objections w
 
 Optimized release builds for macOS and Linux use source 3755f5454aee2031d2905140fab1157e06c70d09. macOS is ad-hoc signed and verified. Both binaries are installed; master and worker run this build. Subsequent merged installer/documentation commits do not change the compiled Rust sources.
 
-- macOS SHA-256: de497df7e374fea50f6baf9762a851b0cb1b745c3911d58972980455645a4941.
-- Linux SHA-256: 34f4260661b6325aa41d57d1ff034706acef8c94602a5e0d7a9f339024c81ffc.
-- Master PID after activation: 17132. Worker PID: 4063096.
-- The active remote business wrapper retained PID 4045899 and its process birth value. T3 and its bridge were not restarted. Existing client processes keep their loaded client code until their normal restart; daemon-side corrections are already active.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/remaining-final.md#extrait-1).
 
 A cleanup-only follow-up, 3dbdd6aa, recognizes the documented macOS lsof rte type as an AF_ROUTE socket. A real capture reproduced the unnecessary refusal. All 65 cleanup tests pass; real inaccessible files and unknown types still block removal. This Python change requires no new Rust binary.
 

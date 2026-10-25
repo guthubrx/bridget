@@ -116,7 +116,7 @@ destination and label are refused without mutation.
 ## Update a remote client
 
 The versioned `scripts/deploy-remote.sh` prepares a client-only Linux candidate.
-It does not restart T3, the master, its bridge or the existing tunnel, and does
+It does not restart host applications, the master, its bridge or the existing tunnel, and does
 not make ordinary spawn remote.
 
 Use a clean isolated Git source and `--expect-commit` with its full commit SHA.

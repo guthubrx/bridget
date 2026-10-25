@@ -29,10 +29,9 @@ Correction technique, non visible dans une interface : pas de diaporama.
 - Garde : `test_linked_checkout_launch_failure_without_absence_proof_keeps_receipt` passe avant et après. Sans preuve d'absence, le reçu reste.
 - Les tests existants de délai et de résidu passent.
 
-## Différence avec T3
+## Différence avec adaptateur de bureau
 
-T3 renvoie une erreur Git explicite et n'écrit aucun reçu distant.
-Bridget écrit un reçu `ready=false` avant `git worktree add`. Le reçu doit donc être nettoyé quand l'absence est prouvée, et conservé sinon.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/git-diagnostics.md#extrait-1).
 
 ## Limites
 

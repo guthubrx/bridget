@@ -4,16 +4,13 @@ Date : 2026-10-08. Recherche ciblée de conception. Aucun résultat d'exécution
 
 ## Sources et méthode
 
-Le principal a conduit les explorations Bridget, runtime T3 et UI. Leurs preuves sont réutilisées ici. Un contrôle documentaire ciblé a confirmé la garde humaine, la distinction Done/Replayed, la résolution serveur, la subscription runtime et les reconstructions du store. Aucun deuxième balayage complet n'a été réalisé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/research.md#extrait-1).
 
 Baselines lues : /Users/moi/.speckit/research/07-frontend-design-systems.md et /Users/moi/.speckit/research/08-testing-quality.md. Elles orientent vers accessibilité, cycle de vie et tests de comportement. Elles ne prouvent pas un abonnement existant dans le panneau.
 
 Sources primaires consultées le 2026-10-08 :
 
-- [W3C WAI — On Focus](https://www.w3.org/WAI/WCAG21/Understanding/on-focus.html) : une prise de focus ne doit pas provoquer de changement de contexte. Décision locale : ne pas déplacer le focus lors d'une revalidation et conserver les contrôles inchangés. Cette page ne prouve pas une conformité complète de T3.
-- [web.dev — Back/forward cache](https://web.dev/articles/bfcache?hl=en) : une page peut être suspendue puis restaurée. Décision locale : libérer le suivi quand la page n'est plus active, puis revalider à la reprise ; ne pas supposer que la connexion a livré tous les événements.
-- [Testing Library — Guiding Principles](https://testing-library.com/docs/guiding-principles/) : les tests utiles ressemblent à l'usage du logiciel. Décision locale : vérifier sélection, contenu, copie et focus avec les contrôles visibles, pas seulement un compteur de mocks.
-- [The Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html) : répartir tests rapides, intégration et parcours complets. Décision locale : tester le transport et la garde aux frontières, puis un parcours réel isolé ; éviter une recette exclusivement simulée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/research.md#extrait-2).
 
 ## Décision R147-01 — Abonnement humain séparé
 
@@ -45,7 +42,7 @@ Alternatives : émettre sur chaque requête rejeté pour bruit ; observer les fi
 
 Charge future : le signal décrit l'effet committé, pas le nom supposé d'une commande. Les mêmes tests vérifient le chemin réel et son rejeu.
 
-## Décision R147-04 — Étendre le lecteur T3 et ses flux natifs
+## Décision R147-04 — Étendre le lecteur adaptateur de bureau et ses flux natifs
 
 Décision : `BridgetReader.watch` résout le contexte comme `read`. Le flux enfant utilise la ressource Effect `ChildProcessSpawner`, puis `bridget.watch` réutilise RPC, autorisation de lecture et supervisor existants. `idleTtlMs: 0` est explicite.
 
@@ -53,7 +50,7 @@ Pourquoi : `ProcessRunner.run` collecte une sortie finie ; un watch est long. Le
 
 Alternatives : interval React rejeté ; nouveau serveur WebSocket rejeté ; détacher un processus CLI sans scope rejeté pour fuite ; chemin racine fourni par navigateur rejeté pour autorité non attestée.
 
-Charge future : transport WebSocket repris par supervisor natif, sans protocole de reconnexion parallèle. La convergence autorisée ajoute une reprise technique bornée du stream CLI si le WebSocket reste sain : Schedule existant, initiale + trois reprises maximum, uniquement unavailable/command_failed/timeout. Refus métier et invalid_output restent terminaux. La CLI reste testable sans T3, le service est testable aux frontières et le runtime conserve ses conventions.
+Charge future : transport WebSocket repris par supervisor natif, sans protocole de reconnexion parallèle. La convergence autorisée ajoute une reprise technique bornée du stream CLI si le WebSocket reste sain : Schedule existant, initiale + trois reprises maximum, uniquement unavailable/command_failed/timeout. Refus métier et invalid_output restent terminaux. La CLI reste testable par le parcours natif Bridget, le service est testable aux frontières et le runtime conserve ses conventions.
 
 ## Décision R147-05 — Références de sélection dans le store natif
 
@@ -79,9 +76,9 @@ Convergence observée : ready premier sur le wire peut être coalescé avec chan
 
 ## Décision R147-07 — Piles et tests propres aux dépôts
 
-Décision : Rust et Vitest/Testing Library/Effect, avec scénario intégré isolé. Les standards génériques Next.js, Axios et Pytest ne remplacent pas les outils réels de T3/Bridget.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/research.md#extrait-3).
 
-Pourquoi : ces prescriptions visent d'autres projets. Ajouter leurs runtimes ou restructurer T3 ne testerait pas le transport effectivement livré.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/research.md#extrait-4).
 
 Alternatives : générer une suite Python parallèle rejeté ; recette uniquement mocks rejetée ; recette sur conversations actives rejetée pour risque inutile.
 
@@ -111,7 +108,7 @@ Sources de test consultées par le principal : [Integration Test](https://martin
 
 ### Diagnostic local vérifié — reçu assaini du principal/RPC
 
-Cause vérifiée en lecture seule par le principal/RPC : agent regional-wrkr-1, thread1288a673-d16e-473a-80dc-def0b2f776c8, adapter ClaudeAgent, provider claude_glm, modèle glm-5.3-flash. Home effectif /Users/moi/.claude-glm, exécutable gclaude, launchArgs sans flags. Les noms MCP home/projet sont vides. La commande `CLAUDE_CONFIG_DIR=/Users/moi/.claude-glm /Users/moi/.local/bin/claude mcp get bridget`, cwd /Users/moi/Nextcloud/10.Scripts/69.opus2D, sort RC1 et confirme l'absence de Bridget. Sortie assainie64 octets, raw non conservé. T3 injecte seulement t3-code ; ce constat ne signifie pas que GLM est interdit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/research.md#extrait-5).
 
 Owner documentaire n'a pas rejoué la commande. Aucun secret ZAI, contenu brut de configuration, modèle lancé ou configuration active modifiée. Le diagnostic ne prouve pas le succès d'une correction ni le catalogue d'un modèle actif.
 

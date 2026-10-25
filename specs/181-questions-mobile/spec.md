@@ -4,12 +4,16 @@ Statut : Implemented (25/25 tâches) ; pipeline Livré avec conservations justif
 
 ## Demande initiale et choix validés
 
-L’utilisateur veut les questions du modèle telles qu’elles existent dans T3, présentées correctement sur téléphone. Il valide le volet compact, son agrandissement, les réponses depuis les notifications et la conservation des réponses. Il demande une réponse libre supplémentaire, éventuellement dictée, pour remplacer ou compléter les choix proposés. Il demande ensuite un émulateur Android et retire son Pixel des essais.
-Précision prioritaire : « je ne veux pas être compatible qu’avec T3 […] même […] dans une fenêtre de terminal […] qu’on passe par Bridget ». La continuité ne doit créer aucune dépendance envers T3 ; son abandon est accepté si elle devient complexe.
+L’utilisateur veut afficher sur Android les questions du modèle, avec leurs textes,
+choix et descriptions. Il valide le volet compact, son agrandissement et les réponses
+depuis les notifications. Il demande une réponse libre, écrite ou dictée, seule ou
+en complément. Il demande un émulateur et retire son Pixel des essais.
+Le contrat appartient à Bridget. Le terminal doit pouvoir traiter les mêmes demandes.
+Les brouillons restent locaux à leur appareil.
 
 ## Demande reformulée
 
-Permettre de recevoir une question humaine structurée par Bridget, d’y répondre sur Android, dans une notification ou depuis un terminal, puis de reprendre exactement la demande d’origine. Préserver les textes, descriptions et choix produits par le modèle. Proposer une réponse libre écrite ou dictée, seule ou en complément. Conserver le brouillon sur son appareil et montrer la résolution confirmée aux autres clients. T3 reste un adaptateur facultatif ; le parcours complet doit fonctionner sans T3.
+Permettre de recevoir une question humaine structurée par Bridget, d’y répondre sur Android, dans une notification ou depuis un terminal, puis de reprendre exactement la demande d’origine. Préserver les textes, descriptions et choix produits par le modèle. Proposer une réponse libre écrite ou dictée, seule ou en complément. Conserver le brouillon sur son appareil et montrer la résolution confirmée aux autres clients. Le parcours complet utilise le contrat natif Bridget.
 Apport du cadrage : la question et sa réponse portent une identité durable native Bridget, au lieu de dépendre du client qui les affiche. Aucun partage de brouillon en cours entre appareils, aucune reformulation automatique des questions ni interprétation des réponses libres.
 
 ## Scénarios utilisateur et vérification
@@ -28,11 +32,9 @@ Acceptation : application fermée, une réponse directe rejoint la bonne questio
 
 ### US4 P1 — Continuité raisonnable
 Fermer puis rouvrir Android conserve le brouillon local. Une réponse depuis le terminal ou Android résout la même demande pour tous. Une coupure conserve une commande incertaine et permet son rejeu identique. Les questions annulées, expirées ou résolues ailleurs ne restent pas présentées comme répondables.
-Acceptation : remise après coupure sans doublon ; arrêt/reprise du daemon sans perte ; conflit entre réponses visible et sans écrasement. Pas de brouillon partagé en direct entre Android et T3.
+Acceptation : remise après coupure sans doublon ; arrêt/reprise du daemon sans perte ; conflit entre réponses visible et sans écrasement. Pas de brouillon partagé entre appareils.
 
-### US5 P1 — Adaptateurs et indépendance
-Les questions natives Bridget fonctionnent avec T3 absent. Les modes terminal capables d’un échange structuré utilisent ce parcours. Les questions natives T3 sont présentées par un adaptateur qui conserve leur demande d’origine. Les terminaux purement interactifs sans callback ni montage Bridget ne sont pas pilotés par simulation de touches : leur limite est explicite et un lancement compatible est indiqué.
-Acceptation : une recette native complète dans un environnement sans connexion ni composant T3, puis une recette de l’adaptateur T3. Aucun changement du contenu des questions, aucun redémarrage de fournisseur pour répondre.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/181-questions-mobile/spec.md#extrait-1).
 
 ## Exigences fonctionnelles
 
@@ -46,7 +48,7 @@ Acceptation : une recette native complète dans un environnement sans connexion 
 - FR008 Même opération rejouée = même réponse/reçu. Même clé avec un contenu différent = refus. Deux réponses concurrentes ne se remplacent pas.
 - FR009 Déconnexion, révocation, changement de projet, fin de session ou question devenue non reprenable ferment la possibilité de répondre sans réinjecter un prompt ordinaire.
 - FR010 Les autres clients voient une résolution confirmée ; les brouillons restent locaux à leur appareil.
-- FR011 Parcours natif indépendant de T3, accessible depuis terminal et Android. Les adaptateurs ne définissent pas le stockage ou le protocole central.
+- FR011 Parcours natif Bridget, accessible depuis terminal et Android. Les adaptateurs ne définissent pas le stockage ou le protocole central.
 - FR012 Conserver les anciens parcours de décisions et de file Android. Ne pas transformer une autorisation d’exécution en question libre.
 - FR013 Vérifier les parcours sur émulateur Android ; conserver les preuves réelles, tests, limites et reçus de livraison.
 
@@ -56,7 +58,7 @@ Demande humaine, questions/choix, réponse structurée (sélections et texte), o
 
 ## Critères de réussite
 
-- SC001 Les trois modes de réponse (choix, texte, sélection+complément) sont reçus une seule fois par leur demande native, T3 absent.
+- SC001 Les trois modes de réponse (choix, texte, sélection+complément) sont reçus une seule fois par leur demande native, dans un environnement natif isolé.
 - SC002 Une fermeture/réouverture conserve tous les champs non envoyés ; une réponse depuis l’autre client ferme la demande sous10s en connexion saine.
 - SC003 Notification en arrière-plan : réponse courte et texte libre atteignent le bon agent ; une question déjà résolue ne peut déclencher une seconde remise.
 - SC004 Aucun écart de texte/description/choix entre source et téléphone sur les fixtures ; aucune perte de sélection lors de la dictée ou de l’agrandissement.
@@ -65,4 +67,4 @@ Demande humaine, questions/choix, réponse structurée (sélections et texte), o
 
 ## Périmètre et dépendances
 
-Réutiliser sessions087/155 (décisions et callbacks),177 (mobile/auth/notifications),178 (rendu/sécurité),180 (file/brouillons locaux). T3 sert de référence UX et d’adaptateur optionnel. Pas de synchronisation de brouillons non envoyés, modification des consignes sur la qualité des questions, nouveau service cloud vocal, dépense externe ou simulation de touches dans une TUI.
+Réutiliser sessions087/155 (décisions et callbacks),177 (mobile/auth/notifications),178 (rendu/sécurité),180 (file/brouillons locaux). Les parcours et contrats sont définis par Bridget. Pas de synchronisation de brouillons non envoyés, modification des consignes sur la qualité des questions, nouveau service cloud vocal, dépense externe ou simulation de touches dans une TUI.

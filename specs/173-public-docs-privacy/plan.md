@@ -8,5 +8,4 @@
 6. Validate the staged changes and links, obtain a targeted independent review,
    then integrate and push without changing the running fleet.
 
-No T3 runtime mechanism is changed. This task concerns publication, not a defect
-in provider/session/worktree execution.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/173-public-docs-privacy/plan.md#extrait-1).

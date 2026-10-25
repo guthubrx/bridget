@@ -2,37 +2,22 @@
 
 ## Fiche synthèse
 
-Spec: 110-reprise-nom
-Statut: Implemented (livré 2026-09-19)
-Priorité: P1
-Tâches: 6/6
-Date: 2026-09-19
-Branche: session-110-reprise-nom
-Dépendances : extension de nom 089, annuaire vivant, adaptateur T3 098.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/110-reprise-nom/spec.md#extrait-1).
 
 ## Problème observé
 
-Constaté le 2026-09-19 sur le poste : trois fils T3 voient leur renommage refusé en boucle,
-toutes les 330 secondes, avec le motif `NameConflict`. Exemple : le fil affiché `claude-horizon`
-dans T3 est connu de Bridget sous son titre automatique, parce que le nom `claude-horizon` est
-détenu depuis le 14 septembre par un profil qui n'apparaît plus dans l'annuaire.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/110-reprise-nom/spec.md#extrait-2).
 
 Cause : le nom d'affichage est unique et durable, et rien ne le libère quand son détenteur
 disparaît. Chaque réimport de conversation crée une identité neuve qui ne peut pas reprendre son
 ancien nom. Mesure du jour : 268 profils enregistrés pour 16 agents connectés, dont 253 dormants
 depuis plus de deux jours.
 
-Conséquence : l'utilisateur et les agents voient deux noms différents pour le même fil, et une
-demande adressée au nom affiché dans T3 ne trouve pas son destinataire.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/110-reprise-nom/spec.md#extrait-3).
 
 ## Scénarios utilisateur
 
-- **US1 (P1) — Récupérer son nom.** Un fil renommé dans T3 demande ce nom à Bridget. Le détenteur
-  actuel est absent de l'annuaire vivant : le nom est transféré, le demandeur le porte.
-- **US2 (P1) — Ne pas voler un nom vivant.** Le détenteur est connecté : la demande est refusée
-  comme aujourd'hui, avec le même motif.
-- **US3 (P2) — L'ancien détenteur reste identifiable.** Le profil dépossédé reçoit un nom dérivé,
-  jamais un vide. Son identifiant et son historique ne changent pas.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/110-reprise-nom/spec.md#extrait-4).
 
 ## Exigences fonctionnelles
 
@@ -49,12 +34,7 @@ demande adressée au nom affiché dans T3 ne trouve pas son destinataire.
 
 ## Critères de succès
 
-- **SC-001** : sur une base de test, un nom détenu par un profil absent de l'annuaire est transféré
-  au demandeur, et l'ancien détenteur porte un nom dérivé distinct.
-- **SC-002** : le même appel, avec un détenteur présent dans l'annuaire, est refusé `NameConflict`.
-- **SC-003** : recette complète verte, sans régression de l'extension de nom 089.
-- **SC-004** : après livraison, les trois fils en conflit portent leur nom T3 dans l'annuaire, et le
-  journal du pont ne montre plus de refus en boucle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/110-reprise-nom/spec.md#extrait-5).
 
 ## Hors périmètre
 

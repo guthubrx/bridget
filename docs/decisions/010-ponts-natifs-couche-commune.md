@@ -82,12 +82,7 @@ aurait permis d'anticiper la panne du 23 août à 22h27 au lieu de la subir.
 Côté Codex, on peut en outre *interroger* les limites avant d'affecter une
 mission longue, et détecter le reroutage silencieux d'un modèle.
 
-**Négatives.** Deux à trois pilotes à maintenir au lieu d'un. Le coût est
-concentré côté Claude, où les permissions interactives dominent le budget —
-estimé trois à cinq semaines-équivalent, contre une à deux pour Codex, sur
-la foi des tailles observées chez T3 Code (adaptateur Claude 4597 lignes,
-Codex 2010, Cursor 1188). Risque de régression sur l'attache et
-l'idempotence pendant le refactor.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/010-ponts-natifs-couche-commune.md#extrait-1).
 
 **Réversibles.** Le pont ACP reste en place pendant toute la migration ;
 aucune étape ne coupe l'existant avant que son remplaçant soit prouvé en
@@ -103,15 +98,8 @@ au démarrage, mais duplique la boucle principale, la reconnexion et le
 journal ; fragmente `who` et le greffe par fournisseur ; et condamne
 l'attache aux seuls agents ACP.
 
-**Reprendre le code de T3 Code** (MIT) : leur code est en TypeScript, le
-nôtre en Rust. On reprend leur *discipline* — interface étroite, événements
-canoniques, octets bruts préservés, capacités déclarées, adaptateur lourd
-isolé — pas leurs lignes.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/010-ponts-natifs-couche-commune.md#extrait-2).
 
 ## Sources
 
-Instruction G1 rendue le 2026-08-24 (lecture seule, agent tiers). Mesures
-propres : schéma du protocole app-server généré localement (37 fichiers,
-579 définitions, version 2) ; exécution réelle du flux Claude en JSON ;
-inventaire des adaptateurs de T3 Code. Le catalogue v2 porte le détail des
-constats, blocs G1 à G11.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/010-ponts-natifs-couche-commune.md#extrait-3).

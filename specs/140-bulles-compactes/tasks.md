@@ -15,32 +15,25 @@ Les décisions de compatibilité et de réutilisation sont prises dans les artef
 
 Test indépendant : cinq enveloppes complètes se replient sur une ligne et s'ouvrent ; messages ordinaires inchangés.
 
-- [x] T002 [US1] Ajouter les tests RED des cinq projections et faux positifs dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.test.ts. Vérifier l'ancrage et la borne1024, puis enregistrer l'échec attendu avant code.
-- [x] T003 [US1] Étendre la projection pure existante dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.ts. Résultat : fixtures T002 GREEN, aucune mutation du texte ou attestation de provenance.
-- [x] T004 [US1] Ajouter ou étendre les tests de rendu proches de /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.tsx. Résultat RED avant code pour repli initial, clic, Entrée/Espace, état accessible et focus. Si aucun harnais DOM existant adapté, consigner l'arbitrage dans reuse-audit puis employer la recette réelle isolée, sans prétendre avoir un test automatique.
-- [x] T005 [US1] Modifier la branche existante de CollapsibleUserMessageBody dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.tsx et importer localement le logo source /Users/moi/Nextcloud/10.Scripts/64.bridget/assets/branding/bridget-logo.svg. Résultat : bulle droite bleu-gris, une ligne initiale, commande clavier et détails bruts ; aucun chargement réseau ni renderer parallèle.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/tasks.md#extrait-1).
 
 ## Phase4 — US2 : libellés sans invention (P1)
 
 Test indépendant : reply, nom absent et compteurs ont des libellés fiables ; aucun mot du corps ne devient un type de mission.
 
-- [x] T006 [US2] Étendre les tests dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.test.ts pour noms présents/absents, reply, lots, notification et corps contenant action/blocker/decision/history. Résultat : la nature n'est jamais inférée du contenu ; conserver RED avant les changements nécessaires.
-- [x] T007 [US2] Compléter les libellés dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.ts et leur affichage dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.tsx. Résultat : T006 GREEN, aucun faux nom de destinataire ou titre de fil.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/tasks.md#extrait-2).
 
 ## Phase5 — US3 : vrai titre de fil compatible (P1)
 
 Test indépendant : destinataire membre reçoit le titre ; absent, ancien format ou non membre ne reçoit aucun titre indu ; canon et journal sont identiques.
 
-- [x] T008 [P] [US3] Ajouter les tests Rust RED dans les modules de test existants de /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/crates/bridget-core/src/message.rs, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/crates/bridget-daemon/src/daemon.rs et /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/crates/bridget-daemon/src/t3code.rs. Résultat : champs absents/lecteur ancien, membre/non-membre, remise classique/idempotente, canon/journal, titre hostile et borne200 couverts en environnement isolé.
-- [x] T009 [US3] Étendre le champ racine facultatif de BridgetMessage dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/crates/bridget-core/src/message.rs, sa projection de remise dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/crates/bridget-daemon/src/daemon.rs et la ligne JSON de titre dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/crates/bridget-daemon/src/t3code.rs. Résultat : tests T008 GREEN ; ThreadNotice, project_thread_wake et octets persistés inchangés.
-- [x] T010 [US3] Ajouter les tests de ligne titre JSON et de fallback ancien dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.test.ts. Résultat RED pour titre valide, hostile, absent, vide, invalide ou hors position ; texte brut original toujours identique.
-- [x] T011 [US3] Consommer la métadonnée titre uniquement en présentation dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.ts. Résultat : T010 GREEN, « Fil partagé » si aucune valeur valide ; aucun lookup, backfill ou texte inconnu retiré.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/tasks.md#extrait-3).
 
 ## Phase6 — US4 : conservation et virtualisation (P1)
 
 Test indépendant : anciennes et nouvelles entrées gardent texte, copie, pièces jointes et actions ; changer de fil ne transporte pas l'état ouvert.
 
-- [x] T012 [US4] Vérifier et corriger si nécessaire la conservation dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.tsx et les tests proches. Étendre les tests logiques dans /Users/moi/11.Repositories/t3code-local/.worktrees/140-bridget-compact/apps/web/src/components/chat/MessagesTimeline.logic.test.ts. Résultat : copie brute exacte, suffixe inconnu conservé, pièces jointes/actions existantes, longs messages, état isolé fil/message, recyclage et ancrage. Consigner la recette réelle du composant en thèmes clair/sombre et largeur320 dans /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/140-bulles-compactes/specs/140-bulles-compactes/implementation.md.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/140-bulles-compactes/tasks.md#extrait-4).
 
 ## Phase7 — Vérification transversale
 

@@ -34,8 +34,7 @@ Aucun CRITICAL, HIGH, MEDIUM ou LOW ouvert dans le diff corrigé. Aucun finding 
 
 Deux défauts confirmés pendant la convergence ont été corrigés avant le gel final :
 
-- T009 : une expression de terminaison optionnelle CR/LF pouvait consommer le CR appartenant à un corps comme A\r. Le parseur retire maintenant exactement le séparateur déduit de l'en-tête canonique. Des séparateurs structurels mélangés imposent le repli sûr. Preuves : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts:129 et /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.test.ts:334.
-- T010 : un en-tête canonique au-delà de 1024 caractères sortait de la projection compacte, mais sa copie suivait alors le chemin qui remplace les références par leurs labels. La copie reconnaît désormais ce seul en-tête canonique séparément, sans activer un rendu compact. Preuves : /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.logic.ts:101 et /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.tsx:2268 ; test /Users/moi/11.Repositories/t3code-local/.worktrees/141-bridget-grouped/apps/web/src/components/chat/MessagesTimeline.test.tsx:396.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-07/session-2026-10-07-spec141-01/scoring.md#extrait-1).
 
 Le principal a rapporté les tests RED puis GREEN. Cet audit n'a pas rejoué les anciennes versions rouges. Il a lu la correction, les assertions et la contre-revue locale APPROVE. Il a rejoué la version finale.
 
@@ -47,10 +46,9 @@ Principal et implémentation : format, lint ciblé, types web et build web PASS.
 
 Recette native rapportée par le principal : clic/Tab/Entrée/Espace, focus visible de 2 px, choix indépendants conservés après repli, ancrage 905→905, repli de 4 annoncés/3 réels affichant les trois corps sans section attribuée, zéro Sources, zéro script exécuté. Le lot de notifications conserve ses détails historiques. À 320 pixels CSS réels, les rendus clair et sombre mesurent chacun 320 pixels de largeur et 320 de contenu, sans débordement. Un nom de 300 caractères Unicode reste complet et revient à la ligne. Le corps long complet garde ses dix paragraphes.
 
-La capacité native preview_resize a expiré deux fois. La recette a donc utilisé un iframe de 320 pixels dans le même aperçu T3, sans navigateur alternatif. Cet audit a inspecté les deux captures finales ; il n'a pas exécuté les interactions du principal. Captures :
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-07/session-2026-10-07-spec141-01/scoring.md#extrait-2).
 
-- /Users/moi/.t3/userdata/browser-artifacts/browser-screenshot-127-0-0-1-muxp14lx-25fd3477.png
-- /Users/moi/.t3/userdata/browser-artifacts/browser-screenshot-127-0-0-1-muxp1vid-2e2033d4.png
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-07/session-2026-10-07-spec141-01/scoring.md#extrait-3).
 
 Complément à 07:57:35 : le principal a cliqué le vrai bouton de copie et comparé les 3421 caractères à la fixture SQLite, texte identique. Le spy local writeText a été restauré ; cette recette ne revendique pas une écriture dans le presse-papiers système.
 
@@ -74,11 +72,7 @@ Le changement réduit la charge de lecture des lots : les noms et les corps rest
 
 ## Points positifs
 
-- Corps HTML traité comme texte par le renderer existant, parseRawHtml=false.
-- Copie originale complète conservée, même avec lien t3-context et en-tête canonique long.
-- Repli entier sur ambiguïté, sans expéditeur ou message inventé.
-- Pas de nouveau transport, stockage, fournisseur ou modification d'Agent Loop.
-- Réutilisation du renderer, de la copie, de la clé fil/message et de l'ancrage existants.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-07/session-2026-10-07-spec141-01/scoring.md#extrait-4).
 
 ## Limites et dépendances vulnérables
 

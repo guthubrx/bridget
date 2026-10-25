@@ -181,10 +181,4 @@ une décision explicite.
 
 ## Alternatives écartées
 
-- **Réintégrer le service compagnon dans le daemon Bridget** : couplage fort, cycle de
-  publication commun et transport alourdi.
-- **Reprendre le superviseur historique** : pipeline rigide, cycle de
-  worktrees et fournisseur imposés.
-- **Partager `bridget.db`** : double autorité et migrations couplées.
-- **Adopter DSH ou T3 Code comme interface canonique** : modèle de sessions et
-  source d'état supplémentaires.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/003-service-compagnon-orchestration.md#extrait-1).

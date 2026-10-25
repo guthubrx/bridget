@@ -34,12 +34,9 @@
   - commande terminale expirée encore référencée par un slot : conservée.
 - Le test passe sur la base et après changement.
 
-## Différences avec T3
+## Différences avec adaptateur de bureau
 
-- Copie lue : `/home/moi/.cache/bridget-maintenance174/T3-ProviderSessionReaper.ts`.
-- T3 parcourt une liste de sessions avec un seuil d'inactivité. Il fait une requête par session.
-- Il ne croise pas deux collections et ne supprime aucune preuve.
-- T3 ne possède pas le store distant de Bridget. Il ne sert donc pas de référence de correction pour `collect`.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/collect-index.md#extrait-1).
 
 ## Limites
 

@@ -20,12 +20,7 @@
 | 5 | Résultat lu par l'attente 151 sans garde posée : la garde n'est posée que par `tick` (HAUTE) (caduque après 151 révisée, voir le réalignement ci-dessous) | lu spec 151 FR-017 et tâche T012 : l'attente pose `result_sent` et `delivery_acked`, « le nettoyage se déclenche, aucun message n'est envoyé » ; branche `result_available && result_sent && !cleanup_done` (`native_delegation.rs:1079`, `:1283`) | oui | le nettoyage arrêterait l'enfant gardé après une lecture par l'attente. Correction : `mark_result_sent` unique, appelé par `tick` et par l'attente ; écriture de l'attente liée à la ronde lue (FR-009, FR-033, I6, T030, SC-015) |
 | 6 | Place libérée avant l'arrêt confirmé : `holds_slot()` est faux dès la levée de garde (MOYENNE) | lu `cancel_tree` : `cleanup_done` posé seulement si tous les arrêts réussissent (`native_delegation.rs:1444-1476`) ; `terminal()` vrai pour `result_available` (`delegation.rs:60-65`) | oui, ciblé | l'écart existe déjà en 149 pour toute tâche terminale non nettoyée. Je le corrige seulement pour les tâches avec garde (`guarded && !cleanup_done`), pour ne pas changer le comptage des tâches 149 (SC-009). FR-010, I2, T012, SC-015 |
 
-**Note de l'agent revue (reprise)** : les validateurs 149 ferment la liste des
-états sans imposer l'irréversibilité (`task_entry`, `delegation_lineage.rs:35`) :
-le retour `result_available` vers `mission_pending` n'est pas bloqué côté
-Bridget. La compatibilité du lecteur T3 reste à prouver (A2, non vérifiable dans
-ce dépôt). L'expiration pendant une pause est cohérente avec 152 : une tâche
-inactive est terminale, donc sans `suspended_at` (R11).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/adversarial-review-codex.md#extrait-1).
 
 **Artefacts modifiés** : `spec.md` (FR-009, FR-010, FR-016, FR-020, FR-026, FR-029
 à FR-033, SC-011 à SC-015, entités), `plan.md` (I2, I3, I6, I7, décisions, fichiers,
@@ -44,10 +39,7 @@ Art. XIX). Effet de bord traité : `continuable` n'est vrai qu'après l'envoi pa
 `tick` (1 s) ; un `bridget_task_continue` trop précoce rend le refus réessayable
 `result_delivery_pending` (FR-019, T013, T015).
 
-Statut du plan : les six objections sont traitées. Ouverts : le lecteur T3
-(A2), le risque de faux refus de l'égalité de politique (A10) et la livraison
-réelle de 150 et 151 (A1). Pas de
-ronde 2 de contre-revue lancée ; elle reste recommandée avant T002.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/adversarial-review-codex.md#extrait-2).
 
 ## Ronde 2 (plan révisé)
 
@@ -61,7 +53,4 @@ ronde 2 de contre-revue lancée ; elle reste recommandée avant T002.
 | R2.2 | Annulation ignorée avant l'envoi du résultat, puis garde posée jusqu'à 2 h (HAUTE) | lu `Cancel` `native_delegation.rs:518-530` (aucun effet sur `result_available`) et `human_cancel` `delegation_lineage.rs:235` (`drives = !terminal`) ; `continuable()` faux avant l'envoi, donc T011 ne couvrait pas cette phase | oui | l'annulation agent et humaine devient une preuve durable `guard_released` qui interdit à `tick` de poser la garde et à toute ronde de s'ouvrir (FR-012, FR-033, I8, T008, T010, T011, SC-016) |
 | R2.3 | Égalité des politiques : la posture effective remplace la posture demandée `None` et modifie la politique Codex (MOYENNE) | lu `child_policy` `native_permissions.rs:206-213` : `readonly = posture == Some(Discovery)` impose lecture seule sans réseau pour Codex vers Codex ; l'admission passe `*posture` et `spawn_task` passe `None` avec snapshot | oui | recalcul avec la posture demandée et les entrées de lancement ; aucun champ de sécurité retiré ; matrice de tests (FR-031, T014, SC-017) |
 
-Aucune tâche ajoutée : les trois corrections complètent T004, T008, T010, T011,
-T013, T014 et T015. Total : 29 tâches. Ouverts : lecteur T3 (A2), stabilité de
-l'égalité de politique à confirmer par le test de T014 (A15), livraison réelle de
-150 et 151 (A1).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/adversarial-review-codex.md#extrait-3).

@@ -78,11 +78,11 @@ Test indépendant : catalogue humain/JSON12+ horsT3, garde locale attestée, auc
 
 - [x] T006 [US1] Owner A. Consommer les capacités déclarées et les observations model/list du préflight/runtime natif existant ou de l’opérateur T043 pour les vrais noms et efforts par connexion ; default_effort membre des efforts ou null/liste vide pour défaut natif sans flag. Aucun processus depuis le loader de registre ou la lecturecatalogue, aucune nouvelle découverte automatique. Conserver provenance et entitlement inconnu, aucun medium inventé, modèle masqué ou appel à chaque modèle. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/registry.rs. Dépendances : T005.
 
-- [x] T007 [US1] Owner ROOT / exécutant /root/admission168_finish. Raccorder routing_catalogue_v1 sur le clientcontract version existant et sa feature dédiée ; garde unix_peer_uid/peer_uids mêmeUID + Role::Client + négociation. Projection publique allowlistée, aucune session d’agent obligatoire ni human_authority_guard/T3, aucune mutation ni lancement fournisseur. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/daemon.rs ; /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/communication/client.rs. Dépendances : T002,T006.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/tasks.md#extrait-1).
 
 - [x] T008 [US1] Owner ROOT / exécutant /root/admission168_finish. Ajouter à delegate167 la lecture exacte --catalogue --json avec filtre --machine et rendu humain du même snapshot. Une lecture depuis terminal humain sans identité d’agent fonctionne ; un maître sans feature retourne capability_unavailable structuré, sans commande parallèle. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/src/cli.rs. Dépendances : T007.
 
-- [x] T009 [US1] Owner ROOT / exécutant /root/admission168_finish. Étendre les bancs existants : catalogue12/128 complet, registre129 même désactivé refusé, modèles réels séparés des labels de profils, défaut natif null, filtre machine et lecture humaine sameUID sansT3. Prouver zéro Task et zéro appel modèle, pas seulement la forme JSON. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/tests/cli_arguments_integration_test.rs. Dépendances : T008.
+- [x] T009 [US1] Owner ROOT / exécutant /root/admission168_finish. Étendre les bancs existants : catalogue12/128 complet, registre129 même désactivé refusé, modèles réels séparés des labels de profils, défaut natif null, filtre machine et lecture humaine sameUID natifBridget. Prouver zéro Task et zéro appel modèle, pas seulement la forme JSON. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/crates/bridget-daemon/tests/cli_arguments_integration_test.rs. Dépendances : T008.
 
 ## Phase4 — US2 / P1 — Axes indépendants
 
@@ -182,7 +182,7 @@ Les tests contrôlés ne remplacent pas la recette réelle ; une installation ou
 
 - [x] T044 Owner ROOT. Installer et activer les paquets utiles Mac/Cartae et la politique déclarée, avec quiescence et relances contrôlées nécessaires. Vérifier build chargé, daemon/pont/worker, registre/digests, quick_check/FK0 et configuration réellementON. Préserver les PID/naissancesT3 et tunnel ; aucun job temporaire de relance en boucle. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/activation168.md. Dépendances : T043.
 
-- [x] T045 Owner ROOT. Exécuter les recettes réelles bornées : namespace sansT3, catalogue humain12+, contraintes modèle/machine/connexion/effort, charge/saturation, comptes isolés, LayaON sur ensemble entier compatible≤8, LayaOFF+HaikuOAuth réel sur12+, deuxOFF+score sur12+, tâche distante hostcartae et SHAexact. Vérifier résultat corrélé, gardes soldées, rejeu sans redécision ; aucune centaine d’appels modèle, aucun claimentitlementuniversel. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/recette168.md. Dépendances : T044.
+- [x] T045 Owner ROOT. Exécuter les recettes réelles bornées : namespace natifBridget, catalogue humain12+, contraintes modèle/machine/connexion/effort, charge/saturation, comptes isolés, LayaON sur ensemble entier compatible≤8, LayaOFF+HaikuOAuth réel sur12+, deuxOFF+score sur12+, tâche distante hostcartae et SHAexact. Vérifier résultat corrélé, gardes soldées, rejeu sans redécision ; aucune centaine d’appels modèle, aucun claimentitlementuniversel. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/recette168.md. Dépendances : T044.
 
 - [x] T046 Owner ROOT. Publier depuisCartae le tagannoté et la releaseSemVer v0.4.0 sur le commit exact validé, avec paquets et sommesT041. Vérifier tag/cible/assetsdistants et intégrité ; notes sans secrets, identitéGit utilisateur et limites de tests conservées. Ne pas republier ni écraser une release existante. Fichiers/preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/release168.md. Dépendances : T042,T045.
 
@@ -401,9 +401,7 @@ GEL final documentaire pour init V15 ; aucune autre écriture sans GO ROOT.
 
 ## Clôture T036 — campagne unique conservée
 
-ROOT a relu les reçus terminaux et leurs limites le15octobre2026. FULLunique RC101 :2820PASS/32FAIL/71ignorés, sources stables ; reprises exactes :9PASS migrations,12PASS r1 et8PASS r2. Dernière issue de29échecs initiauxPASS ; trois annulations159 nonvalidables Linux (watch_marker kqueue Darwin/BSD), sans ignore ajouté. Aucun GREENglobal. Les neuf deltas postFULL concernent les tests uniquement et ont leur contre-lecture. Le diagnostic T3 nonatteint au PASS ne ferme pas sa cause initiale inconnue.
-Preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/tests168.md et /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/audit168.md.
-T036 clôturée sur exécution et conservation des résultats exigées, sans attribuer un succès aux trois frontières nonportables. État45/56 ; première tâche restanteT039. Les étapes Git/build/activation/recettes/release/nettoyage restent à réaliser.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/tasks.md#extrait-2).
 
 
 ## Clôture T039 — commandes et configuration documentées
@@ -428,7 +426,7 @@ Cartae main intégré ff-only puis poussé origin/main ; Mac main avancé ff-onl
 
 ## Clôture T043/T044 — qualification et activation utiles
 
-Les reçus préflight/activation ont été relus par ROOT. Deux namespaces sans modèlePASS, catalogue27(17+10), DDL168 et DBvidesqualifiées ; sauvegardes froides cohérentes et contrôles de quiescence/handles exécutés. Daemon47823/pont47926 et worker3712026 sont réellement en0.4.0 sourceA ; configONet27options, quickOK/FK0, schémas7/12, identité native/MCP/pontRunning vérifiés. T3core65544/65608 et tunnel60206 sont conservés. Premierfreeze refusé avantmutation aprèsfermeture naturelleRenderer ; garde core corrigée et contre-relue sanssignaler T3. Aucun epochprodworkerdeviné, aucune recette réelle encore déduite. Preuves : /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/preflight-activation168.md et /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/activation168.md, avec chemins absolus et hashes. État51/56 ; première tâche restanteT045.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/tasks.md#extrait-3).
 
 
 ## Point T045B — preuve de délai, sans clôture de recette

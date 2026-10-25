@@ -17,10 +17,7 @@ Aucune mutation de main.
 
 ## Écarts préexistants corrigés (mêmes correctifs que dans la 102, sur ce socle)
 
-Prompt 105 des wrappers sans « ; » (tests `claude_interactive_097_test`), exemple de
-réponse de SKILL.md raccourci (`core_089_skill_test`), liste attendue de
-`claude_native_permissions_test` complétée (`bridget_events`, `bridget_journal`),
-emprunt inutile t3code.rs:2780 (clippy).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/103-dossier-passation/implementation.md#extrait-1).
 
 ## Progression
 
@@ -94,16 +91,7 @@ emprunt inutile t3code.rs:2780 (clippy).
 - ✅ quickstart.md § « État au 2026-09-17 » (surfaces partagées avec la 102, réconciliation
   des listes fermées à la fusion, aucune autorisation de commit/installation implicite).
 
-### T020 Recette complète (état définitif du code, 2026-09-17 22:52–22:58 CEST)
-- ✅ Environnement : `umask 077`, `env -i HOME TMPDIR=/tmp/b.XXXX BRIDGET_HOME=/tmp/b102/ns
-  PATH=~/.cargo/bin:/usr/bin:/bin:/usr/sbin:/sbin`, `perl -e 'alarm 1800'`.
-- `cargo fmt --all -- --check` : rc 0 ; `cargo clippy --workspace --all-targets -- -D warnings` : rc 0.
-- `cargo test --workspace --release --no-fail-fast` : **1426 réussis, 0 échec, 50 ignorés**
-  (/tmp/b102/r103c-release.log). Une première passe (22:39–22:44, avant les deux corrections
-  de la contre-revue) avait donné le même bilan 1426/0/50 ; une relance intermédiaire dont le
-  journal mélangeait deux exécutions a été refaite proprement.
-- Ignorés : recettes réelles Codex/Claude/T3 conditionnées par variables d'environnement et
-  worker de performance privé du harnais.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/103-dossier-passation/implementation.md#extrait-2).
 
 ## Remise à l'humain
 

@@ -33,7 +33,7 @@ Bridget peut communiquer avec des agents, lancer des équipiers et gérer des d�
 
 La création d'un agent et l'envoi de sa mission sont séparés. La délégation automatique exige plusieurs paramètres techniques. Le suivi des tâches natives est riche par MCP, mais il n'est pas exposé avec la même simplicité dans la ligne de commande.
 
-L'utilisateur doit pouvoir employer un agent Bridget comme coordinateur autonome depuis son terminal. T3 peut enrichir cette expérience, mais il ne doit pas être nécessaire pour créer, suivre, continuer ou arrêter une tâche.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/spec.md#extrait-1).
 
 ## Histoires utilisateur
 
@@ -77,18 +77,15 @@ Comme utilisateur, je veux lister, lire, attendre, continuer et annuler mes tâc
 4. Étant donné un enfant qui attend une réponse, quand l'utilisateur répond depuis le terminal, alors la réponse est liée à la bonne demande.
 5. Étant donné une tâche annulable, quand l'utilisateur l'annule, alors sa descendance suit les règles de sécurité existantes.
 
-### US4 — Automatiser sans dépendre de T3 (P2)
+### US4 — Automatiser sans dépendre de adaptateur de bureau (P2)
 
-Comme utilisateur de scripts et d'autres interfaces, je veux une sortie stable et exploitable par machine afin d'intégrer Bridget à mon environnement sans dépendre de T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/spec.md#extrait-2).
 
-**Test indépendant** : chaque commande du nouveau parcours fournit un format machine stable, conserve les identifiants durables et fonctionne lorsque T3 est arrêté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/spec.md#extrait-3).
 
 **Scénarios d'acceptation** :
 
-1. Étant donné une commande de coordination, quand le format machine est demandé, alors la sortie contient des champs stables et aucun texte décoratif parasite.
-2. Étant donné une nouvelle tentative avec la même clé et les mêmes données, quand l'issue précédente était incertaine, alors Bridget ne crée pas une seconde tâche.
-3. Étant donné que T3 est absent, quand le daemon Bridget et le pilote requis sont disponibles, alors le parcours complet reste utilisable.
-4. Étant donné une tâche créée par MCP, quand le terminal la consulte, alors les identifiants et les états ont le même sens.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/spec.md#extrait-4).
 
 ## Exigences fonctionnelles
 
@@ -109,7 +106,7 @@ Comme utilisateur de scripts et d'autres interfaces, je veux une sortie stable e
 - **FR-015.** Les nouvelles commandes doivent utiliser les mêmes tâches, états, droits, quotas, reçus, refus et règles de rejeu que les outils MCP correspondants.
 - **FR-016.** Une nouvelle tentative portant la même clé et la même enveloppe doit rendre l'état durable existant sans créer de doublon.
 - **FR-017.** Une nouvelle tentative portant la même clé et une enveloppe différente doit être refusée explicitement.
-- **FR-018.** Le parcours complet doit fonctionner sans processus T3 actif.
+- **FR-018.** Le parcours complet doit fonctionner dans un environnement natif isolé actif.
 - **FR-018a.** Une commande qui exige un coordinateur doit refuser une invocation sans identité Bridget. Le refus doit indiquer comment lancer ou rattacher un agent. La commande ne doit pas fabriquer une identité d'agent pour un processus humain.
 - **FR-019.** Les commandes historiques de lancement, délégation automatique, envoi et contrôle doivent rester compatibles.
 - **FR-020.** La solution ne doit ajouter ni nouveau fournisseur, ni nouveau moteur de tâche, ni nouvelle base, ni nouveau service permanent.
@@ -136,7 +133,7 @@ Comme utilisateur de scripts et d'autres interfaces, je veux une sortie stable e
 - **SC-003.** Dans 100 % des tests de sélection explicite, le choix est respecté exactement ou refusé sans substitution.
 - **SC-004.** Les états observés depuis le terminal et depuis MCP sont identiques dans 100 % des scénarios croisés.
 - **SC-005.** Une reprise avec la même clé ne crée aucun doublon dans 100 % des scénarios de rejeu.
-- **SC-006.** Le parcours créer, suivre, attendre, continuer, répondre, accuser lecture et annuler réussit sans processus T3 dans une recette isolée.
+- **SC-006.** Le parcours créer, suivre, attendre, continuer, répondre, accuser lecture et annuler réussit dans un environnement natif isolé dans une recette isolée.
 - **SC-007.** Les commandes historiques couvertes par la régression conservent leur comportement et leur format documenté.
 - **SC-008.** Aucun service permanent, stockage ou dépendance externe supplémentaire n'est nécessaire.
 - **SC-009.** Un nouvel utilisateur peut exécuter le parcours nominal à partir de l'aide intégrée sans consulter le code source.
@@ -152,13 +149,7 @@ Comme utilisateur de scripts et d'autres interfaces, je veux une sortie stable e
 
 ## Hors périmètre
 
-- Reproduire l'interface graphique, les worktrees ou le graphe d'exécution de T3.
-- Ajouter un planificateur de graphes ou un langage de workflows.
-- Ajouter un nouveau fournisseur ou modifier l'authentification d'un fournisseur.
-- Modifier les décisions d'admission, les quotas ou les droits existants.
-- Créer une interface plein écran dans le terminal.
-- Déduire qu'une fin de tour constitue une réussite de mission.
-- Déployer ou configurer automatiquement T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/spec.md#extrait-5).
 
 ## Dépendances
 

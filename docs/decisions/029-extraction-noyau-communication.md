@@ -16,7 +16,7 @@ Le nouveau binaire doit disposer d'un espace isolé avant son premier démarrage
 
 ## Alternatives rejetées
 
-Réécriture complète (perte des preuves), retour tmux (besoin utilisateur contraire), simples flags masquant toutes les anciennes dépendances (coût maintenu), adoption d'un framework multi-agents (nouvelle orchestration au lieu de découplage). Une passerelle A2A ou une vue T3 seront des décisions ultérieures fondées sur un consommateur réel.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/029-extraction-noyau-communication.md#extrait-1).
 
 ## Conséquences
 

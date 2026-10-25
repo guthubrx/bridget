@@ -2,7 +2,7 @@
 
 ## Précondition
 
-Un tour Codex va démarrer pour un fil T3 qui possède une preuve privée Bridget courante.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/contracts/rattachement-reprise.md#extrait-1).
 
 ## Comportement
 
@@ -13,9 +13,4 @@ Un tour Codex va démarrer pour un fil T3 qui possède une preuve privée Bridge
 
 ## Garanties
 
-- Le `ThreadId` T3 ne change pas.
-- L’identifiant natif Codex ne change pas.
-- L’historique n’est ni remplacé ni dupliqué.
-- Une preuve n’est jamais partagée entre deux fils.
-- Une preuve ancienne ne reçoit pas les droits du nouveau run.
-- Aucun repli global n’est autorisé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/contracts/rattachement-reprise.md#extrait-2).

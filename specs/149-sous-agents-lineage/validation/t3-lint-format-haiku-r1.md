@@ -1,33 +1,20 @@
-# Rapport lint et format T3 - session 149 - Haiku 5.5 (r1)
+# Rapport lint et format adaptateur de bureau - session 149 - Haiku 5.5 (r1)
 
 ## Résumé
 
-- Le lint échoue : 14 erreurs, dont 13 nouvelles introduites par 149. Une erreur existe déjà dans le checkout racine.
-- Le lint échoue aussi sur 924 avertissements, contre 901 en racine (+23 liés à 149).
-- Le format échoue : 37 fichiers sur 48 modifiés ou nouveaux par 149 ne respectent pas `vp fmt`. Deux échecs existent déjà en racine.
-- Cause du blocage initial : le plugin de lint `oxlint-plugin-t3code` ne trouvait ni `@oxlint/plugins` ni `effect` dans le worktree. J'ai ajouté deux liens ciblés. Aucune dépendance n'a été installée ni copiée.
-- Aucun fichier source, test, manifeste ou lock n'a été modifié. Aucun format ni fix automatique n'a été lancé.
-- Aucune commande Git, Cargo, modèle réel, install ou redémarrage.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lint-format-haiku-r1.md#extrait-1).
 
 ## Environnement
 
-- Worktree : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage`
-- Racine (baseline) : `/Users/moi/11.Repositories/t3code-local`
-- Toolchain Node : `/Users/moi/.cache/t3-toolchains/148/node-v24.13.1-darwin-arm64/bin` (Node v24.13.1, vérifié par `verification.json`)
-- Commande : `export PATH=/Users/moi/.cache/t3-toolchains/148/node-v24.13.1-darwin-arm64/bin:$PATH`
-- `vp` n'est pas dans le PATH. J'ai utilisé `./node_modules/.bin/vp` (lien vers la racine).
-- Dossier des logs (hors dépôt) : `/Users/moi/.cache/t3-lint149-PaLNaU`
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lint-format-haiku-r1.md#extrait-2).
 
 ## Liens ajoutés (réversibles)
 
 Ces liens existent seulement dans le worktree. Ils pointent vers le store pnpm de la racine. Ils sont couverts par `node_modules` dans `.gitignore`.
 
-| Lien | Cible |
-|---|---|
-| `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage/oxlint-plugin-t3code/node_modules/@oxlint/plugins` | `/Users/moi/11.Repositories/t3code-local/node_modules/.pnpm/@oxlint+plugins@1.68.0/node_modules/@oxlint/plugins` |
-| `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage/oxlint-plugin-t3code/node_modules/effect` | `/Users/moi/11.Repositories/t3code-local/node_modules/.pnpm/effect@4.0.1_patch_hash=a33cba07c41f32374c2aaa86ea4a84d3ab9a872a78c94b65e929b19f8361856f/node_modules/effect` |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lint-format-haiku-r1.md#extrait-3).
 
-Justification : la racine a les mêmes liens dans `oxlint-plugin-t3code/node_modules`. Le `package.json` du plugin demande `@oxlint/plugins` `^1.63.0`, et 1.68.0 le satisfait. Les règles du plugin importent seulement `@oxlint/plugins` et `effect`, vérifié par lecture des fichiers hors tests.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lint-format-haiku-r1.md#extrait-4).
 
 Pour retirer les liens : `rm` sur ces deux chemins de lien, sans suivre la cible.
 
@@ -41,7 +28,7 @@ Pour retirer les liens : `rm` sur ces deux chemins de lien, sans suivre la cible
 | 4 | `./node_modules/.bin/vp fmt --check <48 fichiers 149>` (WT) | 1 | `fmt-check-149.log` |
 | 5 | Idem sur les 29 fichiers 149 qui existent en racine | 1 | `fmt-check-root-baseline.log` |
 
-Liste des 48 fichiers 149 : `/Users/moi/.cache/t3-lint149-PaLNaU/files149.txt`. Elle reprend le `git status` lu au début (fichiers modifiés et non suivis, `apps/` et `packages/`).
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lint-format-haiku-r1.md#extrait-5).
 
 ## Lint : erreurs
 
@@ -80,7 +67,7 @@ Aucun fichier n'a été reformaté.
 
 ## Tests
 
-Aucun test unitaire relancé. Les tsc baseline (16 server et 10 web) ne sont pas refaits. Les 104 PASS du rapport `t3-final-boundary-tests-sonnet-r1.md` ne sont pas revérifiés ici.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-lint-format-haiku-r1.md#extrait-6).
 
 ## Processus
 

@@ -17,12 +17,7 @@ La présence d'une tâche en working ou cancelling interdit de prétendre qu'une
 
 ## Constats de code
 
-- Le daemon ouvre sa base sous verrou exclusif et ne remplace pas une socket active : daemon.rs:6761.
-- Les vues humaines existantes exigent une liaison de conversation et une présence locale : daemon.rs:18115.
-- La réattestation valide exactement un endpoint loopback correspondant au port du runtime local : t3code_mcp.rs:120.
-- Le même contrôle est réappliqué avant l'admission et avant la remise distante : native_delegation.rs:4017 et le chemin de démarrage distant.
-- Un simple tunnel vers le maître ne rend pas ce contrôle portable.
-- L'envoi humain nu possède déjà son propre chemin idempotent sans usurper un agent : daemon.rs:12120.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/177-bridget-mobile/validation/preflight.md#extrait-1).
 
 ## Réseau et outillage
 

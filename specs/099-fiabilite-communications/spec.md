@@ -1,20 +1,10 @@
 # Spécification 099 — Fiabilité et identité des communications
 
-**Branche** : session-099-fiabilite-communications
-**Date** : 2026-09-16
-**Statut** : Implemented — 16/16 tâches initiales + 6 tâches de convergence (reprise du 2026-09-16) ; recette complète `cargo test --workspace` exigée verte avant commit et déploiement.
-**Demande** : « $my-specify-all corrige les problèmes que tu as trouvés ».
-**Dépendances** : 089 (messagerie et garanties), 094 (clients MCP), 097 (sessions natives), 098 (pont t3code).
-**Tests** : 26/26 nouvelles régressions passent (25 daemon, 1 protocole) ; baseline : 39 tests cœur et 13 tests t3code avant correction.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/spec.md#extrait-1).
 
 ## Pourquoi
 
-La revue a reproduit trois défauts opérationnels et une attribution indue :
-un destinataire lent immobilise les autres communications ; un client auxiliaire
-peut emprunter une identité qu'il connaît ; un travail t3code annulé peut démarrer
-après l'annulation ; une réponse terminée est oubliée lorsque son destinataire est
-déconnecté. La lecture montre aussi une sauvegarde intermédiaire omettant des
-attentes et une observation coupant silencieusement les textes longs.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/spec.md#extrait-2).
 
 Le périmètre est la correction de ces défauts, pas une refonte du produit ni la
 suppression d'adaptateurs, du journal, du suivi durable ou de la fédération.
@@ -42,13 +32,7 @@ auxiliaire valide et preuve périmée après nouvelle incarnation.
 
 ### US3 — Ne pas démarrer un travail déjà annulé ou périmé (P1)
 
-Étant donné un fil t3code occupé, un travail reçu reste en attente. Si l'émetteur
-l'annule avant son démarrage, si son échéance est passée, ou si la connexion
-d'autorité disparaît, le travail n'est pas démarré ultérieurement en silence.
-Le pont continue à traiter les commandes de contrôle pendant cette attente.
-Test : faux fournisseur occupé, annulation attestée avant libération, aucune
-commande de démarrage pour cette demande ; mêmes essais avec expiration et
-déconnexion. Une autre demande valide peut être traitée ensuite.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/spec.md#extrait-3).
 
 ### US4 — Une réponse prête reste récupérable (P1)
 
@@ -71,31 +55,7 @@ explicite, sans succès mensonger.
 
 ## Exigences fonctionnelles
 
-- FR-09901 : isoler l'effet d'une remise classique bloquée sur les autres agents ;
-  borner l'attente d'écriture et de verrou de sortie à une seconde.
-- FR-09902 : ne pas confirmer comme réussie une remise dont l'écriture a échoué ;
-  garder une issue honnête si une remise partielle ne peut être prouvée.
-- FR-09903 : conserver la corrélation des réponses immédiates et les contrôles
-  de doublons, de sauts et de débit pendant la correction.
-- FR-09904 : exiger une preuve de rattachement pour les clients auxiliaires ;
-  les seuls identifiants, le type déclaré ou l'identité du compte ne suffisent pas.
-- FR-09905 : révoquer cette preuve à la fin de l'incarnation autorisée ;
-  ne l'exposer ni dans l'annuaire, ni dans les journaux, ni dans les erreurs.
-- FR-09906 : maintenir les clients légitimes et nommer les incompatibilités ;
-  documenter qu'il ne s'agit pas d'un cloisonnement entre processus hostiles
-  disposant du même compte système.
-- FR-09907 : annulation avant démarrage, expiration et perte du daemon empêchent
-  un démarrage différé ; traiter le contrôle sans attendre la fin du tour occupé.
-- FR-09908 : conserver durablement les réponses non confirmées et permettre leur
-  reprise, sans relancer le travail fournisseur ni fermer la mauvaise demande.
-- FR-09909 : une sauvegarde de décision ne doit omettre aucune autre attente ;
-  les anciennes données de pont restent lisibles.
-- FR-09910 : conserver le contenu observable long ou annoncer sa lacune ; ne pas
-  avancer un repère d'observation après un échec d'écriture.
-- FR-09911 : utiliser les protections et formats existants quand ils couvrent le
-  besoin ; aucune nouvelle dépendance ni service.
-- FR-09912 : tests et recettes utilisent uniquement des états explicitement
-  isolés ; aucune modification de l'installation historique ou de t3code.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/spec.md#extrait-4).
 
 ## Entités
 
@@ -125,19 +85,8 @@ un processus malveillant du même compte peut lire la mémoire ou les fichiers s
 les protections du système. La correction empêche l'usurpation par simple
 déclaration de protocole, pas toutes les attaques locales.
 
-Une annulation après acceptation effective d'un tour par t3code n'est pas une
-garantie d'arrêt fournisseur ; cette course reste visible et documentée.
-Aucun changement de permissions fournisseur, aucun nouvel outil MCP, aucune
-migration destructive, aucun déploiement et aucun commit automatique.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/spec.md#extrait-5).
 
 ## Preuves initiales
 
-- Instance isolée /tmp/bg-audit-2jgfzw9l : annuaire 0,21 ms, attente bloquée
-  1 201,14 ms, reprise 1,33 ms après fermeture du seul destinataire.
-- Même instance : client MCP auxiliaire déclaré sous l'identité d'un autre agent,
-  inscription et envoi acquittés, destinataire reçoit l'identité empruntée.
-- Instance isolée /tmp/bg-t3-audit-dpekg5ti : RequestCancelled confirmé puis
-  démarrage fournisseur constaté ; réponse oubliée (pending vide), destinataire
-  reconnecté sans réponse et demande audit-lost-842d2f11 encore open.
-- Scripts reproducteurs conservés dans
-  /Users/moi/Nextcloud/10.Scripts/64.bridget/audits/2026-09-16/session-2026-09-16-bridget-global-01.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/spec.md#extrait-6).

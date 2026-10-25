@@ -60,4 +60,4 @@ Exécution séquentielle par tranches ; aucun lancement automatique de sous-agen
 
 P0 → P1 → P2 → P3 → P4. T007 précède tout essai de binaire extrait ; T002 et T003 précèdent toute suppression ; T009–T012 partagent les mêmes propriétaires et sont séquentiels. T026 nécessite l'accès réel à deux machines ; T020/T021 nécessitent les sessions autorisées. Aucun de ces gates n'est remplacé par un test simulé.
 
-Le premier incrément démontrable est US1 + US3 après P2 ; il n'est pas la livraison complète, car SSH est obligatoire. La session ne démarre ni l'intégration T3 ni la greffière. Les lots sont des transactions Git petites, pas trente-six couches d'architecture.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/089-communication-core/tasks.md#extrait-1).

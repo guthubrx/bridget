@@ -19,7 +19,9 @@ Switching off stops future automatic work and attempts to abandon an uncommitted
 
 ## Mac and Linux
 
-The existing stable executable link is ~/.local/bin/bridget. The updater is embedded in that binary and runs with Python 3.9 or later, as a user service: bridget updates watch. It reads a private BRIDGET_HOME/update-host.json with exactly host and services. Supported roles are core/mobile/worker on Linux and t3 on macOS. The worker role names bridget-worker-cartae.service. The supervised units must execute the stable link. Configuration contains no downloaded command.
+The stable executable link is `~/.local/bin/bridget`. The embedded updater runs as a user service with Python3.9 or later: `bridget updates watch`. Its private `BRIDGET_HOME/update-host.json` contains `host` and `services`. Linux roles are `core`, `mobile` and `worker`; the worker unit is `bridget-worker-cartae.service`. Supervised services execute the stable link. Configuration contains no downloaded command.
+
+[Adapter contract details](adapters/t3.md#note-50).
 
 A per-host file lock permits one updater. Metadata is checked every six hours and an existing prepared candidate is reconsidered every minute. Downloading does not stop missions. Native activation obtains a common, durable 180-second barrier. Active or uncertain missions, admissions and commands defer activation. New deliveries receive update_in_progress while the barrier is held. A second host cannot activate concurrently.
 
@@ -39,10 +41,12 @@ An exact manual target cannot silently select a different release. Turning autom
 
 ## Loaded clients and cleanup
 
-Changing a file does not change an already running MCP client. T3 owns these client processes and reloads them at its supported boundaries; Bridget does not restart T3 or copy session credentials. A different build ID is not proof that the daemon is older.
+[Adapter contract details](adapters/t3.md#note-51).
 
 Only update-owned version directories are removed automatically, after a complete open-file inventory. The active executable, the rollback executable, other live versions, unrelated installations, evidence and unknown inventories are preserved. Build intermediates remain subject to scripts/build.py. Keep one verified rollback; do not erase a worktree or pending task to make an update possible.
 
 The first rollout must install the update-capable binary and configure the watchers through the normal controlled deployment. The updater does not grant itself an exception to bootstrap an old daemon. See the session 179 delivery receipt for actual installed/active versions and any deferred component.
 
 The update-management grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.
+
+A downloaded file is not an active version. An existing MCP process keeps its loaded code until a supported remount. Preserve session credentials. A different build ID alone does not prove that the daemon is older.

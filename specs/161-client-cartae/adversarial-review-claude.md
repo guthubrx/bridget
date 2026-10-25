@@ -1,6 +1,6 @@
 # Contre-revue adverse du plan161
 
-**Date :** 2026-10-13. **Fournisseur :** Claude, délégué T3 par ROOT. **Verdict reçu :** APPROVE_WITH_CHANGES. **Périmètre :** artefacts161, deploy-remote, harness089, fédération et recette095. Revue en lecture seule ; aucun test, build ou SSH exécuté par le réviseur. La borne et l'identifiant exacts de délégation sont conservés par ROOT.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/161-client-cartae/adversarial-review-claude.md#extrait-1).
 
 Brut : /Users/moi/.cache/bridget-plan-cartae-flotte-laya-20261013/review161-plan-r1.txt.
 

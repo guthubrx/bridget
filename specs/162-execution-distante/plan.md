@@ -13,7 +13,7 @@ La sélection est explicite : machine_id et project_id complètent la demande na
 
 Rust, JSON versionné, socket Unix fédérée par SSH, SQLite métier au maître et fichiers privés au worker. Aucune dépendance nouvelle prévue. Le registre agents.json porte une section machines facultative, désactivée par défaut. Aucun environnement ni secret fournisseur du Mac n’est envoyé à Linux.
 
-Audit de réemploi et contre-revue avant tasks.md ; Analyze ensuite. Tests ciblés sur les risques, au plus une suite Rust finale si requise, jamais une suite complète par tâche. T3 impose des tests ciblés, aucune suite globale. Pas de nouvelle API HTTP, de store T3 ou de moteur Git. La décision architecturale est consignée dans docs/decisions/162-execution-distante-sous-autorite-unique.md. Les primitives SpecKit absentes sont documentées plus bas.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/plan.md#extrait-1).
 
 ## Configuration et identité
 
@@ -73,11 +73,11 @@ Quota 160 garde son instance et ne devient pas un spawn. Une reprise 152 qui cr�
 
 Le journal durable reste sur le worker. Les pages froides passent par journal_page vers le worker. Leur racine est dérivée de l’instance et de la génération attestées par le reçu, selon le patron ManagedStderrStore. Aucun champ de chemin arbitraire fourni par le CLI ni nouveau champ de racine stocké. Réemployer le lecteur local Attach sur le worker. Pour le suivi vivant, conserver LiveJournalFragment et AttachView déjà relayés au maître ; aucune nouvelle famille follow/stop distante. Réemployer les bornes, annulations d’abonnement et séquences existantes. En cas de gap, reprendre par page froide autorisée ; worker perdu, annoncer le gap et l’indisponibilité, sans inventer des lignes. Ne pas utiliser la lecture froide des sessions locales du parent pour une tâche distante. Aucun miroir permanent ni nouveau store de curseurs. Worker indisponible : journal explicitement indisponible, dernier état et résultat déjà reçus conservés au maître.
 
-last_contact vient d’une observation du transport, jamais de task.updated_at. Réemployer la trame Heartbeat existante, avec son traitement étendu à la connexion worker authentifiée. Heartbeat est unitaire : son époque vient de la connexion, pas d’un champ ajouté à la trame. Une trame toutes les 10 secondes ; dégradation après 30 secondes selon l’horloge du maître. Aucun nouveau type ping nécessaire. last_contact reste volatile. Notifier seulement les transitions de contact_state, sans incrément de génération métier à chaque trame. Les transitions de contact_state incrémentent seq et invalident le curseur via le mécanisme existant. last_contact_at est une observation propre à chaque page lors de sa lecture, sans gel global des données volatiles. Aucun polling de mission par T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/plan.md#extrait-2).
 
 Cancel vérifie machine, worker, commande, instance, génération, PID et naissance via managed_process. PID seul interdit. Sans contact, garder l’annulation en attente ; ne pas inventer stopped. Les demandes de permission enfant 155 et l’état métier gardent leur autorité au maître.
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Garder la réponse v1 par défaut strictement inchangée. `bridget lineage inspect --response-version 2` enrichit uniquement list/show. La version de projection 2 est distincte de l’authentification HumanLineageViewV1. Conserver la capacité de lecture existante et refuser proprement une version non supportée.
 
@@ -87,39 +87,17 @@ Succès list/show v2 : version=2. Les erreurs structurées gardent leur envelopp
 
 ## Surfaces prévues
 
-| Surface | Modification |
-|---|---|
-| crates/bridget-daemon/src/registry.rs | Machines, mappings privés, validation et loaders. |
-| crates/bridget-transport/src/protocol.rs, lineage_protocol.rs | Placement et handshake worker ; étendre la requête et la version Lineage existantes, sans type parallèle. |
-| crates/bridget-daemon/src/native_permissions.rs | Origine distincte de la destination, projection restrictive, sources Linux. |
-| crates/bridget-daemon/src/delegation.rs, delegation_lineage.rs | Placement durable et projections compatibles. |
-| crates/bridget-daemon/src/fleet.rs, desired_state.rs, idempotency.rs | Placement dans le canon, réservation et reprise. |
-| crates/bridget-daemon/src/daemon/native_delegation.rs, daemon.rs | Admission hors verrou, dispatch, résultat, journal et annulation. |
-| crates/bridget-daemon/src/lifecycle.rs, managed_process.rs | Extraction minimale des primitives réemployées, sans second superviseur. |
-| crates/bridget-daemon/src/cli.rs, cli_lineage.rs, lineage_client.rs, delegation_mcp.rs | Mode worker, choix explicite et lecture enrichie. |
-| crates/bridget-daemon/src/wrapper.rs | Persistance finale du couloir distant avant réseau, ACK corrélé et relais worker après fin du wrapper. |
-| crates/bridget-daemon/src/remote_worker.rs | Frontière technique distante et reçus, justifiée par l’ADR et l’audit. |
-| T3 packages/contracts/src/bridgetLineage.ts | Schéma v2 et compatibilité v1. |
-| T3 BridgetReader.ts, BridgetLineage.ts, Orchestrator.ts | Lecture négociée et publication atomique. |
-| T3 ThreadRelationshipsControl.tsx, SubagentTooltipContent.tsx, BridgetTaskJournal.tsx | Machine et contact dans les vues existantes. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/plan.md#extrait-3).
 
 Étendre les tests 149/152/154/155/160 et les suites registre/protocole/processus. Le besoin d’un fichier de tests worker est soumis au réemploi, sans suite parallèle redondante.
 
 ## Étapes et livraison
 
-1. Audit de réemploi et contre-revue sur ces artefacts, puis Tasks et Analyze.
-2. Configuration, contrat, authentification et tests de refus/compatibilité.
-3. Mappings, isolation 154 et permissions par hôte.
-4. Réservation, reçus, bootstrap, permis, réconciliation et annulation.
-5. Résultat durable, journal distant, demandes 155 et reprises 152/160.
-6. Lineage v2 et tests ciblés de compatibilité et de rendu.
-7. Recettes isolées puis mission réelle sur chaque route autorisée, avec coupures aux frontières définies.
-8. Converge, contre-revue, audit, commit, intégration, push, build et installation avec rollback.
-9. Activation contrôlée de Bridget et du worker, puis reçus et nettoyage gardé. T3 reste sans relance.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/plan.md#extrait-4).
 
-Le pipeline demandé autorise l’activation Bridget 162. L’interdiction de relancer le maître et le pont était propre au client seul 161. Avant activation 162 : sauvegarder, vérifier les missions actives et leur reprise 152–160 ; ne pas forcer un arrêt dans une situation inconnue. T3 ne doit jamais être relancé par ce lot.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/plan.md#extrait-5).
 
-Worktree T3 : /Users/moi/11.Repositories/t3code-local/.worktrees/162-lineage-distant, branche session-162-lineage-distant, base d833387203e113ec2a24f947ba8b8064a1c2542b, cible fork/local/main-20261009. Aucun push upstream, aucune PR. Pas de navigateur ou de contrôle graphique sans accord exprès ; la recette de rendu repose sur les tests intégrés isolés. Installer les fichiers et distinguer le runtime encore chargé. Les 17 worktrees préexistants de ce dépôt partagé restent hors nettoyage ; seuls les deux worktrees 162 appartiennent au lot.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/plan.md#extrait-6).
 
 ## Déploiement et supervision du worker
 

@@ -18,7 +18,7 @@ base_ref. Permission checks, routing and idempotency are unchanged.
 The existing workspace_preflight_technical recovery already correctly explains
 the source/destination distinction and is unchanged.
 
-## T3 reference
+## adaptateur de bureau reference
 
 At ef86c2bbc3388be8fc593db23a323e3d80b58509, GitVcsDriverCore.createWorktree
 executes Git in input.cwd and passes a separate worktreePath.
@@ -60,12 +60,7 @@ The responsible maintainer applied this correction and reran the targeted tests.
 
 ## Delivery
 
-Source fe18a02a18ff87654e4b3108faeada4e471d5ede was pushed to main.
-Optimized clients built and installed on macOS and Cartae. A fresh MCP process
-from each installed executable returned the corrected schema through
-initialize / notifications/initialized / tools/list. The macOS signature was
-verified. No daemon, worker, provider or T3 restart was performed. Already-open
-MCP processes keep their loaded catalog until their normal restart.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/source-arguments.md#extrait-1).
 
 - macOS SHA-256: 86cde091adecea9ec0a52324bfcb4122325d90733fccda9d3c8db24daa5e38b0.
 - Linux SHA-256: 045bd5d474fe05ac472920366ecd137a02e4ff7c96e21e3e21c5288b353cd088.

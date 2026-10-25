@@ -1,7 +1,1 @@
-# Checklist exigences
-- [x] Demande initiale et reformulation conservées.
-- [x] Résultats mesurables, cas limites et exclusions définis.
-- [x] Aucun nouveau droit, aucune suppression automatique nouvelle.
-- [x] Partage/rangement arbitrés explicitement.
-- [x] Anciennes données et échanges worker conservés.
-- [x] Source T3 et mécanismes existants examinés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/175-cycle-worktrees/checklists/requirements.md#extrait-1).

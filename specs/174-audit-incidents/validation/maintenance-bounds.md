@@ -10,9 +10,9 @@ Le passage de maintenance choisit au plus une tâche distante. Un curseur en mé
 
 La sélection reste O(n), pour n tâches en attente. Les appels réseau ne sont plus multipliés par n dans un passage. Le curseur n'est pas durable et repart au début après un redémarrage.
 
-## Comparaison avec T3
+## Comparaison avec adaptateur de bureau
 
-Lecture de `apps/server/src/provider/Layers/ProviderSessionReaper.ts` : T3 sépare son balayage dans une activité de fond, espacée, et vérifie les tâches actives avant arrêt. T3 n'a pas de réservation de résultat sur un worker distant. Bridget réutilise ici son propre mécanisme existant de rotation des sondes ; déplacer tout le traitement dans une nouvelle activité asynchrone serait un changement plus large. Aucune preuve distante n'est supprimée pour gagner du temps.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/maintenance-bounds.md#extrait-1).
 
 ## Validation et limites
 

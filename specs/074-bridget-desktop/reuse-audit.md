@@ -32,10 +32,7 @@ Conclusion courte: le plan ne recrée ni le relais UI, ni son contrat HTTP/SSE, 
 
 ## Existant potentiellement pertinent non mentionne
 
-| Item du plan | Existant proche | Preuve | Decision attendue |
-|---|---|---|---|
-| Coque desktop et consultation multi-vues | Étude GUI T3 Code seulement documentaire | `docs/decisions/009-gui-plan-de-controle.md:20` | Créer le client minimal propre au dépôt: aucun composant source Bridget réutilisable n'existe. |
-| Diagnostics sans secret | Projections redacted et tests de contenu secret | `crates/bridget-transport/src/codex_app_server.rs:2937`, `scripts/test-bridget-idle.sh:1584` | Réutiliser la règle de non-divulgation, créer le format desktop limité à son besoin. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/074-bridget-desktop/reuse-audit.md#extrait-1).
 
 ## Items sans equivalent existant
 

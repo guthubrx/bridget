@@ -34,7 +34,7 @@ des sessions 151 à 158.
 ## Besoin et périmètre
 
 La délégation native permet à un agent de confier une tâche à un sous-agent en
-un appel. Le moteur tourne dans le daemon Bridget, avec ou sans T3. Quatre
+un appel. Le moteur tourne dans le daemon Bridget, par le contrat natif Bridget. Quatre
 défauts empêchent d'en faire un service durable.
 
 **Défaut 1 - Historique sans fin.** Chaque tâche reste enregistrée pour toujours.
@@ -98,9 +98,7 @@ d'annulation et leur trace de lignée. Un arbre n'est jamais purgé tant que :
 Deux arbres du même parent sont indépendants : un arbre actif ne bloque pas la
 purge d'un autre.
 
-Le rejeu d'une demande dont l'arbre a été purgé rend un refus explicite
-(`request_expired`). Il ne crée jamais une nouvelle tâche en silence. La vue
-Lineage T3 ne montre pas de tâche fantôme après une purge.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/spec.md#extrait-1).
 
 ### US3 - La pause refuse les nouvelles délégations (P1)
 
@@ -128,9 +126,7 @@ demande de mission (relances) utilise le même délai.
 
 ### US5 - Aucun changement pour l'existant (P1)
 
-Les tâches actives au moment de la mise à jour continuent avec leurs règles
-d'origine, y compris leur délai de 3600 s. Les contrats MCP et CLI existants
-restent compatibles. La vue Lineage T3 garde ses états et ses clés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/spec.md#extrait-2).
 
 ## Exigences fonctionnelles
 
@@ -232,24 +228,8 @@ restent compatibles. La vue Lineage T3 garde ses états et ses clés.
 
 **Entités**
 
-- **Tâche native** : demande de délégation d'un parent vers un enfant, avec
-  état, délai, lignée, résultat et clé de rejeu.
-- **Arbre de tâches** : une tâche sans parent et ses descendants.
-- **Reçu d'annulation** : trace idempotente d'une annulation humaine.
-- **Pierre tombale** : trace d'une clé de rejeu purgée, gardée 30 jours.
-- **Projection de lignée** : vue lue par T3, avec génération et séquence.
-- **État de contrôle** : pause ou activité du référent.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/spec.md#extrait-3).
 
 **Hypothèses**
 
-- La durée de conservation par défaut est de 7 jours, comme l'historique du
-  ledger.
-- La borne totale reste 4096 tâches, valeur déjà publiée aux lecteurs T3.
-- Le délai de 86 400 s maximum couvre les tâches longues connues.
-- Un résultat dont la remise reste indéterminée bloque la purge de son arbre.
-  Si ces arbres saturent la borne, la délégation est refusée
-  (`retention_saturated`) plutôt que de perdre un résultat.
-- Les tests suivent la règle du projet : `umask 077`, environnement privé,
-  racine temporaire courte.
-- La livraison suit les sessions 147 à 149 : fichiers sur disque, sans relance
-  automatique des services.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/150-socle-delegation/spec.md#extrait-4).

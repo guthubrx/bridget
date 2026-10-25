@@ -8,15 +8,7 @@ Release stable : https://github.com/guthubrx/bridget/releases/tag/v0.6.0
 
 Source du binaire : 533f9ec60fe6f6d94868ac18974507a35c7f4c07, intégrée et poussée sur main. Le tag v0.6.0 vise ce commit. Le commit documentaire qui contient ce reçu est distinct de la source compilée. Base commune d6a2984f ; développements mobiles 177 et sécurité 178 conservés.
 
-| Composant | Observation réelle |
-|---|---|
-| Core Cartae | 0.6.0, PID 1864895, service actif |
-| Worker Cartae | 0.6.0, PID 1867403, service actif |
-| Mobile Cartae | 0.6.0, PID 1865084, service actif |
-| Connecteur Mac | 0.6.0, PID 45047, service actif |
-| Surveillants de mise à jour | Cartae 1869234, Mac 50305, actifs |
-| Pixel | Android 17, Bridget 0.6.0, versionCode 6000, installée à 06:51:06 CET |
-| T3 | PID 650/975 conservés, aucune relance |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/179-mises-a-jour-automatiques/validation/livraison.md#extrait-1).
 
 Choix réel du daemon : automatic=true. Paramètres Android : interrupteur ON. Le passage OFF a donné automatic=false sur le daemon ; le choix OFF a survécu à la fermeture de l’application. Le choix a ensuite été remis ON et conservé après installation.
 
@@ -38,7 +30,7 @@ Exécutables installés : Mac cf14e5bee6855863f80f13a8e4c6a12d8762137960e86c4321
 
 Les anciens services 178 ne savaient pas traiter l’API de mise à jour. Cette première activation a donc utilisé une maintenance contrôlée. Core et mobile arrêtés proprement pour fermer les nouvelles admissions. Cgroups relus : aucun enfant de mission ; worker seul et 250 commandes terminales, une refusée ; aucune admission pending/chosen. Le worker a été arrêté après ce contrôle.
 
-Une barrière privée bornée à 180 secondes a été posée pendant que l’autorité était arrêtée. Les liens stables et services ont été installés, puis les nouveaux exécutables chargés et vérifiés. La barrière a été libérée après la santé Mac/Cartae. Aucun état de tâche n’a été écrit. Le worker a effectué cinq reprises de connexion pendant la fenêtre, puis est resté stable après sa libération. Aucun fournisseur ni T3 n’a été arrêté.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/179-mises-a-jour-automatiques/validation/livraison.md#extrait-2).
 
 Les activations suivantes passent par la demande de fenêtre du daemon, avec exclusion de l’activité, revalidation, santé et retour contrôlé. Ce premier déploiement n’est pas présenté comme une activation automatique depuis un ancien daemon incompatible.
 
@@ -58,13 +50,7 @@ Preuves visibles : diaporama vérifié, dix étapes, navigation testée. Capture
 
 ## Limites et entretien
 
-- La tâche historique e5959986-e426-422d-956f-e035dbcf89be reste cancelling, avec arrêt non confirmé. Son payload est identique avant/après livraison. Un essai réel de préparation d’activation renvoie update_missions_active_or_unconfirmed : une prochaine activation attendra sa réconciliation. Aucune fausse clôture n’a été inscrite.
-- Les clients MCP déjà ouverts gardent leur ancien code. Le montage de ce tour répond encore identity_not_found. Le chemin de lancement stable est configuré ; pas de copie d’identité ni de redémarrage de T3 pour forcer le rechargement.
-- Mac : quatre anciens exécutables non ouverts et sans référence de service retirés, quatre copies de validation retirées, worktree de compilation 179 retiré. Total 225 324 587 octets logiques pour les fichiers retirés ; pas de gain physique APFS annoncé.
-- Version active 0.6.0 et retour 178-c49d2766 conservés. Les MCP encore ouverts sur 178 restent protégés.
-- Cartae : lsof privilégié signale fuse.portal et une observation incomplète. Worktree 179, branche et caches conservés, sans forcer le retrait. Les rapports de tests et fichiers mémoire ignorés sont archivés : 26 fichiers, archive 85 666 octets, SHA-256 0bd92c51c1dc27a4f19c989478dfac6e45c3ab0c2ebd9fe7e3115b038867bd11.
-- Les worktrees 177, 178 et la contre-revue associée appartiennent aux autres travaux ; ils sont conservés. Aucun processus d’un autre travail terminé pour le ménage.
-- Commande installed exécutée sur les deux machines après installation vérifiée. Cache Mac environ 1,40 Gio ; cache Cartae conservé sur observation incomplète. Aucun target copié par test.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/179-mises-a-jour-automatiques/validation/livraison.md#extrait-3).
 
 Les sources et documents sont intégrés à main et poussés. Le worktree 179 conservé reste propre et sur le même commit documentaire. Les reçus Git finaux et de nettoyage sont conservés hors Git pour éviter une référence circulaire au commit du présent document.
 

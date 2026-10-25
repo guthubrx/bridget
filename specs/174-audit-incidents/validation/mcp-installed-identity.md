@@ -2,18 +2,9 @@
 
 ## Cause vérifiée
 
-Base commune Android : 4c198b1822833725c37fe942abb36d820e8665a7,
-contenant la livraison r10e e631e47c. Mac et Cartae propres au départ.
-Le refus Monuments portait sur bridget_status, avant toute admission.
-La même lecture a échoué dans le fil de maintenance. L'attestation native
-T3 réussissait. Les processus MCP lancés par Codex ne recevaient aucune
-preuve privée de session.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-1).
 
-L'entrée globale Codex pointait sur target/release/bridget. Son chemin réel
-et son empreinte différaient du lien installé choisi par T3. Le mécanisme
-T3 refreshBridgetMcpServer refuse alors le montage privé (user_server).
-Cette garde empêche de donner un credential à un autre programme. Elle
-reste inchangée. Ce n'est pas une erreur du dépôt Monuments.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-2).
 
 ## Correction
 
@@ -22,25 +13,13 @@ a été remplacé par le lien installé stable. La configuration parsée avant
 et après est identique hors ce champ. Aucun credential, droit, namespace,
 serveur étranger ou opt-out modifié.
 
-Le diagnostic identity_not_found indique désormais la lecture native T3,
-la comparaison des exécutables et la reprise officielle du montage.
-Le code de refus et le refus avant toute exécution restent inchangés.
-Documentation EN/FR complétée. L'inventaire CLI inclut aussi mobile : son
-absence héritée de la177 a été révélée par le test documentaire094.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-3).
 
-## Référence T3 relue
+## Choix de conception Bridget
 
-Fork local/main-20261009, commit ac26460e13603c70b6b151b56c8ce4d981748b5b :
-BridgetExecutable.ts, BridgetMcp.ts, CodexMcp.ts, CodexAdapterV2.ts et
-ProviderSessionManager.ts. Réemploi du lien installé, de la comparaison
-realpath et du montage privé par fil. Aucune nouvelle résolution d'identité
-ni modification T3. Les 42 tests CodexMcp passent dans cette référence.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-4).
 
-Le gestionnaire T3 peut conserver un fil natif chargé. Il prévoit un
-déchargement après inactivité (30 minutes par défaut), avec garde des
-travaux d'arrière-plan, puis un remontage à la reprise. Un tour actif
-n'est pas interrompu pour accélérer cette opération. Corriger le fichier
-ne réécrit pas l'environnement d'un MCP existant.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-5).
 
 ## Validation
 
@@ -78,20 +57,9 @@ Linux 1 min 47 s ; Mac 2 min 10 s. Identifiant commun :
 SHA-256 Mac : d8c2c9ef7be5b36277a62e36f44709fe36b6347a8e4c4f447f3bd15de18dbca5.
 SHA-256 Linux : 64276359c008ddff1b1954c99b8af0fd3fd78261ce18651734bbc762e4b55849.
 
-Clients installés hors staging, empreintes comparées aux builds, liens
-.local/bin/bridget remplacés atomiquement. Chaque exécutable installé a
-traité une séquence JSON-RPC stdio réelle initialize/initialized/status,
-dans un namespace temporaire sans identité. Le refus conserve son code,
-isError=true et expose le nouveau conseil. Ce test négatif ne prouve pas
-une identité T3 fonctionnelle.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-6).
 
-Core1520358 et mobile1520533 restent en r10e. Connecteur Mac35661, T3 650/975
-et workers existants préservés. Ce changement porte sur le client MCP,
-pas sur l'autorité, le protocole mobile ou les permissions. Les processus
-MCP déjà ouverts restent anciens : le status de ce fil renvoie encore
-identity_not_found. Aucun rétablissement Monuments n'est revendiqué avant
-une lecture positive depuis son prochain rattachement natif. La seule
-entrée Codex officielle corrigée suit maintenant le lien installé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-7).
 
 L'envoi de coordination Android par Bridget a lui aussi été refusé avant
 remise pour identity_not_found. Aucune autre route utilisée, aucun rejeu
@@ -109,11 +77,4 @@ Aucune preuve ni base retirée. Branche de correction supprimée après
 intégration. Aucun worktree créé par ce lot ; les deux worktrees177 du
 serveur restent conservés pour leurs gardes de clôture/usage non acquises.
 
-La boîte à idées globale est en lecture seule pour ce processus ; le choix
-automatique reste durablement consigné dans la section précédente. Il ne
-s'agit pas d'une option déjà implémentée. Une différence de build entre
-composants ne suffit pas à prouver qu'une version publiée est plus récente :
-la future détection doit utiliser les métadonnées de livraison. T3 sépare
-aussi disponibilité et téléchargement (DesktopUpdates.ts et updateMachine.ts),
-puis l'application de la version. Aucune mise à jour automatique de T3 ou
-Android n'a été ajoutée par ce correctif.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/mcp-installed-identity.md#extrait-8).

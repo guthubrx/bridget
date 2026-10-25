@@ -30,15 +30,15 @@ Journal durable sur le worker ; Attach à la demande via le maître autorisant c
 
 Contact fondé sur le transport, jamais sur task.updated_at. Heartbeat existe dans protocol.rs:3646 ; son traitement daemon.rs:22181 vise actuellement présence.conn_instances. Étendre ce traitement au worker authentifié et à son époque, sans nouvelle famille ping. Une trame toutes les 10 secondes, seuil de 30 secondes. Horodatage volatile, notifications seulement lors des transitions, séquence modifiée seulement aux transitions de contact pour invalider les curseurs ; last_contact_at observé par page, sans gel global ni invalidation à chaque heartbeat.
 
-## Compatibilité T3 et Git
+## Compatibilité adaptateur de bureau et Git
 
-lineage_protocol.rs contient déjà la requête et sa version. Le nouveau CLI accepte succès version=2 et erreurs historiques version=1, avec authentification humaine v1 distincte. Le reader T3 utilise un schéma fermé et une pagination de 4 096 tâches. Une version enrichie explicite évite de casser l’ancien runtime. ROOT a vérifié que le CLI 160 refuse un flag inconnu avec invalid_request JSON RC2. Repli unique de lecture sur ce refus ou unsupported_version seulement. La projection thread:bridget-task existante n’est pas un nouveau fil fournisseur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/research.md#extrait-1).
 
-Réemployer les tests T3 149 des contrats, reader, orchestrateur et composants. Pas de suite globale ni de relance T3. Pour les tâches de code, réemployer l’isolation 154 sur l’hôte choisi, avec commit de base puis travail local autorisé. Aucun moteur Git réseau ni push concurrent vers main.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/research.md#extrait-2).
 
 ## Limites et workflow
 
-Mappings de production, authentification fournisseur et route réelle restent à attester par ROOT après choix utilisateur. La présence d’un binaire ne vaut pas login. L’activation Bridget 162 est autorisée par le pipeline, avec sauvegardes et contrôle des missions vivantes ; seule la relance T3 reste interdite.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/162-execution-distante/research.md#extrait-3).
 
 Sélection 162 vérifiée. setup-plan tenté : RC127, absent. Templates et extensions absents. Fallback documentaire des skills sans installation de toolkit. Les artefacts restent Draft jusqu’à audit de réemploi et contre-revue. Aucun tasks.md créé.
 

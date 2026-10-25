@@ -1,4 +1,4 @@
-# Recherche — SPEC-165 Cycle de vie des liens T3
+# Recherche — SPEC-165 Cycle de vie des liens adaptateur de bureau
 
 ## Décision 1 — Traiter les sous-agents comme des tâches, pas comme des pairs permanents
 
@@ -8,21 +8,17 @@
 
 **Sources** :
 
-- Le contrat local SPEC-149 définit déjà les fils `subagent` comme projections de tâche, et non comme agents T3 permanents.
-- [Google A2A décrit l’échange agent comme une tâche dotée d’un cycle de vie](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/).
-- [Anthropic présente les sous-agents comme des unités spécialisées qui retournent leur résultat à un orchestrateur](https://www.anthropic.com/engineering/multi-agent-research-system).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/research.md#extrait-1).
 
 **Alternatives évaluées** :
 
-- Garder tous les sous-agents et augmenter la limite : rejeté, car la croissance reste linéaire avec l’historique.
-- Supprimer ou archiver les fils terminés : rejeté, car l’historique appartient à T3 et doit rester consultable.
-- Multiplexer tous les agents sur une connexion : rejeté pour cette session, car le protocole actuel lie une connexion à un agent et le refactor serait disproportionné.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/research.md#extrait-2).
 
 **Impact mainteneur** : la règle suit le cycle de vie métier. Elle supprime la nécessité de surveiller et relever périodiquement une limite système.
 
 ## Décision 2 — Séparer existence du fil et besoin de connexion
 
-**Décision** : conserver `is_live()` pour la présence T3 et ajouter une décision d’exposition Bridget.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/research.md#extrait-3).
 
 **Raison** : une conversation principale terminée reste reprenable. Un sous-agent terminé ne doit plus consommer de ressources. Un seul booléen ne peut pas exprimer ces deux responsabilités sans devenir trompeur.
 
@@ -74,5 +70,4 @@
 
 ## Observation runtime reproductible
 
-Le diagnostic est reproductible avec le snapshot authentifié T3 et `lsof` sur le PID du pont. Les mesures initiales du 14 octobre 2026 sont consignées dans le plan. La recette finale reprend les mêmes compteurs après activation afin de comparer avant et après dans les mêmes conditions.
-
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/research.md#extrait-4).

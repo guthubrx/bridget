@@ -8,17 +8,13 @@
 
 ## Première passe de détection — lecture seule
 
-| ID | Catégorie | Sévérité | Constat | Correction autorisée ROOT |
-|---|---|---|---|---|
-| I1 | Cohérence des statuts | MEDIUM | Plan Ready/gate ROOT soldé, mais des paragraphes de checklist/research/reuse/ADR/reçu R1 gardent Draft ou relecture attendue. | Corriger les seuls statuts/gates historiques contradictoires, conserver verdict externe R1 APPROVE_WITH_CHANGES. |
-| I2 | Cohérence de progression | LOW | Spec annonce 0/0 et tasks absentes alors que la génération produit 45 tâches. | Mettre 0/45 et artefact tasks présent, sans cocher aucune tâche future. |
-| D1 | Ordre de responsabilités | MEDIUM | Les chemins T3/Cartae sont prévus, mais non attestés ; une entrée utilisateur ne crée pas le binding de travail. | T001–T004 rendent attestations et wire figé bloquants ; T031 attend T030/binding, aucune existence supposée. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-1).
 
 Aucun problème CRITICAL trouvé dans cette passe. Autofix documentaire non ambigu autorisé explicitement par ROOT : appliqué séparément de la détection. Aucune constitution modifiée.
 
 ## Seconde passe après corrections — résultat
 
-Couverture sémantique : configuration/axes, profils et droits, probes réels sans effets, HTTP et permis, reçus et crash, refus/purge, collision, entretien sans demandeur, interfaces versionnées, T3 et livraison sont présents avec résultats observables. O1–O6 sont rattachés à leurs campagnes et non à des tests par minigarde. La transmission wire et les frontières de propriété sont explicites. Correction finale d’ordre relue : T036 Converge et campagnes passées → T037 contre-revue/audit → T038 checkpoint source validé/build Mac/signature → T039. Si le build Mac révèle une correction, contrôles affectés et delta de revue/audit précèdent le commit final, sans FULL répétée. Les textes de configuration et modèle détaillent le comportement ; les tâches nomment le lieu d’implémentation et sa preuve.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-2).
 
 - Findings actifs : **0 CRITICAL / 0 HIGH / 0 MEDIUM / 0 LOW** après corrections I1/I2/D1.
 - 22 FR + 9 SC : **31/31 couverts** ; 45 tâches ; à la seconde passe de génération, 0 cochée. ROOT a ensuite attesté et soldé T001–T003 (préparation), progression actuelle3/45 ; aucun code futur coché.
@@ -64,7 +60,7 @@ Couverture sémantique : configuration/axes, profils et droits, probes réels sa
 
 ## Constitution et décisions utilisateur
 
-Constitution locale pont et constitution globale1.9.0 relues : français, ADR, pipeline, isolation, complexité, minimalisme et responsabilité future sont couverts. Les prescriptions de validation répétée par tâche de l’Article XV sont adaptées à l’instruction utilisateur persistante : tests prévus groupés et pas de répétition longue inutile. Chaque tâche n’est soldée que lorsque ses contrôles utiles sont prouvés ; ROOT possède commits/intégration, les développeurs n’écrivent pas Git. Les travaux simultanés n’éditent pas la même surface sans arbitrage ; compilation unique à l’échelle flotte. Les 17 worktrees T3 étrangers historiques ne sont pas un motif de purge du lot.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-3).
 
 Aucune baseline économique, qualité comparative des modèles ou compatibilité Jev n’est revendiquée. Les preuves de code/API locales et les observations historiques déjà consignées servent à la décision technique ; elles ne prouvent pas l’état actuel du service. Les paramètres/recette réels restent T039/T040, automatismes off avant leur gate.
 
@@ -154,7 +150,7 @@ ROOT rapporte l’acceptation en lecture seule decision_preflight163 de T056 sur
 
 T055 dispose du PASS exact indépendamment attesté delegation_mcp::tests::closed_arguments_reject_forged_parent_without_connecting : un PASS, zéro FAIL, 2036 filtrés, RC0/6,38 s. L’attente huit→neuf concerne le nombre d’outils MCP, pas les champs handoff ; les gardes auto sont inchangées. Le FAIL R5 demeure historique. Source R6 : /Users/moi/.cache/bridget-delivery163-20261013/source-manifest163-r6.json, SHA-256 09d25daa87620ce6aada5d1132babeee1f0d7510800c908a76133551396ceefe. Le reçu de tests et ses limites restent /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/163-decision-admission/specs/163-decision-admission/validation/tests163.md. Aucun test ou lecture de code nouvelle par ce rédacteur.
 
-Le checkpoint P3 NONCONVERGED et l’exception autorisée de poursuite en phase 5 sont conservés : le mandat utilisateur de terminer prime sur l’arrêt borné qui laisserait l’objectif inachevé. Cette adaptation ne déclare aucun P4 formel ou CONVERGED nouveau. L’analyse documentaire présente ne ferme pas T036. La contre-revue CODE Claude R2, l’audit, les builds de livraison/paquet, la recette T040, Git/push, installation, G8/G9 et clôture restent à attester. Aucun nouveau runtime T3 annoncé ; aucune case cochée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-4).
 
 ### Constitution, minimalisme et prochaine action
 
@@ -187,7 +183,7 @@ La seconde lecture confirme 22 FR et neuf SC inchangés, cinq US, 57 identifiant
 
 Un filtre documentaire T033 a été corrigé : le module réel est delegation::lineage::delegation_lineage_tests, confirmé par la déclaration de module et la trace R1. À cette lecture, le CLI version_explicite renommé R2 était qualifié comme déclaration sans attestation nominative fraîche retrouvée ; cette limite est levée par le complément nominatif ci-dessous. Le PASS invalid_request R1 reste une preuve historique distincte. Les anciennes gardes humaines, pagination et annulation ont des oracles existants identifiés, mais aucune réussite nominative n’est déduite du groupe spec163_. Aucun test ni commande Cargo exécuté.
 
-Résultat : zéro finding documentaire CRITICAL restant dans les sept documents attribués après ces corrections ; aucune case, exigence, tâche ou campagne ajoutée. La fausse clôture SQL R7 reste un défaut de code ouvert : R8 préparatoire sur deux sources, 22 sources à attester, discriminant Git et liste métier fermée à prouver avant acceptation T057. Audit final, clôture Converge, T040, builds, livraison et G8/G9 restent futurs. Aucun PASS R8, correction SQL ou nouveau runtime T3 annoncé. Contrats et checklist ROOT n’ont pas été édités.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-5).
 
 ### Complément de preuve T033 après la passe 2
 
@@ -199,13 +195,13 @@ R8 : 16 PASS ciblés indépendamment attestés (deux natifs T024/T025, dix Git e
 
 CODE R3 APPROVE_WITH_CHANGES confirme la perte de classe Technical en String : workspace_path_unsafe peut encore terminer un reçu après une erreur E/S. ROOT retient la correction R9 dans T057, sans nouvelle tâche. R9 code-only préparé sur native_delegation.rs et workspace_git.rs ; trois replays affectés attendus, aucun résultat R9 encore attesté. L’oracle EIO typé prévu vérifiera le passage par la méthode de production et la fermeture, chosen/noTask/rx0 ; il ne forcera pas une syscall OS réellement en erreur.
 
-31/31 couverture documentaire et 4/57 inchangés, aucun cochage. T033 quatre contrôles nominativement prouvés, sans extrapolation vers nouveau runtime T3. P3 NONCONVERGED historique/phase 5 corrective autorisée conservés, aucun P4 formel. Audit final/delta R9, builds, recette T040, Git, G8/G9 et livraison restent ouverts. T039 prépare quatre profils off/on moteur/placement sans appliquer la configuration ; quota CLI à 100 % et nouveaux children ne prouvent pas l’usage opérationnel de ces profils en production.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-6).
 
 ### Analyze documentaire R8/R9 — deux lectures ciblées
 
 Passe 1 : les preuves R8 sont désormais disponibles, ce qui rendait les limites courantes « aucun résultat R8 » et « quatre filtres T033 en attente » obsolètes. La table courante est corrigée ; les checkpoints préparatoires restent historiques. Le périmètre final R8 est 23 et non22, car workspace_git_tests.rs est inclus ; aucune exigence ni tâche nouvelle. SQL et E/S sont séparées : SQL prouvée, défaut Technical→String confirmé R3 encore ouvert R9.
 
-Passe 2 : 22 FR/neuf SC inchangés, cinq US, 57 IDs uniques, quatre cases initiales conservées et table45 exhaustive. T033 quatre contrôles R8 et CLI2 R2 ont chacun leurs logs/limites de provenance ; aucune nouvelle réussite de runtime T3. Trois replays R9 encore attendus, aucun PASS futur. Zéro CRITICAL documentaire restant identifié dans les sept fichiers attribués ; la réserve de code E/S demeure ouverte avant acceptation T057 et ne disparaît pas par Analyze. Contrats/checklist/audits ROOT non édités ; aucun code, test, Git ou service exécuté ici.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-7).
 
 ## Checkpoint R9 final ciblé — 14 octobre 2026
 
@@ -219,7 +215,7 @@ Compteur 4/57 sans cochage, 31/31 couverture documentaire. ROOT relit le delta R
 
 Première lecture : remplacement des limites courantes de la table45 par les preuves R9 disponibles ; classement E/S testé, SQL R8 distincte, T033 quatre contrôles R8 attestés. Les checkpoints préparatoires et erreurs historiques restent conservés. Réponse à CODE R3 reliée au delta R9, sans APPROVE R4 ni grade d’audit anticipé.
 
-Seconde lecture : 31 exigences inchangées et toujours mappées, cinq US, 57 IDs uniques, seules T001–T004 cochées et 45 lignes d’acceptation exhaustives. Périmètre R9 final23/deux changements/21 inchangées ; oracle EIO typé via code de production qualifié sans syscall OS forcée. Zéro CRITICAL documentaire restant identifié dans les sept documents attribués. R4/audit et acceptation ROOT restent ouverts ; aucun cochage, nouveau runtime T3, Converge/P4 formel, G8/G9 ou succès de livraison déduit. Aucun source, test, build, Git ou service exécuté par cette analyse.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-8).
 
 ### Analyze après qualification CODE R4 — deux lectures ciblées
 
@@ -237,7 +233,7 @@ L’entrée de build existante decision-request-max8.json, 709 octets/objet ques
 
 Passe 1 : source finale distinguée de R9 de production et des provenances R1–R8 ; 23 sources/deux corps de tests/21 inchangées, zéro changement de préfixe production. T021 et T054 reliés au même oracle existant étendu, sans ajouter de tâche ou test. Entrée JSON709 objet identifiée séparément et obligation de versionnage avant build Mac consignée ; ancien861 tableau conservé historique.
 
-Passe 2 : 22 FR/neuf SC et cinq US inchangés, 57 IDs uniques, table45 exhaustive, seules T001–T004 cochées. Le PASS tardif/reprise ne prouve ni syscall EIO ni recette POST/tokenizer de production. 49/57 est une acceptation ROOT préparée mais encore future ; 4/57 reste courant avant grade/validator final. Aucun CRITICAL documentaire restant identifié ; aucun nouveau runtime T3, Mac PASS, GREEN global, CVE, P4 formel, build ou G8/G9 inventé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-9).
 
 ## Acceptation ROOT du développement — 49/57, 14 octobre 2026
 
@@ -253,7 +249,7 @@ Passe 1 : introductions courantes49/57 synchronisées, checkpoints4/57 historiqu
 
 ROOT accepte T038/T040/T041/T042 sur leurs preuves réelles. Bridget source 5105378bf4f03376e9bc93e52065cb022f81dee5 installé : Mac SHA-256 6c8f89203c85c76e7add2a4d06bb86eedd6cdb3f74470eac11920cc0f6068063, Linux SHA-256 6e5d9717d6054511326f84c684d65c3f3bc1a5086cb514b2d6b64a03ad9b97e0. Maître 44553 né 04:55:03 CEST et pont 44667 né 04:55:05 utilisent /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget ; worker 1411115, naissance 146166371 utilise /home/moi/.local/lib/bridget-communication/163-5105378bf4f0/bin/bridget.
 
-T3 /Applications/T3 Code (Local).app remplacée atomiquement en 0.0.45-local.164/source 511190beb307e0952066fe1a4b511cb9dd7adb18, signature stricte/deep RC0 et entitlements préservés. PID 704/969 et naissances 17:31:27/33 du 13 octobre restent inchangés : aucun redémarrage, ancien code encore chargé. Aucun réveil différé programmé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-10).
 
 Sauvegarde retry : phase_complete/activate, projection173→174 de même génération et 33 autres tables exactes, schéma/count inchangés ; halt humain complet préservé. Migration additive reçusauto, quick_check ok/FK0, schémas 7/12/Fleet5. Sauvegarde jointe vérifiée ; après activation, toute rétrogradation exige une nouvelle sauvegarde jointe sans perte. La sauvegarde préactivation ne couvre pas les nouveaux reçus. L’incident171→172 et les anciens PID 86807/86830/1403968 restent uniquement historiques.
 
@@ -265,19 +261,17 @@ Ordre réel : sources committées/intégrées/poussées avant laboratoire T040, 
 
 Reçus :
 
-- /Users/moi/.cache/bridget-delivery163-20261013/joint-backup-20261014-163164-retry-projection/progress.json ; SHA-256 b6da23d355fbb396b50fab7c946dd5693dd6ced27aafe5ae3ac2aaffaf7cef16
-- /Users/moi/.cache/bridget-delivery163-20261013/t3-backup163164/T3-install-receipt.json ; SHA-256 b73ddc5019a644fc9964372816089f95cfffdd276b319ad0bbef5196429fa2f0
-- /Users/moi/.cache/bridget-delivery163-20261013/g8-registry-off-applied.json ; SHA-256 ed358ea42dc927adf19d4c4e7cca2ecdd0de76e2aa2a213116f6b15049b26aae
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-11).
 
 ### Analyze après installation — deux lectures documentaires
 
-Passe 1 : introductions 53/57 et quatre cochages autorisés synchronisés ; application off réelle séparée des futurs axes/G8/G9. Ordre Git avant T040 expliqué par checkpoint déterministe préactivation. Passe 2 : 57 ID uniques, exactement53 cases ; seules T039/T043/T044/T045 ouvertes, FR/SC inchangés et table45 conservée. RC1 T040 et captures de production historiques qualifiées ; T3 installé sur disque distinct de l’ancien code chargé. Aucun source Git/AGENTS/runtime/test modifié par le rédacteur.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-12).
 
 ## Correctif G8 — façade MCP T058, 14 octobre 2026
 
-Le MCP propre à la nouvelle commande annonce bridget_auto_delegate dans tools/list, mais tools/call renvoie JSON-RPC -32602, message outil inconnu, request_id g8-spec163-a73f9432-53d5-46b5-94b9-e8f0ee3cfe7e. Les attestations officielles immédiatement avant appel portent version2 et permissions_present=true ; provider codex-pro déclaré disponible et capacité maître contrôlée. Aucun reçu auto/Task sous cette clé selon la vérification durable ROOT. La cause confirmée ROOT est le dispatcher de /Users/moi/Nextcloud/10.Scripts/64.bridget/crates/bridget-daemon/src/mcp.rs:753–760 : routage auto omis malgré l’annonce. Scope/hook/wrapper doivent être raccordés à la voie native existante. Ce refus ne démontre pas un problème de quota ou d’authentification et ne nécessite pas de redémarrage T3.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-13).
 
-T058 reste dans la session163 autorisée : correctif minimal sur Cartae, oracles MCP existants affectés, contre-revue/delta d’audit ciblés, build et livraison du correctif avant reprise G8. Aucun nouveau framework, banc de confort ou FULL. Le prochain commit source sera différent de5105378bf4f03376e9bc93e52065cb022f81dee5 ; aucun hash futur fixé. T038/T042 demeurent cochées pour les builds/installations réellement prouvés du510, pas pour le futur correctif. T3 source511190beb307e0952066fe1a4b511cb9dd7adb18/version164 est déjà installée et inchangée. Aucun résultat antérieur effacé, aucun livré final ou G8/G9 déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-14).
 
 Compteur courant53/58 : T039/T043/T044/T045/T058 seules ouvertes. La preuve brute est conservée : /Users/moi/.cache/bridget-delivery163-20261013/g8-mcp-off-error-observation.log ; SHA-256 03e823bb6a993a7f1b8b546edc53f6aeded6e163bcd9ed507b22a68dc28f2f47. P3 NONCONVERGED historique et poursuite corrective sous mandat utilisateur restent explicites ; aucun P4 formel inventé.
 
@@ -294,7 +288,7 @@ ROOT accepte T039/T043/T044/T058 sur les preuves de configuration effective, de 
 
 Reçus : /Users/moi/.cache/bridget-delivery163-20261013/g8-t058-operational-final.json ; SHA-256 5b1c00923f2f307136b5831cc8d3328227b7284deacf44c793d71542e3ceb52c. /Users/moi/.cache/bridget-delivery163-20261013/g9-t058-cleanup-final.json ; SHA-256 08091fc94791644308b258f2eb912ee375145d66004ef9f9c5e0d822a34fb5c3. Les faits et limites sont consignés dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/163-decision-admission/validation/livraison163.md. Les anciens chemins de worktrees Mac retirés désignent des lieux historiques, sans nouvelle copie de travail active.
 
-P3 NONCONVERGED historique et poursuite corrective autorisée par l’utilisateur en phase 5 restent conservés, sans P4 formel inventé. Les anciennes FULL avec échecs, l’audit163 partiel 3M/2L, le delta T058 partiel sans finding et le delta T3 R6 sans finding restent distincts ; aucun GREEN global déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/163-decision-admission/analysis.md#extrait-15).
 
 
 ## Rapprochement de clôture avant Git ROOT

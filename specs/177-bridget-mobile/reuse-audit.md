@@ -37,10 +37,7 @@ Conclusion courte: Le plan réutilise le moteur, les reçus et la fédération e
 
 ## Existant potentiellement pertinent non mentionne
 
-| Item du plan | Existant proche | Preuve | Decision attendue |
-|---|---|---|---|
-| Autorité humaine mobile | human_principal_actor et human_authority_guard | referent_control.rs:31 ; daemon.rs:18115 | Créer une identité d'appareil ; réutiliser les opérations mais ne pas usurper le libellé ou la conversation |
-| Migration du maître | reattest dépend du runtime d'origine | t3code_mcp.rs:39 ; native_delegation.rs:4017 | Prouver une adaptation liée à la machine d'origine avant bascule ; aucun relâchement de validation |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-1).
 
 ## Duplications evidentes
 
@@ -85,15 +82,7 @@ Ces quatre lignes complètent les dix responsabilités réutilisées : quatorze 
 
 ## Journal de recherche
 
-| Requete | Portee | Resultat |
-|---|---|---|
-| rg mobile / gateway / http / android | crates, scripts, docs et manifestes | Aucun accès mobile ni module Android |
-| rg HumanPrincipal / human_authority_guard / control_client_actor | daemon.rs, protocol.rs | Deux gardes humaines existantes, responsabilités différentes |
-| rg reattest / loopback / validate_endpoint | t3code_mcp.rs, native_delegation.rs | Validation locale du runtime et du port |
-| rg handle_idempotent_send / human_from_bare_client | daemon.rs | Envoi humain natif réutilisable sans identité d'agent |
-| rg human_cancel / resolve / lookup | delegation.rs, human_inbox.rs, idempotency.rs | Puits existants à réutiliser |
-| lecture federation-services.md | docs | Un maître, pas de réplication |
-| inventaire PATH et emplacements Android | Cartae | Outils Android absents des emplacements usuels |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-2).
 
 ## Arbitrages
 
@@ -217,19 +206,17 @@ Constat concret : mobile_operations::agent_journal lit root/sessions pour un age
 
 ## Incident réel de projet distant, 24 octobre
 
-Lecture courte de T3 : apps/server/src/project/T3ProjectFileLoader.ts charge le projet sur la machine qui possède son workspace ; apps/server/src/vcs/GitVcsDriverCore.ts transmet explicitement cwd au lecteur Git. Aucun mécanisme de projet fédéré équivalent dans ces fichiers. Bridget réutilise son resolve_communication_project existant sur le worker provisionné, avec le canal OriginProof déjà introduit dans ce lot. Il ne recrée pas une règle lexicale de projet et ne transforme pas le chemin Mac en chemin Linux. La garde humaine conserve le binding T3 et l'égalité du projet validé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-3).
 
-Pour le relais SSH duplex, les mêmes sources T3 ne couvrent pas socat/MSG_PEEK. Bridget conserve son runner natif et son contrat de flux SSH ; le correctif évite de consommer puis réinjecter le premier octet. La preuve macOS utilise deux échanges espacés, pas seulement un écho immédiat.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-4).
 
-Intégration du main 4118ff2b : conservation des corrections concurrentes et de minreq 3 / serde-saphyr. minreq 3 retourne un statut HTTP u16 ; la frontière FCM existante i32 conserve son contrat par conversion sans perte. Référence T3 OpenCodeAdapter.test.ts, cas session_message 404 : conservation du statut fournisseur, pas de réinterprétation du code. T3 n’utilise pas ce client Rust et ne fournit pas d’équivalent FCM ; seule la règle de conservation du code est réutilisable.
+Intégration du main 4118ff2b : conservation des corrections concurrentes et de minreq 3 / serde-saphyr. minreq 3 retourne un statut HTTP u16 ; la frontière FCM existante i32 conserve son contrat par conversion sans perte.
 
-Recette Pixel : T3 ChatView.tsx, scrollToEnd et bouton de retour au direct (4663+, 8008+), maintient le suivi de fin jusqu’à un geste de lecture antérieure. Le client Compose reprend ce comportement sans réutiliser son code web : en-tête compact, boutons secondaires dans un menu et saisie ancrée. Pour l’historique vide, le lecteur Attach natif de Bridget connaissait déjà SnapshotCaughtUp même sans through_seq ; le relais mobile perdait ce fait en testant seulement is_some. Un booléen interne non sérialisé conserve maintenant l’événement explicite. Le protocole et les limites restent inchangés. T3 ne possède pas ce relais Unix distant ; le lecteur natif existant est la référence appropriée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-5).
 
-### Reassociation and expired QR
-The user reused the consumed first QR after forgetting local access. The server refused correctly; Android incorrectly showed a generic unconfirmed response. Dedicated EN/FR guidance now explains expiry, one-use pairing and the explicit new-association action. No pending request or saved work is discarded automatically. T3 ConnectionsSettings.tsx computes expiry from expiresAt and displays an expiration label; the temporary private QR page follows the same expiry principle without copying its implementation. Lost-response reconciliation is unchanged.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-6).
 
-### Recent history, project labels and keyboard (physical feedback)
-T3 ChatView.tsx retains follow-to-end until a real user scroll, and observes composer resize. Android uses its existing LazyListState with viewport-size changes and stable message keys. T3 ProjectIconPickerDialog uses a compact project icon; Bridget uses a local monogram and a short name, with host/parent/digest only for homonyms. Native host/root identities remain unchanged. Recent history reuses Attach Tail(1) to locate the end, then the existing bounded forward page. The optional tail flag defaults to false for previous native requests; workers need no new operation. Older messages are loaded explicitly without moving the live cursor.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/reuse-audit.md#extrait-7).
 
 ### Concurrent deployment observation
 The active core was replaced by the native-project fix while physical testing was ongoing. The r8 archive used by that build predates the empty-snapshot amendment, although the original r8 binary included it. This explains the restored stopped-follow symptom. The next candidate must include both the native-project correction d5af84f8 and the empty-snapshot amendment. No rollback to an older binary is permitted.
@@ -289,16 +276,5 @@ Markwon 4.6.2 et Highlights 1.0.0 remplacent ce rendu partiel ; WebView appartie
 à Android. Aucun client HTTP, magasin d’artefacts ou moteur d’exécution nouveau.
 Les extensions tables, cases à cocher et barré sont explicites et verrouillées.
 
-Référence T3 lue : ChatMarkdown.tsx utilise react-markdown, remark-gfm et son
-service de coloration. FilePreviewPanel.tsx:207–227 place le document HTML dans
-un iframe isolé. Mécanisme réutilisable : un vrai parseur et un rendu de document
-distinct du texte source. Différence Android validée : moteur natif embarqué,
-HTML statique, sans scripts ni ressources externes ; aucun appel à T3.
-
 Défaut observé sur Pixel : l’ouverture de Fichiers conservait la liste vide
 jusqu’à Actualiser. FilePanel ne déclenchait aucune lecture à son montage.
-Référence T3 relue : FilePreviewPanel.tsx:977 et ses requêtes d’assets sont
-rattachés au composant monté et à la sélection courante. Bridget réutilise
-vm.files à l’ouverture. Il attend la fin d’une action locale en cours avec
-snapshotFlow.first ; aucun timer ni second état métier n’est introduit.
-Le texte des formats acceptés est aligné en français et en anglais.

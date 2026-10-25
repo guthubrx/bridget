@@ -12,18 +12,13 @@ Les noms d'agents affichés viennent de l'annuaire existant. Une modification r�
 
 Table logique : `bridgetSelectionByContextKey`, dans `useRightPanelStore` existant.
 
-- Clé : chaîne JSON du triplet `[environmentId, projectId, threadId]`. Les trois composants viennent du contexte T3 attesté ; aucun concaténat ambigu avec séparateur libre.
-- Valeur : UUID canonique du fil Bridget, ou absence d'entrée si aucun choix.
-- Validation : valeur UUID valide, structure de clé conforme au triplet attendu. Une donnée persistée invalide n'est pas restaurée.
-- Ancien snapshot : champ absent → table vide. Aucun corps n'est migré.
-- Suppression : refus d'accès au fil confirmé, fil inexistant confirmé ou suppression du contexte selon la réconciliation native du store.
-- Indisponibilité : conserver la référence. Elle n'autorise pas l'affichage d'un ancien corps lors d'une reprise non revalidée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/data-model.md#extrait-1).
 
 La table est séparée de `ThreadRightPanelState`. Fermer/reconstruire une surface ne retire pas le choix. Aucun titre, liste de membres, corps, credential, verdict ou curseur agent n'est stocké dans cette table.
 
 ## Suivi humain en mémoire
 
-Un suivi possède : connexion Client négociée, conversation T3, projet résolu, agent/instance attestés, génération opaque UUID, ressource de sortie et invalidation en attente.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/data-model.md#extrait-2).
 
 La génération change à chaque nouvelle connexion. Elle ne constitue pas un cursor métier ou une preuve d'accès.
 
@@ -89,7 +84,7 @@ Un nom absent produit Nom indisponible + UUID court ; l'identifiant exact reste 
 
 require_uuid normalise les champs UUID des actions de fils partagés déjà existants en forme hyphénée minuscule avant clé d'idempotence/SQL. UUID majuscule/minuscule/mixte admissible représente la même valeur ; aucune table ou migration. Membres/targets/reçus conservent leurs relations. Le corps et les noms/préfixes CLI ne sont pas réécrits.
 
-canonical_uuid du contrat humain145/146/147 et les curseurs restent stricts. La normalisation ne vaut aucune attestation d'identité ni permission. ACK garde son refus ReceiptInvalid. Le montage MCP US7 suit le plan natif validé, pas une identité injectée par un outil T3. Aucun champ d'identité dans stdio/env MCP ; les preuves OS privées restent distinctes des fixtures de configuration SDK.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/147-panneau-bridget-vivant/data-model.md#extrait-3).
 
 ## US9 — projection visuelle sans nouveau modèle
 

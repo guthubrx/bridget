@@ -129,8 +129,7 @@ passe pas par un outil MCP.
 
 ## Compatibilité
 
-- Un appelant sans tâche `discovery` garde tous ses outils.
-- La vue Lineage T3 ne change pas.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/158-reveils-controle/contracts/control158.md#extrait-1).
 
 ## Base158A vérifiée par le principal
 

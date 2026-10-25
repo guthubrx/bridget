@@ -104,7 +104,7 @@ Le magasin d’appareils passe en version 2 avec une souscription technique facu
 
 Android possède un service FCM, un choix explicite, la permission Android 13+, un canal système et le rejet des alertes d’une autre association ou contenant des champs métier. Aucun Analytics ajouté et auto-initialisation désactivée. La préférence locale ne devient pas une inscription confirmée sans reçu serveur. Les identifiants publics Firebase sont fournis au build par configuration privée ; aucun compte inventé.
 
-48 tests Rust mobile177 passent après les tests de migration du magasin et de refus sans configuration Google. Build Android succès ; sur le Pixel, 13 cas exécutables passent, le cas conditionnel d’arrêt externe reste distinct. Aucun envoi FCM réel effectué. Le navigateur MCP voit un runtime serveur non connecté, alors que l’utilisateur confirme sa connexion dans le navigateur local T3. Le contrôle natif local est indisponible (Accessibilité refusée) ; ne pas demander encore une reconnexion à l’utilisateur. La recette T033 reste ouverte.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/177-bridget-mobile/implementation.md#extrait-1).
 
 ## Régression d’origine : fixture locale incohérente identifiée
 

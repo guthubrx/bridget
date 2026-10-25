@@ -8,10 +8,6 @@ neuve, l'active et attend une réponse du daemon. Les anciennes installations qu
 répondent ne sont pas interrompues. Les fédérations inaccessibles, les sockets
 ambiguës et les unités étrangères sont préservées et refusées explicitement.
 
-Référence T3 : bootService.ts et docs/user/background-service.md, lus avant
-implémentation. Même usage de launchd/systemd et des sessions utilisateur.
-Bridget ajoute le contrôle d'autorité distante avant création d'un maître.
-
 ## Preuves réelles
 
 - Mac : paquet v0.4.1, HOME jetable, vrai launchctl bootstrap, daemon répondant.
@@ -23,7 +19,7 @@ Bridget ajoute le contrôle d'autorité distante avant création d'un maître.
 - Défauts observés pendant l'essai : launchd créait des journaux non privés
   dans le namespace strict de la release ; ils sont désormais précréés 0600
   hors du namespace, avec Umask=077. systemd refusait un WorkingDirectory entre
-  guillemets : réemploi de %h comme T3. Les deux essais réussissent après correction.
+  guillemets : réemploi de %h par le contrat natif. Les deux essais réussissent après correction.
 - 26 tests ciblés PASS : activation Linux et rendu plist Mac, échec de santé
   sans faux succès, refus de gestionnaire absent, de fédération en panne et
   d'un service étranger, namespace persistant et conservation des anciens tests.

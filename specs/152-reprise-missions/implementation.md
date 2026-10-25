@@ -117,14 +117,7 @@ Journaux bruts lus, sans modification :
 
 ## Limite documentaire de livraison, à trancher par le principal
 
-H6 distingue l’installation sans relance des sessions 147 à 151, référence
-historique, de l’activation de production coordonnée par le principal sans
-interrompre les autres fils T3. Le quickstart affirme encore qu’aucune relance
-n’est faite par cette session et réserve l’activation à l’utilisateur.
-Ces formulations ne sont pas équivalentes au dernier contrat de livraison en
-production. Le principal vérifiera les processus et travaux actifs lors de
-la livraison. Ce reçu n’ajoute aucune interdiction ni nouvelle approbation,
-et ne tranche pas l’activation à sa place.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/152-reprise-missions/implementation.md#extrait-1).
 
 Textes concernés :
 
@@ -381,13 +374,7 @@ des lots restent distinctes. Preuves brutes conservées :
 
 ## Alignement du quickstart sur H6 — décision du principal
 
-Le dernier contrat utilisateur demande une livraison de production fonctionnelle.
-H6 confie l’activation coordonnée au principal sans interrompre les autres fils
-T3. L’installation sans relance des sessions précédentes reste historique.
-Sur décision explicite du principal, l’ancienne phrase du quickstart réservant
-l’activation à l’utilisateur est remplacée par le contrôle réel après activation
-coordonnée. Le principal observe processus, namespace et quiescence en phase 8 ;
-aucun redémarrage T3 ni nouvelle approbation n’est ajouté.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/152-reprise-missions/implementation.md#extrait-2).
 
 L’ordre du contrôle est précisé : suspended=true se lit pendant la pause ;
 après la levée, suspended=false précède la vérification du résultat.
@@ -1788,14 +1775,7 @@ et les cinq F2 en contexte. Aucun blocage nouveau ni ligne supprimable
 prouvée. Cette capture précède les seuls ajouts documentaires T036 ci-dessus ;
 leur relecture finale reste le gate avant cochageT037. Pas de test personnel.
 
-| Question XIX/XX | Réponse du reviewer, résumée |
-|---|---|
-| Nécessité | RED compilés des défauts prévus ; pause consommée après request_unavailable ; fixtures Working avec admission durable. |
-| Simplicité/réemploi | ADR027, garde, magasins, continuations, flotte/droits, arrêts et entretien existants ; deux usages réels par extraction ; table de refus requise par FR-021/023. Aucun module/dépendance/outil public nouveau. |
-| Hypothèses | Données lisibles, identité et droits attestés, journal de pause autoritaire ; borne2, bail soumis300s non gelé ; FR-029 limitée au natif lisible, refus sûr cible/CAS/stockage. |
-| Vérifié | Diff entier, ADR/implementation, gardes, compteur sauvegardé avant effet, trois correctifs finaux et cinq F2 ; SHA sources conformes ; R8 personnellement lu295/0/1, sept RC0. |
-| Non vérifié | Modèle réel, T3, activation, benchmark, couverture/mutation ; aucun Cargo/Git/service personnel ; R1 antérieur au patch, solo098 vérifié par principal/docowner. Aucun GREEN global ni Converge/audit. |
-| Conservé/supprimé | Dates/champs durables, interruptions, droits/identité/CAS/ACK151 et oracles stricts conservés ; helper150/trigger mort déjà retirés, vrai UPDATE refusé gardé ; cinq adaptations149 et témoin inchangé ; zéro suppression additionnelle prouvée. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/152-reprise-missions/implementation.md#extrait-3).
 
 Coûts relus : may_resume inclut JSON/tri/liens/chaîne/sagas ; latest_in_chain
 O(c(log n+log c)), mémoireO(c) ; pauseO(log N+P) ; collecteD7300

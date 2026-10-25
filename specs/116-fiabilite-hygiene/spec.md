@@ -7,12 +7,7 @@ Décision : [ADR 042](../../docs/decisions/042-appariement-par-origine-prouvee-e
 
 ## Problèmes observés (données réelles)
 
-**A. Des réponses se perdent.** 16 demandes suivies abandonnées depuis le 14/09 sur six fils,
-« au repos sans appariement certain ». Le pont apparie message et tour par rang, et ne voit les tours
-qu'à travers leurs messages écrits. Sur le fil `horizon-terra-captation` : 38 messages, 38 tours
-selon T3, 34 tours écrits. Sur `opus_city_ai` (Claude) : 58 messages, 139 tours écrits (réveils
-d'arrière-plan). Les points de contrôle T3 ne sont pas une alternative : absents sur 5 fils hors
-Git, et non un pour un sur 9 fils sur 20.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/116-fiabilite-hygiene/spec.md#extrait-1).
 
 **B. Toutes les identités tombent une à deux fois par jour.** 71 épisodes depuis le 14/09. `lsof`
 sort en erreur dès qu'un seul processus demandé a disparu, tout en listant les autres (vérifié) ;

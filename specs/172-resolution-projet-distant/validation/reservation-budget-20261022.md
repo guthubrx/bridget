@@ -26,8 +26,6 @@ Les contrôles ciblés donnent 17 PASS :
 
 Aucune suite complète. La fixture a la même empreinte dans le RED et le GREEN : 8b8ef1b8547239768819bf67e25f0a3a2440882a024d2378351add061dfee09f. Empreinte de native_delegation.rs final : dbe18130e9b14dd79ce23e0aa6c4169d97f96a109b28a77e085c1147e2470962.
 
-Référence T3 lue : /Users/moi/11.Repositories/t3code/apps/server/src/provider/acp/AcpSessionRuntime.ts, lignes 65–67, 734–749 et 935–950 sur ef86c2bbc3388be8fc593db23a323e3d80b58509. T3 applique des budgets par opération. Il n’a pas de réservation équivalente pour un résultat de worker distant. Bridget conserve son échéance commune et ses preuves de nettoyage.
-
 ## Revue et limites
 
 La revue indépendante 74f5eb18-7220-46c5-b124-d5a11df5a54c donne APPROVE. Résultat complet lu, ACK confirmé, tâche clôturée. Le code auteur et le code relu sont au même commit ; leurs empreintes et états Git propres ont été comparés par l’opérateur.
@@ -44,7 +42,7 @@ Binaire macOS signé et vérifié : SHA-256 5d09a527e3a93484d1c843211275608f8f8e
 
 Le seul maître passe du PID 76289 au PID 13340. Le contrôle officiel bridget_status confirme running=true et build_id=172-cbc034bd.
 
-T3 50681/50799 et le pont 898 sont préservés. Le worker Cartae 2219043 reste actif, sans redémarrage, sur son build compatible 172-76b682d6. Aucun changement de protocole, de droits ou de configuration fournisseur.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/reservation-budget-20261022.md#extrait-1).
 
 Les commandes Notre-Dame 28da9844-0695-4f99-9159-b9beeab9bd6d et revue e8df00b4-e3b4-482c-83bc-4f305ea2ac28 conservent leurs identités, générations, marqueurs, wrappers et fournisseurs pendant le remplacement. Leurs résultats sont ensuite disponibles sans erreur. La tâche historique e6283066 reste en échec nettoyé ; elle n’a pas été relancée.
 

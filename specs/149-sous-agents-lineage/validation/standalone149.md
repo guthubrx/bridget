@@ -1,6 +1,6 @@
-# Preuve réelle - parents externes sans T3 (ronde r5)
+# Preuve réelle - parents externes par le parcours natif Bridget (ronde r5)
 
-Ronde Sonnet r5, 2026-10-10. Binaire RELEASE `bridget-abfb346e23cc`. Fixture privée `/Users/moi/.cache/bridget149-recipe-r2.r5`. Variables `BRIDGET_T3_*` absentes ; aucun processus T3 dans la fixture ; voie `NativeDelegation` seule.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/standalone149.md#extrait-1).
 
 - Premier parent GLM : `bridget gclaude` (lanceur `dd8dee56…872a8e`, profil `/Users/moi/.claude-glm`, CLI 2.1.296) dans un PTY. A délégué, suivi (`bridget_task_status`) et reçu l'échec corrélé. Sources de permission révisionnées : 17 (user, managed, project, local, plugins), CLI résolu `c9b53416…`.
 - Premier parent Codex : `bridget codex … -a never -s <sandbox>` (TUI Codex 0.161.0, app-server propriétaire). Fait publié avant la TUI (mode réel `full-access` ou `workspaceWrite`).

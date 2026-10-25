@@ -33,10 +33,7 @@ Suite complète avant clôture : même environnement,
 
 ## Contrôle réel après activation coordonnée
 
-En phase 8, le principal observe les processus, le namespace et la quiescence
-des travaux. Il coordonne l’activation de production prévue par H6 sans
-interrompre les autres fils T3 et sans redémarrer T3. Aucune relance n’est
-effectuée à l’étape actuelle de développement.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/152-reprise-missions/quickstart.md#extrait-1).
 
 Le contrôle réel s’exécute après cette activation : déléguer une mission longue,
 mettre le référent en pause (`bridget` contrôle d’état), attendre plus que le

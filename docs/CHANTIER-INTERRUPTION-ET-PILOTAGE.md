@@ -339,12 +339,12 @@ client.request("turn/steer", {
 
 ---
 
-# RÉFÉRENCE : t3code
+# Choix de conception Bridget
 
 > ⚠ **INACCESSIBLE ÉGALEMENT** — même mesure, même date. Seuls les extraits
 > reproduits ci-dessous sont disponibles.
 
-`~/11.Repositories/t3code/apps/server/src/provider/` *(inaccessible)*
+[Note technique de l’adaptateur](adapters/t3/archives/docs/CHANTIER-INTERRUPTION-ET-PILOTAGE.md#extrait-1).
 
 **Codex** — `Layers/CodexAdapter.ts:1845` expose `interruptTurn`, qui appelle
 `session.runtime.interruptTurn` (ligne 1847).

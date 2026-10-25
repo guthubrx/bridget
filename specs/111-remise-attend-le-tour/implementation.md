@@ -18,12 +18,7 @@ rien d'autre.
 
 ## Correction
 
-- `t3code.rs` : la condition `received.elapsed() >= turn_wait` est retirée des deux points de
-  filtrage. Les autres motifs, tous fondés sur une échéance portée par le message, sont inchangés :
-  échéance métier, délai de réponse, expiration de saga, demande suivie close.
-- Nouvelle borne `QUEUE_BOUND = 64` appliquée à l'insertion. Un dépassement écarte la plus ancienne
-  avec un avertissement distinct, pour ne pas confondre saturation et péremption.
-- `turn_wait` reste employé par le cache des annulations, dont la sémantique est différente.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/111-remise-attend-le-tour/implementation.md#extrait-1).
 
 Allonger le délai aurait déplacé le seuil sans le supprimer, et rendu le symptôme plus rare donc
 plus difficile à diagnostiquer. Un message sans échéance n'a aucune raison de périmer : le

@@ -121,13 +121,7 @@ correctifs E/S ultérieurs, ni le workspace complet.
 
 Les rapports propriétaires ont été relus :
 
-| Rapport | Preuve disponible | Limite actuelle |
-|---|---|---|
-| Noyau SPEC-138 — preuves réelles, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/core.md | RED noyau initiale et RED T019 capturées ; recherche du scénario processus réel avant création | GREEN final noyau/T019 encore à consigner |
-| SPEC138 — Façades de communication, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/facades.md | MCP51, CLI80 et client14 PASS rapportés ; matrice réelle et recette Agent Loop opt-in écrites | Recettes réelles encore à exécuter ; pas de PASS global |
-| SPEC138 — Annonces propriétaires wrapper et T3, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/transport-facades.md | Cinq tests transport PASS dans une vague20 PASS/1 FAIL | RED séparée non capturée ; cette vague n'est pas une validation globale |
-| T019 — Stockage durable des avertissements de contrôle, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/control-store.md | Deux RED migration puis suite SQLite17 PASS, exit0 ; warnings durables et canon exact | Seulement stockage ; garde daemon et restart processus restent au noyau |
-| Preuves Agent Loop — SPEC-138, /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/evidence/loop.md | Course et pannes E/S observées RED ; suite finale152 PASS, exit0 confirmée par le principal et revue corrective APPROVE | Transports surtout simulés ; recette daemon réel reste T017 ; limites machine/rollback/legacy ci-dessous |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/implementation.md#extrait-1).
 
 T020 protège la remise initiale existing_bridget et write_task_result sous le
 verrou commun. Ses tests injectent des OSError ordinaires. Aucun crash disque,
@@ -255,12 +249,7 @@ résultats historiques du pipeline initial. La livraison est maintenant achevée
 Les preuves et les empreintes détaillées figurent dans
 /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/specs/138-priorite-projet/delivery.md.
 
-Bridget est publié sur github/main au commit
-`7f6aba8527d2ee764e61613e3e579f54a290bf65`. Le daemon actif annonce ce build.
-L'application T3 reste ouverte : 28 fils, 28 présences actives et 28 projets
-attestés. Agent Loop est publié sur main au commit `8008b08e`. Ses quatre
-fichiers actifs sont identiques à la publication. La branche active 104 reste
-distincte et non poussée pour préserver les autres travaux.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/implementation.md#extrait-2).
 
 Les validations après commit sont PASS : release, clippy frais et formatage.
 Les 152 tests Python installés passent. La recette isolée avec le daemon réel

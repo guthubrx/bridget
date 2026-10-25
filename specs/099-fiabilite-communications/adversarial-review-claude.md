@@ -31,8 +31,4 @@ remise : identity_not_found. Aucun avis externe reçu et aucune attente artifici
 de quatre minutes après un échec d'admission. L'agent existe dans l'inventaire,
 mais aucun agent d'un autre fournisseur n'est joignable depuis cette identité.
 
-Contre-relecture du même fournisseur effectuée en parallèle : deux défauts t3code
-retenus (publication non retentée, corrélation perdue sur HTTP ambigu), corrigés
-après tests rouges. Relecture US2 : pas de défaut bloquant concret supplémentaire.
-Le principal a également retenu le rappel t3 expiré et la notification système
-non bornée, reproduits puis corrigés. Aucun de ces avis ne vaut un verdict Claude.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/099-fiabilite-communications/adversarial-review-claude.md#extrait-1).

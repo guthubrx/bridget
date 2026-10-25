@@ -1,9 +1,6 @@
-# Clôture fixtures permissions T3 — lot sous-agent, r3
+# Clôture fixtures permissions adaptateur de bureau — lot sous-agent, r3
 
-Date : 2026-10-10
-Worktree : `/Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage` (branche `session-149-sous-agents-lineage`, HEAD `33f6d04e11` + changements non commités)
-Base de comparaison : checkout principal `/Users/moi/11.Repositories/t3code-local` à `33f6d04e11` (voir r2 pour les preuves baseline).
-Périmètre r3 : clôture des 2 fixtures rouges (BridgetSession, ProviderTurnControlService), vérification du fix Sol `ClaudeAdapterV2.ts:901`, montage des deps manquantes du worktree. Sources production **read-only** — aucun fichier production touché.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-fixtures-final-r3.md#extrait-1).
 
 ## 1. Compteurs (stdout vitest, font foi)
 
@@ -82,7 +79,7 @@ effect, pngjs, sharp, typescript, typescript-legacy, vite-plus
 - `scripts/node_modules` est gitignore : zéro bruit dans `git status`.
 - Résultat : les 59 erreurs `scripts/lib` du r2 ont disparu du log r3.
 
-## 5. Typechecks (log complet : `t3-permissions-types-r3.log`)
+## 5. Typechecks (log complet : `adaptateur de bureau-permissions-types-r3.log`)
 
 | Package | Exit | Résultat |
 |---|---|---|
@@ -109,24 +106,7 @@ Les autres mentions (`BridgetSession`, `ClaudeAdapterV2.test`, `BridgetReader`�
 
 ## 7. Commandes exactes
 
-```
-cd /Users/moi/11.Repositories/t3code-local/.worktrees/149-sous-agents-lineage
-./node_modules/.bin/vp test run apps/server/src/mcp/BridgetSession.test.ts
-→ Test Files 1 passed (1) | Tests 6 passed (6)
-./node_modules/.bin/vp test run apps/server/src/orchestration-v2/ProviderTurnControlService.test.ts
-→ Test Files 1 passed (1) | Tests 1 passed (1)
-./node_modules/.bin/vp test run \
-  packages/contracts/src/bridgetPermissions149.test.ts \
-  packages/provider-core/src/server/mcpSession149.test.ts \
-  apps/server/src/mcp/OrchestratorMcpService.bridgetPermissions149.test.ts \
-  apps/server/src/orchestration-v2/Adapters/BridgetPermissions149.test.ts \
-  apps/server/src/mcp/BridgetSession.test.ts \
-  apps/server/src/orchestration-v2/ProviderTurnControlService.test.ts
-→ Test Files 6 passed (6) | Tests 74 passed (74)
-cd packages/contracts    && ../../node_modules/.bin/tsc --noEmit → EXIT=0
-cd packages/provider-core && ../../node_modules/.bin/tsc --noEmit → EXIT=0
-cd apps/server           && ../../node_modules/.bin/tsc --noEmit → EXIT=1 (16, artefact t3-permissions-types-r3.log)
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/149-sous-agents-lineage/validation/t3-permissions-fixtures-final-r3.md#extrait-2).
 
 `vp test` retourne 0 même en échec : seuls les compteurs stdout font foi. Tous les runs sont lancés **depuis le worktree** ; la baseline n'est donc jamais exécutée en double (piège r2 §5).
 

@@ -16,12 +16,7 @@ Les195hunks N et65hunks P149 viennent surtout du formatage historique. Rustfmt n
 
 ## Six réponses ArticlesXIX/XX
 
-1. Nécessaire : FR101–107/US5–US7 exigent programmation, déclencheur local, provenanceonce et résumé corrélé. Le post102 déjà committé est retrouvé avant grâce/gardes de création pour éviter un double effet ou faux refus à la reprise.
-2. Simple : tick1s, worker64, Store, garde referent_control, route/identité149, négociation humaine et registres099/102 sont réemployés. Trois modules/tables de domaine justifiés, aucun service/thread/dépendance/outbox/registre de quota supplémentaire. Les helpers ont leurs usages réels ou une contrainte écrite.
-3. Hypothèses : owner et instance attestés, données lisibles, projet/membership revalidés au départ, heure serveur, fuseau dans le domaine minutes±24h. ADR011 mêmeUID reste une limite. Aucun libellé/body n’est pris pour autorité.
-4. Vérifié : delta entier normalisé, trois nouveaux modules/tests entiers, canon avant effet, Immediate/CAS, bornes physiques16/128 et8192/64, pagination20/64/65536B, JSON16KiB, worker1s/deadline5s, épisodes et cutoffs distincts. ACKcurrent UUID/delivery/instance/génération et retour afterACKOk mêmeanswered_requestNone sont relus. Hashes du manifeste concordent au début/fin.
-5. Non vérifié : aucun test/build/Cargo/DB/provider exécuté par ce lecteur. FULL et rejouages sont des preuves ROOT lues, pas des exécutions de cet agent. Aucun modèle réel/T3/activation/performance/couverture/mutation validé. Les 7 résumés enfants sont exclus du compteur Cargo.
-6. Conservé/suppressible : conserver provenance avantonce, canon/UUID102/issued_at, horizon7j, phasesunknown et cutoffs nécessaires au crash. Aucune ligne métier supprimable prouvée. Le dépôt sans avis ET sans snapshot ne porte aucun effet : éviter seulement sa TX et ses scans. SnapshotSome doit rester committé même avec zéroavis. Aucun nouveau helper/scénario n’est nécessaire.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/158-reveils-controle/implementation-158B.md#extrait-1).
 
 ## Corrections locales transmises
 
@@ -64,7 +59,7 @@ Ce complément n’annonce ni R2, ni audit clos, ni livraison. Aucun test/Cargo/
 
 ROOT a corrigé les deux appels Register et levée DND à observer_return_tick : capturer Instant dans return_clock avant unix_now_secs. La boucle1s utilisait déjà cet ordre via wake_clock puis wake_now. Les trois appels de production sont relus à daemon.rs6565–6568,7090–7091 et21458–21459. Aucun changement dans la méthode, dans les scénarios, le canon ou la grâce ; exactement deux appels modifiés, chacun avec sa variable locale. L'inverse de ces deux hunks restitue le SHA42a95a02…0316ec du précédent GREEN.
 
-Nécessité : conserver la borne conservatrice Wall/Mono utilisée au vrai départ, aussi aux retours Register/DND. Simplicité : deux captures locales, aucun helper, API, type, état, calendrier ou dépendance neuf. Hypothèses inchangées : horloges serveur exploitables et preuves lisibles ; sinon refus sûr. Preuve : deltas exacts et trois appels relus, puis reçu ROOT frais. Limites : aucune nouvelle exécution de cet agent, aucun modèle réel/T3/performance/activation validé. Canon, issued_at, cutoffs et tous anciens oracles sont conservés.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/158-reveils-controle/implementation-158B.md#extrait-2).
 
 Rejeu ROOT des quatre tests existants : 4 PASS / 0 FAIL / 0 ignoré, RC0,22,51s. Les221sources sont stables avant/après ; daemonSHA2124b1d0b42c3232698269918adf9f9df012a7aa8dae07cac98919f0c82064a5. Reçu : /Users/moi/.cache/bridget-tests158B-20261012/T109-T117-return-clock-order-GREEN.json, SHAc3feb4ada748ebd22470b9cbdf5192031e322f0b3591b28cfe1ca0fe0ae77e4b. Log : /Users/moi/.cache/bridget-tests158B-20261012/T109-T117-return-clock-order-GREEN.log, SHAa7fda2d6fa2a47e7556e4ef18fdef988b7ddb36552dbd727e48afe6ce982b5fd.
 

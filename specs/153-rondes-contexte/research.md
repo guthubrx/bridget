@@ -20,15 +20,7 @@ spec (`specs/150-socle-delegation/`) et seront relus en T001.
 
 ## R2 - Aucun nouvel état possible
 
-- **Constat** : `task_entry` refuse tout état hors de neuf valeurs
-  (`delegation_lineage.rs:35`) et le contrat 149 dit « un statut inconnu ferme le
-  contrat ».
-- **Décision** : l'enfant inactif est `result_available` avec `idle_deadline_at`.
-  La ronde suivante repasse la tâche en `mission_pending` puis `working`, états
-  déjà connus.
-- **Risque** : la projection montre une tâche qui quitte un état « terminal ».
-  Non vérifiable dans ce dépôt (lecteur T3). Parade : mutation visible normale,
-  donc relecture du lecteur ; test T020.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/153-rondes-contexte/research.md#extrait-1).
 
 ## R3 - Une mission par tâche : la ronde remplace la mission
 
@@ -191,23 +183,7 @@ spec (`specs/150-socle-delegation/`) et seront relus en T001.
   redémarrage (FR-013 de 152 ne vise que `starting`, `mission_pending`, `working`) :
   153 lève sa garde (FR-014).
 
-## R12 - Doctrine T3 et écart
-
-- **T3** (`research-t3-bridget.md`, A5 et A9) : l'enfant reçoit seulement le
-  prompt ; une tâche par ronde, tout le contexte dans le brief, clé distincte par
-  ronde, jamais de relance par envoi dans le fil enfant. T3 transfère du contexte
-  par fork ou par résumé portable (budget 16 000 jetons, références vers
-  l'historique omis).
-- **Reprise** : clé distincte par ronde ; brief structuré ; jamais de relance
-  hors de l'outil de ronde.
-- **Amélioration** : mémoire conservée (même processus) ; brief delta ; ronde
-  idempotente et plafonnée ; droits revérifiés ; fin explicite et délai borné.
-- **Limite honnête** : un enfant qui garde sa mémoire garde aussi ses biais. Pour
-  une contre-revue indépendante, la bonne pratique reste une nouvelle délégation
-  sans garde. La documentation le dit.
-- **Baseline research (Art. IX)** : fonctionnalité de délégation, pas d'IA
-  générative nouvelle. Consultation des notes de la comparaison T3/Bridget faite.
-  Pas de recherche web : sans objet pour un mécanisme interne.
+## R12 - Doctrine adaptateur de bureau et écart
 
 ## R14 - Contre-revue Codex (ronde 1) : points retenus
 

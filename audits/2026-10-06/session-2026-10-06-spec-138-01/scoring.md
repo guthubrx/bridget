@@ -139,7 +139,7 @@ Vérification : Rejouer les tests des trois rôles mandatés, ROOT hors projet s
 
 ### PERF-001 — Coût de parse_snapshot non documenté
 
-Fichier : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/138-priorite-projet/crates/bridget-daemon/src/t3code_contract.rs:271
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-06/session-2026-10-06-spec-138-01/scoring.md#extrait-1).
 
 Fingerprint : be476edf1ba6. Statut : open. Exploitabilité : N/A. Chemin : hot. Effort : XS. Risque de régression : LOW.
 
@@ -183,13 +183,7 @@ JSCPD : Bridget4,029571% (31sources/76832lignes), Loop0,449135% (2sources/4453li
 
 ## Points positifs
 
-- 03 — Le projet source est issu du fait de connexion ; from et domain ne font pas autorité (daemon.rs / communication.rs).
-- 04 — parse_snapshot indexe les projets et consulte chaque thread par HashMap ; index attendu O(P+T) (t3code_contract.rs:279).
-- 05 — La copie Claude délègue au moteur canonique au lieu de recopier le moteur (scope externe claude/.claude/skills/agent-loop/scripts/agent_loop.py).
-- 06 — Le contrôle conserve les warnings dans le résultat durable ; un replay accepté ne réexécute pas l'effet (execution_store.rs / spec138_project_test.rs).
-- 06 — CAS, archive et publication partagent le verrou de tâche ; les tests couvrent course et pannes E/S ordinaires (agent_loop.py:638).
-- 07 — Aucun bloc de 100 lignes dans les deux rapports JSCPD ; les taux sont des mesures de contexte, pas du diff.
-- 12 — Cargo.toml/Cargo.lock et les manifests des crates restent inchangés ; aucun nouveau service, registre ou framework.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/audits/2026-10-06/session-2026-10-06-spec-138-01/scoring.md#extrait-2).
 
 ## Findings supprimés par baseline
 

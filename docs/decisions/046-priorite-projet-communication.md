@@ -13,9 +13,7 @@ besoin de conserver les rappels d'un mandat extérieur déjà explicite.
 
 ## Décision
 
-Attacher un fait de projet à la connexion attestée. Utiliser l'hôte et la racine
-commune Git, ou la racine T3 attestée. Conserver l'inconnu si la preuve manque.
-Garder ListAgents global et ajouter une vue de communication locale par défaut.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/046-priorite-projet-communication.md#extrait-1).
 
 Un motif structuré valide exprime le choix interprojets. Une garde commune le
 vérifie avant dépôt et notification. L'avertissement revient à l'émetteur hors

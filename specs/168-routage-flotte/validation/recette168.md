@@ -4,7 +4,7 @@
 
 ## Périmètre et provenance
 
-Source B de cette recette : 431b78f72bdd73eac4772af17bf36879d7a629d2. Les lectures ci-dessous proviennent des reçus privés exécutés par ROOT, sans nouveau test, modèle, build, service ou commande Git pour cette rédaction. Le parcours est natif Bridget/MCP dans un namespace privé, sans dépendance T3 selon la passation ROOT. L’état des services de production relève du reçu d’activation ; cette recette ne le remplace pas.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/recette168.md#extrait-1).
 
 L’ancienne recette source A 269de64e172f71f8856373fe8b09cb2d8642da52 avait utilisé deterministic avec caller_deadline, sous le défaut de 2 s : elle reste historique et ne valide pas Laya. Le correctif du délai configurable et son oracle exact PASS à trois sous-cas sont publiés dans /home/moi/10.Scripts/64.bridget/.worktrees/168-routage-flotte/specs/168-routage-flotte/validation/tests168.md, complément T045B. Ce test contrôlé reste distinct de la présente recette réelle.
 
@@ -85,7 +85,7 @@ Le diagnostic en lecture seule transmis par ROOT constate loggedIn=false pour le
 
 ## Nouveau parcours Haiku Cartae — choix réel et rejeu prouvés
 
-Le namespace privé /home/moi/.local/state/bridget-delivery168/r168-ch-759bee18 utilise un maître Bridget sur Cartae, sans serveur ou pont T3. Son runtime-topology conserve le catalogue 27 et la source B 431b78f72bdd73eac4772af17bf36879d7a629d2. Dans cette topologie, machine_id=local désigne Cartae ; il ne désigne pas le Mac.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/recette168.md#extrait-2).
 
 ### Première étape à sept candidats, conservée séparément
 
@@ -117,13 +117,13 @@ Les compteurs globaux 2 reçus/2 Tasks/2 exécutions incluent la première recet
 
 Le reçu matriciel porte created_at=1792075807 et updated_at=1792075812. Ils décrivent l’écriture durable, pas un chronomètre monotone de toute la chaîne. Leur écart de 5 s n’est donc pas une mesure de conformité temporelle universelle. Les oracles contrôlés déjà PASS restent la preuve des deadlines absolues, du budget partagé et des bornes ; aucune nouvelle FULL ou mesure n’est ajoutée ici.
 
-### Arrêt privé et protection de T3
+### Arrêt privé et protection de adaptateur de bureau
 
 cleanup-runtime-cartae.json atteste l’arrêt natif du parent, puis SIGTERM après vérification d’identité au daemon 3834811 et au relais 3813547 ; chacun est absent après 3 s. DB et preuves sont conservées, production_services_signaled=false. Le worker Mac privé 74195 est observé absent au redémarrage et n’a pas été tué, selon ROOT. Le reçu Mac final confirme SIGTERM au tunnel privé 74191 après vérification d’identité et son absence après 3 s ; le worker privé 74195 était déjà absent, sans signal. Les runtimes privés des recettes sont soldés ; DB et preuves sont conservées.
 
 L’activation B active_verified est attestée par /Users/moi/.cache/bridget-delivery168/activation/B-runtime-followup168.json, SHA-256 6d50c3181012c13b2334722f3e3ae13468800c0f8c75d988cfeca27be2c8f86e : source 431b78f72bdd73eac4772af17bf36879d7a629d2, version 0.4.0, daemon 71927, pont 72468, worker 3767260, catalogue 27, routage ON, DB quick_check=ok/FK0. Ce checkpoint ne prouve pas la release GitHub.
 
-Le serveur T3 ancien 65608 a été remplacé extérieurement par 97328, né à 16:51:02 CEST, pendant la restriction d’accès, selon le constat frais ROOT. Aucun signal T3 n’a été envoyé par notre activation ou ces recettes. L’application 65544 née 04:07 et le tunnel de production 60206 sont inchangés. Le reçu B conserve son état historique initial ; il ne justifie pas d’affirmer que 65608 est encore vivant.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/recette168.md#extrait-3).
 
 Cette topologie conserve la télémétrie locale Cartae réelle ; private_mac_telemetry_isolation=true dans le reçu indique l’isolation de la cible Mac privée. Aucun chiffre de charge artificiel ni changement de production n’est déduit.
 

@@ -5,13 +5,9 @@ Date : 2026-10-11. Statut : accepté par l'utilisateur (« go », puis pipeline
 
 ## Contexte
 
-Une comparaison avec T3 Code, limitée au métier de Bridget (communication et
-délégation entre agents), donne Bridget devant sur l'annuaire, les fils
-partagés, les agents hors outil et les garde-fous de droits. T3 est devant sur
-l'attente d'un résultat, la reprise après panne, le guidage en cours de tour,
-les réveils sur événement, la remontée des demandes d'un enfant et l'isolation
-de son espace de travail. Bridget ne doit pas devenir un environnement de
-développement : ni interface graphique, ni gestion des PR.
+Bridget doit améliorer l'attente des résultats, la reprise après panne, le guidage,
+les réveils, les demandes humaines et l'isolation des espaces de travail.
+Ces fonctions utilisent les identités et les droits de son moteur natif.
 
 ## Décision
 
@@ -27,24 +23,13 @@ développement : ni interface graphique, ni gestion des PR.
 | 157 | Catalogue fiable (disponibilité, quotas), reprise sur quota, remplacement explicite | lancement, résilience |
 | 158 | Réveils programmés, vue globale, budget par tâche, arrêt global, portées MCP | réveil, contrôle, sécurité |
 
-Mécanismes repris de T3 : attente pilotée par événements, boîte de fin à états,
-résultat structuré, reçus qui gardent les refus, annulation en cascade vérifiée
-d'abord, modes file/guidage/interruption, reprise sur quota, catalogue qui dit
-ce qui marche. Points où Bridget vise mieux que T3 : remontée des approbations
-au parent, remplacement explicite de fournisseur, enfant réutilisable, budgets,
-tout cela entre outils et entre machines.
+Mécanismes retenus : attente par événements, boîte de fin à états, résultats
+structurés, reçus de refus, annulation vérifiée, modes de remise, reprise sur quota,
+catalogue, approbations, enfants réutilisables et budgets entre machines.
 
 ## Conséquences
 
-- La suspension des missions pendant une pause, prévue en 150, passe en 152 :
-  elle partage le mécanisme de reprise d'une mission avec son identifiant
-  d'origine et le gel des horloges (contre-revue 150, objections 1 à 4 et 7).
-- Constat pour 157 : `bridget_capabilities` annonce `discovery: true` pour
-  `codex-pro`, mais `bridget_delegate` refuse `permission_source_unavailable`
-  depuis un fil T3 Claude (2026-10-11).
-- Les sessions modifient les mêmes fichiers (`native_delegation.rs`) : exécution
-  séquentielle dans un seul worktree, sans commit automatique, diff enregistré
-  par session.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/150-feuille-de-route-delegation-cinq-etoiles.md#extrait-1).
 
 ## Révision du 2026-10-11 (après deux rondes de contre-revue par session)
 

@@ -10,11 +10,11 @@ Le stockage `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-t
 
 Le daemon `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/crates/bridget-daemon/src/daemon.rs` refuse actuellement `ThreadRequest` au rôle Client vers11410. La branche agent11638 dépend d'une identité de connexion vivante. Cette voie n'est pas une API humaine réutilisable telle quelle.
 
-L'identité `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/crates/bridget-daemon/src/t3code_identity.rs` atteste des processus pour le contexte MCP. Elle fournit un modèle de refus en cas d'ambiguïté, mais un lecteur humain dormant ne doit pas dépendre d'un PID de fournisseur. La connexion primaire est préparée dans `/Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/145-bridget-thread-viewer/crates/bridget-daemon/src/t3code.rs` vers1277. Le principal a figé un nouveau fait de liaison de cette connexion après enregistrement et publication du projet.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/research.md#extrait-1).
 
-T3 possède le store natif `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web/src/rightPanelStore.ts`, les onglets `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web/src/components/RightPanelTabs.tsx` et le montage `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/web/src/components/ChatView.tsx`. Leurs unions sont fermées ; les extensions doivent couvrir toutes les branches et la migration persistée. Aucun contrat Bridget n'existe à réutiliser dans T3 au point de départ.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/research.md#extrait-2).
 
-Le service `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/server/src/processRunner.ts` accepte déjà commande, argv, délai et plafond de sortie. `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/server/src/auth/RpcAuthorization.ts` couple les scopes de lecture au groupe RPC. Les résolutions de conversation et projet existent dans `/Users/moi/11.Repositories/t3code-local/.worktrees/145-bridget-thread-viewer/apps/server/src/orchestration/Services/ProjectionSnapshotQuery.ts`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/research.md#extrait-3).
 
 ## Validation externe transmise par le principal
 
@@ -33,4 +33,4 @@ I004 : lecture source145 pendant implémentation, sans edit code par l'agent doc
 
 Réutiliser les lectures et règles de stockage, avec une projection humaine distincte. Ne pas exposer les curseurs ni réouvrir toutes les commandes agent au rôle Client. Ajouter une capacité versionnée fermée et un fait primaire de liaison en mémoire. Aucun changement de schéma DB, nouvelle dépendance ou API générale n'est requis.
 
-Choisir un rafraîchissement manuel et une recherche locale dans les pages chargées. Garder les séquences historiques ASC déjà présentes. Utiliser la racine projet autoritative T3, pas un chemin fourni par le navigateur ou l'annuaire `last_known`.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/145-bridget-thread-viewer/research.md#extrait-4).

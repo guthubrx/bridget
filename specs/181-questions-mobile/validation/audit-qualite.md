@@ -92,12 +92,7 @@ Qualité observée = somme des niveaux justifiés / maximum des critères notés
 
 ### Architecture et dépendances
 
-| Critère | Niveau /4 | Justification |
-|---|---|---|
-| Frontières et résolution des dépendances | 3 | DomaineBridget sansT3, adaptateurconf iné, refus155séparés ; pas de nouvellelib. |
-| Maîtrise des cycles | 3 | Lecture des imports et flux : transporttypes->daemonstore, adaptateur->protocole, aucunimportT3dansdomaine. |
-| Séparation construction et exécution | 3 | SDK/buildconfig public séparés du namespace/credentials ; binaire/associationpreuve distingués. |
-| Assemblages et dépendances dynamiques | 2 | Assemblages concernéspassent etmoteurvocalIntent facultatif ; pas de qualificationtoutesversionshôtes/fournisseurs. |
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/181-questions-mobile/validation/audit-qualite.md#extrait-1).
 
 
 ### Responsabilité future et hygiène
@@ -124,7 +119,7 @@ Qualité observée = somme des niveaux justifiés / maximum des critères notés
 |---|---|---|
 | Fidélité des données lues | 3 | Textes/options/descriptions et sélections/texteslibrespréservés, callbacks corrélés et aucune interprétation. |
 | Cohérence et idempotence des versions | 3 | Révision/clé/enveloppe immuables, lost-receiptretrymêmecommande et19tests181 ciblés. |
-| Conformité aux règles et données de référence | 3 | Choixutilisateurlocalseulement/T3facultatif/voixéditionrespectés ; aucune nouvelleautorisationexécution. |
+| Conformité aux règles et données de référence | 3 | Choixutilisateurlocalseulement/contratnatifBridget/voixéditionrespectés ; aucune nouvelleautorisationexécution. |
 
 
 ### Traçabilité des exigences

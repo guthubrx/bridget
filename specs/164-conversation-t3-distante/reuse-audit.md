@@ -1,10 +1,8 @@
-# Audit de reutilisation de l'existant — 164-conversation-t3-distante
+# Audit de reutilisation de l'existant — 164-conversation-adaptateur de bureau-distante
 
 ## Decision
 
-Statut: PASS
-Date: 2026-10-13
-Feature dir: /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/164-conversation-t3-distante/specs/164-conversation-t3-distante
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-1).
 
 Le plan prolonge les conteneurs de journal déjà utilisés. Il ajoute seulement une projection de présentation partagée, absente des sept sources ciblées initialement lues et des vérifications complémentaires de ROOT. Aucun contrat, moteur, store durable ou service n’est recréé. La contre-revue impose seulement une option de rendu inerte et la conservation bornée des lacunes dans le réducteur client actuel. Ce PASS autorise la génération Tasks, pas l'implémentation avant contre-revue et GO ROOT.
 
@@ -23,23 +21,9 @@ Le plan prolonge les conteneurs de journal déjà utilisés. Il ajoute seulement
 
 ## Reutilisations correctement identifiees
 
-Racine des preuves T3 : /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-2).
 
-| Item du plan | Existant reutilise | Preuve dans cette racine | Commentaire |
-|---|---|---|---|
-| Conteneur de conversation web/desktop | BridgetTaskJournal | apps/web/src/components/BridgetTaskJournal.tsx:175 | Abonnements/actions conservés, seule présentation changée |
-| Conteneur mobile | BridgetTaskJournal mobile | apps/mobile/src/features/threads/BridgetTaskJournal.tsx:82 | Focus/foreground/abort existants |
-| Suivi borné des enveloppes | BridgetJournalState et Stream.scan | packages/client-runtime/src/state/orchestration.ts:123 | Fenêtre de 4 096 événements, ne pas recréer un store |
-| Identité/ordre des événements | BridgetJournalEvent | packages/contracts/src/bridgetLineage.ts:139 | Seq/session/message_id et payloadJSON déjà disponibles |
-| Lacune et pagination | BridgetLineageJournal | packages/contracts/src/bridgetLineage.ts:149 | Page100/gap/caught_up ; aucun nouveau contrat |
-| Lecture du résultat | readResult/inspect | apps/web/src/components/BridgetTaskJournal.tsx:251 ; apps/mobile/src/features/threads/BridgetTaskJournal.tsx:157 | Fenêtres16KiB et plafonds natifs existants |
-| Historique et reconnexion | readHistory/connection | apps/web/src/components/BridgetTaskJournal.tsx:283 ; apps/mobile/src/features/threads/BridgetTaskJournal.tsx:247 | Garder les curseurs et modes distincts |
-| Actions/permissions | bridgetLineageCancel et scope | apps/web/src/components/BridgetTaskJournal.tsx:304 ; apps/mobile/src/features/threads/BridgetTaskJournal.tsx:189 | Pas de nouvelle commande ni autorité |
-| Markdown web | ChatMarkdown | apps/web/src/components/ChatMarkdown.tsx:214 | Contexte sans accès local implicite aux chemins distants |
-| Option Markdown inerte | ChatMarkdown existant | apps/web/src/components/ChatMarkdown.tsx:216,2416,2431,3180 | Étendre opt-in, couper actions locales et médias implicites |
-| Historique éphémère de lacunes | Réducteur journal existant | packages/client-runtime/src/state/orchestration.ts:138 | Gap actuellement unique et sticky ; conserver frontières bornées sans nouveau store |
-| Identité stable des blocs clos et détails différés | React.memo et primitives de détail existantes | apps/web/src/components/BridgetTaskJournal.tsx:122 ; composants de détail T3 | Réemploi de memo, partage structurel et montage brut seulement à l’ouverture |
-| Tests de journal/protections | BridgetTaskJournal149.test | apps/web/src/components/BridgetTaskJournal149.test.tsx:1 | Étendre des scénarios observables, pas recopier des mocks |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-3).
 
 ## Existant potentiellement pertinent non mentionne
 
@@ -64,22 +48,13 @@ Aucune duplication évidente non arbitrée.
 
 ## Memoires et regles applicables
 
-| Source | Regle | Impact sur le plan |
-|---|---|---|
-| /Users/moi/.speckit/constitution.md | XVIII/XIX/XX/XXI : complexité, réemploi, simplicité, routines opt-in | Projection bornée O(n+c), aucune dépendance nouvelle, pas de routine incidente |
-| /Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/AGENTS.md | Clients web/desktop/mobile ; petits contrôles ciblés ; pas de plans committés T3 | Logique commune, tests concernés, docs164 externes à T3 |
-| /Users/moi/Nextcloud/10.Scripts/64.bridget/AGENTS.md et mandat ROOT | Français, autorisation parallèle, code sur serveur, chemins absolus | Développement Cartae, ROOT tient livraison ; zéro Rust164 |
-| Instructions utilisateur de cette session | Bridget indépendant, livrer/push/nettoyer ; éviter suites longues répétées | Connecteur seul ; gates livraison explicites ; réemploi des résultats valides |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-4).
 
 Les fichiers `.specify/memory/constitution.md` et `.specify/memory/standards.md` sont absents du worktreeBridget 164 à la lecture. Ils ne sont ni inventés ni recréés. Pas de mémoire Bridget dans les quatre dossiers présents de /Users/moi/.Codex/projects. La constitution globale et les règles livrées par ROOT sont les références disponibles. La synchronisation globale déjà soldée163 n'est pas relancée.
 
 ## Specs livrees applicables
 
-| Spec | Pattern deja etabli | Impact |
-|---|---|---|
-| SPEC149 | Fil virtuel, journal natif, résultat durable, actions protégées, pas de lancement T3 | Garder les services/RPC ; présentation seulement |
-| SPEC162 | Placement et tâches distantes | Conserver machine/contact, aucune nouvelle route |
-| SPEC163 | Sélection paramétrable et métadonnées de décision ; fichiers T3 distincts | Livraison163 avant 164, ne pas toucher ses neuf fichiers ; aucune dépendance fonctionnelle du rendu |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-5).
 
 SPEC149 spec/plan consultés par recherche ciblée. Les états162/163 et périmètres actifs viennent du mandat ROOT ; aucun nouveau contrôle de livraison historique n'est déduit de cet audit.
 
@@ -96,14 +71,7 @@ SPEC149 spec/plan consultés par recherche ciblée. Les états162/163 et périm�
 
 ## Arbitrages
 
-| Sujet | Decision | Justification | Date |
-|---|---|---|---|
-| Vue de conversation | Étendre le journal, pas convertir en MessagesTimeline fournisseur | Le journal natif ne possède pas l'autorité d'un tour fournisseur | 2026-10-13 |
-| Helper partagé | Créer projection pure commune | Deux surfaces réelles et contrainte explicite de parité ; pas de nouveau store | 2026-10-13 |
-| Renderer complet privé | Réemployer primitives/règles ; extraction locale si démontrée | Évite duplication de framework et identités synthétiques | 2026-10-13 |
-| Specs dans T3 | Documents dans Bridget 164 uniquement | AGENTS T3 interdit de committer les plans/scratch | 2026-10-13 |
-| Clôture des objections R1 | Option inerte web, primitives inertes mobile, gaps bornés, conflits avant Map | Vérifications de ROOT et preuves runtime existantes, aucune modification de contrat/Rust | 2026-10-13 |
-| Nouvelle recherche web/dépendance | Aucune | Changement interne sur contrats connus, pas de recommandation externe ni nouvelle technologie | 2026-10-13 |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-6).
 
 ## Gate avant tasks
 
@@ -115,7 +83,7 @@ SPEC149 spec/plan consultés par recherche ciblée. Les états162/163 et périm�
 
 ## Complément de réemploi — scope12 et reprise R4
 
-Les métriques et le PASS ci-dessus restent l’audit pré-Tasks historique. Le périmètre source attesté R3 compte douze fichiers, selon `/Users/moi/.cache/bridget-delivery164-20261013/remote-code/source-transfer164-r3-final.json`. Le fichier supplémentaire `/Users/moi/11.Repositories/t3code-local/.worktrees/164-conversation-t3-distante/vite.config.ts` réemploie la liste native existante : une entrée pour BridgetTaskJournal mobile, avec `allowUniwindTheme: true`. Les props Markdown natives ne peuvent pas recevoir `className`. La sévérité de `t3code/no-mobile-uniwind-theme-escape-hatches` reste `error` ; aucun réglage global n’est assoupli.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/164-conversation-t3-distante/reuse-audit.md#extrait-7).
 
 Le rendu mobile réemploie les préférences de police/taille/thème et SelectableMarkdownText iOS/Android existants, avec liens et images inertes. Les tests mobile utilisent des fixtures ; aucune recette sur appareil réel n’est déduite de ce réemploi. La projection reste commune, sans nouveau provider, store, RPC, service, migration ni contrat Bridget.
 

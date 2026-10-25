@@ -45,3 +45,7 @@ changes. Keep CLI flags, JSON fields, error codes and code identifiers unchanged
 during translation. Use example domains and documentation IP ranges instead
 of deployment addresses. Never paste credentials, private transcripts or raw
 state exports into a guide.
+
+## Client adapters
+
+- [adaptateur — adaptateur](adapters/t3.md).

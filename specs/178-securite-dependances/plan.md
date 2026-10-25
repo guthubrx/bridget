@@ -5,8 +5,6 @@
 4. Sauvegarder Caddy, sa configuration et son unité ; valider la nouvelle version avant activation ; tester tous les sites servis avant/après. Mettre WebView à jour via GooglePlay officiel.
 5. Tester, relire, intégrer et pousser ; compiler les sources livrées Mac/Linux, activer, vérifier, nettoyer sans force.
 
-Référence T3 : chemin imposé /Users/moi/11.Repositories/t3code absent. Lecture du checkout serveur alternatif t3code-local : AgentSessionScanner.ts importe node:sqlite (lignes17 et suivantes), SQLite provient de Node ; pas de bibliothèque rusqlite/Gradle ni de mécanisme de patch équivalent. Bridget conserve son SQLite embarqué et actualise la dépendance Rust ; Caddy et WebView fournis par le système ne sont pas des parcours T3. Les correctifs restent indépendants de T3.
-
 Aucune délégation neuve : routage bloqué pour ce tour ; revue directe explicitement distincte d’une revue indépendante.
 
 
@@ -15,4 +13,4 @@ Construction Android : scripts/android-build.sh sélectionne le JDK privé corri
 SQLite effectivement fourni par libsqlite3-sys0.39.0 :3.54.0 (64bits). Le correctif3.54.1 vise un débordement propre au32bits. Les binaires livrés sont x86_64Linux/aarch64Mac ; Android utilise son SQLite système. La feature fallible_uint de rusqlite0.41 conserve les conversions u64/usize précédentes avec vérification de bornes.
 
 
-Protection WebView : T3 BrowserDocumentFrame.tsx et HtmlRenderFrame.tsx lus. T3 isole les documents en iframe, avec origine opaque ; pas de garde pour moteur Android système. Bridget conserve son rendu statique plus strict et ajoute une garde avant construction du WebView, partagée par messages et fichiers. Baseline officielle WebView Stable156.0.8078.48 relevée sur ChromiumDash le25octobre ; les versions inconnues/anciennes restent lisibles en code source. Le paquet moteur est relu à la reprise de l’écran, pour permettre la mise à jour GooglePlay sans figer le refus. La mise à jour du moteur reste externe ; le risque de rendu est neutralisé dans Bridget.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/178-securite-dependances/plan.md#extrait-1).

@@ -58,7 +58,7 @@ statut n'écrivent ni `result_sent`, ni `failure_sent`, ni `delivery_acked`.
 
 **Test indépendant** : filtre `native151_groupe`.
 
-- [x] T014 [US4] Écrire `native151_groupe_trois_resultats_une_reponse` (trois enfants terminés dans le même intervalle : une réponse, trois entrées dans l'ordre de `task_ids`, `pending` vide) et, dans `crates/bridget-daemon/src/t3code.rs`, un test qui prouve que `batch_family` classe un message `native-result-*` (`reply = false`, sans `thread_notice`) en famille `Message` et que `batchable_prefix` en groupe trois. Corriger `Wait` si l'ordre ou le contenu diffère. Résultat : tests verts (SC-004).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/151-attente-fin-de-tache/tasks.md#extrait-1).
 
 ## Phase 7 - US5 Attendre la réponse d'un envoi (P2)
 

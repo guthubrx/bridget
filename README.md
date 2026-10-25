@@ -11,8 +11,8 @@ each other, exchange messages, ask for a reply, share a thread and delegate work
 without copying conversations by hand.
 
 A Rust daemon owns identities, delivery receipts and task state. CLI and MCP
-clients use that same authority. T3 Code can connect to it, but Bridget's native
-delegation engine also works without T3.
+clients use that same authority. Bridget owns its communication, delegation and
+human-question contracts across terminal and Android clients.
 
 ## What you can do
 
@@ -20,6 +20,7 @@ delegation engine also works without T3.
 - **Share context:** use shared threads, a handoff brief or a bounded journal excerpt.
 - **Delegate:** give a child a mission, inspect its result and continue it when its guard permits.
 - **Work remotely:** connect machines over SSH and run supported tasks in separate Git worktrees.
+- **Answer human questions:** keep the model’s choices and descriptions, add your own text, and confirm a response from Android or a terminal. Drafts stay on their device.
 - **Keep control:** inspect queues, cancel owned tasks and use human controls to halt new delegations.
 
 Codex and Claude Code use native drivers. Cursor and Gemini use supported

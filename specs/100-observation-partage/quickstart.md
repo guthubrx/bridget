@@ -64,9 +64,7 @@ renouveler sa connexion par le mécanisme du client ou utiliser une nouvelle
 session, sans tuer une conversation en cours. Les abonnements demandent
 l'identité réelle d'un agent Bridget enregistré ; pas d'identité à inventer.
 
-Le partage d'un journal T3 a été vérifié sur l'installation. Les événements de
-fin de tour/écriture restent limités aux producteurs structurés documentés ;
-l'installation n'ajoute pas cette observation au pont T3 natif.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/100-observation-partage/quickstart.md#extrait-1).
 
 Sauvegarde et retour arrière :
 /Users/moi/.cache/bridget-adoptions/100-20260916.iMZZbR/receipt.md

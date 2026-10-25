@@ -155,36 +155,15 @@ ACK151 quatre attentes en vol : trames=[Object {"type": String("DaemonIdentityRe
 ACK151 quatre attentes en vol : trames=[Object {"type": String("DaemonIdentityRequest")}, Object {"type": String("RegisterAuxiliary")}, Object {"request": Object {"operation": String("ack"), "task_ids": Array [String("active")]}, "type": String("NativeDelegation")}], réponse={"id":6,"jsonrpc":"2.0","result":{"code":"native_delegation_refused","content":[{"text":"task_not_ready","type":"text"}],"isError":true}}
 ```
 
-### t3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation
+### adaptateur de bureau::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation
 
-Running unittests src/lib.rs
-État du même nom au passage complet154 :ok
-Thread anonyme t3code.rs:5187 read unwrap : WouldBlock/code35/Resource temporarily unavailable ; puis join unwrap Any à5262.
-Cause non établie ; aucun classement flaky.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/155-demandes-enfant/validation/workspace155-final-r1-comparison.md#extrait-1).
 
-Log lignes LF 1752–1760 :
-```text
-
-thread '<unnamed>' (69789601) panicked at crates/bridget-daemon/src/t3code.rs:5187:45:
-called `Result::unwrap()` on an `Err` value: Os { code: 35, kind: WouldBlock, message: "Resource temporarily unavailable" }
-
-thread 't3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation' (69789556) panicked at crates/bridget-daemon/src/t3code.rs:5262:42:
-called `Result::unwrap()` on an `Err` value: Any { .. }
-test t3code::tests::spec099_post_accepte_issue_illisible_conserve_la_correlation ... FAILED
-test t3code::tests::spec099_refus_publication_est_repris_sur_tick_inchange ... ok
-test t3code::tests::spec099_reponse_non_acquittee_et_autres_attentes_survivent ... ok
-```
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/155-demandes-enfant/validation/workspace155-final-r1-comparison.md#extrait-2).
 
 ## Huit échecs historiques conservés
 
-- Running tests/core_089_contract_test.rs — cli_uuid_herite_adresse_active_sans_pouvoir_usurper_ni_suivre_une_reponse_ephemere
-- Running tests/core_089_contract_test.rs — client_reference_cli_mcp_rejouent_le_meme_record_et_refusent_les_divergences_sans_mutation
-- Running tests/core_089_crash_test.rs — binaire_et_outil_mcp_partagent_les_quatre_issues_d_une_reponse_liee
-- Running tests/core_089_identity_test.rs — deux_processus_mcp_meme_identite_et_meme_cle_restent_isoles_par_instance
-- Running tests/core_089_identity_test.rs — noms_humains_et_crash_ne_changent_ni_scope_ni_canon_ni_instance_du_wrapper
-- Running tests/core_089_identity_test.rs — spec094_mcp_modifie_uniquement_sa_propre_presence
-- Running tests/core_089_reply_test.rs — cli_demande_mcp_repond_annulation_et_timeout_ne_rouvrent_ni_ne_dupliquent
-- Running tests/t3code_098_test.rs — spec098_pont_expose_remet_repond_renouvelle_et_retire
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/155-demandes-enfant/validation/workspace155-final-r1-comparison.md#extrait-3).
 
 ## Fixture UTC154
 

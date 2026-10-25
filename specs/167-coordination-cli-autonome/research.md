@@ -2,7 +2,7 @@
 
 ## Question
 
-Comment rendre Bridget utile comme coordinateur interagent depuis une ligne de commande, sans reproduire T3 et sans créer un second moteur de délégation ?
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/research.md#extrait-1).
 
 ## Sources locales
 
@@ -39,14 +39,8 @@ Une coordination fiable ne se limite pas au lancement. Elle exige des identifian
 
 ## Alternatives rejetées
 
-| Alternative | Motif du rejet |
-|---|---|
-| Reproduire le coordinateur T3 dans Bridget | Hors métier. Cela ajouterait une UI et une seconde politique. |
-| Créer un principal humain synthétique | Il n’aurait ni présence d’agent ni autorité de remise correcte. |
-| Combiner `spawn` puis `send` | Deux effets sans transaction durable. Aucun reçu de tâche natif commun. |
-| Ajouter un daemon de coordination | Le daemon Bridget existe déjà. Un second service augmenterait les pannes. |
-| Exposer seulement des alias shell | Les sorties, erreurs et clés de rejeu resteraient incohérentes. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/research.md#extrait-2).
 
 ## Conclusion
 
-La bonne unité de conception est une façade CLI vers les outils natifs existants. T3 reste un client possible. Il n’est ni la source d’identité Bridget, ni le moteur de tâche.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/167-coordination-cli-autonome/research.md#extrait-3).

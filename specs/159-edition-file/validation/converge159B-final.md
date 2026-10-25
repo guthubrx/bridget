@@ -31,7 +31,7 @@ FULL unique RC101 conservé : nouvel échec isolé Claude, errno22 observé dans
 
 T018 pause explicite de reprise152, réattestation, cancel/replayoffline, unpause humaine et nouvelle incarnation ; pas preuve de retry gagnant hors pause. SC007 protège Appliedcommitté.
 
-SC01024cas privés CLI/MCP/4acteurs : marqueur enfant local nonsigné ; aucune interop T3/enfantprovider certifiée.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/159-edition-file/validation/converge159B-final.md#extrait-1).
 
 Promotion effectunconfirmed ne prouve pas consommation ; file pleine peut rendre indéterminé, erreur ambiguë Codex peut produire doublon ; pas exactlyonce.
 

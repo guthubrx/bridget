@@ -1,20 +1,10 @@
 # Livraison du canal worker et des erreurs lisibles — 21 octobre 2026
 
-Correctif installé et actif sur Mac et Cartae. Aucune mission native active au
-moment de l'arrêt des composants Bridget. T3 et le pont sont restés ouverts.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/canal-worker172.md#extrait-1).
 
 ## Source et composants actifs
 
-- Source du binaire : e5195b7de80341170196bfd92def8277b2f0df3a. Build : 172-e5195b7d.
-- Revue de production APPROVE sur 95c6ec4c, puis garde de sortie du test corrigée
-  et test ciblé : 1 PASS. Aucun autre code de production modifié après la revue.
-- Maître Mac : PID 3688, SHA256 20a44e11b74ebbe92e118fee4152cec6874270542aa5d6a895bd31e01860511c.
-  Chemin : /Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget.
-- Worker Cartae : PID 589872, SHA256 2b3f36fc577a08fa41ac55cbb6c69b6e4f925463d688077f6188cb486dc4574c.
-  Chemin : /home/moi/.local/lib/bridget-communication/172-e5195b7de803/bin/bridget.
-  Service actif, NRestarts=0 après démarrage.
-- T3 : PID 91019/91105 ; pont : PID 898. PID, dates de naissance et application
-  signée inchangés. Aucun service métier relancé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/canal-worker172.md#extrait-2).
 
 Le worker ancien a été arrêté hors commande active, avant le remplacement du
 maître. Le worker corrigé a été démarré seulement après le maître corrigé.
@@ -31,17 +21,7 @@ inchangé après r5 ; le dernier test rejoué recoupe les 34. Aucune suite compl
 Les noms exacts, les tours de test et les empreintes compilées sont conservés dans :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/172-resolution-projet-distant/validation/canal-worker172-tests.json
 
-Délégation réelle depuis ce fil T3 sur le couple actif :
-- Clé : recette172-canal-actif-cartae-e5195b7d-20261021-r1.
-- Task : e05fd619-83fd-4056-9bea-5a42615783b0.
-- Enfant : c7ea25a6-214c-46d7-9d6f-150306a99b8f.
-- Route choisie par Bridget : claude / claude-haiku-5-5 sur Cartae.
-- Machine cartae, version 0.4.1 et HEAD e5195b7de80341170196bfd92def8277b2f0df3a lus réellement.
-- Marqueur : BRIDGET172_CANAL_ACTIF_CARTAE_OK.
-- Résultat intégral lu puis acquitté ; rejeu strict unique : même Task et
-  même résultat de 1369 octets, sans nouveau lancement.
-- cleanup_done=true ; guarded=false (aucune garde acquise), guard_released=false
-  conservé tel quel. Worktree propre, résultat et fichiers conservés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/canal-worker172.md#extrait-3).
 
 Cette recette qualifie ce parcours réel. Elle ne qualifie pas tous les comptes,
 tous les modèles ou d'autres machines. La saturation du modèle montrée dans la
@@ -50,9 +30,7 @@ du worker. La cause fine de la coupure historique 837972ad reste inconnue.
 
 ## Message français confirmé dans le fil propriétaire
 
-L'agent chargement a effectué une seule lecture MCP officielle de la tâche
-837972ad-ad58-4512-9a71-fd2843ab5be5 après activation, sans relance des façades.
-Message de preuve : t3-7120f9a6-52e9-4cdb-a3ed-4844a2de32b2.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/172-resolution-projet-distant/validation/canal-worker172.md#extrait-4).
 
 ```json
 {

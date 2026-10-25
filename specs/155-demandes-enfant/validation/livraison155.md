@@ -23,13 +23,7 @@ Les LOW PERF-082/DUP-001 restent acceptés. Cette couverture partielle ne prouve
 pas une lecture complète. Un canal hostile qui ignore SIGTERM peut survivre ;
 aucune terminaison inconditionnelle n’est revendiquée.
 
-Build release depuis le dépôt principal : RC0 en 133,80 s, build-id 59da3968c7d1.
-Binaire signé et vérifié installé :
-/Users/moi/Nextcloud/10.Scripts/64.bridget/target/release/bridget.
-SHA256 : 4d3ff43d6a82de02b4ed115f1af422703ca584d1ce7f4843dcda41179ac748a7.
-Runtime actif : daemon 69512/pont 69652, nés 05:47:08/11 CEST le 12 octobre 2026.
-Le statut est RC0, build-id 59da3968c7d1. T3 PID 60116/60228 et naissances
-01:13:35/36 le 11 octobre sont inchangés.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/155-demandes-enfant/validation/livraison155.md#extrait-1).
 
 WT/branche 155 retirés proprement à 05:49 CEST ; 81 fichiers ignorés archivés
 avec empreintes vérifiées. Aucun worktree de session ne reste. Intermédiaires :

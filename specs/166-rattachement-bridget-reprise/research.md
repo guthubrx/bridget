@@ -19,14 +19,8 @@ Réutiliser `thread/resume` juste avant le tour lorsque la preuve diffère. Cett
 
 ## Alternatives écartées
 
-| Alternative | Motif du rejet |
-|---|---|
-| Réinstaller Bridget | Répare parfois l’émission, mais pas le montage dans un fil déjà chargé. |
-| Augmenter les limites système | Sans rapport avec l’incohérence d’identité. |
-| Créer une identité globale de secours | Casse l’isolation entre les fils. |
-| Redémarrer T3 à chaque reprise | Interrompt les autres conversations et masque la cause. |
-| Renouveler selon un minuteur | Ajoute un état et laisse une fenêtre de course. |
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/research.md#extrait-1).
 
 ## Conclusion
 
-La correction appartient à l’adaptateur Codex de T3. Bridget applique déjà le refus sûr attendu.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/research.md#extrait-2).

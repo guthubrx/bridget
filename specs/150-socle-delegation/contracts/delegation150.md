@@ -43,7 +43,7 @@ en 149.
 | `mission_reply_min_secs` | 60 (nouveau) |
 | `mission_reply_max_secs` | 86 400 (nouveau) |
 
-## Lineage T3
+## Lineage adaptateur de bureau
 
 Aucun changement de forme. Une purge change la génération : le lecteur fait un
 snapshot complet, comme déjà prévu par le contrat 149.

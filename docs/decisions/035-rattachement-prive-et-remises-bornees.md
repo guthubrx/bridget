@@ -4,11 +4,7 @@
 
 ## Contexte
 
-L'accès au socket privé donnait accès à trois chemins d'attribution insuffisante :
-inscription MCP par identifiants déclarés, compatibilité CLI et SendIdempotent
-dont issuer_scope est une clé de rejeu. Les preuves reproduites montrent aussi
-qu'une sortie bloquée immobilise l'état global et qu'une réponse t3code peut être
-oubliée sans confirmation.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/035-rattachement-prive-et-remises-bornees.md#extrait-1).
 
 ## Décision
 
@@ -22,9 +18,7 @@ Les écritures classiques utilisent la primitive bornée existante, hors verrou
 global. Le suivi est préparé avant exposition au destinataire ; la clôture d'une
 réponse reste après la remise réussie. Un échec n'est pas un succès fictif.
 
-Le pont t3code conserve les réponses prêtes dans son état de fil existant jusqu'à
-confirmation. Il ne crée ni second broker, ni table, ni service. Sa boucle traite
-les contrôles durant l'attente, sans nouvelle exécution d'une demande annulée.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/035-rattachement-prive-et-remises-bornees.md#extrait-2).
 
 ## Alternatives écartées
 
@@ -42,9 +36,7 @@ réponses récupérables, état et tests inspectables sans nouveau framework.
 Coûts : mise à jour conjointe des clients auxiliaires et wrappers, champs d'état
 supplémentaires compatibles avec les anciens fichiers du pont, tests de révocation.
 
-Limites : aucune séparation garantie entre processus hostiles du même compte
-système ; aucune interruption atomique d'un tour déjà accepté par t3code ; une
-écriture partielle reste indéterminée. Aucun déploiement implicite de cette décision.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/035-rattachement-prive-et-remises-bornees.md#extrait-3).
 
 ## Amendement du 2026-09-16 — humain et annuaire
 

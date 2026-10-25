@@ -70,6 +70,4 @@ CLI d'approbation humaine locale sera spécifiée séparément.
 
 ## Résultat attendu
 
-Les scénarios 1 à 4 sont reproductibles par CLI et JSON. Le scénario 5 est
-reproductible par les API et tests d'intégration, jusqu'à la livraison d'une
-surface CLI dédiée. Aucun scénario ne requiert GUI, TUI, DSH ou T3 Code.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/011-maicie-orchestration/quickstart.md#extrait-1).

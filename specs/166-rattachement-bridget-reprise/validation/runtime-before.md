@@ -4,11 +4,7 @@ Date : 2026-10-15, Europe/Paris.
 
 ## Versions
 
-- Bridget source active : `3b4f101e0732`.
-- T3 source installée : `3ea39f11095debbba6ca6a73f99f44fbe308cd60`.
-- T3 application : `0.0.45-local.164`.
-- T3 ASAR SHA-256 : `dc5623d70f45c85909703274ba59d216295b9e84b1e50ab8685b75aabe73f942`.
-- Processus T3 principal observé : PID 30234, démarré le 14 octobre 2026 à 15:50 CEST.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/166-rattachement-bridget-reprise/validation/runtime-before.md#extrait-1).
 
 ## Défaut observé
 

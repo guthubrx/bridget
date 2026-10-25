@@ -7,12 +7,7 @@
 
 ## Pourquoi
 
-La nuit du 24 a prouvé le besoin (wrappers orphelins, daemons de test, répertoires
-temporaires). Les gardes à la destruction des harnais traitent la *cause* ; rien
-ne nettoie les *survivants* ni les fuites d'une autre origine. T3 Code refuse de
-tuer une session à tour actif **et** une session à travail de fond — leçon
-reprise telle quelle. Un ramasseur qui se trompe une fois détruit la confiance :
-d'où l'observateur avant l'actif, et « interdit : tuer puis demander pardon ».
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/011-maicie-orchestration/j2-session-reaper-phase0.md#extrait-1).
 
 ## Phase 0 — contrat
 
@@ -77,12 +72,7 @@ Le doute profite **toujours** au processus.
 
 ## Trou à instruire — signal de travail de fond
 
-**Constat arbitragé** : Bridget n'expose pas aujourd'hui d'équivalent de
-`backgroundLiveness` (T3). En Phase 0/1, toute cible de **classe A** qui
-atteindrait autrement `eligible` est forcée en **`incertain`**
-(`fail_closed_background_liveness_absent`). Ce n'est pas une limite cosmétique :
-c'est un **manque à instruire** (capa J2 ↔ éventuel J3). Les classes B et C ne
-dépendent pas de ce signal.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/011-maicie-orchestration/j2-session-reaper-phase0.md#extrait-2).
 
 ## Double observation
 

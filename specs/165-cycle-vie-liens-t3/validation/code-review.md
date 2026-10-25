@@ -9,9 +9,7 @@ Mode : lecture seule
 
 Tâche : `node:delegated-task:command%3Amcp%3Ae3126f2b-7428-43cd-ad5d-737df2712318%3Adelegate-task%3Aspec165-code-review-r4-20261014`
 
-La revue a suivi les retraits de liens, les fermetures du worker et du lecteur,
-les obligations durables, les reprises bornées, les remises pendant le drain et
-les contrats T3 V1/V2. Elle ne relève aucune fuite de descripteur ni de tâche.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/code-review.md#extrait-1).
 
 ## Objections closes
 
@@ -29,17 +27,7 @@ les contrats T3 V1/V2. Elle ne relève aucune fuite de descripteur ni de tâche.
 
 ## Observations non bloquantes
 
-- Un snapshot ancien peut, dans une fenêtre étroite, lever l'attente d'un
-  changement après dispatch. Une remise avec réponse attendue reste protégée
-  par `pending`. T3 ne fournit pas de séquence de snapshot permettant un ordre
-  plus fiable.
-- Un sous-agent arrêté refuse les messages Bridget directs jusqu'à sa reprise
-  par T3. L'ADR et le quickstart décrivent maintenant cette limite.
-- Une relation V2 inconnue arrête le pont. C'est le comportement fermé voulu.
-  Son coût opérationnel est maintenant explicite dans l'ADR.
-- La petite fenêtre héritée entre la fin du worker et la fermeture du lecteur
-  n'est pas aggravée. Le correctif rapporte les remises connues avant la
-  désinscription et réduit cette fenêtre.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/165-cycle-vie-liens-t3/validation/code-review.md#extrait-2).
 
 ## Conclusion
 

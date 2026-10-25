@@ -10,9 +10,9 @@ The existing error code now carries static `detail.message` and `detail.recovery
 
 No routing, permissions, admission state, receipt, retry or worker protocol changes. The maintainer did not create or replay a business mission.
 
-## T3 comparison
+## adaptateur de bureau comparison
 
-Read `GitVcsDriverCore.ts`: `gitCommandContext`, `isMissingGitCwdError`, command spawning with `cwd`, and `branchExists`. T3 distinguishes a missing working directory from an existing branch. Bridget additionally needs to explain source versus destination hosts. No automatic path remapping was added.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/source-preflight-diagnostics.md#extrait-1).
 
 ## Validation
 
@@ -26,4 +26,4 @@ Independent review of the initial correction identified misleading generic guida
 
 Optimized, signed macOS build `174-748d6870` was installed and confirmed by the official daemon status. Artifact SHA-256: `db5470a1cb96fb43b650b65e6bfddeb089a22eca633095e97e31b2721f1b0c81`.
 
-Only the master restarted. The bridge, T3 and remote worker were preserved. The worker remains on its previous optimized build because no worker production code changed. Private activation and test receipts are retained outside Git. The project owner was notified; message submission does not prove that the recipient has read it.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/174-audit-incidents/validation/source-preflight-diagnostics.md#extrait-2).

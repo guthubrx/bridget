@@ -14,18 +14,10 @@ Les wrappers annoncent leurs capacités sur la connexion primaire attestée ;
 un client auxiliaire ne peut ni annoncer des capacités ni produire des faits.
 Les clients anciens sans annonce sont explicitement non compatibles.
 
-T3 : contrat HTTP 098 conservé, complété par lecture locale minimale de
-`userdata/state.sqlite`, colonnes `thread_id, provider_name, resume_cursor_json`
-de `provider_session_runtime`. Jamais d'écriture dans cette base.
-Formes inconnues, IDs multiples, processus périmés → refus de rattachement.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/101-abonnements-t3/contracts/observation.md#extrait-1).
 
 Fenêtre100 conservée : événements reçus par le daemon après abonnement.
 Une fin de tour n'atteste ni succès ni fin de projet. Notifications système
 exclues de l'observation afin de ne pas créer de cycles.
 
-États listés : active, source_unavailable, interrupted. Restart du daemon :
-trace conservée interrupted, nouveau sub requis. Types : available et UUID sources.
-T3 : seule fin latestTurn connue ; activités500 avant compression ; chemins12
-par activité. ÉcrituresCodex attestées uniquement, ClaudeT3 explicitement non
-compatible avec file_written/file_collision. Permissions = demandes observées,
-éventuellement déjà traitées. Catalogue global annonce une couverture partielle.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/101-abonnements-t3/contracts/observation.md#extrait-2).

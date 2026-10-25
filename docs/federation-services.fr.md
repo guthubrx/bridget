@@ -114,7 +114,7 @@ Cartae est le client du tunnel, le Mac en supervise la connexion.
 ## Mise à jour du client Cartae — procédure 161
 
 Cette mise à jour conserve le maître Mac et le tunnel déjà actif. Elle prépare
-uniquement un client Linux ; elle ne rend pas `spawn` distant. Ne relancer ni T3,
+uniquement un client Linux ; elle ne rend pas `spawn` distant. Ne relancer ni application hôte,
 ni le maître, ni son pont, ni le service de fédération pour cette opération.
 
 Le runner versionné est

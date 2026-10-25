@@ -30,13 +30,9 @@ du mandat. Il ne prouve pas un gain chiffré de cette session.
 
 ### D1 — Projet de communication attesté, distinct du domaine
 
-Décision: porter un fait vivant sur la connexion. Utiliser la racine commune Git
-et l'hôte attesté, ou la racine T3 attestée hors Git. Hériter du fait de l'instance
-pour une connexion auxiliaire déjà prouvée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/research.md#extrait-1).
 
-Pourquoi: live_connection_identity et register_auxiliary existent. Les données
-T3 contiennent workspace_root. derive_domain_at peut changer l'étiquette et ne
-prouve pas une appartenance. ProjectReference/runtime est retiré.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/research.md#extrait-2).
 
 Alternatives: comparer domain produit des faux locaux ; recréer un registre
 ajoute une autorité ; vérifier Git à chaque envoi ajoute des entrées/sorties
@@ -107,11 +103,7 @@ acceptée encore en remise. Les anciens messages restent exacts et lisibles.
 
 ## Incertitudes résolues et limites vérifiables
 
-Le choix du projet n'utilise aucun registre retiré. Le rattachement T3 et la
-racine Git sont les seules preuves de cette session. Un chemin distant sans
-preuve exploitable reste inconnu. Une vue globale n'autorise rien. Un ancien
-client inconnu reçoit un warning ; un client dont le projet est prouvé applique
-la même garde que les clients nouveaux.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/138-priorite-projet/research.md#extrait-3).
 
 Tous les choix ci-dessus sont des décisions locales de conception. Aucun gain
 en tokens ni réduction d'erreurs n'est annoncé avant les essais. Les sources

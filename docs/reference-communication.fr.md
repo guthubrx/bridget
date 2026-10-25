@@ -67,22 +67,9 @@ l'UUID complet, si le nom est exploitable ; sinon, l'UUID seul. Le nom n'est
 jamais une autorité. Le prochain enregistrement répare un profil manquant sans
 réécrire les messages anciens ni créer une seconde identité.
 
-Un sous-agent interne T3 attesté peut uniquement consulter l'annuaire et envoyer
-par MCP (`bridget_who`, `bridget_send`). Le message porte l'identité du parent et
-une provenance enfant. La réponse revient au parent. Le sous-agent n'a ni boîte
-de réception ni inscription durable, et la délégation ne lui ouvre pas la CLI.
-Une filiation ambiguë ou périmée est refusée, sans identité devinée.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-14).
 
-Le rendu T3 compact139–141 concerne la présentation. Un lot de messages directs
-reste fermé sur une ligne. À sa première ouverture, le premier message est
-ouvert et les autres sont repliés. Chaque section affiche le nom reçu et les
-120 premiers caractères du corps au maximum, sans sujet inventé. Un UUID seul reste visible.
-Les sections s'ouvrent séparément. Le lot n'affiche ni Sources ni Détails techniques,
-même quand un format ambigu impose le corps entier. La copie conserve le texte
-original du lot. Les autres enveloppes, pièces jointes et actions gardent leur
-comportement. Aucun changement du protocole de transport ni de l'historique.
-Ce rendu est validé en recette isolée ; vérifier séparément la version réellement
-chargée dans T3 avant d'affirmer qu'il est actif dans une application déjà ouverte.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-15).
 
 ### Priorité au projet — session 138
 
@@ -90,10 +77,12 @@ Ce contrat décrit les fonctions de la session138. Il ne constitue pas une preuv
 d'installation du binaire ou de mise à jour d'un catalogue MCP déjà vivant.
 
 L'annuaire de communication et les suggestions visent le même projet par défaut.
-L'appartenance utilise un rattachement attesté T3 ou une racine commune Git et
+L'appartenance utilise un rattachement attesté l’adaptateur de bureau ou une racine commune Git et
 l'hôte attesté. Dépôt, worktree et lien symbolique peuvent partager cette racine.
 Deux dépôts homonymes restent distincts. Le domaine mutable sert à l'affichage.
 Le contrat administratif `ListAgents` conserve son diagnostic global.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-16).
 
 ```sh
 bridget who
@@ -152,10 +141,12 @@ n'accorde rien. Les réponses restent soumises aux contrôles d'accès actuels.
 Le client de fond peut porter `--project-root` sur `send`. `who` et `agents`
 acceptent aussi cette racine explicite. Le daemon valide la racine et l'hôte
 sur la propre connexion Client négociée. Aucun Register d'agent temporaire ni
-identité T3 empruntée. Le contexte ne remplace jamais un fait auxiliaire parent.
+identité l’adaptateur de bureau empruntée. Le contexte ne remplace jamais un fait auxiliaire parent.
 Un client CLI autonome sans racine reste inconnu, y compris who/agents : liste
 locale vide et warning. Aucun cwd implicite ne lui est ajouté. Les agents
-rattachés à T3/wrapper héritent de leur contexte sans option supplémentaire.
+rattachés à adaptateur/wrapper héritent de leur contexte sans option supplémentaire.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-17).
 
 Le client exige la capacité `CommunicationProjectsV1`, valeur protocole
 `communication_projects_v1`, avant le nouveau motif ou la portée scoped.
@@ -209,7 +200,9 @@ rend `envelope_mismatch`. Un refus idempotent mémorisé exige une clé neuve.
 | UI Client attestée | Non par sa seule provenance UI. | Toute la file visible. |
 | Destinataire | Non vers lui-même. | Toute la file visible. |
 | Autre agent ou client nu | Non. | Ses propres messages. |
-| Preuve enfant interne T3 | Refus. | Refus. |
+
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-18).
 
 Un client CLI nu qui écrit `from=human` conserve l’envoi en file. Il ne reçoit
 aucun droit humain de contrôle : refus `intent_not_permitted`, motif
@@ -239,17 +232,7 @@ contrôle. Un crash entre admission durable et émission peut consommer le rythm
 sans effet physique : choix prudent, sans promesse exactement une fois physique.
 Aucun steer agent non consommé ne devient automatiquement une interruption.
 
-Vers T3, seul Claude a un guidage actif natif prouvé. Le steer explicite des
-autres fournisseurs, Cursor inclus, rend `steer_unavailable`. Cursor occupé
-attend même si `mid_turn_ok=true`. Pour Claude occupé, un message ordinaire
-déjà groupable reste immédiat avec ce flag calculé par le daemon pour Attach,
-UI attestée, système interne, parent ou enfant. Pairs et clients nus attendent.
-Deliver historique et DeliverIdempotent suivent cette règle en envoi/reprise.
-La remise immédiate utilise la connexion source réelle. À la récupération, from ne permet jamais d’emprunter une route UI ou humaine ; sans preuve UI persistée, la remise attend normalement. Pour les agents UUID, recalculer les liens depuis les faits actuels.
-Un flag absent impose l’attente ; aucune origine humaine n’est fabriquée.
-REST/V1 ne sait pas porter l’intention explicite : steer/interrupt sont refusés
-localement avant émission, par les erreurs existantes. L’envoi ordinaire reste
-inchangé ; le trajet installé149 est V2.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-19).
 
 La lecture `bridget_queue` prend `target`, comme `bridget_send`.
 CLI : `bridget queue --target '<UUID>'`. La capacité `QueueListV1` est requise.
@@ -313,7 +296,9 @@ Promotion exige `queue_fallback`. `no_active_turn`, `steer_unavailable` ou
 FIFO pleine : rejet explicite et remise indéterminée. Erreur Codex ambiguë après
 guidage : doublon possible. `applied` prouve le commit, jamais l'injection ou la
 consommation du modèle. Aucun avis universel nouveau pour un envoi `reply=false`.
-`edit` du corps, les fils T3 et l'extension 159c restent différés.
+`edit` du corps, les fils l’adaptateur de bureau et l'extension 159c restent différés.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-20).
 
 CLI T022, syntaxe confirmée dans le code des façades :
 
@@ -350,8 +335,10 @@ ancienne sans `turn_attest` garde le chemin actuel, sans rétention.
 
 Sont toujours exclus : origine `Human` ou `System`, intentions `steer` et
 `interrupt`, alertes de fil, observations (`bridget-observation:`), incidents
-délégués (`delegated-runtime-`), messages de mission native et fils T3.
+délégués (`delegated-runtime-`), messages de mission native et fils l’adaptateur de bureau.
 Un type sans `held_queue` ouvert n'utilise pas cette rétention.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-21).
 
 | Situation | Ce que la lecture peut établir |
 |---|---|
@@ -361,7 +348,7 @@ Un type sans `held_queue` ouvert n'utilise pas cette rétention.
 | Message clos ou expiré avant libération | Retiré de la file ; résultat rejeté et auteur prévenu par les voies existantes. |
 
 À l'enregistrement d'une nouvelle instance attestée, avec held_queue ouvert
-et hors T3, le daemon rattache d'abord les retenus et les remises ordinaires
+et dans un terminal, le daemon rattache d'abord les retenus et les remises ordinaires
 encore dispatching, non ACKées et non expirées de l'ancienne instance. Le
 rattachement conserve identité, génération, octets et rang ; la remise
 encore dispatching réserve le tour avant libération du message suivant.
@@ -538,32 +525,13 @@ Une nouvelle destination demande les paramètres manquants seulement avec stdin
 et stdout sur un terminal ; ailleurs, elle affiche les options requises et échoue.
 Voir [le guide des services de fédération](federation-services.fr.md).
 
-## Joindre les fils t3code (session 098)
+## Joindre les fils l’adaptateur de bureaucode (session 098)
 
-Le binaire 098 embarque un pont vers [t3code](https://github.com/pingdotgg/t3code)
-qui ne modifie jamais t3code : il lit son serveur local en boucle locale avec une
-session émise par le CLI officiel `t3`, et présente chaque fil ouvert comme un
-agent Bridget (`TYPE` = fournisseur du fil, `TRANSPORT` t3code, `MODE` cli, nom
-humain = titre du fil).
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-22).
 
-```sh
-bridget t3 install        # session t3 dédiée (t3 auth session issue) + service de pont
-bridget t3 status         # serveur t3code, session, service, fils exposés
-bridget send --to Alpha --reply -- 'Mission…'   # un tour démarre dans le fil « Alpha »
-bridget t3 uninstall      # révoque la session, retire le service, efface l'état du pont
-```
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-23).
 
-Prérequis : t3code démarré (application ou `t3 --mode web --no-browser`) et le
-CLI `t3` installé (`npm i -g t3`). Un message remis attend que le fil soit libre
-(sans limite de durée, file bornée à 64 remises par fil), démarre un tour avec le texte du message, et la réponse
-de ce tour revient à l'expéditeur comme réponse liée : l'appariement suit
-l'ordre FIFO des tours après le dernier tour clos au moment de la remise. La
-session détenue est administrative (t3code 0.0.40 n'en émet pas d'autre) et
-vit uniquement dans un fichier 0600 de l'état Bridget ; un refus 401 déclenche
-un seul renouvellement, un second refus est un échec explicite dans `status`.
-Le journal du fil (`bridget attach`) ne rejoue pas l'historique antérieur à
-l'installation. Le fil archivé disparaît de l'annuaire, jamais de t3code.
-Voir [l'ADR 034](decisions/034-adaptateur-t3code.md).
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-24).
 
 Attente et écartement (sessions 111 à 113) : l'attente d'un fil occupé ne périme
 rien par elle-même et ne consomme pas le budget d'exécution du tour, qui court à
@@ -593,22 +561,9 @@ secondes, au lieu de le laisser attendre jusqu'à l'échéance. Quand l'origine 
 pas pu être relevée, l'ancien appariement par rang s'applique en repli. Voir
 [l'ADR 042](decisions/042-appariement-par-origine-prouvee-et-entretien.md).
 
-Le pont traite les annulations pendant l'attente d'un fil libre : une demande
-annulée avant démarrage ne devient pas un tour ultérieur. L'expiration et les
-rappels automatiques n'ouvrent pas de tour supplémentaire. Une annulation après
-acceptation par t3code ne garantit pas l'interruption du fournisseur. La réponse
-préparée est conservée jusqu'à confirmation, y compris si son destinataire se
-déconnecte ou si le pont redémarre ; sa reprise ne relance pas le travail.
-Le journal conserve les textes longs dans ses bornes ou signale explicitement
-la lacune, sans coupe silencieuse à 4 096 caractères.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-25).
 
-La session 105 réserve le relais automatique aux demandes `reply=true`.
-Les réponses reçues et notifications `reply=false` ne produisent plus de réponse
-automatique en retour. Les anciennes attentes dépourvues de contrat sont
-conservées mais ne sont envoyées qu'après preuve d'une demande encore ouverte.
-Les consignes T3, Claude, Codex, ACP et terminal demandent de ne pas accuser
-réception inutilement. Une nouvelle question explicite reste possible : il
-n'existe pas de filtre sur des mots comme « OK », ni de blocage des envois volontaires.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-26).
 
 La session 102 ajoute les fils partagés : un historique commun à des membres
 autorisés, des dépôts silencieux par défaut, des sollicitations ciblées structurées
@@ -673,30 +628,13 @@ Ne pas doubler les publications par des rafales de messages directs récapitulat
 Les messages directs sans classe restent inchangés ; Bridget ne devine pas lesquels
 sont obsolètes. Les anciens textes déjà livrés ne sont pas supprimés.
 
-Le panneau humain Bridget de T3 (sessions145–146) consulte les fils accessibles
-à la conversation ouverte, sous les contrôles du daemon. Il ne crée ni ACK,
-message, notification, tour fournisseur ou avance du repère de lecture d'un agent.
-Les fils sont triés par activité récente ; les messages, par séquence décroissante.
-Les auteurs et dates sont visibles. Les corps longs se déplient ; leur copie
-conserve le texte complet. La recherche est locale aux données chargées, même
-repliées. Les pages anciennes conservent l'instantané de la première page ;
-rafraîchir permet de consulter les échanges arrivés depuis.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-27).
 
-Le serveur T3 utilise `bridget thread inspect`, voie de consultation distincte
-de `bridget_thread/read`. Exemple de diagnostic dans le namespace vérifié :
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-28).
 
-```sh
-/Users/moi/.local/bin/bridget thread inspect --t3-thread '<UUID_CONVERSATION_T3>' --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget --action list_recent --limit 50 --json
-/Users/moi/.local/bin/bridget thread inspect --t3-thread '<UUID_CONVERSATION_T3>' --project-root /Users/moi/Nextcloud/10.Scripts/64.bridget --action history_recent --thread '<UUID_FIL_BRIDGET>' --limit 50 --json
-```
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-29).
 
-Recopier le curseur reçu avec `list_recent --after '<CURSEUR>'`. Pour l'histoire,
-recopier `next_before_seq` avec `--before-seq` et conserver `snapshot_seq` avec
-`--to-seq`. Ces valeurs ne confèrent aucun accès. La capacité récente
-`human_thread_view_recent_v1` est requise ; un daemon ancien est refusé,
-sans repli vers un autre ordre ni présentation d'un historique vide.
-Installer les versions compatibles sur disque ne recharge pas T3 ni Bridget.
-Le nouveau panneau exige leur prochain redémarrage ; cette livraison ne le déclenche pas.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-30).
 
 La session 103 ajoute le dossier de passation : l'agent rédige objectif, résumé,
 résultats déclarés, décisions, questions, prochain pas, références et limites ;
@@ -704,27 +642,9 @@ résultats déclarés, décisions, questions, prochain pas, références et limi
 déterministe borné à 16 Kio et le transmet par l'envoi idempotent existant. Rien
 n'est lu ni certifié ; le dossier suit la conservation du journal.
 
-**Une seule application t3code à la fois.** Deux applications lancées sur le même
-dossier utilisateur partagent `state.sqlite` et `server-runtime.json` : la
-dernière démarrée s'y déclare, et la première qui se ferme efface ce fichier.
-Le pont continue de servir le serveur auquel il est lié, mais il signale le
-partage dans son journal et dans `bridget t3 status`. Tant que le fichier
-désigne une autre application, un redémarrage du pont ne retrouvera pas le bon
-serveur. Un partage de base entre deux versions différentes peut en outre
-provoquer une migration de schéma que l'ancienne ne saura plus lire.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-31).
 
-La session 101 ajoute le rattachement automatique des appels MCP au fil T3
-réel, lorsque son identité fournisseur et sa filiation de processus sont
-attestées : Codex par le rollout qu'il tient ouvert, Claude par son option de
-session, Cursor par le dossier `acp-sessions` qu'il tient ouvert (session 114).
-Un fil dont le fournisseur n'expose aucune de ces preuves reste joignable, mais
-ses propres appels MCP ne sont pas rattachés. Le pont lit uniquement les
-correspondances de sessions nécessaires dans la base T3, sans la modifier. Ni le titre, ni le projet, ni le fichier le
-plus récent ne servent de preuve. Une ambiguïté entraîne un refus explicite,
-pas le choix arbitraire d'une conversation. Aucun redémarrage de T3 ou d'un
-fournisseur n'est nécessaire à ce mécanisme. Les événements proposés restent
-ceux annoncés par la source dans `bridget events types` ; voir
-[l'ADR 037](decisions/037-observations-t3-attestees.md).
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-32).
 
 ## Claude Code interactif, sans tmux (session 097)
 
@@ -746,7 +666,7 @@ sans tmux. Sans terminal, le lancement est refusé avec l'alternative
 explicitement passé par l'utilisateur est relayé tel quel. Le journal de
 session relaie les tours humain et assistant lus dans le transcript Claude ;
 `bridget attach <UUID>` fonctionne comme sur Codex interactif. Une session
-Claude hors T3 a donc deux routes vers une identité attestée : `bridget claude`
+Claude dans un terminal a donc deux routes vers une identité attestée : `bridget claude`
 (ou ses alias historiques `gclaude` et `claude-son`, même type) et
 `bridget spawn claude`. Une session Claude lancée autrement n'est pas joignable
 par Bridget. Les autres
@@ -828,7 +748,7 @@ explicitement sandbox et approbations Codex ; il n'est jamais ajouté par défau
 
 ## Coordination native depuis la ligne de commande
 
-Un agent Bridget authentifié peut déléguer sans T3 :
+Un agent Bridget authentifié peut déléguer par le parcours natif Bridget :
 
 ```sh
 bridget delegate "Relis le plan et rends les défauts prioritaires"
@@ -1078,7 +998,7 @@ détaillent l'abonnement, sa prolongation/annulation, le partage avec un relecte
 et les alertes de fichiers. Aucun nouveau profil ni formulaire à remplir.
 
 Bridget sait transmettre un extrait exact du journal et prévenir un agent d'un
-fait observable. Ces fonctions sont indépendantes de T3 et du service compagnon : elles
+fait observable. Ces fonctions sont natives Bridget et du service compagnon : elles
 n'ajoutent ni mandat, ni validation obligatoire, ni verrou sur les fichiers.
 Remplacer les UUID d'exemple par ceux de `bridget agents --json` :
 
@@ -1117,7 +1037,7 @@ L'abonnement concerne les faits reçus par le daemon après sa création, sans
 relecture de l'historique ; un fait déjà produit mais encore en transit peut
 donc le déclencher. Ce n'est pas une synchronisation des horloges des agents.
 Les fins de tour corrélées viennent des pilotes gérés ACP, Claude stream-json,
-Codex app-server et de l'adaptateur T3. Pour T3, seules les fins explicites
+Codex app-server et de l'adaptateur l’adaptateur de bureau. Pour l’adaptateur de bureau, seules les fins explicites
 `completed`, `error` et `interrupted` sont prises en compte, même sans texte
 assistant, si l'origine du tour est attestée. Un tour relayé par le suivant
 avant d'avoir été vu clos compte aussi, avec l'état `ended`, si son origine a
@@ -1130,12 +1050,9 @@ Les écritures viennent d'outils structurés connus et terminés avec succès :
 Claude/ACP Write, Edit et équivalents reconnus, Codex fileChange completed.
 Ni lecture, ni commande shell libre, ni surveillance universelle du disque.
 
-T3 fournit des événements `approval.requested` et certaines écritures Codex
-attestées. **Les écritures de Claude dans T3 ne sont pas couvertes** : la
-projection actuelle perd le chemin `input.file_path` et peut annoncer un outil
-terminé sans résultat confirmant l'écriture. Le pont n'annonce donc pas
-`file_written` pour ces fils. Cela ne change pas les capacités des wrappers
-structurés Bridget utilisés sans T3.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-33).
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-34).
 
 Exemple : « préviens-moi quand Horizon-3D termine » devient un abonnement
 ponctuel `turn_ended` sur son UUID, après vérification de sa présence dans
@@ -1143,21 +1060,19 @@ ponctuel `turn_ended` sur son UUID, après vérification de sa présence dans
 Horizon-3D fini ». Un refus d'abonnement ou une interruption doivent être
 rapportés ; ils ne valent pas une surveillance active.
 
-La couverture T3 reste bornée : `latestTurn` ne décrit que le dernier tour,
-donc plusieurs fins entre deux lectures peuvent être manquées. La fenêtre
-d'activités est limitée à 500 entrées avant compression côté T3, et la
-projection à 12 chemins par activité. Une lacune détectée est signalée ; le
-pont ne reconstruit pas les faits absents et ne promet pas d'exhaustivité.
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-35).
 
 Une collision est un **risque** : deux auteurs, même hôte et même chemin absolu
 normalisé, moins de 30 secondes. Aucun accès au disque, verrou ou fusion Git ;
 les alias par symlink, différences de casse et hôtes mal nommés restent des
 limites. Les faits ne sont pas fédérés entre daemons. Une lacune détectée
-(saturation ou projection T3 incomplète) donne une notice distincte, sans
+(saturation ou projection l’adaptateur de bureau incomplète) donne une notice distincte, sans
 consommer `once`. `events list` expose `facts_lost` pour les pertes quantifiées
 et `observation_gaps` pour les lacunes, même de quantité inconnue ; chaque
 abonnement expose ses propres compteurs. Ces compteurs concernent l'instance
 courante du daemon, distinctement des notifications perdues à la remise.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-36).
 
 Les abonnements ont une durée par défaut d'une heure, un maximum de sept jours,
 une limite de 16 par agent et 128 au total. La fermeture du client auxiliaire
@@ -1223,6 +1138,8 @@ retire les worktrees fusionnés dans main, propres, inoccupés et dont le dernie
 a plus de 24 heures ; leur branche est conservée.
 
 Bridget ne remplace ni un orchestrateur de tâches, ni une revue humaine, ni une
-preuve de travail terminé. L'adaptateur T3 reste séparé du cœur de communication ;
+preuve de travail terminé. L'adaptateur l’adaptateur de bureau reste séparé du cœur de communication ;
 A2A et la greffière ne sont pas requis pour ces observations. Aucun framework
 d'orchestration supplémentaire n'est introduit.
+
+[Détail du contrat de l’adaptateur](adapters/t3.md#note-37).

@@ -12,7 +12,7 @@ La source binaire B `431b78f72bdd73eac4772af17bf36879d7a629d2`, version 0.4.0, e
 
 **Release publiée et vérifiée :** https://github.com/guthubrx/bridget/releases/tag/v0.4.0 . Tag annoté `43202c9de66ce466b76ba05bd3077699ac88ca3d`, cible exacte B ; quatre actifs retéléchargés et hashes conformes. Reçu : /home/moi/10.Scripts/64.bridget/specs/168-routage-flotte/validation/release168.md, SHA-256 `15a7b44610ebe060c47164e6c511606e67c37c4d2e4e85a71c2db5be879b9f5d`. Preuve privée : /home/moi/.local/state/bridget-delivery168/release-0.4.0-431b78f72bdd/publication168.json, SHA-256 `d815ca75ca354ec4941577cb39a29aab62cf641ac71895f2ba69e3f0c8ea9666`.
 
-Santé finale reçue : B en ligne, catalogue 27, pont 32 fils vers 97328 ; DB readonly quick_check ok/FK0, versions 7/12 ; worker B 3767260 actif, configuration inchangée. Application T3 65544 et tunnel 60206 préservés ; le serveur 65608 a été remplacé extérieurement par 97328 né à 16:51:02 CEST, sans signal T3 de notre part. La restriction temporaire de 16:56 CEST est levée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/spec.md#extrait-1).
 
 Preuves existantes :
 
@@ -20,7 +20,7 @@ Preuves existantes :
 - /Users/moi/.cache/bridget-delivery168/final-health/database-health.json — SHA-256 `98feb24442412b8e2ce12d5c6a92e75605c500bd6f67b4e7fc349fc6cebab147` ;
 - /home/moi/.local/state/bridget-delivery168/final-health/cartae-health.json — SHA-256 `a409e7698a2f7ff7bdede77a2a2126eeda0d835052765473f0ef60850818f32a`.
 
-Limites : FULL unique 2820 PASS/32 FAIL/71 ignorés ; 29 échecs initiaux PASS après reprises, trois annulations 159 non validables sur Linux, cause initiale T3 inconnue malgré replay PASS. Deux LOW rustls-webpki et une INFO unsafe-libyaml restent documentés ; aucun GREEN global. Aucun nouvel audit/FULL/P4/build/service/test/modèle par cette rédaction. Aucun retour direct au binaire 0.3.0 après reçu admission v2. Les commits documentaires descendants conservent la source binaire B et ne nécessitent aucune reconstruction.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/spec.md#extrait-2).
 
 Cet état daté prévaut sur les checkpoints historiques ci-dessous, dont les anciennes mentions de publication en préparation. Les DB, preuves et sauvegardes sont protégées.
 
@@ -57,7 +57,7 @@ Fichiers:
 
 État : **In Progress**, 45 tâches cochées sur 56 après T036. Le code est réalisé ; Converge P3 est CONVERGED, la contre-revue T037 et ses corrections sont closes, l’audit T038 et la FULL unique T036 ont leurs reçus. T039 est en publication ; T040 et les étapes de livraison restent à suivre. Ce checkpoint ne coche aucune tâche et ne vaut ni installation ni livraison.
 
-FULL : 2 820 PASS / 32 FAIL / 71 ignorés. Après reprises ciblées, 29 des 32 échecs initiaux passent ; trois annulations 159 restent non validables sur Linux (observateur kqueue Darwin/BSD). La cause du premier échec d’identité T3 reste inconnue malgré son replay PASS. Aucun succès global vert n’est déduit.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/spec.md#extrait-3).
 
 Preuves et état de livraison :
 
@@ -69,10 +69,7 @@ Preuves et état de livraison :
 
 ## Problème et valeur attendue
 
-L’utilisateur veut confier des sous-tâches à sa flotte depuis Bridget, sans dépendre de T3.
-Le choix doit tenir compte des capacités réellement disponibles, des ressources des machines
-et des limites attestées des comptes. Le modèle, sa connexion et sa machine sont trois notions distinctes.
-Une machine saturée peut perdre la préférence donnée à son dépôt ou à son cache déjà préparé.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/spec.md#extrait-4).
 
 Les choix explicites restent prioritaires. L’automatisation aide à choisir ; elle ne crée aucun droit,
 n’authentifie aucun compte et ne transfère pas une mission en cours entre machines.
@@ -182,17 +179,11 @@ et intégrer le travail distant avant de nettoyer son espace.
 **Test indépendant** : une base absente interdit le lancement ; après préparation autorisée du commit,
 le travail distant rapporte ses commits et peut être intégré sur une autre machine.
 
-1. Le commit de départ exact doit être disponible sur la cible avant tout lancement de code.
-2. La continuité d’un dépôt ne force pas la machine ; le coordinateur peut préparer la même base ailleurs.
-3. Le résultat indique la base, la branche, la tête et les modifications non enregistrées.
-4. Un résultat disponible ne signifie pas que le travail est intégré.
-5. Un intégrateur autorisé récupère et vérifie le résultat avant nettoyage ; le daemon ne fait
-   aucun fetch, pull, push ou merge de livraison.
-6. T3 peut rester fermé pendant tout le parcours.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/spec.md#extrait-5).
 
 ## Exigences fonctionnelles
 
-- **FR-001** : Le parcours de création, choix, suivi, reprise et arrêt DOIT fonctionner hors T3.
+- **FR-001** : Le parcours de création, choix, suivi, reprise et arrêt DOIT fonctionner dans un terminal.
 - **FR-002** : Le catalogue DOIT séparer modèle réel, moteur, machine, connexion et effort.
 - **FR-003** : Les versions proposées DOIVENT venir des capacités et déclarations attestées de chaque machine ;
   aucun alias de famille ne DOIT être transformé en version imaginée.
@@ -277,30 +268,7 @@ Deux tâches qui écrivent les mêmes fichiers ne sont pas des sous-tâches ind�
 
 ## Critères de succès mesurables
 
-- **SC-001** : Dans un namespace isolé sans serveur, pont ni configuration T3, une mission automatique locale
-  et une mission distante terminent avec résultat corrélé, sans arrêter le T3 de l’utilisateur.
-- **SC-002** : Un catalogue de douze combinaisons au moins reste complet et sélectionnable sans troncature à huit.
-- **SC-003** : Dans chaque scénario de contrainte explicite testé, aucune sélection ne viole un axe imposé.
-- **SC-004** : Deux comptes distincts du même fournisseur conservent des faits de quotas séparés dans tous les scénarios prévus.
-- **SC-005** : Dans la chaîne réelle, une machine franchement saturée ne peut pas être choisie par le service
-  ou le petit décideur lorsqu’une autre machine admissible est prouvée disponible, malgré le bonus de continuité.
-  Une machine imposée saturée refuse sans bascule ; le rejeu conserve le choix déjà durable.
-- **SC-006** : Les trois issues service valide, petit décideur valide et dernier repli sont chacune prouvées.
-  Le service choisit sur un ensemble entier qui tient dans ses bornes attestées, huit options au plus par
-  prudence initiale ; la matrice12+est prouvée par le petit décideur réel et le score, avec indisponibilité
-  de capacité explicite si le service ne peut tout représenter. Les niveaux désactivés émettent zéro consultation.
-- **SC-007** : Toute chaîne rend un choix ou une issue explicite avant le budget configuré,
-  hors préparation Git dont le délai reste séparé et borné.
-- **SC-008** : Un rejeu et deux demandes concurrentes donnent au plus une admission ;
-  après redémarrage, zéro nouvelle consultation de décision pour cette clé.
-- **SC-009** : Aucun secret de configuration ou d’authentification, chemin d’authentification ou outil
-  métier/système/réseau/MCP n’est automatiquement injecté. Seul StructuredOutput formate le JSON
-  sans droit d’exécution ; les autres outils/tool_use sont rejetés et la sortie est validée localement. Le brief utilisateur est borné et inerte,
-  sans garantie de détection universelle de secrets ; une réponse invalide ne déclenche aucun effet.
-- **SC-010** : Chaque lancement de code prouvé part du commit demandé ; chaque nettoyage final
-  dispose d’une preuve de récupération et d’absence de travail vivant ou étranger.
-- **SC-011** : Les noms réels et capacités de chaque modèle/connexion activés sont vérifiés sur leur machine ;
-  la documentation distingue clairement les possibilités déclarées et l’activation observée.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/168-routage-flotte/spec.md#extrait-6).
 
 ## Hypothèses et limites explicites
 

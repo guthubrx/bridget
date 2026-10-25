@@ -137,14 +137,7 @@ défautNone. Déclaration simple ; pas de benchmark.
 
 ## C — façades publiées, admission encore en raccordement
 
-- bridget_auto_delegate construit V2 et exige auto_delegate_v2 ; V1 reste un chemin distinct.
-- bridget delegate transmet les axes et résout le SHA de la source locale avant l’enveloppe.
-- delegate --catalogue [--machine] [--json] lit le catalogue sans lancement ; le filtre est local à la CLI.
-- Le maître impose même UID Unix, rôle Client et capacité routing_catalogue_v1. Aucune autorité T3 n’est requise pour cette lecture.
-- Le plan V2 possède son snapshot typé ; ses faits métier sont conservés dans metadata v2 opaque pour E. metadata.decision: Option<LineageDecisionV4> vaut None avant choix, puis l’objet complet fermé source/combinaison au choix.
-- Les constructeurs externes AutoAdmissionReceipt doivent renseigner metadata_version:u8 ; les reçus163 portent1, les nouveaux snapshots168 portent2.
-- Le reçu C laisse explicitement à raccorder : probes B, score/saturation, chaîne service→Claude→score, CAS de choix, Prepare.base_commit et reprise ; A raccorde désormais la projection Lineage.
-- Pour chaque candidat Git Shared/Worktree, expected_base_commit source exact doit atteindre probe et Prepare. Sans SHA, exclure ce candidat par workspace_base_required ; sans candidat restant, refuser globalement. Hors Git Shared général peut omettre le SHA ; un SHA fourni hors Git refuse mismatch. Une erreur technique ne signifie jamais hors Git. Worktree exige Git.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/168-routage-flotte/validation/interfaces168.md#extrait-1).
 
 ### Transfert des lecteurs et projections Lineage à A
 

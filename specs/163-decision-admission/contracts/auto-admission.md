@@ -12,7 +12,7 @@ La configuration domine : si auto_engine=false, moteur figé par contrainte comp
 
 ## Mode conservé au choix final — arbitrage ROOT du 14 octobre 2026
 
-Au point commun finalise_auto_choice, une nouvelle admission AutoDelegate avec auto_engine=false et auto_placement=false, dont le tuple de profil fixe réel est connu et validé, conserve le mode Explicit. Un choix de repli reste Fallback. Hors repli, si au moins un axe est automatique, le mode reste Automatic, même avec un seul candidat. Le parcours Delegate162 historique conserve decision:null lorsque son profil n’est pas connu. Le parcours configuré R3 met en œuvre cette règle selon le journal et les contrôles ciblés indépendamment attestés. La lecture du consommateur T3 confirme les modes ; aucune recette du runtime T3 ni validation de livraison déduite.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/163-decision-admission/contracts/auto-admission.md#extrait-1).
 
 Les preuves sont rattachées à T023/T030/T034 existantes. Cette règle ne donne aucune autorité supplémentaire au choix et ne change pas les contraintes ou les droits.
 
@@ -34,7 +34,7 @@ Après redémarrage, decision_started sans choix ne rappelle pas le service : fa
 
 Proposition Lineage list/show response-version3, résumé decision nullable. V1 et v2 inchangés ; garde humaine toujours distincte. Reader163 : v3 → v2 uniquement pour unsupported_version structuré ; v2 → v1 conserve la compatibilité historique sur unsupported_version ou invalid_request structurés. Au plus trois tentatives initiales, aucune boucle ; un échec de page fait jeter le staging et repartir au début dans la version retenue. Pas de mélange de génération/pages. invalid_request reçu sur v3, timeout et erreur d’autorisation ne déclenchent pas de fallback. Le repli historique v2 → v1 sur invalid_request structuré est conservé, sans l’étendre à v3. Watch, journal et cancel n’utilisent pas ce repli.
 
-Afficher uniquement mode, choix et raison courte dans les surfaces existantes. Aucune raison interprétée comme HTML ou consigne. Ancien reader sans résumé : information de décision indisponible, pas mode explicite inventé. Pas de nouvelle conversation ni vue globale T3. Les surfaces de compatibilité v3 sont identifiées dans l’audit ; leur plan est validé par ROOT après corrections R1 ; leur implémentation reste à vérifier.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/163-decision-admission/contracts/auto-admission.md#extrait-2).
 
 ## Capacité et rétention — distinction existant/proposition
 

@@ -8,57 +8,11 @@ session150 est supposée livrée ; ses apports sont cités par sa spec.
 
 ## R1 - Ce que fait l'existant
 
-- **Dossier de l'enfant.** Avec un parent attesté, le dossier demandé est
-  canonicalisé et doit rester sous le dossier du parent
-  (`native_delegation.rs:421-428`, `path.starts_with(&root)`). Sans fait
-  attesté, `authorize_cwd` applique la racine d'un grant humain ou le projet
-  commun (`native_delegation.rs:227-257`). Le dossier devient `Task.cwd`
-  (`native_delegation.rs:489`). Le lancement revérifie qu'il est canonique
-  (`native_delegation.rs:544-546`).
-- **Droits.** `child_policy` calcule la politique de l'enfant. Pour Claude vers
-  Claude, elle exige `parent.cwd == cwd` (`native_permissions.rs:229-230`) et
-  revérifie le contexte de lancement par chemins de réglages
-  (`native_permissions.rs:169-181`). Pour Codex vers Claude, elle capture un
-  contexte neuf au dossier de l'enfant (`native_permissions.rs:224`). Pour
-  Codex vers Codex et Claude vers Codex, le dossier n'intervient pas.
-- **Aucun code Git d'espace de travail.** Le recensement `worktree` du dépôt ne
-  montre que la résolution du projet commun (`communication.rs:64-127`), la
-  carte de reprise (`wrapper.rs:329-400`) et des champs de contrat T3. Bridget
-  ne crée ni ne supprime aucun worktree.
-- **Carte de reprise.** Le wrapper lit déjà la branche, la tête et les
-  fichiers modifiés du dossier de l'enfant (`wrapper.rs:623-651`) et alerte si
-  ce dossier est le checkout principal d'un dépôt à worktrees liés
-  (`wrapper.rs:552-615`). Ces lectures lancent `git` sans couper
-  `core.fsmonitor` ni les verrous optionnels (`wrapper.rs:572-590`,
-  `:623-641`). L'enfant d'un worktree reçoit ses faits Git sans code nouveau,
-  mais ces lectures doivent être durcies (R8).
-- **Collision.** `FileCollision` compare des chemins absolus normalisés sur
-  30 secondes (`observation.rs:441-460`). Deux chemins différents ne se
-  rencontrent jamais.
-- **Nettoyage de tâche.** `cancel_tree` arrête les enfants puis pose
-  `cleanup_done` (`native_delegation.rs:1380-1478`). Le tick pousse aussi les
-  nettoyages après remise du résultat (`native_delegation.rs:1071-1080`,
-  `:1283-1285`).
-- **Verrou global.** `handle_with_fact` prend le verrou de l'état du daemon et
-  appelle `handle_locked_with_project` pendant toute l'admission
-  (`native_delegation.rs:301-312`). Tout Git exécuté là bloque les autres appels.
-- **Git hors verrou, déjà pratiqué.** `resolve_communication_project` s'exécute
-  avant le verrou et retire `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`
-  (`native_delegation.rs:283-296`, `communication.rs:85-100`).
-- **Processus du wrapper.** Le wrapper est un processus séparé du daemon. Il lance
-  déjà `git` directement, sans confinement (`wrapper.rs:623-641`). Le bac à
-  sable du fournisseur est une politique appliquée par le fournisseur, pas par
-  le wrapper.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/154-isolation-worktree/research.md#extrait-1).
 
 ## R2 - Décision : un paramètre `workspace` sur `bridget_delegate`
 
-- **Décision** : objet optionnel `workspace {strategy, base_ref?, branch?}`,
-  absent par défaut. Même patron que `reply_timeout` de la session150 :
-  `skip_serializing_if = "Option::is_none"`, donc mêmes octets sans le champ.
-- **Raison** : un seul appel reste un seul appel. Aucun nouvel outil MCP.
-- **Rejeté** : un outil `bridget_workspace` séparé ; une option de CLI seule.
-- **T3** : `root` devient `shared`. `existing_worktree` est déjà couvert par
-  `cwd`. `startFromOrigin` est exclu (réseau).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/154-isolation-worktree/research.md#extrait-2).
 
 ## R3 - Décision : worktree créé par le daemon, hors verrou, en deux passes
 
@@ -174,7 +128,7 @@ sans code en plus.
   neutraliser les filtres un par un par `-c` (liste incomplète si une inclusion
   les ajoute, refus plus sûr).
 
-## R5b - Ronde 2 et arbitrage : exécution de Git comme T3, durcie
+## R5b - Ronde 2 et arbitrage : exécution de Git exécution directe de Git, durcie
 
 La contre-revue de ronde 2 montre que les parades de R5 ne forment pas une
 frontière : la configuration peut changer entre le contrôle et l'extraction ou le
@@ -182,25 +136,9 @@ rapport, et `log.showSignature` ou le filtre `clean` d'un `status` lancent un
 programme choisi par le dépôt. Un parent confiné pourrait ainsi obtenir
 l'exécution de code avec les droits du daemon.
 
-**Comparaison avec T3** (`origin/main`) : `GitVcsDriverCore.ts:3418-3419` et
-`:3789` exécutent `git worktree add` avec les droits du serveur pour tout
-appelant ; seul `core.fsmonitor` est coupé ; hooks et filtres ne sont pas
-neutralisés ; le retrait utilise `-c status.showUntrackedFiles=normal`
-(`GitVcsDriver.ts:430`).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/154-isolation-worktree/research.md#extrait-3).
 
-**Décision de l'utilisateur (2026-10-11)** : même modèle que T3, durci. Le
-daemon exécute Git pour tout parent autorisé. Les durcissements de R5 sont tous
-conservés. Le risque résiduel est accepté et écrit tel quel dans la spec et dans
-l'ADR 154. Le cadre est celui de l'ADR 011 : un agent qui tourne sur cette
-machine peut déjà exécuter des commandes et écrire des fichiers (ADR 011,
-« Contexte »). L'hypothèse d'un même compte Unix pour le daemon et le dépôt est
-celle de la spec.
-
-**Alternatives écartées** : Git confiné (`sandbox-exec` présent, déprécié ;
-`bwrap` absent ici ; profil plus large que `workspace-write` ; 33 tâches) ;
-isolation coopérative par lecture des fichiers `.git` (isolation non imposée,
-enfants confinés exclus, rapport non fiable) ; réservation aux parents non
-confinés (valeur réduite, T3 ne le fait pas).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/154-isolation-worktree/research.md#extrait-4).
 
 Les corrections de ronde 2 valables dans tous les cas sont intégrées : rapport
 hors verrou (R7), table de réservations, revalidation sans auto-contradiction,
@@ -300,11 +238,7 @@ supersédé. Aucun changement de `communication.rs` ni de la racine/projet commu
 
 ## R11 - Hors périmètre constaté
 
-- Affichage de la branche dans Lineage T3 : contrat 149 fermé.
-- Retrait automatique d'un worktree : décision humaine.
-- Mesure d'un dépôt volumineux : T002 mesure le dépôt Bridget seulement.
-- Fenêtre de course sur un lien `.worktrees` remplacé entre le contrôle et Git :
-  recontrôle après création, résiduel accepté (R3).
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/154-isolation-worktree/research.md#extrait-5).
 
 ## R12 - Base153 livrée et rapports par ronde
 

@@ -2,13 +2,7 @@
 
 ## Fiche synthèse
 
-Spec: 111-remise-attend-le-tour
-Statut: In Progress
-Priorité: P1
-Tâches: 0/5
-Date: 2026-09-19
-Branche: session-111-remise-attend-le-tour
-Dépendances : adaptateur T3 098, envoi idempotent 099.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/111-remise-attend-le-tour/spec.md#extrait-1).
 
 ## Problème observé
 

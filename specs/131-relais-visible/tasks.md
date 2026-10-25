@@ -1,4 +1,1 @@
-# Tâches 131
-Statut: Implemented - 2/2.
-- [x] T001 Diagnostic sur la base T3 (lecture seule) ; enveloppe reply=yes du pont modifiée ; test `spec131_*`.
-- [x] T002 CHANGELOG.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/131-relais-visible/tasks.md#extrait-1).

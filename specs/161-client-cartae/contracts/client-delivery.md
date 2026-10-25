@@ -27,7 +27,7 @@ Depuis le binaire candidat puis la commande courante : status/who. Séparément,
 
 ## Compatibilité
 
-Aucune évolution du protocole métier, des bases ou des permissions dans161. Le build utilise la source160 déjà livrée sur Mac. La compatibilité affirmée couvre les commandes réellement exercées, pas toutes les plateformes, fournisseurs ou missions distantes. Aucun nouveau runtime T3 chargé.
+[Note technique de l’adaptateur](../../../docs/adapters/t3/archives/specs/161-client-cartae/contracts/client-delivery.md#extrait-1).
 
 ## Extrait versionné de bascule à vérifier en fixture
 

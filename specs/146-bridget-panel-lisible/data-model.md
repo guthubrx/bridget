@@ -22,7 +22,7 @@ La projection d'un remplacement conserve la borne globale `snapshot_seq`, même 
 
 ## État de présentation
 
-L'état de contexte garde la conversation T3, le projet et les protections145 contre les réponses devenues obsolètes. La sélection du fil reste distincte de celle de la conversation.
+[Note technique de l’adaptateur](../../docs/adapters/t3/archives/specs/146-bridget-panel-lisible/data-model.md#extrait-1).
 
 Le corps original sert de source unique à l'affichage, la recherche et la copie. L'état « développé » d'un message et l'état « détails ouverts » sont des choix visuels ; ils ne changent pas le corps, son type ou son verdict. Le changement de contexte ne réutilise pas ces choix pour une autre identité.
 

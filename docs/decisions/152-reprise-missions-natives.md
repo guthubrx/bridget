@@ -191,10 +191,7 @@ Captures de référence :
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/regressions-152-r3-results.json.
 - /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/152-reprise-missions/specs/152-reprise-missions/validation/regressions-152-r4-results.json.
 
-Les anciennes captures restent conservées. Git, installation sur disque
-et processus chargés doivent être prouvés séparément à la livraison.
-L'activation est coordonnée par le principal sans interrompre les autres
-fils T3 ; aucun redémarrage T3 n'est autorisé par cet ADR.
+[Note technique de l’adaptateur](../adapters/t3/archives/docs/decisions/152-reprise-missions-natives.md#extrait-1).
 
 ## Correctifs terminalement retenus avant la validation finale
 
