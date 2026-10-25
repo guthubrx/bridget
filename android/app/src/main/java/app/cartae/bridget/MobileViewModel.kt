@@ -59,6 +59,9 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var transferProgress by mutableStateOf<Float?>(null); private set
     var uploadPending by mutableStateOf(false); private set
     var exportPending by mutableStateOf(false); private set
+    var previewContent by mutableStateOf<String?>(null); private set
+    var previewTitle by mutableStateOf(""); private set
+    var previewMediaType by mutableStateOf(""); private set
     var tasks by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var taskCursor by mutableStateOf<String?>(null); private set
     var taskDetail by mutableStateOf<JSONObject?>(null); private set
@@ -235,6 +238,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         followJob?.cancel(); followJob = null
         try {
             updatePreferences { it.put("selected", agent ?: JSONObject.NULL) }
+            previewContent=null; previewTitle=""; previewMediaType=""
             selected = agent
             tailPending = true; olderBefore = null
             attachments = emptyList(); attachmentCursor = null; tasks = emptyList(); taskCursor = null
@@ -459,6 +463,17 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             + receipt.getString("artifact_ref") + "; version_ref=" + receipt.getString("version_ref")
             + "; sha256=" + envelope.getString("expected_digest") + "]")
         editDraft(draft + text)
+    }
+    fun closePreview() { previewContent=null; previewTitle=""; previewMediaType="" }
+    fun previewFile(metadata: JSONObject) = act {
+        val id=selected?.getString("agent_id") ?: return@act
+        val title=metadata.getString("title")
+        if(!isTextPreview(title,metadata.getString("media_type")) || metadata.getLong("byte_length") !in 1..262_144) throw MobileFailure("preview_unavailable")
+        val bytes=client.download(id,metadata)
+        if(selected?.optString("agent_id")!=id) throw MobileFailure("command_origin_changed")
+        val decoder=Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+        val text=withContext(Dispatchers.Default) { decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString() }
+        previewTitle=title;previewMediaType=metadata.getString("media_type");previewContent=text
     }
     fun beginExport(metadata: JSONObject): String? {
         if (busy) return null

@@ -130,7 +130,7 @@ class LocalStore(context: Context, databaseName: String = "bridget-private.db", 
     @Synchronized fun enqueueFile(agentId: String, name: String, mediaType: String, input: InputStream, commandId: String = UUID.randomUUID().toString()): JSONObject {
         require(name.isNotBlank() && name.toByteArray(Charsets.UTF_8).size <= 240
             && name != "." && name != ".." && name.none { it.isISOControl() || it == '/' || it == '\\' }) { "invalid_file" }
-        require(mediaType in setOf("application/pdf", "text/plain", "image/png", "image/jpeg")) { "invalid_file" }
+        require(mediaType in setOf("application/pdf", "text/plain", "text/html", "text/markdown", "image/png", "image/jpeg")) { "invalid_file" }
         require(UUID.fromString(agentId).toString() == agentId)
         check(list("command:").size < 256) { "device_storage_limit" }
         val session = get("session") ?: throw MobileFailure("authorization_required")

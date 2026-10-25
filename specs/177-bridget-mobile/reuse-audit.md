@@ -277,3 +277,28 @@ Dernière retouche de libellé : lecture de work-log/presentation.ts, branche
 command_execution. La commande et le statut sont deux informations distinctes.
 Bridget conserve ses données natives et retire seulement le préfixe répétitif
 lorsqu’un nom ou une commande existe. Aucun changement de transport.
+
+
+## Lecture riche et reprise du 25 octobre
+
+REUTILISER le téléchargement authentifié BridgetClient.download, son contrôle
+SHA-256 et les gardes natives d’appareil/conversation. CREER RichContent.kt :
+la recherche dans ConversationText et les dépendances Android ne trouve que
+le rendu partiel gras/code, sans parseur Markdown complet ni coloration.
+Markwon 4.6.2 et Highlights 1.0.0 remplacent ce rendu partiel ; WebView appartient
+à Android. Aucun client HTTP, magasin d’artefacts ou moteur d’exécution nouveau.
+Les extensions tables, cases à cocher et barré sont explicites et verrouillées.
+
+Référence T3 lue : ChatMarkdown.tsx utilise react-markdown, remark-gfm et son
+service de coloration. FilePreviewPanel.tsx:207–227 place le document HTML dans
+un iframe isolé. Mécanisme réutilisable : un vrai parseur et un rendu de document
+distinct du texte source. Différence Android validée : moteur natif embarqué,
+HTML statique, sans scripts ni ressources externes ; aucun appel à T3.
+
+Défaut observé sur Pixel : l’ouverture de Fichiers conservait la liste vide
+jusqu’à Actualiser. FilePanel ne déclenchait aucune lecture à son montage.
+Référence T3 relue : FilePreviewPanel.tsx:977 et ses requêtes d’assets sont
+rattachés au composant monté et à la sélection courante. Bridget réutilise
+vm.files à l’ouverture. Il attend la fin d’une action locale en cours avec
+snapshotFlow.first ; aucun timer ni second état métier n’est introduit.
+Le texte des formats acceptés est aligné en français et en anglais.

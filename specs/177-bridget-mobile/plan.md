@@ -131,3 +131,14 @@ Un contrat mobile versionné, des adaptateurs courts vers les puits existants et
 ## Décision utilisateur — 24 octobre 2026
 
 Première livraison : piloter les agents existants et leurs tâches. La création directe de nouveaux agents est reportée comme extension. L'envoi à un agent existant reste possible ; cet agent applique ses droits de délégation. Le téléphone ne reçoit aucun droit de lancement direct par anticipation.
+
+## Complément lecture riche — r10d
+
+Réutiliser le téléchargement authentifié des pièces jointes, sa vérification de
+SHA-256 et ses contrôles d’appareil. Rendu natif Markwon 4.6.2 (Markdown et tables),
+Highlights 1.0.0 (code), sans service réseau. Les deux bibliothèques remplacent le
+parseur partiel gras/code. Android WebView est réservé à l’aperçu HTML isolé.
+Limiter l’aperçu à 256 Kio, la coloration à 32 K caractères ; conserver le texte
+complet sans couleur au-delà. Calculer le rendu hors du fil UI. Ajouter HTML et
+Markdown à la liste fermée des textes UTF-8 transportés. Aucun nouveau droit.
+Vérifier compilation, tests ciblés, refus d’accès WebView et circuit Pixel.

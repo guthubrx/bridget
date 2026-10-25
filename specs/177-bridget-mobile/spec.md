@@ -171,3 +171,13 @@ QR intercepté ou déjà consommé ; réponse d'association perdue ; téléphone
 ## Hypothèses
 
 Le serveur Cartae et cartae.app sont disponibles, sans coût nouveau. L'accès DNS a été confirmé en lecture. Le téléphone de recette et la configuration des notifications seront requis pour la validation physique. Une absence de ces accès bloque la seule preuve ou livraison qui en dépend, pas le travail indépendant.
+
+## Complément validé — lecture riche mobile
+
+Le 24 octobre, l’utilisateur demande le Markdown, la coloration des principaux
+langages et l’aperçu des fichiers HTML. L’affichage reste autonome : bibliothèques
+Android embarquées, aucune API d’une interface de bureau appelée par le téléphone.
+Les messages et sorties restent sélectionnables. Un langage inconnu reste lisible
+sans couleur. Un aperçu HTML s’ouvre sur action humaine, sans script, navigation,
+fichier local ou requête réseau. Le contenu provient du journal ou d’un fichier
+explicitement partagé dans Bridget, avec portée et empreinte vérifiées.

@@ -649,6 +649,53 @@ mod tests {
         assert_eq!(f.deliveries(), 0);
     }
     #[test]
+    fn mobile177_generated_html_is_listed_and_read_only_in_its_conversation() {
+        let f = Fixture::new();
+        let (key, _) = full_device(&f);
+        let (db, blobs, instance, project) = {
+            let st = f.state.lock().unwrap();
+            let (_, instance, project) = artifact_access_scope(&st, "conn-1").unwrap();
+            (st.db_path.clone(), st.artifact_root.clone(), instance, project)
+        };
+        let html = "<article><h1>Document généré</h1></article>";
+        let mut publication: crate::artifact_types::ArtifactPublicationV1 = serde_json::from_str(
+            include_str!("../../tests/fixtures/artifacts/chart-external-v1.json"),
+        ).unwrap();
+        publication.kind = crate::artifact_types::ArtifactKind::Html;
+        publication.payload = serde_json::json!({"html": html});
+        let context = crate::artifact_store::ArtifactPublicationContext {
+            project_id: project.clone(),
+            conversation_reference: format!("conversation:{project}:{}", f.agent),
+            turn_reference: "turn:mobile177-html".into(),
+            created_by: f.agent.clone(),
+            origin_instance: instance,
+            observed_at: unix_timestamp(),
+        };
+        let mut service = ArtifactService::open(&db, &blobs, Default::default()).unwrap();
+        service.publish(context, publication).unwrap();
+        let call = |operation| value(handle("phone", MobileOperationRequest {
+            credential: IdentityCredential::new(key.clone()), operation,
+        }, &f.state));
+        let page = call(MobileOperation::ArtifactList {
+            agent_id: f.agent.clone(), after: None, limit: 50,
+        });
+        assert_eq!(page["status"], "ok", "{page}");
+        let item = &page["items"][0];
+        assert_eq!(item["media_type"], "text/html");
+        assert_eq!(item["digest"], crate::artifact_types::sha256_hex(html.as_bytes()));
+        let read = |agent| call(MobileOperation::ArtifactRead {
+            agent_id: agent,
+            artifact_ref: item["artifact_ref"].as_str().unwrap().into(),
+            version_ref: item["version_ref"].as_str().unwrap().into(),
+            offset: 0, limit: 16384,
+        });
+        let bytes: Vec<u8> = serde_json::from_value(read(f.agent.clone())["chunk"]["bytes"].clone()).unwrap();
+        assert_eq!(bytes, html.as_bytes());
+        assert_eq!(read(Uuid::new_v4().to_string())["code"], "not_found");
+        assert_eq!(f.deliveries(), 0);
+    }
+
+    #[test]
     fn mobile177_http_eight_mib_file_replays_one_native_publication() {
         use bridget_transport::protocol::MobileFileUpload;
         let f = Fixture::new();

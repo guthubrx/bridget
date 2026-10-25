@@ -152,3 +152,23 @@ FCM receiver token. Only the receiver registration moves to the current pairing;
 credentials, scope and rights of either pairing do not move.
 
 The launcher uses the Bridget b on black. Tool rows show their name or command directly; expand a row for its input and result.
+
+
+## Markdown, code and HTML previews
+
+Replies render headings, lists, tables, task lists, strikethrough and code blocks.
+Python, JavaScript/JSON, TypeScript, Rust, Kotlin, Java, C/C++, C#, Go, PHP, Ruby,
+Swift, Dart, Perl and shell commands support syntax highlighting. Unknown
+languages remain readable text. Highlighting is limited to 32,768 characters
+per block; longer code remains complete without highlighting.
+
+Tap **HTML preview** below an HTML code block. For a shared file, open the
+conversation menu, then **Files** and **Preview**. Opening Files loads its list.
+Markdown files render as Markdown; source files retain their literal code.
+Previews accept up to 256 KiB of UTF-8 text. **Save a verified copy** keeps the
+complete file within the general 8 MiB limit.
+
+Rendering is bundled in Android and does not contact a desktop interface.
+HTML previews are static: embedded styles are allowed; scripts, forms,
+navigation, local file access and external resources are disabled. Documents
+that require those features will not be fully interactive in this preview.

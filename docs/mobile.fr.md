@@ -160,3 +160,23 @@ peut réutiliser son jeton FCM. Seul l’enregistrement de réception passe à
 l’association courante. Les identifiants, portées et droits ne sont pas transférés.
 
 Le lanceur affiche le b Bridget sur fond noir. Les lignes d’outil affichent directement leur nom ou commande ; le dépliage montre l’entrée et le résultat.
+
+
+## Markdown, code et aperçu HTML
+
+Les réponses affichent titres, listes, tableaux, cases à cocher, texte barré et
+blocs de code. Le code Python, JavaScript/JSON, TypeScript, Rust, Kotlin, Java,
+C/C++, C#, Go, PHP, Ruby, Swift, Dart, Perl et les commandes shell peuvent être
+colorés. Un langage inconnu reste du texte lisible. La coloration est limitée
+à 32 768 caractères par bloc ; le reste du texte demeure complet.
+
+Sous un bloc HTML, touchez **Aperçu HTML**. Pour un fichier partagé, ouvrez le
+menu de conversation, puis **Fichiers** et **Aperçu**. La liste se charge à son
+ouverture. Les fichiers Markdown sont rendus ; les fichiers de code conservent
+leur texte. L’aperçu accepte au plus 256 Kio de texte UTF-8. **Enregistrer une
+copie vérifiée** conserve le fichier complet, dans la limite générale de 8 Mio.
+
+Le rendu est embarqué dans Android et ne contacte aucune interface de bureau.
+L’aperçu HTML est statique : styles intégrés autorisés, scripts, formulaires,
+navigation, accès au disque et ressources externes désactivés. Un document qui
+exige ces fonctions ne sera donc pas entièrement interactif dans cet aperçu.

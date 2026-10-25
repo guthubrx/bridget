@@ -192,7 +192,7 @@ class BridgetClient(private val store: LocalStore) {
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         val total = metadata.getLong("byte_length")
         if (total !in 1..LocalStore.MAX_FILE_BYTES.toLong()
-            || metadata.getString("media_type") !in setOf("application/pdf", "text/plain", "image/png", "image/jpeg")) throw MobileFailure("invalid_file")
+            || metadata.getString("media_type") !in setOf("application/pdf", "text/plain", "text/html", "text/markdown", "image/png", "image/jpeg")) throw MobileFailure("invalid_file")
         val digest = metadata.getString("digest")
         if (!digest.matches(Regex("[0-9a-f]{64}"))) throw MobileFailure("invalid_file")
         val output = ByteArrayOutputStream()

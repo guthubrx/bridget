@@ -82,7 +82,7 @@ fn valid_file_name(name: &str) -> bool {
 fn allowed_media(media: &str) -> bool {
     matches!(
         media,
-        "application/pdf" | "text/plain" | "image/png" | "image/jpeg"
+        "application/pdf" | "text/plain" | "text/html" | "text/markdown" | "image/png" | "image/jpeg"
     )
 }
 fn valid_bytes(media: &str, bytes: &[u8]) -> bool {
@@ -92,7 +92,7 @@ fn valid_bytes(media: &str, bytes: &[u8]) -> bool {
             "application/pdf" => bytes.starts_with(b"%PDF-"),
             "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
             "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
-            "text/plain" => std::str::from_utf8(bytes).is_ok_and(|s| {
+            "text/plain" | "text/html" | "text/markdown" => std::str::from_utf8(bytes).is_ok_and(|s| {
                 !s.chars()
                     .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
             }),
@@ -120,7 +120,7 @@ fn metadata(
             d.item.artifact_ref == artifact && d.item.conversation_reference == binding.conversation
         })
         .ok_or("not_found")?;
-    if !matches!(detail.item.kind, ArtifactKind::Image | ArtifactKind::File) {
+    if !matches!(detail.item.kind, ArtifactKind::Image | ArtifactKind::File | ArtifactKind::Html) {
         return Err("file_type_unavailable");
     }
     let payload = &detail.publication.payload;
@@ -132,7 +132,8 @@ fn metadata(
         .version_blob(&binding.project, version, digest)
         .map_err(|_| "storage_unavailable")?
         .ok_or("not_found")?;
-    if !allowed_media(&blob.media_type) {
+    let media = if blob.media_type == "text/html; charset=utf-8" { "text/html" } else { blob.media_type.as_str() };
+    if !allowed_media(media) {
         return Err("file_type_unavailable");
     }
     if blob.byte_length > MAX_FILE_BYTES as u64 {
@@ -140,7 +141,7 @@ fn metadata(
     }
     Ok(
         json!({"artifact_ref":artifact,"version_ref":version,"title":detail.item.title,
-        "state":detail.item.state,"media_type":blob.media_type,"byte_length":blob.byte_length,"digest":digest}),
+        "state":detail.item.state,"media_type":media,"byte_length":blob.byte_length,"digest":digest}),
     )
 }
 
@@ -429,5 +430,20 @@ fn publication(upload: &MobileFileUpload, key: &str) -> ArtifactPublicationV1 {
         quality_notices: vec![],
         parent_artifact_ref: None,
         publication_reason: PublicationReason::Initial,
+    }
+}
+
+#[cfg(test)]
+mod rich_text_tests {
+    use super::*;
+    #[test]
+    fn mobile177_html_markdown_are_utf8_files_not_executable_media() {
+        for media in ["text/html", "text/markdown"] {
+            assert!(allowed_media(media));
+            assert!(valid_bytes(media, "<h1>Bonjour</h1>\n**Texte**".as_bytes()));
+            assert!(!valid_bytes(media, &[0xff, 0xfe]));
+            assert!(!valid_bytes(media, b"a\0b"));
+        }
+        assert!(!allowed_media("application/javascript"));
     }
 }

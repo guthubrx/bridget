@@ -29,6 +29,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -87,7 +88,7 @@ class MainActivity : ComponentActivity() {
                     onScan = { scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                         .setPrompt(getString(R.string.scan_prompt)).setBeepEnabled(false).setBarcodeImageEnabled(false)) },
                     onConfirm = { scanned?.let(model::associate); scanned = null }, onDismiss = { scanned = null },
-                    onPick = { if (model.beginFileSelection()) filePicker.launch(arrayOf("application/pdf", "text/plain", "image/png", "image/jpeg")) },
+                    onPick = { if (model.beginFileSelection()) filePicker.launch(arrayOf("application/pdf", "text/plain", "text/html", "text/markdown", "image/png", "image/jpeg")) },
                     onExport = { metadata -> model.beginExport(metadata)?.let(fileExporter::launch) },
                     onNotifications = { if (model.notificationsEnabled) model.changeNotifications(false) else enableNotifications() })
             }
@@ -382,7 +383,7 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSO
                                 else if (user) Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh,
                                     modifier = Modifier.widthIn(max = 340.dp)) {
                                     SelectionContainer { Text(if (technical) eventText(event) else conversationBody(eventText(event), true, localMessages), Modifier.padding(14.dp), style = MaterialTheme.typography.bodyLarge) }
-                                } else SelectionContainer { Text(messageMarkup(eventText(event)), style = MaterialTheme.typography.bodyLarge, lineHeight = 25.sp) }
+                                } else RichMarkdown(eventText(event))
                                 Text(conversationTime(event.optString("ts")), Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp),
                                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -504,11 +505,11 @@ private fun ToolActivity(event: JSONObject) {
         if(expanded) Column(Modifier.padding(horizontal=8.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
             if(input!=null) {
                 Text(stringResource(R.string.tool_input),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                SelectionContainer { Text(input,fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall) }
+                HighlightedCode(input,if(category==R.string.activity_command) "shell" else if(input.trimStart().firstOrNull() in setOf('{','[')) "json" else null)
             }
             if(output!=null) {
                 Text(stringResource(R.string.tool_output),style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                SelectionContainer { Text(output,fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall) }
+                HighlightedCode(output,if(output.trimStart().firstOrNull() in setOf('{','[')) "json" else null)
             }
             if(p.has("exit_code") && !p.isNull("exit_code")) Text(stringResource(R.string.tool_exit,p.optInt("exit_code")),style=MaterialTheme.typography.labelSmall)
             if(p.optBoolean("details_truncated")) Text(stringResource(R.string.tool_details_partial),style=MaterialTheme.typography.labelSmall)
@@ -527,20 +528,31 @@ private fun hasMessageText(event: JSONObject): Boolean {
     }
 }
 
-private fun messageMarkup(value: String) = buildAnnotatedString {
-    val tokens = Regex("\\*\\*([^*\\n]+)\\*\\*|`([^`\\n]+)`")
-    var offset = 0
-    for (match in tokens.findAll(value)) {
-        append(value.substring(offset, match.range.first))
-        if (match.groups[1] != null) withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(match.groupValues[1]) }
-        else withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(match.groupValues[2]) }
-        offset = match.range.last + 1
-    }
-    append(value.substring(offset))
-}
-
 @Composable
 private fun FilePanel(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSONObject) -> Unit) {
+    LaunchedEffect(vm.selected?.optString("agent_id")) {
+        snapshotFlow { vm.busy }.first { !it }
+        vm.files()
+    }
+    vm.previewContent?.let { text ->
+        if (isHtmlPreview(vm.previewTitle, vm.previewMediaType)) {
+            HtmlPreview(text, vm::closePreview)
+        } else {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = vm::closePreview,
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+            ) {
+                Surface(Modifier.fillMaxSize()) {
+                    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+                        .padding(16.dp).verticalScroll(rememberScrollState())) {
+                        TextButton(onClick = vm::closePreview) { Text(stringResource(R.string.dismiss)) }
+                        if (isMarkdownPreview(vm.previewTitle, vm.previewMediaType)) RichMarkdown(text)
+                        else HighlightedCode(text, vm.previewTitle.substringAfterLast('.'))
+                    }
+                }
+            }
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.file_limits), style = MaterialTheme.typography.bodySmall)
         Row {
@@ -556,6 +568,7 @@ private fun FilePanel(vm: MobileViewModel, onPick: () -> Unit, onExport: (JSONOb
                         else {
                             Text(file.getString("media_type") + " · " + file.getLong("byte_length") + " " + stringResource(R.string.bytes))
                             OutlinedButton(onClick = { onExport(file) }, enabled = !vm.busy) { Text(stringResource(R.string.save_file)) }
+                            if(isTextPreview(file.getString("title"),file.getString("media_type"))) TextButton(onClick={vm.previewFile(file)},enabled=!vm.busy) { Text(stringResource(R.string.preview_file)) }
                         }
                     }
                 }
@@ -850,6 +863,7 @@ private fun errorText(code: String): Int = when (code) {
     "command_origin_changed" -> R.string.command_origin_error
     "authorization_origin_changed" -> R.string.authorization_origin_error
     "device_storage_unavailable", "device_storage_locked", "device_storage_invalid", "device_storage_limit" -> R.string.storage_error
+    "preview_unavailable" -> R.string.preview_unavailable
     "invalid_file", "payload_too_large", "file_export_incomplete" -> R.string.file_unavailable
     "choice_not_offered" -> R.string.choice_not_offered
     "question_already_resolved" -> R.string.question_already_resolved

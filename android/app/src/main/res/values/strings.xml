@@ -55,7 +55,7 @@
  <string name="follow_paused">Live follow paused. Read the conversation or reconnect.</string>
  <string name="history_restart">Read from the beginning</string>
  <string name="attach">Attach a file</string>
- <string name="file_limits">PDF, UTF-8 text, PNG or JPEG. Maximum 8 MiB per file. Local encrypted staging: 32 MiB.</string>
+ <string name="file_limits">PDF, UTF-8 text, HTML, Markdown, PNG or JPEG. Maximum 8 MiB per file. Local encrypted staging: 32 MiB.</string>
  <string name="resume_file_selection">Resume file selection</string>
  <string name="file_unavailable">File unavailable or refused</string>
  <string name="bytes">bytes</string>
@@ -187,4 +187,8 @@
  <string name="tool_exit">Exit code: %1$d</string>
  <string name="tool_details_partial">Long output: the displayed excerpt is limited.</string>
  <string name="tool_details_unavailable">Some details were not provided by the source.</string>
+<string name="preview_html">HTML preview</string>
+<string name="preview_file">Preview</string>
+<string name="preview_html_static">Local preview · scripts and external resources disabled</string>
+<string name="preview_unavailable">Preview unavailable. You can save the file.</string>
 </resources>

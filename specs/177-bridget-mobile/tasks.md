@@ -65,10 +65,10 @@ Le périmètre complet des huit scénarios est conservé. Les cases ne sont coch
 
 ## US8 — Livraison complète
 
-- [ ] T034 [US8] Réutiliser l'installation pour le composant serveur et le raccordement des machines ; documenter commandes et prérequis dans docs/mobile.md et docs/mobile.fr.md. (FR-021, FR-024, FR-027)
+- [x] T034 [US8] Réutiliser l'installation pour le composant serveur et le raccordement des machines ; documenter commandes et prérequis dans docs/mobile.md et docs/mobile.fr.md. (FR-021, FR-024, FR-027)
 - [x] T035 [US8] Signer l'APK avec une clé privée sauvegardée et ajouter la vérification de mise à jour dans android/ et le canal de publication existant ; préserver données locales et compatibilité. (FR-020, FR-022)
 - [ ] T036 [US8] Exécuter les parcours QR, Wi-Fi/4G, erreurs, fichiers et mise à jour sur téléphone ; produire les preuves UI réelles et le bilan dans validation/acceptance.md. (FR-001, FR-003, FR-010, FR-011, FR-013, FR-015, FR-022, FR-023)
-- [ ] T037 [US8] Terminer les documentations publiques EN/FR dans docs/mobile.md, docs/mobile.fr.md, docs/README.md et README.md ; vérifier les liens et l'absence de secret. (FR-024, FR-025, FR-026)
+- [x] T037 [US8] Terminer les documentations publiques EN/FR dans docs/mobile.md, docs/mobile.fr.md, docs/README.md et README.md ; vérifier les liens et l'absence de secret. (FR-024, FR-025, FR-026)
 - [ ] T038 Exécuter Converge après la dernière implémentation, sans modifier le code ; tracer correspondance FR/code/test dans specs/177-bridget-mobile/validation/convergence.md. (FR-001, FR-027)
 - [ ] T039 Faire la contre-revue d'implémentation si admise et l'audit applicable ; lire la décision et les blocages dans specs/177-bridget-mobile/validation/audit.md. (FR-003, FR-025, FR-026)
 - [ ] T040 Intégrer et pousser les sources et artefacts après les gates ; vérifier le SHA distant et les paquets installés dans specs/177-bridget-mobile/validation/delivery.md. (FR-021, FR-022, FR-024, FR-027)
@@ -132,3 +132,27 @@ outils ont été vus sur le Pixel. La notification réelle est enregistrée par
 Android et sa réception est confirmée par l’utilisateur. Son ouverture par
 toucher, les recettes 4G/Mac éteint et les autres tâches ouvertes ci-dessus ne
 sont pas considérées comme validées.
+
+## Lecture riche demandée sur le Pixel
+
+- [x] T057 Remplacer le Markdown partiel par le rendu natif, ajouter la coloration du code et qualifier les principaux langages.
+- [x] T058 Ouvrir les blocs HTML et fichiers partagés dans un aperçu isolé ; préserver les droits et vérifier le circuit réel sur le Pixel.
+
+
+## Recette de reprise — 25 octobre 2026
+
+- [x] T059 Charger les fichiers à l’ouverture, conserver le bouton Actualiser et
+  aligner les formats FR/EN. RED observé puis GREEN sur le Pixel après mise à jour.
+
+T057/T058 : Markdown et Python coloré vus dans cette conversation ; aperçu de
+bloc HTML ouvert puis fermé. Import HTML via le sélecteur Android, aperçu du
+fichier partagé et export vérifié par SHA-256. Les tests natifs couvrent aussi
+un artefact Html produit par le service canonique, son type avec charset et le
+refus de lecture depuis une autre conversation. 69 PASS, 1 recette d’origine
+ignorée ; Android 14 PASS, lintRelease/assembleRelease PASS.
+
+Le client HTTPS, l’annuaire, les tâches et les notifications sont implémentés.
+Les cases de recette plus larges restent ouvertes : la présente reprise ne
+remplace pas une instruction et son résultat sur chaque réseau ni le test Mac
+réellement éteint. Le détail par tâche et la prochaine action figurent dans
+validation/r10e.md. Statut global : In Progress.

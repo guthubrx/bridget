@@ -55,7 +55,7 @@
  <string name="follow_paused">Suivi en pause. Relisez la conversation ou reconnectez-vous.</string>
  <string name="history_restart">Relire depuis le début</string>
  <string name="attach">Joindre un fichier</string>
- <string name="file_limits">PDF, texte UTF-8, PNG ou JPEG. Maximum 8 Mio par fichier. Conservation locale chiffrée : 32 Mio.</string>
+ <string name="file_limits">PDF, texte UTF-8, HTML, Markdown, PNG ou JPEG. Maximum 8 Mio par fichier. Conservation locale chiffrée : 32 Mio.</string>
  <string name="resume_file_selection">Reprendre la sélection du fichier</string>
  <string name="file_unavailable">Fichier indisponible ou refusé</string>
  <string name="bytes">octets</string>
@@ -187,4 +187,8 @@
  <string name="tool_exit">Code de sortie : %1$d</string>
  <string name="tool_details_partial">Sortie longue : l’extrait affiché est limité.</string>
  <string name="tool_details_unavailable">Certains détails n’ont pas été transmis par la source.</string>
+<string name="preview_html">Aperçu HTML</string>
+<string name="preview_file">Aperçu</string>
+<string name="preview_html_static">Aperçu local · scripts et ressources externes désactivés</string>
+<string name="preview_unavailable">Aperçu indisponible. Tu peux enregistrer le fichier.</string>
 </resources>
