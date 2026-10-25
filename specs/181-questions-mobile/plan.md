@@ -1,6 +1,6 @@
 # Plan181 — Questions natives Bridget
 
-Statut : prêt après audit de réutilisation et Analyze ; contre-revue plan indisponible (api_error).
+Statut : livré avec conservations justifiées.25/25tâches ; ConvergeP1/P2/P3 ; auditpass14/14 ; source0.6.2et release publiées. Contre-revue indépendante sans verdict (api_error/délai), réserves et reçus de livraison conservés.
 
 ## Architecture et réutilisation
 

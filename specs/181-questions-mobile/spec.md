@@ -1,6 +1,6 @@
 # 181 — Questions humaines natives Bridget sur Android et terminal
 
-Statut : Implemented (25/25 tâches) ; pipeline In Progress. Demande approuvée par invocation my-specify-all le25octobre2026.
+Statut : Implemented (25/25 tâches) ; pipeline Livré avec conservations justifiées. Demande approuvée par invocation my-specify-all le25octobre2026.
 
 ## Demande initiale et choix validés
 
