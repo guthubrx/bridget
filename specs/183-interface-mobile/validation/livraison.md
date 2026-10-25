@@ -107,8 +107,7 @@ Aucun niveau maximal ou score global de qualité100n’est revendiqué.
 
 Réserves : aucune FULL, ni charge/heap approfondis ; voix réelle et Pixel non
 qualifiés ; le compactage spontané d’un modèle n’a pas été observé. Le cycle
-réel de journal contrôlé est vérifié. Les quatre refus de source/protocole ne
-sont pas remplacés par une imitation textuelle. Aucun client desktop développé.
+réel de journal contrôlé est vérifié. Aucun client desktop développé.
 
 ## Disque et runtime
 
@@ -201,3 +200,16 @@ concurrente non résolue. Aucune clôtureImplemented ne remplace une activation.
 
 Première tâche fonctionnelle non cochée : **aucune**. Reste opérationnel :
 activation Linux et contrôle/cleanup associé. Pipeline **In Progress**.
+
+## Contrôle de clôture documentaire
+
+main021a103c21fdbf5aff2654f24c99890a96a0df8e poussé et comparé au distant,
+CI40238273752PASS. Les trois branches locales183de source/correctif/reçu sont
+retirées après intégration ; aucune de ces branches n’existe au distant. Le
+checkout serveur183reste détaché au tagv0.6.3pour la reprise d’activation.
+Le serveurHTTPdepreuve privé est arrêté, PID67209libéré. L’émulateur reste ouvert.
+
+Passage de nettoyage final :7,67Gio logiques d’intermédiaires Linux supprimés
+par scripts/build.py,3,66Gio reconnus restants. Mac :2,22Gio restants. Les
+refus ponctuels d’observation précédents restent tracés. Aucun gain physique
+APFS revendiqué. Retours, preuves et tâches actives conservés.
