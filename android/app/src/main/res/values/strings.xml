@@ -191,4 +191,7 @@
 <string name="preview_file">Preview</string>
 <string name="preview_html_static">Local preview · scripts and external resources disabled</string>
 <string name="preview_unavailable">Preview unavailable. You can save the file.</string>
+<string name="preview_html_update_required">Update Android System WebView in Google Play to open HTML previews safely. The source code remains available.</string>
+<string name="preview_html_update_action">Open Google Play</string>
+<string name="preview_html_update_manual">Open Google Play and search for Android System WebView.</string>
 </resources>

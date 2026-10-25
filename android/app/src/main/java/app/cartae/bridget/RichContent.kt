@@ -11,6 +11,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.ui.window.DialogProperties
 import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.BoldHighlight
@@ -128,8 +131,25 @@ internal fun isHtmlPreview(title: String,media: String=""): Boolean = media=="te
 internal fun isTextPreview(title: String, media: String): Boolean = media in setOf("text/html","text/markdown") || media=="text/plain" &&
     title.substringAfterLast('.').lowercase() in setOf("html","htm","md","markdown","txt","json","py","js","ts","rs","sh","kt","java","css","sql","yaml","yml")
 
+/** Baseline WebView stable vérifiée le 25 octobre 2026 ; version inconnue refusée. */
+internal fun htmlPreviewEngineAllowed(version: String?): Boolean {
+    if(version==null || !Regex("[0-9]{1,6}(\\.[0-9]{1,6}){3}").matches(version)) return false
+    val parts=version.split('.').map(String::toInt)
+    val minimum=listOf(156,0,8078,48)
+    for(i in parts.indices) if(parts[i]!=minimum[i]) return parts[i]>minimum[i]
+    return true
+}
+
 @Composable
 internal fun HtmlPreview(html: String,onClose: () -> Unit) {
+    val context=LocalContext.current
+    var engineVersion by remember { mutableStateOf<String?>(null) }
+    var updateFailed by remember { mutableStateOf(false) }
+    LifecycleResumeEffect(Unit) {
+        engineVersion=runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
+        onPauseOrDispose { }
+    }
+
     Dialog(onDismissRequest=onClose,properties=DialogProperties(usePlatformDefaultWidth=false)) {
         Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),horizontalArrangement=Arrangement.SpaceBetween) {
@@ -137,7 +157,17 @@ internal fun HtmlPreview(html: String,onClose: () -> Unit) {
                 TextButton(onClick=onClose) { Text(stringResource(R.string.dismiss)) }
             }
             Text(stringResource(R.string.preview_html_static),modifier=Modifier.padding(horizontal=12.dp),style=MaterialTheme.typography.labelSmall)
-            AndroidView(modifier=Modifier.weight(1f).fillMaxWidth(),factory={ context -> WebView(context).apply {
+            if(!htmlPreviewEngineAllowed(engineVersion)) {
+                Text(stringResource(R.string.preview_html_update_required),modifier=Modifier.padding(24.dp))
+                TextButton(onClick={
+                    updateFailed=runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.webview"))) }.isFailure
+                }) { Text(stringResource(R.string.preview_html_update_action)) }
+                if(updateFailed) Text(stringResource(R.string.preview_html_update_manual),modifier=Modifier.padding(24.dp))
+                Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                    HighlightedCode(html,"html")
+                }
+            } else AndroidView(modifier=Modifier.weight(1f).fillMaxWidth(),factory={ context -> WebView(context).apply {
                 settings.javaScriptEnabled=false;settings.allowFileAccess=false;settings.allowContentAccess=false
                 settings.domStorageEnabled=false;settings.blockNetworkLoads=true;settings.mixedContentMode=android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 webViewClient=object: WebViewClient() {
