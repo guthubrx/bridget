@@ -1,0 +1,8 @@
+{
+  "artifact_ref": "artifact:b2d3315c-1e5f-45a8-917c-217d91b0c495",
+  "version_ref": "artifact-version:31bbc38e-a2d2-4242-9f9f-66a05f1a6994",
+  "state": "partial",
+  "qualification_notices_preserved": true,
+  "html_sha256": "604550f5c2c9a3a4e37e20f5dee2c9b729a82584260c64025fad317c929c5fbc",
+  "images_unchanged": true
+}

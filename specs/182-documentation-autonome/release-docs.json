@@ -1,0 +1,32 @@
+[
+  {
+    "tag": "v0.6.2",
+    "before_sha256": "7fd559040addc3f4182d304f540a2f1320209dec2e49cbff09a493530d786802",
+    "after_sha256": "bcbfa152087b4855c9b3f7c667b99ac91de6eefddd4cb1da02168df4498863fd",
+    "verified": true
+  },
+  {
+    "tag": "v0.6.0",
+    "before_sha256": "05f1a14d8d6a03c385ec0329689c884f4dada2edd83c72c77578c26fa8bc7963",
+    "after_sha256": "b97f019dd2b9918d438eff2bf12c0f8b071bfb47469d7b6e990bb724a60b29c2",
+    "verified": true
+  },
+  {
+    "tag": "v0.4.1",
+    "before_sha256": "99dc91b17bd2f2bc0e64bb72c20befe0b4bf26b2f7542856ec1f1277ea75a13f",
+    "after_sha256": "93200f6ddd2321e131732a96b383d1e69c0f1a5ce158ed79ee96ff24fbad5706",
+    "verified": true
+  },
+  {
+    "tag": "v0.4.0",
+    "before_sha256": "2e765e945302c15dfc64d274292bdf493f473e86cb2c1805854e288112dc71ed",
+    "after_sha256": "2d5a1f1d37598899b506e731a7246ee84a706b97849dfec3b61ce26731be0e03",
+    "verified": true
+  },
+  {
+    "tag": "v0.3.0",
+    "before_sha256": "5838fbb7c57dd090df80bbcaa22e2e0b214ed68d4f544989ec0d3d3b92d1456a",
+    "after_sha256": "318e831613ae465512d775afebd2c86e4460fe8ac1b6c30b2c5cd13ddeaf9ef9",
+    "verified": true
+  }
+]

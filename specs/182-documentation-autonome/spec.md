@@ -1,6 +1,6 @@
 # 182 — Documentation du produit autonome
 
-Correction demandée le25octobre2026. Statut : In Progress.
+Correction demandée le25octobre2026. Statut : Implemented ; pipeline Livré avec conservations justifiées.
 
 Bridget doit être présenté par ses fonctions et contrats propres. Le nom d'un
 client externe n'apparaît que dans la documentation technique de son adaptateur.

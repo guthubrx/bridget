@@ -1,6 +1,6 @@
 # Livraison documentaire182
 
-Statut : vérifications terminées, intégration en cours.
+Statut : Implemented,4/4tâches ; Livré avec conservations justifiées.
 
 La présentation de Bridget utilise ses fonctions et ses contrats natifs. Les guides français et anglais, les consignes et les spécifications générales ne citent aucun client externe comme référence de conception ou condition de fonctionnement. Les noms des clients sont réservés aux documents de leur adaptateur.
 
@@ -17,3 +17,5 @@ Notes de version publiques : sept descriptions relues ; cinq corrigées et relue
 Paquet source : test existant scripts/tests/package_089_test.sh PASS (autonomie, cible occupée, refus des parents symboliques, détection de mutation SHA256). Fixture privée : /tmp/b89-package-test.1prWWX. bash -n du script modifié conforme.
 
 Gardes de nettoyage : lsof indique plusieurs systèmes de fichiers non observables sur Cartae. Observation incomplète, aucun contournement. Le worktree182 et sa branche seront conservés après fusion, ainsi que la fixture de test et les preuves. Aucun binaire ni cache de compilation créé. Les autres lots ne sont pas touchés.
+
+Livraison Git vérifiée : source documentaire97c7806bed1ee646a336c440e2e6019c031d9292, intégrée à main et poussée sur origin GitHub. Main Mac et Cartae propres et alignés sur ce commit. Clôture documentaire dans le commit suivant ; son SHA final est relevé dans les reçus privés de l’opération. Les vérifications documentaires ont réussi sur les deux machines.
