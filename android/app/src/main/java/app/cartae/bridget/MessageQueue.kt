@@ -23,14 +23,14 @@ internal fun queuedMessageVisible(state: String, observation: String?, queueStat
 
 /** O(n+h): index par commande, maximum 256 enveloppes locales et 32 retenues. */
 @Composable
-internal fun MessageQueue(vm: MobileViewModel, agent: String) {
+internal fun MessageQueue(vm: MobileViewModel, agent: String, localEntries: List<JSONObject>, onEditingVisibility:(Boolean)->Unit = {}) {
     var expanded by rememberSaveable(agent) { mutableStateOf(true) }
     var editing by remember(agent) { mutableStateOf<JSONObject?>(null) }
     var text by remember { mutableStateOf("") }
     val held = remember(vm.messageQueue) { vm.messageQueue.associateBy { it.getString("command_id") } }
     val positions = remember(vm.messageQueue) { vm.messageQueue.mapIndexed { index,item -> item.getString("command_id") to index }.toMap() }
-    val entries = remember(vm.outbox, held, agent) {
-        vm.conversationEntries(agent).mapNotNull { entry ->
+    val entries = remember(localEntries, held, agent) {
+        localEntries.mapNotNull { entry ->
             val envelope = entry.getJSONObject("envelope")
             if (envelope.optString("type") != "message" || envelope.optString("agent_id") != agent
                 || !queuedMessageVisible(entry.getString("state"), entry.optJSONObject("delivery_observation")?.optString("event"),entry.optString("queue_state"),entry.has("queue_change"))) null
@@ -84,6 +84,7 @@ internal fun MessageQueue(vm: MobileViewModel, agent: String) {
         }
     }
     editing?.let { item ->
+        DisposableEffect(Unit) {onEditingVisibility(true);onDispose {onEditingVisibility(false)}}
         AlertDialog(onDismissRequest={editing=null},title={Text(stringResource(R.string.queue_edit))},
             text={OutlinedTextField(value=text,onValueChange={if(it.toByteArray(Charsets.UTF_8).size<=10_000) text=it},
                 modifier=Modifier.fillMaxWidth(),minLines=3,maxLines=8)},
@@ -96,7 +97,7 @@ internal fun MessageQueue(vm: MobileViewModel, agent: String) {
 @Composable
 private fun QueueIcon(label:Int,symbol:String,enabled:Boolean,onClick:()->Unit) {
     val description=stringResource(label)
-    IconButton(onClick=onClick,enabled=enabled,modifier=Modifier.size(40.dp).semantics {contentDescription=description}) {
+    IconButton(onClick=onClick,enabled=enabled,modifier=Modifier.size(48.dp).semantics {contentDescription=description}) {
         Text(symbol,fontSize=22.sp)
     }
 }

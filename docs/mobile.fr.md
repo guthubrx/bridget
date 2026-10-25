@@ -177,6 +177,49 @@ leur texte. L’aperçu accepte au plus 256 Kio de texte UTF-8. **Enregistrer un
 copie vérifiée** conserve le fichier complet, dans la limite générale de 8 Mio.
 
 Le rendu est embarqué dans Android et ne contacte aucune interface de bureau.
-L’aperçu HTML est statique : styles intégrés autorisés, scripts, formulaires,
-navigation, accès au disque et ressources externes désactivés. Un document qui
-exige ces fonctions ne sera donc pas entièrement interactif dans cet aperçu.
+L’aperçu propose **Interactif**, **Statique** et **Code**. Le mode interactif exécute
+les scripts intégrés dans un document isolé. Les boutons, graphiques et formulaires
+locaux fonctionnent. Le réseau, la navigation, les téléchargements, le stockage,
+les fichiers, le microphone et la caméra restent interdits. Un document qui charge
+une bibliothèque externe doit l’intégrer dans sa source. Le mode statique désactive
+les scripts. Un moteur WebView ancien ou inconnu ne reçoit que le code et le guidage
+de mise à jour. Le bouton Fermer appartient à Bridget.
+
+Chaque bloc de code racine affiche son langage et **Copier**. Le texte copié conserve
+ses accents, ses espaces et ses sauts de ligne. Dans les listes et citations, le code
+garde sa structure et sa sélection habituelles.
+
+## Volet, attention et saisie
+
+Depuis le fil, touchez le menu en haut à gauche. Le volet affiche l’annuaire existant,
+les favoris et une recherche par nom, machine ou projet. Les filtres de machine et de
+projet restent visibles. **Plus** charge les pages suivantes. La recherche porte sur
+les agents chargés et les favoris conservés, pas sur une liste distante invisible.
+Le changement de fil conserve son brouillon et sa position de lecture pendant cette
+session de l’application.
+
+Les marqueurs possèdent un libellé : **Réponse attendue**, **À consulter**, **En cours**
+ou **Observation à actualiser**. Une question fraîche a priorité, même sur un favori ancien. Une question non relue porte « Question à vérifier » ; une réponse déjà soumise porte « Réponse en attente de confirmation ». Une réponse terminale reçue,
+ou une transition d’activité fraîche dans la même génération de connexion, peut
+signaler un élément à consulter. Ce marqueur ne certifie pas une réussite. Les
+activités très courtes d’un agent non suivi peuvent ne pas être observées. Le volet
+seul ne marque rien comme lu : il faut afficher la fin du bon fil avec un suivi vivant.
+Un échec de rafraîchissement conserve les données avec leur statut ancien.
+
+La loupe recherche dans les messages déjà chargés. Le nombre de résultats et les
+boutons précédent/suivant permettent de les atteindre. Chargez des messages plus
+anciens pour élargir cette recherche. Le bouton de dictée ouvre la reconnaissance
+vocale du système. Son texte revient dans le brouillon et reste modifiable. Elle
+n’envoie rien. Un changement d’agent ou d’association empêche l’insertion ailleurs.
+La disponibilité et le traitement audio dépendent du service vocal choisi par Android.
+
+Le menu **+** prépare une photo ou un fichier sur cet appareil. Sa carte peut être
+retirée avant transmission. La flèche envoie explicitement les pièces jointes, puis
+le message avec leurs références. Les reçus des fichiers et du message restent
+séparés. Après une erreur partielle, le même fichier reprend sa commande ; il n’est
+pas recréé. Retirer une carte déjà transmise ne supprime pas un artefact du serveur.
+
+Quand le producteur fournit un événement structurel correspondant au tour courant,
+l’en-tête affiche **Compactage du contexte…**. La fin de l’item ou du tour ferme ce
+texte. La perte de suivi ou le changement de fil le ferme aussi. Un ancien début
+mis en cache n’invente pas une activité en cours. Aucun pourcentage n’est estimé.

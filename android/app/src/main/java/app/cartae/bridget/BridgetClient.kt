@@ -149,6 +149,7 @@ class BridgetClient(private val store: LocalStore) {
         store.remove("session")
     }
     suspend fun send(entry: JSONObject): JSONObject {
+        if(entry.optBoolean("staged")) throw MobileFailure("attachment_not_sent")
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         requireCommandOrigin(entry, session)
         val envelope = entry.getJSONObject("envelope")
@@ -175,6 +176,7 @@ class BridgetClient(private val store: LocalStore) {
         return receipt
     }
     suspend fun reconcile(entry: JSONObject): JSONObject {
+        if(entry.optBoolean("staged")) throw MobileFailure("attachment_not_sent")
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         requireCommandOrigin(entry, session)
         val id = entry.getJSONObject("envelope").getString("command_id")

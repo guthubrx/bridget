@@ -210,6 +210,18 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         let kind = string(item, "type")?;
         let status = string(item, "status")?;
         let run_id = nullable_string(item, "runId")?.map(str::to_owned);
+        if kind == "compaction"
+            && matches!(status, "running" | "completed" | "failed" | "cancelled")
+            && root_message(item, run_id.as_deref().and_then(|id| by_run.get(id).copied()), &nodes)?
+        {
+            let id = string(item, "id")?;
+            if id.len() > 256 || id.chars().any(char::is_control) { return Err(invalid("compaction.id")); }
+            activities.push(Activity {
+                id: format!("v2-compaction:{id}:{status}"), kind: "context.compaction".into(), turn_id: run_id.clone(),
+                payload: json!({"kind":"tool","tool_type":"context_compaction","tool_id":format!("compaction:{}:{id}",run_id.as_deref().unwrap_or("")),
+                    "text":"Compactage du contexte","status":status,"turn_id":run_id,"item_id":id}),
+            });
+        }
         if matches!(kind, "command_execution" | "dynamic_tool" | "mcp_tool_call" | "web_search" | "file_search" | "image_view")
             && matches!(status, "pending" | "running" | "completed" | "failed" | "cancelled")
             && root_message(item, run_id.as_deref().and_then(|id| by_run.get(id).copied()), &nodes)?
@@ -780,6 +792,24 @@ pub(crate) mod tests {
                 "lineage":{"relationshipToParent":"subagent","parentThreadId":"parent"},
                 "latestRunId":"r","latestRunRequestedAt":"2026-10-09T00:00:00.000Z","activeRunId":"r","status":"running",
                 "updatedAt":"2026-10-09T00:00:01.000Z","archivedAt":null,"deletedAt":null,"settledOverride":null}]})
+    }
+
+    #[test]
+    fn mobile183_compaction_items_keep_root_lineage_and_status_identity() {
+        let mut raw=detail();
+        raw["projection"]["turnItems"]=json!([
+            {"id":"comp183","type":"compaction","threadId":"t","runId":"r","nodeId":"root","status":"running"},
+            {"id":"child-comp","type":"compaction","threadId":"t","runId":"r","nodeId":"child","status":"running"}
+        ]);
+        let parsed=parse_detail(&raw.to_string(),"t").unwrap();
+        let acts:Vec<_>=parsed.activities.iter().filter(|a|a.kind=="context.compaction").collect();
+        assert_eq!(acts.len(),1);assert_eq!(acts[0].payload["status"],"running");
+        let first=acts[0].id.clone();
+        raw["projection"]["turnItems"][0]["status"]=json!("completed");
+        let done=parse_detail(&raw.to_string(),"t").unwrap();
+        assert_ne!(done.activities.iter().find(|a|a.kind=="context.compaction").unwrap().id,first);
+        raw["projection"]["turnItems"][0]["threadId"]=json!("foreign");
+        assert!(parse_detail(&raw.to_string(),"t").is_err());
     }
 
     pub(super) fn detail() -> Value {

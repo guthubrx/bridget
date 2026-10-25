@@ -9,6 +9,14 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebChromeClient
+import android.webkit.PermissionRequest
+import android.webkit.GeolocationPermissions
+import android.webkit.ValueCallback
+import android.webkit.WebSettings
+import android.net.Uri
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.widget.TextView
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
@@ -16,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -39,9 +48,7 @@ import io.noties.markwon.ext.tables.TablePlugin
 import io.noties.markwon.syntax.SyntaxHighlight
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.commonmark.node.AbstractVisitor
 import org.commonmark.node.FencedCodeBlock
-import org.commonmark.parser.Parser
 import java.io.ByteArrayInputStream
 
 internal fun syntaxLanguage(info: String?): SyntaxLanguage? = when(info?.trim()?.substringBefore(' ')?.lowercase()) {
@@ -75,7 +82,7 @@ private fun coloredCode(code: String, info: String?, dark: Boolean): CharSequenc
 }
 
 @Composable
-internal fun RichMarkdown(text: String, modifier: Modifier=Modifier) {
+internal fun RichMarkdown(text: String, modifier: Modifier=Modifier, onPreviewVisibility: (Boolean)->Unit = {}) {
     val context=LocalContext.current
     val dark=isSystemInDarkTheme()
     val color=MaterialTheme.colorScheme.onSurface.toArgb()
@@ -92,17 +99,55 @@ internal fun RichMarkdown(text: String, modifier: Modifier=Modifier) {
             }
         }).build()
     }
-    var rendered by remember(text) { mutableStateOf<CharSequence>(text) }
-    LaunchedEffect(text,renderer) { rendered=withContext(Dispatchers.Default) { renderer.toMarkdown(text) } }
-    AndroidView(modifier=modifier.fillMaxWidth(),factory={ TextView(it).apply {
-        textSize=16f; setTextIsSelectable(true); setLineSpacing(0f,1.22f)
-    } },update={ it.setTextColor(color); if(rendered is Spanned) renderer.setParsedMarkdown(it,rendered as Spanned) else it.text=rendered })
-    val previews=remember(text) { htmlCodeBlocks(text) }
-    var preview by remember(text) { mutableStateOf<String?>(null) }
-    previews.forEachIndexed { index,html ->
-        TextButton(onClick={preview=html}) { Text(stringResource(R.string.preview_html)+(if(previews.size>1) " ${index+1}" else "")) }
+    val blocks=remember(text,renderer) {markdownRenderBlocks(renderer.parse(text))}
+    var preview by remember(text) {mutableStateOf<String?>(null)}
+    Column(modifier.fillMaxWidth(),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+        blocks.forEach {block ->
+            if(block.code!=null) {
+                Surface(shape=androidx.compose.foundation.shape.RoundedCornerShape(12.dp),color=MaterialTheme.colorScheme.surfaceContainer) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal=12.dp)) {
+                        var copied by remember(block.code) {mutableStateOf(false)}
+                        Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                            Text(block.language.ifBlank {stringResource(R.string.code_label)}.take(40),modifier=Modifier.weight(1f),style=MaterialTheme.typography.labelMedium)
+                            TextButton(onClick={
+                                context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Bridget code",block.code));copied=true
+                            }) {Text(stringResource(if(copied) R.string.code_copied else R.string.code_copy))}
+                        }
+                        Box(Modifier.fillMaxWidth().padding(bottom=12.dp)) {HighlightedCode(block.code,block.language)}
+                        if(block.language.trim().lowercase() in setOf("html","htm") && block.code.toByteArray().size<=262_144)
+                            OutlinedButton(onClick={preview=block.code},modifier=Modifier.fillMaxWidth().padding(bottom=8.dp)) {Text(stringResource(R.string.preview_html))}
+                    }
+                }
+            } else block.prose?.let {node ->
+                var rendered by remember(node,renderer) {mutableStateOf<CharSequence>("")}
+                LaunchedEffect(node,renderer) {rendered=withContext(Dispatchers.Default) {renderer.render(node)}}
+                AndroidView(modifier=Modifier.fillMaxWidth(),factory={TextView(it).apply {
+                    textSize=16f;setTextIsSelectable(true);setLineSpacing(0f,1.22f)
+                }},update={it.setTextColor(color);if(rendered is Spanned) renderer.setParsedMarkdown(it,rendered as Spanned) else it.text=rendered})
+            }
+        }
     }
-    preview?.let { HtmlPreview(it) { preview=null } }
+    preview?.let {
+        DisposableEffect(Unit) {onPreviewVisibility(true);onDispose {onPreviewVisibility(false)}}
+        HtmlPreview(it) {preview=null}
+    }
+}
+
+internal data class MarkdownRenderBlock(val prose: org.commonmark.node.Document?=null,val code: String?=null,val language: String="")
+
+/** Les blocs racine restent dans leur ordre CommonMark ; listes et citations gardent leur structure. */
+internal fun markdownRenderBlocks(root: org.commonmark.node.Node): List<MarkdownRenderBlock> {
+    val result=mutableListOf<MarkdownRenderBlock>()
+    var prose=org.commonmark.node.Document()
+    var node=root.firstChild
+    fun flush() {if(prose.firstChild!=null) {result.add(MarkdownRenderBlock(prose=prose));prose=org.commonmark.node.Document()}}
+    while(node!=null) {
+        val next=node.next
+        if(node is FencedCodeBlock) {flush();result.add(MarkdownRenderBlock(code=node.literal,language=node.info.trim()))}
+        else {node.unlink();prose.appendChild(node)}
+        node=next
+    }
+    flush();return result
 }
 
 @Composable
@@ -113,17 +158,6 @@ internal fun HighlightedCode(code: String, language: String?=null) {
     AndroidView(modifier=Modifier.fillMaxWidth(),factory={ TextView(it).apply {
         textSize=13f;typeface=Typeface.MONOSPACE;setTextIsSelectable(true)
     } },update={it.setTextColor(color);it.text=rendered})
-}
-
-/** Parser CommonMark partagé, au plus quatre aperçus de 256 Kio, sans accès réseau. */
-internal fun htmlCodeBlocks(text: String): List<String> {
-    val result=mutableListOf<String>()
-    Parser.builder().build().parse(text).accept(object: AbstractVisitor() {
-        override fun visit(block: FencedCodeBlock) {
-            if(result.size<4 && block.info.trim().lowercase() in setOf("html","htm") && block.literal.toByteArray().size<=262_144) result+=block.literal
-        }
-    })
-    return result
 }
 
 internal fun isMarkdownPreview(title: String,media: String=""): Boolean = media=="text/markdown" || title.substringAfterLast('.').lowercase() in setOf("md","markdown")
@@ -145,6 +179,8 @@ internal fun HtmlPreview(html: String,onClose: () -> Unit) {
     val context=LocalContext.current
     var engineVersion by remember { mutableStateOf<String?>(null) }
     var updateFailed by remember { mutableStateOf(false) }
+    var mode by rememberSaveable {mutableIntStateOf(0)}
+    var rendererFailed by remember {mutableStateOf(false)}
     LifecycleResumeEffect(Unit) {
         engineVersion=runCatching { WebView.getCurrentWebViewPackage()?.versionName }.getOrNull()
         onPauseOrDispose { }
@@ -156,29 +192,33 @@ internal fun HtmlPreview(html: String,onClose: () -> Unit) {
                 Text(stringResource(R.string.preview_html),modifier=Modifier.padding(vertical=16.dp))
                 TextButton(onClick=onClose) { Text(stringResource(R.string.dismiss)) }
             }
-            Text(stringResource(R.string.preview_html_static),modifier=Modifier.padding(horizontal=12.dp),style=MaterialTheme.typography.labelSmall)
-            if(!htmlPreviewEngineAllowed(engineVersion)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                listOf(R.string.preview_interactive,R.string.preview_static,R.string.code_label).forEachIndexed {index,label ->
+                    FilterChip(selected=mode==index,onClick={mode=index;rendererFailed=false},label={Text(stringResource(label))})
+                }
+            }
+            Text(stringResource(if(mode==0) R.string.preview_html_isolated else R.string.preview_html_static),modifier=Modifier.padding(horizontal=12.dp),style=MaterialTheme.typography.labelSmall)
+            if(mode==2 || rendererFailed || !htmlPreviewEngineAllowed(engineVersion)) {
+                if(rendererFailed) Text(stringResource(R.string.preview_failed),Modifier.padding(16.dp))
+                if(mode!=2 && !htmlPreviewEngineAllowed(engineVersion)) {
                 Text(stringResource(R.string.preview_html_update_required),modifier=Modifier.padding(24.dp))
                 TextButton(onClick={
                     updateFailed=runCatching { context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
                         android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.webview"))) }.isFailure
                 }) { Text(stringResource(R.string.preview_html_update_action)) }
                 if(updateFailed) Text(stringResource(R.string.preview_html_update_manual),modifier=Modifier.padding(24.dp))
+                }
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp)) {
                     HighlightedCode(html,"html")
                 }
-            } else AndroidView(modifier=Modifier.weight(1f).fillMaxWidth(),factory={ context -> WebView(context).apply {
-                settings.javaScriptEnabled=false;settings.allowFileAccess=false;settings.allowContentAccess=false
-                settings.domStorageEnabled=false;settings.blockNetworkLoads=true;settings.mixedContentMode=android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                webViewClient=object: WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView,request: WebResourceRequest)=true
-                    override fun shouldInterceptRequest(view: WebView,request: WebResourceRequest): WebResourceResponse =
-                        WebResourceResponse("text/plain","UTF-8",ByteArrayInputStream(byteArrayOf()))
-                }
-            } },update={ view -> if(view.tag!=html) {
-                view.tag=html
-                view.loadDataWithBaseURL("https://preview.invalid/",htmlPreviewDocument(html),"text/html","UTF-8",null)
-            } },onRelease={it.stopLoading();it.destroy()})
+            } else key(mode) {
+                AndroidView(modifier=Modifier.weight(1f).fillMaxWidth(),factory={context ->
+                    isolatedPreviewWebView(context,mode==0) {rendererFailed=true}
+                },update={view -> if(view.tag!=html) {
+                    view.tag=html
+                    view.loadDataWithBaseURL("https://preview.invalid/",if(mode==0) isolatedHtmlPreviewDocument(html) else htmlPreviewDocument(html),"text/html","UTF-8",null)
+                }},onRelease={it.stopLoading();it.destroy()})
+            }
         } }
     }
 }
@@ -186,4 +226,43 @@ internal fun HtmlPreview(html: String,onClose: () -> Unit) {
 internal fun htmlPreviewDocument(html: String): String {
     require(html.toByteArray().size<=262_144)
     return "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-src 'none'\"><style>body{font-family:system-ui;margin:16px;overflow-wrap:anywhere}img,svg{max-width:100%;height:auto}pre{overflow:auto}</style></head><body>"+html+"</body></html>"
+}
+
+/** Le document non fiable vit dans une origine opaque ; aucune capacité native n'est ajoutée. */
+internal fun isolatedHtmlPreviewDocument(html: String): String {
+    require(html.toByteArray(Charsets.UTF_8).size<=262_144)
+    val child="""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; media-src data:; font-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'none'; form-action 'none'"><style>body{font-family:system-ui;margin:16px;overflow-wrap:anywhere}img,svg{max-width:100%;height:auto}pre{overflow:auto}</style></head><body>"""+html+"</body></html>"
+    val escaped=child.replace("&","&amp;").replace("\"","&quot;").replace("<","&lt;").replace(">","&gt;")
+    return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src 'self' about:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><style>html,body,iframe{margin:0;width:100%;height:100%;border:0;overflow:hidden}iframe{display:block}</style></head><body><iframe title="Bridget HTML" sandbox="allow-scripts" referrerpolicy="no-referrer" srcdoc=""""+escaped+""""></iframe></body></html>"""
+}
+
+/** Cette vue ne reçoit ni session, ni pont natif, ni gestionnaire de message privilégié. */
+internal fun isolatedPreviewWebView(context: android.content.Context, interactive: Boolean, failed: () -> Unit = {}): WebView = WebView(context).apply {
+    // WRAP_CONTENT force Chromium à calculer une hauteur CSS nulle pour un cadre plein écran.
+    layoutParams=android.view.ViewGroup.LayoutParams(android.view.ViewGroup.LayoutParams.MATCH_PARENT,android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+    settings.javaScriptEnabled=interactive
+    settings.allowFileAccess=false;settings.allowContentAccess=false
+    settings.domStorageEnabled=false;settings.databaseEnabled=false
+    settings.blockNetworkLoads=true;settings.cacheMode=WebSettings.LOAD_NO_CACHE
+    settings.mixedContentMode=WebSettings.MIXED_CONTENT_NEVER_ALLOW
+    settings.javaScriptCanOpenWindowsAutomatically=false;settings.setSupportMultipleWindows(true)
+    settings.mediaPlaybackRequiresUserGesture=true
+    android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(this,false)
+    removeJavascriptInterface("searchBoxJavaBridge_");removeJavascriptInterface("accessibility");removeJavascriptInterface("accessibilityTraversal")
+    setDownloadListener {_,_,_,_,_-> }
+    webChromeClient=object: WebChromeClient() {
+        override fun onPermissionRequest(request: PermissionRequest) {request.deny()}
+        override fun onGeolocationPermissionsShowPrompt(origin: String,callback: GeolocationPermissions.Callback) {callback.invoke(origin,false,false)}
+        override fun onShowFileChooser(view: WebView,callback: ValueCallback<Array<Uri>>,params: FileChooserParams): Boolean {callback.onReceiveValue(null);return true}
+        override fun onCreateWindow(view: WebView,isDialog: Boolean,isUserGesture: Boolean,result: android.os.Message)=false
+        override fun onJsAlert(view: WebView,url: String,message: String,result: android.webkit.JsResult): Boolean {result.cancel();return true}
+        override fun onJsConfirm(view: WebView,url: String,message: String,result: android.webkit.JsResult): Boolean {result.cancel();return true}
+        override fun onJsPrompt(view: WebView,url: String,message: String,defaultValue: String,result: android.webkit.JsPromptResult): Boolean {result.cancel();return true}
+    }
+    webViewClient=object: WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView,request: WebResourceRequest)=true
+        override fun shouldInterceptRequest(view: WebView,request: WebResourceRequest): WebResourceResponse =
+            WebResourceResponse("text/plain","UTF-8",ByteArrayInputStream(byteArrayOf()))
+        override fun onRenderProcessGone(view: WebView,detail: android.webkit.RenderProcessGoneDetail): Boolean {failed();return true}
+    }
 }
