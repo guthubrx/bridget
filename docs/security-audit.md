@@ -96,3 +96,18 @@ CODEOWNERS requests maintainer review for the scripts, exclusions and workflow.
 Enforcement depends on GitHub branch rules, which this task does not change.
 CI uses the proposed revision's files; it cannot defend against malicious changes
 to its own checks without trusted review.
+
+## Historical notification fixture — 2026-10-25
+
+The full-history delivery check found one additional false positive in commit
+`6f2ad5166ec1762b6726fbbf51acaf3ebc79c73f`, in
+`crates/bridget-daemon/src/mobile/store.rs`, line946, rule `generic-api-key`.
+It is the notification receiver string in the unit test
+`mobile177_notification_reassociation_moves_receiver_without_moving_authority`.
+The test uses `Store::memory()`, synthetic timestamps and generated local pairing
+keys. It tests receiver reassociation without changing device authority. It does
+not call an external notification service. The receiver string consists of two
+lowercase words separated by underscores and the sequential suffix123456789.
+It is a synthetic fixture, not a provider credential. Its value is not repeated
+here. The exception records only that immutable commit/path/rule/line fingerprint;
+no current path, future commit or scanner rule is excluded.

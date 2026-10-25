@@ -89,3 +89,19 @@ CODEOWNERS demande la revue du mainteneur pour les scripts, exclusions et workfl
 Son caractère obligatoire dépend des règles de branche GitHub, non modifiées ici.
 La CI utilise les fichiers de la révision proposée : elle ne protège pas contre
 une modification malveillante de ses propres contrôles sans revue de confiance.
+
+## Valeur de notification de test historique — 25octobre2026
+
+Le contrôle de livraison sur tout l’historique a trouvé un faux positif
+supplémentaire dans le commit `6f2ad5166ec1762b6726fbbf51acaf3ebc79c73f`,
+fichier `crates/bridget-daemon/src/mobile/store.rs`, ligne946, règle
+`generic-api-key`. Il s’agit du destinataire de notification du test unitaire
+`mobile177_notification_reassociation_moves_receiver_without_moving_authority`.
+Ce test utilise `Store::memory()`, des dates fictives et des clés locales de
+jumelage générées. Il vérifie le changement de destinataire sans modifier les
+droits de l’appareil. Il ne contacte aucun service de notification externe.
+La chaîne contient deux mots en minuscules séparés par des tirets bas et la
+suite123456789. C’est une donnée de test, pas un identifiant fournisseur. Sa
+valeur n’est pas recopiée ici. L’exception porte uniquement sur l’empreinte
+immuable commit/chemin/règle/ligne. Aucun chemin courant, nouveau commit ou
+règle du scanner n’est exclu.
