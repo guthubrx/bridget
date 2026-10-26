@@ -155,3 +155,11 @@ La commande d'entretien après installation a retiré 4,12 Gio ; 3,10 Gio de cac
 Disponibilité envoyée aux trois responsables : Monuments `mcp-73580-6adeee5a-5`, Trajets bus `mcp-73580-6adeee58-4`, Politique sol `mcp-73580-6adeee5c-6`. Les envois sont en vol, sans lecture revendiquée. Les serveurs sont qualifiés pour la délégation native ; ni GPU ni dépendances métier n'ont été qualifiés. Aucune mission Opus2D n'a été rejouée.
 
 La tâche historique `e5959986` reste en arrêt non confirmé malgré une annulation officielle relue. Elle peut encore retenir une future activation automatique. Ses preuves sont conservées ; ce reçu ne la présente pas comme close. Le statut MCP propre au fil Monuments reste à confirmer par son propriétaire.
+
+## Clôture Git et nettoyage vérifiés
+
+Reçu d'activation et de qualification intégré et poussé : `f523c878e6c680a8eeca34921737fce8465e887e`. Après contrôle de l'intégration, des tâches, des fichiers ignorés et un inventaire complet des usages, quatre worktrees Cartae ont été retirés : flotte 183, mobile 177, sécurité 178 et interface mobile 183. Les trois branches de session et la branche de revue 177 intégrées ont aussi été retirées. Aucune référence distante correspondante ne restait. Mac et Cartae ne conservent qu'un checkout `main`.
+
+Les intermédiaires Android/Rust des trois anciens worktrees totalisaient 2 961 929 590 octets. Les 98 fichiers de preuves utiles ont été archivés et relus avec contrôle SHA-256, dans 25 196 529 octets d'archives privées. Les copies installées active et de retour sont conservées. Ce nettoyage s'ajoute aux 227 408 891 octets de binaires obsolètes et aux 4,12 Gio de caches retirés après compilation.
+
+Les reçus, sauvegardes de maintenance et preuves archivées restent hors Git. La tâche historique en arrêt non confirmé et les processus encore utilisés n'ont pas été supprimés pour rendre le bilan propre.
