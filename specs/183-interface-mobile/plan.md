@@ -1,6 +1,6 @@
 # Plan183 — Interface mobile et suivi d’activité
 
-Statut : Implemented. Pipeline : In Progress (activation Linux retenue ; voir validation/livraison.md). Responsable autonome unique. Contre-revue indépendante en lecture seule.
+Statut : Implemented. Pipeline : Livré le26octobre2026 (activation et nettoyage vérifiés ; voir validation/livraison.md). Responsable autonome unique. Contre-revue indépendante en lecture seule.
 
 ## Contexte technique
 

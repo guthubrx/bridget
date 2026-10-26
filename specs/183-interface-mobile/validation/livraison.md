@@ -1,8 +1,41 @@
-# Reçu183 — interface mobile — 25octobre2026
+# Reçu183 — interface mobile — clôture du26octobre2026
 
-Implémentation : **Implemented,22/22tâches**. Pipeline : **In Progress**.
-L’activation Linux est retenue. Aucune installation complète de la fédération
-n’est revendiquée. État constaté vers23:03CET.
+Implémentation : **Implemented,22/22tâches**. Pipeline : **Livré**.
+
+## État courant vérifié le26octobre2026
+
+Core/mobile/worker Cartae chargent0.6.3, build183-admission-7478e9e7,
+source7478e9e756dced0e0f85d9519229c279644d362c, qui inclut le lot mobilee2987fb7.
+Contrôle indépendant à07:17CET : les trois liens /proc/PID/exe désignent ce
+binaire, sonSHA256estd6ba590c987b67a206d6ea87e5d9e832d3b3f47abc54a19c30df93deb93770ef,
+le statut natif donne core_version0.6.3, automatic=true et Mac/Cartaeup_to_date.
+HTTP local avec le Host attendu et HTTPS public /v1/status répondent200.
+Le refus400sur un Host loopback étranger reste conforme au contrôle d’origine.
+Aucun nouveau service, arrêt ou build n’a été effectué pour cette clôture.
+
+L’ancienne admission estrefused sans tâche, aucune admissionpending/chosen,
+aucun verrou d’activation présent. La maintenance et le nettoyage sont décrits
+dans le complément du26octobre ci-dessous et le reçu technique associé.
+Sur Mac, le service d’observation charge encore le binaire0.6.3e2987fb7,
+PID87075. L’émulateur reste qualifié/installé en6003 ; aucune installationPixel.
+
+Les22cases et leurSHA256sont inchangés :
+96d15fcf02402a55c6dfbbf0c030f56100fdb031692f6f309767569d7fd9591d.
+Les sources7478e9e7et le reçuf950c324ont été relus ; aucun nouveau test de
+code mobile n’est requis pour modifier uniquement le statut documentaire.
+Phases8/9terminées dans le périmètre autorisé. Aucun reste fonctionnel ou de
+livraison183. Les preuves et ressources encore utilisées restent conservées.
+La tâche historiquee5959986reste non réconciliée ; elle peut encore retenir une
+future activation automatique. Sa conservation ne constitue pas une activation
+manquante de la présente livraison. Les réserves de qualification restent :
+voix réelle/Pixel non testés, pas deFULL, contre-revue de la feature sans verdict.
+**Preuves : diaporama vérifié.**
+
+Les sections qui suivent jusqu’au complément de maintenance retracent l’état
+historique du25octobre. Leurs mentions In Progress et les actions alors bloquées
+ne décrivent pas l’état courant ci-dessus.
+
+## Historique de préparation du25octobre2026
 
 ## Résultat et périmètre
 
@@ -221,3 +254,17 @@ Après autorisation explicite de l'utilisateur, core/mobile/worker Cartae ont é
 Mac et l'émulateur restent en 0.6.3 ; le Pixel est toujours absent. Auto-update actif, Mac et Cartae annoncés à jour. Le retour Cartae conservé est 0.6.2. Six copies obsolètes Cartae ont été retirées après observation complète, avec reçus archivés. La tâche historique `e5959986` reste non réconciliée : ce complément ne prouve pas qu'une future activation automatique serait immédiatement autorisée. Voir le [reçu technique](../../183-flotte-ovh/validation/admission-replay.md).
 
 Le worktree détaché de livraison 183 a ensuite été retiré : code intégré, aucune tâche gardée, aucun fichier ouvert. Ses preuves ignorées (rapports, résultats et sorties) ont été archivées et vérifiées avant retrait des intermédiaires. Les anciens worktrees mobiles 177 et sécurité 178 ont été traités de la même façon. Cartae ne conserve qu'un checkout `main`.
+
+## Clôture du pipeline — 26octobre2026
+
+Activation et nettoyage relus et confirmés. Un seul checkoutmainpropre par
+machine, aucune branche/worktree mobile de livraison restant à retirer. Les
+preuves ignorées ont été archivées avant les retraits ; les versions actives,
+retours vérifiés et copies réellement utilisées sont conservés. La version
+publique restev0.6.3sur e2987fb7 ; le hotfix serveur actif7478e9e7ne modifie aucun
+parcours visuel de la feature. Aucun binaire n’a été reconstruit à cette clôture.
+
+Durée calendaire au relevé :682.9min depuis25octobre19:55CET, soit+127.6%par rapport à la borne initiale300min. Cause principale : attente de maintenance autorisée et réconciliation concurrente pendant la nuit, distincte du temps de travail actif. Reprise de clôture annoncée2–5min après confirmation de l’activation.
+
+Première tâche non cochée : **aucune**. Reste de livraison183 : **aucun**.
+Statut du pipeline : **Livré**.
