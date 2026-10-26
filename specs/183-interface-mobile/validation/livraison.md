@@ -268,3 +268,27 @@ Durée calendaire au relevé :682.9min depuis25octobre19:55CET, soit+127.6%par r
 
 Première tâche non cochée : **aucune**. Reste de livraison183 : **aucun**.
 Statut du pipeline : **Livré**.
+
+
+## Complément du 26 octobre 2026 — Pixel et parc actif
+
+Le Pixel physique est connecté en USB. L’APK officiel signé de la release v0.6.3
+(6003) a été réinstallé avec conservation des données : `adb install -r` répond
+`Success`. Son SHA-256 correspond au fichier publié. L’application ouvre la
+liste des agents, dont Monuments, Trajets bus et Politique sol. L’écran Réglages
+affiche Bridget 0.6.3, « Cette version est à jour » et le commutateur des mises
+à jour automatiques activé. Les notifications sont activées pour l’association.
+Aucune recette voix, 4G ou Mac éteint n’est revendiquée.
+
+Cartae (core, mobile et worker), SYS-LE-2 et KS-STOR ont été relus actifs en
+0.6.3. Le lien MCP du Mac répond depuis le core Cartae ; les contrôles HTTP local
+et HTTPS public du service mobile répondent 200. Les mises à jour automatiques
+Mac/Cartae sont activées. Les qualifications natives OVH précédentes restent
+valides ; aucune mission métier n’a été rejouée.
+
+À la demande de l’utilisateur, la correction de l’annulation historique est
+différée après cette livraison. La compilation de diagnostic a été arrêtée
+proprement, son patch non validé conservé hors Git et son worktree/branche retirés.
+La tâche historique reste non close ; elle peut retenir une activation future.
+Preuves locales Pixel : /Users/moi/.cache/bridget-delivery-20261026/pixel-delivery.json
+et /Users/moi/.cache/bridget-delivery-20261026/pixel-settings-0.6.3.png.
