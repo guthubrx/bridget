@@ -43,3 +43,17 @@ Correction technique : aucun parcours visuel modifié, aucun diaporama requis.
 - Le worktree, sa branche et le candidat sont conservés pour l'activation et la réconciliation restantes. Aucune admission persistée n'a été modifiée à la main. Aucune mission métier n'a été rejouée.
 
 La préparation est terminée. L'activation, le résultat réel de la clé KS-STOR et la qualification de ce serveur restent à établir. Une éventuelle maintenance manuelle doit traiter explicitement l'interruption du coordinateur et la tâche historique non réconciliée ; elle ne découle pas d'un succès du garde.
+
+## Activation réelle — 26 octobre 2026
+
+L'utilisateur a explicitement autorisé la maintenance manuelle. L'état SQLite et les configurations ont été sauvegardés dans un dossier privé avant intervention. Les services ont été arrêtés normalement par systemd, sans SIGKILL, puis le lien installé a été remplacé atomiquement. Le core, le service mobile et le worker Cartae chargent désormais le candidat `183-admission-7478e9e7` (0.6.3). L'observation `/proc/<pid>/exe` et le statut MCP confirment le binaire chargé. Le service de mise à jour a été redémarré avec la version 0.6.2 comme retour.
+
+Le contrôle HTTP mobile local `/v1/status` répond 200. L'auto-update reste activé ; son statut annonce Mac et Cartae `installed=0.6.3`, `stage=up_to_date`. L'émulateur Android est en 0.6.3 (6003). Le Pixel est absent d'ADB ; aucune mise à jour du Pixel n'est revendiquée.
+
+La récupération du coordinateur a clôturé la clé `bridget-ovh183-ksstore-qualification-20261025-02` en `refused / permission_not_inherited`, sans tâche. Un rejeu officiel à enveloppe identique confirme ce refus durable et son conseil de reprise. Aucun reçu SQL n'a été modifié manuellement.
+
+Six anciennes copies de binaires Cartae, sans référence de service ni usage observé, ont été retirées : 227 408 891 octets. Leurs reçus utiles ont été archivés hors Git. La version active et le retour sont conservés. Ce retrait s'ajoute aux 4,12 Gio de caches nettoyés après compilation.
+
+La tâche historique `e5959986-e426-422d-956f-e035dbcf89be` reste en annulation non confirmée après un appel officiel. Le diagnostic indépendant `ef4b3cc6-13f8-4872-8ceb-29dd1f1b736f` relève que le chemin exige encore une preuve d'arrêt maître après le résultat terminal du worker ; ses preuves runtime n'étaient pas accessibles depuis SYS-LE-2. Elle reste conservée et peut encore retenir une future activation automatique. Ce reçu ne la présente pas comme soldée.
+
+Qualification de suivi réussie : tâche `17d80e5b-4df3-49fa-a89b-4aa789b2e55b`, résultat `QUALIFICATION_KSSTORE_OK`, cinq commandes réelles, nettoyage confirmé. Le suivi ne réutilise pas la clé terminale ; il utilise une nouvelle enveloppe et une nouvelle clé après correction des conditions et confirmation de l'absence de tâche pour l'ancienne demande.

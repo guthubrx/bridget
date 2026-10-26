@@ -213,3 +213,9 @@ Passage de nettoyage final :7,67Gio logiques d’intermédiaires Linux supprimé
 par scripts/build.py,3,66Gio reconnus restants. Mac :2,22Gio restants. Les
 refus ponctuels d’observation précédents restent tracés. Aucun gain physique
 APFS revendiqué. Retours, preuves et tâches actives conservés.
+
+## Complément de maintenance — 26 octobre 2026
+
+Après autorisation explicite de l'utilisateur, core/mobile/worker Cartae ont été activés sur le binaire 0.6.3 `183-admission-7478e9e7`, source `7478e9e756dced0e0f85d9519229c279644d362c`, qui conserve la livraison mobile `e2987fb7`. Les exécutables chargés, le statut MCP et HTTP mobile 200 ont été vérifiés. L'admission OVH qui retenait cette livraison est maintenant refusée durablement sans tâche. Aucun état SQL n'a été forcé.
+
+Mac et l'émulateur restent en 0.6.3 ; le Pixel est toujours absent. Auto-update actif, Mac et Cartae annoncés à jour. Le retour Cartae conservé est 0.6.2. Six copies obsolètes Cartae ont été retirées après observation complète, avec reçus archivés. La tâche historique `e5959986` reste non réconciliée : ce complément ne prouve pas qu'une future activation automatique serait immédiatement autorisée. Voir le [reçu technique](../../183-flotte-ovh/validation/admission-replay.md).

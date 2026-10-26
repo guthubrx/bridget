@@ -1,11 +1,15 @@
-# Livraison partielle — flotte OVH — 25 octobre 2026
+# Livraison — flotte OVH — 26 octobre 2026
 
 ## État réel
 
 | Machine | Système | Worker installé | Exécution native | Routage |
 |---|---|---|---|---|
 | SYS-LE-2 (`sysle2`) | Debian 12, glibc 2.36 | 0.6.3, build `183-b6c045cd` | Deux missions terminées avec résultat | Disponible |
-| KS-STOR (`ksstore`) | Ubuntu 24.04 | 0.6.3, build `183-b6c045cd` | Non qualifiée ; admission Claude en attente | Connexions désactivées |
+| KS-STOR (`ksstore`) | Ubuntu 24.04 | 0.6.3, build `183-b6c045cd` | Cinq commandes réelles réussies | Claude disponible ; Codex désactivé |
+
+Core, mobile et worker Cartae sont actifs en 0.6.3, build `183-admission-7478e9e7`. Mac et l'émulateur Android sont en 0.6.3. L'auto-update est activé. Le Pixel est absent ; aucune installation sur ce téléphone n'est revendiquée.
+
+Les sections datées du 25 octobre ci-dessous conservent les preuves initiales. Les blocages OVH de cette date sont soldés par le complément du 26 octobre en fin de reçu. La tâche historique `e5959986` et le rétablissement MCP du fil Monuments restent distincts et non confirmés.
 
 Les liaisons Unix sur SSH et les services utilisateur sont persistants.
 Le maître reste Cartae. Les workers, comptes et connexions sont propres à chaque
@@ -34,7 +38,7 @@ Cela ne qualifie ni les dépendances de chaque métier, ni une capacité GPU.
   démarrent et les deux services workers sont actifs. Les 21 warnings existants
   de compilation ne sont pas présentés comme corrigés.
 
-## Reçus natifs
+## Reçus natifs du 25 octobre
 
 - SYS-LE-2 : `b854e7b4-0dd8-472b-8965-dfdad2ed18ae`, résultat
   `QUALIFICATION_SYSLE2_OK`, hostname `backup`, Git 2.56.0, x86_64 et SHA attendu.
@@ -52,7 +56,7 @@ Cela ne qualifie ni les dépendances de chaque métier, ni une capacité GPU.
   mesurer : le rejeu strict lit encore l’admission en attente et ne recommence
   pas la préparation. Aucune nouvelle clé n’a été créée pour contourner ce sort.
 
-## Point bloquant conservé
+## Blocage OVH initial du 25 octobre — résolu le 26
 
 La reprise automatique actuelle sélectionne uniquement les reçus d’une époque
 antérieure du coordinateur (`auto_admission_receipts_before_epoch`). Un échec
@@ -137,3 +141,17 @@ Validation : 42 tests ciblés réussis, aucun ignoré, et contre-revue R2 sans d
 La commande d'entretien après installation a retiré 4,12 Gio ; 3,10 Gio de caches sont annoncés restants. Le worktree, sa branche, les preuves et le candidat sont conservés pour terminer la livraison. Aucun ancien binaire actif ou retour n'a été retiré.
 
 **Activation non effectuée.** Le garde réel renvoie encore `update_missions_active_or_unconfirmed`. Le core Cartae reste en 0.6.2. La clé KS-STOR reste non réconciliée et ce serveur n'est pas annoncé disponible. La tâche historique `e5959986-e426-422d-956f-e035dbcf89be`, en arrêt non confirmé, constitue un autre point à traiter. Aucun service n'a été arrêté pour franchir ce refus.
+
+## Qualification et activation finales — 26 octobre 2026
+
+- L'ancienne admission `bridget-ovh183-ksstore-qualification-20261025-02` est clôturée `refused / permission_not_inherited`, sans tâche. Son rejeu officiel confirme le refus durable. Aucune écriture SQL manuelle.
+- La tâche `43fb4077-80d2-421f-b1ff-aa64bbeee0cc` a confirmé la remise native KS-STOR mais n'a exécuté aucune commande : la posture découverte choisie par le responsable retirait le terminal à Claude. Son résultat a été lu ; elle est nettoyée.
+- La qualification corrigée `17d80e5b-4df3-49fa-a89b-4aa789b2e55b`, clé `bridget-ovh183-ksstore-qualification-20261026-04`, a exécuté les cinq commandes via le parcours officiel `development`. Périmètre inchangé : cinq lectures, aucune écriture ou sous-délégation. Résultat `QUALIFICATION_KSSTORE_OK`, hostname `ns31107979`, cwd `/home/moi/.local/share/bridget-projects/bridget/repository`, HEAD `39316d601370299607b35ef3c6ac63b4f24bf599`, Git 2.56.0, x86_64. Résultat lu, `cleanup_done=true`.
+- SYS-LE-2 a terminé une autre mission native de diagnostic `ef4b3cc6-13f8-4872-8ceb-29dd1f1b736f`, résultat lu et nettoyage confirmé. Elle n'a changé aucun fichier.
+- La connexion Claude KS-STOR est authentifiée et activée dans la politique révision 7 du maître et du worker. Codex KS-STOR reste désactivé. Ni compte ni credential n'ont été copiés.
+- Core/mobile/worker Cartae : 0.6.3 `183-admission-7478e9e7`, chemins des exécutables chargés vérifiés ; MCP confirme le build ; HTTP mobile répond 200. Auto-update `automatic=true`, Mac et Cartae `up_to_date`.
+- Six copies de binaires Cartae retirées après inventaire complet et contrôle des références : 227 408 891 octets. Reçus archivés hors Git. Active et retour conservés. Les 4,12 Gio de caches avaient déjà été retirés après compilation.
+
+Disponibilité envoyée aux trois responsables : Monuments `mcp-73580-6adeee5a-5`, Trajets bus `mcp-73580-6adeee58-4`, Politique sol `mcp-73580-6adeee5c-6`. Les envois sont en vol, sans lecture revendiquée. Les serveurs sont qualifiés pour la délégation native ; ni GPU ni dépendances métier n'ont été qualifiés. Aucune mission Opus2D n'a été rejouée.
+
+La tâche historique `e5959986` reste en arrêt non confirmé malgré une annulation officielle relue. Elle peut encore retenir une future activation automatique. Ses preuves sont conservées ; ce reçu ne la présente pas comme close. Le statut MCP propre au fil Monuments reste à confirmer par son propriétaire.
