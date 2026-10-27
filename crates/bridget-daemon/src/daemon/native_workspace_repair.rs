@@ -178,6 +178,82 @@ pub(super) fn recheck_idle(
     recheck_remote_dispatch(st, current, saved)
 }
 
+fn reconcile_publication(
+    conn: &str,
+    task_id: &str,
+    request: &WorkspaceRepairRequestV1,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Option<Value>, String> {
+    let (saved, worker, command, owner, instance) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        recheck_attested_thread(&st, conn, thread)?;
+        let (owner, instance) =
+            live_connection_identity(&st, conn).ok_or("permission_attestation_unavailable")?;
+        let task = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        if !can_own_task(&st, &task, &owner, &instance)? {
+            return Err("task_unavailable".into());
+        }
+        if !task
+            .workspace_repairs
+            .last()
+            .is_some_and(|v| v.request == *request && v.phase == "publishing")
+        {
+            return Ok(None);
+        }
+        let worker = remote_worker_identity(
+            task.remote_placement
+                .as_ref()
+                .ok_or("workspace_repair_remote_required")?,
+        );
+        let command = remote_command_identity(&st, &task)
+            .map_err(|_| "workspace_repair_identity_unconfirmed")?;
+        (task, worker, command, owner, instance)
+    };
+    // Observe ne modifie ni worker, ni wrapper, ni fichiers Git, ni droits.
+    let response = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        bridget_transport::protocol::WorkerRequestOperation::RepairWorkspace {
+            repair: request.clone(),
+            action: WorkspaceRepairActionV1::Observe,
+            expires_at: 0,
+        },
+        Instant::now() + Duration::from_secs(10),
+    )
+    .map_err(|e| format!("workspace_repair_remote:{e:?}"))?;
+    let bridget_transport::protocol::WorkerResponseOperation::WorkspaceRepair { status } = response
+    else {
+        return Err("workspace_repair_proof_missing".into());
+    };
+    if status.request != *request {
+        return Err("workspace_repair_envelope_mismatch".into());
+    }
+    if status.phase != "published" {
+        return Ok(None);
+    }
+    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let current = st
+        .delegation_store
+        .get(task_id)?
+        .ok_or("task_unavailable")?;
+    if !can_own_task(&st, &current, &owner, &instance)?
+        || current.remote_placement != saved.remote_placement
+        || current.child_instance != saved.child_instance
+        || current.workspace_repairs.last().is_none_or(|v| {
+            v.request != *request || !matches!(v.phase.as_str(), "publishing" | "published")
+        })
+    {
+        return Err("workspace_repair_task_changed".into());
+    }
+    let task = save_status(&mut st, task_id, status)?;
+    Ok(Some(current_task_view(&st, &task, true)?))
+}
+
 pub(super) fn repair(
     conn: &str,
     task_id: &str,
@@ -189,6 +265,9 @@ pub(super) fn repair(
     request
         .validate()
         .map_err(|_| "workspace_repair_invalid_request")?;
+    if let Some(view) = reconcile_publication(conn, task_id, request, thread, state)? {
+        return Ok(view);
+    }
     let (saved, command, worker, owner, instance) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;

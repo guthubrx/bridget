@@ -3548,7 +3548,7 @@ pub struct WorkerSourceBase {
 /// Réparation explicite185 : aucun identifiant d'enfant ou de fournisseur libre.
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
 #[serde(rename_all="snake_case")]
-pub enum WorkspaceRepairActionV1 {Prepare,Commit,Publish}
+pub enum WorkspaceRepairActionV1 {Observe,Prepare,Commit,Publish}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRepairRequestV1 {
@@ -4054,9 +4054,9 @@ impl WorkerRequest {
                     && worker_base_commit(source.expected_base_commit.as_deref()))?;
                 worker_serialized_size(&source.workspace, 4096)
             }
-            WorkerRequestOperation::RepairWorkspace { repair, expires_at, .. } => {
+            WorkerRequestOperation::RepairWorkspace { repair, action, expires_at } => {
                 repair.validate()?;
-                worker_require(*expires_at>0)
+                worker_require(if *action==WorkspaceRepairActionV1::Observe {*expires_at==0} else {*expires_at>0})
             },
             WorkerRequestOperation::Start { start } => {
                 start.validate()?;

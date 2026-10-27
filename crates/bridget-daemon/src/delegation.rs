@@ -1084,6 +1084,12 @@ impl Task {
             .unwrap_or(&self.cwd)
     }
 
+    pub fn effective_child_policy(&self)->Option<&serde_json::Value> {
+        self.workspace_repairs.last().filter(|v|v.phase=="published")
+            .and_then(|v|v.prepared.as_ref()).map(|v|&v.child_policy)
+            .or_else(||self.permission_snapshot.as_ref().map(|v|&v.child_policy))
+    }
+
     pub fn terminal(&self) -> bool {
         matches!(
             self.state.as_str(),

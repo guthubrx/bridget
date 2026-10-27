@@ -55,6 +55,22 @@ impl ManagedSession for RetainedRepairSession {
     }
 }
 
+pub(super) struct ApplyOutcome {
+    pub status: WorkspaceRepairStatusV1,
+    pub pending_receipt: Option<WorkspaceRepairStatusV1>,
+}
+pub(super) fn persist_pending(
+    context: &WorkerResultContext,
+    status: &WorkspaceRepairStatusV1,
+) -> bool {
+    crate::remote_worker::workspace_repair::persist_wrapper_result(
+        &context.store_root,
+        &context.command,
+        status,
+    )
+    .is_ok()
+}
+
 pub(super) fn apply(
     task_id: &str,
     mut status: WorkspaceRepairStatusV1,
@@ -70,7 +86,7 @@ pub(super) fn apply(
     instance: &str,
     socket: &Path,
     cancelled: Option<&NativeTerminationSignal>,
-) -> WorkspaceRepairStatusV1 {
+) -> ApplyOutcome {
     let cancelled = || cancelled.is_some_and(NativeTerminationSignal::requested);
     let result = (|| -> Result<(), String> {
         let context = remote.ok_or("workspace_repair_remote_required")?;
@@ -252,11 +268,8 @@ pub(super) fn apply(
         }
         status.phase = "resumed".into();
         status.code = None;
-        crate::remote_worker::workspace_repair::persist_wrapper_result(
-            &context.store_root,
-            &context.command,
-            &status,
-        )?;
+        // L'écriture finale unique reste hors du traitement des erreurs
+        // fournisseur : sa panne ne transforme pas une reprise attestée en refus.
         Ok(())
     })();
     if let Err(mut code) = result {
@@ -281,15 +294,26 @@ pub(super) fn apply(
             .into();
         }
         status.code = Some(code);
-        if let Some(context) = remote {
-            let _ = crate::remote_worker::workspace_repair::persist_wrapper_result(
-                &context.store_root,
-                &context.command,
-                &status,
-            );
+    }
+    // Le maître ne voit jamais un refus terminal avant sa persistance.
+    // Une erreur de disque ferme les admissions ; le wrapper garde le vrai
+    // résultat et ne rejoue aucun effet pendant ses tentatives d'écriture.
+    let mut pending_receipt = None;
+    if let Some(context) =
+        remote.filter(|v| v.command.task_id == task_id && v.command.instance_id == instance)
+    {
+        if !persist_pending(context, &status) {
+            pending_receipt = Some(status.clone());
+            if status.phase == "refused" {
+                status.phase = "prepared".into();
+            }
+            status.code = Some("workspace_repair_receipt_unconfirmed".into());
         }
     }
-    status
+    ApplyOutcome {
+        status,
+        pending_receipt,
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +523,50 @@ for line in sys.stdin:
                 "expires_at":unix_now_secs()+60}),
             ),
         };
+        // Écriture du refus indisponible : aucun terminal n'est annoncé.
+        let mut blocked_status = status.clone();
+        blocked_status.request.request_id = "repair185-disk-failure".into();
+        let blocked_path = crate::remote_worker::workspace_repair::result_path(
+            &context.store_root,
+            &context.command,
+            &blocked_status.request.request_id,
+        );
+        std::fs::create_dir(&blocked_path).unwrap();
+        let pending = apply(
+            "task185",
+            blocked_status.clone(),
+            Some(&context),
+            &mut transport,
+            "repair185",
+            definition,
+            &definition.args,
+            &env,
+            Vec::new(),
+            root,
+            "child185",
+            "instance185",
+            &root.join("bridget.sock"),
+            None,
+        );
+        assert_eq!(pending.status.phase, "prepared");
+        assert_eq!(
+            pending.status.code.as_deref(),
+            Some("workspace_repair_receipt_unconfirmed")
+        );
+        let pending = pending.pending_receipt.unwrap();
+        assert_eq!(pending.phase, "refused");
+        assert_eq!(transport.process_id(), old_pid);
+        assert!(transport.is_alive());
+        std::fs::remove_dir(&blocked_path).unwrap();
+        assert!(persist_pending(&context, &pending));
+        let durable = crate::remote_worker::workspace_repair::wrapper_result(
+            &context.store_root,
+            &context.command,
+            &blocked_status.request,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(durable.phase, "refused");
         // Annulation observée avant toute action : même processus et Git intact.
         let cancellation = NativeTerminationSignal::new().unwrap();
         cancellation.requested.store(true, Ordering::SeqCst);
@@ -519,7 +587,8 @@ for line in sys.stdin:
             "instance185",
             &root.join("bridget.sock"),
             Some(&cancellation),
-        );
+        )
+        .status;
         assert_eq!(cancelled_result.phase, "refused", "{cancelled_result:?}");
         assert_eq!(
             cancelled_result.code.as_deref(),
@@ -544,7 +613,8 @@ for line in sys.stdin:
             "instance185",
             &root.join("bridget.sock"),
             None,
-        );
+        )
+        .status;
         assert_eq!(result.phase, "resumed", "{result:?}");
         assert_eq!(result.code, None);
         assert_ne!(transport.process_id(), old_pid);
@@ -587,7 +657,8 @@ for line in sys.stdin:
             "instance185",
             &root.join("bridget.sock"),
             None,
-        );
+        )
+        .status;
         assert_eq!(replay.phase, "resumed", "{replay:?}");
         let rpc = std::fs::read_to_string(&trace).unwrap();
         assert_eq!(

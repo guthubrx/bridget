@@ -162,6 +162,23 @@ impl WorkerRuntime {
         Ok(WorkerResponseOperation::WorkspaceRepair { status })
     }
 
+    pub(super) fn publish_repair_status(
+        &self,
+        command: &WorkerCommandIdentity,
+        status: WorkspaceRepairStatusV1,
+    ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        // Même verrou que dispatch_worker_inbound : l'annulation reçue et
+        // la publication durable possèdent un ordre unique, après les relectures.
+        let cancelled = self
+            .cancelled
+            .lock()
+            .map_err(|_| WorkerRefusal::StoreUnavailable)?;
+        if cancelled.contains(&json_digest(command).map_err(unavailable)?) {
+            return Err(WorkerRefusal::Unauthorized);
+        }
+        self.save_repair_status(command, status)
+    }
+
     pub(super) fn repair_workspace(
         &mut self,
         command: &WorkerCommandIdentity,
@@ -171,6 +188,22 @@ impl WorkerRuntime {
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
         request.validate()?;
         let mut receipt = self.store.command(command).map_err(refuse)?;
+        // Lecture pure : un résultat publié reste réconciliable après arrêt/expiration.
+        if action == WorkspaceRepairActionV1::Observe {
+            let status = receipt
+                .workspace_repair
+                .iter()
+                .chain(receipt.workspace_repair_history.iter())
+                .find(|v| v.request.request_id == request.request_id)
+                .ok_or(WorkerRefusal::UnknownExecution)?;
+            if status.request != *request {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
+            return Ok(WorkerResponseOperation::WorkspaceRepair {
+                status: status.clone(),
+            });
+        }
+
         // Un refus sans effet du wrapper est durable avant une autre clé.
         if let Some(previous) = receipt
             .workspace_repair
@@ -341,7 +374,7 @@ impl WorkerRuntime {
                 "committed"
             }
             .into();
-            return self.save_repair_status(command, observed);
+            return self.publish_repair_status(command, observed);
         }
         if action != WorkspaceRepairActionV1::Prepare {
             return Ok(refused("workspace_repair_not_prepared"));
@@ -513,4 +546,27 @@ pub(crate) fn published(
         .filter(|v| v.identity == *command)
         .and_then(|v| v.workspace_repair)
         .is_some_and(|v| v.request == *request && v.phase == "published")
+}
+
+pub(super) fn collect_markers(root: &Path, receipt: &WorkerCommandReceipt) -> io::Result<()> {
+    let mut paths = vec![capability_path(root, &receipt.identity)];
+    for status in receipt
+        .workspace_repair
+        .iter()
+        .chain(receipt.workspace_repair_history.iter())
+    {
+        paths.push(result_path(
+            root,
+            &receipt.identity,
+            &status.request.request_id,
+        ));
+    }
+    for path in paths {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    File::open(root.join("markers"))?.sync_all()
 }

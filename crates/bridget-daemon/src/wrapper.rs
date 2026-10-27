@@ -4703,8 +4703,22 @@ fn launch_session_with_status(
     let mut last_provider_spawn = Instant::now();
     let mut consecutive_fast_failures = 0_u32;
     let mut workspace_repair_barrier:Option<bridget_transport::protocol::WorkspaceRepairRequestV1>=None;
+    let mut workspace_repair_pending_receipt:Option<bridget_transport::protocol::WorkspaceRepairStatusV1>=None;
+    let mut last_repair_receipt_attempt=Instant::now();
 
     loop {
+        if last_repair_receipt_attempt.elapsed()>=Duration::from_millis(250) {
+            if let (Some(status),Some(context))=(&workspace_repair_pending_receipt,&remote_result_context) {
+                if workspace_repair::persist_pending(context,status) {
+                    let status=status.clone();
+                    if status.phase=="refused" {workspace_repair_barrier=None;}
+                    send_wrapper_message(&writer,WrapperToDaemon::WorkspaceRepairResult {
+                        task_id:context.command.task_id.clone(),status});
+                    workspace_repair_pending_receipt=None;
+                }
+            }
+            last_repair_receipt_attempt=Instant::now();
+        }
         if let (Some(request),Some(context))=(&workspace_repair_barrier,&remote_result_context) {
             if crate::remote_worker::workspace_repair::published(&context.store_root,&context.command,request) {
                 workspace_repair_barrier=None;
@@ -5060,9 +5074,11 @@ fn launch_session_with_status(
                     }
                 }
                 Ok(DaemonToWrapper::WorkspaceRepairControl {task_id,status}) => {
-                    let status=workspace_repair::apply(&task_id,status,remote_result_context.as_ref(),
+                    let outcome=workspace_repair::apply(&task_id,status,remote_result_context.as_ref(),
                         &mut transport,agent_type,definition,&native_args,&mcp_environment,
                         mcp_servers.clone(),home,&my_name,&instance_id,socket,native_termination.as_ref());
+                    let status=outcome.status;
+                    workspace_repair_pending_receipt=outcome.pending_receipt;
                     if status.phase!="refused" {workspace_repair_barrier=Some(status.request.clone());}
                     if status.phase=="resumed" {
                         permission_cwd=std::env::current_dir().unwrap_or(permission_cwd);

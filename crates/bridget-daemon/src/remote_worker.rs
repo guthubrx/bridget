@@ -275,6 +275,13 @@ pub struct WorkerCommandReceipt {
     pub updated_at: i64,
 }
 
+impl WorkerCommandReceipt {
+    fn effective_placement(&self)->&RemotePlacement {
+        self.workspace_repair.as_ref().filter(|v|v.phase=="published")
+            .and_then(|v|v.prepared.as_ref()).map(|v|&v.placement).unwrap_or(&self.placement)
+    }
+}
+
 /// Attestation compacte : les digests lient les identités complètes sans secrets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1136,6 +1143,7 @@ impl WorkerStore {
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error.into()),
                 }
+                workspace_repair::collect_markers(&self.root,&command)?;
                 fs::remove_file(self.command_path(&command.identity))?;
                 File::open(self.root.join("commands"))?.sync_all()?;
             }
@@ -4054,7 +4062,7 @@ impl WorkerRuntime {
             } => {
                 let receipt = self.store.command(&request.command).map_err(refuse)?;
                 if !matches!(receipt.phase, WorkerCommandPhase::Released)
-                    || receipt.placement.execution_cwd != parent.cwd
+                    || receipt.effective_placement().execution_cwd != parent.cwd
                 {
                     return Err(WorkerRefusal::Unauthorized);
                 }
@@ -4068,7 +4076,7 @@ impl WorkerRuntime {
             }
             WorkerRequestOperation::ParentSourceProof { parent, source } => {
                 let receipt = self.store.command(&request.command).map_err(refuse)?;
-                if receipt.phase != WorkerCommandPhase::Released || receipt.placement.execution_cwd != parent.cwd {
+                if receipt.phase != WorkerCommandPhase::Released || receipt.effective_placement().execution_cwd != parent.cwd {
                     return Err(WorkerRefusal::Unauthorized);
                 }
                 let permission_digest = crate::native_permissions::prove_parent_permissions(parent, parent.revision)
@@ -7332,7 +7340,43 @@ while not stop.exists(): time.sleep(.01)
         assert!(observation.native_ready);
         assert!(observation.permission_digest.is_some(),"un commit après migration doit rester continuable");
         assert_eq!(observation.workspace.as_ref().unwrap()["head_commit"],next_head);
+        // Les délégations du parent réparé prouvent les nouveaux droits et le nouveau dossier.
+        let parent=ProviderPermissions {cwd:target.to_string_lossy().into_owned(),
+            provider_policy:published.prepared.as_ref().unwrap().child_policy.clone(),
+            provider_instance_id:identity.instance_id.clone(),..prepare.parent.clone()};
+        let request_frame=WorkerRequest {version:REMOTE_WORKER_VERSION,correlation_id:"parent-repaired185".into(),
+            connection_epoch:"epoch185".into(),worker:runtime.identity.clone(),command:identity.clone(),
+            request:WorkerRequestOperation::ParentProof {parent:parent.clone(),expected_revision:parent.revision}};
+        let disconnected=AtomicBool::new(false);
+        assert!(matches!(runtime.handle(&request_frame,"epoch185",&disconnected).unwrap(),
+            WorkerResponseOperation::ParentProof {..}));
+        let mut source_frame=request_frame;
+        source_frame.request=WorkerRequestOperation::ParentSourceProof {parent:parent.clone(),
+            source:bridget_transport::protocol::WorkerSourceBase {cwd:parent.cwd.clone(),
+                expected_base_commit:Some(next_head),workspace:Some(WorkspaceRequest::Shared {}),
+                workload:bridget_transport::protocol::AutoDelegateWorkload::General}};
+        assert!(matches!(runtime.handle(&source_frame,"epoch185",&disconnected).unwrap(),
+            WorkerResponseOperation::ParentSourceProof {source_error:None,..}));
+        // Une annulation arrivée après les relectures ferme le point atomique de publication.
+        let before=runtime.store.command(&identity).unwrap();
+        runtime.cancelled.lock().unwrap().insert(json_digest(&identity).unwrap());
+        assert_eq!(runtime.publish_repair_status(&identity,published.clone()).unwrap_err(),WorkerRefusal::Unauthorized);
+        assert_eq!(runtime.store.command(&identity).unwrap(),before);
+        let WorkerResponseOperation::WorkspaceRepair {status:observed}=runtime.repair_workspace(
+            &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Observe,0).unwrap()
+            else {panic!("lecture sans effet attendue")};
+        assert_eq!(observed.phase,"published","l'annulation n'efface pas le reçu publié");
+        let capability_path=workspace_repair::capability_path(&runtime.store.root,&identity);
+        let result_path=workspace_repair::result_path(&runtime.store.root,&identity,&request.request_id);
+        let refused_path=workspace_repair::result_path(&runtime.store.root,&identity,"repair185-worker");
+        runtime.store.collect(worker_now()+2*WORKER_RECEIPT_RETENTION_SECS).unwrap();
+        assert!(capability_path.exists()&&result_path.exists()&&refused_path.exists(),"commande active conservée");
         bridget_transport::managed_session::stop_owned_child(&mut child,true,Duration::from_secs(2)).unwrap();
+        let mut ended=runtime.store.command(&identity).unwrap();ended.phase=WorkerCommandPhase::Terminal;
+        runtime.store.persist(&runtime.store.command_path(&identity),&ended).unwrap();
+        runtime.store.collect(worker_now()+2*WORKER_RECEIPT_RETENTION_SECS).unwrap();
+        assert!(!capability_path.exists()&&!result_path.exists()&&!refused_path.exists(),"marqueurs collectés avec le reçu");
+        assert!(!runtime.store.command_path(&identity).exists());
     }
 
     #[test]

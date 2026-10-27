@@ -3540,6 +3540,10 @@ fn failure(code: &str) -> Value {
                 "Cette clé de réparation désigne déjà des paramètres différents.",
                 "Relisez workspace_repair dans le statut de cette tâche. Pour suivre cette opération, conservez sa request_id et tous ses paramètres. Ne modifiez pas sa destination au rejeu.",
                 "Un changement de destination exige un refus sans effet confirmé, puis une nouvelle décision de réparation."),
+            "workspace_repair_receipt_unconfirmed" => (
+                "Le wrapper n'a pas pu enregistrer durablement son résultat de réparation.",
+                "Conservez la même tâche et la même clé. Vérifiez l'espace disque et l'accès au store technique du worker. Le wrapper garde les admissions fermées et retente seulement l'écriture du reçu, sans rejouer la réparation.",
+                "Si le stockage ne peut pas être rétabli dans le mandat existant, demandez cette intervention au responsable. Ne créez pas une autre clé tant que le reçu reste incertain."),
             "workspace_repair_pending" => (
                 "La réparation n'est pas encore confirmée de bout en bout.",
                 "Relisez le statut de la même tâche. Rejouez uniquement la même réparation avec la même request_id et les mêmes paramètres pour réconcilier son reçu. N'envoyez aucune nouvelle mission.",
@@ -3881,7 +3885,9 @@ fn parent_fact(
         {
             return Err("permission_not_inherited".into());
         }
-        let command = current_command(st, &parent)?;
+        let command = if parent.remote_placement.is_some() {
+            remote_command_identity(st,&parent).map_err(|_|"parent_task_unavailable")?.command_id
+        } else {current_command(st,&parent)?};
         if st.managed_by_instance.get(instance) != Some(&command)
             || st
                 .fleet
@@ -3895,7 +3901,8 @@ fn parent_fact(
         {
             return Err("parent_task_unavailable".into());
         }
-        if let Some(snapshot) = parent.permission_snapshot {
+        if let Some(policy) = parent.effective_child_policy().cloned() {
+            let cwd=parent.effective_execution_cwd().to_owned();
             return Ok(Some(bridget_transport::protocol::ProviderPermissions {
                 version: 1,
                 source: "native_wrapper".into(),
@@ -3904,18 +3911,18 @@ fn parent_fact(
                 provider_instance_id: instance.into(),
                 revision: 1,
                 driver: parent.definition.protocol,
-                cwd: parent.cwd,
-                runtime_mode: crate::native_permissions::runtime_mode(&snapshot.child_policy)
+                cwd,
+                runtime_mode: crate::native_permissions::runtime_mode(&policy)
                     .into(),
-                interaction_mode: if snapshot.child_policy["permission_mode"] == "plan"
-                    || snapshot.child_policy["sandbox_policy"]["type"] == "readOnly"
+                interaction_mode: if policy["permission_mode"] == "plan"
+                    || policy["sandbox_policy"]["type"] == "readOnly"
                 {
                     "plan"
                 } else {
                     "default"
                 }
                 .into(),
-                provider_policy: snapshot.child_policy,
+                provider_policy: policy,
             }));
         }
     }
@@ -31208,6 +31215,103 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let shared=Arc::new(Mutex::new(st));
         assert_eq!(remote_dispatch_proof(&shared,&task).unwrap_err(),"workspace_repair_pending");
         drop(shared);cleanup(&config);
+    }
+
+    fn spec185_published_status(task:&Task)->bridget_transport::protocol::WorkspaceRepairStatusV1 {
+        use bridget_transport::protocol::*;
+        let mut placement=task.remote_placement.clone().unwrap();
+        placement.execution_cwd="/mnt/storage/repair185".into();
+        let workspace=json!({"strategy":"worktree","state":"kept","toplevel":task.cwd,
+            "path":placement.execution_cwd,"branch":"repair185","base_commit":"1".repeat(40),
+            "head_commit":"1".repeat(40),"branch_commit":"1".repeat(40),"head_on_branch":true,
+            "commit_count":0,"commits":[],"truncated":false,"dirty":false});
+        WorkspaceRepairStatusV1 {request:WorkspaceRepairRequestV1 {
+            request_id:"repair185-observed".into(),target_cwd:placement.execution_cwd.clone(),
+            expected_head:"1".repeat(40)},phase:"published".into(),proof:None,code:None,
+            prepared:Some(WorkerPrepared {placement,workspace:Some(workspace),token:"fixture185".into(),
+                definition:task.definition.clone(),child_policy:json!({"kind":"codex","approval_policy":"never",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"workspaceWrite",
+                "writableRoots":["/mnt/storage/repair185"],"networkAccess":false,
+                "excludeTmpdirEnvVar":true,"excludeSlashTmp":true}}),
+                effective_posture:SpawnPosture::Development,prepared_at:unix_timestamp()})}
+    }
+
+    #[test]
+    fn spec185_parent_authority_uses_published_projection_without_changing_canon() {
+        let (mut st,config,mut task,_)=remote162_capture_fixture();
+        let original=serde_json::to_value(&task.request).unwrap();
+        let original_cwd=task.cwd.clone();
+        task.workspace_repairs.push(spec185_published_status(&task));
+        let identity=remote_command_identity(&st,&task).unwrap();
+        let command=identity.command_id.clone();
+        task.definition.digest=task.remote_placement.as_ref().unwrap().definition_digest.clone();
+        let lease=crate::fleet::SpawnLease {command_id:command.clone(),name:task.child.clone(),
+            instance_id:identity.instance_id.clone(),generation:identity.generation,
+            deadline_at:task.mission_deadline_at.unwrap(),persistent:false,project:None,link_id:None,
+            ownership:None,agent_path:None,remote_placement:task.remote_placement.clone()};
+        st.fleet.mark_starting(&lease,unix_timestamp(),&task.definition).unwrap();
+        st.fleet.register_connected(&lease,&identity.instance_id,unix_timestamp()).unwrap();
+        st.managed_by_instance.insert(task.child_instance.clone().unwrap(),command);
+        st.delegation_store.save(&task).unwrap();
+        let fact=parent_fact(&st,&task.child,task.child_instance.as_deref().unwrap(),None,None).unwrap().unwrap();
+        assert_eq!(fact.cwd,"/mnt/storage/repair185");
+        assert_eq!(fact.provider_policy["sandbox_policy"]["writableRoots"],json!(["/mnt/storage/repair185"]));
+        assert_eq!(task.cwd,original_cwd);
+        assert_eq!(serde_json::to_value(&task.request).unwrap(),original);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec185_published_worker_receipt_reconciles_after_guard_expiry_without_effects() {
+        use bridget_transport::protocol::*;
+        let (mut st,config,mut task,_)=remote162_capture_fixture();
+        task.state="cancelled".into();task.guard_released=true;
+        task.idle_deadline_at=Some(unix_timestamp()-1);
+        let published=spec185_published_status(&task);
+        let mut pending=published.clone();pending.phase="publishing".into();
+        task.workspace_repairs.push(pending);
+        st.delegation_store.save(&task).unwrap();
+        let registry_path=config.db_path.with_extension("registry185.json");
+        let mut registry=json!({"agents":{"native-test":{"command":"/bin/sh","args":["app-server"],
+            "protocol":"codex_app_server","forbidden_env":[],"capabilities":{"execution_paths":["codex_app_server"],
+            "models":{"custom/model":{"efforts":["high"]}}}}}});
+        registry["machines"]=json!({"cartae":{"enabled":true,"worker_id":"worker-cartae",
+            "provisioning_revision":1,"credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"repair185-secret")),
+            "allowed_agent_types":["native-test"],"mappings":{}}});
+        std::fs::write(&registry_path,registry.to_string()).unwrap();
+        std::fs::set_permissions(&registry_path,std::fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry=AgentRegistry::load_from_path(registry_path).unwrap();
+        let (writer,mut reader)=super::super::presence_tests::control_socket("observe185");
+        st.connections.insert("worker185".into(),writer);
+        st.peer_uids.insert("worker185".into(),unsafe {libc::geteuid()});
+        let state=Arc::new(Mutex::new(st));
+        assert!(matches!(handle_worker_message(&state,"worker185",
+            WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {
+                hello:WorkerHello {version:REMOTE_WORKER_VERSION,
+                    identity:WorkerIdentity {machine_id:"cartae".into(),worker_id:"worker-cartae".into(),provisioning_revision:1},
+                    credential:IdentityCredential::new("repair185-secret".into()),
+                    build:"fixture185".into(),capability:ClientCapability::RemoteWorkerV1},
+                capabilities:vec![WorkerCapability::WorkspaceRepairV1]}}),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities {..})));
+        let responder_state=state.clone();let response_status=published.clone();
+        let responder=std::thread::spawn(move|| {
+            let DaemonToWrapper::WorkerRequest {request}=super::super::presence_tests::read_control(&mut reader)
+                else {panic!("lecture worker attendue")};
+            assert!(matches!(request.request,WorkerRequestOperation::RepairWorkspace {
+                action:WorkspaceRepairActionV1::Observe,expires_at:0,..}),"aucun nouvel effet admis");
+            assert!(handle_worker_message(&responder_state,"worker185",WrapperToDaemon::WorkerResponse {
+                response:WorkerResponse {version:request.version,correlation_id:request.correlation_id,
+                    connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+                    response:WorkerResponseOperation::WorkspaceRepair {status:response_status}}
+            }).is_none());
+        });
+        let view=workspace_repair::repair("conn-1",&task.task_id,&published.request,None,None,&state).unwrap();
+        responder.join().unwrap();
+        assert_eq!(view["workspace_repair"]["phase"],"published");
+        let saved=state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(saved.state,"cancelled");assert!(saved.guard_released);
+        assert_eq!(saved.workspace.unwrap().path,"/mnt/storage/repair185");
+        drop(state);cleanup(&config);
     }
 
     #[test]

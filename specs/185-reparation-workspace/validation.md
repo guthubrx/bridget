@@ -54,3 +54,14 @@ Le test d'échec de reprise comporte une sonde de compte sans réponse, bornée 
 -13 tests de module MCP : PASS ;1 test CLI du cycle natif : PASS ;4 tests de portées MCP : PASS ;10 tests d'attestation d'outils : PASS.
 Les journaux locaux de ces passages sont conservés sous /home/moi/.cache/bridget184/spec185-*.log, hors Git.
 La compatibilité MCP complète et la revue du commit corrigé restent en cours. Les tests ne constituent pas une qualification exhaustive de toutes les coupures à toutes les frontières. Aucun fournisseur réel ni tâche métier réelle n'a été lancé par ces contrôles.
+
+## Contre-revue57018bf6 et seconde correction
+Source8bdbfab0 : verdict défavorable. Le candidat compilé8bdbfab0 n'est pas éligible à l'activation.
+Cinq objections :
+- Publication worker : le verrou partagé des annulations couvre désormais la relecture fraîche et la persistance de la publication.
+- Réponse de publication perdue : une opération Observe sans effet consulte le reçu avant les gardes d'admission. Le maître peut réconcilier sa décision publishing après expiration ou annulation, sans réactiver la tâche.
+- Écriture du refus wrapper : aucun terminal n'est annoncé si le reçu n'est pas écrit. Le wrapper conserve son résultat en mémoire, ferme les admissions et ne retente que l'écriture. Le résultat repris attesté utilise cette même écriture finale.
+- Autorité du parent : le dossier et les droits proviennent de la projection publiée. Les preuves worker ParentProof et ParentSourceProof utilisent le placement effectif ; leurs canons restent inchangés. Le contrôle du parent distant utilise l'identité de commande attestée par la flotte, et non l'hypothèse command_id=task_id. Le journal de test a confirmé cette divergence avant correction.
+- Collecte : la capacité et chaque reçu de réparation sont retirés avec le reçu de commande, sous ses conditions de terminalité, rétention et absence de slot référent. Une commande active les conserve.
+
+14tests daemon185 : PASS après ces corrections. Un aller-retour réel de protocole vérifie Observe après expiration et annulation ; la tâche reste annulée. Le test de délégation vérifie le nouveau fait parent et les preuves worker. La fixture d'écriture défaillante ne retourne aucun refus terminal puis persiste le même reçu dès rétablissement. La collecte conserve les marqueurs actifs puis retire les marqueurs avec la commande terminale hors rétention.
