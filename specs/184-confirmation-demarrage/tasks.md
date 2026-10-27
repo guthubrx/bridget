@@ -13,5 +13,6 @@
 - [x] Corriger la projection historique de l'incertitude initiale.
 - [x] Vérifier six tests ciblés, dont la matrice des états/preuves et l'absence de mutation de tâche.
 - [x] Consigner la seconde revue et la contre-revue finale après traitement des objections.
-- [ ] Intégrer et pousser le complément.
-- [ ] Actualiser le candidat et vérifier la possibilité d'activation native.
+- [x] Intégrer et pousser le complément.
+- [x] Actualiser et vérifier le candidat ; demande native d'activation réellement refusée.
+- [ ] Activer le candidat actualisé lorsque la maintenance native sera admise.

@@ -49,4 +49,10 @@ Six tests ciblés PASS via scripts/build.py : trois spec184, matrice spec172 des
 Revue initiale du complément : tâche fdf5a11f-9a44-48fe-a47d-5d68ebdbe18c, clé bridget-spec184-guidance-review-20261027-02. Deux objections ont été traitées : ancien incident après fin de tâche, codes non couverts.
 Contre-revue finale : tâche42b9dfbd-47fd-4458-bb27-53a42aed9a91, clé bridget-spec184-guidance-review-20261027-03. Verdict APPROUVÉ, aucun bloquant identifié. Aucun modèle métier n'a été lancé.
 Les six tests ciblés ont été rejoués après ces ajustements : PASS. Le cas terminal failed reste visible, tandis que l'incertitude initiale reste historique. Les codes inconnus déclarent leur diagnostic manquant et un recours humain sûr.
-La compilation, l'installation du candidat actualisé et le garde d'activation restent à consigner après leur résultat réel.
+Complément source intégré et poussé : 7899d0bdab0112d804af04ef2966484a8ed07702.
+Compilation release du candidat actualisé : PASS en56,62s.
+Candidat vérifié et installé : /home/moi/.local/lib/bridget-communication/184-guidance-7899d0bdab01/bin/bridget.
+Build184-guidance-7899d0bdab01, version0.6.3, SHA-256621101901c8fc6c3df278cc82f94133a02132d501bd1b4a57f55a07785753483.
+Nouvel appel natif updates prepare : refus update_missions_active_or_unconfirmed. Aucun lien actif modifié ni service redémarré. Le daemon relu est toujours183-admission-7478e9e7 ; core/mobile/workerCartae et liaisonSYS-LE-2 sont actifs.
+L'appel installed a de nouveau différé le nettoyage pour observation des usages incomplète. Le candidat initial1caabb9e est conservé avec le candidat actualisé et les exécutables actifs/retours : aucun retrait forcé pendant la livraison ouverte. Le worktree/branche184 restent propres, intégrés mais conservés jusqu'à activation et contrôle d'usage. Aucun travail Opus2D touché.
+Les refus améliorés et la projection historique sont donc livrés en source et dans le candidat, PAS dans le runtime actif.
