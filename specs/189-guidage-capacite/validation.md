@@ -4,3 +4,7 @@ La trace native d605c969 montre le refus transitoire au tour200 puis une lecture
 Six tests189 PASS : preuve fermée/roundtrip, inconnus et données invalides, refus durable atomique/rejeu immuable/sans tâche, ancien refus sans preuve, dépassement de borne sans mutation, précontrôle MCP refusé sans seconde connexion ni opération de tâche et sans donnée privée. Le premier build de tests a trouvé une erreur de portée du module de fixture MCP, corrigée avant ces contrôles. Aucun runtime métier ou service modifié.
 
 Le contrôle de régression du service168 a révélé une assertion qui exigeait l’ancien transport interne nu ; l’assertion vérifie maintenant le code public inchangé et la preuve CPU réellement reçue (95%). Aucun critère de saturation assoupli. La régression du score168 passe.
+
+Source001a97aaf814ac7fe0c7fbd0f9604665604a0e7b : 23 contrôles distincts PASS (6spec189,14store163,score168,service168,prétransport138). Documentation32pages/522liens/13pairesPASS. Aucun test ignoré par ces filtres ; aucune FULL. Contre-revue indépendante demandée avec cette source exacte.
+
+Contre-revue b45d760a-4c89-4982-93a7-194de2270bf2 favorable sur001a97aa, résultat lu/ACK et garde fermée. Revue statique, normes absentes de son checkout signalées ; aucun build ni test délégué. Build release PASS (1min11s), cache partagé7,11Gio. Statut natif final : maître183-admission-7478e9e7 ; tâche historique e5959986 toujours cancelling/native_cancel_unverifiable. Aucun Prepare identique répété, aucun arrêt forcé ni modification manuelle du store.
