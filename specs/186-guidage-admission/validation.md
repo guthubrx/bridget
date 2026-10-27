@@ -35,3 +35,9 @@ Correction technique : aucun diaporama d'interface requis.
 ## Limite de livraison
 Runtime183 toujours actif. Maintenance native184/185 déjà refusée update_missions_active_or_unconfirmed ; une production Cartae est en cours selon le propriétaire.
 Cette correction ne contourne pas la garde et ne répare pas58459353. Aucune relance, mission de substitution, modification directe de base ou redémarrage.
+
+## Contre-revue du premier commit
+Tâche1c4a8c79-2d55-4a1b-ac25-b010b152601d, clébridget-spec186-review-20261027-01.
+Source57e65819 : un défautP2, refus partiel des deux efforts encore perdu lorsque la sonde globale réussit.
+Correction : les recherches de l'effort témoin et de l'effort choisi traversent le même pont. Le test existant spec168_service_valide_choisit_la_combinaison_complete exige désormais le motif réellement reçu.
+Les trois régressions184 PASS.

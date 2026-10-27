@@ -1583,8 +1583,10 @@ fn refresh_routing_selected(
                 .map(|(_, observation)| observation)
                 .ok_or("routing_candidate_unavailable")
         };
-        let control = observed_effort(original.default_effort.as_deref())?;
-        let selected = observed_effort(effort)?;
+        let control = observed_effort(original.default_effort.as_deref())
+            .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
+        let selected = observed_effort(effort)
+            .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
         // La variation d'effort n'autorise aucune dérive du profil initial.
         // Les droits du choix restent attestés, puis revalidés à Prepare.
         if control.definition_digest != observed.definition_digest
@@ -15060,8 +15062,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 false,
             )
             .unwrap_err();
+            let refusal = failure(&error);
             assert_eq!(
-                error,
+                refusal["code"],
                 if drift.ends_with("_missing") {
                     "routing_candidate_unavailable"
                 } else {
@@ -15069,8 +15072,6 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 },
                 "dérive {drift}"
             );
-            let refusal = failure(&error);
-            assert_eq!(refusal["code"], error);
             assert_eq!(refusal["status"], "refused");
             let recovery = refusal["detail"]["recovery"].as_str().unwrap();
             assert!(recovery.contains("request_id"));
@@ -15078,7 +15079,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
             if drift.ends_with("_missing") {
                 assert!(recovery.contains("detail.admission"));
                 assert!(recovery.contains("sans créer de doublon"));
-                assert!(refusal["detail"].get("reasons").is_none(), "aucune cause inventée");
+                assert_eq!(refusal["detail"]["reasons"], json!([
+                    {"kind":"candidate","code":"capability_unavailable","candidates":1}
+                ]), "motif réellement reçu du worker pour {drift}");
             }
         }
         assert!(
