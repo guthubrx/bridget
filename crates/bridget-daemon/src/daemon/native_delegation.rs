@@ -5594,12 +5594,13 @@ fn start_remote_task(
     };
     let digest = crate::remote_worker::worker_command_digest(&worker, &command, &start)
         .map_err(|e| e.to_string())?;
+    let confirmation_timeout = Duration::from_secs(30);
     let response = remote_worker_roundtrip(
         state,
         &worker,
         &command,
         WorkerRequestOperation::Start { start },
-        Instant::now() + Duration::from_secs(30),
+        Instant::now() + confirmation_timeout,
     )
     .map_err(|e| format!("remote_start:{e:?}"))?;
     let WorkerResponseOperation::ReadyToRelease { ready_at } = response else {
@@ -5705,7 +5706,9 @@ fn start_remote_task(
         &worker,
         &command,
         WorkerRequestOperation::Release { permit },
-        Instant::now() + Duration::from_secs(5),
+        // La revalidation du worker et sa file partagée peuvent dépasser cinq
+        // secondes. Attendre comme pour Start ; le permis garde son expiration.
+        Instant::now() + confirmation_timeout,
     )
     .map_err(|e| format!("remote_release:{e:?}"))?;
     if !matches!(response, WorkerResponseOperation::Released {}) {

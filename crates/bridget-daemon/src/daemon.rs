@@ -18935,6 +18935,7 @@ fn handle_worker_message(
                     &response.response,
                     WorkerResponseOperation::Observation { .. }
                         | WorkerResponseOperation::DispositionRecorded { .. }
+                        | WorkerResponseOperation::Released {}
                         | WorkerResponseOperation::Rejected { .. }
                 ) && remote_worker_has_command(&st, &response.worker, Some(&response.command))
                 {
@@ -42154,6 +42155,87 @@ mod presence_tests {
     /// Sans la séparation : un wrapper vivant / shell mort garde `capacity_seen`
     /// frais et who / bridget-idle le comptent LIBRE. busy doit rester busy ;
     /// `capacity_seen` (capacité) ne bouge pas sous heartbeat seul.
+    #[test]
+    fn spec184_late_release_reply_preserves_worker_connection() {
+        use bridget_transport::protocol::*;
+        for cancelled in [false, true] {
+        let (mut st, config) = state_with_registered_agent("worker184-late-release");
+        let worker = WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 };
+        let placement = RemotePlacement {
+            machine_id: worker.machine_id.clone(), worker_id: worker.worker_id.clone(), provisioning_revision: 1,
+            project_id: "project".into(), mapping_revision: 1, origin_host: "mac".into(), origin_cwd: "/source".into(),
+            source_root_identity: "/repo.git".into(), relative_cwd: ".".into(), execution_cwd: "/remote".into(),
+            base_commit: None, definition_digest: "a".repeat(64), permission_digest: "b".repeat(64),
+        };
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder { remote_placement: Some(placement), posture: None, agent_type: "codex".into(),
+            project: None, requested_name: Some(Uuid::new_v4().to_string()), cwd: PathBuf::from("/remote"), persistent: true,
+            command_id: Uuid::new_v4().to_string(), issued_at: now, deadline_at: now + 300, ownership: None };
+        let crate::fleet::SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap() else { panic!("start expected") };
+        st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
+            epoch: "epoch".into(), capabilities: vec![], last_contact: Instant::now(), last_contact_at: now,
+            contact: WorkerContactState::Connected });
+        let (writer, mut reader) = control_socket("late184");
+        reader.get_ref().set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        st.connections.insert("worker".into(), writer);
+        st.registry = AgentRegistry::from_json(&serde_json::json!({"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"a".repeat(64),"allowed_agent_types":["codex"],"mappings":{}
+        }}}).to_string(), "/tmp/worker184-registry.json").unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        let command = WorkerCommandIdentity { command_id: lease.command_id.clone(), task_id: order.command_id.clone(),
+            instance_id: lease.instance_id.clone(), generation: lease.generation };
+        let (allow_late, wait_late) = mpsc::sync_channel(1);
+        let responder = shared.clone();
+        let server = std::thread::spawn(move || {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let DaemonToWrapper::WorkerRequest { request } = decode(line.trim()).unwrap() else {
+                panic!("requête Release attendue");
+            };
+            assert!(matches!(request.request, WorkerRequestOperation::Release { .. }));
+            wait_late.recv_timeout(Duration::from_secs(2)).unwrap();
+            let response = WorkerResponse { version: REMOTE_WORKER_VERSION,
+                correlation_id: request.correlation_id, connection_epoch: request.connection_epoch,
+                worker: request.worker, command: request.command,
+                response: WorkerResponseOperation::Released {} };
+            assert!(handle_worker_message(&responder, "worker",
+                WrapperToDaemon::WorkerResponse { response: response.clone() }).is_none(),
+                "un accusé Release tardif connu ne doit pas couper le worker");
+            response
+        });
+        let permit = WorkerReleasePermit { permit_id: Uuid::new_v4().to_string(),
+            command_digest: "d".repeat(64), permission_revision: 1, mapping_revision: 1,
+            provisioning_revision: 1, issued_at: now, expires_at: now + WORKER_RELEASE_LEASE_SECS };
+        let outcome = remote_worker_roundtrip(&shared, &worker, &command,
+            WorkerRequestOperation::Release { permit }, Instant::now() + Duration::from_millis(20));
+        assert!(matches!(outcome, Err(WorkerRefusal::WorkerUnavailable)), "{outcome:?}");
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty(),
+            "la réponse doit arriver après retrait réel de l'attente");
+        if cancelled {
+            shared.lock().unwrap().fleet.invalidate_for_stop(&lease).unwrap();
+        }
+        let before = shared.lock().unwrap().fleet.desired_entry(&lease.name).unwrap();
+        allow_late.send(()).unwrap();
+        let response = server.join().unwrap();
+        assert_eq!(shared.lock().unwrap().fleet.desired_entry(&lease.name).unwrap(), before,
+            "l'accusé tardif ne doit pas réactiver une commande annulée");
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
+        let mut foreign = response.clone();
+        foreign.command.instance_id = Uuid::new_v4().to_string();
+        assert!(matches!(handle_worker_message(&shared, "worker",
+            WrapperToDaemon::WorkerResponse { response: foreign }),
+            Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::CommandMismatch })));
+        let mut stale = response;
+        stale.connection_epoch = "old-epoch".into();
+        assert!(matches!(handle_worker_message(&shared, "worker",
+            WrapperToDaemon::WorkerResponse { response: stale }),
+            Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::StaleConnection })));
+        assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::Heartbeat).is_none());
+        let _ = std::fs::remove_file(config.db_path);
+        }
+    }
+
     #[test]
     fn spec172_untracked_worker_refusal_keeps_known_command_channel() {
         use bridget_transport::protocol::*;
