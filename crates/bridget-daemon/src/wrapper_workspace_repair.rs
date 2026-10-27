@@ -2,6 +2,59 @@
 use super::*;
 use bridget_transport::protocol::WorkspaceRepairStatusV1;
 
+struct RetainedRepairSession {
+    owner: Mutex<Box<bridget_transport::transport::RetainedStart>>,
+    descriptor: ManagedSessionDescriptor,
+    connection_id: String,
+}
+impl bridget_transport::Transport for RetainedRepairSession {
+    fn deliver(
+        &mut self,
+        _: &bridget_core::BridgetMessage,
+    ) -> Result<(), bridget_transport::TransportError> {
+        Err(bridget_transport::TransportError::AgentDead)
+    }
+    fn is_alive(&self) -> bool {
+        false
+    }
+    fn connection_id(&self) -> &str {
+        &self.connection_id
+    }
+}
+impl ManagedSession for RetainedRepairSession {
+    fn descriptor(&self) -> ManagedSessionDescriptor {
+        self.descriptor.clone()
+    }
+    fn process_id(&self) -> u32 {
+        self.owner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .process_id()
+    }
+    fn activate_journal(
+        &self,
+        _: &Path,
+        _: &str,
+        _: Option<JournalLiveFeed>,
+    ) -> std::io::Result<()> {
+        Err(std::io::Error::other("reprise fournisseur non confirmée"))
+    }
+    fn drain_events(&self) -> Vec<bridget_transport::ManagedEvent> {
+        Vec::new()
+    }
+    fn cancel_delivery(&self, _: &str, _: &str) -> bool {
+        false
+    }
+    fn stop(&self) {
+        if let Ok(mut owner) = self.owner.try_lock() {
+            let _ = owner.stop(Duration::from_secs(4));
+        }
+    }
+    fn is_busy(&self) -> bool {
+        false
+    }
+}
+
 pub(super) fn apply(
     task_id: &str,
     mut status: WorkspaceRepairStatusV1,
@@ -16,7 +69,9 @@ pub(super) fn apply(
     name: &str,
     instance: &str,
     socket: &Path,
+    cancelled: Option<&NativeTerminationSignal>,
 ) -> WorkspaceRepairStatusV1 {
+    let cancelled = || cancelled.is_some_and(NativeTerminationSignal::requested);
     let result = (|| -> Result<(), String> {
         let context = remote.ok_or("workspace_repair_remote_required")?;
         if context.command.task_id != task_id || context.command.instance_id != instance {
@@ -47,9 +102,6 @@ pub(super) fn apply(
             .as_ref()
             .and_then(|v| v["expires_at"].as_i64())
             .ok_or("workspace_repair_authority_expired")?;
-        if unix_now_secs() >= expires {
-            return Err("workspace_repair_authority_expired".into());
-        }
 
         let mut checkpoint = crate::remote_worker::workspace_repair::wrapper_result(
             &context.store_root,
@@ -77,6 +129,12 @@ pub(super) fn apply(
                 return Err(previous.code.clone().unwrap());
             }
         }
+        if unix_now_secs() >= expires {
+            return Err("workspace_repair_authority_expired".into());
+        }
+        if cancelled() {
+            return Err("workspace_repair_cancelled".into());
+        }
         if checkpoint.is_none() {
             let identity = transport
                 .provider_identity()
@@ -88,7 +146,14 @@ pub(super) fn apply(
             crate::workspace_git::report_repair(&original, &anchor, false)?;
             let stopped = transport
                 .stop_for_workspace_repair(Duration::from_secs(8))
-                .map_err(|e| format!("workspace_repair_stop:{e}"))?;
+                .map_err(|e| match e {
+                    bridget_transport::TransportError::DeliveryFailed(code)
+                        if code.starts_with("workspace_repair_") =>
+                    {
+                        code
+                    }
+                    error => format!("workspace_repair_stop:{error}"),
+                })?;
             if stopped.provider_thread_id.as_deref() != Some(capability.thread_id.as_str()) {
                 return Err("workspace_repair_session_unconfirmed".into());
             }
@@ -103,7 +168,13 @@ pub(super) fn apply(
         if checkpoint.as_ref().is_none_or(|v| v.phase != "stopped") {
             return Err("workspace_repair_pending".into());
         }
+        if cancelled() {
+            return Err("workspace_repair_cancelled".into());
+        }
         crate::workspace_git::apply_repair_git(&original, &anchor)?;
+        if cancelled() {
+            return Err("workspace_repair_cancelled".into());
+        }
         // Aucun fil fournisseur ne peut encore employer l'ancien cwd.
         std::env::set_current_dir(&prepared.placement.execution_cwd)
             .map_err(|_| "workspace_repair_destination_changed")?;
@@ -124,7 +195,10 @@ pub(super) fn apply(
         if unix_now_secs() >= expires {
             return Err("workspace_repair_authority_expired".into());
         }
-        let new = spawn_managed_session_transport(
+        if cancelled() {
+            return Err("workspace_repair_cancelled".into());
+        }
+        let new = match spawn_managed_session_transport(
             agent_type,
             definition,
             &args,
@@ -136,10 +210,30 @@ pub(super) fn apply(
             instance,
             socket,
             Some((&prepared.child_policy, &capability.thread_id)),
-        )
-        .map_err(|e| format!("workspace_repair_resume:{e}"))?;
+        ) {
+            Ok(new) => new,
+            Err(error) => {
+                let code = format!("workspace_repair_resume:{error}");
+                if let Ok(error) = error.downcast::<bridget_transport::TransportError>() {
+                    if let bridget_transport::TransportError::StartUnconfirmed { owner, .. } =
+                        *error
+                    {
+                        let descriptor = transport.descriptor();
+                        *transport = Box::new(RetainedRepairSession {
+                            owner: Mutex::new(owner),
+                            descriptor,
+                            connection_id: "workspace-repair-unconfirmed".into(),
+                        });
+                    }
+                }
+                return Err(code);
+            }
+        };
         // Conserver l'unique transport, même si son attestation suivante échoue.
         *transport = new;
+        if cancelled() {
+            return Err("workspace_repair_cancelled".into());
+        }
         let identity = transport
             .provider_identity()
             .ok_or("workspace_repair_resume_unconfirmed")?;
@@ -405,6 +499,36 @@ for line in sys.stdin:
                 "expires_at":unix_now_secs()+60}),
             ),
         };
+        // Annulation observée avant toute action : même processus et Git intact.
+        let cancellation = NativeTerminationSignal::new().unwrap();
+        cancellation.requested.store(true, Ordering::SeqCst);
+        let mut cancelled_status = status.clone();
+        cancelled_status.request.request_id = "repair185-cancelled".into();
+        let cancelled_result = apply(
+            "task185",
+            cancelled_status,
+            Some(&context),
+            &mut transport,
+            "repair185",
+            definition,
+            &definition.args,
+            &env,
+            Vec::new(),
+            root,
+            "child185",
+            "instance185",
+            &root.join("bridget.sock"),
+            Some(&cancellation),
+        );
+        assert_eq!(cancelled_result.phase, "refused", "{cancelled_result:?}");
+        assert_eq!(
+            cancelled_result.code.as_deref(),
+            Some("workspace_repair_cancelled")
+        );
+        assert_eq!(transport.process_id(), old_pid);
+        assert!(transport.is_alive());
+        assert!(std::env::current_dir().is_err());
+        drop(cancellation);
         let result = apply(
             "task185",
             status.clone(),
@@ -419,6 +543,7 @@ for line in sys.stdin:
             "child185",
             "instance185",
             &root.join("bridget.sock"),
+            None,
         );
         assert_eq!(result.phase, "resumed", "{result:?}");
         assert_eq!(result.code, None);
@@ -436,6 +561,17 @@ for line in sys.stdin:
             std::fs::read_to_string(target.join("untracked")).unwrap(),
             "conservé aussi\n"
         );
+        // Horloge de fixture : état repris valide dont le permis est désormais passé.
+        let mut status = status;
+        status.proof.as_mut().unwrap()["expires_at"] = json!(unix_now_secs() - 1);
+        let mut past = result.clone();
+        past.proof = status.proof.clone();
+        crate::remote_worker::workspace_repair::persist_wrapper_result(
+            &context.store_root,
+            &context.command,
+            &past,
+        )
+        .unwrap();
         let replay = apply(
             "task185",
             status,
@@ -450,6 +586,7 @@ for line in sys.stdin:
             "child185",
             "instance185",
             &root.join("bridget.sock"),
+            None,
         );
         assert_eq!(replay.phase, "resumed", "{replay:?}");
         let rpc = std::fs::read_to_string(&trace).unwrap();

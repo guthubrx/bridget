@@ -3546,6 +3546,9 @@ pub struct WorkerSourceBase {
 }
 
 /// Réparation explicite185 : aucun identifiant d'enfant ou de fournisseur libre.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum WorkspaceRepairActionV1 {Prepare,Commit,Publish}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkspaceRepairRequestV1 {
@@ -3589,7 +3592,7 @@ impl WorkspaceRepairStatusV1 {
 pub enum WorkerRequestOperation {
     RepairWorkspace {
         repair: WorkspaceRepairRequestV1,
-        publish: bool,
+        action: WorkspaceRepairActionV1,
         expires_at: i64,
     },
     Prepare {
@@ -4115,7 +4118,7 @@ impl WorkerResponse {
             WorkerResponseOperation::WorkspaceRepair { status } => {
                 status.request.validate()?;
                 worker_require(matches!(status.phase.as_str(),
-                    "requested"|"prepared"|"stopped"|"resumed"|"publishing"|"published"|"refused"))
+                    "requested"|"prepared"|"stopped"|"resumed"|"committed"|"publishing"|"published"|"refused"))
             }
 
             WorkerResponseOperation::Prepared { prepared } => {
@@ -11507,4 +11510,22 @@ mod workspace_repair185_tests {
         value["force"]=serde_json::json!(true);
         assert!(serde_json::from_value::<NativeDelegationRequest>(value).is_err());
     }
+    #[test]
+    fn spec185_repair_wire_accepts_commit_and_rejects_unknown_phase() {
+        let request=WorkspaceRepairRequestV1 {request_id:"repair185".into(),
+            target_cwd:"/srv/project185/task".into(),expected_head:"1".repeat(40)};
+        let mut response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:"reply185".into(),
+            connection_epoch:"epoch185".into(),worker:WorkerIdentity {machine_id:"machine185".into(),
+                worker_id:"worker185".into(),provisioning_revision:1},
+            command:WorkerCommandIdentity {command_id:"command185".into(),task_id:"task185".into(),
+                instance_id:"instance185".into(),generation:1},
+            response:WorkerResponseOperation::WorkspaceRepair {status:WorkspaceRepairStatusV1 {
+                request,phase:"committed".into(),prepared:None,proof:None,code:None}}};
+        response.validate().unwrap();
+        if let WorkerResponseOperation::WorkspaceRepair {status}=&mut response.response {
+            status.phase="unverified185".into();
+        }
+        assert!(response.validate().is_err());
+    }
+
 }

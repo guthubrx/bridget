@@ -3468,6 +3468,70 @@ fn failure(code: &str) -> Value {
                 "Le programme qui pilote cet enfant ne sait pas encore exécuter la réparation native.",
                 "Conservez cette tâche et son dossier. Installer un binaire ne modifie pas le programme déjà chargé. Ne créez pas de nouvelle mission et ne forcez pas le placement.",
                 "Une migration ciblée du pilote doit être qualifiée avant son exécution ; aucun redémarrage de service n'est déduit de ce refus."),
+            "workspace_repair_platform_unsupported" => (
+                "Cette version ne qualifie la réparation distante que sur les workers Linux.",
+                "Conservez la même tâche, ses résultats et son dossier. Ne changez pas sa machine pour contourner ce refus.",
+                "Le responsable doit faire qualifier le mécanisme de drainage sur cette plateforme avant de l'activer."),
+            "workspace_repair_adapter_unsupported" | "workspace_repair_resume_unattested" => (
+                "Le pilote admis pour cet enfant ne confirme pas une reprise de conversation qualifiée pour cette réparation.",
+                "Conservez la même tâche, ses résultats et son dossier. Relevez le pilote et sa version effective sur la machine d'exécution. La réparation ne doit jamais démarrer une conversation neuve pour contourner cette absence de preuve.",
+                "Le responsable doit faire qualifier cette reprise native ou un mécanisme de migration ciblée ; aucun changement de fournisseur ni remplacement de mission n'est automatique."),
+            "workspace_repair_master_upgrade_required" | "workspace_repair_remote:CapabilityRequired" => (
+                "Le maître ou le worker connecté n'annonce pas la capacité requise pour cette réparation.",
+                "Conservez la tâche et la clé de réparation. Vérifiez les versions chargées et préparez leur mise à jour par la maintenance native ; ne transmettez pas la nouvelle commande à un ancien pair.",
+                "Une activation admise est nécessaire ; un refus de maintenance ne permet ni redémarrage forcé ni modification directe de l'état."),
+            "workspace_repair_busy" => (
+                "Le fournisseur a encore un tour, un message, une demande ou un événement à traiter.",
+                "Laissez finir le travail et résolvez les demandes ouvertes. Relisez ensuite la même tâche ; cette tentative n'a pas arrêté le fournisseur.",
+                "Si l'activité ne se termine pas, demandez au responsable de décider de son traitement avant une nouvelle tentative."),
+            "workspace_repair_cancelled" | "workspace_repair_task_changed" => (
+                "La tâche a été annulée ou ses conditions de réparation ont changé.",
+                "Relisez le statut, la garde et la phase de cette même tâche. N'essayez pas de réactiver une commande annulée ; conservez les sorties et le reçu de réparation.",
+                "Le propriétaire doit décider de la récupération si la garde est libérée ou la tâche arrêtée."),
+            "workspace_repair_stop_unconfirmed" => (
+                "L'arrêt du fournisseur ou de ses lecteurs n'a pas été confirmé dans le délai.",
+                "Conservez le même wrapper et son reçu. Vérifiez les processus détenus et leur état ; aucun second fournisseur ne doit être lancé tant que cet arrêt reste incertain.",
+                "Transmettez les identités et le reçu au responsable pour une récupération native ; aucun arrêt forcé n'est autorisé par ce message."),
+            "workspace_repair_permissions_changed" | "workspace_repair_permissions_unconfirmed" => (
+                "Les droits au nouvel emplacement ne sont pas confirmés identiques aux droits admis.",
+                "Comparez la politique d'origine, les racines d'écriture et leurs traductions au nouvel emplacement. Ne modifiez pas les droits pour rendre la réparation acceptable.",
+                "Si la politique doit réellement changer, le propriétaire doit valider cette décision séparément."),
+            "workspace_repair_destination_invalid" | "workspace_repair_destination_changed" => (
+                "Le dossier cible est invalide ou son identité physique a changé.",
+                "Vérifiez que le chemin absolu est un dossier réel sans alias, hors des racines protégées, et qu'il désigne toujours la copie déplacée attendue. Conservez tous les fichiers.",
+                "Le propriétaire doit confirmer la destination si plusieurs copies existent ; ne remplacez aucun dossier pour contourner ce contrôle."),
+            "workspace_repair_head_changed" | "workspace_repair_history_unconfirmed" => (
+                "Le commit ou l'historique Git ne correspond pas à la réparation demandée.",
+                "Comparez le HEAD complet, la branche et leur ascendance avec les commits conservés. Aucun reset, checkout ou effacement n'est une solution à ce refus.",
+                "Le propriétaire doit résoudre la divergence et confirmer le commit attendu avant une nouvelle décision."),
+            "workspace_repair_anchor_unconfirmed" | "workspace_repair_original_conflict" => (
+                "Le dépôt de confiance ne rattache pas cette copie à l'ancien worktree de façon vérifiable.",
+                "Comparez le fichier .git de la copie et l'entrée administrative du dépôt d'origine. L'ancien chemin doit être absent ou être le lien exact vers cette copie ; conservez tout autre contenu.",
+                "Si les liens ou la provenance ne peuvent pas être prouvés, demandez une récupération examinée par le responsable sans réécrire les reçus."),
+            "workspace_repair_wrapper_changed" | "workspace_repair_identity_unconfirmed"
+                | "workspace_repair_child_incompatible" | "workspace_repair_session_unconfirmed"
+                | "workspace_repair_child_unavailable" | "workspace_repair_execution_unconfirmed"
+                | "workspace_repair_resume_unconfirmed" => (
+                "L'identité ou la reprise de l'exécution attendue n'a pas été confirmée.",
+                "Vérifiez le worker, la commande, l'instance, la génération et le fil fournisseur de cette même tâche. Relisez le reçu durable ; ne démarrez pas une autre conversation.",
+                "Transmettez les identités manquantes et la phase au responsable pour une récupération native ciblée."),
+            "workspace_repair_not_prepared" | "workspace_repair_not_committed"
+                | "workspace_repair_proof_missing" | "workspace_repair_proof_invalid" => (
+                "Le reçu nécessaire à cette étape est absent ou invalide.",
+                "Relisez le statut de la même réparation et réconciliez la même clé. Ne fabriquez pas le reçu et ne passez pas manuellement à l'étape suivante.",
+                "Si le reçu ne peut pas être retrouvé ou vérifié, le responsable doit examiner cette opération conservée."),
+            "workspace_repair_already_recorded" => (
+                "Une réparation engagée ou publiée existe déjà pour cette génération.",
+                "Suivez sa clé et son reçu. Une autre clé n'est permise qu'après un refus sans effet confirmé et dans la limite des tentatives admises.",
+                "Une nouvelle migration après publication doit faire l'objet d'un parcours qualifié ; ne remplacez pas l'historique."),
+            "workspace_repair_remote_required" | "workspace_repair_unsupported" => (
+                "Cette exécution ne remplit pas le contrat de réparation distante pris en charge.",
+                "Conservez la même tâche et relevez sa machine, son pilote et sa version. Ne changez pas de machine ou de fournisseur pour contourner ce refus.",
+                "Le responsable doit faire qualifier le parcours correspondant avant son activation."),
+            "workspace_repair_invalid_request" => (
+                "La demande de réparation ne respecte pas le contrat.",
+                "Fournissez une clé stable, un chemin absolu sans composant ambigu et un HEAD Git complet de40 caractères. Conservez les paramètres d'une clé déjà enregistrée.",
+                "Demandez au propriétaire le chemin et le commit attendus si ces valeurs ne sont pas connues."),
             "workspace_repair_not_idle" => (
                 "La tâche ne remplit pas les conditions de repos nécessaires à sa réparation.",
                 "Attendez le résultat remis, la fin du tour et la résolution des demandes ouvertes. Vérifiez que la garde de l'enfant reste valide. Ne créez pas de nouvelle ronde pendant la réparation.",
@@ -4462,7 +4526,7 @@ fn handle_with_fact(
     if let NativeDelegationRequest::RepairWorkspace {task_id,repair}=&request {
         return DaemonToWrapper::NativeDelegationResult {result:
             workspace_repair::repair(conn,task_id,repair,fact.as_ref(),thread,state)
-                .unwrap_or_else(|code|failure(&code))};
+                .unwrap_or_else(|code|workspace_repair::failure_context(conn,task_id,&repair.request_id,&code,thread,state))};
     }
     if matches!(&request,NativeDelegationRequest::Catalogue) {
         match foreign_catalogue177(conn,fact.as_ref(),thread,state) {
@@ -31147,8 +31211,57 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec185_fresh_idle_guard_rejects_cancel_and_expiry_before_control() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.state="result_available".into();task.result_sent=true;
+        task.guarded=true;task.guard_released=false;task.cleanup_done=false;
+        task.idle_deadline_at=Some(unix_timestamp()+120);
+        let saved=task.clone();
+        for change in ["cancel","release","expiry","cleanup"] {
+            let mut changed=task.clone();
+            match change {
+                "cancel"=>changed.state="cancelled".into(),
+                "release"=>changed.guard_released=true,
+                "expiry"=>changed.idle_deadline_at=Some(unix_timestamp()-1),
+                _=>changed.cleanup_done=true,
+            }
+            assert_eq!(workspace_repair::recheck_idle(&st,&changed,&saved,&task.owner,
+                &task.owner_instance).unwrap_err(),"workspace_repair_task_changed","{change}");
+        }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec185_refusal_after_prepare_is_durable_and_own_failure_has_context() {
+        let (mut st,config,mut task,_)=remote162_capture_fixture();
+        task.state="result_available".into();task.guard_released=true;
+        let request=bridget_transport::protocol::WorkspaceRepairRequestV1 {
+            request_id:"repair185-refused".into(),target_cwd:"/mnt/storage/task185".into(),
+            expected_head:"1".repeat(40),
+        };
+        let mut status=bridget_transport::protocol::WorkspaceRepairStatusV1 {
+            request:request.clone(),phase:"prepared".into(),prepared:None,proof:None,code:None,
+        };
+        task.workspace_repairs.push(status.clone());st.delegation_store.save(&task).unwrap();
+        status.phase="refused".into();status.code=Some("workspace_repair_busy".into());
+        let saved=workspace_repair::save_status(&mut st,&task.task_id,status).unwrap();
+        assert_eq!(saved.workspace_repairs.last().unwrap().phase,"refused");
+        assert_eq!(saved.workspace_repairs.last().unwrap().code.as_deref(),Some("workspace_repair_busy"));
+        let shared=Arc::new(Mutex::new(st));
+        let view=workspace_repair::failure_context("conn-1",&task.task_id,&request.request_id,
+            "workspace_repair_not_idle",None,&shared);
+        assert_eq!(view["detail"]["execution"]["task_id"],task.task_id);
+        assert_eq!(view["detail"]["execution"]["guard_released"],true);
+        assert_eq!(view["detail"]["execution"]["request_id"],request.request_id);
+        drop(shared);cleanup(&config);
+    }
+
+    #[test]
     fn spec185_workspace_repair_refusals_explain_recovery_and_human_prerequisite() {
-        for code in ["workspace_repair_child_upgrade_required","workspace_repair_not_idle",
+        for code in ["workspace_repair_busy","workspace_repair_cancelled","workspace_repair_stop_unconfirmed",
+            "workspace_repair_permissions_changed","workspace_repair_destination_invalid","workspace_repair_head_changed",
+            "workspace_repair_anchor_unconfirmed","workspace_repair_not_prepared","workspace_repair_already_recorded",
+            "workspace_repair_child_upgrade_required","workspace_repair_not_idle",
             "workspace_repair_envelope_mismatch","workspace_repair_pending",
             "workspace_repair_authority_expired","workspace_repair_unclassified185"] {
             let view=failure(code);

@@ -14,13 +14,15 @@ Le rapport Git ordinaire garde ses contrôles stricts. Le chemin externe n'est a
 
 Les droits cibles proviennent des mécanismes existants. Leur comparaison conserve toutes les restrictions, à la seule traduction des chemins du même worktree près. Une équivalence non prouvée refuse.
 
+Le worker valide d'abord le résultat repris. Le maître enregistre ensuite sa décision de publication avant de demander au worker d'ouvrir les admissions. Le wrapper garde toute son entrée fournisseur fermée jusqu'à cette publication. Un rejeu du résultat durable n'effectue aucun nouvel arrêt, même après expiration de l'autorisation initiale.
+
 ## Garanties et limites
 - La file, les demandes et les tours doivent être vides avant arrêt.
 - Aucun second fournisseur si l'arrêt est incertain.
 - La reprise ne crée aucun tour de modèle ; la continuation ultérieure reste distincte.
 - Les refus sans effet et les opérations engagées restent distingués ; les clés et les canons sont conservés.
 - Première version : une migration publiée par génération ; huit tentatives au plus, dont seules les tentatives refusées sans effet peuvent être remplacées par une nouvelle décision.
-- Le pilote natif Codex est qualifié par les tests. Les adaptations sans preuve de reprise refusent. Aucun repli silencieux vers une conversation neuve.
+- Première version Linux : le pilote natif Codex est qualifié par les tests. Les adaptations sans preuve de reprise refusent. Aucun repli silencieux vers une conversation neuve.
 - Un ancien worker ou wrapper ne reçoit pas une commande qu'il ne sait pas traiter.
 - Sans inventaire antérieur, l'exhaustivité de la copie faite avant la réparation reste inconnue. L'opération conserve les fichiers présents.
 - La migration d'un ancien wrapper déjà chargé exige un mécanisme admis distinct. L'installation d'un binaire seul ne suffit pas.

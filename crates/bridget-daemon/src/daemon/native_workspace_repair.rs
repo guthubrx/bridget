@@ -1,6 +1,8 @@
 //! Coordination185 : même tâche et mêmes canons de naissance.
 use super::*;
-use bridget_transport::protocol::{WorkspaceRepairRequestV1, WorkspaceRepairStatusV1};
+use bridget_transport::protocol::{
+    WorkspaceRepairActionV1, WorkspaceRepairRequestV1, WorkspaceRepairStatusV1,
+};
 
 pub(crate) struct Pending {
     pub child: String,
@@ -36,7 +38,7 @@ pub(crate) fn response(
     }
 }
 
-fn save_status(
+pub(super) fn save_status(
     st: &mut DaemonState,
     task_id: &str,
     status: WorkspaceRepairStatusV1,
@@ -52,20 +54,49 @@ fn save_status(
     if last.request != status.request {
         return Err("workspace_repair_envelope_mismatch".into());
     }
-    let rank = |phase: &str| match phase {
-        "requested" => 0,
-        "prepared" => 1,
-        "stopped" => 2,
-        "resumed" => 3,
-        "publishing" => 4,
-        "published" => 5,
-        _ => 0,
-    };
-    if last.phase == "published" || rank(&last.phase) > rank(&status.phase) {
+    if matches!(last.phase.as_str(), "published" | "refused") {
         return Ok(task);
     }
-    if last.phase == "refused" && status.phase != "refused" {
-        return Err("workspace_repair_task_changed".into());
+    if status.phase == "refused" {
+        if !matches!(last.phase.as_str(), "requested" | "prepared") {
+            last.code = status.code;
+            st.delegation_store.save(&task)?;
+            return Ok(task);
+        }
+    } else {
+        let forward = match last.phase.as_str() {
+            "requested" => matches!(
+                status.phase.as_str(),
+                "requested"
+                    | "prepared"
+                    | "stopped"
+                    | "resumed"
+                    | "committed"
+                    | "publishing"
+                    | "published"
+            ),
+            "prepared" => matches!(
+                status.phase.as_str(),
+                "prepared" | "stopped" | "resumed" | "committed" | "publishing" | "published"
+            ),
+            "stopped" => matches!(
+                status.phase.as_str(),
+                "stopped" | "resumed" | "committed" | "publishing" | "published"
+            ),
+            "resumed" => matches!(
+                status.phase.as_str(),
+                "resumed" | "committed" | "publishing" | "published"
+            ),
+            "committed" => matches!(
+                status.phase.as_str(),
+                "committed" | "publishing" | "published"
+            ),
+            "publishing" => matches!(status.phase.as_str(), "publishing" | "published"),
+            _ => false,
+        };
+        if !forward {
+            return Ok(task);
+        }
     }
     *last = status;
     if last.phase == "published" {
@@ -84,6 +115,67 @@ fn save_status(
     }
     st.delegation_store.save(&task)?;
     Ok(task)
+}
+
+pub(super) fn failure_context(
+    conn: &str,
+    task_id: &str,
+    request_id: &str,
+    code: &str,
+    thread: Option<&str>,
+    state: &Arc<Mutex<DaemonState>>,
+) -> Value {
+    let mut result = failure(code);
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    if recheck_attested_thread(&st, conn, thread).is_err() {
+        return result;
+    }
+    let Some((owner, instance)) = live_connection_identity(&st, conn) else {
+        return result;
+    };
+    let Ok(Some(task)) = st.delegation_store.get(task_id) else {
+        return result;
+    };
+    if !can_own_task(&st, &task, &owner, &instance).unwrap_or(false) {
+        return result;
+    }
+    if !result["detail"].is_object() {
+        result["detail"] = json!({});
+    }
+    result["detail"]["execution"] = json!({
+        "task_id":task.task_id,"request_id":request_id,
+        "child_agent_id":task.child,"execution_cwd":task.effective_execution_cwd(),
+        "state":task.state,"guard_released":task.guard_released,
+        "idle_deadline_at":task.idle_deadline_at,
+        "repair_phase":task.workspace_repairs.last().map(|v|&v.phase),
+    });
+    result
+}
+
+pub(super) fn recheck_idle(
+    st: &DaemonState,
+    current: &Task,
+    saved: &Task,
+    owner: &str,
+    instance: &str,
+) -> Result<(), String> {
+    if current.state != "result_available"
+        || !current.result_sent
+        || !current.guarded
+        || current.guard_released
+        || current.cleanup_done
+        || current
+            .idle_deadline_at
+            .is_some_and(|v| unix_timestamp() >= v)
+        || !st
+            .delegation_store
+            .open_child_requests(&current.task_id)?
+            .is_empty()
+        || !can_own_task(st, current, owner, instance)?
+    {
+        return Err("workspace_repair_task_changed".into());
+    }
+    recheck_remote_dispatch(st, current, saved)
 }
 
 pub(super) fn repair(
@@ -170,36 +262,9 @@ pub(super) fn repair(
         let command = remote_command_identity(&st, &task)
             .map_err(|_| "workspace_repair_identity_unconfirmed")?;
         let worker = remote_worker_identity(placement);
-        if let Some(previous) = task
-            .workspace_repairs
-            .iter()
-            .find(|v| v.request.request_id == request.request_id)
-        {
-            if previous.request != *request {
-                return Err("workspace_repair_envelope_mismatch".into());
-            }
-            if task
-                .workspace_repairs
-                .last()
-                .is_some_and(|last| last.request.request_id != request.request_id)
-            {
-                return current_task_view(&st, &task, true);
-            }
-        }
         if let Some(previous) = task.workspace_repairs.last() {
             if previous.request.request_id == request.request_id {
-                if previous.request != *request {
-                    return Err("workspace_repair_envelope_mismatch".into());
-                }
-                if previous.phase == "published" {
-                    return current_task_view(&st, &task, true);
-                }
-                if previous.phase == "refused" {
-                    return Err(previous
-                        .code
-                        .clone()
-                        .unwrap_or_else(|| "workspace_repair_refused".into()));
-                }
+                // Enveloppe vérifiée avant les gardes ; reprendre le même reçu.
             } else if previous.phase != "refused" || task.workspace_repairs.len() >= 8 {
                 return Err("workspace_repair_already_recorded".into());
             } else {
@@ -235,7 +300,7 @@ pub(super) fn repair(
         &command,
         bridget_transport::protocol::WorkerRequestOperation::RepairWorkspace {
             repair: request.clone(),
-            publish: false,
+            action: WorkspaceRepairActionV1::Prepare,
             expires_at: saved
                 .idle_deadline_at
                 .unwrap_or(unix_timestamp())
@@ -257,10 +322,7 @@ pub(super) fn repair(
             .delegation_store
             .get(task_id)?
             .ok_or("task_unavailable")?;
-        if !can_own_task(&st, &current, &owner, &instance)? || current.state != "result_available" {
-            return Err("workspace_repair_task_changed".into());
-        }
-        recheck_remote_dispatch(&st, &current, &saved)?;
+        recheck_idle(&st, &current, &saved, &owner, &instance)?;
         if current
             .workspace_repairs
             .last()
@@ -269,13 +331,13 @@ pub(super) fn repair(
             return current_task_view(&st, &current, true);
         }
         save_status(&mut st, task_id, status.clone())?;
-        if status.phase == "refused" {
+        if status.phase == "refused" || status.code.is_some() {
             return Err(status
                 .code
                 .unwrap_or_else(|| "workspace_repair_refused".into()));
         }
     }
-    if status.phase != "published" {
+    if !matches!(status.phase.as_str(), "published" | "committed" | "resumed") {
         let key = format!("{task_id}:{}", request.request_id);
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let writer = {
@@ -284,11 +346,7 @@ pub(super) fn repair(
                 .delegation_store
                 .get(task_id)?
                 .ok_or("task_unavailable")?;
-            if current.state != "result_available"
-                || !can_own_task(&st, &current, &owner, &instance)?
-            {
-                return Err("workspace_repair_task_changed".into());
-            }
+            recheck_idle(&st, &current, &saved, &owner, &instance)?;
             if st.pending_workspace_repairs.contains_key(&key) {
                 return Err("workspace_repair_pending".into());
             }
@@ -316,15 +374,39 @@ pub(super) fn repair(
             );
             writer
         };
-        // Le résultat est un blob durable du wrapper ; un ACK perdu n'autorise
-        // jamais une seconde opération sous une autre clé.
+        // Le résultat du wrapper est durable : un ACK perdu n'autorise pas une autre clé.
         let control = DaemonToWrapper::WorkspaceRepairControl {
             task_id: task_id.into(),
             status: status.clone(),
         };
-        if let Err(error) =
-            push_control_message_until(&writer, &control, Instant::now() + Duration::from_secs(5))
-        {
+        if let Err(error) = push_control_message_until_checked(
+            &writer,
+            &control,
+            Instant::now() + Duration::from_secs(5),
+            || {
+                let st = match state.try_lock() {
+                    Ok(st) => st,
+                    Err(std::sync::TryLockError::WouldBlock) => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::WouldBlock,
+                            "état occupé",
+                        ));
+                    }
+                    Err(_) => return Err(std::io::Error::other("état indisponible")),
+                };
+                let check = (|| -> Result<(), String> {
+                    let current = st
+                        .delegation_store
+                        .get(task_id)?
+                        .ok_or("task_unavailable")?;
+                    recheck_idle(&st, &current, &saved, &owner, &instance)
+                })();
+                check.map_err(|code| {
+                    std::io::Error::new(std::io::ErrorKind::PermissionDenied, code)
+                })?;
+                Ok(None)
+            },
+        ) {
             state
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -363,15 +445,7 @@ pub(super) fn repair(
             .delegation_store
             .get(task_id)?
             .ok_or("task_unavailable")?;
-        if current.state != "result_available"
-            || current.guard_released
-            || current
-                .idle_deadline_at
-                .is_some_and(|v| unix_timestamp() >= v)
-        {
-            return Err("workspace_repair_task_changed".into());
-        }
-        recheck_remote_dispatch(&st, &current, &saved)?;
+        recheck_idle(&st, &current, &saved, &owner, &instance)?;
     }
     let published = remote_worker_roundtrip(
         state,
@@ -379,7 +453,7 @@ pub(super) fn repair(
         &command,
         bridget_transport::protocol::WorkerRequestOperation::RepairWorkspace {
             repair: request.clone(),
-            publish: true,
+            action: WorkspaceRepairActionV1::Commit,
             expires_at: saved
                 .idle_deadline_at
                 .unwrap_or(unix_timestamp())
@@ -393,6 +467,39 @@ pub(super) fn repair(
     else {
         return Err("workspace_repair_resume_unconfirmed".into());
     };
+    if status.request != *request || !matches!(status.phase.as_str(), "committed" | "published") {
+        return Err("workspace_repair_pending".into());
+    }
+    {
+        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let current = st
+            .delegation_store
+            .get(task_id)?
+            .ok_or("task_unavailable")?;
+        recheck_idle(&st, &current, &saved, &owner, &instance)?;
+        let mut decision = status;
+        decision.phase = "publishing".into();
+        save_status(&mut st, task_id, decision)?;
+    }
+    let released = remote_worker_roundtrip(
+        state,
+        &worker,
+        &command,
+        bridget_transport::protocol::WorkerRequestOperation::RepairWorkspace {
+            repair: request.clone(),
+            action: WorkspaceRepairActionV1::Publish,
+            expires_at: saved
+                .idle_deadline_at
+                .unwrap_or(unix_timestamp())
+                .min(unix_timestamp() + 60),
+        },
+        Instant::now() + Duration::from_secs(30),
+    )
+    .map_err(|e| format!("workspace_repair_remote:{e:?}"))?;
+    let bridget_transport::protocol::WorkerResponseOperation::WorkspaceRepair { status } = released
+    else {
+        return Err("workspace_repair_resume_unconfirmed".into());
+    };
     if status.request != *request || status.phase != "published" {
         return Err("workspace_repair_pending".into());
     }
@@ -401,9 +508,7 @@ pub(super) fn repair(
         .delegation_store
         .get(task_id)?
         .ok_or("task_unavailable")?;
-    if current.state != "result_available" || !can_own_task(&st, &current, &owner, &instance)? {
-        return Err("workspace_repair_task_changed".into());
-    }
+    recheck_idle(&st, &current, &saved, &owner, &instance)?;
     let task = save_status(&mut st, task_id, status)?;
     current_task_view(&st, &task, true)
 }

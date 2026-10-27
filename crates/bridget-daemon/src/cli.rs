@@ -8939,6 +8939,15 @@ mod hook_tests {
     fn spec167_task_traduit_le_cycle_de_vie_vers_les_outils_natifs() {
         let cases = [
             (
+                argv(&["repair-workspace","task-1","/srv/projet/task-1","--expected-head",
+                    "1111111111111111111111111111111111111111","--request-id","repair-1"]),
+                "bridget_task_repair_workspace",
+                serde_json::json!({"task_id":"task-1","target_cwd":"/srv/projet/task-1",
+                    "expected_head":"1".repeat(40),"request_id":"repair-1"}),
+                false,
+            ),
+
+            (
                 argv(&["status", "task-1", "--json"]),
                 "bridget_task_status",
                 serde_json::json!({"task_id":"task-1"}),
@@ -8999,6 +9008,9 @@ mod hook_tests {
             assert_eq!(parsed.json, json);
         }
         for invalid in [
+            argv(&["repair-workspace","task-1","/srv/projet/task-1"]),
+            argv(&["repair-workspace","task-1","/srv/projet/task-1","--force"]),
+
             argv(&[]),
             argv(&["status"]),
             argv(&["wait", "task-1", "task-1"]),

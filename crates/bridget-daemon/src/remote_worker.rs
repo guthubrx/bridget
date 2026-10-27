@@ -3188,11 +3188,11 @@ impl WorkerRuntime {
             }
             let original = receipt.record.ok_or(WorkerRefusal::UnknownExecution)?;
             let record = if let Some(anchor)=repair {
-                crate::workspace_git::report_repair(&original,anchor,true)
+                crate::workspace_git::report_repaired_workspace(&original,anchor)
                     .map_err(|_|WorkerRefusal::PlacementMismatch)?
             } else {original};
             let report = if let Some(anchor)=repair {
-                crate::workspace_git::report_repair(&record,anchor,true)
+                crate::workspace_git::report_repaired_workspace(&record,anchor)
             } else {crate::workspace_git::report(&record)}
                 .map_err(|_| WorkerRefusal::PlacementMismatch)?;
             if before_release
@@ -3798,7 +3798,7 @@ impl WorkerRuntime {
                 if let Ok(record) =
                     serde_json::from_value::<crate::delegation::WorkspaceRecord>(value.clone())
                     && let Ok(report) = if let Some(anchor)=anchor.as_ref() {
-                        crate::workspace_git::report_repair(&record,anchor,true)
+                        crate::workspace_git::report_repaired_workspace(&record,anchor)
                     } else {crate::workspace_git::report(&record)}
                 {
                     observation.workspace = serde_json::to_value(report).ok();
@@ -4035,7 +4035,7 @@ impl WorkerRuntime {
                     result: result.clone(),
                 })
             }
-            WorkerRequestOperation::RepairWorkspace { repair, publish, expires_at } => self.repair_workspace(&request.command,repair,*publish,*expires_at),
+            WorkerRequestOperation::RepairWorkspace { repair, action, expires_at } => self.repair_workspace(&request.command,repair,*action,*expires_at),
             WorkerRequestOperation::Reconcile {} => self.reconcile_attested(&request.command),
             WorkerRequestOperation::Cancel {
                 target: WorkerCancelScope::ResultSlot { slot, proof },
@@ -4235,38 +4235,56 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 /// Sonde historique sur la même connexion, avant toute variante ou secret162.
 /// Le drapeau retourné est une attestation du maître pour proposer la nouvelle
 /// enveloppe de capacités ; il ne dépend jamais du build du pair.
-fn probe_worker_capability(
-    writer: &Mutex<UnixStream>,
-    reader: &mut BufReader<UnixStream>,
-) -> Result<(bool, bool, bool, bool, bool, bool, bool, bool), String> {
-    send_worker_frame(writer, &WrapperToDaemon::DaemonIdentityRequest)?;
-    let line = bridget_transport::jsonl::read_unix_line(
-        reader,
-        MAX_WORKER_FRAME_BYTES,
-        bridget_transport::jsonl::LineDeadline::Absolute(Instant::now() + Duration::from_secs(5)),
-    )
-    .map_err(|_| "worker_capability_unavailable")?
-    .ok_or("worker_capability_unavailable")?;
-    match serde_json::from_slice::<DaemonToWrapper>(&line) {
-        Ok(DaemonToWrapper::DaemonIdentityReport { features, .. })
-            if features.iter().any(|feature| feature == "remote_worker_v1") =>
-        {
-            Ok((
-                features
-                    .iter()
-                    .any(|feature| feature == "worker_candidate_probe_v1"),
-                features
-                    .iter()
-                    .any(|feature| feature == "worker_candidate_probe_v2"),
-                features.iter().any(|feature| feature == "worker_release_lease_v2"),
-                features.iter().any(|feature| feature == "worker_parent_source_proof_v1"),
-                features.iter().any(|feature| feature == "worker_result_slot_deadline_v1"),
-                features.iter().any(|feature| feature == "worker_workspace_diagnostics_v1"),
-                features.iter().any(|feature| feature == "worker_origin_proof_v1"),
-                features.iter().any(|feature| feature == "worker_workspace_repair_v1"),
-            ))
+
+#[derive(Debug,Clone,Copy,Default)]
+struct MasterWorkerFeatures {
+    candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
+    slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
+}
+impl MasterWorkerFeatures {
+    fn supports(&self,capability:WorkerCapability)->bool {
+        match capability {
+            WorkerCapability::CandidateProbeV1=>self.candidate_probe,
+            WorkerCapability::CandidateProbeV2=>self.probe_v2,
+            WorkerCapability::ReleaseLeaseV2=>self.release_lease,
+            WorkerCapability::ParentSourceProofV1=>self.source_proof,
+            WorkerCapability::ResultSlotDeadlineV1=>self.slot_deadline,
+            WorkerCapability::OriginProofV1=>self.origin_proof,
+            WorkerCapability::WorkspaceRepairV1=>self.workspace_repair,
         }
-        _ => Err("worker_capability_required".into()),
+    }
+    fn capabilities(&self)->Vec<WorkerCapability> {
+        [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
+            WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
+            WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
+            WorkerCapability::WorkspaceRepairV1].into_iter().filter(|v|self.supports(*v)).collect()
+    }
+    fn admits(&self,accepted:&[WorkerCapability])->bool {
+        accepted.len()<=7 && accepted.iter().enumerate().all(|(index,capability)|
+            self.supports(*capability) && !accepted[..index].contains(capability))
+    }
+}
+
+fn probe_worker_capability(
+    writer:&Mutex<UnixStream>,reader:&mut BufReader<UnixStream>,
+)->Result<MasterWorkerFeatures,String> {
+    send_worker_frame(writer,&WrapperToDaemon::DaemonIdentityRequest)?;
+    let line=bridget_transport::jsonl::read_unix_line(reader,MAX_WORKER_FRAME_BYTES,
+        bridget_transport::jsonl::LineDeadline::Absolute(Instant::now()+Duration::from_secs(5)))
+        .map_err(|_|"worker_capability_unavailable")?.ok_or("worker_capability_unavailable")?;
+    match serde_json::from_slice::<DaemonToWrapper>(&line) {
+        Ok(DaemonToWrapper::DaemonIdentityReport {features,..})
+            if features.iter().any(|v|v=="remote_worker_v1")=>{
+            let has=|name:&str|features.iter().any(|v|v==name);
+            Ok(MasterWorkerFeatures {
+                candidate_probe:has("worker_candidate_probe_v1"),probe_v2:has("worker_candidate_probe_v2"),
+                release_lease:has("worker_release_lease_v2"),source_proof:has("worker_parent_source_proof_v1"),
+                slot_deadline:has("worker_result_slot_deadline_v1"),
+                workspace_diagnostics:has("worker_workspace_diagnostics_v1"),
+                origin_proof:has("worker_origin_proof_v1"),workspace_repair:has("worker_workspace_repair_v1"),
+            })
+        }
+        _=>Err("worker_capability_required".into()),
     }
 }
 
@@ -4297,7 +4315,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             stream.try_clone().map_err(|_| "worker_socket_clone")?,
         ));
         let mut reader = BufReader::new(stream);
-        let (master_supports_candidate_probe, master_supports_probe_v2, master_supports_release_lease, master_supports_source_proof, master_supports_slot_deadline, master_supports_workspace_diagnostics, master_supports_origin_proof, master_supports_workspace_repair) =
+        let master_features =
             match probe_worker_capability(&writer, &mut reader) {
                 Ok(capabilities) => capabilities,
                 Err(code) if matches!(code.as_str(), "worker_connection_lost" | "worker_capability_unavailable") => {
@@ -4310,6 +4328,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 }
                 Err(code) => return Err(code),
             };
+        let master_supports_workspace_diagnostics=master_features.workspace_diagnostics;
+        let offered_caps=master_features.capabilities();
         let worker_hello = WorkerHello {
             version: REMOTE_WORKER_VERSION,
             identity: runtime.identity.clone(),
@@ -4317,25 +4337,11 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             build: crate::build_info::BUILD_ID.to_owned(),
             capability: ClientCapability::RemoteWorkerV1,
         };
-        let hello = if master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline || master_supports_origin_proof || master_supports_workspace_repair {
+        let hello = if !offered_caps.is_empty() {
             WrapperToDaemon::WorkerHelloWithCapabilities {
                 hello: WorkerHelloWithCapabilities {
                     hello: worker_hello,
-                    capabilities: [
-                        (
-                            master_supports_candidate_probe,
-                            WorkerCapability::CandidateProbeV1,
-                        ),
-                        (master_supports_probe_v2, WorkerCapability::CandidateProbeV2),
-                        (master_supports_release_lease, WorkerCapability::ReleaseLeaseV2),
-                        (master_supports_source_proof, WorkerCapability::ParentSourceProofV1),
-                        (master_supports_slot_deadline, WorkerCapability::ResultSlotDeadlineV1),
-                        (master_supports_origin_proof, WorkerCapability::OriginProofV1),
-                        (master_supports_workspace_repair, WorkerCapability::WorkspaceRepairV1),
-                    ]
-                    .into_iter()
-                    .filter_map(|(supported, capability)| supported.then_some(capability))
-                    .collect(),
+                    capabilities: offered_caps.clone(),
                 },
             }
         } else {
@@ -4361,68 +4367,31 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 continue;
             }
         };
-        let (epoch, candidate_probe_negotiated, candidate_probe_v2_negotiated, slot_deadline_negotiated, origin_proof_negotiated, workspace_repair_negotiated) =
+        let (epoch, negotiated) =
             match serde_json::from_slice::<DaemonToWrapper>(&line) {
                 Ok(DaemonToWrapper::WorkerAccepted { accepted })
-                    if !master_supports_candidate_probe
-                        && !master_supports_probe_v2
-                        && !master_supports_release_lease
-                        && !master_supports_slot_deadline
-                        && !master_supports_origin_proof
-                        && !master_supports_workspace_repair
-                        && accepted.validate().is_ok()
-                        && accepted.identity == runtime.identity =>
+                    if offered_caps.is_empty() && accepted.validate().is_ok()
+                        && accepted.identity==runtime.identity =>
                 {
-                    (accepted.connection_epoch, false, false, false, false, false)
+                    (accepted.connection_epoch, Vec::new())
                 }
                 Ok(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted })
-                    if (master_supports_candidate_probe || master_supports_probe_v2 || master_supports_release_lease || master_supports_slot_deadline || master_supports_origin_proof || master_supports_workspace_repair)
-                        && (!accepted
-                            .capabilities
-                            .contains(&WorkerCapability::CandidateProbeV1)
-                            || master_supports_candidate_probe)
-                        && accepted.accepted.validate().is_ok()
-                        && accepted.accepted.identity == runtime.identity
-                        && (!accepted
-                            .capabilities
-                            .contains(&WorkerCapability::CandidateProbeV2)
-                            || master_supports_probe_v2)
-                        && (!accepted.capabilities.contains(&WorkerCapability::ReleaseLeaseV2) || master_supports_release_lease)
-                        && (!accepted.capabilities.contains(&WorkerCapability::ParentSourceProofV1) || master_supports_source_proof)
-                        && (!accepted.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1) || master_supports_slot_deadline)
-                        && (!accepted.capabilities.contains(&WorkerCapability::OriginProofV1) || master_supports_origin_proof || master_supports_workspace_repair)
-                        && accepted.capabilities.iter().all(|capability| {
-                            matches!(
-                                capability,
-                                WorkerCapability::CandidateProbeV1
-                                    | WorkerCapability::CandidateProbeV2
-                                    | WorkerCapability::ReleaseLeaseV2
-                                    | WorkerCapability::ParentSourceProofV1
-                                    | WorkerCapability::ResultSlotDeadlineV1
-                                    | WorkerCapability::OriginProofV1
-                                    | WorkerCapability::WorkspaceRepairV1
-                            )
-                        }) =>
+                    if !offered_caps.is_empty() && accepted.accepted.validate().is_ok()
+                        && accepted.accepted.identity==runtime.identity
+                        && master_features.admits(&accepted.capabilities) =>
                 {
-                    let candidate_probe_negotiated = accepted
-                        .capabilities
-                        .contains(&WorkerCapability::CandidateProbeV1);
-                    (
-                        accepted.accepted.connection_epoch,
-                        candidate_probe_negotiated,
-                        accepted
-                            .capabilities
-                            .contains(&WorkerCapability::CandidateProbeV2),
-                        accepted.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1),
-                        accepted.capabilities.contains(&WorkerCapability::OriginProofV1),
-                        accepted.capabilities.contains(&WorkerCapability::WorkspaceRepairV1),
-                    )
+                    (accepted.accepted.connection_epoch, accepted.capabilities)
                 }
                 Ok(DaemonToWrapper::WorkerRejected { .. }) => {
                     return Err("worker_registration_refused".into());
                 }
                 _ => return Err("worker_handshake_invalid".into()),
             };
+        let candidate_probe_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV1);
+        let candidate_probe_v2_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV2);
+        let slot_deadline_negotiated=negotiated.contains(&WorkerCapability::ResultSlotDeadlineV1);
+        let origin_proof_negotiated=negotiated.contains(&WorkerCapability::OriginProofV1);
+        let workspace_repair_negotiated=negotiated.contains(&WorkerCapability::WorkspaceRepairV1);
         runtime.host_resources.reset();
         runtime.last_resource_refresh = Instant::now();
         let disconnected = Arc::new(AtomicBool::new(false));
@@ -7220,12 +7189,13 @@ while not stop.exists(): time.sleep(.01)
             let mut reader = BufReader::new(client);
             let probe = probe_worker_capability(&writer, &mut reader);
             assert_eq!(probe.is_ok(), supported, "sonde: {probe:?}");
-            if supported { assert!(probe.unwrap().5); }
+            if supported { assert!(probe.unwrap().workspace_diagnostics); }
             drop(writer);
             drop(reader);
             peer.join().unwrap();
         }
     }
+    #[cfg(target_os="linux")]
     #[test]
     fn spec185_worker_repair_publishes_overlay_and_keeps_original_command_and_slots() {
         use bridget_transport::protocol::{WorkspaceRequest,ProviderPermissions,SpawnPosture,WorkspaceRepairRequestV1};
@@ -7252,7 +7222,10 @@ while not stop.exists(): time.sleep(.01)
         write_json(&runtime.config.registry_path,&serde_json::json!({
             "agents":{"codex":{"command":"/bin/echo","args":["app-server"],"protocol":"codex_app_server",
                 "forbidden_env":[],"capabilities":{"execution_paths":["codex_app_server"],
-                    "models":{"fixture-model":{"efforts":["high"]}}}}},
+                     "models":{"fixture-model":{"efforts":["high"]}},
+                    "observed":{"binary_path":"/bin/echo","binary_version":"fixture185",
+                        "binary_digest":digest_bytes(&fs::read("/bin/echo").unwrap()),"contract_version":"codex-app-server-fixture-v1",
+                        "operations":["resume"]}}}},
             "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
                 "credential_fingerprint":digest_bytes(b"worker162-test-secret"),"allowed_agent_types":["codex"],
                 "mappings":{"repair185":{"source_host":"origin185","source_root":"/origin185",
@@ -7268,14 +7241,14 @@ while not stop.exists(): time.sleep(.01)
             origin_host:"origin185".into(),origin_cwd:"/origin185".into(),source_root:"/origin185".into(),
             remote_root:project.to_string_lossy().into_owned(),source_root_identity:"fixture:repair185".into(),
             relative_cwd:".".into(),base_commit:Some(base.clone()),agent_type:"codex".into(),
-            model:"fixture-model".into(),effort:Some("high".into()),posture:Some(SpawnPosture::Discovery),
+            model:"fixture-model".into(),effort:Some("high".into()),posture:Some(SpawnPosture::Development),
             workspace:Some(WorkspaceRequest::Worktree {base_ref:None,branch:None}),
             parent:ProviderPermissions {version:1,source:"native_wrapper".into(),run_id:"run185".into(),
                 provider_session_id:"parent-session185".into(),provider_instance_id:"parent185".into(),revision:1,
                 driver:"codex_app_server".into(),cwd:"/origin185".into(),runtime_mode:"full-access".into(),
                 interaction_mode:"default".into(),provider_policy:serde_json::json!({"kind":"codex",
                     "approval_policy":"never","approvals_reviewer":"user",
-                    "sandbox_policy":{"type":"readOnly","networkAccess":false}})},
+                    "sandbox_policy":{"type":"workspaceWrite","writableRoots":["/origin185"],"networkAccess":false,"excludeTmpdirEnvVar":true,"excludeSlashTmp":true}})},
         };
         let prepared=runtime.prepare(&prepare_identity,&prepare).unwrap();
         let original:crate::delegation::WorkspaceRecord=serde_json::from_value(prepared.workspace.clone().unwrap()).unwrap();
@@ -7291,9 +7264,9 @@ while not stop.exists(): time.sleep(.01)
         let target=project_fixture.0.join("disk185");
         fs::rename(&original.path,&target).unwrap();
         std::os::unix::fs::symlink(&target,&original.path).unwrap();
-        let request=WorkspaceRepairRequestV1 {request_id:"repair185-worker".into(),
+        let mut request=WorkspaceRepairRequestV1 {request_id:"repair185-worker".into(),
             target_cwd:target.to_string_lossy().into_owned(),expected_head:base};
-        let WorkerResponseOperation::WorkspaceRepair {status}=runtime.repair_workspace(&identity,&request,false,worker_now()+60).unwrap()
+        let WorkerResponseOperation::WorkspaceRepair {status}=runtime.repair_workspace(&identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Prepare,worker_now()+60).unwrap()
             else {panic!("statut attendu")};
         assert_eq!(status.code.as_deref(),Some("workspace_repair_child_upgrade_required"));
         assert_eq!(serde_json::to_value(runtime.store.command(&identity).unwrap()).unwrap(),
@@ -7302,17 +7275,43 @@ while not stop.exists(): time.sleep(.01)
         write_json(&workspace_repair::capability_path(&runtime.store.root,&identity),
             &workspace_repair::RepairCapability {version:1,worker:runtime.identity.clone(),command:identity.clone(),
                 wrapper_pid:child.id(),wrapper_birth:receipt.marker.as_ref().unwrap().birth,thread_id:"thread185".into()}).unwrap();
-        let WorkerResponseOperation::WorkspaceRepair {status}=runtime.repair_workspace(&identity,&request,false,worker_now()+60).unwrap()
+        let WorkerResponseOperation::WorkspaceRepair {status}=runtime.repair_workspace(&identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Prepare,worker_now()+60).unwrap()
             else {panic!("statut attendu")};
         assert_eq!(status.phase,"prepared","{status:?}");
+        // Un refus sans effet clôt la tentative ; une nouvelle clé est alors permise.
+        let mut refused_status=status.clone();refused_status.phase="refused".into();
+        refused_status.code=Some("workspace_repair_busy".into());
+        workspace_repair::persist_wrapper_result(&runtime.store.root,&identity,&refused_status).unwrap();
+        let WorkerResponseOperation::WorkspaceRepair {status:refused}=runtime.repair_workspace(
+            &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Prepare,worker_now()+60).unwrap()
+            else {panic!("refus durable attendu")};
+        assert_eq!(refused.phase,"refused");
+        request.request_id="repair185-worker-second".into();
+        let WorkerResponseOperation::WorkspaceRepair {status}=runtime.repair_workspace(
+            &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Prepare,worker_now()+60).unwrap()
+            else {panic!("nouvelle préparation attendue")};
+        assert_eq!(status.phase,"prepared","{status:?}");
+        let retained=runtime.store.command(&identity).unwrap();
+        assert_eq!(retained.workspace_repair_history.len(),1);
+        assert_eq!(retained.workspace_repair_history[0].phase,"refused");
         let (anchor,source,_)=workspace_repair::proof(&status).unwrap();
         crate::workspace_git::apply_repair_git(&source,&anchor).unwrap();
         // Frontière wrapper simulée : ce test vérifie les contrôles worker.
         // Le test wrapper185 qualifie séparément l'arrêt et la reprise réels.
         let mut resumed=status.clone();resumed.phase="resumed".into();
         workspace_repair::persist_wrapper_result(&runtime.store.root,&identity,&resumed).unwrap();
+        let WorkerResponseOperation::WorkspaceRepair {status:observed}=runtime.repair_workspace(
+            &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Prepare,worker_now()+60).unwrap() else {panic!("reçu observé attendu")};
+        assert_eq!(observed.phase,"resumed","un ACK perdu ne rejoue pas le contrôle wrapper");
+        assert_eq!(runtime.store.command(&identity).unwrap().workspace_repair.as_ref().unwrap().phase,"prepared",
+            "l'observation ne publie aucune liaison");
         let WorkerResponseOperation::WorkspaceRepair {status:published}=runtime.repair_workspace(
-            &identity,&request,true,worker_now()+60).unwrap() else {panic!("publication attendue")};
+            &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Commit,worker_now()+60).unwrap() else {panic!("publication attendue")};
+        assert_eq!(published.phase,"committed","{published:?}");
+        assert!(!workspace_repair::published(&runtime.store.root,&identity,&request));
+        let WorkerResponseOperation::WorkspaceRepair {status:published}=runtime.repair_workspace(
+            &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Publish,worker_now()+60).unwrap()
+            else {panic!("publication attendue")};
         assert_eq!(published.phase,"published","{published:?}");
         let after=runtime.store.command(&identity).unwrap();
         assert_eq!(after.identity,receipt.identity);assert_eq!(after.command_digest,receipt.command_digest);
@@ -7325,7 +7324,24 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(observation.permission_digest.as_ref(),
             published.prepared.as_ref().map(|v|&v.placement.permission_digest));
         assert_eq!(observation.workspace.as_ref().unwrap()["path"],target.to_string_lossy().as_ref());
+        fs::write(target.join("next-round"),"nouveau travail conservé").unwrap();
+        git(&target,&["add","next-round"]);git(&target,&["commit","-qm","ronde suivante"]);
+        let next_head=git(&target,&["rev-parse","HEAD"]);
+        let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+            else {panic!("preuve après commit attendue")};
+        assert!(observation.native_ready);
+        assert!(observation.permission_digest.is_some(),"un commit après migration doit rester continuable");
+        assert_eq!(observation.workspace.as_ref().unwrap()["head_commit"],next_head);
         bridget_transport::managed_session::stop_owned_child(&mut child,true,Duration::from_secs(2)).unwrap();
+    }
+
+    #[test]
+    fn spec185_capabilities_remain_independent_and_reject_unoffered_origin_proof() {
+        let features=MasterWorkerFeatures {workspace_repair:true,..Default::default()};
+        assert_eq!(features.capabilities(),vec![WorkerCapability::WorkspaceRepairV1]);
+        assert!(features.admits(&[WorkerCapability::WorkspaceRepairV1]));
+        assert!(!features.admits(&[WorkerCapability::OriginProofV1]));
+        assert!(!features.admits(&[WorkerCapability::WorkspaceRepairV1,WorkerCapability::WorkspaceRepairV1]));
     }
 
 }

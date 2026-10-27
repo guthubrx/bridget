@@ -14,7 +14,7 @@ Les commandes Cargo passent par python3 scripts/build.py cargo.
 ## Revue de conception
 - b3bad360-3746-47e4-afc1-21b669b567fe : aucun verdict, le brief interdisait le seul lecteur disponible (shell).
 - 543a123c-619d-4cb1-b4d9-54b73f817c07 : lecture effective, avis favorable au parcours dédié, avec exigences sur ancrage, quiescence, arrêt borné, même fil, durabilité, négociation et ancien wrapper.
-- Ces exigences structurent l'implémentation. La contre-revue du diff reste à effectuer.
+- Ces exigences structurent l'implémentation. La contre-revue du premier diff a imposé huit corrections, détaillées ci-dessous.
 
 ## Contrôles déjà observés
 - cargo check -p bridget-daemon --lib : PASS avant les derniers compléments.
@@ -31,3 +31,26 @@ Le binaire actif reste celui de la session183. Le candidat184 attend déjà une 
 Finir les contrôles du worker et de coordination ; revoir le diff ; intégrer et pousser après validation ; préparer le binaire ; respecter le refus de maintenance s'il persiste. Traiter explicitement le préalable de migration de l'ancien wrapper, sans mission de remplacement.
 
 Aucune interface graphique modifiée : contrôles techniques, pas de diaporama requis.
+
+## Contre-revue du candidat 2164346a
+Tâche478e2ba5-4595-466a-8803-5963e7788dce ; clé bridget-spec185-code-review-20261027-03 ; verdict défavorable.
+Les huit objections ont été reprises dans la source suivante, qui attend une nouvelle revue :
+1. Verrous fournisseur : try_lock, ordre pending puis queue, délai établi avant les verrous.
+2. Reçu repris : lecture et réconciliation avant contrôle d'expiration autorisant un nouvel effet.
+3. Annulation : garde relue après préparation, sous le verrou d'écriture du contrôle et à chaque publication ; signal natif observé entre les effets du wrapper.
+4. Admission : aucune entrée de socket fournisseur pendant la barrière. Préparation, commit worker, décision maître durable puis publication worker. Aucun événement système ne passe avant cette publication.
+5. Reprise ratée : arrêt TERM/INT borné, ressource de lancement conservée si arrêt incertain, aucune attente de lecteur non bornée dans ce parcours.
+6. FIFO : ouverture non bloquante puis contrôle du type.
+7. HEAD : égalité pendant la migration ; ensuite même branche et ascendance du HEAD de migration, avec conservation des identités de dossiers.
+8. Refus : terminalité explicite avant effets ; refus wrapper repris durablement par le worker, puis nouvelle clé autorisée sans écraser l'historique.
+Les répétitions de lecture ont été retirées ; la négociation utilise une structure nommée et des capacités indépendantes ; le contexte d'échec reste réservé au parent propriétaire.
+
+Diagnostic de qualification : le cas workspaceWrite a révélé un séparateur final ajouté par join sur un suffixe vide. Les politiques observées différaient seulement entre /disk185/ et /disk185. La traduction conserve désormais exactement la racine canonique ; aucune restriction n'a été assouplie.
+Le test d'échec de reprise comporte une sonde de compte sans réponse, bornée à2s, puis un nettoyage borné à4s. Il conserve le propriétaire tant que le processus ou son lecteur n'est pas arrêté. La fixture finit seule, sans SIGKILL.
+
+## Contrôles après résolution des huit objections
+-12 tests daemon spec185_ : PASS. Incluent annulation/expiration avant contrôle, refus durable, accès parent étranger, FIFO, ancrage Git, équivalence workspaceWrite, commit après publication, reprise réelle du même fil, rejeu après expiration sans nouvel effet.
+-8 tests transport spec185_ : PASS. Incluent verrou fournisseur déjà pris et échec de reprise avec processus/lecteur résistants, conservés sous borne.
+-13 tests de module MCP : PASS ;1 test CLI du cycle natif : PASS ;4 tests de portées MCP : PASS ;10 tests d'attestation d'outils : PASS.
+Les journaux locaux de ces passages sont conservés sous /home/moi/.cache/bridget184/spec185-*.log, hors Git.
+La compatibilité MCP complète et la revue du commit corrigé restent en cours. Les tests ne constituent pas une qualification exhaustive de toutes les coupures à toutes les frontières. Aucun fournisseur réel ni tâche métier réelle n'a été lancé par ces contrôles.

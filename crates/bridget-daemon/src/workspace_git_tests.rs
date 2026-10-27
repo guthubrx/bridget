@@ -1006,3 +1006,16 @@ fn spec185_repair_refuses_destination_alias_and_inode_substitution() {
         assert!(apply_repair_git(&record,&anchor).is_err());
     });
 }
+
+#[test]
+fn spec185_repair_fifo_is_refused_without_blocking_worker() {
+    with_repo(|repo|{
+        let (record,target,head,_)=moved185(repo);
+        fs::remove_file(target.join(".git")).unwrap();
+        let fifo=std::ffi::CString::new(target.join(".git").as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe {libc::mkfifo(fifo.as_ptr(),0o600)},0);
+        let started=Instant::now();
+        assert!(inspect_repair(&record,&target,&head).is_err());
+        assert!(started.elapsed()<Duration::from_millis(500));
+    });
+}

@@ -44,4 +44,4 @@ pub use protocol::{
 };
 pub use pty::PtyTransport;
 pub use tmux::TmuxTransport;
-pub use transport::{Transport, TransportError};
+pub use transport::{Transport, TransportError, RetainedStart};

@@ -14,7 +14,7 @@ mod tests;
 
 #[path = "workspace_repair_git.rs"]
 mod repair;
-pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, apply_repair_git};
+pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, report_repaired_workspace, apply_repair_git};
 
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(20);

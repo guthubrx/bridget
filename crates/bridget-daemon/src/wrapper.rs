@@ -4094,6 +4094,11 @@ fn spawn_managed_session_transport(
                 dynamic_tool_handler,
             };
             let environment = string_environment(mcp_environment);
+            if repair.is_some() {
+                return Ok(Box::new(CodexAppServerTransport::spawn_repair_with_environment(
+                    options,&environment,inherit_stderr
+                )?));
+            }
             if inherit_stderr {
                 Ok(Box::new(
                     CodexAppServerTransport::spawn_inheriting_stderr_with_environment(
@@ -4620,7 +4625,7 @@ fn launch_session_with_status(
         reporter.startup_succeeded();
     }
     if let Some(context)=remote_result_context.as_ref() {
-        if definition.protocol=="codex_app_server" {
+        if cfg!(target_os="linux") && definition.protocol=="codex_app_server" {
             if let Some(identity)=transport.provider_identity() {
                 if identity.provider_observation.as_ref().is_some_and(|v|
                     v.supports(bridget_transport::protocol::ProviderOperation::Resume)) {
@@ -4703,6 +4708,14 @@ fn launch_session_with_status(
         if let (Some(request),Some(context))=(&workspace_repair_barrier,&remote_result_context) {
             if crate::remote_worker::workspace_repair::published(&context.store_root,&context.command,request) {
                 workspace_repair_barrier=None;
+            } else {
+                // Aucun message (y compris les événements système) ne rejoint
+                // le fournisseur avant la publication. L'annulation native
+                // reste prioritaire via le signal détenu par le worker.
+                if native_termination.as_ref().is_some_and(NativeTerminationSignal::requested) {break;}
+                reattest_managed_turn_if_due(&writer,transport.as_ref(),&mut last_heartbeat,Instant::now());
+                thread::sleep(Duration::from_millis(25));
+                continue;
             }
         }
         reattest_managed_turn_if_due(
@@ -5049,7 +5062,7 @@ fn launch_session_with_status(
                 Ok(DaemonToWrapper::WorkspaceRepairControl {task_id,status}) => {
                     let status=workspace_repair::apply(&task_id,status,remote_result_context.as_ref(),
                         &mut transport,agent_type,definition,&native_args,&mcp_environment,
-                        mcp_servers.clone(),home,&my_name,&instance_id,socket);
+                        mcp_servers.clone(),home,&my_name,&instance_id,socket,native_termination.as_ref());
                     if status.phase!="refused" {workspace_repair_barrier=Some(status.request.clone());}
                     if status.phase=="resumed" {
                         permission_cwd=std::env::current_dir().unwrap_or(permission_cwd);
@@ -5206,7 +5219,7 @@ fn launch_session_with_status(
                 continue;
             }
         }
-        if !transport.is_alive() {
+        if !transport.is_alive() && workspace_repair_barrier.is_none() {
             let terminal_events = transport.drain_events();
             let terminal_journal_failed = forward_managed_events_with_redaction(
                 &writer,

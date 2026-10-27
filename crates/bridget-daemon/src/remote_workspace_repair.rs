@@ -1,6 +1,8 @@
 //! Réparation185 : reçus séparés du canon de naissance, aucun nouveau Start.
 use super::*;
-use bridget_transport::protocol::{WorkspaceRepairRequestV1, WorkspaceRepairStatusV1};
+use bridget_transport::protocol::{
+    WorkspaceRepairActionV1, WorkspaceRepairRequestV1, WorkspaceRepairStatusV1,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -101,7 +103,13 @@ fn remap_policy(value: &mut serde_json::Value, old: &Path, target: &Path) {
     match value {
         serde_json::Value::String(text) => {
             if let Ok(offset) = Path::new(text).strip_prefix(old) {
-                *text = target.join(offset).to_string_lossy().into_owned();
+                *text = if offset.as_os_str().is_empty() {
+                    target.to_path_buf()
+                } else {
+                    target.join(offset)
+                }
+                .to_string_lossy()
+                .into_owned();
             }
         }
         serde_json::Value::Array(items) => {
@@ -158,11 +166,29 @@ impl WorkerRuntime {
         &mut self,
         command: &WorkerCommandIdentity,
         request: &WorkspaceRepairRequestV1,
-        publish: bool,
+        action: WorkspaceRepairActionV1,
         expires_at: i64,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
         request.validate()?;
-        let receipt = self.store.command(command).map_err(refuse)?;
+        let mut receipt = self.store.command(command).map_err(refuse)?;
+        // Un refus sans effet du wrapper est durable avant une autre clé.
+        if let Some(previous) = receipt
+            .workspace_repair
+            .as_ref()
+            .filter(|v| v.phase == "prepared")
+        {
+            if let Some(observed) =
+                wrapper_result(&self.store.root, command, &previous.request).map_err(unavailable)?
+            {
+                if observed.phase == "refused"
+                    && observed.prepared == previous.prepared
+                    && observed.proof == previous.proof
+                {
+                    self.save_repair_status(command, observed)?;
+                    receipt = self.store.command(command).map_err(refuse)?;
+                }
+            }
+        }
         let refused = |code: &str| WorkerResponseOperation::WorkspaceRepair {
             status: WorkspaceRepairStatusV1 {
                 request: request.clone(),
@@ -172,6 +198,9 @@ impl WorkerRuntime {
                 code: Some(code.into()),
             },
         };
+        if !cfg!(target_os = "linux") {
+            return Ok(refused("workspace_repair_platform_unsupported"));
+        }
         if receipt.phase != WorkerCommandPhase::Released
             || !receipt.native_ready
             || receipt.startup_failed
@@ -209,10 +238,33 @@ impl WorkerRuntime {
                     },
                 ));
             }
-            if previous.phase == "published" || !publish {
+            if previous.phase == "published" {
                 return Ok(WorkerResponseOperation::WorkspaceRepair {
                     status: previous.clone(),
                 });
+            }
+            if action == WorkspaceRepairActionV1::Prepare {
+                // Observation seulement : un ACK perdu se réconcilie depuis le
+                // blob durable, sans réveiller un wrapper déjà mis en barrière.
+                if let Some(observed) =
+                    wrapper_result(&self.store.root, command, request).map_err(unavailable)?
+                {
+                    if observed.prepared != previous.prepared || observed.proof != previous.proof {
+                        return Err(WorkerRefusal::CommandMismatch);
+                    }
+                    return Ok(WorkerResponseOperation::WorkspaceRepair { status: observed });
+                }
+                return Ok(WorkerResponseOperation::WorkspaceRepair {
+                    status: previous.clone(),
+                });
+            }
+            if previous.phase == "committed" && action == WorkspaceRepairActionV1::Commit {
+                return Ok(WorkerResponseOperation::WorkspaceRepair {
+                    status: previous.clone(),
+                });
+            }
+            if action == WorkspaceRepairActionV1::Publish && previous.phase != "committed" {
+                return Ok(refused("workspace_repair_not_committed"));
             }
             let (anchor, original, capability) =
                 proof(previous).map_err(|_| WorkerRefusal::CommandMismatch)?;
@@ -283,14 +335,36 @@ impl WorkerRuntime {
             }
             self.recheck_at_repaired(&mut retained, &anchor)
                 .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-            observed.phase = "published".into();
+            observed.phase = if action == WorkspaceRepairActionV1::Publish {
+                "published"
+            } else {
+                "committed"
+            }
+            .into();
             return self.save_repair_status(command, observed);
         }
-        if publish {
+        if action != WorkspaceRepairActionV1::Prepare {
             return Ok(refused("workspace_repair_not_prepared"));
         }
         if worker_now() >= expires_at || expires_at > worker_now() + 60 {
             return Ok(refused("workspace_repair_authority_expired"));
+        }
+        let admitted = receipt
+            .preparation
+            .as_ref()
+            .ok_or(WorkerRefusal::UnknownExecution)?;
+        if admitted.1.definition.protocol != "codex_app_server" {
+            return Ok(refused("workspace_repair_adapter_unsupported"));
+        }
+        if !admitted
+            .1
+            .definition
+            .capabilities
+            .observed
+            .as_ref()
+            .is_some_and(|v| v.supports(bridget_transport::protocol::ProviderOperation::Resume))
+        {
+            return Ok(refused("workspace_repair_resume_unattested"));
         }
         let capability: Option<RepairCapability> = read_optional(
             &capability_path(&self.store.root, command),

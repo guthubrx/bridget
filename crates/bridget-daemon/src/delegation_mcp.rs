@@ -417,6 +417,10 @@ fn execute_with_proof(
         },
         _ => unreachable!(),
     };
+    if let NativeDelegationRequest::RepairWorkspace {repair,..}=&request {
+        repair.validate().map_err(|_|ClientError::InvalidParams(
+            "Réparation : request_id non vide, chemin absolu et SHA complet de 40 caractères requis.".into()))?;
+    }
     if let NativeDelegationRequest::AutoDelegate(auto) = &request {
         let canonical = serde_json::to_vec(&request)
             .map_err(|_| ClientError::InvalidParams("auto_delegate invalide".into()))?;
@@ -792,6 +796,11 @@ mod tests {
             serde_json::to_string(&legacy).unwrap(),
             r#"{"operation":"auto_delegate","request_id":"legacy163","task":"mission","cwd":"/tmp"}"#
         );
+        for (tool,args,expected) in [
+            ("bridget_auto_delegate",json!({"request_id":"new168","task":"mission","cwd":"/tmp"}),"auto_delegate_v2_unsupported"),
+            ("bridget_task_repair_workspace",json!({"task_id":"task185","request_id":"repair185",
+                "target_cwd":"/srv/projet/task185","expected_head":"1".repeat(40)}),"workspace_repair_master_upgrade_required"),
+        ] {
         let socket = crate::mcp_identity::mock_socket("legacy168-refusal");
         let listener = UnixListener::bind(&socket).unwrap();
         crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
@@ -840,15 +849,16 @@ mod tests {
         };
         let result = execute(
             &identity,
-            "bridget_auto_delegate",
-            &json!({"request_id":"new168","task":"mission","cwd":"/tmp"}),
+            tool,
+            &args,
             &socket,
         );
         assert!(
-            matches!(result,Err(ClientError::Technical{message,..}) if message=="auto_delegate_v2_unsupported")
+            matches!(result,Err(ClientError::Technical{message,..}) if message==expected)
         );
         backend.join().unwrap();
         let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+        }
     }
 
     #[test]
@@ -1270,7 +1280,7 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
-        assert_eq!(tools(brief_schema).len(), 9);
+        assert_eq!(tools(brief_schema).len(), 10);
     }
 
     #[test]

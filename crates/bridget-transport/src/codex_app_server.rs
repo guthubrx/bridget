@@ -316,7 +316,14 @@ impl CodexAppServerTransport {
         environment: &[(String, String)],
         inherit_stderr: bool,
     ) -> Result<Self, TransportError> {
-        Self::spawn_endpoint(options, environment, inherit_stderr, None, None)
+        Self::spawn_endpoint(options, environment, inherit_stderr, None, None, false)
+    }
+
+    /// Réparation native : tous les échecs de négociation gardent un arrêt
+    /// borné et rendent le propriétaire du processus si cet arrêt est incertain.
+    pub fn spawn_repair_with_environment(options:CodexAppServerOptions,
+        environment:&[(String,String)],inherit_stderr:bool)->Result<Self,TransportError> {
+        Self::spawn_endpoint(options,environment,inherit_stderr,None,None,true)
     }
 
     /// Un app-server privé, partagé avec la TUI native. Aucun octet terminal
@@ -326,7 +333,7 @@ impl CodexAppServerTransport {
         environment: &[(String, String)],
         socket: &Path,
     ) -> Result<Self, TransportError> {
-        Self::spawn_endpoint(options, environment, false, Some(socket), None)
+        Self::spawn_endpoint(options, environment, false, Some(socket), None, false)
     }
 
     /// La sélection précède thread/resume, Register et la TUI : aucun fil
@@ -337,7 +344,7 @@ impl CodexAppServerTransport {
         socket: &Path,
         selector: Option<InteractiveThreadSelector<'_>>,
     ) -> Result<Self, TransportError> {
-        Self::spawn_endpoint(options, environment, false, Some(socket), selector)
+        Self::spawn_endpoint(options, environment, false, Some(socket), selector, false)
     }
 
     pub fn thread_id(&self) -> &str {
@@ -356,6 +363,7 @@ impl CodexAppServerTransport {
         inherit_stderr: bool,
         interactive_socket: Option<&Path>,
         selector: Option<InteractiveThreadSelector<'_>>,
+        bounded_failure:bool,
     ) -> Result<Self, TransportError> {
         if options.queue_capacity == 0 {
             return Err(TransportError::DeliveryFailed(
@@ -654,6 +662,19 @@ impl CodexAppServerTransport {
         let thread_id = match setup {
             Ok(thread_id) => thread_id,
             Err(error) => {
+                if bounded_failure {
+                    alive.store(false,Ordering::SeqCst);
+                    if let Ok(mut queue)=queue.0.try_lock() {queue.closed=true;}
+                    observations.1.notify_all();
+                    if let Ok(mut writer)=writer.try_lock() {writer.take();}
+                    let mut owner=crate::transport::RetainedStart::new(child,reader_handle);
+                    if owner.stop(Duration::from_secs(4)).is_err() {
+                        return Err(TransportError::StartUnconfirmed {
+                            reason:error.to_string(),owner:Box::new(owner)
+                        });
+                    }
+                    return Err(error);
+                }
                 writer
                     .lock()
                     .unwrap_or_else(|poison| poison.into_inner())
@@ -980,70 +1001,66 @@ impl Transport for CodexAppServerTransport {
 
 impl ManagedSession for CodexAppServerTransport {
     fn stop_for_workspace_repair(
-        &mut self,
-        budget: Duration,
+        &mut self, budget: Duration,
     ) -> Result<ManagedProviderIdentity, TransportError> {
+        let deadline=Instant::now()+budget;
+        let busy=||TransportError::DeliveryFailed("workspace_repair_busy".into());
+        let uncertain=||TransportError::DeliveryFailed("workspace_repair_stop_unconfirmed".into());
         if self.interactive_socket.is_some() {
             return Err(TransportError::DeliveryFailed("workspace_repair_unsupported".into()));
         }
-        // Fermer la même file qui admet les remises, avant toute observation.
-        let (queue, wake) = &*self.queue;
-        let mut queue = queue.lock().unwrap_or_else(|e| e.into_inner());
+        // Même ordre que record_provider_request. Ne jamais attendre un verrou
+        // imbriqué : une arrivée concurrente refuse cette tentative sans effet.
+        let pending=self.pending_request.try_lock().map_err(|_|busy())?;
+        let (queue,wake)=&*self.queue;
+        let mut queue=queue.try_lock().map_err(|_|busy())?;
         if queue.closed || queue.active.is_some() || queue.external_turn.is_some()
-            || !queue.messages.is_empty() || !queue.steer.is_empty()
-        {
-            return Err(TransportError::DeliveryFailed("workspace_repair_busy".into()));
+            || !queue.messages.is_empty() || !queue.steer.is_empty() || pending.is_some() {
+            return Err(busy());
         }
-        queue.closed = true;
-        let ready = self.child_requests.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
-            && self.pending_request.lock().unwrap_or_else(|e| e.into_inner()).is_none()
-            && self.active_detail.lock().unwrap_or_else(|e| e.into_inner()).is_none()
-            && self.observations.0.lock().unwrap_or_else(|e| e.into_inner()).events.is_empty();
-        if !ready {
-            queue.closed = false;
-            return Err(TransportError::DeliveryFailed("workspace_repair_busy".into()));
+        let children=self.child_requests.try_lock().map_err(|_|busy())?;
+        let active=self.active_detail.try_lock().map_err(|_|busy())?;
+        let observations=self.observations.0.try_lock().map_err(|_|busy())?;
+        if !children.is_empty() || active.is_some() || !observations.events.is_empty() {
+            return Err(busy());
         }
-        let identity = self.provider_identity().ok_or_else(||
-            TransportError::DeliveryFailed("workspace_repair_session_unconfirmed".into()))?;
-        let resume = identity.provider_observation.as_ref()
-            .is_some_and(|o| o.supports(crate::protocol::ProviderOperation::Resume));
-        if !resume || identity.provider_thread_id.as_ref().is_none_or(|id| id.is_empty()) {
-            queue.closed = false;
+        if self.provider_observation.as_ref().is_none_or(|v|!v.supports(ProviderOperation::Resume))
+            || self.thread_id.is_empty() {
             return Err(TransportError::DeliveryFailed("workspace_repair_resume_unattested".into()));
         }
-        // Pas de Drop bloquant après un arrêt incertain, ni de relance implicite.
-        if self.shutdown_started.swap(true, Ordering::SeqCst) {
-            queue.closed = false;
-            return Err(TransportError::DeliveryFailed("workspace_repair_stop_unconfirmed".into()));
-        }
-        self.alive.store(false, Ordering::SeqCst);
-        wake.notify_all();
-        self.observations.1.notify_all();
-        drop(queue);
-        let deadline = std::time::Instant::now() + budget;
-        self.writer.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Les champs sont ceux du pilote vivant. active est gardé à None ;
+        // provider_identity() reprendrait son verrou sous queue et pending.
+        let identity=ManagedProviderIdentity {
+            provider_kind:"codex".into(),provider_session_id:Some(self.connection_id.clone()),
+            provider_thread_id:Some(self.thread_id.clone()),active_turn_id:None,provider_item_id:None,
+            capabilities_revision:self.provider_observation.as_ref().map(|v|v.contract_version.clone()),
+            provider_observation:self.provider_observation.clone(),
+        };
+        if self.shutdown_started.swap(true,Ordering::SeqCst) {return Err(uncertain());}
+        queue.closed=true;
+        self.alive.store(false,Ordering::SeqCst);
+        wake.notify_all();self.observations.1.notify_all();
+        drop(observations);drop(active);drop(children);drop(queue);drop(pending);
+        self.writer.try_lock().map_err(|_|uncertain())?.take();
+        let mut child=self.child.try_lock().map_err(|_|uncertain())?;
         crate::managed_session::stop_owned_child(
-            &mut self.child.lock().unwrap_or_else(|e| e.into_inner()), true, budget,
-        ).map_err(|_| TransportError::DeliveryFailed("workspace_repair_stop_unconfirmed".into()))?;
-        // Les fils concernés doivent avoir quitté les anciens chemins avant chdir.
-        for handle in [&self.reader_handle, &self.worker_handle] {
+            &mut child,true,deadline.saturating_duration_since(Instant::now()),
+        ).map_err(|_|uncertain())?;
+        drop(child);
+        for handle in [&self.reader_handle,&self.worker_handle] {
             loop {
-                let finished = handle.lock().unwrap_or_else(|e| e.into_inner())
-                    .as_ref().is_none_or(|thread| thread.is_finished());
-                if finished { break; }
-                if std::time::Instant::now() >= deadline {
-                    return Err(TransportError::DeliveryFailed("workspace_repair_stop_unconfirmed".into()));
-                }
-                std::thread::sleep(Duration::from_millis(10));
+                let finished=handle.try_lock().map_err(|_|uncertain())?
+                    .as_ref().is_none_or(|thread|thread.is_finished());
+                if finished {break;}
+                if Instant::now()>=deadline {return Err(uncertain());}
+                thread::sleep(Duration::from_millis(10));
             }
-            if let Some(thread) = handle.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                thread.join().map_err(|_| TransportError::DeliveryFailed(
-                    "workspace_repair_stop_unconfirmed".into()))?;
+            if let Some(thread)=handle.try_lock().map_err(|_|uncertain())?.take() {
+                thread.join().map_err(|_|uncertain())?;
             }
         }
         Ok(identity)
     }
-
 
     fn answer_provider_request(
         &mut self,
@@ -10041,6 +10058,78 @@ for line in sys.stdin:
         for handle in [&transport.reader_handle,&transport.worker_handle] {
             if let Some(thread)=handle.lock().unwrap().take() {thread.join().unwrap();}
         }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec185_repair_does_not_wait_for_provider_request_lock() {
+        let root=root("repair185-lock-order");
+        let trace=root.join("trace.jsonl");
+        let mut transport=CodexAppServerTransport::spawn_with_environment(repair185_options(&trace),
+            &[("BRIDGET_CODEX_TRACE".into(),trace.to_string_lossy().into_owned())],false).unwrap();
+        transport.drain_events();
+        let pending=transport.pending_request.clone();
+        let held=pending.lock().unwrap();
+        let (sender,receiver)=mpsc::channel();
+        let thread=std::thread::spawn(move|| {
+            let start=Instant::now();
+            let result=transport.stop_for_workspace_repair(Duration::from_millis(60));
+            sender.send((start.elapsed(),result)).unwrap();
+            transport
+        });
+        let observed=receiver.recv_timeout(Duration::from_millis(200));
+        // Libérer même en échec : le témoin ancien ne bloque jamais la suite.
+        drop(held);
+        let transport=thread.join().unwrap();
+        assert!(observed.is_ok(),"l'arrêt attendait le verrou détenu par le lecteur");
+        let (elapsed,result)=observed.unwrap();
+        assert!(elapsed<Duration::from_millis(150));
+        assert!(matches!(result,Err(TransportError::DeliveryFailed(ref code)) if code=="workspace_repair_busy"));
+        assert!(transport.is_alive());
+        transport.stop();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec185_failed_resume_keeps_owned_process_and_bounds_reader_cleanup() {
+        let root=root("repair185-failed-resume");
+        let trace=root.join("trace.jsonl");
+        let mut options=repair185_options(&trace);
+        options.command="/usr/bin/python3".into();
+        options.args=vec!["-u".into(),"-c".into(),r#"
+import json,sys,signal,subprocess,time
+signal.signal(signal.SIGTERM,signal.SIG_IGN)
+signal.signal(signal.SIGINT,signal.SIG_IGN)
+for line in sys.stdin:
+ q=json.loads(line)
+ with open(sys.argv[1],"a") as log: log.write(line)
+ if "id" not in q: continue
+ m=q.get("method");r={}
+ if m=="initialize":r={"userAgent":"fixture185","codexHome":"/tmp","platformFamily":"unix","platformOs":"linux"}
+ if m=="config/read":r={"config":{"approval_policy":"never","sandbox_mode":"read-only"}}
+ if m=="thread/resume":
+  subprocess.Popen(["/bin/sleep","7"])
+  r={"thread":{"id":"foreign-thread185"}}
+ print(json.dumps({"id":q["id"],"result":r}),flush=True)
+ if m=="thread/resume":time.sleep(7);break
+"#.into(),trace.to_string_lossy().into_owned()];
+        options.thread_bootstrap=CodexThreadBootstrap::Resume {thread_id:"expected185".into()};
+        let started=Instant::now();
+        let result=CodexAppServerTransport::spawn_repair_with_environment(options,&[],false);
+        // La sonde account/rateLimits volontairement sans réponse coûte 2 s ;
+        // le nettoyage possède ensuite sa borne propre de 4 s.
+        assert!(started.elapsed()<Duration::from_secs(7),"reprise et nettoyage hors bornes : {:?}",started.elapsed());
+        let mut owner=match result {
+            Err(TransportError::StartUnconfirmed {owner,..})=>owner,
+            Err(error)=>panic!("propriétaire non conservé : {error:?}"),
+            Ok(_)=>panic!("reprise étrangère acceptée"),
+        };
+        let pid=owner.process_id();
+        assert!(pid>0);
+        owner.stop(Duration::from_secs(5)).unwrap();
+        let rpc=std::fs::read_to_string(trace).unwrap();
+        assert_eq!(rpc.lines().filter(|v|v.contains("\"method\":\"thread/resume\"")).count(),1);
+        assert!(!rpc.contains("\"method\":\"turn/start\""));
         std::fs::remove_dir_all(root).unwrap();
     }
 

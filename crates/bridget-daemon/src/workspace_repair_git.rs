@@ -19,7 +19,7 @@ pub(crate) struct RepairAnchor {
 fn bounded_file(path: &Path) -> Result<String, String> {
     let file = fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
         .map_err(|_| "workspace_repair_anchor_unconfirmed")?;
     if !file
@@ -152,6 +152,22 @@ pub(crate) fn report_repair(
     anchor: &RepairAnchor,
     repaired: bool,
 ) -> Result<WorkspaceRecord, String> {
+    report_repair_at(original, anchor, repaired, true)
+}
+
+pub(crate) fn report_repaired_workspace(
+    original: &WorkspaceRecord,
+    anchor: &RepairAnchor,
+) -> Result<WorkspaceRecord, String> {
+    report_repair_at(original, anchor, true, false)
+}
+
+fn report_repair_at(
+    original: &WorkspaceRecord,
+    anchor: &RepairAnchor,
+    repaired: bool,
+    pin_head: bool,
+) -> Result<WorkspaceRecord, String> {
     for (path, device, inode) in [
         (&anchor.path, anchor.path_device, anchor.path_inode),
         (&anchor.git_dir, anchor.git_device, anchor.git_inode),
@@ -182,20 +198,24 @@ pub(crate) fn report_repair(
     let mut workspace = original.clone();
     workspace.path = anchor.path.to_string_lossy().into_owned();
     let report = report_at(&workspace, &anchor.git_dir, &anchor.path)?;
-    if report.head_commit.as_deref() != Some(anchor.expected_head.as_str())
+    if (pin_head && report.head_commit.as_deref() != Some(anchor.expected_head.as_str()))
         || report.head_on_branch != Some(true)
         || report.branch_commit != report.head_commit
     {
         return Err("workspace_repair_head_changed".into());
     }
+    let ancestor = if pin_head {
+        &original.base_commit
+    } else {
+        &anchor.expected_head
+    };
+    let head = report
+        .head_commit
+        .as_deref()
+        .ok_or("workspace_repair_history_unconfirmed")?;
     let ancestry = capture(
         &anchor.path,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            &original.base_commit,
-            &anchor.expected_head,
-        ],
+        &["merge-base", "--is-ancestor", ancestor, head],
         READ_TIMEOUT,
         Some((&anchor.git_dir, &anchor.path)),
     )?;
