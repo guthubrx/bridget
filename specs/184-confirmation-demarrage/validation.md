@@ -114,4 +114,4 @@ Nouvelle préparation native après ce changement d'état :
 /home/moi/.local/bin/bridget updates prepare B27D32B5-CFDB-44AC-8079-45AF179D9903
 Refus actuel : update_missions_active_or_unconfirmed. Aucun bail obtenu, aucun chargement ou redémarrage. Le maître reste183-admission-7478e9e7.
 L'annulation demandée de b0f614ff est confirmée. La livraison runtime184/186 reste bloquée par d'autres travaux ou états à réconcilier ; la liste active n'exclut pas les autres gardes internes.
-La demande de lecture propriétaire mcp-19961-6ae09bf2-1 est retirée, la confirmation native étant maintenant disponible. Aucun réveil périodique, rejeu ou mission de substitution.
+La tentative de retrait de la demande de lecture propriétaire mcp-19961-6ae09bf2-1 est refusée : demande déjà terminale timed_out. Aucune réponse supplémentaire n’est attendue ; la confirmation native est maintenant disponible. Aucun réveil périodique, rejeu ou mission de substitution.
