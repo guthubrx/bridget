@@ -26,7 +26,7 @@ Aucun protocole externe, critère d'acceptation, politique, compte ou configurat
 Journaux hors Git :
 /home/moi/.cache/bridget184/spec186-guidance-final.log
 /home/moi/.cache/bridget184/spec186-reread.log
-Régressions184 et contre-revue en cours.
+3régressions184 PASS. Contre-revue finale favorable, voir ci-dessous.
 Auto-revue hostile : contrôle des codes fermés, borne128/16Kio, absence de secrets et d'identité de tâche, refus conservé, absence de nouvelle sonde.
 Minimalisme : un fichier moteur, aucun nouveau service, store ou dépendance ; abstraction réservée au pont String existant.
 Complexité : O(R), R<=128. Charge future réduite par un diagnostic conservé ; volume limité au défaut démontré.
@@ -41,3 +41,12 @@ Tâche1c4a8c79-2d55-4a1b-ac25-b010b152601d, clébridget-spec186-review-20261027-
 Source57e65819 : un défautP2, refus partiel des deux efforts encore perdu lorsque la sonde globale réussit.
 Correction : les recherches de l'effort témoin et de l'effort choisi traversent le même pont. Le test existant spec168_service_valide_choisit_la_combinaison_complete exige désormais le motif réellement reçu.
 Les trois régressions184 PASS.
+
+## Qualification finale
+Source35123122672abdf49a019bb415d8fed34afe7e95.
+Test spec168_service_valide_choisit_la_combinaison_complete PASS, y compris refus de chacun des deux efforts ; log /home/moi/.cache/bridget184/spec186-partial-final.log.
+Total huit contrôles ciblés :3spec186,1incident171 étendu,3spec184,1spec168.
+Première compilation du complément : deux conversions &str/String manquantes, corrigées ; compilation et test final PASS.
+Contre-revue finale dc3bbf6f-71ef-4379-8948-1e047bf4e7b7, clébridget-spec186-review-20261027-02 : favorable, aucun blocage concret. Résultat lu et acquitté ; revue lecture seule.
+CI35123122 verte : https://github.com/guthubrx/bridget/actions/runs/40488333085
+Compilation release finale PASS,1minute ; installed PASS. Dernier budget3,07Gio.
