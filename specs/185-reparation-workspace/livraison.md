@@ -1,47 +1,56 @@
-# Préparation de livraison — Session185
-Statut : candidat installé, revue finale et activation en attente. Ce document ne vaut pas reçu d'activation.
+# Livraison préparée — Session185
+Statut : sources intégrées et poussées ; candidat installé et vérifié ; activation native refusée. Le parcours185 n'est PAS actif. La tâche métier historique n'a pas été réparée.
 
-## Source et candidat
-Base principale : fe776eda5f65e07571bdf28776bf0ee21dde97ba.
-Implémentation :2164346a9b242c1e48ba35115253ee091679c7ab.
-Corrections de revue :8bdbfab0a6469f1e32de3900ae9f7b8fd64ccd51.
-Branche poussée :session-185-reparation-workspace.
-Binaire candidat vérifié : /home/moi/.local/lib/bridget-communication/185-repair-8bdbfab0a646/bin/bridget.
-Build185-repair-8bdbfab0a646 ; version0.6.3.
-SHA-256f3b33d31e9bc6fed485713bbbbc8e8c19cea5f60b3efae8e598bd13ae2b4f792.
-Compilation release via scripts/build.py : PASS,1min36s.
-Installed après vérification hors cache : PASS. Cache partagé6,91Gio sous budget10Gio.
-Le lien installé actif n'a pas été modifié.
+## Source et revue
+Source qualifiée :46021dda412abdf66dee977d31492b28256affb6, intégrée en avance rapide à main et poussée.
+Revue indépendante finale : tâche712649ac-673d-4bbd-a192-0980aed0d903, clébridget-spec185-code-review-20261027-07. Verdict favorable, aucun blocage concret constaté sur ce SHA. Lecture seule ; aucun test exécuté par le réviseur.
+Les objections antérieures et leurs corrections restent dans /home/moi/10.Scripts/64.bridget/specs/185-reparation-workspace/validation.md.
+CI principale verte pour46021dda : https://github.com/guthubrx/bridget/actions/runs/40473530681.
 
-## Qualification
-12tests daemon185 ;8transport185 ;22compatibilité MCP ;1CLI ;4portées ;10attestation d'outils ;1négociation ancien maître : PASS.
-Le passage ciblé --bin bridget n'exécutait aucun test ; il n'est pas compté.
-L'essai CLI SSH du candidat a refusé identity_not_found, avant toute réparation. Cette session SSH ne fournit aucune identité native d'agent ; aucune preuve d'un autre fil n'a été copiée. Il ne s'agit pas d'un essai réel réussi de la réparation.
-Aucune qualification exhaustive de toutes les coupures ni intervention sur la tâche métier réelle.
+## Contrôles
+-15tests daemon185 : PASS.
+-8tests transport185 : PASS.
+-129tests de droits et délégations : PASS ;1banc explicitement ignoré.
+-3tests de collecte : PASS.
+-7tests de briefs : PASS ; le diagnostic du refus est conservé dans un vrai reçu SQL et son rejeu.
+-Preuve parent worker : PASS.
+-Contrôles de compatibilité déjà passés sur les surfaces inchangées :22MCP,4portées,10attestations d'outils,1CLI,1négociation ancien maître.
+-Documentation :32pages,522liens locaux,13paires de langues PASS.
+La qualification ne couvre pas toutes les coupures à toutes les frontières. Les fournisseurs des fixtures sont locaux et isolés. Aucune mission métier réelle n'a été lancée par les tests.
+Correction technique : aucun diaporama d'interface requis.
 
-## Revue
-Revue défavorable du premier candidat :478e2ba5-4595-466a-8803-5963e7788dce ; huit objections reprises.
-Contre-revue en cours :57018bf6-e736-44b1-b5af-25257b061bfb, clébridget-spec185-code-review-20261027-04, source exacte8bdbfab0.
+## Candidat
+Binaire : /home/moi/.local/lib/bridget-communication/185-repair-46021dda412a/bin/bridget.
+Manifest : /home/moi/.local/lib/bridget-communication/185-repair-46021dda412a/candidate.json.
+Build185-repair-46021dda412a ; version0.6.3 ; Linuxx86_64.
+SHA-256fceaec17087d1a6c63ae1e12fa246ba93ad6ce9a79e74b7da01e3dac215f284d.
+Compilation release via scripts/build.py : PASS,1min16s.
+Installed appelé après comparaison des octets hors cache : PASS. Cache partagé6,92Gio, sous le budget10Gio.
+Le candidat8bdbfab0 reste marqué non éligible à l'activation après sa revue défavorable.
+
+## Refus d'activation observé
+Commande réellement exécutée :
+/home/moi/.local/bin/bridget updates prepare 185-repair-46021dda412a-20261027
+
+Réponse : {"code":"update_missions_active_or_unconfirmed","status":"refused"}.
+Reçu brut : /home/moi/.cache/bridget184/spec185-maintenance-prepare.json.
+Le lien actif avant et après reste /home/moi/.local/lib/bridget-communication/183-admission-7478e9e7/bin/bridget.
+Core, mobile et worker Cartae ont été relus active/running ; leurs exécutables chargés restent183-admission-7478e9e7. Les liaisons SSH SYS et KS sont actives.
+Le refus signifie que la maintenance ne dispose pas d'une preuve suffisante d'arrêt des missions. Aucun contournement, redémarrage de service ni édition directe des états.
+Préalable exact : obtenir une préparation native admise après réconciliation des missions actives ou non confirmées. Leur annulation pour faire passer la maintenance n'est pas autorisée par cette livraison. Une nouvelle tentative devra suivre cette preuve, pas un réveil périodique.
 
 ## Tâche historique conservée
 Tâche58459353-0d42-4fc2-acc4-692949616648, propriétaire monuments.
 Dossier historique : /home/moi/.local/share/bridget-projects/opus2d/repository/.worktrees/58459353.
-Dossier réel conservé : /mnt/storage/opus2d/worktrees/58459353.
-Lecture SYS du27octobre vers07h42UTC : dossier réel présent, Git propre, branche158-sys-lot-suivant-20261027, HEADc1b1221038947a66ceff62109a168dffe0acf0b3. Les PID115301 et115521 attestés auparavant ne sont plus présents. Cela ne prouve pas à soi seul le statut natif ni l'absence d'une autre exécution.
-Une seule demande de projection propriétaire actuelle a été envoyée ; aucune continuation, annulation ou mission de remplacement créée.
-La version185 exige un wrapper vivant récent annonçant sa capacité et un fournisseur reprenable attesté. Elle ne migre pas un ancien wrapper chargé ni ne ressuscite une garde terminée. Ce préalable reste explicite ; aucune réparation historique n'est revendiquée.
+Dossier réel : /mnt/storage/opus2d/worktrees/58459353.
+Lecture SYS du27octobre vers07h42UTC : dossier réel présent, Git propre, branche158-sys-lot-suivant-20261027, HEADc1b1221038947a66ceff62109a168dffe0acf0b3. Les anciens PID115301 et115521 ne sont plus présents. Ce fait ne prouve ni le statut natif actuel ni l'absence d'une autre exécution.
+Une unique demande de projection propriétaire actuelle a été envoyée, message mcp-677-6ae0560a-b. Aucune projection nouvelle reçue à la rédaction de ce reçu ; aucune continuation, annulation ou mission de remplacement créée.
+185 répare un wrapper récent vivant, à repos, avec garde valide et reprise native attestée. Il ne migre pas un ancien wrapper ni ne récupère une garde terminée. La projection propriétaire est nécessaire pour choisir le parcours suivant ; aucun succès rétroactif n'est revendiqué.
 
-## Nettoyage
-Les sources en cours, le candidat, les preuves, les exécutables actifs/retours et les worktrees de revue sont conservés.
-Les dépôts mappés natifs sur SYS et KS sont des snapshots détachés ; aucun checkout forcé pendant l'usage par les missions.
-Leurs chemins : /home/moi/.local/share/bridget-projects/bridget/repository.
-Aucun retrait de travail ni arrêt de processus d'autrui.
-
-## Verdict de la contre-revue
-57018bf6 : défavorable sur8bdbfab0. Ce binaire reste un candidat de diagnostic, non éligible à l'activation.
-Cinq corrections et14tests daemon185 passent dans la source suivante ; nouvelle revue nécessaire avant intégration.
-
-## Révision suivante
-La revue06 sur177d0a5e a refusé une publication hors délai. Le point atomique relit désormais l'échéance après les contrôles, sous le verrou d'annulation. Les tests expirés conservent le reçu et la barrière.
-Le complément conserve aussi le diagnostic des nouveaux briefs refusés dans le format historique borné, et corrige la collecte des anciennes commandes sans marqueurs.
-15tests daemon185 passent. Cette révision doit encore recevoir son verdict indépendant ; aucune activation ni intégration principale revendiquée à ce stade.
+## Git et conservation
+Main Cartae est propre et aligné au distant au commit source qualifié ; la clôture documentaire est publiée séparément.
+Les worktrees184 et185 et leurs branches sont conservés : livraisons runtime encore ouvertes, observation complète des usages non acquise. Les worktrees de revue sont arrêtés et propres selon leurs reçus, mais restent soumis à leur rétention native et au contrôle d'usage.
+Les dépôts natifs SYS et KS /home/moi/.local/share/bridget-projects/bridget/repository sont des snapshots détachés, pas des checkouts main ; aucun checkout forcé pendant leur usage par les missions.
+Les exécutables actifs, le retour181, les candidats184/185 et la copie credits sont conservés tant que leur absence d'usage n'est pas prouvée. Le candidat refusé8bdbfab0 reste une preuve et ne doit pas être activé.
+Nettoyage automatique avant/après Cargo et après installation :0,00Gio retiré au dernier passage,6,92Gio conservés. Aucun retrait manuel de travail, branche, preuve ou binaire ; aucun processus d'un autre travail terminé.
+Les preuves et journaux détaillés restent sous /home/moi/.cache/bridget184, hors Git.

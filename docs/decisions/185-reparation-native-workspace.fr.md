@@ -1,6 +1,6 @@
 # Décision 185 — Réparation explicite du dossier d'une tâche distante
 Date : 27 octobre 2026.
-Statut : implémentation en cours, non activée.
+Statut : sources qualifiées et intégrées ; candidat préparé, activation native refusée.
 
 ## Contexte
 Un déplacement inter-volumes peut conserver les fichiers tout en supprimant le dossier auquel le programme vivant reste attaché. Un lien au chemin initial ne rétablit ni ce dossier courant ni ses attestations. La continuation ordinaire doit continuer à refuser.

@@ -62,6 +62,9 @@ Les guides généraux et les bilans présentent les fonctions natives de Bridget
 Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
+
+Session185 réparation native du workspace : sources qualifiées et poussées sur main, commit46021dda412abdf66dee977d31492b28256affb6. Revue finale favorable.15tests daemon185,8transport185,129droits(1ignoré),3collecte,7briefsPASS. Candidat185-repair-46021dda412a vérifié sur Cartae ; activation REFUSÉE update_missions_active_or_unconfirmed, runtime toujours183. La tâche58459353 n'est pas réparée ; ses fichiers sont conservés, projection propriétaire actuelle encore attendue. T005 reste ouverte. Aucun forçage ni restart. Worktrees/candidats conservés pour livraison runtime ouverte et usage non complètement observé. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/185-reparation-workspace/livraison.md.
+
 Session184 confirmation et guidage des refus : corrections1caabb9e et7899d0bd intégrées/poussées ; cinq tests initiaux et six tests du complément PASS, contre-revue finale approuvée. Candidat Linux actualisé installé, build184-guidance-7899d0bdab01 ; activation refusée par update_missions_active_or_unconfirmed. Le maître actif reste183-admission-7478e9e7, services conservés. Remise métierKS confirmée sans duplication. RefusSYS expliqué par un déplacement du dossier alors que les processus gardent l'ancien inode supprimé ; aucune reprise forcée. Worktree/branche184, candidats et caches conservés : livraison runtime encore ouverte, garde d'usage incomplet. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/184-confirmation-demarrage/validation.md.
 
 

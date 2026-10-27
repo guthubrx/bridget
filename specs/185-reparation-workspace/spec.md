@@ -1,5 +1,5 @@
 # Session 185 — Réparation native du dossier d'une tâche
-Statut : autorisée le 27 octobre 2026 par « fais ce qui est nécessaire » ; qualification en cours ; aucun runtime185 activé.
+Statut : autorisée le 27 octobre 2026 par « fais ce qui est nécessaire » ; sources implémentées et qualifiées ; aucun runtime185 activé, maintenance refusée.
 
 ## Résultat attendu
 Un agent propriétaire peut demander à Bridget de rattacher sa même tâche distante à son dossier déplacé. Bridget conserve identité de tâche, historique, résultats, commits et fichiers. La réparation ne crée aucune mission métier. Le prochain tour utilise le dossier réel validé.

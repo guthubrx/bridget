@@ -80,3 +80,8 @@ Les anciens reçus dont le diagnostic n'a jamais été enregistré ne sont pas r
 La suite de droits a passé128tests avec un échec d'attente JSON ancien et1test explicitement ignoré. Le refus permission_not_inherited était correct ; seul son nouveau guidage manquait dans l'attente. Le test conserve ses contrôles d'absence de tâche/lancement et vérifie désormais le code plus le guidage.
 La régression du collecteur a aussi révélé le cas ancien sans dossier markers : cette absence est désormais une collecte vide, et un dossier existant doit rester privé avant tout retrait.
 Les passages finaux de ces régressions restent à consigner.
+
+## Bilan final observé
+Revue07, tâche712649ac-673d-4bbd-a192-0980aed0d903 sur46021dda : favorable, aucun blocage concret. Le cas de droits corrigé est passé avec les128autres tests de la suite complète (129PASS,1ignoré). Collecte3PASS ; briefs7PASS ; réparation15PASS ; transport8PASS.
+Source46021dda intégrée/poussée sur main ; CI verte. Compilation optimisée et installation du candidat185-repair-46021dda412a vérifiées.
+La maintenance native a réellement refusé update_missions_active_or_unconfirmed. Runtime core/mobile/workerCartae relu183-admission-7478e9e7. Aucun succès d'activation ou de réparation métier. Le reçu final précise les chemins, le hash et les préalables.
