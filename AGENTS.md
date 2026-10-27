@@ -4,7 +4,15 @@ Pour chaque incident remonté, vérifier la cause réelle. Tout défaut confirm�
 Bridget, y compris un message ou un conseil insuffisant, doit être corrigé puis
 livré dans le binaire actif, avec les contrôles ciblés utiles et les sources
 poussées. Une explication ponctuelle au demandeur ne suffit pas : le prochain
-agent doit pouvoir agir avec le message reçu. Informer ensuite le demandeur du
+agent doit pouvoir agir avec le message reçu.
+
+Un refus doit rendre sa cause constatée, le contexte utile autorisé et une action
+de résolution précise. Il indique quand et quelle décision demander à
+l'utilisateur si l'agent ne peut pas résoudre la cause dans son périmètre.
+Une cause inconnue reste explicitement inconnue : nommer la vérification
+manquante, sans inventer un problème de réseau, de compte ou de droits.
+Conserver le code technique, la tâche et la clé de requête ; ne pas conseiller
+un remplacement ou un nouvel essai sans préciser les prérequis. Informer ensuite le demandeur du
 correctif livré. Cette consigne permanente a été donnée le 24 octobre 2026.
 
 ## Builds : entretien automatique obligatoire

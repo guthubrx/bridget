@@ -3472,13 +3472,56 @@ fn failure(code: &str) -> Value {
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"message":message,"recovery":recovery}});
     }
-    let message = match code {
-        "remote_execution_ended" => Some("La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail. Consultez l’état et les éléments conservés de la tâche avant de préparer une suite."),
-        "remote_execution_unconfirmed" => Some("Le service distant n’a pas confirmé les conditions de reprise de cette exécution. Vérifiez l’état de la tâche sans créer de doublon."),
+    let guidance = match code {
+        "remote_execution_ended" => Some((
+            "La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail.",
+            "Lisez le résultat et les éléments conservés de cette même tâche. Confirmez son arrêt et son nettoyage avant de préparer une suite autorisée. Le rejeu de cette reprise ne redémarre pas la commande.",
+            "Demandez à l'utilisateur de choisir la suite si la mission doit changer. Ne créez pas de remplacement sans autorisation.")),
+        "remote_execution_unconfirmed" => Some((
+            "Le worker n'a pas confirmé une exécution libérée et prête à recevoir une nouvelle ronde. Conservez cette tâche sans créer de doublon.",
+            "Relisez le statut et le journal de l'enfant indiqué. Vérifiez sur la machine d'exécution que le wrapper et le fournisseur sont encore actifs. Un résultat disponible ou continuable=true ne prouve pas à lui seul que l'exécution peut reprendre. Réessayez la même requête seulement après clarification de cette condition.",
+            "Si l'exécution ne peut pas être vérifiée ou s'est arrêtée, demandez à l'utilisateur de décider de sa remise en état ou de sa clôture.")),
+        "remote_workspace_unconfirmed" => Some((
+            "Le worker n'a pas fourni le rapport Git du dossier de travail attendu. La reprise reste bloquée.",
+            "Sur la machine indiquée dans detail.execution, vérifiez que execution_cwd existe encore, désigne le même dossier réel et reste un worktree du dépôt attendu. Comparez aussi le dossier courant du wrapper et du fournisseur. Un chemin déplacé, remplacé ou devenu un lien peut invalider ce contrôle. Conservez la tâche, sa requête et ses résultats ; ne recréez pas un dossier au même nom pour forcer la reprise.",
+            "Si le dossier a été déplacé ou supprimé, demandez au responsable ou à l'utilisateur si ce déplacement était voulu et quelle remise en état est autorisée avant un nouvel essai.")),
+        "remote_permissions_unconfirmed" => Some((
+            "Le worker confirme une exécution prête, mais n'a pas confirmé la vérification actuelle de ses droits.",
+            "Vérifiez sur la machine d'exécution la lisibilité du dossier et des sources de droits utilisées à l'admission, ainsi que les changements de configuration du fournisseur. Ce refus ne prouve pas une révocation : la cause précise du contrôle reste inconnue. Conservez la même tâche et la même requête.",
+            "Si la politique ou les accès doivent changer, demandez l'autorisation de l'utilisateur. N'élargissez pas les permissions pour contourner ce refus.")),
+        "remote_permissions:WorkerUnavailable" | "remote_permissions:StaleConnection" => Some((
+            "La liaison au worker n'a pas fourni de confirmation exploitable pour cette reprise.",
+            "Vérifiez le service worker et sa liaison au maître sur la machine d'exécution. Relisez ensuite cette tâche et rejouez strictement la même requête si la liaison est rétablie. Ce refus ne prouve ni un arrêt du travail ni une déconnexion du compte fournisseur.",
+            "Si le service ou le réseau doit être modifié hors du périmètre autorisé, demandez cette intervention à l'utilisateur.")),
+        "remote_permissions:PlacementMismatch" => Some((
+            "Le dossier ou le rattachement de projet observé par le worker ne correspond plus à la commande admise.",
+            "Comparez le mapping du projet et execution_cwd avec le dossier réel sur la machine d'exécution. Vérifiez un éventuel déplacement ou changement de worktree. Conservez cette commande et ses résultats ; ne modifiez pas son placement durable à la main.",
+            "Si une migration était voulue, demandez au responsable ou à l'utilisateur de valider sa réconciliation avant la reprise.")),
+        "permission_not_inherited" => Some((
+            "Les droits actuels du parent ne correspondent pas aux droits figés pour cette opération.",
+            "Vérifiez l'identité du parent, son projet, son dossier et sa politique actuelle par rapport à la demande admise. Conservez la tâche et la clé de requête ; ne changez pas de compte ou d'identité pour contourner ce refus.",
+            "Si les droits ou le périmètre ont changé volontairement, demandez à l'utilisateur quelle autorisation doit s'appliquer avant de poursuivre.")),
+        "remote_permissions:DefinitionChanged" => Some((
+            "Le worker n'a pas revalidé la définition du programme fournisseur utilisée lors de l'admission.",
+            "Sur la machine d'exécution, comparez le programme installé et la définition du registre avec la commande admise : chemin, version observée, empreinte, arguments et capacités. Ne réinstallez pas un programme et ne changez pas de modèle sur ce seul refus.",
+            "Si une mise à jour ou une modification de configuration était voulue, demandez à l'utilisateur de valider la remise en état attendue.")),
+        "remote_permissions:CommandMismatch" => Some((
+            "L'identité de la commande observée par le worker ne correspond pas à celle de la tâche admise.",
+            "Conservez les identifiants de tâche, commande, instance et génération. Vérifiez le worker et le reçu de cette même commande ; ne réécrivez pas ces identités et ne créez pas de doublon.",
+            "Si les reçus ne peuvent pas être rapprochés, transmettez ces éléments au responsable ou à l'utilisateur pour décider d'une clôture ou d'une réconciliation autorisée.")),
+        "remote_permissions:Unauthorized" => Some((
+            "Le worker a refusé l'autorisation de cette opération distante.",
+            "Vérifiez l'activation de la machine, son provisionnement et les droits du projet pour cette commande. Ce refus ne prouve pas un problème du compte fournisseur. Ne modifiez pas les clés ou les autorisations pour forcer la reprise.",
+            "Demandez à l'utilisateur ou à l'administrateur de valider toute modification des droits ou du provisionnement.")),
+        "remote_permissions:PermissionsChanged" => Some((
+            "Le worker n'a pas revalidé les droits de cette exécution.",
+            "Comparez les sources de droits et la configuration courante avec celles admises. Vérifiez aussi leur lisibilité. Conservez les éléments d'origine ; l'absence de revalidation n'autorise pas une politique plus large.",
+            "Si une politique a changé volontairement, demandez à l'utilisateur d'autoriser la suite avec le périmètre approprié.")),
         _ => None,
     };
-    if let Some(message) = message {
-        return json!({"status":"refused","code":code,"message":message,"detail":{"message":message}});
+    if let Some((message, recovery, human_action)) = guidance {
+        return json!({"status":"refused","code":code,"message":message,
+            "detail":{"message":message,"recovery":recovery,"human_action":human_action}});
     }
     if let Some(message) = code.strip_prefix("brief_invalid:") {
         return json!({"status":"refused","code":"brief_invalid","message":message});
@@ -3582,7 +3625,11 @@ fn failure(code: &str) -> Value {
         }
         return json!({"status":"refused","code":canonical_code});
     }
-    json!({"status":"refused","code":code})
+    let message = "Bridget a refusé l'opération, sans fournir de diagnostic complémentaire exploitable pour ce code technique.";
+    let recovery = "Conservez le code exact, la clé de requête et toute tâche déjà connue. Relisez le statut depuis son parent propriétaire et vérifiez les prérequis de l'opération concernée. La cause précise reste inconnue : ne la présentez pas comme un problème de réseau, de compte ou de droits. Ne répétez pas l'opération et ne créez pas de remplacement avant d'avoir clarifié ce refus.";
+    let human_action = "Si aucune vérification autorisée ne permet de préciser la cause, présentez ces éléments au responsable ou à l'utilisateur et demandez le diagnostic ou la décision manquante. Ne demandez pas un élargissement de droits par défaut.";
+    json!({"status":"refused","code":code,"message":message,
+        "detail":{"message":message,"recovery":recovery,"human_action":human_action}})
 }
 
 /// Lecture indexée de la pause exacte, ou de sa continuation déjà reconstruite.
@@ -3933,6 +3980,16 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         view["error_message"] = json!(message);
         view["error_recovery"] = json!(recovery);
+        if body.is_some() || task.mission_issued_at.is_some() {
+            view["error"] = Value::Null;
+            if !view["detail"].is_object() { view["detail"] = json!({}); }
+            view["detail"]["initial_start"] = json!({
+                "code":task.projected_error(), "current_failure":false,
+                "message":message, "recovery":recovery,
+            });
+            view.as_object_mut().unwrap().remove("error_message");
+            view.as_object_mut().unwrap().remove("error_recovery");
+        }
     } else if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
@@ -4504,6 +4561,7 @@ fn handle_with_fact(
         }
         return DaemonToWrapper::NativeDelegationResult { result };
     }
+    let mut remote_task_context = None;
     let remote_proof = (|| -> Result<Option<Task>, String> {
         let NativeDelegationRequest::Continue {
             task_id,
@@ -4541,14 +4599,25 @@ fn handle_with_fact(
             }
             task
         };
+        remote_task_context = Some(task.clone());
         remote_dispatch_proof(state, &task).map(Some)
     })();
     let remote_proof = match remote_proof {
         Ok(proof) => proof,
         Err(code) => {
-            return DaemonToWrapper::NativeDelegationResult {
-                result: failure(&code),
-            };
+            let mut result = failure(&code);
+            // Ce contexte vient uniquement de la tâche après contrôle du parent,
+            // jamais du chemin ou de l'identité proposés par l'appelant.
+            if let Some(task) = remote_task_context
+                && let Some(placement) = task.remote_placement
+            {
+                if !result["detail"].is_object() { result["detail"] = json!({}); }
+                result["detail"]["execution"] = json!({
+                    "task_id":task.task_id, "child_agent_id":task.child,
+                    "machine_id":placement.machine_id, "execution_cwd":placement.execution_cwd,
+                });
+            }
+            return DaemonToWrapper::NativeDelegationResult { result };
         }
     };
     let drives = matches!(
@@ -5140,11 +5209,15 @@ pub(super) fn remote_dispatch_proof(
     if matches!(observation.phase, WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused) {
         return Err("remote_execution_ended".into());
     }
-    if observation.phase != WorkerCommandPhase::Released
-        || !observation.native_ready
-        || observation.permission_digest.is_none()
-    {
+    if observation.phase != WorkerCommandPhase::Released || !observation.native_ready {
         return Err("remote_execution_unconfirmed".into());
+    }
+    if observation.permission_digest.is_none() {
+        return Err(if task.workspace.is_some() && observation.workspace.is_none() {
+            "remote_workspace_unconfirmed"
+        } else {
+            "remote_permissions_unconfirmed"
+        }.into());
     }
     if observation.permission_digest.as_ref() != Some(&placement.permission_digest) {
         return Err("permission_not_inherited".into());
@@ -24160,6 +24233,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let state = shared.lock().unwrap();
         assert_eq!(serde_json::to_value(state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before,
             "le worker absent interdit toute nouvelle ronde ou mutation de tâche");
+        assert_eq!(result["detail"]["execution"]["task_id"], task.task_id);
+        assert_eq!(result["detail"]["execution"]["machine_id"], "cartae");
+        assert_eq!(result["detail"]["execution"]["execution_cwd"], "/tmp");
         drop(state);drop(shared);cleanup(&config);
     }
 
@@ -24167,15 +24243,16 @@ for frame in frames: print(json.dumps(frame),flush=True)
     fn spec172_remote_continuation_distinguishes_execution_state_from_permissions() {
         use bridget_transport::protocol::*;
         use std::os::unix::fs::PermissionsExt;
-        for (phase, native_ready, digest, expected) in [
-            (WorkerCommandPhase::Terminal, false, Some("b".repeat(64)), Some("remote_execution_ended")),
-            (WorkerCommandPhase::Terminal, true, Some("b".repeat(64)), Some("remote_execution_ended")),
-            (WorkerCommandPhase::Refused, false, None, Some("remote_execution_ended")),
-            (WorkerCommandPhase::Unknown, true, Some("b".repeat(64)), Some("remote_execution_unconfirmed")),
-            (WorkerCommandPhase::Released, false, Some("b".repeat(64)), Some("remote_execution_unconfirmed")),
-            (WorkerCommandPhase::Released, true, None, Some("remote_execution_unconfirmed")),
-            (WorkerCommandPhase::Released, true, Some("c".repeat(64)), Some("permission_not_inherited")),
-            (WorkerCommandPhase::Released, true, Some("b".repeat(64)), None),
+        for (phase, native_ready, digest, worktree, expected) in [
+            (WorkerCommandPhase::Terminal, false, Some("b".repeat(64)), false, Some("remote_execution_ended")),
+            (WorkerCommandPhase::Terminal, true, Some("b".repeat(64)), false, Some("remote_execution_ended")),
+            (WorkerCommandPhase::Refused, false, None, false, Some("remote_execution_ended")),
+            (WorkerCommandPhase::Unknown, true, Some("b".repeat(64)), false, Some("remote_execution_unconfirmed")),
+            (WorkerCommandPhase::Released, false, Some("b".repeat(64)), false, Some("remote_execution_unconfirmed")),
+            (WorkerCommandPhase::Released, true, None, false, Some("remote_permissions_unconfirmed")),
+            (WorkerCommandPhase::Released, true, Some("c".repeat(64)), false, Some("permission_not_inherited")),
+            (WorkerCommandPhase::Released, true, None, true, Some("remote_workspace_unconfirmed")),
+            (WorkerCommandPhase::Released, true, Some("b".repeat(64)), false, None),
         ] {
             let (mut st, config, mut task, _result) = remote162_capture_fixture();
             let root = st.fixture_root.as_ref().unwrap().0.clone();
@@ -24193,6 +24270,14 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 Path::new(&task.cwd),
             ));
             task.state = "result_available".into();
+            if worktree {
+                task.workspace = Some(serde_json::from_value(json!({
+                    "strategy":"worktree","state":"kept","toplevel":"/remote","path":"/remote/worktree",
+                    "branch":"bridget/continuation","base_commit":"a".repeat(40),
+                    "head_commit":null,"branch_commit":null,"head_on_branch":null,"commit_count":null,
+                    "commits":[],"truncated":false,"dirty":null
+                })).unwrap());
+            }
             st.delegation_store.save(&task).unwrap();
             let task = st.delegation_store.get(&task.task_id).unwrap().unwrap();
             let before = serde_json::to_value(&task).unwrap();
@@ -24241,6 +24326,32 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(unconfirmed["message"].as_str().unwrap().contains("pas confirmé"));
         assert!(unconfirmed["message"].as_str().unwrap().contains("sans créer de doublon"));
         assert_eq!(failure("permission_not_inherited")["code"], "permission_not_inherited");
+    }
+
+    #[test]
+    fn spec184_refusal_guidance_names_verification_and_human_decision() {
+        for code in ["remote_execution_ended", "remote_execution_unconfirmed",
+            "remote_workspace_unconfirmed", "remote_permissions_unconfirmed",
+            "remote_permissions:WorkerUnavailable", "remote_permissions:StaleConnection",
+            "remote_permissions:PlacementMismatch", "permission_not_inherited",
+            "remote_permissions:DefinitionChanged", "remote_permissions:CommandMismatch",
+            "remote_permissions:Unauthorized", "remote_permissions:PermissionsChanged",
+            "remote_parent_proof_changed", "remote_unknown_future", "unclassified_future_refusal"]
+        {
+            let refusal = failure(code);
+            assert_eq!(refusal["status"], "refused");
+            assert_eq!(refusal["code"], code);
+            assert!(refusal["detail"]["recovery"].as_str().is_some_and(|s| s.len() > 80),
+                "une action de résolution est requise : {code}");
+            assert!(refusal["detail"]["human_action"].as_str().is_some_and(|s| s.contains("utilisateur")),
+                "le recours humain doit être précis : {code}");
+        }
+        let workspace = failure("remote_workspace_unconfirmed");
+        assert!(workspace["message"].as_str().unwrap().contains("pas fourni le rapport"));
+        assert!(!workspace["message"].as_str().unwrap().contains("supprimé"),
+            "un rapport absent ne prouve pas une suppression");
+        let rights = failure("remote_permissions_unconfirmed");
+        assert!(rights["detail"]["recovery"].as_str().unwrap().contains("cause précise"));
     }
 
     #[test]
@@ -24576,17 +24687,27 @@ for frame in frames: print(json.dumps(frame),flush=True)
         task.state = "working".into();
         task.mission_issued_at = Some(unix_timestamp());
         let working = task_view(&task, None, true);
-        assert_eq!(working["error_message"], "La tentative d’envoi du travail métier est enregistrée. Ce délai de réponse ne permet pas de conclure à un échec.");
-        assert!(working["error_recovery"].as_str().unwrap().contains("même tâche"));
+        assert!(working["error"].is_null());
+        assert!(working.get("error_message").is_none());
+        assert_eq!(working["detail"]["initial_start"]["current_failure"], false);
+        assert!(working["detail"]["initial_start"]["code"].as_str().unwrap().starts_with("remote_start_failed:remote_release"));
+        assert!(task.error.is_some(), "le fait durable historique est conservé");
         task.state = "result_available".into();
         task.result = Some("résultat confirmé".into());
         let completed = task_view(&task, None, true);
         assert_eq!(completed["result"], "résultat confirmé");
-        assert_eq!(completed["error_message"], "Le résultat est disponible. La confirmation initiale du démarrage distant n’avait pas été obtenue.");
-        assert!(completed["error_recovery"].as_str().unwrap().contains("Récupérez"));
+        assert!(completed["error"].is_null());
+        assert!(completed.get("error_message").is_none());
+        assert!(completed["detail"]["initial_start"]["message"].as_str().unwrap().contains("résultat est disponible"));
+        assert!(completed["detail"]["initial_start"]["recovery"].as_str().unwrap().contains("Récupérez"));
         task.state = "failed".into();
         task.result = None;
         task.cleanup_done = false;
+        let failed_after_dispatch = task_view(&task, None, true);
+        assert_eq!(failed_after_dispatch["status"], "failed", "l'échec final reste visible");
+        assert!(failed_after_dispatch["error"].is_null());
+        assert_eq!(failed_after_dispatch["detail"]["initial_start"]["current_failure"], false);
+        assert!(task.error.is_some(), "le fait durable reste conservé après une fin en échec");
         task.mission_issued_at = None;
         let pending_cleanup = task_view(&task, None, true);
         assert_eq!(pending_cleanup["error_message"], "La tâche est clôturée côté Bridget. La vérification de son arrêt ou de son dossier de travail n’est pas terminée.");

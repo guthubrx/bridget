@@ -41,3 +41,12 @@ Le worktree et la branche 184 sont intégrés et propres, sans fichiers ignorés
 Le candidat s'ajoute temporairement à la version active et au retour existant. Ces exécutables sont conservés. Les preuves locales restent dans /home/moi/.cache/bridget184, hors Git.
 
 Prochaine action : refaire la demande native de maintenance, puis activer et vérifier ce même candidat si elle est admise. Ne pas annuler de missions ou modifier une base pour faire passer ce refus. Nettoyer les ressources de 184 après activation et vérification des usages.
+
+## Complément SYS-LE-2 et instruction sur les refus
+Observation du 27 octobre : wrapper115301 et Codex115521 ont pour cwd le worktree58459353 supprimé, device2052/inode2490404/nlink0. Le chemin courant est /mnt/storage/opus2d/worktrees/58459353, device2065/inode127664278. Le propriétaire a été informé ; aucun arrêt, changement de mapping ou remplacement métier exécuté par ce correctif.
+Le contrôleur conserve son refus. La réponse précise la preuve manquante, la machine et le dossier attendu, les vérifications possibles et la décision humaine à demander si le déplacement était voulu.
+Six tests ciblés PASS via scripts/build.py : trois spec184, matrice spec172 des états/preuves (dont rapport absent pour worktree), renouvellement du tour avec contexte et absence de mutation, projection spec174 de l'ancienne incertitude.
+Revue initiale du complément : tâche fdf5a11f-9a44-48fe-a47d-5d68ebdbe18c, clé bridget-spec184-guidance-review-20261027-02. Deux objections ont été traitées : ancien incident après fin de tâche, codes non couverts.
+Contre-revue finale : tâche42b9dfbd-47fd-4458-bb27-53a42aed9a91, clé bridget-spec184-guidance-review-20261027-03. Verdict APPROUVÉ, aucun bloquant identifié. Aucun modèle métier n'a été lancé.
+Les six tests ciblés ont été rejoués après ces ajustements : PASS. Le cas terminal failed reste visible, tandis que l'incertitude initiale reste historique. Les codes inconnus déclarent leur diagnostic manquant et un recours humain sûr.
+La compilation, l'installation du candidat actualisé et le garde d'activation restent à consigner après leur résultat réel.

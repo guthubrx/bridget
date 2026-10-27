@@ -14,3 +14,9 @@ Le maître attend cinq secondes pour Release, malgré une revalidation distante 
 - Accepter sans mutation un accusé tardif pour la même identité worker, époque et commande.
 - Refuser une époque périmée ou une autre instance.
 - Conserver la tâche, le choix de routage et les protections contre les doublons.
+
+## Complément — refus de reprise explicites
+Instruction utilisateur du 27 octobre : les refus motivés doivent être explicites pour permettre une résolution par l'agent, ou une demande humaine précise.
+La tâche SYS-LE-2 58459353-0d42-4fc2-acc4-692949616648 est encore continuable mais son exécution pointe vers un ancien dossier supprimé. Le chemin courant se résout désormais sur un autre disque. Le refus est justifié ; sa cause et ses actions étaient insuffisantes.
+Distinguer exécution, rapport de dossier et preuve de droits. Ajouter le contexte de l'exécution uniquement après contrôle du parent. Ne pas transformer une preuve absente en certitude de suppression ou révocation.
+Une ancienne incertitude de lancement doit rester consultable comme historique dès que la tâche a progressé ou dispose d'un résultat, sans rester une erreur courante. Aucun effacement du fait durable.

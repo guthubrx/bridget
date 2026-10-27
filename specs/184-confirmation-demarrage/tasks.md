@@ -6,3 +6,12 @@
 - [x] Intégrer et pousser.
 - [ ] Livrer dans le binaire actif : candidat installé, activation refusée par update_missions_active_or_unconfirmed ; services actifs conservés.
 - [x] Consigner la tâche existante, le candidat, le refus et les conservations du nettoyage.
+
+## Complément de guidage
+- [x] Vérifier l'exécution SYS-LE-2 et le déplacement réel du dossier.
+- [x] Distinguer les refus et ajouter résolution, recours humain et contexte autorisé.
+- [x] Corriger la projection historique de l'incertitude initiale.
+- [x] Vérifier six tests ciblés, dont la matrice des états/preuves et l'absence de mutation de tâche.
+- [x] Consigner la seconde revue et la contre-revue finale après traitement des objections.
+- [ ] Intégrer et pousser le complément.
+- [ ] Actualiser le candidat et vérifier la possibilité d'activation native.
