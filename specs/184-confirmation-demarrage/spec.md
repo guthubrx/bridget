@@ -1,6 +1,6 @@
 # Session 184 — Confirmation du démarrage distant
 
-Statut : en cours. Correction autorisée d'un incident récurrent KS-STOR.
+Statut : source corrigée, testée, intégrée et poussée ; candidat installé ; activation refusée par le garde natif de maintenance. Correction autorisée d'un incident récurrent KS-STOR.
 
 ## Besoin
 Conserver et confirmer la même commande quand le lancement distant réussit mais que son accusé dépasse le délai réseau. Ne pas recréer de mission métier.

@@ -25,4 +25,19 @@ Correction technique : aucun diaporama d'interface requis.
 Nettoyage automatique appelé avant/après Cargo ; suppression différée par le garde d'observation des processus incomplet. Aucun nettoyage forcé.
 
 ## Livraison
-Sources validées. Compilation, installation, activation et nettoyage final à consigner après leurs résultats réels.
+Correctif source 1caabb9ecf7f25b68b295286e8c535ba0cdd0ae8 intégré à main et poussé.
+Compilation release optimisée réussie en 1 min 08 s, via scripts/build.py.
+Candidat installé et vérifié :
+/home/moi/.local/lib/bridget-communication/184-1caabb9ecf7f/bin/bridget
+Build : 184-confirmation-1caabb9ecf7f ; version : 0.6.3.
+SHA-256 : 7344d44652f33e997ce0d44ade2cfd7c7a02ea2e1eece86f0ef602b721e9c75e.
+
+L'appel natif updates prepare a été réellement exécuté. Refus : update_missions_active_or_unconfirmed. Aucune barrière contournée, aucun lien actif modifié, aucun service redémarré.
+Le daemon reste actif sur 183-admission-7478e9e7. Core, mobile, worker Cartae et liaison KS-STOR relus actifs après ce refus.
+Le correctif n'est donc PAS actif. La livraison runtime reste en attente d'une maintenance native admise.
+
+L'appel installed a été exécuté après vérification du candidat hors cache ; il a refusé le nettoyage pour observation des processus incomplète. Les caches ne sont pas supprimés de force.
+Le worktree et la branche 184 sont intégrés et propres, sans fichiers ignorés signalés. Ils sont conservés pour la livraison encore active et parce que le garde d'usage reste incomplet. Aucun retrait de worktree, branche ou ancien binaire n'est revendiqué.
+Le candidat s'ajoute temporairement à la version active et au retour existant. Ces exécutables sont conservés. Les preuves locales restent dans /home/moi/.cache/bridget184, hors Git.
+
+Prochaine action : refaire la demande native de maintenance, puis activer et vérifier ce même candidat si elle est admise. Ne pas annuler de missions ou modifier une base pour faire passer ce refus. Nettoyer les ressources de 184 après activation et vérification des usages.
