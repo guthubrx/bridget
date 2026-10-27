@@ -3624,6 +3624,10 @@ fn failure(code: &str) -> Value {
             "detail":{"message":message,"recovery":recovery}});
     }
     let guidance = match code {
+        "round_limit" => Some((
+            "Cette tâche a atteint le plafond de huit rondes, première mission comprise. Aucune neuvième ronde n'a été ouverte.",
+            "Conservez le résultat, les commits et les fichiers, y compris non suivis ou ignorés. Depuis le parent propriétaire, fermez la garde avec bridget_task_cancel sur cette même tâche. Vérifiez ensuite son statut : continuable=false ne prouve pas l'arrêt ; task_active ou stop_unconfirmed imposent d'attendre sa confirmation, report_unavailable impose une inspection. Après clôture confirmée, une suite autorisée utilise une nouvelle tâche, une nouvelle clé et un brief citant le travail conservé. Pour un nouveau worktree, rendez le commit complet disponible dans le dépôt source du parent et donnez ce même SHA à expected_base_commit et workspace.base_ref. Ne modifiez ni le compteur, ni la clé refusée, ni l'identité de l'ancien enfant.",
+            "Si la suite dépasse le mandat existant ou si l'arrêt et la conservation du travail ne peuvent pas être confirmés, demandez au propriétaire ou à l'utilisateur de décider de cette suite. Le plafond de cette tâche ne peut pas être levé par un changement de clé.")),
         "permission_attestation_unavailable" => Some((
             "Bridget n'a pas pu confirmer l'identité et les droits actuels de la session appelante. La cause précise n'est pas établie.",
             "Ce refus ne permet pas de conclure sur l'état d'une tâche distante. Vérifiez son rattachement Bridget et la disponibilité de son attestation native de droits dans le tour actif. L'outil bridget_session n'a pas besoin d'être exposé au modèle : Bridget l'appelle par son adaptateur. Conservez task_id, request_id et le refus exact ; aucune reprise, nouvelle mission ou modification de droits.",
@@ -19656,21 +19660,36 @@ for frame in frames: print(json.dumps(frame),flush=True)
             saved.idle_deadline_at = Some(unix_timestamp() + 120);
             st.delegation_store.save(&saved).unwrap();
         }
-        assert_eq!(
-            handle_locked(
-                "conn-1",
-                NativeDelegationRequest::Continue {
-                    task_id: id,
-                    request_id: "round-9".into(),
-                    task: "encore".into(),
-                    brief: None
-                },
-                &mut st
-            )
-            .unwrap_err(),
-            "round_limit"
-        );
+        let before=serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap();
+        let refusal=handle_locked(
+            "conn-1",
+            NativeDelegationRequest::Continue {
+                task_id:id.clone(), request_id:"round-9".into(), task:"encore".into(), brief:None,
+            },
+            &mut st,
+        ).unwrap_err();
+        assert_eq!(refusal,"round_limit");
+        let view=failure(&refusal);
+        assert_eq!(view["code"],"round_limit");
+        assert!(view["detail"]["recovery"].as_str().unwrap().contains("bridget_task_cancel"));
+        assert_eq!(serde_json::to_vec(&st.delegation_store.get(&id).unwrap().unwrap()).unwrap(),
+            before,"aucune mutation ni neuvième ronde après le refus");
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec187_plafond_explique_passation_et_limites_sans_droits_neufs() {
+        let view=failure("round_limit");
+        assert_eq!(view["status"],"refused");
+        assert_eq!(view["code"],"round_limit");
+        assert!(view["message"].as_str().unwrap().contains("huit rondes"));
+        let recovery=view["detail"]["recovery"].as_str().unwrap();
+        for required in ["non suivis","bridget_task_cancel","stop_unconfirmed",
+            "report_unavailable","nouvelle tâche","workspace.base_ref","identité"] {
+            assert!(recovery.contains(required),"{required}");
+        }
+        assert!(view["detail"]["human_action"].as_str().unwrap().contains("mandat existant"));
+        assert!(view.get("task_id").is_none(),"aucun contexte de tâche inventé");
     }
 
     #[test]

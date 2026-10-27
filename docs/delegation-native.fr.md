@@ -840,6 +840,33 @@ Un redémarrage du daemon la termine ; aucune nouvelle ronde n'est alors possibl
 Un enfant inactif tient sa place, parmi les 16 par instance et 128 au total,
 jusqu'à la confirmation de son arrêt.
 
+### Après le plafond de huit rondes
+
+Le refus `round_limit` termine les possibilités de nouvelle ronde de cette tâche.
+`continuable:true` indique la garde conservée ; il ne relève pas ce plafond.
+
+Conservez d'abord le résultat, les commits, les fichiers non suivis ou ignorés
+et les paquets utiles. Depuis le parent propriétaire, fermez la garde avec
+`bridget_task_cancel` sur cette tâche. Sur `result_available`, le résultat et
+le worktree restent conservés. Lisez le statut après cette fermeture :
+`continuable:false` seul ne prouve pas l'arrêt. `task_active` ou
+`stop_unconfirmed` imposent d'attendre la confirmation ; `report_unavailable`
+impose une inspection avant la suite. Aucun dossier ne doit être retiré pour
+franchir ce plafond.
+
+Après clôture confirmée, une suite couverte par le mandat existant ouvre une
+nouvelle admission avec une nouvelle clé, un nouvel enfant et un brief citant
+l'ancienne tâche et son résultat. Pour repartir des commits conservés dans un
+nouveau worktree, rendez d'abord le SHA complet disponible dans le dépôt source
+du parent. Utilisez ce même SHA dans `expected_base_commit` et
+`workspace.base_ref`. Cela ne déplace pas le worktree précédent et ne copie
+pas ses fichiers non suivis ou ignorés.
+
+Ne remettez pas le compteur à zéro et ne reprenez pas l'identité de l'enfant.
+Une nouvelle clé ne rouvre pas la neuvième ronde refusée. Si la suite dépasse le
+mandat ou si l'arrêt et la conservation restent inconnus, une décision du
+propriétaire ou de l'utilisateur est nécessaire avant une nouvelle mission.
+
 `brief` est facultatif sur Delegate et Continue. Il suit le brouillon de
 `bridget_handoff` : `objective` et `summary` sont obligatoires. Résultats,
 décisions, questions, prochain pas, références et limites sont facultatifs.
@@ -861,7 +888,7 @@ tout l'historique.
 | `keep_alive_ended` | La garde est terminée ou l'enfant est absent ; cette tâche ne peut plus continuer. |
 | `round_in_progress` | Attendre la fin de la ronde courante. |
 | `result_delivery_pending` | Attendre environ une seconde, puis reprendre le même appel et la même clé. |
-| `round_limit` | Huit rondes ont été ouvertes ; créer une nouvelle délégation si nécessaire. |
+| `round_limit` | Préserver le travail, fermer la garde, confirmer l’arrêt, puis ouvrir une suite autorisée avec une nouvelle tâche et une base explicite. |
 
 Le même processus ne garantit pas qu'un vrai modèle se souvienne de tous les
 faits. Le contexte accumulé peut aussi renforcer un biais. Pour une contre-revue

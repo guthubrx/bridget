@@ -400,6 +400,30 @@ Common refusals: `keep_alive_not_enabled`, `keep_alive_ended`,
 `permission_not_inherited`. Use their specific recovery message; do not
 interpret all of them as a request for broader rights.
 
+### After the eight-round limit
+
+`round_limit` prevents another round on that task. `continuable:true` describes
+the retained guard; it does not override the limit.
+
+Preserve the result, commits, untracked and ignored files, and useful packages.
+The owning parent then closes the guard with `bridget_task_cancel`. On
+`result_available`, the result and worktree remain. Check status after closure:
+`continuable:false` alone does not prove that execution stopped.
+`task_active` or `stop_unconfirmed` require stop confirmation;
+`report_unavailable` requires inspection before proceeding. Do not remove a
+directory to pass the limit.
+
+After confirmed closure, a follow-up within the existing mandate uses a new
+admission, request key and child. Its brief cites the previous task and result.
+To start a new worktree from retained commits, first make the full commit
+available in the parent's source repository. Use the same SHA for
+`expected_base_commit` and `workspace.base_ref`. This neither moves the old
+worktree nor copies its untracked or ignored files.
+
+Do not reset the round counter or reuse the child's identity. A new key cannot
+reopen the refused ninth round. If the scope changes or stop/preservation is
+unconfirmed, obtain the owner's or user's decision before a new mission.
+
 ## Child questions and approvals
 
 `child_requests` defaults to `deny`. `forward` supports only declared
