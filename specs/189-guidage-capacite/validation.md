@@ -18,3 +18,5 @@ Source849c88993ae04c9c30fa59eb4c7d751ad2532f92 : les13contrôles du complément 
 Contre-revue4a94a7a0 défavorable sur849c8899 : chemin initial Ok(routing_probe_failure) non couvert par le guidage encodé ; test worker/ResourceLimit invalide car sérialisation snake_case. Corrections : projection commune appelée après validation/construction des motifs sur les deux chemins ; motif worker/resource_limit valide conservé sans conclusion de file pleine ; test natif complet du probe initial jusqu’au refus not_recorded, sans tâche ni réservation et worker connecté. Le candidat849 rejeté n’a pas été installé ni activé.
 
 Complément corrigé :14contrôles PASS (9spec189,3spec186,2worker172), dont refus initial not_recorded via le vrai handler natif simulé et motif worker/resource_limit valide ; guides32pages/522liens/13pairesPASS. Aucune nouvelle sonde réelle sur KS, aucun changement de limite ni activation.
+
+Contre-revue finale dd494bef-5204-48a1-a5ed-519c700f716b favorable sur550b096f ; les deux objections4a94a7a0 sont corrigées. Résultat lu/ACK et garde fermée. Candidat189-queue-550b096f9b32 vérifié horsstaging, releasePASS, installedPASS, cache7,11Gio ; non actif.
