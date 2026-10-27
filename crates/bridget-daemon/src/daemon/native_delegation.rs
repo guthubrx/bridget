@@ -590,6 +590,26 @@ fn record_routing_probe_refusal(
 }
 
 /// Rendre au demandeur les motifs fermés déjà reçus, sans nouvelle sonde.
+// Les deux appelants construisent ou valident d’abord des motifs fermés.
+// Aucune donnée libre de note ou de worker n’est reprise dans le guidage.
+fn project_probe_capacity(result: &mut Value, reasons: &[Value]) {
+    if reasons
+        .iter()
+        .any(|reason| reason["kind"] == "candidate" && reason["code"] == "resource_limit")
+    {
+        let message = "Au moins une sonde de candidat a été refusée car la file bornée des demandes du worker était pleine.";
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        result["detail"]["probe_capacity"] = json!({"cause":"worker_inbound_queue_full","observed_state":"full_at_probe","current_state":"unknown"});
+        result["detail"]["recovery"] = json!(
+            "Ce motif concerne la file de contrôle du worker, pas une preuve de manque de mémoire, d’espace disque ou d’authentification. La sonde refusée n’a pas été traitée ; les autres opérations peuvent continuer. Consultez detail.admission. Si state=not_recorded et qu’aucun appel concurrent de cette même demande ne subsiste, après drainage des opérations natives en cours, rejouez strictement la même request_id et la même enveloppe. Ne créez aucune nouvelle clé ni mission de remplacement, ne changez pas les contraintes pour contourner ce refus. Une tâche connue reste à suivre ; une admission pending ou d’issue inconnue ne permet aucun remplacement. Ce reçu historique ne prouve pas que la file soit encore pleine maintenant."
+        );
+        result["detail"]["human_action"] = json!(
+            "Si le drainage normal ne suffit pas, transmettez au responsable du worker le code, la machine demandée, la request_id et l’heure du refus pour inspection des opérations en attente. Ne redémarrez pas le service et n’annulez pas les tâches d’autrui pour vider la file ; une décision d’arbitrage de priorité appartient à leurs propriétaires ou à l’utilisateur."
+        );
+    }
+}
+
 fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
     use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
     let mut counts = BTreeMap::<(String, String), usize>::new();
@@ -619,6 +639,7 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
             }
             reason
         }).collect::<Vec<_>>();
+        project_probe_capacity(&mut result, &reasons);
         result["detail"]["reasons"] = json!(reasons);
     }
     result
@@ -3545,14 +3566,7 @@ fn failure(code: &str) -> Value {
                         _ => false,
                     }
             }) {
-            if reasons.iter().any(|reason|reason["kind"]=="candidate" && reason["code"]=="resource_limit") {
-                let message="Au moins une sonde de candidat a été refusée car la file bornée des demandes du worker était pleine.";
-                result["message"]=json!(message);
-                result["detail"]["message"]=json!(message);
-                result["detail"]["probe_capacity"]=json!({"cause":"worker_inbound_queue_full","observed_state":"full_at_probe","current_state":"unknown"});
-                result["detail"]["recovery"]=json!("Ce motif concerne la file de contrôle du worker, pas une preuve de manque de mémoire, d’espace disque ou d’authentification. La sonde refusée n’a pas été traitée ; les autres opérations peuvent continuer. Consultez detail.admission. Si state=not_recorded et qu’aucun appel concurrent de cette même demande ne subsiste, après drainage des opérations natives en cours, rejouez strictement la même request_id et la même enveloppe. Ne créez aucune nouvelle clé ni mission de remplacement, ne changez pas les contraintes pour contourner ce refus. Une tâche connue reste à suivre ; une admission pending ou d’issue inconnue ne permet aucun remplacement. Ce reçu historique ne prouve pas que la file soit encore pleine maintenant.");
-                result["detail"]["human_action"]=json!("Si le drainage normal ne suffit pas, transmettez au responsable du worker le code, la machine demandée, la request_id et l’heure du refus pour inspection des opérations en attente. Ne redémarrez pas le service et n’annulez pas les tâches d’autrui pour vider la file ; une décision d’arbitrage de priorité appartient à leurs propriétaires ou à l’utilisateur.");
-            }
+            project_probe_capacity(&mut result, &reasons);
             result["detail"]["reasons"] = json!(reasons);
         }
         return result;
@@ -31668,6 +31682,10 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
     #[test]
     fn spec189_worker_resource_limit_or_invalid_reason_does_not_claim_probe_queue() {
+        let worker_reasons=json!([{"kind":"worker","code":"resource_limit","candidates":1}]);
+        let worker_result=failure(&format!("routing_candidate_unavailable:{worker_reasons}"));
+        assert_eq!(worker_result["detail"]["reasons"],worker_reasons,"motif worker valide conservé");
+        assert!(worker_result["detail"]["probe_capacity"].is_null());
         for reasons in [json!([{"kind":"worker","code":"ResourceLimit","candidates":1}]),
             json!([{"kind":"candidate","code":"capability_unavailable","candidates":1}]),
             json!([{"kind":"candidate","code":"resource_limit","candidates":1,"private":"secret189"}]),
@@ -31678,6 +31696,81 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(result["code"],"routing_candidate_unavailable");
         }
     }
+
+    #[test]
+    fn spec189_initial_probe_queue_refusal_is_not_recorded_and_actionable() {
+        use bridget_transport::protocol::*;
+        let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
+        {
+            let mut st=state.lock().unwrap();
+            st.host="coordinator171".into();
+            st.presences.get_mut("instance-1").unwrap().host="coordinator171".into();
+        }
+        request.request_id = "probe189-full".into();
+        request.project_id = Some("project171".into());
+        request.machine_id = Some("cartae".into());
+        request.engine = Some("codex".into());
+        let host = state.lock().unwrap().host.clone();
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(b"worker171-fixture"));
+        routing168_update(&state, |value| {
+            value["routing_policy"]["connections"][0]["machine_id"] = json!("cartae");
+            value["routing_policy"]["machine_policies"]["cartae"] = json!({"enabled":true});
+            value["machines"] = json!({"cartae":{"enabled":true,"worker_id":"worker171",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project171":{
+                    "source_host":host,"source_root":request.cwd,
+                    "remote_root":root.join("remote171"),"expected_git_identity":"fixture171",
+                    "mapping_revision":1}}}});
+        });
+        let (writer, mut reader) = super::super::presence_tests::control_socket("probe189-full");
+        {
+            let mut st = state.lock().unwrap();
+            st.connections.insert("worker171".into(), writer);
+            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+        }
+        assert!(matches!(handle_worker_message(&state, "worker171",
+            WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
+                hello: WorkerHello { version: REMOTE_WORKER_VERSION,
+                    identity: WorkerIdentity { machine_id:"cartae".into(),
+                        worker_id:"worker171".into(),provisioning_revision:1 },
+                    credential: IdentityCredential::new("worker171-fixture".into()),
+                    build:"fixture171".into(),capability:ClientCapability::RemoteWorkerV1 },
+                capabilities:vec![WorkerCapability::CandidateProbeV2] } }),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })));
+        let responder_state=Arc::clone(&state);
+        let responder=std::thread::spawn(move || {
+            let frame=super::super::presence_tests::read_control(&mut reader);
+            let DaemonToWrapper::CandidateProbeV2 {probe}=frame else {panic!("sonde attendue")};
+            let now=unix_timestamp();
+            let result=CandidateProbeV2Result {version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
+                worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                resources:HostResourceSnapshotV1 {source_observed_at:now,received_at:now,cpu_percent:None,
+                    available_memory_percent:None,normalized_load_percent:None,compilation_slots:None},
+                verdicts:probe.candidates.into_iter().enumerate().map(|(i,candidate)|CandidateProbeV2Verdict::Ineligible {
+                    candidate_id:candidate.candidate_id,reason:if i==0 {CandidateProbeRefusal::ResourceLimit} else {CandidateProbeRefusal::MappingUnavailable}
+                }).collect()};
+            assert!(handle_worker_message(&responder_state,"worker171",WrapperToDaemon::CandidateProbeResultV2 {result}).is_none());
+            reader
+        });
+        let response=handle("conn-1",NativeDelegationRequest::AutoDelegateV2(request.clone()),&state);
+        let DaemonToWrapper::NativeDelegationResult {result}=response else {panic!("résultat attendu")};
+        let _peer=responder.join().unwrap();
+        assert_eq!(result["code"],"routing_candidate_unavailable");
+        assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
+        assert!(result["detail"]["admission"]["task_id"].is_null());
+        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
+        assert!(result["detail"]["reasons"].as_array().unwrap().iter().any(|r|r["kind"]=="candidate" && r["code"]=="resource_limit" && r["candidates"]==1));
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("même request_id"));
+        let st=state.lock().unwrap();
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().is_none());
+        assert!(st.pending_candidate_probes_v2.is_empty());
+        assert_eq!(st.remote_workers["cartae"].contact,WorkerContactState::Connected);
+        assert!(rx.try_recv().is_err());
+        drop(st);drop(state);cleanup(&config);
+    }
+
 
 }
 
