@@ -21,6 +21,9 @@ impl Drop for Fixture {
     }
 }
 fn diagnostic(root: &Path, namespace: &Path) -> Output {
+    diagnostic_with_path(root, namespace, "/usr/bin:/bin")
+}
+fn diagnostic_with_path(root: &Path, namespace: &Path, path: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bridget"))
         .args([
             "worker",
@@ -50,6 +53,7 @@ fn diagnostic(root: &Path, namespace: &Path) -> Output {
             "--generation",
             "1",
         ])
+        .env("PATH", path)
         .env("BRIDGET_HOME", namespace)
         .env_remove("BRIDGET_SOCKET")
         .env_remove("BRIDGET_AGENT_ID_FILE")
@@ -239,4 +243,17 @@ fn spec188_cli_quiet_registry_emits_only_closed_failure_json() {
     assert_eq!(v["environment"], "diagnostic_process");
     assert!(v.get("cause").is_some());
     assert!(!String::from_utf8_lossy(&result.stderr).contains("fixture-secret"));
+}
+
+#[test]
+fn spec188_cli_different_tool_path_refuses_before_business_recheck() {
+    let live = LiveWorker::new();
+    let result = diagnostic_with_path(live.root(), live.root(), "/bin:/usr/bin");
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    let v: serde_json::Value = serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(v["code"], "diagnostic_tool_environment_mismatch");
+    assert_eq!(v["stage"], "tool_environment");
+    assert!(v["recovery"].as_str().unwrap().contains("PATH"));
+    assert_eq!(v["command"]["task_id"], "task188");
 }

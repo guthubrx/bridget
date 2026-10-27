@@ -749,6 +749,11 @@ pub(crate) fn diagnostic_failure(code: &str, command: &WorkerCommandIdentity) ->
             "Vérifiez le worker Linux qui détient le verrou, son PID et ses sept options. Aucun reçu ni verrou ne doit être recréé pour ce contrôle.",
             "Si le processus ou ses informations noyau restent invérifiables, demandez une inspection au responsable ; aucune fin de tâche n’est déduite.",
         ),
+        "diagnostic_tool_environment_mismatch" => (
+            "Le lecteur et le worker ne sélectionnent pas leurs outils avec le même PATH.",
+            "Faites vérifier le PATH du worker vivant par son responsable, puis utilisez ce seul réglage pour le lecteur. Ne recopiez aucune variable d’identité ou secret. Le contrôle métier n’a pas été exécuté.",
+            "Si ce réglage ne peut pas être vérifié, demandez au responsable du worker d’effectuer le diagnostic dans son contexte d’outils.",
+        ),
         "diagnostic_worker_environment_unavailable" | "diagnostic_worker_environment_changed" => (
             "L’environnement source du worker vivant est inaccessible ou instable.",
             "Vérifiez le processus détenteur du verrou et son accès procfs ; aucune variable d’identité du lecteur ne doit être remplacée.",
@@ -796,6 +801,7 @@ pub(crate) fn diagnostic_failure(code: &str, command: &WorkerCommandIdentity) ->
         "diagnostic_context_unavailable" => "context",
         "diagnostic_enrollment_invalid" | "diagnostic_enrollment_unavailable" => "enrollment",
         "namespace_configuration_invalid" | "delegated_mcp_only" | "identity_not_found" => "caller",
+        "diagnostic_tool_environment_mismatch" => "tool_environment",
         code if code.starts_with("diagnostic_worker_environment_") => "worker_environment",
         code if code.starts_with("diagnostic_worker_binding_") => "worker_binding",
         _ => "observation",
@@ -860,6 +866,12 @@ pub(crate) fn diagnose_live_local(
         return Err("diagnostic_worker_binding_changed".into());
     }
     let environment = live_environment(binding)?;
+    // Git est lancé par le contrôleur historique dans le processus lecteur.
+    // Ne jamais présenter son refus comme comparable si PATH sélectionne
+    // un autre outil. Aucune variable n'est modifiée pour franchir cette garde.
+    if environment.get("PATH") != std::env::var_os("PATH").as_ref() {
+        return Err("diagnostic_tool_environment_mismatch".into());
+    }
     let outcome = diagnose_with_source(config, command, environment.clone(), || {});
     if live_worker_binding(config).ok().as_ref() != Some(binding) {
         return Err("diagnostic_worker_binding_changed".into());

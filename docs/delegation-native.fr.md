@@ -1564,3 +1564,5 @@ La sortie `scope: local_read_only_recheck`, `authoritative: false` contient `che
 Le lecteur local sans principal est réservé à l’observation sous l’UID propriétaire : aucun marqueur de filiation déléguée ni sélecteur d’identité explicite ne doit être présent. Une configuration de namespace invalide ou une identité ambiguë refuse avant les fichiers worker. Le registre lu est borné à 16 Mio.
 
 Le diagnostic188 est limité à Linux et à un worker vivant. Il lie les options au détenteur noyau du verrou du store et à sa naissance, puis observe son environnement source en mémoire. Il ne modifie pas l’environnement du lecteur et ne reprend aucune identité. Le résultat reste une lecture locale non autoritative, distincte de la remise de mission. Un registre ambigu, une filiation déléguée ou une observation instable ferment la commande.
+
+Le PATH du lecteur doit aussi égaler celui du worker vérifié : le contrôleur Git historique utilise les outils du processus lecteur. Une différence rend diagnostic_tool_environment_mismatch avant le contrôle métier. Seul ce réglage d’outils peut être repris explicitement ; ne copier aucune variable d’identité ni secret.

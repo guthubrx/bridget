@@ -811,3 +811,5 @@ The output has `scope: local_read_only_recheck`, `authoritative: false`, `check`
 An unbound local reader only observes files under their owning UID: no delegated lineage marker or explicit identity selector may be present. Invalid namespace configuration or ambiguous identity refuses before worker files are read. Registry input is limited to 16 MiB.
 
 Diagnostic188 requires Linux and a live worker. It binds the supplied options to the kernel owner of the store lock and its process birth, then observes its source environment in memory. It never changes the reader environment or adopts an identity. The result remains a non-authoritative local read, distinct from mission delivery. Ambiguous registry context, delegated lineage or unstable observations close the command.
+
+The reader PATH must also equal the verified worker PATH: the existing Git controller uses the reader process tools. A mismatch returns diagnostic_tool_environment_mismatch before the business check. Only this tool setting may be selected explicitly; never copy identity variables or secrets.
