@@ -978,6 +978,10 @@ pub(crate) struct Task {
     pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
     #[serde(default)]
     pub remote_prepared: bool,
+    /// Réparations explicites185. Le canon de lancement reste inchangé.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspace_repairs: Vec<bridget_transport::protocol::WorkspaceRepairStatusV1>,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remote_result_slots: Vec<bridget_transport::protocol::WorkerResultSlot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1071,6 +1075,15 @@ impl Task {
         Some(error)
     }
 
+    /// Le lieu de naissance reste dans le canon et la flotte. Cette projection
+    /// donne le dossier physique uniquement après publication de la réparation.
+    pub fn effective_execution_cwd(&self) -> &str {
+        self.workspace_repairs.last().filter(|v|v.phase=="published")
+            .and_then(|v|v.prepared.as_ref()).map(|v|v.placement.execution_cwd.as_str())
+            .or_else(||self.remote_placement.as_ref().map(|v|v.execution_cwd.as_str()))
+            .unwrap_or(&self.cwd)
+    }
+
     pub fn terminal(&self) -> bool {
         matches!(
             self.state.as_str(),
@@ -1112,6 +1125,7 @@ impl Task {
 
     pub fn continuable(&self) -> bool {
         self.state == "result_available"
+            && !self.workspace_repairs.last().is_some_and(|v|v.blocks_dispatch())
             && self.result_sent
             && self.idle_deadline_at.is_some()
             && !self.guard_released

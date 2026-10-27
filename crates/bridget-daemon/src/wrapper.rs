@@ -2,6 +2,9 @@
 //!
 //! Appelé par le CLI quand l'utilisateur tape : bridget codex, bridget claude, etc.
 
+#[path = "wrapper_workspace_repair.rs"]
+mod workspace_repair;
+
 use bridget_transport::journal::{
     IncrementalJournalReader, JournalLiveFeed, JournalReadItem, JournalSourceIdentity,
     JournalWindowError, JournalWriter, current_host_date, resolve_window,
@@ -3987,11 +3990,10 @@ fn spawn_managed_session_transport(
     agent_name: Option<String>,
     instance_id: &str,
     socket: &Path,
+    repair: Option<(&serde_json::Value,&str)>,
 ) -> Result<Box<dyn ManagedSession>, Box<dyn std::error::Error>> {
-    if let Some(policy) = std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
-        .ok()
-        .map(|raw| serde_json::from_str::<serde_json::Value>(&raw))
-        .transpose()
+    if let Some(policy) = repair.map(|v|Ok(Some(v.0.clone()))).unwrap_or_else(|| std::env::var(crate::native_permissions::CHILD_POLICY_ENV)
+        .ok().map(|raw| serde_json::from_str::<serde_json::Value>(&raw)).transpose())
         .map_err(|_| "permission_attestation_unavailable")?
     {
         if let Some(context) = policy.get("launch_context") {
@@ -4087,7 +4089,8 @@ fn spawn_managed_session_transport(
                 model: codex_model_from_args(&definition.args),
                 permissions: definition.permissions.clone(),
                 provider_observation: definition.capabilities.observed.clone(),
-                thread_bootstrap: Default::default(),
+                thread_bootstrap: repair.map_or(Default::default(),|v|
+                    bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {thread_id:v.1.into()}),
                 dynamic_tool_handler,
             };
             let environment = string_environment(mcp_environment);
@@ -4393,7 +4396,7 @@ fn launch_session_with_status(
     // Capture the exact provider inputs before its first process is created.
     let mut permission_launch = definition.clone();
     permission_launch.args = native_args.clone();
-    let permission_cwd = std::env::current_dir()?;
+    let mut permission_cwd = std::env::current_dir()?;
     let permission_environment = crate::lifecycle::source_environment();
     let captured_context = if definition.protocol == "claude_stream_json" {
         crate::native_permissions::capture_context_with_env(
@@ -4475,6 +4478,7 @@ fn launch_session_with_status(
             effective_name.clone(),
             &instance_id,
             socket,
+            None,
         )?
     };
     #[cfg(target_os = "linux")]
@@ -4615,6 +4619,19 @@ fn launch_session_with_status(
     if let Some(reporter) = managed_reporter.as_mut() {
         reporter.startup_succeeded();
     }
+    if let Some(context)=remote_result_context.as_ref() {
+        if definition.protocol=="codex_app_server" {
+            if let Some(identity)=transport.provider_identity() {
+                if identity.provider_observation.as_ref().is_some_and(|v|
+                    v.supports(bridget_transport::protocol::ProviderOperation::Resume)) {
+                    if let Some(thread_id)=identity.provider_thread_id {
+                        crate::remote_worker::workspace_repair::publish_capability(
+                            &context.store_root,&context.worker,&context.command,&thread_id)?;
+                    }
+                }
+            }
+        }
+    }
     // Le retour thread/start ou thread/resume fournit déjà le fait effectif.
     // Le publier avant la TUI : son prompt initial peut lancer une délégation.
     let mut last_permission_fact = None;
@@ -4680,8 +4697,14 @@ fn launch_session_with_status(
     let mut last_heartbeat = Instant::now();
     let mut last_provider_spawn = Instant::now();
     let mut consecutive_fast_failures = 0_u32;
+    let mut workspace_repair_barrier:Option<bridget_transport::protocol::WorkspaceRepairRequestV1>=None;
 
     loop {
+        if let (Some(request),Some(context))=(&workspace_repair_barrier,&remote_result_context) {
+            if crate::remote_worker::workspace_repair::published(&context.store_root,&context.command,request) {
+                workspace_repair_barrier=None;
+            }
+        }
         reattest_managed_turn_if_due(
             &writer,
             transport.as_ref(),
@@ -4804,6 +4827,12 @@ fn launch_session_with_status(
                 continue;
             }
             Ok(_) => match decode(line.trim()) {
+                Ok(DaemonToWrapper::Deliver {message,..}
+                    | DaemonToWrapper::DeliverExecution {message,..}
+                    | DaemonToWrapper::DeliverIdempotent {message,..}) if workspace_repair_barrier.is_some() => {
+                    send_wrapper_message(&writer,bound_delivery_rejection(
+                        &execution_bindings,message.id,"workspace_repair_pending".into()));
+                }
                 Ok(DaemonToWrapper::Deliver { message, .. }) => {
                     if let Err(reason) = remote_result_for_delivery(
                         remote_result_context.as_ref(),
@@ -5016,6 +5045,28 @@ fn launch_session_with_status(
                         let _ = idempotent_deliveries.injection_rejected(&message.id);
                         warn!("remise de l'incident délégué différée: {error}");
                     }
+                }
+                Ok(DaemonToWrapper::WorkspaceRepairControl {task_id,status}) => {
+                    let status=workspace_repair::apply(&task_id,status,remote_result_context.as_ref(),
+                        &mut transport,agent_type,definition,&native_args,&mcp_environment,
+                        mcp_servers.clone(),home,&my_name,&instance_id,socket);
+                    if status.phase!="refused" {workspace_repair_barrier=Some(status.request.clone());}
+                    if status.phase=="resumed" {
+                        permission_cwd=std::env::current_dir().unwrap_or(permission_cwd);
+                        last_permission_fact=None;
+                        let pid=transport.process_id();
+                        if let Ok(birth)=crate::managed_process::process_birth(pid) {
+                            let _=crate::mcp_identity::write_marker(&marker_directory,pid,birth,&instance_id,&name_state_path);
+                        }
+                        let feed=JournalLiveFeed::default();
+                        if transport.activate_journal(&journal_root,&my_name,Some(feed.clone())).is_ok() {
+                            relay.shutdown();
+                            let relay_writer=writer.clone();
+                            relay=AttachRelayWorker::start(journal_root.join(&my_name),feed,
+                                Arc::new(move |message|send_wrapper_message(&relay_writer,message)));
+                        }
+                    }
+                    send_wrapper_message(&writer,WrapperToDaemon::WorkspaceRepairResult {task_id,status});
                 }
                 Ok(DaemonToWrapper::ControlExecutionDispatch {
                     issuer_scope,
@@ -5240,6 +5291,7 @@ fn launch_session_with_status(
                 Some(my_name.clone()),
                 &instance_id,
                 socket,
+                None,
             ) {
                 Ok(new_transport) => {
                     transport = new_transport;
@@ -5643,7 +5695,7 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 26] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 27] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
@@ -5669,6 +5721,7 @@ const BRIDGET_SAFE_MCP_TOOLS: [&str; 26] = [
     "bridget_request_wait",
     "bridget_task_ack",
     "bridget_task_continue",
+    "bridget_task_repair_workspace",
     "bridget_task_respond",
 ];
 
@@ -9980,6 +10033,7 @@ mod reconnect_tests {
             Some("glm-test".to_string()),
             "test-instance",
             &root.join("bridget.sock"),
+            None,
         )
         .unwrap();
         assert!(transport.drain_events().into_iter().any(|event| {

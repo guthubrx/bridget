@@ -282,6 +282,17 @@ fn continuation_fallback(
 /// exclusivement les opérations de session dont le wrapper a besoin. Il ne
 /// déclare ni modèle, ni quota, ni sémantique de protocole fournisseur.
 pub trait ManagedSession: Transport {
+    /// Mise au repos et arrêt prouvés avant changement de dossier.
+    /// Aucun adaptateur ne peut remplacer une conversation par défaut.
+    /// Un échec interdit tout second lancement ; l'appelant conserve la session.
+    fn stop_for_workspace_repair(
+        &mut self,
+        _budget: std::time::Duration,
+    ) -> Result<ManagedProviderIdentity, TransportError> {
+        Err(TransportError::DeliveryFailed("workspace_repair_unsupported".into()))
+    }
+
+
     /// O(1) par défaut : aucun ancien pilote n'accorde une demande différée.
     fn answer_provider_request(
         &mut self,

@@ -1078,6 +1078,7 @@ fn tache_enregistree(
     crate::delegation::Task {
         remote_placement: None,
         remote_prepared: false,
+        workspace_repairs: Vec::new(),
         remote_result_slots: Vec::new(),
         remote_result_receipts: Vec::new(),
         substitution: None,

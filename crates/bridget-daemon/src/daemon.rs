@@ -1125,6 +1125,7 @@ struct DaemonState {
     remote_result_reservation: Option<Receiver<Result<Option<crate::delegation::Task>, String>>>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
+    pending_workspace_repairs: HashMap<String,native_delegation::workspace_repair::Pending>,
     pending_origin_proofs: HashMap<String,origin_proof::Pending>,
     user_input_dispatch_after: Option<(i64,String)>,
     mobile_notifier: Option<crate::mobile::notifications::Notifier>,
@@ -5068,6 +5069,7 @@ impl DaemonState {
             remote_result_reservation: None,
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
+            pending_workspace_repairs: HashMap::new(),
             pending_origin_proofs: HashMap::new(),
             user_input_dispatch_after: None,
             mobile_notifier: config.db_path.parent().and_then(crate::mobile::notifications::Notifier::start),
@@ -18702,7 +18704,7 @@ fn handle_worker_message(
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -19110,6 +19112,10 @@ fn remote_worker_roundtrip(
                 .capabilities
                 .contains(&WorkerCapability::CandidateProbeV2)
         {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if matches!(&operation, WorkerRequestOperation::RepairWorkspace { .. })
+            && !session.capabilities.contains(&WorkerCapability::WorkspaceRepairV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if matches!(&operation, WorkerRequestOperation::ParentSourceProof { .. })
@@ -19878,6 +19884,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::DeliveryRejected { .. }
                 | WrapperToDaemon::TurnState { .. }
                 | WrapperToDaemon::ExecutionStateChanged { .. }
+                | WrapperToDaemon::WorkspaceRepairResult { .. }
                 | WrapperToDaemon::ExecutionProviderObserved { .. }
                 | WrapperToDaemon::CancelRequest { .. }
                 | WrapperToDaemon::ListRequests { .. }
@@ -20178,6 +20185,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::DeliveryRejected { .. }
                 | WrapperToDaemon::TurnState { .. }
                 | WrapperToDaemon::ExecutionStateChanged { .. }
+                | WrapperToDaemon::WorkspaceRepairResult { .. }
                 | WrapperToDaemon::ExecutionProviderObserved { .. }
                 | WrapperToDaemon::CancelRequest { .. }
                 | WrapperToDaemon::ListRequests { .. }
@@ -23747,6 +23755,11 @@ fn handle_wrapper_message_with_peer(
             handle_execution_transition(conn_id, transition, &mut st)
         }
 
+        WrapperToDaemon::WorkspaceRepairResult {task_id,status} => {
+            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            native_delegation::workspace_repair::response(&mut st,conn_id,&task_id,status);
+            None
+        }
         WrapperToDaemon::ExecutionProviderObserved { context } => {
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             handle_execution_provider_context(conn_id, context, &mut st)
@@ -23771,6 +23784,8 @@ fn handle_wrapper_message_with_peer(
                     "worker_result_slot_deadline_v1".to_string(),
                     "worker_workspace_diagnostics_v1".to_string(),
                     "worker_origin_proof_v1".to_string(),
+                    "worker_workspace_repair_v1".to_string(),
+                    "task_workspace_repair_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })

@@ -3014,7 +3014,7 @@ authentifié qui exécute la commande. Utilisez --request-id pour un rejeu contr
 const TASK_USAGE: &str = "usage: bridget task \\
   list [--state active|all] [--limit 1..100] [--json] | \\
   status TASK_ID [--json] | wait TASK_ID... [--timeout SECONDES] [--json] | \\
-  continue TASK_ID MISSION [--request-id ID] [--brief JSON] [--json] | \\
+  repair-workspace TASK_ID DOSSIER --expected-head SHA --request-id ID [--json] | \\\n  continue TASK_ID MISSION [--request-id ID] [--brief JSON] [--json] | \\
   respond TASK_ID REQUEST_ID accept|decline|cancel [--answer JSON] [--json] | \\
   cancel TASK_ID [--json] | ack TASK_ID... [--json]";
 
@@ -3226,6 +3226,17 @@ fn parse_task_args(
                 payload,
                 json,
                 displayed_request_id: None,
+            }
+        }
+        Some("repair-workspace") if values.len()==7 => {
+            if values[3]!="--expected-head" || values[5]!="--request-id" {
+                return Err("task repair-workspace : attendre TASK_ID DOSSIER --expected-head SHA --request-id CLE".into());
+            }
+            ParsedNativeCli {
+                tool:"bridget_task_repair_workspace",
+                payload:serde_json::json!({"task_id":values[1],"target_cwd":values[2],
+                    "expected_head":values[4],"request_id":values[6]}),
+                json,displayed_request_id:Some(values[6].clone()),
             }
         }
         Some("continue") if values.len() >= 3 => {

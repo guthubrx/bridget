@@ -2240,6 +2240,10 @@ pub enum NativeDelegationRequest {
         )]
         answer: Option<serde_json::Value>,
     },
+    RepairWorkspace {
+        task_id: String,
+        repair: WorkspaceRepairRequestV1,
+    },
     Continue {
         task_id: String,
         request_id: String,
@@ -2868,6 +2872,7 @@ pub enum WorkerCapability {
     CandidateProbeV1,
     CandidateProbeV2,
     ReleaseLeaseV2,
+    WorkspaceRepairV1,
     ParentSourceProofV1,
     ResultSlotDeadlineV1,
     OriginProofV1,
@@ -3540,9 +3545,53 @@ pub struct WorkerSourceBase {
     pub workload: AutoDelegateWorkload,
 }
 
+/// Réparation explicite185 : aucun identifiant d'enfant ou de fournisseur libre.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRepairRequestV1 {
+    pub request_id: String,
+    pub target_cwd: String,
+    pub expected_head: String,
+}
+impl WorkspaceRepairRequestV1 {
+    pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        let path = std::path::Path::new(&self.target_cwd);
+        worker_require(!self.request_id.is_empty() && self.request_id.len() <= 128
+            && !self.request_id.chars().any(char::is_control)
+            && self.target_cwd.len() <= 4096 && !self.target_cwd.chars().any(char::is_control)
+            && path.is_absolute()
+            && !path.components().any(|c| matches!(c, std::path::Component::ParentDir))
+            && self.expected_head.len() == 40
+            && self.expected_head.bytes().all(|b| b.is_ascii_hexdigit())
+)
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceRepairStatusV1 {
+    pub request: WorkspaceRepairRequestV1,
+    pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared: Option<WorkerPrepared>,
+    /// Preuve worker privée, retournée seulement au parent propriétaire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+}
+impl WorkspaceRepairStatusV1 {
+    pub fn blocks_dispatch(&self) -> bool {
+        !matches!(self.phase.as_str(), "published" | "refused")
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequestOperation {
+    RepairWorkspace {
+        repair: WorkspaceRepairRequestV1,
+        publish: bool,
+        expires_at: i64,
+    },
     Prepare {
         prepare: WorkerPrepare,
     },
@@ -3596,6 +3645,9 @@ pub enum WorkerRequestOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerResponseOperation {
+    WorkspaceRepair {
+        status: WorkspaceRepairStatusV1,
+    },
     Prepared {
         prepared: WorkerPrepared,
     },
@@ -3999,6 +4051,10 @@ impl WorkerRequest {
                     && worker_base_commit(source.expected_base_commit.as_deref()))?;
                 worker_serialized_size(&source.workspace, 4096)
             }
+            WorkerRequestOperation::RepairWorkspace { repair, expires_at, .. } => {
+                repair.validate()?;
+                worker_require(*expires_at>0)
+            },
             WorkerRequestOperation::Start { start } => {
                 start.validate()?;
                 worker_require(start.placement.matches_worker(&self.worker))
@@ -4056,6 +4112,12 @@ impl WorkerResponse {
         )?;
         worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
         match &self.response {
+            WorkerResponseOperation::WorkspaceRepair { status } => {
+                status.request.validate()?;
+                worker_require(matches!(status.phase.as_str(),
+                    "requested"|"prepared"|"stopped"|"resumed"|"publishing"|"published"|"refused"))
+            }
+
             WorkerResponseOperation::Prepared { prepared } => {
                 prepared.placement.validate()?;
                 worker_require(
@@ -4865,6 +4927,10 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    WorkspaceRepairResult {
+        task_id: String,
+        status: WorkspaceRepairStatusV1,
+    },
     MobileAdministration { request:MobileAdministrationRequest },
     MobileOperation { request:MobileOperationRequest },
     /// Authentification worker distincte du rôle Service et du Register agent.
@@ -5892,6 +5958,10 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    WorkspaceRepairControl {
+        task_id: String,
+        status: WorkspaceRepairStatusV1,
+    },
     MobileAdministrationResult { result:MobileAdministrationResult },
     MobileOperationResult { result:serde_json::Value },
     WorkerAccepted {
@@ -11417,5 +11487,24 @@ mod routing168_protocol_tests {
         let invalid =
             serde_json::json!({"request_id":"r","task":"t","cwd":"/p","workload":"unknown"});
         assert!(serde_json::from_value::<AutoDelegateV2>(invalid).is_err());
+    }
+}
+
+#[cfg(test)]
+mod workspace_repair185_tests {
+    use super::*;
+    #[test]
+    fn spec185_workspace_repair_contract_is_closed_and_paths_bounded() {
+        let valid=WorkspaceRepairRequestV1 {request_id:"repair185".into(),
+            target_cwd:"/mnt/storage/project/worktrees/task185".into(),expected_head:"1".repeat(40)};
+        valid.validate().unwrap();
+        for path in ["relative","/project/../other","/project/\nfile",""] {
+            let mut request=valid.clone();request.target_cwd=path.into();
+            assert!(request.validate().is_err());
+        }
+        let native=NativeDelegationRequest::RepairWorkspace {task_id:"task185".into(),repair:valid};
+        let mut value=serde_json::to_value(native).unwrap();
+        value["force"]=serde_json::json!(true);
+        assert!(serde_json::from_value::<NativeDelegationRequest>(value).is_err());
     }
 }

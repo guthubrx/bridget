@@ -67,6 +67,7 @@ pub(crate) fn task(
         substitution: None,
         remote_placement: None,
         remote_prepared: false,
+        workspace_repairs: Vec::new(),
         remote_result_slots: Vec::new(),
         remote_result_receipts: Vec::new(),
         task_id: task_id.into(),

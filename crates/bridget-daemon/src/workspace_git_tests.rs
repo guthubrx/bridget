@@ -1,5 +1,5 @@
 use super::*;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt,MetadataExt};
 
 // Même recette que wrapper::prompt_tests : PATH privé dans un fils de test,
 // aucune mutation de l'environnement commun de la suite.
@@ -922,5 +922,87 @@ fn spec174_base_ref_absente_sans_depot_ou_git_technique_sont_separees() {
                     && !error.contains("fatal")
                     && !error.contains(outside.to_str().unwrap())
         ));
+    });
+}
+
+
+fn moved185(repo:&Path)->(WorkspaceRecord,PathBuf,String,Vec<u8>) {
+    let record=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+    let path=Path::new(&record.path);
+    fs::write(path.join("sub/tracked"),"commit conservé\n").unwrap();
+    fixture_git(path,&["add","sub/tracked"]);
+    fixture_git(path,&["commit","-qm","suite conservée"]);
+    fs::write(path.join("sub/tracked"),"index conservé\n").unwrap();
+    fixture_git(path,&["add","sub/tracked"]);
+    fs::write(path.join("untracked"),"fichier non suivi conservé\n").unwrap();
+    fs::write(path.join(".gitignore"),".worktrees/\nignored\n").unwrap();
+    fs::write(path.join("ignored"),"fichier ignoré conservé\n").unwrap();
+    let head=report(&record).unwrap().head_commit.unwrap();
+    let git_file=fs::read_to_string(path.join(".git")).unwrap();
+    let git_dir=PathBuf::from(git_file.trim().strip_prefix("gitdir: ").unwrap());
+    let index=fs::read(git_dir.join("index")).unwrap();
+    let target=repo.parent().unwrap().join("disk185");
+    fs::create_dir(&target).unwrap();
+    fn copy(from:&Path,to:&Path) {
+        for entry in fs::read_dir(from).unwrap() {
+            let entry=entry.unwrap();let destination=to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                fs::create_dir(&destination).unwrap();copy(&entry.path(),&destination);
+            } else {fs::copy(entry.path(),destination).unwrap();}
+        }
+    }
+    copy(path,&target);
+    // Le dossier vivant a disparu : un nouveau dossier a un inode différent,
+    // comme après copie inter-volumes. La fixture ne touche aucun travail réel.
+    fs::remove_dir_all(path).unwrap();
+    std::os::unix::fs::symlink(&target,path).unwrap();
+    (record,target,head,index)
+}
+
+#[test]
+fn spec185_repair_moved_worktree_preserves_commits_index_and_all_existing_files() {
+    with_repo(|repo|{
+        let (record,target,head,index)=moved185(repo);
+        assert!(report(&record).is_err(),"le contrôle ordinaire reste fermé au symlink");
+        let (anchor,before)=inspect_repair(&record,&target,&head).unwrap();
+        assert_ne!(fs::metadata(repo).unwrap().ino(),anchor.path_inode);
+        let after=apply_repair_git(&record,&anchor).unwrap();
+        assert_eq!(after.head_commit,before.head_commit);
+        assert_eq!(after.base_commit,record.base_commit);
+        assert_eq!(after.commit_count,Some(1));
+        assert_eq!(fs::read(anchor.git_dir.join("index")).unwrap(),index);
+        assert_eq!(fs::read_to_string(target.join("sub/tracked")).unwrap(),"index conservé\n");
+        assert_eq!(fs::read_to_string(target.join("untracked")).unwrap(),"fichier non suivi conservé\n");
+        assert_eq!(fs::read_to_string(target.join("ignored")).unwrap(),"fichier ignoré conservé\n");
+        assert!(report(&after).is_err(),"aucune relaxation de l'ancrage ordinaire hors du parent");
+        assert_eq!(apply_repair_git(&record,&anchor).unwrap().head_commit,Some(head));
+        assert_eq!(record.path,anchor.original_path.to_string_lossy());
+    });
+}
+
+#[test]
+fn spec185_repair_refuses_wrong_head_or_foreign_git_anchor_before_mutation() {
+    with_repo(|repo|{
+        let (record,target,head,_)=moved185(repo);
+        let git_file=fs::read_to_string(target.join(".git")).unwrap();
+        assert!(inspect_repair(&record,&target,&"1".repeat(40)).is_err());
+        assert_eq!(fs::read_to_string(target.join(".git")).unwrap(),git_file);
+        fs::write(target.join(".git"),"gitdir: /foreign/repository/worktrees/other\n").unwrap();
+        assert!(inspect_repair(&record,&target,&head).is_err());
+    });
+}
+
+#[test]
+fn spec185_repair_refuses_destination_alias_and_inode_substitution() {
+    with_repo(|repo|{
+        let (record,target,head,_)=moved185(repo);
+        let alias=target.with_file_name("alias185");
+        std::os::unix::fs::symlink(&target,&alias).unwrap();
+        assert!(inspect_repair(&record,&alias,&head).is_err());
+        let (anchor,_)=inspect_repair(&record,&target,&head).unwrap();
+        fs::rename(&target,target.with_file_name("preserved185")).unwrap();
+        fs::create_dir(&target).unwrap();
+        assert!(report_repair(&record,&anchor,false).is_err());
+        assert!(apply_repair_git(&record,&anchor).is_err());
     });
 }

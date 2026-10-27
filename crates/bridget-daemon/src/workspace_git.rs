@@ -12,6 +12,10 @@ use std::time::{Duration, Instant};
 #[path = "workspace_git_tests.rs"]
 mod tests;
 
+#[path = "workspace_repair_git.rs"]
+mod repair;
+pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, apply_repair_git};
+
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
 // Même plafond que T3 (WORKTREE_ADD_TIMEOUT_MS) : l'extraction d'un gros dépôt
@@ -183,6 +187,7 @@ fn allowed(args: &[&str]) -> bool {
         ] => true,
         ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--", origin, commit] =>
             Path::new(origin).is_absolute() && sha(commit),
+        ["worktree", "repair", "--", path] => Path::new(path).is_absolute(),
         ["worktree", "list", "--porcelain"] | ["worktree", "list", "--porcelain", "-z"] => true,
         ["worktree", "add", "-b", branch, "--", path, base] => {
             validate_branch(branch).is_ok() && Path::new(path).is_absolute() && sha(base)
@@ -973,6 +978,10 @@ fn report_anchor(workspace: &WorkspaceRecord) -> Result<(PathBuf, PathBuf), Stri
 /// O(B+50), sorties bornées et 50 commits ; faits inconnus renvoyés en erreur.
 pub(crate) fn report(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord, String> {
     let (git_dir, path) = report_anchor(workspace)?;
+    report_at(workspace, &git_dir, &path)
+}
+
+fn report_at(workspace: &WorkspaceRecord, git_dir: &Path, path: &Path) -> Result<WorkspaceRecord, String> {
     let read = |args: &[&str]| capture(&path, args, READ_TIMEOUT, Some((&git_dir, &path)));
     let configuration = read(&[
         "config",

@@ -148,6 +148,12 @@ pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
         own_state_actions: &[],
     },
     ToolScope {
+        tool: "bridget_task_repair_workspace",
+        base: Scope::Delegates,
+        read_actions: &[],
+        own_state_actions: &[],
+    },
+    ToolScope {
         tool: "bridget_task_continue",
         base: Scope::Delegates,
         read_actions: &[],

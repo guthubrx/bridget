@@ -733,3 +733,44 @@ Automatic V2 admission refusals include `detail.admission` when the request reac
 The observation does not cover a concurrent call submitted later. Transport failures before a daemon response and early attestation failures may have no `admission` field; absence of this field is not proof of absence of work. No automatic retry, cancellation, or permission change is introduced.
 
 An explicit V2 replay can resume a `chosen` admission interrupted after its decision, within the same coordinator epoch. It preserves the recorded envelope and choice, then rechecks the Git source, permissions and target. An ongoing preparation for the same owner and key returns `admission_pending`. Replaying `pending` or `decision_started` does not start a new decision. An admitted task and a durable refusal remain unchanged. Maintenance remains blocked until the admission is settled.
+
+## Réparer le dossier déplacé d'une tâche — contrat185
+
+Ce parcours exige la capacité `task_workspace_repair_v1` du maître,
+`workspace_repair_v1` du worker et un wrapper compatible. Il ne constitue pas
+une preuve d'activation sur une installation existante.
+
+Le parent propriétaire utilise `bridget_task_repair_workspace` avec `task_id`,
+`request_id`, `target_cwd` et `expected_head` (SHA complet du HEAD conservé).
+`target_cwd` désigne la racine réelle du worktree sur la machine d'exécution.
+Le worker vérifie le dépôt, sa branche et le décalage du dossier de travail.
+Le déplacement doit déjà être terminé ; Bridget ne déplace ni ne supprime les fichiers métier.
+
+La tâche doit être gardée et au repos après remise du résultat. La réparation
+ne crée aucun tour métier. Elle ferme les remises, vérifie les droits, arrête le
+seul fournisseur détenu sous borne et reprend sa conversation native attestée.
+Un arrêt incertain, un autre fil ou une politique différente interdit la suite.
+Les canons de naissance et l'historique restent conservés.
+
+Commande équivalente :
+```sh
+bridget task repair-workspace TASK_ID /srv/projets/exemple/dossiers/tache --expected-head SHA_COMPLET --request-id CLE_STABLE --json
+```
+
+Lire `workspace_repair.phase` et `workspace_repair.code` au statut. Un résultat
+`published` permet une continuation distincte. Une phase en cours exige de
+conserver la même clé et tous les paramètres pour réconcilier l'opération.
+Un refus enregistré se relit sans nouvel effet. Après un refus confirmé sans
+effet, une décision corrigée peut utiliser une nouvelle clé sur la même tâche.
+Il n'y a aucun remplacement de mission.
+
+Le contrôle ordinaire de continuation ne suit pas un lien symbolique pour
+contourner un déplacement. Un ancien wrapper peut refuser avec
+`workspace_repair_child_upgrade_required` : installer un binaire ne met pas à
+jour son code chargé. Une migration ciblée admise reste alors nécessaire ;
+aucun redémarrage de service ni changement direct de base n'est implicite.
+
+La première version accepte une migration publiée par génération et huit
+tentatives au plus. Les adaptations non qualifiées refusent sans démarrer une
+conversation neuve. Sans inventaire avant le déplacement, l'exhaustivité de
+cette copie antérieure reste inconnue ; la réparation conserve les fichiers qu'elle vérifie.

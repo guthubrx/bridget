@@ -758,6 +758,7 @@ fn execute_tool_at_with_identity(
         | "bridget_delegate"
         | "bridget_auto_delegate"
         | "bridget_task_continue"
+        | "bridget_task_repair_workspace"
         | "bridget_task_respond"
         | "bridget_task_status"
         | "bridget_task_wait"

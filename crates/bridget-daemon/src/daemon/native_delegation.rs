@@ -1,4 +1,6 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
+#[path = "native_workspace_repair.rs"]
+pub(super) mod workspace_repair;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -3460,6 +3462,37 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code.starts_with("workspace_repair") {
+        let (message,recovery,human)=match code {
+            "workspace_repair_child_upgrade_required" => (
+                "Le programme qui pilote cet enfant ne sait pas encore exécuter la réparation native.",
+                "Conservez cette tâche et son dossier. Installer un binaire ne modifie pas le programme déjà chargé. Ne créez pas de nouvelle mission et ne forcez pas le placement.",
+                "Une migration ciblée du pilote doit être qualifiée avant son exécution ; aucun redémarrage de service n'est déduit de ce refus."),
+            "workspace_repair_not_idle" => (
+                "La tâche ne remplit pas les conditions de repos nécessaires à sa réparation.",
+                "Attendez le résultat remis, la fin du tour et la résolution des demandes ouvertes. Vérifiez que la garde de l'enfant reste valide. Ne créez pas de nouvelle ronde pendant la réparation.",
+                "Si la garde est terminée, demandez au responsable de choisir un parcours de récupération qui conserve les sorties."),
+            "workspace_repair_envelope_mismatch" => (
+                "Cette clé de réparation désigne déjà des paramètres différents.",
+                "Relisez workspace_repair dans le statut de cette tâche. Pour suivre cette opération, conservez sa request_id et tous ses paramètres. Ne modifiez pas sa destination au rejeu.",
+                "Un changement de destination exige un refus sans effet confirmé, puis une nouvelle décision de réparation."),
+            "workspace_repair_pending" => (
+                "La réparation n'est pas encore confirmée de bout en bout.",
+                "Relisez le statut de la même tâche. Rejouez uniquement la même réparation avec la même request_id et les mêmes paramètres pour réconcilier son reçu. N'envoyez aucune nouvelle mission.",
+                "Si un arrêt ou une reprise reste incertain, transmettez la phase et le code au responsable ; aucune relance forcée."),
+            "workspace_repair_authority_expired" => (
+                "La fenêtre autorisée de cette réparation est terminée.",
+                "Conservez la tâche, ses fichiers et son reçu. Vérifiez sa phase : un arrêt engagé ne doit pas devenir une nouvelle tentative sous une autre clé.",
+                "Le responsable doit renouveler explicitement les conditions de reprise si l'exécution est déjà arrêtée."),
+            _ => (
+                "Bridget refuse cette étape de réparation. Le code conservé précise le contrôle qui n'a pas été confirmé.",
+                "Conservez cette tâche, sa request_id de réparation et ses fichiers. Vérifiez workspace_repair.phase et workspace_repair.code dans son statut. Ne recréez ni dossier, ni mission et ne modifiez pas les reçus à la main.",
+                "Si le contrôle ne peut pas être rétabli dans les droits existants, transmettez ce code et la phase au responsable pour une décision ciblée."),
+        };
+        return json!({"status":"refused","code":code,"message":message,
+            "detail":{"message":message,"recovery":recovery,"human_action":human}});
+    }
+
     if code == "routing_candidate_unavailable" {
         let message = "Aucun candidat requis n’a pu être confirmé comme éligible lors du contrôle.";
         let recovery = "Consultez detail.reasons s’il est présent, puis le catalogue sur la machine demandée avec le même cwd et la même posture. Vérifiez la disponibilité du profil, du modèle, de l’effort, du dossier et des sources de droits selon le motif reçu. Ce code seul ne prouve ni une déconnexion du compte ni l’absence du programme. Corrigez la cause sans changer les contraintes ni les permissions pour contourner le refus. Consultez detail.admission : suivez toute tâche connue ; si la demande reste en attente ou d’issue inconnue, conservez request_id et les paramètres, sans créer de doublon. Si detail.admission indique not_recorded, après correction de la cause sans changement de paramètres, rejouez strictement la même demande avec sa request_id. L’absence de tâche enregistrée à une lecture ne suffit pas à exclure un appel concurrent. Une nouvelle request_id exige un refus durable confirmé sans tâche et sa cause corrigée, ou des paramètres corrigés après confirmation de la clôture de l’ancienne demande.";
@@ -4073,6 +4106,16 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             "commits":workspace.commits,"truncated":workspace.truncated,"dirty":workspace.dirty,
             "retention":{"code":code,"message":message,"recovery":recovery}});
     }
+    if let Some(repair)=task.workspace_repairs.last() {
+        view["workspace_repair"]=json!({
+            "request_id":repair.request.request_id,"target_cwd":repair.request.target_cwd,
+            "expected_head":repair.request.expected_head,"phase":repair.phase,"code":repair.code,
+            "history":task.workspace_repairs.iter().map(|r|json!({
+                "request_id":r.request.request_id,"target_cwd":r.request.target_cwd,
+                "phase":r.phase,"code":r.code})).collect::<Vec<_>>()
+        });
+        if repair.phase=="published" {view["cwd"]=json!(task.effective_execution_cwd());}
+    }
     if !full {
         view.as_object_mut().unwrap().remove("result");
     }
@@ -4416,6 +4459,11 @@ fn handle_with_fact(
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
+    if let NativeDelegationRequest::RepairWorkspace {task_id,repair}=&request {
+        return DaemonToWrapper::NativeDelegationResult {result:
+            workspace_repair::repair(conn,task_id,repair,fact.as_ref(),thread,state)
+                .unwrap_or_else(|code|failure(&code))};
+    }
     if matches!(&request,NativeDelegationRequest::Catalogue) {
         match foreign_catalogue177(conn,fact.as_ref(),thread,state) {
             Ok(Some(result))=>return DaemonToWrapper::NativeDelegationResult {result},
@@ -4609,12 +4657,12 @@ fn handle_with_fact(
             // Ce contexte vient uniquement de la tâche après contrôle du parent,
             // jamais du chemin ou de l'identité proposés par l'appelant.
             if let Some(task) = remote_task_context
-                && let Some(placement) = task.remote_placement
+                && let Some(ref placement) = task.remote_placement
             {
                 if !result["detail"].is_object() { result["detail"] = json!({}); }
                 result["detail"]["execution"] = json!({
                     "task_id":task.task_id, "child_agent_id":task.child,
-                    "machine_id":placement.machine_id, "execution_cwd":placement.execution_cwd,
+                    "machine_id":placement.machine_id, "execution_cwd":task.effective_execution_cwd(),
                 });
             }
             return DaemonToWrapper::NativeDelegationResult { result };
@@ -5181,6 +5229,9 @@ pub(super) fn remote_dispatch_proof(
     task: &Task,
 ) -> Result<Task, String> {
     use bridget_transport::protocol::*;
+    if task.workspace_repairs.last().is_some_and(|r|r.blocks_dispatch()) {
+        return Err("workspace_repair_pending".into());
+    }
     let snapshot = task
         .permission_snapshot
         .as_ref()
@@ -5219,7 +5270,10 @@ pub(super) fn remote_dispatch_proof(
             "remote_permissions_unconfirmed"
         }.into());
     }
-    if observation.permission_digest.as_ref() != Some(&placement.permission_digest) {
+    let effective_digest=task.workspace_repairs.last().filter(|r|r.phase=="published")
+        .and_then(|r|r.prepared.as_ref()).map(|p|&p.placement.permission_digest)
+        .unwrap_or(&placement.permission_digest);
+    if observation.permission_digest.as_ref() != Some(effective_digest) {
         return Err("permission_not_inherited".into());
     }
     Ok(task.clone())
@@ -7050,6 +7104,7 @@ fn admit_delegate(
         };
         let record = Task {
             remote_prepared: false,
+            workspace_repairs: Vec::new(),
             remote_result_slots: Vec::new(),
             remote_result_receipts: Vec::new(),
             remote_placement: if let WorkspacePass::Remote { prepared, .. } = pass {
@@ -7622,6 +7677,9 @@ fn handle_locked_with_remote_proof(
                 st.delegation_store.save(&saved)?;
                 return Err("keep_alive_ended".into());
             }
+            if saved.workspace_repairs.last().is_some_and(|r|r.blocks_dispatch()) {
+                return Err("workspace_repair_pending".into());
+            }
             if saved.state != "result_available" {
                 return Err("round_in_progress".into());
             }
@@ -7694,6 +7752,7 @@ fn handle_locked_with_remote_proof(
             )?;
             current_task_view(st, &next, true)
         }
+        NativeDelegationRequest::RepairWorkspace { .. } => Err("workspace_repair_requires_coordinator".into()),
         NativeDelegationRequest::Grant { .. } => unreachable!(),
     }
 }
@@ -31043,6 +31102,63 @@ for frame in frames: print(json.dumps(frame),flush=True)
             cleanup(&config);
         }
     }
+    #[test]
+    fn spec185_workspace_repair_foreign_owner_cannot_mutate_or_reveal_task() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.owner="foreign-owner185".into();
+        st.delegation_store.save(&task).unwrap();
+        let before=serde_json::to_value(&task).unwrap();
+        let mut parent=continuation172_parent();parent.cwd=task.cwd.clone();
+        let shared=Arc::new(Mutex::new(st));
+        let reply=handle_with_fact("conn-1",NativeDelegationRequest::RepairWorkspace {
+            task_id:task.task_id.clone(),repair:bridget_transport::protocol::WorkspaceRepairRequestV1 {
+                request_id:"repair185-foreign".into(),target_cwd:"/mnt/storage/task185".into(),
+                expected_head:"1".repeat(40),
+            }},Some(parent),None,None,&shared,None);
+        let DaemonToWrapper::NativeDelegationResult {result}=reply else {panic!("résultat natif")};
+        assert_eq!(result["code"],"task_unavailable");
+        assert!(result["detail"]["execution"].is_null());
+        assert_eq!(serde_json::to_value(shared.lock().unwrap().delegation_store
+            .get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        drop(shared);cleanup(&config);
+    }
+
+    #[test]
+    fn spec185_pending_repair_closes_continuation_and_exposes_only_useful_status() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.state="result_available".into();task.result_sent=true;
+        task.guarded=true;task.guard_released=false;
+        task.idle_deadline_at=Some(unix_timestamp()+120);
+        let original_request=serde_json::to_value(&task.request).unwrap();
+        task.workspace_repairs.push(bridget_transport::protocol::WorkspaceRepairStatusV1 {
+            request:bridget_transport::protocol::WorkspaceRepairRequestV1 {
+                request_id:"repair185-pending".into(),target_cwd:"/mnt/storage/task185".into(),
+                expected_head:"1".repeat(40),
+            },phase:"prepared".into(),prepared:None,proof:Some(json!({"private":"not exposed"})),code:None,
+        });
+        assert!(!task.continuable());
+        let view=task_view(&task,None,true);
+        assert_eq!(view["workspace_repair"]["phase"],"prepared");
+        assert!(!view.to_string().contains("not exposed"));
+        assert_eq!(serde_json::to_value(&task.request).unwrap(),original_request);
+        let shared=Arc::new(Mutex::new(st));
+        assert_eq!(remote_dispatch_proof(&shared,&task).unwrap_err(),"workspace_repair_pending");
+        drop(shared);cleanup(&config);
+    }
+
+    #[test]
+    fn spec185_workspace_repair_refusals_explain_recovery_and_human_prerequisite() {
+        for code in ["workspace_repair_child_upgrade_required","workspace_repair_not_idle",
+            "workspace_repair_envelope_mismatch","workspace_repair_pending",
+            "workspace_repair_authority_expired","workspace_repair_unclassified185"] {
+            let view=failure(code);
+            assert_eq!(view["code"],code);
+            assert!(view["message"].as_str().is_some_and(|v|!v.is_empty()));
+            assert!(view["detail"]["recovery"].as_str().is_some_and(|v|!v.is_empty()));
+            assert!(view["detail"]["human_action"].as_str().is_some_and(|v|!v.is_empty()));
+        }
+    }
+
 }
 
 #[cfg(test)]
