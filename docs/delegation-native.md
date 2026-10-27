@@ -842,4 +842,4 @@ Full owner status adds `detail.provider_failure`: task, admission key, child, ma
 
 The remote dispatch proof waits at most30seconds for its `Reconcile` (192). A worker may perform several Git reads, each bounded to10seconds. The former5second master timeout could expire while an allowed read was still running, allowing another proof request to enter the queue. The single asynchronous slot and task rotation are unchanged. This timeout changes no queue capacity, permit, permission, identity, epoch, dispatch criterion or mission counter. A foreign identity remains rejected and a different digest still refuses dispatch. Beyond30seconds the outcome remains unconfirmed; this change guarantees neither success nor freedom from all saturation. It never retries a refused business request.
 
-A silent worker may hold this slot for up to30seconds and delay other proofs sharing it; the tick, link controls and task rotation remain independent of that wait.
+A silent worker may hold this slot for up to30seconds and delay other proofs sharing it; the tick stays nonblocking and rotation order is preserved. The next proof waits for the slot to become available.
