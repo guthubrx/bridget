@@ -146,6 +146,30 @@ fn delegated_cli_guard(
     }
 }
 
+// Un lecteur local sans identité n'agit au nom d'aucun agent. L'absence doit
+// être distincte d'une filiation invalide ; toute ambiguïté ferme la commande.
+fn diagnostic_cli_guard(
+    resolved: Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError>,
+    delegated_marker: bool,
+    explicit_identity: bool,
+) -> Result<(), crate::mcp_identity::IdentityError> {
+    use crate::mcp_identity::IdentityError as E;
+    if delegated_marker {return Err(E::DelegatedMcpOnly);}
+    match resolved {
+        Ok(identity) if identity.delegated_origin.is_some() => Err(E::DelegatedMcpOnly),
+        Ok(_) => Ok(()),
+        Err(E::IdentityNotFound) if !explicit_identity => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+fn current_diagnostic_cli_guard() -> Result<(), crate::mcp_identity::IdentityError> {
+    use crate::mcp_identity::{IdentityError, SystemProcessTree};
+    let namespace=crate::environment::Namespace::from_environment().map_err(|_|IdentityError::NamespaceConfiguration)?;
+    let delegated=crate::mcp_identity::has_delegated_marker(&namespace.root.join("delegated-pids"),std::process::id(),&SystemProcessTree);
+    let explicit=std::env::var_os("BRIDGET_AGENT_ID_FILE").is_some() || std::env::var_os("BRIDGET_AGENT_INSTANCE_ID").is_some();
+    diagnostic_cli_guard(crate::mcp_identity::resolve_current_identity(),delegated,explicit)
+}
+
 pub fn run() {
     run_with_args(std::env::args().collect());
 }
@@ -171,7 +195,7 @@ fn run_with_args(args: Vec<String>) {
     // Le worker n'ouvre pas le namespace métier et ne démarre aucun daemon.
     if cmd == "worker" {
         if args.get(2).is_some_and(|s| s == "diagnose") {
-            if let Err(error) = delegated_cli_guard("worker-diagnose", crate::mcp_identity::resolve_current_identity()) {
+            if let Err(error) = current_diagnostic_cli_guard() {
                 eprintln!("bridget worker diagnose : {} : {}", error.code(), error.remediation());
                 std::process::exit(1);
             }
@@ -12463,6 +12487,13 @@ mod worker188_tests {
     }
     #[test]
     fn spec188_worker_diagnostic_preserves_delegated_cli_guard() {
-        assert!(delegated_cli_guard("worker-diagnose",Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly)).is_err());
+        use crate::mcp_identity::IdentityError as E;
+        assert!(diagnostic_cli_guard(Err(E::DelegatedMcpOnly),false,false).is_err());
+        assert!(diagnostic_cli_guard(Err(E::NamespaceConfiguration),false,false).is_err());
+        assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),true,false).is_err(),"marqueur enfant même invalide");
+        assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),false,true).is_err(),"identité explicite non résolue");
+        assert!(diagnostic_cli_guard(Err(E::LegacyMarker),false,false).is_err());
+        assert!(diagnostic_cli_guard(Err(E::T3SessionUnavailable),false,false).is_err());
+        assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),false,false).is_ok(),"lecture locale sans principal, sous UID propriétaire");
     }
 }

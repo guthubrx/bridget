@@ -1589,14 +1589,14 @@ fn read_private_registry(source: &Path) -> Result<String, String> {
     let link_metadata = std::fs::symlink_metadata(source)
         .map_err(|err| format!("impossible d'inspecter {}: {err}", source.display()))?;
     if link_metadata.file_type().is_symlink() {
-        return Err(format!(
-            "registre refusé {}: les liens symboliques sont interdits",
-            source.display()
-        ));
+        return Err(format!("registre refusé {}: les liens symboliques sont interdits",source.display()));
+    }
+    if !link_metadata.is_file() {
+        return Err(format!("registre refusé {}: fichier régulier requis",source.display()));
     }
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(source)
         .map_err(|err| {
             format!(
@@ -1626,9 +1626,12 @@ fn read_private_registry(source: &Path) -> Result<String, String> {
             source.display()
         ));
     }
+    const MAX_REGISTRY_BYTES:u64=16*1024*1024;
+    if metadata.len()>MAX_REGISTRY_BYTES {return Err("registre trop volumineux".into());}
     let mut content = String::new();
-    std::io::Read::read_to_string(&mut file, &mut content)
+    std::io::Read::read_to_string(&mut std::io::Read::take(&mut file,MAX_REGISTRY_BYTES+1), &mut content)
         .map_err(|err| format!("impossible de lire {}: {err}", source.display()))?;
+    if content.len() as u64>MAX_REGISTRY_BYTES {return Err("registre trop volumineux".into());}
     Ok(content)
 }
 

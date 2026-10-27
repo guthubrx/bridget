@@ -4399,6 +4399,35 @@ mod tests {
         let v=diagnostic_failure("diagnostic_observation_changed",&command());
         assert!(v["recovery"].as_str().unwrap().contains("même tuple"));
     }
+
+    #[test]
+    fn spec188_diagnostic_checks_stability_after_early_identity_and_context_errors() {
+        let fixture=Fixture::new();let runtime=runtime_fixture(&fixture);reserve(&runtime.store);
+        let mut foreign=command();foreign.instance_id="foreign".into();
+        let result=read::diagnose_observed(runtime.read_view(),&foreign,|| {
+            let mut receipt=runtime.store.command(&command()).unwrap();receipt.updated_at+=1;
+            runtime.store.persist(&runtime.store.command_path(&command()),&receipt).unwrap();
+        });
+        assert_eq!(result.unwrap_err(),"diagnostic_observation_changed");
+        let original=fs::read(&runtime.config.registry_path).unwrap();
+        fs::write(&runtime.config.registry_path,b"invalid registry").unwrap();
+        let result=read::diagnose_local_observed(&runtime.config,&command(),|| {
+            fs::write(&runtime.config.registry_path,&original).unwrap();
+        });
+        assert_eq!(result.unwrap_err(),"diagnostic_observation_changed");
+    }
+    #[test]
+    fn spec188_registry_fifo_and_oversize_are_bounded_without_writer() {
+        let fixture=Fixture::new();let p=fixture.0.join("registry-fifo");
+        let c=std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe {libc::mkfifo(c.as_ptr(),0o600)},0);
+        let (tx,rx)=std::sync::mpsc::channel();let fifo=p.clone();
+        let reader=std::thread::spawn(move||tx.send(AgentRegistry::load_from_path(fifo).is_err()).unwrap());
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(),true);reader.join().unwrap();
+        fs::remove_file(&p).unwrap();write_private_file_atomic(&p,b"{}").unwrap();
+        fs::OpenOptions::new().write(true).open(&p).unwrap().set_len(16*1024*1024+1).unwrap();
+        assert!(AgentRegistry::load_from_path(p).err().unwrap().contains("volumineux"));
+    }
     fn snapshot188(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         let mut out=BTreeMap::new();let mut dirs=vec![root.to_path_buf()];
         while let Some(dir)=dirs.pop() {

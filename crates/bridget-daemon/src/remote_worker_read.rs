@@ -458,87 +458,153 @@ pub(crate) fn diagnose_local(
     config: &WorkerRuntimeConfig,
     command: &WorkerCommandIdentity,
 ) -> Result<serde_json::Value, String> {
+    diagnose_local_observed(config, command, || {})
+}
+
+fn diagnostic_paths(
+    config: &WorkerRuntimeConfig,
+    command: &WorkerCommandIdentity,
+) -> Result<Vec<PathBuf>, String> {
     command
         .validate()
         .map_err(|_| "diagnostic_identity_invalid")?;
-    let (identity, credential, source) =
-        inputs(config).map_err(|_| "diagnostic_context_unavailable")?;
-    diagnose_observed(
-        WorkerReadView {
-            config,
-            identity: &identity,
-            credential: &credential,
-            source: &source,
-        },
-        command,
-        || {},
-    )
+    for p in [
+        &config.state_root,
+        &config.credential_path,
+        &config.registry_path,
+        &config.master_socket,
+    ] {
+        if !p.is_absolute()
+            || p.components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err("diagnostic_context_unavailable".into());
+        }
+    }
+    let root = config.state_root.join("store");
+    let enrollment = config.state_root.join(format!(
+        ".worker-{}.enrolled",
+        digest_bytes(root.as_os_str().as_encoded_bytes())
+    ));
+    Ok(vec![
+        root.join("commands")
+            .join(format!("{}.json", marker_key(command))),
+        root.join("workspaces")
+            .join(format!("{}.json", marker_key(command))),
+        enrollment,
+        config.registry_path.clone(),
+        config.credential_path.clone(),
+    ])
 }
-
-fn stamp(path: &Path) -> Result<Option<(u64, u64, u64, i64, i64, i64, i64)>, String> {
+#[derive(PartialEq, Eq)]
+struct ReadStamp {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mode: u32,
+    mtime: (i64, i64),
+    ctime: (i64, i64),
+}
+fn stamp(path: &Path) -> Result<Option<ReadStamp>, String> {
     match fs::symlink_metadata(path) {
-        Ok(m) if m.is_file() && !m.file_type().is_symlink() => Ok(Some((
-            m.dev(),
-            m.ino(),
-            m.len(),
-            m.mtime(),
-            m.mtime_nsec(),
-            m.ctime(),
-            m.ctime_nsec(),
-        ))),
-        Ok(_) => Err("diagnostic_file_type_invalid".into()),
+        Ok(m) => Ok(Some(ReadStamp {
+            dev: m.dev(),
+            ino: m.ino(),
+            len: m.len(),
+            mode: m.mode(),
+            mtime: (m.mtime(), m.mtime_nsec()),
+            ctime: (m.ctime(), m.ctime_nsec()),
+        })),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err("diagnostic_file_unavailable".into()),
     }
 }
-
+fn observe_stably(
+    paths: &[PathBuf],
+    read: impl FnOnce() -> Result<serde_json::Value, String>,
+    after_check: impl FnOnce(),
+) -> Result<serde_json::Value, String> {
+    let before = paths
+        .iter()
+        .map(|p| stamp(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let outcome = if before
+        .iter()
+        .flatten()
+        .any(|m| m.mode & libc::S_IFMT != libc::S_IFREG)
+    {
+        Err("diagnostic_file_type_invalid".into())
+    } else {
+        read()
+    };
+    after_check();
+    let after = paths
+        .iter()
+        .map(|p| stamp(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "diagnostic_stability_unavailable")?;
+    if before != after {
+        return Err("diagnostic_observation_changed".into());
+    }
+    outcome
+}
+pub(super) fn diagnose_local_observed(
+    config: &WorkerRuntimeConfig,
+    command: &WorkerCommandIdentity,
+    after_check: impl FnOnce(),
+) -> Result<serde_json::Value, String> {
+    let paths = diagnostic_paths(config, command)?;
+    observe_stably(
+        &paths,
+        || {
+            let (identity, credential, source) =
+                inputs(config).map_err(|_| "diagnostic_context_unavailable")?;
+            diagnose_inner(
+                WorkerReadView {
+                    config,
+                    identity: &identity,
+                    credential: &credential,
+                    source: &source,
+                },
+                command,
+            )
+        },
+        after_check,
+    )
+}
+#[cfg(test)]
 pub(super) fn diagnose_observed(
     view: WorkerReadView<'_>,
     command: &WorkerCommandIdentity,
     after_check: impl FnOnce(),
 ) -> Result<serde_json::Value, String> {
+    let paths = diagnostic_paths(view.config, command)?;
+    observe_stably(&paths, || diagnose_inner(view, command), after_check)
+}
+fn diagnose_inner(
+    view: WorkerReadView<'_>,
+    command: &WorkerCommandIdentity,
+) -> Result<serde_json::Value, String> {
     let config = view.config;
     let identity = view.identity;
-    command
-        .validate()
-        .map_err(|_| "diagnostic_identity_invalid")?;
+    let paths = diagnostic_paths(config, command)?;
+    let path = &paths[0];
+    let enrollment = &paths[2];
     let root = config.state_root.join("store");
-    let parent = root.parent().ok_or("diagnostic_store_unavailable")?;
-    let enrollment = parent.join(format!(
-        ".worker-{}.enrolled",
-        digest_bytes(root.as_os_str().as_encoded_bytes())
-    ));
-    let path = root
-        .join("commands")
-        .join(format!("{}.json", marker_key(command)));
-    let workspace = root
-        .join("workspaces")
-        .join(format!("{}.json", marker_key(command)));
-    let paths = [
-        &path,
-        &workspace,
-        &enrollment,
-        &config.registry_path,
-        &config.credential_path,
-    ];
-    let before = paths
-        .iter()
-        .map(|p| stamp(p))
-        .collect::<Result<Vec<_>, _>>()?;
     check_private(&root, true).map_err(|_| "diagnostic_store_unavailable")?;
-    let enrolled: Enrollment = read_optional(&enrollment, MAX_METADATA_BYTES)
+    let enrolled: Enrollment = read_optional(enrollment, MAX_METADATA_BYTES)
         .map_err(|_| "diagnostic_enrollment_invalid")?
         .ok_or("diagnostic_enrollment_unavailable")?;
     if enrolled.version != STORE_VERSION || enrolled.worker != *identity || enrolled.quarantined {
         return Err("diagnostic_enrollment_invalid".into());
     }
-    let receipt: WorkerCommandReceipt = read_optional(&path, MAX_METADATA_BYTES)
+    let receipt: WorkerCommandReceipt = read_optional(path, MAX_METADATA_BYTES)
         .map_err(|_| "diagnostic_receipt_invalid")?
         .ok_or("diagnostic_receipt_unavailable")?;
     if receipt.version != STORE_VERSION
         || receipt.worker != *identity
         || receipt.identity != *command
-        || !receipt.placement.matches_worker(&identity)
+        || !receipt.placement.matches_worker(identity)
     {
         return Err("diagnostic_identity_mismatch".into());
     }
@@ -590,14 +656,6 @@ pub(super) fn diagnose_observed(
         view.recheck_at_with_repair(&retained, false, anchor.as_ref(), &trace)?;
         Ok(())
     })();
-    after_check();
-    let after = paths
-        .iter()
-        .map(|p| stamp(p))
-        .collect::<Result<Vec<_>, _>>()?;
-    if before != after {
-        return Err("diagnostic_observation_changed".into());
-    }
     let reason = outcome.as_ref().err().map(|r| format!("{r:?}"));
     let recovery = match trace.stage.get() {
         "mapping" | "workspace_receipt" | "workspace_report" | "workspace_mapping"
@@ -641,6 +699,11 @@ pub(crate) fn diagnostic_failure(code: &str, command: &WorkerCommandIdentity) ->
             "Un fichier observé a changé pendant le contrôle.",
             "Après la fin de l’opération qui écrit ces fichiers, relisez exactement le même tuple dans le même environnement.",
             "Si les changements persistent, faites examiner les écritures concurrentes par le responsable du worker.",
+        ),
+        "diagnostic_stability_unavailable" => (
+            "La stabilité finale des fichiers n’a pas pu être vérifiée.",
+            "Conservez le tuple et le code ; vérifiez l’accès aux fichiers avant une nouvelle observation.",
+            "Si l’accès reste invérifiable, faites examiner le stockage par son responsable.",
         ),
         "diagnostic_file_type_invalid" => (
             "Une entrée attendue comme fichier ordinaire est d’un autre type.",
