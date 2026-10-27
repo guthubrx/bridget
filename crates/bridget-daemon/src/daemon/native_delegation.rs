@@ -3545,6 +3545,14 @@ fn failure(code: &str) -> Value {
                         _ => false,
                     }
             }) {
+            if reasons.iter().any(|reason|reason["kind"]=="candidate" && reason["code"]=="resource_limit") {
+                let message="Au moins une sonde de candidat a été refusée car la file bornée des demandes du worker était pleine.";
+                result["message"]=json!(message);
+                result["detail"]["message"]=json!(message);
+                result["detail"]["probe_capacity"]=json!({"cause":"worker_inbound_queue_full","observed_state":"full_at_probe","current_state":"unknown"});
+                result["detail"]["recovery"]=json!("Ce motif concerne la file de contrôle du worker, pas une preuve de manque de mémoire, d’espace disque ou d’authentification. La sonde refusée n’a pas été traitée ; les autres opérations peuvent continuer. Consultez detail.admission. Si state=not_recorded et qu’aucun appel concurrent de cette même demande ne subsiste, après drainage des opérations natives en cours, rejouez strictement la même request_id et la même enveloppe. Ne créez aucune nouvelle clé ni mission de remplacement, ne changez pas les contraintes pour contourner ce refus. Une tâche connue reste à suivre ; une admission pending ou d’issue inconnue ne permet aucun remplacement. Ce reçu historique ne prouve pas que la file soit encore pleine maintenant.");
+                result["detail"]["human_action"]=json!("Si le drainage normal ne suffit pas, transmettez au responsable du worker le code, la machine demandée, la request_id et l’heure du refus pour inspection des opérations en attente. Ne redémarrez pas le service et n’annulez pas les tâches d’autrui pour vider la file ; une décision d’arbitrage de priorité appartient à leurs propriétaires ou à l’utilisateur.");
+            }
             result["detail"]["reasons"] = json!(reasons);
         }
         return result;
@@ -31644,6 +31652,31 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(stored.metadata,receipt.metadata);
         assert!(stored.refusal_code.is_none() && stored.task_id.is_none());
         drop(st);drop(state);cleanup(&config);
+    }
+
+    #[test]
+    fn spec189_candidate_resource_limit_names_queue_and_preserves_reason() {
+        let code=format!("routing_candidate_unavailable:{}",json!([{"kind":"candidate","code":"resource_limit","candidates":1}]));
+        let result=failure(&code);
+        assert_eq!(result["code"],"routing_candidate_unavailable");
+        assert_eq!(result["detail"]["reasons"],json!([{"kind":"candidate","code":"resource_limit","candidates":1}]));
+        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
+        assert_eq!(result["detail"]["probe_capacity"]["current_state"],"unknown");
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("même request_id"));
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("not_recorded"));
+        assert!(result["detail"]["human_action"].as_str().unwrap().contains("Ne redémarrez pas"));
+    }
+    #[test]
+    fn spec189_worker_resource_limit_or_invalid_reason_does_not_claim_probe_queue() {
+        for reasons in [json!([{"kind":"worker","code":"ResourceLimit","candidates":1}]),
+            json!([{"kind":"candidate","code":"capability_unavailable","candidates":1}]),
+            json!([{"kind":"candidate","code":"resource_limit","candidates":1,"private":"secret189"}]),
+            json!([{"kind":"candidate","code":"resource_limit","candidates":0}])] {
+            let result=failure(&format!("routing_candidate_unavailable:{reasons}"));
+            assert!(result["detail"]["probe_capacity"].is_null());
+            assert!(!result.to_string().contains("secret189"));
+            assert_eq!(result["code"],"routing_candidate_unavailable");
+        }
     }
 
 }
