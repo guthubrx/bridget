@@ -87,3 +87,17 @@ Le journal Bridget disponible pour cet enfant est vide ; aucun avancement ou éc
 Le maître est encore183-admission-7478e9e7. Le correctif184 inclus dans le candidat186 n'est pas actif. La livraison runtime reste ouverte, sans nouvelle correction identique ni redémarrage.
 Une seule projection propriétaire a été demandée, message mcp-79687-6ae0890b-5. Aucune réponse reçue pendant les attentes bornées ; pas de sondage périodique ni d'emprunt d'identité.
 La confirmation de l'état métier reste au propriétaire via le statut natif de cette même tâche. Aucune nouvelle mission, continuation, modification de store ou réécriture de garde.
+
+
+## Projection propriétaire et refus de chargement — même tâche KS
+Source : Politique sol, message mcp-60861-6ae08c10-a.
+Projection déjà lue pour b0f614ff-b4c4-47bf-b5b7-4b3f9ce649a8 : status mission_pending, work_state working, error remote_start_failed:remote_release:WorkerUnavailable, detail null, round1, result_available=false, result null, mailbox null.
+Cette projection complète le reçu released/native_ready. Elle ne prouve ni fin métier ni remise du travail au fournisseur. La demande de projection mcp-79687-6ae0890b-5 avait expiré avant démarrage ; ce fait de transport est distinct de la mission KS.
+Nouvel appel natif, explicitement demandé pour appliquer le correctif ou nommer le blocage :
+/home/moi/.local/bin/bridget updates prepare 2A68A218-BBF9-4434-8A66-6B143179B5A8
+Refus effectivement reçu : update_missions_active_or_unconfirmed. Aucun bail de maintenance accordé.
+Le statut natif relu confirme encore183-admission-7478e9e7. updates status annonce0.6.3 up_to_date : cette égalité de version stable ne signifie pas que le build184 est chargé.
+La garde de préparation vérifie notamment DelegationStore.pending(). Une tâche mission_pending entre dans cette collection ; elle suffit donc à empêcher la préparation, indépendamment des autres activités. La lecture du code explique ce critère ; aucune lecture globale des tâches ni modification directe du store n'a été faite.
+Le correctif184 est déjà qualifié et inclus dans le candidat186-guidance-35123122672a. L'installation de ses octets ne modifie pas le code du maître183 vivant. Aucun parcours de chargement à chaud de ce correctif n'est livré.
+Blocage concret : obtenir une maintenance native admise alors que cette tâche reste pending et que le propriétaire impose la conservation de son instance. Un redémarrage forcé ou une annulation pour vider le verrou ne répond pas à ce mandat.
+La remise de cette tâche reste non confirmée. Aucune relance, continuation, fabrication, modification Opus2D, réécriture d'erreur ou de garde. La livraison runtime reste ouverte.
