@@ -20,4 +20,8 @@ SHA256 : 330d5e713febe617b94a23d309488698568340d657d4b97a799e3a3ec558f4a9.
 Version0.6.3, build189-guidance-001a97aaf814 présent dans l’exécutable ; copie hors staging identique au build et commande installed passée. Manifeste eligible_for_activation=false. Cache partagé7,11Gio. Le correctif du précontrôle doit aussi être chargé dans le client MCP concerné ; ce candidat Linux ne prouve pas une mise à jour du client Mac.
 
 ## État de livraison
-Sources et reçus à intégrer/pousser sur main, puis vérifier la propreté des checkouts Mac et Cartae. Travail de la mission Opus2D, reçus historiques, binaire183 actif et versions de retour conservés. Le nettoyage de cette session sera consigné après vérification des usages ; aucun travail d’autrui retiré.
+Sources et reçus intégrés/poussés sur main8d8d9cc5 ; checkouts Mac et Cartae propres et alignés avant cette clôture documentaire. Travail de la mission Opus2D, reçus historiques, binaire183 actif et versions de retour conservés. Worktree et branche source189 retirés après contrôle d’intégration, absence d’ignorés et de fichiers ouverts ; référence distante supprimée. Worktree de revue b45d760a retiré après clôture native et mêmes contrôles ; seule sa référence légère reste conservée car non intégrée au HEAD ancien du miroir SYS. Aucun forçage de Git ; aucun travail d’autrui retiré.
+
+## Retour au demandeur
+Message bridget-politique-qualification189-20261027-01, issued_at1793128518, delivery312e0abe-e5ae-44cd-b93f-a3cda99ceaf0 : accepté in_flight. Résolution native déjà constatée pour la lecture d605c969, limites du reçu historique de capacité et correctif source/candidat non actif transmis en un envoi. Aucune confirmation de lecture déduite du reçu de transport.
+T004 reste ouverte : chargement maître et client MCP puis vérification réelle. Cette session n’est pas déclarée livrée dans le runtime actif.
