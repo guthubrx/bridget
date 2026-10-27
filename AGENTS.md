@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session193 rapport Git unique : source180c0aa4c74333616919d1709dcbc8249c1c264b,39contrôles ciblés PASS, contre-épreuve2→1status, revueacc0f775 favorable. Candidat193-report-180c0aa4c743 vérifié NON actif ; maître183 confirmé, maintenance native toujours bloquée. Aucun rejeu/purge/annulation métier. Huit demandes historiques non persistées ; refus Cartae final sans mesure conservée en183. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/193-rapport-unique/validation.md.
+
+
 Session192 délai de preuve : source1b77b7390fa292e1933a1e69d4967387020ebf3b qualifiée,15contrôles ciblésPASS, contre-épreuve5s reproduite, guides vérifiés et revue7b317595 favorable. Le Reconcile de preuve attend30s au lieu de5 ; file8, droits, identités, permis et créneau unique inchangés. Candidat192-proof-1b77b7390fa2 vérifié, NON actif ; garde de maintenance183 maintenue. Aucune admission métier, annulation tierce ou urgence de caches rouverte. Composition historique de la file KS non reconstituée. Sources intégrées/poussées ;2worktrees et1ancien exécutable retirés, référence légère SYS/actif/retour/diagnostic188/candidat192 conservés. Retour Politique accepté in_flight ; lecture non déduite. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/192-delai-verification/validation.md.
 
 
