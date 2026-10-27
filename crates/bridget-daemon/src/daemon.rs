@@ -3,6 +3,7 @@
 
 mod native_child_requests;
 mod native_delegation;
+mod dispatch_diagnostics;
 pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
 mod mobile_admin;
@@ -1120,6 +1121,7 @@ struct DaemonState {
     /// Curseur de sondage uniquement ; aucune preuve d'arrêt ni permis durable.
     remote_start_reconcile_last: Option<(String, Instant)>,
     /// Rotation des réservations ; ne remplace aucune preuve de droits.
+    dispatch_diagnostics: dispatch_diagnostics::Cache,
     remote_result_reservation_last: Option<(String, Instant)>,
     /// Un seul travail réseau en vol ; résultat consommé sans attendre dans tick.
     remote_result_reservation: Option<Receiver<Result<Option<crate::delegation::Task>, String>>>,
@@ -5065,6 +5067,7 @@ impl DaemonState {
             remote_workers: HashMap::new(),
             remote_native_ready: HashSet::new(),
             remote_start_reconcile_last: None,
+            dispatch_diagnostics: Default::default(),
             remote_result_reservation_last: None,
             remote_result_reservation: None,
             worker_probe_connections: HashSet::new(),

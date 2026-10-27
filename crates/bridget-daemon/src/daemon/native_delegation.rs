@@ -4354,6 +4354,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     });
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
+    st.dispatch_diagnostics.attach(task, &mut view, full);
     Ok(view)
 }
 
@@ -5417,53 +5418,111 @@ pub(super) fn remote_dispatch_proof(
     state: &Arc<Mutex<DaemonState>>,
     task: &Task,
 ) -> Result<Task, String> {
+    use super::dispatch_diagnostics::{Stage, WorkerFact, observe, record};
     use bridget_transport::protocol::*;
-    if task.workspace_repairs.last().is_some_and(|r|r.blocks_dispatch()) {
-        return Err("workspace_repair_pending".into());
+    if task
+        .workspace_repairs
+        .last()
+        .is_some_and(|r| r.blocks_dispatch())
+    {
+        return observe(
+            state,
+            task,
+            Stage::Preparation,
+            Err("workspace_repair_pending".into()),
+        );
     }
-    let snapshot = task
-        .permission_snapshot
-        .as_ref()
-        .ok_or("permission_attestation_unavailable")?;
-    let placement = task
-        .remote_placement
-        .as_ref()
-        .ok_or("remote_placement_missing")?;
-    remote_parent_proof(state, &task.owner, &snapshot.parent)?;
-    let command = {
+    let snapshot = observe(
+        state,
+        task,
+        Stage::Preparation,
+        task.permission_snapshot
+            .as_ref()
+            .ok_or_else(|| "permission_attestation_unavailable".to_owned()),
+    )?;
+    let placement = observe(
+        state,
+        task,
+        Stage::Preparation,
+        task.remote_placement
+            .as_ref()
+            .ok_or_else(|| "remote_placement_missing".to_owned()),
+    )?;
+    observe(
+        state,
+        task,
+        Stage::ParentProof,
+        remote_parent_proof(state, &task.owner, &snapshot.parent),
+    )?;
+    let command_result = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        remote_command_identity(&st, task).map_err(|e| format!("{e:?}"))?
+        remote_command_identity(&st, task).map_err(|e| format!("{e:?}"))
     };
-    let response = remote_worker_roundtrip(
+    let command = observe(state, task, Stage::CommandIdentity, command_result)?;
+    let result = remote_worker_roundtrip(
         state,
         &remote_worker_identity(placement),
         &command,
         WorkerRequestOperation::Reconcile {},
         Instant::now() + Duration::from_secs(5),
     )
-    .map_err(|e| format!("remote_permissions:{e:?}"))?;
+    .map_err(|e| format!("remote_permissions:{e:?}"));
+    let response = observe(state, task, Stage::WorkerObservation, result)?;
     let WorkerResponseOperation::Observation { observation } = response else {
-        return Err("remote_execution_unconfirmed".into());
+        return observe(
+            state,
+            task,
+            Stage::WorkerObservation,
+            Err("remote_execution_unconfirmed".into()),
+        );
     };
-    // Une commande terminée ne prouve aucune modification des droits.
-    if matches!(observation.phase, WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused) {
-        return Err("remote_execution_ended".into());
+    let effective_digest = task
+        .workspace_repairs
+        .last()
+        .filter(|r| r.phase == "published")
+        .and_then(|r| r.prepared.as_ref())
+        .map(|p| &p.placement.permission_digest)
+        .unwrap_or(&placement.permission_digest);
+    let fact = WorkerFact {
+        phase: observation.phase.clone(),
+        native_ready: observation.native_ready,
+        permission_digest_present: observation.permission_digest.is_some(),
+        permission_digest_matches: observation
+            .permission_digest
+            .as_ref()
+            .map(|digest| digest == effective_digest),
+        workspace_report_present: observation.workspace.is_some(),
+    };
+    let refusal = |code: &str| {
+        record(
+            state,
+            task,
+            Stage::WorkerPermissions,
+            code,
+            Some(fact.clone()),
+        );
+        Err(code.to_owned())
+    };
+    if matches!(
+        observation.phase,
+        WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
+    ) {
+        return refusal("remote_execution_ended");
     }
     if observation.phase != WorkerCommandPhase::Released || !observation.native_ready {
-        return Err("remote_execution_unconfirmed".into());
+        return refusal("remote_execution_unconfirmed");
     }
     if observation.permission_digest.is_none() {
-        return Err(if task.workspace.is_some() && observation.workspace.is_none() {
-            "remote_workspace_unconfirmed"
-        } else {
-            "remote_permissions_unconfirmed"
-        }.into());
+        return refusal(
+            if task.workspace.is_some() && observation.workspace.is_none() {
+                "remote_workspace_unconfirmed"
+            } else {
+                "remote_permissions_unconfirmed"
+            },
+        );
     }
-    let effective_digest=task.workspace_repairs.last().filter(|r|r.phase=="published")
-        .and_then(|r|r.prepared.as_ref()).map(|p|&p.placement.permission_digest)
-        .unwrap_or(&placement.permission_digest);
     if observation.permission_digest.as_ref() != Some(effective_digest) {
-        return Err("permission_not_inherited".into());
+        return refusal("permission_not_inherited");
     }
     Ok(task.clone())
 }
@@ -5565,7 +5624,8 @@ fn reserve_remote_result_slot(
     task_id: &str,
 ) -> Result<Option<Task>, String> {
     use bridget_transport::protocol::*;
-    let (worker, command, slot, original, existing, deadline_supported) = {
+    let mut diagnostic = None;
+    let setup = (|| {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let task = st
             .delegation_store
@@ -5575,7 +5635,15 @@ fn reserve_remote_result_slot(
             .remote_placement
             .as_ref()
             .ok_or("remote_placement_missing")?;
+        diagnostic = Some((
+            task.clone(),
+            super::dispatch_diagnostics::Stage::CommandIdentity,
+        ));
         let command = remote_command_identity(&st, &task).map_err(|e| format!("{e:?}"))?;
+        diagnostic = Some((
+            task.clone(),
+            super::dispatch_diagnostics::Stage::ResultReservation,
+        ));
         let initial = remote_mission_message(&task)?;
         let root_execution = format!("execution-{}", task.mission);
         st.execution_store
@@ -5614,17 +5682,29 @@ fn reserve_remote_result_slot(
         {
             return Err("remote_result_slot_limit".into());
         }
-        let deadline_supported = st.remote_workers.get(&placement.machine_id).is_some_and(|session|
-            session.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1));
-        (
+        let deadline_supported =
+            st.remote_workers
+                .get(&placement.machine_id)
+                .is_some_and(|session| {
+                    session
+                        .capabilities
+                        .contains(&WorkerCapability::ResultSlotDeadlineV1)
+                });
+        Ok::<_, String>((
             remote_worker_identity(placement),
             command,
             slot,
             task,
             existing,
             deadline_supported,
-        )
-    };
+        ))
+    })();
+    if let Err(code) = &setup
+        && let Some((task, stage)) = diagnostic
+    {
+        super::dispatch_diagnostics::record(state, &task, stage, code, None);
+    }
+    let (worker, command, slot, original, existing, deadline_supported) = setup?;
     let proof = if original.state == "starting" {
         None
     } else {
@@ -5635,22 +5715,37 @@ fn reserve_remote_result_slot(
     }
     let deadline = Instant::now() + REMOTE_RESULT_SLOT_TIMEOUT;
     let operation = if deadline_supported {
-        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64).unwrap_or(0);
-        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis().min(i64::MAX as u128) as i64;
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+            .unwrap_or(0);
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(i64::MAX as u128) as i64;
         WorkerRequestOperation::ReserveResultSlotUntil {
-            slot: slot.clone(), expires_at_ms: now_ms.saturating_add(remaining),
+            slot: slot.clone(),
+            expires_at_ms: now_ms.saturating_add(remaining),
         }
     } else {
         WorkerRequestOperation::ReserveResultSlot { slot: slot.clone() }
     };
-    let response = remote_worker_roundtrip(
-        state, &worker, &command, operation, deadline,
-    )
-    .map_err(|e| format!("remote_result_slot:{e:?}"))?;
+    let response_result = remote_worker_roundtrip(state, &worker, &command, operation, deadline)
+        .map_err(|e| format!("remote_result_slot:{e:?}"));
+    let response = super::dispatch_diagnostics::observe(
+        state,
+        &original,
+        super::dispatch_diagnostics::Stage::ResultReservation,
+        response_result,
+    )?;
     if !matches!(response, WorkerResponseOperation::ResultSlotReserved { slot:ref confirmed, .. } if confirmed == &slot)
     {
-        return Err("remote_result_slot_mismatch".into());
+        return super::dispatch_diagnostics::observe(
+            state,
+            &original,
+            super::dispatch_diagnostics::Stage::ResultReservation,
+            Err("remote_result_slot_mismatch".into()),
+        );
     }
     let admitted = (|| {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -5673,6 +5768,12 @@ fn reserve_remote_result_slot(
         }
         st.delegation_store.save(&task)
     })();
+    let admitted = super::dispatch_diagnostics::observe(
+        state,
+        &original,
+        super::dispatch_diagnostics::Stage::ResultReservation,
+        admitted,
+    );
     if admitted.is_err() {
         // Aucune remise n'a pu observer ce slot absent de Task ; fermeture corrélée seulement.
         let absent = state
@@ -10666,6 +10767,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     let mut cancellations = Vec::new();
     let mut cleanups = Vec::new();
     let mut reports = Vec::new();
+    let mut dispatch_events = Vec::new();
     {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         let control = match crate::referent_control::read(st.store.connection()) {
@@ -11110,12 +11212,15 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 let _ = st.delegation_store.save(&task);
             }
             if task.state == "mission_pending" {
-                if task.remote_placement.is_some()
-                    && remote_proofs
-                        .get(&task.task_id)
-                        .is_none_or(|proof| recheck_remote_dispatch(&st, &task, proof).is_err())
-                {
-                    continue;
+                use super::dispatch_diagnostics::{record_locked,Stage};
+                if task.remote_placement.is_some() {
+                    // L'absence de réponse d'un travail asynchrone n'est pas
+                    // un refus : seule la garde réellement exécutée est observée.
+                    let Some(proof)=remote_proofs.get(&task.task_id) else {continue;};
+                    if let Err(code)=recheck_remote_dispatch(&st,&task,proof) {
+                        if let Some(event)=record_locked(&mut st,&task,Stage::FinalPermissions,&code,None) {dispatch_events.push(event);}
+                        continue;
+                    }
                 }
                 if task.remote_placement.is_some()
                     && !task.remote_result_slots.iter().any(|slot| {
@@ -11125,6 +11230,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                                 == task.child_instance.as_deref()
                     })
                 {
+                    if let Some(event)=record_locked(&mut st,&task,Stage::ResultReservation,"remote_result_slot_unconfirmed",None) {dispatch_events.push(event);}
                     continue;
                 }
                 if !matches!(
@@ -11134,6 +11240,8 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     ),
                     crate::referent_control::Admission::Admitted
                 ) {
+                    let code=if control.paused {"referent_paused"} else {"dispatch_control_deferred"};
+                    if let Some(event)=record_locked(&mut st,&task,Stage::Control,code,None) {dispatch_events.push(event);}
                     continue;
                 }
                 if task.mission_issued_at.is_none() {
@@ -11406,6 +11514,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 cleanups.push(task);
             }
         }
+    }
+    for event in dispatch_events {
+        super::dispatch_diagnostics::emit(event);
     }
     for job in reports {
         complete_workspace_report(state, job);
@@ -31772,6 +31883,285 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
 
+    fn diagnostics190_fixture() -> (DaemonState, DaemonConfig, Task) {
+        let (st, config, mut task, _) = remote162_capture_fixture();
+        task.state = "mission_pending".into();
+        task.mission_issued_at = None;
+        task.error = Some("remote_start_failed:remote_release:WorkerUnavailable".into());
+        st.delegation_store.save(&task).unwrap();
+        (st, config, task)
+    }
+    #[test]
+    fn spec190_real_guard_refusal_is_owned_readable_and_never_mutates_task() {
+        use super::super::dispatch_diagnostics::Stage;
+        let (st, config, mut task) = diagnostics190_fixture();
+        task.permission_snapshot = None;
+        st.delegation_store.save(&task).unwrap();
+        let before =
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        let state = Arc::new(Mutex::new(st));
+        assert_eq!(
+            remote_dispatch_proof(&state, &task).unwrap_err(),
+            "permission_attestation_unavailable"
+        );
+        let DaemonToWrapper::NativeDelegationResult { result } = handle(
+            "conn-1",
+            NativeDelegationRequest::Status {
+                task_id: task.task_id.clone(),
+            },
+            &state,
+        ) else {
+            panic!("statut attendu")
+        };
+        assert_eq!(result["detail"]["dispatch_refusal"]["stage"], "preparation");
+        assert_eq!(
+            result["detail"]["dispatch_refusal"]["code"],
+            "permission_attestation_unavailable"
+        );
+        assert_eq!(
+            result["detail"]["dispatch_refusal"]["authorizes_dispatch"],
+            false
+        );
+        assert_eq!(
+            result["error"],
+            "remote_start_failed:remote_release:WorkerUnavailable"
+        );
+        let st = state.lock().unwrap();
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        assert!(st.pending_worker_responses.is_empty());
+        drop(st);
+        let DaemonToWrapper::NativeDelegationResult { result: foreign } = handle(
+            "foreign190",
+            NativeDelegationRequest::Status {
+                task_id: task.task_id.clone(),
+            },
+            &state,
+        ) else {
+            panic!("refus attendu")
+        };
+        assert!(!foreign.to_string().contains("dispatch_refusal"));
+        // Un fait de contrôle garde son code fermé, sans changer l'autorité.
+        super::super::dispatch_diagnostics::record(
+            &state,
+            &task,
+            Stage::ParentProof,
+            "origin_proof_unavailable",
+            None,
+        );
+        drop(state);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_real_worker_observation_refusal_keeps_stage_and_original_code() {
+        let (st, config, mut task) = diagnostics190_fixture();
+        let mut parent = continuation172_parent();
+        parent.cwd.clone_from(&task.cwd);
+        task.permission_snapshot = Some(crate::native_permissions::snapshot(
+            &task.owner,
+            &task.owner_instance,
+            parent,
+            json!({"kind":"claude"}),
+            Path::new(&task.cwd),
+        ));
+        st.delegation_store.save(&task).unwrap();
+        let before = serde_json::to_value(&task).unwrap();
+        let state = Arc::new(Mutex::new(st));
+        assert_eq!(
+            remote_dispatch_proof(&state, &task).unwrap_err(),
+            "remote_permissions:Unauthorized"
+        );
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["stage"],
+            "worker_observation"
+        );
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["code"],
+            "remote_permissions:Unauthorized"
+        );
+        assert!(view["detail"]["dispatch_refusal"]["worker"].is_null());
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_slot_command_guard_keeps_its_real_code_without_network_or_mutation() {
+        let (st, config, mut task) = diagnostics190_fixture();
+        task.child_instance = Some(Uuid::new_v4().to_string());
+        st.delegation_store.save(&task).unwrap();
+        let before = serde_json::to_value(&task).unwrap();
+        let state = Arc::new(Mutex::new(st));
+        assert_eq!(
+            reserve_remote_result_slot(&state, &task.task_id).unwrap_err(),
+            "CommandMismatch"
+        );
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["stage"],
+            "command_identity"
+        );
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["code"],
+            "CommandMismatch"
+        );
+        assert!(st.pending_worker_responses.is_empty());
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_worker_fact_is_closed_stale_safe_and_not_a_permission() {
+        use super::super::dispatch_diagnostics::{Stage, WorkerFact, record_locked};
+        let (mut st, config, task) = diagnostics190_fixture();
+        let fact = WorkerFact {
+            phase: bridget_transport::protocol::WorkerCommandPhase::Released,
+            native_ready: true,
+            permission_digest_present: false,
+            permission_digest_matches: None,
+            workspace_report_present: false,
+        };
+        let event = record_locked(
+            &mut st,
+            &task,
+            Stage::WorkerPermissions,
+            "remote_permissions_unconfirmed",
+            Some(fact.clone()),
+        )
+        .unwrap();
+        assert_eq!(event["code"], "remote_permissions_unconfirmed");
+        assert!(
+            record_locked(
+                &mut st,
+                &task,
+                Stage::WorkerPermissions,
+                "remote_permissions_unconfirmed",
+                Some(fact)
+            )
+            .is_none(),
+            "déduplication sans nouvel événement"
+        );
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["worker"]["native_ready"],
+            true
+        );
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["worker"]["permission_digest_present"],
+            false
+        );
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["scope"],
+            "last_observed_master_refusal"
+        );
+        for variant in 0..6 {
+            let mut changed = task.clone();
+            match variant {
+                0 => changed.owner = "other190".into(),
+                1 => changed.owner_instance = "other190".into(),
+                2 => changed.child_instance = Some("other190".into()),
+                3 => changed.mission = "other190".into(),
+                4 => changed.round += 1,
+                _ => changed.remote_placement.as_mut().unwrap().mapping_revision += 1,
+            }
+            let mut public = json!({});
+            st.dispatch_diagnostics.attach(&changed, &mut public, true);
+            assert_eq!(
+                public["detail"]["dispatch_refusal"]["state"],
+                "unobserved_since_start"
+            );
+        }
+        for (full, state_name, issued) in [
+            (false, "mission_pending", None),
+            (true, "cancelled", None),
+            (true, "mission_pending", Some(100)),
+        ] {
+            let mut changed = task.clone();
+            changed.state = state_name.into();
+            changed.mission_issued_at = issued;
+            let mut public = json!({});
+            st.dispatch_diagnostics.attach(&changed, &mut public, full);
+            assert!(public["detail"]["dispatch_refusal"].is_null());
+        }
+        drop(st);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_diagnostic_cache_is_bounded_and_unknown_errors_are_not_disclosed() {
+        use super::super::dispatch_diagnostics::{Stage, record_locked};
+        let (mut st, config, task) = diagnostics190_fixture();
+        let mut tasks = Vec::new();
+        for _ in 0..130 {
+            let mut task = task.clone();
+            task.task_id = Uuid::new_v4().to_string();
+            let event = record_locked(
+                &mut st,
+                &task,
+                Stage::ParentProof,
+                "secret190 /private/secret-path",
+                None,
+            )
+            .unwrap();
+            assert_eq!(event["code"], "unclassified");
+            assert!(!event.to_string().contains("secret190"));
+            assert!(!event.to_string().contains("secret-path"));
+            tasks.push(task);
+        }
+        let known = tasks
+            .iter()
+            .filter(|task| {
+                let mut view = json!({});
+                st.dispatch_diagnostics.attach(task, &mut view, true);
+                view["detail"]["dispatch_refusal"]["state"] != "unobserved_since_start"
+            })
+            .count();
+        assert_eq!(known, 128);
+        drop(st);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_late_diagnostic_does_not_attach_to_a_new_mission() {
+        use super::super::dispatch_diagnostics::{Stage, record};
+        let (st, config, old) = diagnostics190_fixture();
+        let mut current = old.clone();
+        current.mission = Uuid::new_v4().to_string();
+        st.delegation_store.save(&current).unwrap();
+        let before = serde_json::to_value(&current).unwrap();
+        let state = Arc::new(Mutex::new(st));
+        record(
+            &state,
+            &old,
+            Stage::WorkerObservation,
+            "remote_permissions:WorkerUnavailable",
+            None,
+        );
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &current, true).unwrap();
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["state"],
+            "unobserved_since_start"
+        );
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&current.task_id).unwrap().unwrap())
+                .unwrap(),
+            before
+        );
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
 }
 
 #[cfg(test)]
