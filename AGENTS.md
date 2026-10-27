@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session192 délai de preuve : source1b77b7390fa292e1933a1e69d4967387020ebf3b qualifiée,15contrôles ciblésPASS, contre-épreuve5s reproduite, guides vérifiés et revue7b317595 favorable. Le Reconcile de preuve attend30s au lieu de5 ; file8, droits, identités, permis et créneau unique inchangés. Candidat192-proof-1b77b7390fa2 vérifié, NON actif ; garde de maintenance183 maintenue. Aucune admission métier, annulation tierce ou urgence de caches rouverte. Composition historique de la file KS non reconstituée. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/192-delai-verification/validation.md.
+
+
 Session191 stockage et EOF : source e882662490006e34cf54eda5137294a3d0769b88 qualifiée,46contrôles ciblésPASS, guides vérifiés, contre-revue afb72cfc favorable. Codes ENOSPC/EDQUOT fermés et guidage EOF avec référence de commande au propriétaire, inconnus conservés. SYS a récupéré8,7Gio par archivage de ses copies de revue effectué par leur propriétaire ; garde métier15Gio inchangée. Candidat191-storage-e88266249000 vérifié, NON actif ; chargement natif encore bloqué par la maintenance183, aucun forçage. Sources intégrées/poussées,3worktrees et2anciens exécutables retirés ;2références légères SYS conservées sous HEAD ancien. Bilans propriétaires acceptés in_flight ; lecture non déduite. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/191-guidage-stockage/validation.md.
 
 

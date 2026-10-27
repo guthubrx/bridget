@@ -10,9 +10,15 @@ Seul le Reconcile de remote_dispatch_proof passe de5à30s, constante nommée. Pa
 30s reste une borne, pas une garantie de succès pour toute durée ni un traitement de toute saturation. Les demandes métier, leurs clés et leurs contraintes restent conservées ; aucun rejeu, remplacement, changement de capacité, annulation de bef ou redémarrage.
 
 ## Contrôles
-Contre-épreuve sur le même scénario de réponse valide à6s, seul délai remis temporairement à5s dans le worktree isolé : échec attendu101, remote_permissions:WorkerUnavailable. Restauration30s dans finally puis réussite des tests. Logs : /home/moi/.cache/bridget192/baseline-five-seconds.log et spec192-final.log. Aucun effet sur le maître actif.
-15contrôles ciblés PASS :2spec192,1rotation/asynchronisme174 (vrai délai borné30s),1scénario172 à9états,8diagnostics190,3confirmation184. Le scénario lent traverse le vrai handler de réponse worker, une seule requête, tâche/slots/mission inchangés ; une empreinte différente reste refusée. Guides32pages/522liens/13paires et git diff --check PASS. Aucune FULL. Revue indépendante à effectuer.
+Contre-épreuve sur le même scénario de réponse valide à6s, seul délai remis temporairement à5s dans le worktree isolé : échec attendu101, remote_permissions:WorkerUnavailable. Restauration30s dans finally puis réussite des tests. Logs : /home/moi/.cache/bridget192/baseline-five-seconds.log et /home/moi/.cache/bridget192/spec192-final.log. Aucun effet sur le maître actif.
+15contrôles ciblés PASS :2spec192,1rotation/asynchronisme174 (vrai délai borné30s),1scénario172 à9états,8diagnostics190,3confirmation184. Le scénario lent traverse le vrai handler de réponse worker, une seule requête, tâche/slots/mission inchangés ; une empreinte différente reste refusée. Guides32pages/522liens/13paires et git diff --check PASS. Aucune FULL. Contre-revue indépendante7b317595 favorable ; résultat lu/ACK et garde native fermée. Aucun test relancé par le lecteur. Simplification des blancs des guides appliquée.
 
 ## Runtime et conservation
 L’urgence de rangement Cartae/SYS a été retirée par le propriétaire après son relevé18Gio/18Gio ; aucun nettoyage d’urgence de caches déclenché. Les nettoyages avant/après Cargo restent ceux du script obligatoire, cache partagé7,12Gio. Les anciennes revues190/191 sont déjà traitées et ne sont pas recréées.
 Le maître actif reste183 ; ce changement ne sera pas annoncé chargé tant que la maintenance native ne l’admet pas. Les travaux métier et les reçus restent conservés. Pas de nouveau relevé périodique du même refus de maintenance.
+
+## Candidat qualifié
+Source1b77b7390fa292e1933a1e69d4967387020ebf3b.
+Chemin : /home/moi/.local/lib/bridget-communication/192-proof-1b77b7390fa2/bin/bridget
+SHA256 : c388265daabfbc43070357958a0b98796fc69c3e220205df367a016a7b3fac12.
+Version0.6.3 ; build192-proof-1b77b7390fa2 présent dans l’exécutable, copie hors staging identique au build, commande installed passée. Compilation release118secondes, nice10/deux jobs, cache7,12Gio. Manifeste non activable ; aucun service modifié. Le chargement du maître demeure ouvert sous T005.
