@@ -101,3 +101,17 @@ La garde de préparation vérifie notamment DelegationStore.pending(). Une tâch
 Le correctif184 est déjà qualifié et inclus dans le candidat186-guidance-35123122672a. L'installation de ses octets ne modifie pas le code du maître183 vivant. Aucun parcours de chargement à chaud de ce correctif n'est livré.
 Blocage concret : obtenir une maintenance native admise alors que cette tâche reste pending et que le propriétaire impose la conservation de son instance. Un redémarrage forcé ou une annulation pour vider le verrou ne répond pas à ce mandat.
 La remise de cette tâche reste non confirmée. Aucune relance, continuation, fabrication, modification Opus2D, réécriture d'erreur ou de garde. La livraison runtime reste ouverte.
+
+
+## Annulation KS confirmée et garde restante — 27 octobre 2026
+Décision propriétaire : Politique sol, message mcp-60861-6ae09bac-b. Annulation native de sa seule tâche b0f614ff-b4c4-47bf-b5b7-4b3f9ce649a8 ; aucune autorisation d'annuler les autres missions pour forcer la maintenance.
+Lecture worker : même commande/instance/génération, phase terminal, terminal_exit_code=0, updated_at=1793104811 ; ancien PID3084164 absent. Aucun arrêt manuel.
+Worktree conservé : /home/moi/.local/share/bridget-projects/opus2d/repository/.worktrees/b0f614ff.
+Lecture Git : HEAD5bdcf4a7636142ca433a777228b1e5ff9dec7732, branche166-sol-code-local-ksstore-20261027,0entrée de statut,0fichier non suivi à cette lecture. Aucun contenu effacé ou changé par le mainteneur. Ce constat n'est pas un inventaire antérieur ni une preuve exhaustive des sorties hors dépôt.
+La vue native de contrôle, control delegations list --state all --limit100 --json, contient cette même tâche en state cancelled et le bon enfant9e8cdb9c-1c58-4b9f-bdfe-d94194f1f6cd. Sa fin n'est donc plus seulement un reçu worker.
+La vue native active est complète : total_active=2, deux éléments. Tâche c99a257f-ba09-491c-98e0-51e5255ad464 de monuments en result_available ; ancienne tâche e5959986-e426-422d-956f-e035dbcf89be en cancelling. b0f614ff n'y figure plus. Aucune action sur ces deux tâches.
+Nouvelle préparation native après ce changement d'état :
+/home/moi/.local/bin/bridget updates prepare B27D32B5-CFDB-44AC-8079-45AF179D9903
+Refus actuel : update_missions_active_or_unconfirmed. Aucun bail obtenu, aucun chargement ou redémarrage. Le maître reste183-admission-7478e9e7.
+L'annulation demandée de b0f614ff est confirmée. La livraison runtime184/186 reste bloquée par d'autres travaux ou états à réconcilier ; la liste active n'exclut pas les autres gardes internes.
+La demande de lecture propriétaire mcp-19961-6ae09bf2-1 est retirée, la confirmation native étant maintenant disponible. Aucun réveil périodique, rejeu ou mission de substitution.
