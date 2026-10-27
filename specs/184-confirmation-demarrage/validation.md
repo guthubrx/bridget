@@ -56,3 +56,18 @@ Build184-guidance-7899d0bdab01, version0.6.3, SHA-256621101901c8fc6c3df278cc82f9
 Nouvel appel natif updates prepare : refus update_missions_active_or_unconfirmed. Aucun lien actif modifié ni service redémarré. Le daemon relu est toujours183-admission-7478e9e7 ; core/mobile/workerCartae et liaisonSYS-LE-2 sont actifs.
 L'appel installed a de nouveau différé le nettoyage pour observation des usages incomplète. Le candidat initial1caabb9e est conservé avec le candidat actualisé et les exécutables actifs/retours : aucun retrait forcé pendant la livraison ouverte. Le worktree/branche184 restent propres, intégrés mais conservés jusqu'à activation et contrôle d'usage. Aucun travail Opus2D touché.
 Les refus améliorés et la projection historique sont donc livrés en source et dans le candidat, PAS dans le runtime actif.
+
+
+## Nouveau cas KS confirmé par le propriétaire — 27 octobre 2026
+Sources : messages de Politique sol (3de3f2a6-6b4a-4415-8a1b-a870fe5a010f), mcp-60861-6ae0788d-1 puis mcp-60861-6ae07d4d-4.
+Demande : opus166-industrialisation-capacite-ksstore-20261027-01.
+Tâche : a61dbc4e-b492-4869-a2bc-025c1764ecb9 ; mission : f92fc599-0f81-42a3-96ab-000fa747c4fc ; enfant : 8f67503d-1d2b-42a4-9121-8bbd73b2a38e.
+Choix déclaré : claude-ksstore / sonnet, development, shared, base ed3fa1c93956c8db0c3abd4680e0ebd645aad454.
+Source sur la machine du parent : /Users/moi/Nextcloud/10.Scripts/69.opus2D.
+Retour initial : remote_start_failed:remote_release:WorkerUnavailable ; statut suivant working avec erreur initiale encore affichée.
+Le second message du propriétaire confirme ensuite un résultat complet, result_available, error=null, lu puis acquitté, avec exécution réelle de commandes. Aucun doublon ni repli créé.
+La tâche SYS distincte 63ba20d3-7cbf-45d9-ad13-6431aaee371f a aussi rendu son diagnostic selon ce même message.
+Le blocage métier de ces deux tâches est levé. Aucune relance ni nouvelle lecture demandée ou effectuée ici.
+Le délai initial Release reste une preuve utile pour184. Il ne prouve pas un arrêt de la mission, ni l'activation du correctif.
+Ces faits sont des observations du propriétaire, pas une nouvelle inspection runtime par le mainteneur.
+La livraison du correctif184 dans le runtime reste ouverte. Aucun changement des services ou de la maintenance.
