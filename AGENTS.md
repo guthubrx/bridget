@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session190 diagnostic des remises : source0bb08e3a02585d498f165f4e9a0a46b001be6724 qualifiée,59contrôles ciblésPASS, guides vérifiés, contre-revue98c719f9 favorable. Cache maître volatil borné, statut propriétaire et trace des refus réels sans changer la remise. Candidat190-dispatch-0bb08e3a0258 vérifié, NON actif ; maître183 conservé. Holder durable du sharedKS : bef1a3bd ; motif maître exact encore inconnu. Aucun recheck local188 répété, rejeu métier ni annulation tierce. T004 ouverte, maintenance native bloquée sans preuve d’arrêt de l’ancienne tâche. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/190-diagnostic-remise/validation.md.
+
+
 Session189 guidage capacité et précontrôle : source550b096f9b3242c00ba602d37ac6749b8da99ca6, 23 contrôles initiaux et14 du complément PASS, guides FR/EN vérifiés et contre-revues finales favorables. Preuve de capacité atomique, code durable inchangé et anciens refus sans preuve explicitement inconnus. Motif candidat resource_limit : file worker pleine à cet instant, projection commune initiale/relecture ; état actuel et cause amont inconnus. Précontrôle MCP explicite sans données de tâche avant attestation. Candidat Linux189-queue-550b096f9b32 vérifié, NON actif ; ancien candidat001 retiré après vérification, preuve conservée. Maître183 confirmé ; T004 chargement maître/client MCP reste ouverte, bloquée par l’annulation historique non attestée. Aucun service ni mission métier modifié. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/189-guidage-capacite/livraison.md.
 
 
