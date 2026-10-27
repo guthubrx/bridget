@@ -71,3 +71,19 @@ Le blocage métier de ces deux tâches est levé. Aucune relance ni nouvelle lec
 Le délai initial Release reste une preuve utile pour184. Il ne prouve pas un arrêt de la mission, ni l'activation du correctif.
 Ces faits sont des observations du propriétaire, pas une nouvelle inspection runtime par le mainteneur.
 La livraison du correctif184 dans le runtime reste ouverte. Aucun changement des services ou de la maintenance.
+
+
+## Cas KS dépendances locales — 27 octobre 2026
+Source : Politique sol, message mcp-60861-6ae088e3-8.
+Clé : opus166-sol-code-dependances-locales-ksstore-20261027-01.
+Tâche et commande : b0f614ff-b4c4-47bf-b5b7-4b3f9ce649a8.
+Enfant : 9e8cdb9c-1c58-4b9f-bdfe-d94194f1f6cd ; instance : 631d88e1-b7a7-43eb-a90b-fa4bec35ce93 ; génération : 1070.
+Base déclarée : 5bdcf4a7636142ca433a777228b1e5ff9dec7732.
+Retour propriétaire initial : remote_start_failed:remote_release:WorkerUnavailable, status starting, work_state working. Aucun doublon ni fallback.
+Lecture technique ciblée du reçu de cette commande dans le store worker KS : phase released, native_ready=true, startup_failed=false, startup_failure=null, terminal_exit_code=null ; enfant et identités concordants. Dernière écriture du reçu : 1793099870.
+Le groupe marqué 3084164 est présent : processus bridget, même starttime 3101978941 que le marqueur, même groupe. Aucune action sur le processus.
+Ces preuves établissent une libération enregistrée, une préparation native attestée et un wrapper encore vivant à la lecture. Elles ne prouvent ni la remise du travail au fournisseur ni un résultat métier.
+Le journal Bridget disponible pour cet enfant est vide ; aucun avancement ou échec déduit de cette absence.
+Le maître est encore183-admission-7478e9e7. Le correctif184 inclus dans le candidat186 n'est pas actif. La livraison runtime reste ouverte, sans nouvelle correction identique ni redémarrage.
+Une seule projection propriétaire a été demandée, message mcp-79687-6ae0890b-5. Aucune réponse reçue pendant les attentes bornées ; pas de sondage périodique ni d'emprunt d'identité.
+La confirmation de l'état métier reste au propriétaire via le statut natif de cette même tâche. Aucune nouvelle mission, continuation, modification de store ou réécriture de garde.
