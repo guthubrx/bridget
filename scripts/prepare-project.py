@@ -4,6 +4,7 @@ Aucun lancement de modèle. Le worker conserve son admission et ses contrôles.
 """
 import base64
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -572,7 +573,13 @@ def main():
         print(json.dumps(dict(ok=False, error=str(error))))
     except subprocess.TimeoutExpired:
         print(json.dumps(dict(ok=False, error="project_preparation_timeout")))
-    except (OSError, KeyError, ValueError, TypeError):
+    except OSError as error:
+        # Seulement l'errno constaté, jamais le texte libre ni un chemin.
+        code = {errno.ENOSPC: "project_preparation_disk_full",
+                errno.EDQUOT: "project_preparation_disk_quota"}.get(
+                    error.errno, "project_preparation_failed")
+        print(json.dumps(dict(ok=False, error=code)))
+    except (KeyError, ValueError, TypeError):
         print(json.dumps(dict(ok=False, error="project_preparation_failed")))
 
 if __name__ == "__main__":

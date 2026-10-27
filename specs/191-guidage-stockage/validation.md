@@ -1,0 +1,22 @@
+# Qualification191 — Stockage SYS et guidage
+
+## Faits et conservation
+- SYS /dev/sda4 :49Gio,100%,12Kio libres au premier relevé ; /mnt/storage6,9Tio disponibles. Le helper ancien replie les OSError dans project_preparation_failed. Le reçu historique ne garde pas l’errno ; le lien causal unique de ces refus reste inconnu.
+- 6311d83c-749e-49d4-9a7c-26b379de6631, owner Politique sol, enfant8f1d8e2c-5718-496b-bf43-f451f21fe444, instanced93ff698-e024-496a-95bf-0f348cb5621d, génération1118 : failed, cleanup_done ; reçu worker terminal. Le stderr corrélé contient à19:55:53Z rollout writer failed / No space left on device / os error28 / StorageFull, puis des échecs du journal fournisseur. Le rollout01a17eec-b613-7e60-965f-a44a6c79d9c2 a une dernière ligne incomplète. Ce fait établit un échec de stockage pendant cette exécution, sans prétendre reconstituer tous les effets métier ou le code de sortie fournisseur.
+- 25aeb917-a48b-4b43-a8ab-d277e5755e01, owner monuments, round3, enfant17016f43-01df-4dc9-ad40-fc6111c27af4, instance5e691a93-d2e1-4ac9-b7d7-9926af0bba94, génération1115 : cancelled, cleanup_done ; reçu worker terminal. Son stderr est vide : cause précise de la fermeture stdout inconnue. Aucun diagnostic navigateur inventé.
+- Journal du worker SYS : worker_store_io à1793131276, sortie1 et redémarrage automatique systemd cinq secondes après. Aucun redémarrage demandé par le mainteneur. Des processus restants étaient alors signalés ; ce seul événement ne sert pas de preuve d’arrêt de toutes les tâches.
+
+Les deux archives /tmp/opus2d-revue166.yKAkbR et /tmp/opus2d-revue166-complete.3GqPNn venaient des extractions Git de la revue6311d83c, sans.git. Le contrôle lisible ne voit aucun cwd/exe/fd utilisateur dessus ; sudo non interactif est indisponible sur SYS et certains superviseurs sshd/sd-pam étaient non lisibles. Aucune élévation ni contournement tenté. Une demande d’archivage conservatoire a été envoyée au propriétaire, idbridget-sys-archives-revue166-20261027-01, issued_at1793134391, delivery3602c843-0789-4adb-85fa-77a6bf8d8409 in_flight.
+Le propriétaire a entretemps confirmé lui-même leur conservation intégrale dans /mnt/storage/opus2d/archives-revues-166-20261027/, avec liens aux anciens chemins. Message exact opus167-sys-revues-archivees-20261027-01, digest a7e570649abf60ea2ca21314deb1d8b2453093e5c0172aa67cdcbe56bb594fe5, lu intégralement par le ledger. Le mainteneur a observé les deux liens et8,7Gio libres sur/. Sa copie préparatoire s’est arrêtée au contrôle préalable dès le changement en symlink ; aucun fichier copié ou retiré par cette opération. La garde métier15Gio reste non satisfaite et n’a pas été changée. Les archives et travaux vivants restent au propriétaire.
+
+KS exécute toujours183-b6c045cd. Le motif candidate/resource_limit est celui de la file d’entrée worker pleine (8demandes techniques), déjà vérifié189 dans cette source. Aucun nouveau probe, rejeu métier, changement de moteur/hôte ou modification de limite. L’état actuel de la file et la cause amont du remplissage restent inconnus.
+
+## Correction
+Le helper Python et les E/S locales du pont Rust conservent ENOSPC/EDQUOT dans des codes fermés. Aucun texte d’exception ou stderr privé n’est repris. Un errno absent ou différent reste générique. Le refus précise la vérification des volumes/inodes, les conditions du rejeu strict selon le sort d’admission et la décision du propriétaire si nécessaire.
+L’erreur stdout existante reste inchangée dans la tâche. Son statut indique quel stderr corrélé inspecter et distingue l’attente de l’arrêt natif d’une suite autorisée après arrêt/rapport confirmés. Aucun changement de droits, de critères, de store, de politique de relance ou d’identité.
+
+## Validation et runtime
+44contrôles ciblés PASS :4Python191,35Python172,3Rust191,1helper177 et1guidage184. Guides FR/EN32pages/522liens/13paires et git diff --check PASS. Aucune FULL. Contre-revue indépendante en cours de préparation. Maître183 conservé ; candidat191 non chargé. Le chargement reste soumis aux gardes natives de maintenance, sans forçage. Les effets ne sont pas annoncés dans les anciens reçus.
+
+## Retour190 conservé
+Le lien natif est revenu dans ce tour. L’enveloppe exacte bridget-monuments-diagnostic190-20261027-02, issued_at1793134112, a été rejouée et acceptée in_flight, delivery75071650-eb01-42f8-b3fb-c43c7437bf0d. Cela solde l’envoi T005190, sans prétendre prouver la lecture du destinataire ni l’activation190.

@@ -828,3 +828,12 @@ For a remote `mission_pending` task whose mission has not yet been issued, an au
 The initial startup error remains under its existing contract. This diagnostic changes no task, receipt, slot, guard, permission or engine choice. A closed technical event `bridget_dispatch_refusal190` is emitted when the observed refusal changes, even if warning logs are disabled. It does not replace owner status or authorize repair.
 
 Preserve the task, request key and files. Restore only the refused source within the authorized scope. If this is impossible, ask the owner or user for the specific decision on permissions, capacity or maintenance. Do not create a replacement mission, cancel other work or force a guard to obtain diagnostics.
+
+
+## Preparation and storage (191)
+
+`project_preparation_disk_full` records an ENOSPC errno actually observed during preparation I/O; `project_preparation_disk_quota` records EDQUOT. These are storage facts at that time, not provider account or current capacity facts. `project_preparation_failed` keeps the precise cause unknown. Refusals retain the code and guide checks of source and target volumes, inodes and storage quotas. No free-form stderr or private path is copied into the refusal.
+
+Identify file owners and task state before archiving or removal. Never move a live working directory. Replay a `not_recorded` request strictly only after correcting the cause and excluding concurrent calls. A known or unknown admission stays bound to its key. Ask the owner or user for a specific decision when files or storage exceed the agent mandate.
+
+The error `stdout Codex fermé pendant le tour` is preserved. Guidance requests stderr correlated to the command, instance and generation, then journal and temporary storage checks. Without evidence, the cause remains unknown. Failure does not prove process termination: wait for native cleanup and the workspace report, preserve outputs, then use only an authorized follow-up task. Neither `bridget_task_continue` nor replay of the initial key resumes a `failed` task.

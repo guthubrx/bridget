@@ -1581,3 +1581,12 @@ Pour une tâche distante `mission_pending` dont la mission n’est pas encore re
 L’erreur initiale de démarrage reste conservée selon son contrat existant. Le diagnostic ne modifie ni tâche, reçu, slot, garde, droits ou choix de moteur. Une trace technique fermée `bridget_dispatch_refusal190` est émise quand le refus observé change, même si les avertissements du journal ne sont pas activés. Elle ne remplace pas le statut propriétaire et n’est pas une autorité de réparation.
 
 Conserver la tâche, sa clé et ses fichiers. Corriger seulement la source refusée dans le périmètre autorisé. Si cette source ne peut pas être rétablie, demander au responsable ou à l’utilisateur la décision précise sur les droits, la capacité ou la maintenance concernée. Ne pas créer de mission de remplacement, annuler un autre travail ou forcer une garde pour obtenir un diagnostic.
+
+
+## Préparation et stockage (191)
+
+`project_preparation_disk_full` indique un errno ENOSPC réellement observé pendant une E/S de préparation ; `project_preparation_disk_quota` indique EDQUOT. Ce sont des faits sur le stockage à cet instant, pas sur le compte fournisseur ou la capacité actuelle. `project_preparation_failed` conserve une cause précise inconnue. Le statut garde le code et donne les vérifications des volumes, inodes et quotas de stockage de la source et de la cible. Aucun stderr libre ou chemin privé n’est copié dans le refus.
+
+Identifier les propriétaires et l’état des fichiers avant archivage ou retrait. Ne jamais déplacer un dossier de travail vivant. Une demande `not_recorded` peut être rejouée strictement, après correction et exclusion d’un appel concurrent ; une admission connue ou inconnue reste liée à sa clé. Une décision du propriétaire ou de l’utilisateur est nécessaire quand les fichiers ou le stockage dépassent le mandat de l’agent.
+
+L’erreur `stdout Codex fermé pendant le tour` reste inchangée. Son guidage demande le stderr corrélé à la commande, à l’instance et à la génération, puis le stockage des journaux et du temporaire. Sans preuve, la cause reste inconnue. Un échec ne prouve pas l’arrêt : attendre le nettoyage natif et le rapport du dossier, conserver les sorties, puis seulement une nouvelle tâche de suite autorisée. Ni `bridget_task_continue` ni le rejeu de la clé initiale ne reprennent une tâche `failed`.

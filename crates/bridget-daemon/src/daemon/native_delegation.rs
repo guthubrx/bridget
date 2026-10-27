@@ -3535,6 +3535,17 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if matches!(code,"project_preparation_failed"|"project_preparation_disk_full"|"project_preparation_disk_quota") {
+        let (cause,message)=match code {
+            "project_preparation_disk_full" => ("storage_full","Le système a signalé un espace de stockage épuisé pendant la préparation."),
+            "project_preparation_disk_quota" => ("storage_quota","Le système a signalé un quota de stockage épuisé pendant la préparation."),
+            _ => ("not_recorded","La préparation a échoué ; sa cause précise n’a pas été conservée ou reconnue."),
+        };
+        return json!({"status":"refused","code":code,"message":message,
+            "detail":{"stage":"project_preparation","cause":cause,
+                "recovery":"Vérifiez les volumes et les inodes du dossier temporaire, du dépôt et du journal sur la source et la cible, puis le quota de stockage si ce code le signale. Sans errno conservé, le disque plein n’est qu’une vérification à faire. Identifiez le propriétaire et l’état des gros fichiers avant archivage ou retrait ; ne déplacez pas un dossier de travail vivant. Consultez detail.admission : une issue inconnue ou une tâche connue interdit un remplacement. Après correction et confirmation not_recorded sans appel concurrent, rejouez seulement la même clé et les mêmes paramètres.",
+                "human_action":"Si les fichiers appartiennent à un autre travail ou si le stockage ne peut pas être libéré dans votre mandat, demandez à son propriétaire ou à l’utilisateur quel archivage ou stockage autoriser. Ne changez ni droits, garde ou service pour contourner le refus."}});
+    }
     if code=="admission_diagnostic_capacity_unavailable" {
         return json!({"status":"refused","code":code,"message":"Le reçu ne peut pas contenir la preuve de capacité sans dépasser sa borne.",
             "detail":{"recovery":"L’admission n’a pas été clôturée par cette tentative. Conservez la même clé et vérifiez son état natif ; aucune nouvelle mission ou nouvelle clé n’est autorisée tant que son sort n’est pas confirmé.",
@@ -4225,6 +4236,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         } else if preparation_failed {
             view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
         }
+    }
+    if task.projected_error()==Some("stdout Codex fermé pendant le tour") {
+        view["error_message"]=json!("Le flux de sortie du fournisseur est devenu indisponible pendant le tour. Sa cause précise reste à vérifier.");
+        view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
+            json!("Inspectez le stderr conservé pour cette même commande, instance et génération, ainsi que les volumes et inodes du journal fournisseur, du dépôt et du dossier temporaire. Un ENOSPC observé établit un disque plein à cet instant ; sans preuve, la cause reste inconnue. Conservez commits, fichiers et sorties. Cet échec ne reprend pas par bridget_task_continue ni par rejeu de la clé initiale. Après correction et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle tâche et une nouvelle clé, avec passation explicite du travail conservé.")
+        } else {
+            json!("Inspectez le stderr de cette même commande et l’espace de stockage du journal fournisseur et du dossier temporaire. Sans preuve conservée, la cause reste inconnue. Conservez tous les fichiers et attendez la confirmation native d’arrêt et le rapport du dossier avant toute nouvelle demande ; continuable=false ne prouve pas l’arrêt.")
+        };
+        view["error_human_action"]=json!("Si la source de l’échec ne peut pas être rétablie dans votre mandat, demandez au responsable ou à l’utilisateur la décision précise sur les fichiers à archiver ou le stockage à ajouter. Aucun arrêt d’autrui, déplacement d’un dossier vivant ou redémarrage forcé.");
     }
     if task.state == "failed"
         && matches!(task.error.as_deref(),
@@ -31884,6 +31904,33 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(st);drop(state);cleanup(&config);
     }
 
+
+    #[test]
+    fn spec191_preparation_guidance_preserves_closed_codes_and_unknown_cause() {
+        for (code,cause) in [("project_preparation_disk_full","storage_full"),
+            ("project_preparation_disk_quota","storage_quota"),("project_preparation_failed","not_recorded")] {
+            let view=failure(code);assert_eq!(view["code"],code);
+            assert_eq!(view["detail"]["cause"],cause);
+            assert!(view["detail"]["recovery"].as_str().unwrap().contains("not_recorded"));
+            assert!(view["detail"]["human_action"].as_str().unwrap().contains("propriétaire"));
+        }
+    }
+    #[test]
+    fn spec191_eof_guidance_preserves_error_and_waits_for_native_stop() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.state="failed".into();task.error=Some("stdout Codex fermé pendant le tour".into());
+        task.cleanup_done=false;
+        let before=serde_json::to_value(&task).unwrap();
+        let waiting=task_view(&task,None,true);
+        assert_eq!(waiting["error"],"stdout Codex fermé pendant le tour");
+        assert!(waiting["error_recovery"].as_str().unwrap().contains("attendez"));
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        task.cleanup_done=true;
+        let stopped=task_view(&task,None,true);
+        assert!(stopped["error_recovery"].as_str().unwrap().contains("nouvelle tâche"));
+        assert!(stopped["error_recovery"].as_str().unwrap().contains("cause reste inconnue"));
+        drop(st);cleanup(&config);
+    }
 
     fn diagnostics190_fixture() -> (DaemonState, DaemonConfig, Task) {
         let (st, config, mut task, _) = remote162_capture_fixture();
