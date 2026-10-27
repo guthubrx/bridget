@@ -22,6 +22,7 @@ Minimalisme : seuls texte, documentation et assertions de régression sont modif
 Documentation PASS :32pages,522liens locaux,13paires de langues.
 14tests native153_ronde PASS, dont refus réel de ronde9 sans mutation et fin durable ;1test spec187 de guidage PASS. Exécution via scripts/build.py, cache commun du checkout,4,42Gio. Aucun test métier ni service utilisé.
 Journaux : /home/moi/.cache/bridget184/spec187-rondes.log et /home/moi/.cache/bridget184/spec187-guidage.log.
-Contre-revue à effectuer avant intégration.
+Contre-revue a8ec8219-1bad-424d-9bbd-28f8dfac350b, clé bridget-spec187-review-20261027-01, sur68093e21ea1f1cab3874e60e17c4587de90b4b9c : favorable, aucun blocage concret. Revue en lecture seule, résultat lu et acquitté.
+CI du code verte : https://github.com/guthubrx/bridget/actions/runs/40499649446
 Correction technique : aucun diaporama d'interface requis.
 Aucune action sur la production, les services ou les dossiers Opus2D. Aucune activation ne sera tentée dans ce mandat.

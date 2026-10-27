@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session187 guidage après huit rondes : code68093e21ea1f1cab3874e60e17c4587de90b4b9c,15tests ciblésPASS, guidesFR/EN vérifiés, contre-revue favorable. Candidat187-rounds-68093e21ea1f vérifié, NON actif. Aucune action sur production/services selon mandat ; plafond et continuable inchangés. Parcours existant : préserver, fermer la garde native, confirmer l'arrêt, puis nouvelle tâche de suite autorisée avec passation et base explicites. Aucun acte sur la tâche monuments4badfd6b. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/187-guidage-plafond-rondes/livraison.md.
+
+
 Session186 guidage admission : sources qualifiées35123122672abdf49a019bb415d8fed34afe7e95,8contrôles ciblésPASS, contre-revue finale favorable. Candidat186-guidance-35123122672a vérifié ; guidage NON actif, runtime183 confirmé. Maintenance184/185 bloquée update_missions_active_or_unconfirmed ; aucune nouvelle préparation répétée, aucun restart. AdmissionKS opus2d-reprise-20261027-1005-ks-galliera conservée pending, motif retrouvé worker_unavailable en relecture finale ; cause plus précise inconnue. LectureSYS refusée sur attestation du parent, sans conclusion sur58459353. T005 ouverte. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/186-guidage-admission/livraison.md.
 
 
