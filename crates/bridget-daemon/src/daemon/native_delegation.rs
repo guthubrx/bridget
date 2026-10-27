@@ -1270,12 +1270,16 @@ fn score_routing_candidates(
             .filter(|p| !p.automatic_axes.machine)
             .and_then(|p| p.fixed_values.machine_id.as_deref())
     });
-    if imposed_machine.is_some_and(|machine| {
-        machine_facts
-            .get(machine)
-            .is_some_and(|fact| fact.saturated)
-    }) {
-        return Err("resource_saturated".into());
+    if let Some(machine) = imposed_machine
+        && let Some(fact) = machine_facts.get(machine).filter(|fact| fact.saturated)
+    {
+        let code = routing_telemetry(plan, machine)
+            .and_then(|policy| crate::capacity_refusal::CapacityRefusal::new(
+                fact.resources.observed_at?, now,
+                [fact.resources.cpu_percent, fact.resources.available_memory_percent, fact.resources.normalized_load_percent],
+                [policy.cpu_saturation_percent, policy.memory_available_min_percent, policy.normalized_load_saturation_percent],
+            )).map(|proof| proof.encoded()).unwrap_or_else(|| "resource_saturated".into());
+        return Err(code);
     }
     let mut connection_facts = HashMap::new();
     for fact in &plan.connections {
@@ -2513,6 +2517,24 @@ fn auto_admission_id(canonical: &[u8]) -> String {
     )
 }
 
+fn auto_refusal_error(receipt: &AutoAdmissionReceipt) -> String {
+    let code = receipt
+        .refusal_code
+        .clone()
+        .unwrap_or_else(|| "auto_admission_refused".into());
+    // Le code durable reste compatible avec les anciens lecteurs.
+    // Seule une preuve fermée attachée atomiquement au refus est projetée.
+    if code == "resource_saturated"
+        && let Ok(metadata) = serde_json::from_slice::<Value>(&receipt.metadata)
+        && let Some(proof) = metadata["capacity_refusal189"]
+            .as_str()
+            .and_then(crate::capacity_refusal::CapacityRefusal::decode)
+    {
+        return proof.encoded();
+    }
+    code
+}
+
 fn auto_receipt_view(
     st: &mut DaemonState,
     receipt: &AutoAdmissionReceipt,
@@ -2526,10 +2548,7 @@ fn auto_receipt_view(
                 .ok_or("auto_admission_invalid")?;
             current_task_view(st, &task, true)
         }
-        AutoAdmissionState::Refused => Err(receipt
-            .refusal_code
-            .clone()
-            .unwrap_or_else(|| "auto_admission_refused".into())),
+        AutoAdmissionState::Refused => Err(auto_refusal_error(receipt)),
         AutoAdmissionState::Pending
         | AutoAdmissionState::DecisionStarted
         | AutoAdmissionState::Chosen => Err("admission_pending".into()),
@@ -2605,10 +2624,14 @@ fn close_auto_admission_error(
     let Some(refusal) = auto_terminal_refusal_code(&code) else {
         return Ok(code);
     };
-    match st
-        .delegation_store
-        .refuse_auto_admission(receipt, refusal, unix_timestamp())
-    {
+    let capacity=crate::capacity_refusal::CapacityRefusal::decode(&code);
+    let closed=if let Some(proof)=capacity.as_ref() {
+        st.delegation_store.refuse_auto_admission_with_capacity(receipt, proof, unix_timestamp())
+    } else {
+        st.delegation_store.refuse_auto_admission(receipt, refusal, unix_timestamp())
+    };
+    match closed {
+        Ok(closed) if capacity.is_some() => Ok(auto_refusal_error(&closed)),
         Ok(_) => Ok(code),
         Err(refusal_error) if refusal_error == "admission_pending" => {
             let current = st
@@ -3491,6 +3514,21 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code=="admission_diagnostic_capacity_unavailable" {
+        return json!({"status":"refused","code":code,"message":"Le reçu ne peut pas contenir la preuve de capacité sans dépasser sa borne.",
+            "detail":{"recovery":"L’admission n’a pas été clôturée par cette tentative. Conservez la même clé et vérifiez son état natif ; aucune nouvelle mission ou nouvelle clé n’est autorisée tant que son sort n’est pas confirmé.",
+            "human_action":"Le responsable doit examiner la taille du reçu et faire qualifier sa conservation ; ne tronquez ni la preuve ni l’historique à la main."}});
+    }
+    if code=="resource_saturated" || code.starts_with("resource_saturated:") {
+        let capacity=crate::capacity_refusal::CapacityRefusal::decode(code)
+            .map(|proof|proof.projection()).unwrap_or_else(||json!({"evidence_available":false,"scope":"historical_refusal","cause":"measurement_not_recorded_or_invalid"}));
+        let message="Le contrôle de capacité a refusé la cible imposée à cet instant.";
+        let recovery="Consultez detail.capacity : seules les mesures jointes au refus établissent le seuil atteint à cet instant. Sans preuve jointe, la mesure exacte est inconnue ; un ancien snapshot ou la charge actuelle ne la reconstitue pas. Une admission refusée durablement sans tâche ne se rouvre pas au rejeu. Avant une nouvelle request_id, vérifiez le refus terminal sans tâche et la capacité fraîche de la même machine, en conservant vos contraintes. Ne lancez aucun remplacement si une tâche ou une admission reste en cours ou inconnue.";
+        let human="Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur de décider quels travaux peuvent attendre ou quelle capacité ajouter. Ne terminez pas les tâches d’autrui et ne changez pas de machine sans autorisation.";
+        return json!({"status":"refused","code":"resource_saturated","message":message,
+            "detail":{"message":message,"recovery":recovery,"human_action":human,"capacity":capacity}});
+    }
+
     if let Some(encoded) = code.strip_prefix("routing_candidate_unavailable:") {
         // O(R), R <=128. Refuser le contenu libre avant toute projection MCP.
         use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
@@ -13301,7 +13339,7 @@ mod tests {
         request.machine_id = Some("local".into());
         plan = original.clone();
         assert_eq!(
-            score_routing_candidates(&request, &mut plan, "host", 100).unwrap_err(),
+            failure(&score_routing_candidates(&request, &mut plan, "host", 100).unwrap_err())["code"],
             "resource_saturated"
         );
         request.machine_id = None;
@@ -15173,10 +15211,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(server.requests().len(), 2);
         request.request_id = "saturation168-imposed".into();
         request.machine_id = Some("zz-saturated".into());
-        assert_eq!(
-            admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap_err(),
-            "resource_saturated"
-        );
+        let capacity_error=admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap_err();
+        let capacity_view=failure(&capacity_error);
+        assert_eq!(capacity_view["code"],"resource_saturated");
+        assert_eq!(capacity_view["detail"]["capacity"]["measurements"]["cpu_percent"],95);
+        assert_eq!(capacity_view["detail"]["capacity"]["crossed"],json!(["cpu"]));
         assert_eq!(probe_count.load(Ordering::SeqCst), 15);
         assert_eq!(
             state
@@ -31543,6 +31582,68 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert!(view["detail"]["recovery"].as_str().is_some_and(|v|!v.is_empty()));
             assert!(view["detail"]["human_action"].as_str().is_some_and(|v|!v.is_empty()));
         }
+    }
+
+    #[test]
+    fn spec189_capacity_refusal_is_atomic_durable_and_replayed() {
+        let (state, config, _rx, _reader, request, _root)=routing168_fixture(8);
+        let plan=routing168_plan(&state,&request);
+        let mut st=state.lock().unwrap();
+        let receipt=routing_auto_receipt(OWNER.into(),&request,vec![1],&plan,1,100).unwrap();
+        assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt,100).unwrap());
+        let before:Value=serde_json::from_slice(&receipt.metadata).unwrap();
+        let proof=crate::capacity_refusal::CapacityRefusal::new(100,101,[Some(35),Some(9),Some(28)],[90,10,100]).unwrap();
+        let error=close_auto_admission_error(&st,&receipt,proof.encoded()).unwrap();
+        assert_eq!(failure(&error)["code"],"resource_saturated");
+        let stored=st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().unwrap();
+        assert_eq!(stored.state,AutoAdmissionState::Refused);
+        assert_eq!(stored.refusal_code.as_deref(),Some("resource_saturated"));
+        assert!(stored.task_id.is_none());
+        let mut after:Value=serde_json::from_slice(&stored.metadata).unwrap();
+        after.as_object_mut().unwrap().remove("capacity_refusal189");
+        assert_eq!(after,before,"l’histoire de décision n’est pas remplacée");
+        assert_eq!(auto_receipt_view(&mut st,&stored).unwrap_err(),error);
+        let other=crate::capacity_refusal::CapacityRefusal::new(102,103,[Some(100),Some(50),Some(10)],[90,10,100]).unwrap();
+        assert_eq!(close_auto_admission_error(&st,&receipt,other.encoded()).unwrap(),error,"un rejeu ne réécrit pas la preuve première");
+        let unchanged=st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().unwrap();
+        assert_eq!(unchanged.metadata,stored.metadata);
+        assert_eq!(unchanged.revision,stored.revision);
+        assert_eq!(st.store.connection().query_row("SELECT count(*) FROM native_delegations",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        drop(st);drop(state);cleanup(&config);
+    }
+    #[test]
+    fn spec189_capacity_legacy_or_invalid_proof_remains_unknown() {
+        for code in ["resource_saturated", "resource_saturated:{\"secret\":\"private189\"}"] {
+            let result=failure(code);
+            assert_eq!(result["code"],"resource_saturated");
+            assert_eq!(result["detail"]["capacity"]["evidence_available"],false);
+            assert_eq!(result["detail"]["capacity"]["cause"],"measurement_not_recorded_or_invalid");
+            assert!(!result.to_string().contains("private189"));
+            assert!(result["detail"]["recovery"].as_str().unwrap().contains("nouvelle request_id"));
+            assert!(result["detail"]["human_action"].as_str().unwrap().contains("utilisateur"));
+        }
+    }
+
+    #[test]
+    fn spec189_capacity_proof_overflow_keeps_admission_unchanged() {
+        let (state,config,_rx,_reader,request,_root)=routing168_fixture(8);
+        let plan=routing168_plan(&state,&request);
+        let st=state.lock().unwrap();
+        let mut receipt=routing_auto_receipt(OWNER.into(),&request,vec![1],&plan,1,100).unwrap();
+        let limit=crate::delegation::MAX_AUTO_ADMISSION_METADATA_V2_BYTES;
+        let mut metadata:Value=serde_json::from_slice(&receipt.metadata).unwrap();
+        metadata["padding189"]=json!("p".repeat(limit-receipt.metadata.len()-50));
+        receipt.metadata=serde_json::to_vec(&metadata).unwrap();
+        assert!(receipt.metadata.len()<limit && receipt.metadata.len()>limit-128);
+        assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt,100).unwrap());
+        let proof=crate::capacity_refusal::CapacityRefusal::new(100,101,[Some(35),Some(9),Some(28)],[90,10,100]).unwrap();
+        assert_eq!(close_auto_admission_error(&st,&receipt,proof.encoded()).unwrap_err(),"admission_diagnostic_capacity_unavailable");
+        let stored=st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().unwrap();
+        assert_eq!(stored.state,AutoAdmissionState::Pending);
+        assert_eq!(stored.revision,receipt.revision);
+        assert_eq!(stored.metadata,receipt.metadata);
+        assert!(stored.refusal_code.is_none() && stored.task_id.is_none());
+        drop(st);drop(state);cleanup(&config);
     }
 
 }

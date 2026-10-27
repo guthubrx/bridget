@@ -2079,6 +2079,25 @@ WHERE state='refused' AND task_id IS NULL;
         code: &str,
         now: i64,
     ) -> Result<AutoAdmissionReceipt, String> {
+        self.refuse_auto_admission_inner(receipt, code, None, now)
+    }
+
+    pub(crate) fn refuse_auto_admission_with_capacity(
+        &self,
+        receipt: &AutoAdmissionReceipt,
+        proof: &crate::capacity_refusal::CapacityRefusal,
+        now: i64,
+    ) -> Result<AutoAdmissionReceipt, String> {
+        self.refuse_auto_admission_inner(receipt, "resource_saturated", Some(proof), now)
+    }
+
+    fn refuse_auto_admission_inner(
+        &self,
+        receipt: &AutoAdmissionReceipt,
+        code: &str,
+        proof: Option<&crate::capacity_refusal::CapacityRefusal>,
+        now: i64,
+    ) -> Result<AutoAdmissionReceipt, String> {
         let tx = Transaction::new_unchecked(&self.conn, rusqlite::TransactionBehavior::Immediate)
             .map_err(|error| error.to_string())?;
         let mut current = auto_admission_receipt_in(&tx, &receipt.owner, &receipt.request_id)?
@@ -2098,6 +2117,15 @@ WHERE state='refused' AND task_id IS NULL;
         {
             return Err("admission_pending".into());
         }
+        if let Some(proof)=proof {
+            let mut metadata:serde_json::Value=serde_json::from_slice(&current.metadata)
+                .map_err(|_|"auto_admission_invalid")?;
+            metadata["capacity_refusal189"]=serde_json::json!(proof.encoded());
+            let updated=serde_json::to_vec(&metadata).map_err(|_|"auto_admission_invalid")?;
+            let limit=if current.metadata_version==2 {MAX_AUTO_ADMISSION_METADATA_V2_BYTES} else {MAX_AUTO_ADMISSION_METADATA_V1_BYTES};
+            if updated.len()>limit {return Err("admission_diagnostic_capacity_unavailable".into());}
+            current.metadata=updated;
+        }
         current.state = AutoAdmissionState::Refused;
         current.refusal_code = Some(code.into());
         current.revision = current
@@ -2108,7 +2136,7 @@ WHERE state='refused' AND task_id IS NULL;
         current.validate()?;
         let changed = tx
             .execute(
-                "UPDATE auto_admission_receipts SET state='refused',revision=?3,refusal_code=?4,updated_at=?5 WHERE owner=?1 AND request_id=?2 AND revision=?6",
+                "UPDATE auto_admission_receipts SET state='refused',revision=?3,refusal_code=?4,updated_at=?5,metadata=coalesce(?7,metadata) WHERE owner=?1 AND request_id=?2 AND revision=?6",
                 params![
                     current.owner,
                     current.request_id,
@@ -2116,6 +2144,7 @@ WHERE state='refused' AND task_id IS NULL;
                     current.refusal_code,
                     current.updated_at,
                     current.revision - 1,
+                    proof.map(|_| current.metadata.as_slice()),
                 ],
             )
             .map_err(|error| error.to_string())?;

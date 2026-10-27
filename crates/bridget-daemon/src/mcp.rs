@@ -619,6 +619,24 @@ fn execute_tool_at_with_scope(
     )
 }
 
+// Aucune donnée de tâche avant attestation : seul le contrôle préalable
+// constaté est nommé. Le détail libre du daemon n'est jamais recopié.
+fn caller_scope_refusal_message(result: &Value) -> String {
+    let code = result["code"].as_str().unwrap_or("refused");
+    if code != "permission_attestation_unavailable" {
+        return code.to_owned();
+    }
+    let verification = match result["detail"]["verification"].as_str() {
+        Some("origin_session_reattest") => "origin_session_reattest",
+        Some("current_session_binding") => "current_session_binding",
+        _ => "unknown",
+    };
+    json!({"status":"refused","code":code,"stage":"caller_scope","verification":verification,
+        "message":"Le contrôle préalable des droits de l’appelant n’a pas été attesté. L’opération demandée n’a pas été envoyée par cet appel.",
+        "recovery":"Vérifiez le rattachement natif et la preuve de la session appelante. Une attestation antérieure ou le succès d’un autre appel ne prouve pas celui-ci. Pour une lecture, conservez le même task_id ; ne recréez aucune mission. Si la cause reste inconnue après un contrôle natif, transmettez ce code, cette étape et la vérification manquante au responsable sans répéter les essais.",
+        "human_action":"Si le responsable ne peut pas rétablir la preuve dans son périmètre, demandez à l’utilisateur de rétablir le rattachement de sa session. Ne changez ni identité, ni canal, ni permissions pour contourner le refus."}).to_string()
+}
+
 fn execute_tool_at_with_identity(
     identity: &crate::mcp_identity::ResolvedIdentity,
     name: &str,
@@ -731,7 +749,7 @@ fn execute_tool_at_with_identity(
         DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
             return Err(ToolError::Technical {
                 code: "native_delegation_refused",
-                message: result["code"].as_str().unwrap_or("refused").to_string(),
+                message: caller_scope_refusal_message(&result),
             });
         }
         _ => {
@@ -5727,7 +5745,7 @@ mod tests {
         assert_eq!(allowed_calls, 2, "la liste blanche reste exactement bornée");
     }
 
-    fn test_socket(label: &str) -> PathBuf {
+    pub(super) fn test_socket(label: &str) -> PathBuf {
         crate::mcp_identity::mock_socket(label)
     }
 
@@ -5952,7 +5970,7 @@ mod tests {
 
     // Fixture IPC partagée : inscription credential+instance réelle puis réponse fermée.
     // Plus de vingt consommateurs standard et les oracles de plafond la réemploient.
-    fn reply_caller_scope(listener: &UnixListener, result: Value) {
+    pub(super) fn reply_caller_scope(listener: &UnixListener, result: Value) {
         use std::os::fd::AsRawFd;
         let mut pollfd = libc::pollfd {
             fd: listener.as_raw_fd(),
@@ -9098,4 +9116,40 @@ mod user_input181_mcp_tests {
             assert!(matches!(execute_ask_user(&identity,args.as_object().unwrap(),Path::new("/missing181.sock")),Err(ToolError::InvalidParams(_))));
         }
     }
+
+}
+
+#[cfg(test)]
+mod capacity189_mcp_tests {
+    use super::*;
+    use super::tests::{test_socket,reply_caller_scope};
+    use std::{thread,os::{fd::AsRawFd,unix::net::UnixListener}};
+    #[test]
+    fn spec189_caller_scope_attestation_refusal_is_explicit_and_stops_dispatch() {
+        for verification in ["origin_session_reattest","current_session_binding","private189"] {
+            let socket=test_socket("scope189");
+            let listener=UnixListener::bind(&socket).unwrap();
+            let refused=json!({"status":"refused","code":"permission_attestation_unavailable",
+                "detail":{"verification":verification,"secret":"private189"}});
+            let backend=thread::spawn(move || {
+                reply_caller_scope(&listener,refused);
+                let mut pollfd=libc::pollfd {fd:listener.as_raw_fd(),events:libc::POLLIN,revents:0};
+                unsafe {libc::poll(&mut pollfd,1,150)}
+            });
+            let args=json!({"task_id":"task189"});
+            let error=execute_tool_at("owner","bridget_task_status",args.as_object().unwrap(),&socket).unwrap_err();
+            let ToolError::Technical {code,message}=error else {panic!("erreur technique attendue")};
+            assert_eq!(code,"native_delegation_refused");
+            let result:Value=serde_json::from_str(&message).unwrap();
+            assert_eq!(result["code"],"permission_attestation_unavailable");
+            assert_eq!(result["stage"],"caller_scope");
+            assert_eq!(result["verification"],if verification=="private189" {"unknown"} else {verification});
+            assert!(!message.contains("private189"));
+            assert!(!message.contains("task189"),"pas de contexte tâche avant attestation");
+            assert!(result["recovery"].as_str().unwrap().contains("même task_id"));
+            assert_eq!(backend.join().unwrap(),0,"aucune deuxième connexion ni opération tâche");
+            let _=std::fs::remove_file(socket);
+        }
+    }
+
 }
