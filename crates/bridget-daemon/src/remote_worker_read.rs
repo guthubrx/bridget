@@ -355,6 +355,20 @@ impl WorkerReadView<'_> {
         repair: Option<&crate::workspace_git::RepairAnchor>,
         trace: &ReadTrace,
     ) -> Result<AgentRegistry, WorkerRefusal> {
+        self.recheck_at_with_workspace(prepared, before_release, repair, trace, &mut None)
+    }
+
+    /// Le rapport appartient à cet appel seulement. Il est produit depuis le reçu
+    /// authentifié, même si une vérification ultérieure des droits refuse.
+    pub(super) fn recheck_at_with_workspace(
+        &self,
+        prepared: &PreparedRuntime,
+        before_release: bool,
+        repair: Option<&crate::workspace_git::RepairAnchor>,
+        trace: &ReadTrace,
+        workspace_report: &mut Option<Result<crate::delegation::WorkspaceRecord, WorkerRefusal>>,
+    ) -> Result<AgentRegistry, WorkerRefusal> {
+        *workspace_report = None;
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
         trace.at("registry");
         let registry = self.registry()?;
@@ -386,18 +400,16 @@ impl WorkerReadView<'_> {
             }
             trace.at("workspace_report");
             let original = receipt.record.ok_or(WorkerRefusal::UnknownExecution)?;
-            let record = if let Some(anchor) = repair {
-                crate::workspace_git::report_repaired_workspace(&original, anchor)
-                    .map_err(|_| WorkerRefusal::PlacementMismatch)?
-            } else {
-                original
-            };
             let report = if let Some(anchor) = repair {
-                crate::workspace_git::report_repaired_workspace(&record, anchor)
+                crate::workspace_git::report_repaired_workspace(&original, anchor)
             } else {
-                crate::workspace_git::report(&record)
-            }
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+                crate::workspace_git::report(&original)
+            }.map_err(|_| WorkerRefusal::PlacementMismatch);
+            // Some(Err) garde aussi la tentative refusée : aucun second rapport
+            // n'est lancé à l'intérieur de ce même contrôle après un échec Git.
+            *workspace_report = Some(report.clone());
+            let report = report?;
+            let record = if repair.is_some() { &report } else { &original };
             if before_release
                 && (report.head_commit.as_ref() != Some(&record.base_commit)
                     || report.head_on_branch != Some(true))
@@ -405,7 +417,7 @@ impl WorkerReadView<'_> {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
             trace.at("workspace_mapping");
-            cwd = self.remap_prepared_worktree(&mut mapping, &cwd, &record)?;
+            cwd = self.remap_prepared_worktree(&mut mapping, &cwd, record)?;
         } else if before_release
             && let Some(base) = prepared.prepared.placement.base_commit.as_deref()
         {

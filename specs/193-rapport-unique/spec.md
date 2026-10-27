@@ -1,0 +1,6 @@
+# Session193 — Un rapport Git par vérification
+Correction autorisée. Estimation25–35minutes.
+KS lot10 request opus2d-nuit5m-lot10-ks-royal-carnavalet-20261027 : candidate/resource_limit, not_recorded sans tâche. Les huit demandes historiques ne sont pas persistées. Source worker183 : ce motif provient de la file technique pleine, pas du compte. Mesure passive31relevés/31s :15avec Git status sur bef1a3bd ; neuf PID distincts. Une seule commande KS non terminale dans le store : bef1a3bd, released/native_ready ; maître mission_pending. Ne pas assimiler registre durable et file mémoire.
+Défaut confirmé : reconcile_attested calcule un rapport puis recheck relit le même rapport ; réparation publiée peut en ajouter un troisième. Réutiliser uniquement le rapport construit dans CE contrôle, après vérification du reçu authentifié. Droits, identité Git et chemins inchangés. Aucun cache inter-appels, aucune suppression de commande/garde.
+Inclure le nouveau refus Cartae resource_saturated du21:56:40Z : snapshot initial78%CPU/20%RAM disponible/78%charge, sous seuils90/10/100 ; mesure finale perdue en183, cause précise inconnue. Le correctif189 conserve déjà la preuve finale, non chargé. Ne pas inventer une saturation réelle ou un faux refus.
+Chargement seulement par maintenance admise ; aucune tâche métier rejouée ou remplacée.

@@ -250,12 +250,26 @@ fn stop_git(child: &mut Child) -> Result<(), String> {
 
 // UNIQUE point de lancement. L'ancre privée sert au rapport : Git ignore alors
 // le fichier .git modifiable de l'enfant et utilise les métadonnées enregistrées.
+#[cfg(test)]
+thread_local! {
+    static STATUS_READS193: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn take_status_reads193() -> usize {
+    STATUS_READS193.with(|count| count.replace(0))
+}
+
 fn capture(
     cwd: &Path,
     args: &[&str],
     timeout: Duration,
     anchor: Option<(&Path, &Path)>,
 ) -> Result<GitOutput, String> {
+    #[cfg(test)]
+    if args.first() == Some(&"status") {
+        STATUS_READS193.with(|count| count.set(count.get() + 1));
+    }
+
     let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add") {
         WORKTREE_ADD_TIMEOUT
     } else if args.first() == Some(&"fetch") {

@@ -3493,23 +3493,28 @@ impl WorkerRuntime {
                 observation.native_ready=false;
                 return Ok(response);
             }
-            // Le rapport réutilise uniquement le record du canon authentifié, jamais un chemin caller.
-            if let Some(value) = retained.prepared.workspace.as_ref() {
-                if let Ok(record) =
-                    serde_json::from_value::<crate::delegation::WorkspaceRecord>(value.clone())
-                    && let Ok(report) = if let Some(anchor)=anchor.as_ref() {
-                        crate::workspace_git::report_repaired_workspace(&record,anchor)
-                    } else {crate::workspace_git::report(&record)}
-                {
-                    observation.workspace = serde_json::to_value(report).ok();
-                }
-            }
-            // Une révocation interdit une nouvelle remise, mais ne masque jamais
-            // l'observation technique nécessaire à la clôture et à l'annulation.
-            if observation.phase == WorkerCommandPhase::Released
+            let mut workspace_report = None;
+            // Un seul rapport frais sert au contrôle et à la réponse. Aucune
+            // preuve n'est conservée entre deux Reconcile.
+            let permitted = observation.phase == WorkerCommandPhase::Released
                 && observation.native_ready
-                && self.recheck_at_with_repair(&retained, false, anchor.as_ref()).is_ok()
+                && self.read_view().recheck_at_with_workspace(
+                    &retained, false, anchor.as_ref(), &read::ReadTrace::default(),
+                    &mut workspace_report,
+                ).is_ok();
+            // Une clôture ou un refus précoce des droits garde son observation
+            // technique, sans devenir une autorisation de remise.
+            if workspace_report.is_none()
+                && let Some(value) = retained.prepared.workspace.as_ref()
+                && let Ok(record) = serde_json::from_value::<crate::delegation::WorkspaceRecord>(value.clone())
             {
+                workspace_report = Some(if let Some(anchor) = anchor.as_ref() {
+                    crate::workspace_git::report_repaired_workspace(&record, anchor)
+                } else { crate::workspace_git::report(&record) }.map_err(|_| WorkerRefusal::PlacementMismatch));
+            }
+            observation.workspace = workspace_report.and_then(Result::ok)
+                .and_then(|report| serde_json::to_value(report).ok());
+            if permitted {
                 observation.permission_digest = Some(retained.prepared.placement.permission_digest.clone());
             }
         }
@@ -6999,7 +7004,7 @@ while not stop.exists(): time.sleep(.01)
     }
     #[cfg(target_os="linux")]
     #[test]
-    fn spec185_worker_repair_publishes_overlay_and_keeps_original_command_and_slots() {
+    fn spec185_spec193_worker_repair_publishes_overlay_and_keeps_original_command_and_slots() {
         use bridget_transport::protocol::{WorkspaceRequest,ProviderPermissions,SpawnPosture,WorkspaceRepairRequestV1};
         use std::os::unix::process::CommandExt;
         let fixture=Fixture::new();
@@ -7068,6 +7073,39 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(diag188["check"],"passed","{diag188}");
         assert_eq!(diag188["stage"],"complete");
         assert_eq!(snapshot188(&runtime.config.state_root),before188);
+        // Mesure du vrai parcours : un seul status Git par réponse, sans cache inter-appels.
+        crate::workspace_git::take_status_reads193();
+        let measured=Instant::now();
+        let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+            else {panic!("observation193 attendue")};
+        let reads=crate::workspace_git::take_status_reads193();
+        eprintln!("spec193 normal_status_reads={reads} elapsed_ms={}",measured.elapsed().as_millis());
+        assert_eq!(reads,1);
+        assert!(observation.permission_digest.is_some());
+        assert_eq!(snapshot188(&runtime.config.state_root),before188,"observation sans mutation du store");
+        let worktree=PathBuf::from(&original.path);
+        fs::write(worktree.join("untracked193"),"changement entre deux appels").unwrap();
+        let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+            else {panic!("observation193 fraîche attendue")};
+        assert_eq!(crate::workspace_git::take_status_reads193(),1);
+        assert_eq!(observation.workspace.as_ref().unwrap()["dirty"],true);
+        fs::remove_file(worktree.join("untracked193")).unwrap();
+        let registry_before=fs::read(&runtime.config.registry_path).unwrap();
+        let mut changed:serde_json::Value=serde_json::from_slice(&registry_before).unwrap();
+        changed["agents"]["codex"]["args"]=serde_json::json!(["app-server","changed193"]);
+        write_json(&runtime.config.registry_path,&changed).unwrap();
+        let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+            else {panic!("observation193 refusée attendue")};
+        assert_eq!(crate::workspace_git::take_status_reads193(),1);
+        assert!(observation.permission_digest.is_none(),"définition modifiée toujours refusée");
+        assert!(observation.workspace.is_some(),"le rapport technique reste disponible après refus des droits");
+        fs::write(&runtime.config.registry_path,registry_before).unwrap();
+        git(&worktree,&["config","filter.blocked193.process","/bin/false"]);
+        let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+            else {panic!("observation193 Git refusé attendue")};
+        assert!(observation.permission_digest.is_none());
+        assert!(observation.workspace.is_none(),"aucun ancien rapport après une erreur Git");
+        git(&worktree,&["config","--unset","filter.blocked193.process"]);
         let target=project_fixture.0.join("disk185");
         fs::rename(&original.path,&target).unwrap();
         std::os::unix::fs::symlink(&target,&original.path).unwrap();
@@ -7137,8 +7175,10 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(after.placement,receipt.placement);assert_eq!(after.marker,receipt.marker);
         assert_eq!(after.preparation,receipt.preparation);
         assert!(runtime.store.inventory().unwrap().1.is_empty(),"aucun slot métier créé");
+        crate::workspace_git::take_status_reads193();
         let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
             else {panic!("preuve attendue")};
+        assert_eq!(crate::workspace_git::take_status_reads193(),1,"placement réparé sans lectures répétées");
         assert!(observation.native_ready);
         assert_eq!(observation.permission_digest.as_ref(),
             published.prepared.as_ref().map(|v|&v.placement.permission_digest));
