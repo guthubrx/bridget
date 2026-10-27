@@ -150,3 +150,8 @@ Le code conserve, même avec un slot existant, une preuve distante avant la remi
 Demande ciblée au propriétaire mcp-86062-6ae0bce2-1 : réattestation native unique puis lecture du statut de la même tâche, pour vérifier le rattachement actuel sans rejouer l’admission ni envoyer manuellement le brief à l’enfant. Ce geste est un diagnostic, pas une cause affirmée ni une réparation garantie.
 Le correctif184 qualifié est toujours non chargé. Le blocage d’amorçage historique e5959986 demeure ; aucune nouvelle préparation de maintenance identique n’est répétée. Aucune annulation de cette tâche KS n’est demandée ou exécutée. La remise métier et le résultat restent non attestés ; le chargement du seul correctif184 ne doit pas être présenté comme la preuve qu’ils ont eu lieu.
 La demande de vérification propriétaire mcp-86062-6ae0bce2-1 a expiré (timed_out), sans réponse reçue pendant les attentes bornées. Aucun nouvel envoi de cette demande, aucune expiration assimilée à une réponse ou une autorisation.
+
+
+## Suite métier KS et conception de la maintenance
+Messages propriétaire mcp-60861-6ae0bdf7-12 puis mcp-60861-6ae0c3a8-13 : la même tâche a5b2b14b passe working puis result_available, erreur nulle, résultat lu/ACK ; commitc5a1d88fd0929957417f72815f52d86cb23354df et tests rendus. Aucun remplacement et aucune activation184 déduite de ces faits.
+Deux pistes de maintenance ont été contre-revues et refusées en l’état : assouplissement maître-seulement et amorçage exceptionnel sans préconditions démontrées. Motifs, tests manquants et limites documentés dans specs/184-confirmation-demarrage/maintenance.md. Les deux revues ont été lues/ACK et leurs gardes clôturées ; aucun service ni code de garde modifié.
