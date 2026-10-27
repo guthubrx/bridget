@@ -5450,6 +5450,10 @@ fn remote_admission_outcome(
     current_task_view(&st, &task, true)
 }
 
+// Le worker relit le rapport Git puis ses droits : une seule lecture Git
+// peut durer10s. Garder un créneau borné assez long avant de redemander une preuve.
+const REMOTE_DISPATCH_PROOF_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Les sources sont relues sur leur hôte ; aucun chemin distant n'est ouvert ici.
 pub(super) fn remote_dispatch_proof(
     state: &Arc<Mutex<DaemonState>>,
@@ -5501,7 +5505,7 @@ pub(super) fn remote_dispatch_proof(
         &remote_worker_identity(placement),
         &command,
         WorkerRequestOperation::Reconcile {},
-        Instant::now() + Duration::from_secs(5),
+        Instant::now() + REMOTE_DISPATCH_PROOF_TIMEOUT,
     )
     .map_err(|e| format!("remote_permissions:{e:?}"));
     let response = observe(state, task, Stage::WorkerObservation, result)?;
@@ -24973,12 +24977,12 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 let mut st = shared.lock().unwrap();
                 assert_eq!(st.pending_worker_responses.len(), 1);
                 if turn > 0 {
-                    // Simuler la perte du canal ; le premier passage attend le vrai délai de 5 s.
+                    // Simuler la perte du canal ; le premier passage attend le vrai délai borné.
                     st.pending_worker_responses.clear();
                 }
                 st.remote_result_reservation.take().unwrap()
             };
-            assert!(receiver.recv_timeout(Duration::from_secs(6)).unwrap().is_err());
+            assert!(receiver.recv_timeout(REMOTE_DISPATCH_PROOF_TIMEOUT + Duration::from_secs(1)).unwrap().is_err());
             let mut extra = String::new();
             assert_eq!(reader.read_line(&mut extra).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
             let st = shared.lock().unwrap();
@@ -31977,6 +31981,71 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(context["command_identity_confirmed"],false);
         assert!(context["command_id"].is_null());assert!(context["generation"].is_null());
         drop(st);cleanup(&config);
+    }
+
+    fn delayed_proof192(digest: String) -> (Result<Task,String>, Duration) {
+        use bridget_transport::protocol::*;
+        let (mut st,config,mut task,_)=remote162_capture_fixture();
+        let registry=st.fixture_root.as_ref().unwrap().0.join("proof192-registry.json");
+        std::fs::write(&registry,serde_json::to_vec(&json!({"agents":{},"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+        }}})).unwrap()).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&registry,std::fs::Permissions::from_mode(0o600)).unwrap();
+        st.registry=AgentRegistry::load_from_path(registry).unwrap();
+        let mut parent=continuation172_parent();parent.cwd.clone_from(&task.cwd);
+        task.permission_snapshot=Some(crate::native_permissions::snapshot(
+            &task.owner,&task.owner_instance,parent,json!({"kind":"claude"}),Path::new(&task.cwd)));
+        task.state="mission_pending".into();task.mission_issued_at=None;
+        st.delegation_store.save(&task).unwrap();
+        let task=st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let before=serde_json::to_value(&task).unwrap();
+        let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+        let (socket,peer)=std::os::unix::net::UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        st.connections.insert("worker192".into(),Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
+        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+            identity:worker,conn_id:"worker192".into(),epoch:"epoch192".into(),capabilities:vec![],
+            last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected,
+        });
+        let state=Arc::new(Mutex::new(st));let responder=state.clone();
+        let listener=thread::spawn(move || {
+            let mut reader=std::io::BufReader::new(peer);let mut line=String::new();
+            std::io::BufRead::read_line(&mut reader,&mut line).unwrap();
+            let DaemonToWrapper::WorkerRequest {request}=serde_json::from_str(&line).unwrap() else {panic!("requête worker")};
+            request.validate().unwrap();assert!(matches!(request.request,WorkerRequestOperation::Reconcile {}));
+            thread::sleep(Duration::from_secs(6));
+            let response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:request.correlation_id,
+                connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+                response:WorkerResponseOperation::Observation {observation:WorkerObservation {
+                    phase:WorkerCommandPhase::Released,native_ready:true,exit_code:None,observed_at:unix_timestamp(),
+                    workspace:None,permission_digest:Some(digest),startup_failure:None,
+                }}};
+            assert!(super::super::handle_worker_message(&responder,"worker192",WrapperToDaemon::WorkerResponse {response}).is_none());
+            reader.get_ref().set_read_timeout(Some(Duration::from_millis(150))).unwrap();
+            let mut extra=String::new();
+            assert!(matches!(std::io::BufRead::read_line(&mut reader,&mut extra),
+                Err(ref e) if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut)),"une seule requête de preuve");
+        });
+        let started=Instant::now();let result=remote_dispatch_proof(&state,&task);let elapsed=started.elapsed();
+        listener.join().unwrap();let st=state.lock().unwrap();
+        assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before,
+            "aucune ronde, mission, erreur ou identité mutée par la preuve");
+        assert!(st.pending_worker_responses.is_empty());assert_eq!(st.delegation_store.tasks().unwrap().len(),1);
+        drop(st);drop(state);cleanup(&config);(result,elapsed)
+    }
+    #[test]
+    fn spec192_slow_six_second_proof_is_accepted_without_duplicate_or_task_mutation() {
+        let (result,elapsed)=delayed_proof192("b".repeat(64));
+        assert!(result.is_ok(),"preuve valide lente refusée : {result:?}");
+        assert!(elapsed>=Duration::from_secs(6) && elapsed<REMOTE_DISPATCH_PROOF_TIMEOUT);
+    }
+    #[test]
+    fn spec192_slow_wrong_digest_still_refuses_without_dispatch() {
+        let (result,elapsed)=delayed_proof192("c".repeat(64));
+        assert_eq!(result.unwrap_err(),"permission_not_inherited");
+        assert!(elapsed>=Duration::from_secs(6) && elapsed<REMOTE_DISPATCH_PROOF_TIMEOUT);
     }
 
     fn diagnostics190_fixture() -> (DaemonState, DaemonConfig, Task) {
