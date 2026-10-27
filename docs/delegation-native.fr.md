@@ -1551,3 +1551,12 @@ Les refus d’admission automatique V2 contiennent `detail.admission` lorsque la
 Cette observation ne couvre pas un appel concurrent envoyé ensuite. Une coupure avant réponse du daemon ou un refus précoce d’attestation peut ne pas fournir ce champ ; son absence ne prouve pas l’absence de travail. Aucun rejeu, aucune annulation et aucun changement de droits automatique n’est ajouté.
 
 Un rejeu explicite V2 peut reprendre une admission `chosen` interrompue après sa décision, dans la même époque du coordinateur. Il conserve l'enveloppe et le choix enregistrés, puis relit la source Git, les droits et la cible. Une préparation déjà en cours pour le même propriétaire et la même clé rend `admission_pending`. Les états `pending` et `decision_started` ne déclenchent pas de nouvelle décision au rejeu. Une tâche déjà admise et un refus durable restent inchangés. La garde de maintenance reste fermée tant que l'admission n'est pas soldée.
+
+
+## Diagnostic local du worker (188)
+
+La commande `bridget worker diagnose` réutilise les lectures du contrôle des droits effectué par le worker. Elle peut s’exécuter depuis un candidat vérifié sans redémarrer un service. Elle ne crée ni worker, fournisseur, slot ou tâche ; elle ne remet pas une mission. L’état du maître reste distinct.
+
+Fournir les sept options du worker installé (`--machine-id`, `--worker-id`, `--provisioning-revision`, `--credential-file`, `--state-root`, `--registry-file`, `--master-socket`) puis le tuple admis complet (`--command-id`, `--task-id`, `--instance-id`, `--generation`). Exécuter sous le propriétaire des fichiers privés, dans le même environnement que le worker. Ne pas afficher ses variables ou son credential. Le plafond CLI des agents délégués reste appliqué.
+
+La sortie `scope: local_read_only_recheck`, `authoritative: false` contient `check`, `stage`, `reason`, `cause` fermée, `recovery` et `human_action`. Une réussite locale ne vaut ni attestation du worker vivant ni remise métier. Un environnement différent peut changer le verdict. Un fichier modifié pendant la lecture rend `diagnostic_observation_changed` : attendre la fin de l’écriture observée puis relire le même tuple. Un reçu absent reste inconnu ; il ne prouve pas une fin de processus. Conserver la tâche, la clé de requête d’origine et tous ses fichiers. La réparation native ou une décision du responsable reste nécessaire si la source de refus ne peut pas être rétablie dans le périmètre autorisé.

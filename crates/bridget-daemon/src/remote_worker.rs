@@ -22,6 +22,10 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[path = "remote_worker_read.rs"]
+mod read;
+pub(crate) use read::{diagnose_local, diagnostic_failure};
+
 #[path = "remote_workspace_repair.rs"]
 pub(crate) mod workspace_repair;
 
@@ -49,32 +53,8 @@ impl ProbePermissionSite {
     }
 }
 
-struct ProbePermissionDiagnostics<'a> {
-    correlation_id: &'a str,
-    admission_id: &'a str,
-    emitted: std::cell::Cell<usize>,
-}
-impl<'a> ProbePermissionDiagnostics<'a> {
-    fn new(correlation_id: &'a str, admission_id: &'a str) -> Self {
-        Self { correlation_id, admission_id, emitted: std::cell::Cell::new(0) }
-    }
-    fn note(&self, candidate_id: &str, site: ProbePermissionSite, error: &str) -> Option<String> {
-        self.note_with_witness(candidate_id, site, error, None)
-    }
-    fn note_with_witness(&self, candidate_id: &str, site: ProbePermissionSite, error: &str,
-        detail: Option<(Option<crate::native_permissions::ProjectionGuard>,
-            &crate::native_permissions::ProjectionWitnessSummary171)>,
-    ) -> Option<String> {
-        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES
-            || self.correlation_id.len() != 36
-            || uuid::Uuid::parse_str(self.correlation_id).is_err()
-            || self.admission_id.len() != 34
-            || !self.admission_id.starts_with("a-")
-            || !self.admission_id[2..].bytes().all(|b| b.is_ascii_hexdigit())
-            || !bridget_transport::protocol::is_routing_candidate_id(candidate_id)
-        { return None; }
-        // Exact closed codes only, never an error message or a prefix match.
-        let code = match error {
+fn permission_diagnostic_code(error: &str) -> &str {
+    match error {
             "effort_unavailable"
             | "machine_path_unverifiable"
             | "model_unavailable"
@@ -138,7 +118,35 @@ impl<'a> ProbePermissionDiagnostics<'a> {
             | "permission_source_unavailable"
             | "settings_revision_changed" => error,
             _ => "unknown",
-        };
+        }
+}
+
+struct ProbePermissionDiagnostics<'a> {
+    correlation_id: &'a str,
+    admission_id: &'a str,
+    emitted: std::cell::Cell<usize>,
+}
+impl<'a> ProbePermissionDiagnostics<'a> {
+    fn new(correlation_id: &'a str, admission_id: &'a str) -> Self {
+        Self { correlation_id, admission_id, emitted: std::cell::Cell::new(0) }
+    }
+    fn note(&self, candidate_id: &str, site: ProbePermissionSite, error: &str) -> Option<String> {
+        self.note_with_witness(candidate_id, site, error, None)
+    }
+    fn note_with_witness(&self, candidate_id: &str, site: ProbePermissionSite, error: &str,
+        detail: Option<(Option<crate::native_permissions::ProjectionGuard>,
+            &crate::native_permissions::ProjectionWitnessSummary171)>,
+    ) -> Option<String> {
+        if self.emitted.get() >= MAX_PROBE_PERMISSION_NOTES
+            || self.correlation_id.len() != 36
+            || uuid::Uuid::parse_str(self.correlation_id).is_err()
+            || self.admission_id.len() != 34
+            || !self.admission_id.starts_with("a-")
+            || !self.admission_id[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            || !bridget_transport::protocol::is_routing_candidate_id(candidate_id)
+        { return None; }
+        // Exact closed codes only, never an error message or a prefix match.
+        let code = permission_diagnostic_code(error);
         let mut value = serde_json::json!({"event":"worker_probe_permission_refused",
             "correlation_id":self.correlation_id,"admission_id":self.admission_id,
             "candidate_id":candidate_id,"site":site.as_str(),"code":code});
@@ -1761,7 +1769,7 @@ fn read_optional<T: DeserializeOwned>(
     check_private(path.parent().ok_or(WorkerStoreError::Unknown)?, true)?;
     let file = OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
         .open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file()
@@ -2102,71 +2110,18 @@ struct WorkerRuntime {
 }
 
 impl WorkerRuntime {
+    fn read_view(&self) -> read::WorkerReadView<'_> {
+        read::WorkerReadView { config: &self.config, identity: &self.identity,
+            credential: &self.credential, source: &self.source }
+    }
+
     fn new(config: WorkerRuntimeConfig) -> Result<Self, String> {
-        let identity = WorkerIdentity {
-            machine_id: config.machine_id.clone(),
-            worker_id: config.worker_id.clone(),
-            provisioning_revision: config.provisioning_revision,
-        };
-        identity.validate().map_err(|_| "worker_identity_invalid")?;
-        for path in [
-            &config.credential_path,
-            &config.state_root,
-            &config.registry_path,
-            &config.master_socket,
-        ] {
-            if !path.is_absolute() {
-                return Err("worker_path_not_absolute".into());
-            }
-        }
-        check_private(&config.state_root, true).map_err(|e| e.to_string())?;
-        check_private(
-            config
-                .credential_path
-                .parent()
-                .ok_or("worker_credential_parent")?,
-            true,
-        )
-        .map_err(|e| e.to_string())?;
-        check_private(&config.credential_path, false).map_err(|e| e.to_string())?;
-        let mut secret = String::new();
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&config.credential_path)
-            .map_err(|_| "worker_credential_unavailable")?
-            .take(4097)
-            .read_to_string(&mut secret)
-            .map_err(|_| "worker_credential_invalid")?;
-        if secret.len() > 4096 || secret.trim().is_empty() {
-            return Err("worker_credential_invalid".into());
-        }
-        let credential = IdentityCredential::new(secret.trim_end_matches(['\r', '\n']).to_owned());
-        let registry = AgentRegistry::load_from_path(config.registry_path.clone())?;
-        let provision = registry
-            .machines()
-            .get(&identity.machine_id)
-            .ok_or("worker_machine_unknown")?;
-        if provision.worker_id != identity.worker_id
-            || provision.provisioning_revision != identity.provisioning_revision
-            || !provision.matches_credential(&credential)
-        {
-            return Err("worker_provisioning_mismatch".into());
-        }
+        let (identity, credential, source) = read::inputs(&config)?;
         let store = WorkerStore::open(&config.state_root.join("store"), identity.clone())
             .map_err(|e| e.to_string())?;
         private_dir(&store.root.join("markers")).map_err(|e| e.to_string())?;
         private_dir(&config.state_root.join("journals")).map_err(|e| e.to_string())?;
         let markers = ManagedMarkerStore::at_directory(store.root.join("markers"));
-        let mut source = crate::lifecycle::source_environment();
-        let namespace = crate::environment::Namespace::resolve(
-            config.master_socket.parent().map(Path::to_path_buf),
-            Some(config.master_socket.clone()),
-            source.get("HOME").map(PathBuf::from),
-        )?;
-        for (name, value) in namespace.child_environment() {
-            source.insert(name.to_string_lossy().into_owned(), value);
-        }
         let mut runtime = Self {
             config,
             identity,
@@ -2191,26 +2146,10 @@ impl WorkerRuntime {
     }
 
     fn registry(&self) -> Result<AgentRegistry, WorkerRefusal> {
-        let registry = AgentRegistry::load_from_path(self.config.registry_path.clone())
-            .map_err(|_| WorkerRefusal::Unauthorized)?;
-        let provision = registry
-            .machines()
-            .get(&self.identity.machine_id)
-            .ok_or(WorkerRefusal::Unauthorized)?;
-        if provision.worker_id != self.identity.worker_id
-            || provision.provisioning_revision != self.identity.provisioning_revision
-            || !provision.matches_credential(&self.credential)
-        {
-            return Err(WorkerRefusal::Unauthorized);
-        }
-        Ok(registry)
+        self.read_view().registry()
     }
     fn protected(&self) -> Vec<PathBuf> {
-        vec![
-            self.config.credential_path.clone(),
-            self.config.credential_path.parent().unwrap().into(),
-            self.config.state_root.clone(),
-        ]
+        self.read_view().protected()
     }
     fn mapping_for(
         &self,
@@ -2218,8 +2157,7 @@ impl WorkerRuntime {
         registry: &AgentRegistry,
         workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
     ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
-        let mapping = self.mapping_authority(request, registry)?;
-        self.mapping_paths_and_git(request, mapping, workload)
+        self.read_view().mapping_for(request, registry, workload)
     }
 
     fn mapping_authority(
@@ -2227,35 +2165,7 @@ impl WorkerRuntime {
         request: &WorkerPrepare,
         registry: &AgentRegistry,
     ) -> Result<ProjectMapping, WorkerRefusal> {
-        let provision = registry
-            .machine(&self.identity.machine_id)
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-        if request.machine_id != self.identity.machine_id
-            || request.provisioning_revision != self.identity.provisioning_revision
-            || !provision.permits_agent_type(&request.agent_type)
-        {
-            return Err(WorkerRefusal::Unauthorized);
-        }
-        let mapping = registry
-            .project_mapping(&request.machine_id, &request.project_id)
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?
-            .for_origin(&request.machine_id, &request.origin_host)
-            .ok_or(WorkerRefusal::PlacementMismatch)?;
-        if mapping.mapping_revision != request.mapping_revision
-            || mapping.source_host != request.origin_host
-            || mapping.source_root != Path::new(&request.source_root)
-            || mapping.remote_root != Path::new(&request.remote_root)
-            || mapping.expected_git_identity != request.source_root_identity
-        {
-            return Err(WorkerRefusal::PlacementMismatch);
-        }
-        // Le côté origine reste une suite de composants approuvée. Aucun stat
-        // ni canonicalize sur un chemin appartenant à l'autre machine.
-        let origin = mapping.source_root.join(&request.relative_cwd);
-        if origin != Path::new(&request.origin_cwd) {
-            return Err(WorkerRefusal::PlacementMismatch);
-        }
-        Ok(mapping)
+        self.read_view().mapping_authority(request, registry)
     }
 
     fn mapping_paths_and_git(
@@ -2264,96 +2174,11 @@ impl WorkerRuntime {
         mapping: ProjectMapping,
         workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
     ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
-        let protected = self.protected();
-        let root =
-            crate::registry::validate_unprotected_local_path(&mapping.remote_root, &protected)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-        let cwd = crate::registry::validate_unprotected_local_path(
-            &root.join(&request.relative_cwd),
-            &protected,
-        )
-        .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-        if !cwd.starts_with(&root) || !cwd.is_dir() {
-            return Err(WorkerRefusal::PlacementMismatch);
-        }
-        if let Some(workload) = workload {
-            let git = Self::git_markers_present(&cwd)?;
-            let worktree = matches!(
-                &request.workspace,
-                Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
-            );
-            if !git {
-                if request.base_commit.is_some()
-                    || worktree
-                    || workload == bridget_transport::protocol::AutoDelegateWorkload::Compilation
-                {
-                    return Err(WorkerRefusal::PlacementMismatch);
-                }
-                // HorsGit attesté : l'autorité est le mapping explicite et les
-                // mêmes chemins/protections/droits, jamais un échec Git supposé.
-                return Ok((mapping, cwd));
-            }
-            if request.base_commit.is_none() {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
-        }
-        let origin = crate::workspace_git::run_git(
-            &root,
-            &[
-                "config",
-                "--local",
-                "--no-includes",
-                "--get",
-                "remote.origin.url",
-            ],
-            crate::workspace_git::READ_TIMEOUT,
-        )
-        .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-        if !origin.success()
-            || origin.truncated
-            || origin.stdout.trim_end_matches(['\r', '\n']) != mapping.expected_git_identity
-        {
-            return Err(WorkerRefusal::PlacementMismatch);
-        }
-        Ok((mapping, cwd))
+        self.read_view().mapping_paths_and_git(request, mapping, workload)
     }
 
     /// O(h), h<=256 ancêtres ; une erreur ou un marqueur ambigu reste un refus.
     /// Aucun stderr/code Git ne sert à déduire l'absence de dépôt.
-    fn git_markers_present(cwd: &Path) -> Result<bool, WorkerRefusal> {
-        for (depth, ancestor) in cwd.ancestors().enumerate() {
-            if depth >= 256 {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
-            match fs::symlink_metadata(ancestor.join(".git")) {
-                Ok(metadata) if metadata.file_type().is_symlink() => {
-                    return Err(WorkerRefusal::PlacementMismatch);
-                }
-                Ok(metadata) if metadata.is_file() || metadata.is_dir() => return Ok(true),
-                Ok(_) => return Err(WorkerRefusal::PlacementMismatch),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(_) => return Err(WorkerRefusal::PlacementMismatch),
-            }
-            let mut bare = 0;
-            for name in ["HEAD", "objects", "refs"] {
-                match fs::symlink_metadata(ancestor.join(name)) {
-                    Ok(metadata) if metadata.file_type().is_symlink() => {
-                        return Err(WorkerRefusal::PlacementMismatch);
-                    }
-                    Ok(_) => bare += 1,
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                    Err(_) => return Err(WorkerRefusal::PlacementMismatch),
-                }
-            }
-            if bare == 3 {
-                return Ok(true);
-            }
-            if bare != 0 {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
-        }
-        Ok(false)
-    }
 
     fn check_routing_connection(
         &self,
@@ -2361,37 +2186,7 @@ impl WorkerRuntime {
         request: &WorkerPrepare,
         routing: &RoutingPreparation,
     ) -> Result<(), WorkerRefusal> {
-        let policy = registry
-            .routing_policy()
-            .ok_or(WorkerRefusal::CapabilityRequired)?;
-        if !policy.enabled
-            || !policy
-                .machine_policies
-                .get(&self.identity.machine_id)
-                .is_some_and(|policy| policy.enabled)
-        {
-            return Err(WorkerRefusal::CapabilityRequired);
-        }
-        let candidates = registry
-            .routing_candidates()
-            .ok_or(WorkerRefusal::CapabilityRequired)?;
-        if !candidates.iter().any(|entry| {
-            entry.enabled
-                && entry.machine_id == self.identity.machine_id
-                && entry.connection_id == routing.connection_id
-                && entry.engine == routing.engine
-                && entry.agent_type == request.agent_type
-                && entry.model == request.model
-                && request
-                    .effort
-                    .as_ref()
-                    .map_or(entry.default_effort.is_none(), |effort| {
-                        entry.supported_efforts.contains(effort)
-                    })
-        }) {
-            return Err(WorkerRefusal::CapabilityRequired);
-        }
-        Ok(())
+        self.read_view().check_routing_connection(registry, request, routing)
     }
 
     fn compilation_capacity(&self, registry: &AgentRegistry) -> Option<u8> {
@@ -2560,23 +2355,7 @@ impl WorkerRuntime {
 
     fn remap_prepared_worktree(&self, mapping: &mut ProjectMapping, cwd: &Path,
         record: &crate::delegation::WorkspaceRecord) -> Result<PathBuf, WorkerRefusal> {
-        let top = Path::new(&record.toplevel);
-        let next;
-        if let Ok(offset) = mapping.remote_root.strip_prefix(top) {
-            next = Path::new(&record.path).join(cwd.strip_prefix(top)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?);
-            mapping.remote_root = Path::new(&record.path).join(offset);
-        } else {
-            top.strip_prefix(&mapping.remote_root)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            next = Path::new(&record.path).join(cwd.strip_prefix(top)
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?);
-            // Un worktree contenu conserve la correspondance projet attestée.
-        }
-        let next = crate::registry::validate_unprotected_local_path(&next, &self.protected())
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-        if !next.starts_with(&mapping.remote_root) { return Err(WorkerRefusal::PlacementMismatch); }
-        Ok(next)
+        self.read_view().remap_prepared_worktree(mapping, cwd, record)
     }
 
     fn shared_refresh_allowed(&self, root: &Path, base: &str) -> Result<bool, CandidateProbeRefusal> {
@@ -3167,96 +2946,7 @@ impl WorkerRuntime {
     }
     fn recheck_at_with_repair(&self, prepared:&PreparedRuntime, before_release:bool,
         repair:Option<&crate::workspace_git::RepairAnchor>) -> Result<AgentRegistry,WorkerRefusal> {
-        let mut operation = crate::native_permissions::PermissionReadOperation::default();
-        let registry = self.registry()?;
-        if let Some(routing) = &prepared.routing {
-            self.check_routing_connection(&registry, &prepared.request, routing)?;
-        }
-        let (mut mapping, mut cwd) = self.mapping_for(
-            &prepared.request,
-            &registry,
-            prepared.routing.as_ref().map(|routing| routing.workload),
-        )?;
-        if matches!(
-            &prepared.request.workspace,
-            Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
-        ) {
-            let receipt: WorkspacePreparationReceipt = read_optional(
-                &self.store.workspace_path(&prepared.command),
-                MAX_METADATA_BYTES,
-            )
-            .map_err(refuse)?
-            .ok_or(WorkerRefusal::UnknownExecution)?;
-            if receipt.worker != self.identity
-                || receipt.command != prepared.command
-                || receipt.prepare_digest
-                    != json_digest(&(&prepared.command, &prepared.request)).map_err(refuse)?
-            {
-                return Err(WorkerRefusal::CommandMismatch);
-            }
-            let original = receipt.record.ok_or(WorkerRefusal::UnknownExecution)?;
-            let record = if let Some(anchor)=repair {
-                crate::workspace_git::report_repaired_workspace(&original,anchor)
-                    .map_err(|_|WorkerRefusal::PlacementMismatch)?
-            } else {original};
-            let report = if let Some(anchor)=repair {
-                crate::workspace_git::report_repaired_workspace(&record,anchor)
-            } else {crate::workspace_git::report(&record)}
-                .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            if before_release
-                && (report.head_commit.as_ref() != Some(&record.base_commit)
-                    || report.head_on_branch != Some(true))
-            {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
-            cwd = self.remap_prepared_worktree(&mut mapping, &cwd, &record)?;
-        } else if before_release
-            && let Some(base) = prepared.prepared.placement.base_commit.as_deref()
-        {
-            let observed = crate::workspace_git::run_git(
-                &cwd,
-                &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
-                crate::workspace_git::READ_TIMEOUT,
-            )
-            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
-            if !observed.success() || observed.truncated || observed.stdout.trim() != base {
-                return Err(WorkerRefusal::PlacementMismatch);
-            }
-        }
-        if cwd != Path::new(&prepared.prepared.placement.execution_cwd) {
-            return Err(WorkerRefusal::PlacementMismatch);
-        }
-        let scoped = registry
-            .for_inherited_delegation_in_operation(
-                &prepared.request.agent_type,
-                &prepared.request.model,
-                prepared.request.effort.as_deref(),
-                &prepared.prepared.child_policy, &mut operation,
-            )
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        if scoped
-            .resolved_definition(&prepared.request.agent_type)
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?
-            != prepared.prepared.definition
-        {
-            return Err(WorkerRefusal::DefinitionChanged);
-        }
-        crate::lifecycle::launch_preflight(&scoped, &prepared.request.agent_type, &self.source)
-            .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        crate::native_permissions::recheck_remote_child_permissions_in_operation(
-            &prepared.prepared.child_policy,
-            scoped
-                .get(&prepared.request.agent_type)
-                .map_err(|_| WorkerRefusal::DefinitionChanged)?,
-            &cwd,
-            &self.source,
-            &self.protected(),
-            Some(&mapping),
-            Some(&prepared.request.parent), &mut operation,
-        )
-        .map_err(|_| WorkerRefusal::PermissionsChanged)?;
-        operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
-        Ok(scoped)
+        self.read_view().recheck_at_with_repair(prepared, before_release, repair, &read::ReadTrace::default())
     }
 
     fn start(
@@ -4698,6 +4388,79 @@ mod tests {
 
 
 
+
+
+    #[test]
+    fn spec188_diagnostic_refusal_preserves_identity_and_actionable_unknown() {
+        let v=diagnostic_failure("diagnostic_receipt_unavailable",&command());
+        assert_eq!(v["command"],serde_json::to_value(command()).unwrap());
+        assert!(v["recovery"].as_str().unwrap().contains("ne prouve"));
+        assert!(!v["human_action"].as_str().unwrap().is_empty());
+        let v=diagnostic_failure("diagnostic_observation_changed",&command());
+        assert!(v["recovery"].as_str().unwrap().contains("même tuple"));
+    }
+    fn snapshot188(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut out=BTreeMap::new();let mut dirs=vec![root.to_path_buf()];
+        while let Some(dir)=dirs.pop() {
+            for entry in fs::read_dir(dir).unwrap() {
+                let entry=entry.unwrap();let p=entry.path();let m=fs::symlink_metadata(&p).unwrap();
+                if m.is_dir() {dirs.push(p)} else if m.is_file() {out.insert(p,fs::read(entry.path()).unwrap());}
+            }
+        }
+        out
+    }
+    #[test]
+    fn spec188_diagnostic_reads_locked_store_without_write_or_terminal_inference() {
+        let fixture=Fixture::new();let runtime=runtime_fixture(&fixture);reserve(&runtime.store);
+        let before=snapshot188(&fixture.0);
+        let result=diagnose_local(&runtime.config,&command()).unwrap();
+        assert_eq!(result["scope"],"local_read_only_recheck");
+        assert_eq!(result["authoritative"],false);
+        assert_eq!(result["check"],"refused");assert_eq!(result["stage"],"preparation");
+        assert_eq!(result["reason"],"UnknownExecution");
+        assert_eq!(runtime.store.command(&command()).unwrap().phase,WorkerCommandPhase::Reserved);
+        assert_eq!(snapshot188(&fixture.0),before,"ni reçu, verrou ni fichier nouveau");
+        assert!(!result.to_string().contains("worker162-test-secret"));
+    }
+    #[test]
+    fn spec188_diagnostic_rejects_foreign_identity_and_absent_receipt_without_write() {
+        let fixture=Fixture::new();let runtime=runtime_fixture(&fixture);reserve(&runtime.store);
+        let before=snapshot188(&fixture.0);
+        let mut foreign=command();foreign.instance_id="foreign-instance".into();
+        assert_eq!(diagnose_local(&runtime.config,&foreign).unwrap_err(),"diagnostic_identity_mismatch");
+        foreign.command_id="missing-command".into();
+        assert_eq!(diagnose_local(&runtime.config,&foreign).unwrap_err(),"diagnostic_receipt_unavailable");
+        assert_eq!(snapshot188(&fixture.0),before);
+    }
+    #[test]
+    fn spec188_diagnostic_rejects_symlink_and_fifo_before_open() {
+        let fixture=Fixture::new();let runtime=runtime_fixture(&fixture);reserve(&runtime.store);
+        let p=runtime.store.command_path(&command());let moved=p.with_extension("preserved");fs::rename(&p,&moved).unwrap();
+        symlink(&moved,&p).unwrap();
+        assert_eq!(diagnose_local(&runtime.config,&command()).unwrap_err(),"diagnostic_file_type_invalid");
+        fs::remove_file(&p).unwrap();
+        let name=std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe {libc::mkfifo(name.as_ptr(),0o600)},0);
+        assert_eq!(diagnose_local(&runtime.config,&command()).unwrap_err(),"diagnostic_file_type_invalid");
+        assert!(moved.is_file());
+    }
+    #[test]
+    fn spec188_diagnostic_marks_concurrent_change_instead_of_returning_stale_verdict() {
+        let fixture=Fixture::new();let runtime=runtime_fixture(&fixture);reserve(&runtime.store);
+        let observed=read::diagnose_observed(runtime.read_view(),&command(),|| {
+            let mut receipt=runtime.store.command(&command()).unwrap();receipt.updated_at+=1;
+            runtime.store.persist(&runtime.store.command_path(&command()),&receipt).unwrap();
+        });
+        assert_eq!(observed.unwrap_err(),"diagnostic_observation_changed");
+        assert_eq!(runtime.store.command(&command()).unwrap().phase,WorkerCommandPhase::Reserved);
+    }
+    #[test]
+    fn spec188_diagnostic_permission_codes_are_closed() {
+        assert_eq!(permission_diagnostic_code("permission_hook_settings_changed"),"permission_hook_settings_changed");
+        for secret in ["private token=secret", "permission_secret_token", "permission_hook_settings_changed:secret"] {
+            assert_eq!(permission_diagnostic_code(secret),"unknown");
+        }
+    }
 
     #[test]
     fn worker172_inbound_r7_failed_signal_can_be_retried() {
@@ -7269,6 +7032,11 @@ while not stop.exists(): time.sleep(.01)
         receipt.marker=Some(ManagedMarker {pgid:child.id(),birth:crate::managed_process::process_birth(child.id()).unwrap(),
             command_id:identity.command_id.clone(),instance_id:identity.instance_id.clone(),generation:identity.generation});
         runtime.store.persist(&runtime.store.command_path(&identity),&receipt).unwrap();
+        let before188=snapshot188(&runtime.config.state_root);
+        let diag188=read::diagnose_observed(runtime.read_view(),&identity,||{}).unwrap();
+        assert_eq!(diag188["check"],"passed","{diag188}");
+        assert_eq!(diag188["stage"],"complete");
+        assert_eq!(snapshot188(&runtime.config.state_root),before188);
         let target=project_fixture.0.join("disk185");
         fs::rename(&original.path,&target).unwrap();
         std::os::unix::fs::symlink(&target,&original.path).unwrap();

@@ -170,6 +170,22 @@ fn run_with_args(args: Vec<String>) {
 
     // Le worker n'ouvre pas le namespace métier et ne démarre aucun daemon.
     if cmd == "worker" {
+        if args.get(2).is_some_and(|s| s == "diagnose") {
+            if let Err(error) = delegated_cli_guard("worker-diagnose", crate::mcp_identity::resolve_current_identity()) {
+                eprintln!("bridget worker diagnose : {} : {}", error.code(), error.remediation());
+                std::process::exit(1);
+            }
+            let (config, command) = parse_worker_diagnostic_args(&args[3..])
+                .unwrap_or_else(|error| exit_argument_error(&error));
+            match crate::remote_worker::diagnose_local(&config, &command) {
+                Ok(value) => println!("{value}"),
+                Err(code) => {
+                    eprintln!("{}", crate::remote_worker::diagnostic_failure(&code, &command));
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         let config =
             parse_worker_args(&args[2..]).unwrap_or_else(|error| exit_argument_error(&error));
         if let Err(error) = crate::remote_worker::run_worker(config) {
@@ -624,6 +640,27 @@ fn cmd_identity(args: &[String]) {
     );
 }
 
+fn parse_worker_diagnostic_args(args: &[String]) -> Result<(crate::remote_worker::WorkerRuntimeConfig, bridget_transport::protocol::WorkerCommandIdentity), String> {
+    let identity_flags = ["--command-id", "--task-id", "--instance-id", "--generation"];
+    if args.len() % 2 != 0 { return Err("diagnostic: options par paires requises".into()); }
+    let mut identity = std::collections::BTreeMap::new();
+    let mut worker = Vec::new();
+    for pair in args.chunks_exact(2) {
+        if identity_flags.contains(&pair[0].as_str()) {
+            if pair[1].is_empty() || identity.insert(pair[0].as_str(), pair[1].as_str()).is_some() {
+                return Err("diagnostic: identité vide ou répétée".into());
+            }
+        } else { worker.extend_from_slice(pair); }
+    }
+    if identity.len()!=identity_flags.len() {return Err("diagnostic: tuple complet requis".into());}
+    let command=bridget_transport::protocol::WorkerCommandIdentity {
+        command_id:identity["--command-id"].into(),task_id:identity["--task-id"].into(),
+        instance_id:identity["--instance-id"].into(),generation:identity["--generation"].parse().map_err(|_|"diagnostic: génération invalide")?,
+    };
+    command.validate().map_err(|_|"diagnostic: identité invalide")?;
+    Ok((parse_worker_args(&worker)?,command))
+}
+
 fn parse_worker_args(args: &[String]) -> Result<crate::remote_worker::WorkerRuntimeConfig, String> {
     let allowed = [
         "--machine-id",
@@ -750,7 +787,7 @@ fn print_usage() {
            gclaude [ARGS...]      Lance gclaude + connexion daemon\n  \
            -- <CMD> [ARGS...]     Agent personnalisé\n\n\
          Daemon & client :\n  \
-           worker <OPTIONS>       Lance le worker distant provisionné\n  \
+           worker <OPTIONS>       Lance le worker distant provisionné ; diagnose : lecture locale sans runtime\n  \
            daemon                 Lance le daemon\n  \
            federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
@@ -12406,4 +12443,26 @@ fn cmd_questions(args:&[String]) {
         }
     })().and_then(|request|crate::communication::client::user_input_request(&socket_path(),None,request).map_err(|e|e.to_string()));
     match parsed {Ok(value)=>{println!("{}",serde_json::to_string_pretty(&value).unwrap_or_default());if value["status"]!="ok"{std::process::exit(1);}},Err(e)=>{eprintln!("bridget questions : {e}");std::process::exit(1);}}
+}
+
+
+#[cfg(test)]
+mod worker188_tests {
+    use super::*;
+    #[test]
+    fn spec188_worker_diagnostic_parser_requires_exact_tuple_and_known_paths() {
+        let mut args=vec!["--machine-id","cartae","--worker-id","worker-cartae","--provisioning-revision","1",
+            "--credential-file","/private/credential","--state-root","/private/state","--registry-file","/private/registry",
+            "--master-socket","/private/socket","--command-id","command","--task-id","task","--instance-id","instance","--generation","1"]
+            .into_iter().map(String::from).collect::<Vec<_>>();
+        let (config,command)=parse_worker_diagnostic_args(&args).unwrap();
+        assert_eq!(config.machine_id,"cartae");assert_eq!(command.generation,1);
+        args.extend(["--generation".into(),"2".into()]);assert!(parse_worker_diagnostic_args(&args).is_err());
+        args.truncate(args.len()-2);args.pop();assert!(parse_worker_diagnostic_args(&args).is_err());
+        args.push("0".into());assert!(parse_worker_diagnostic_args(&args).is_err());
+    }
+    #[test]
+    fn spec188_worker_diagnostic_preserves_delegated_cli_guard() {
+        assert!(delegated_cli_guard("worker-diagnose",Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly)).is_err());
+    }
 }

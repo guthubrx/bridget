@@ -798,3 +798,12 @@ La première version accepte une migration publiée par génération et huit
 tentatives au plus. Les adaptations non qualifiées refusent sans démarrer une
 conversation neuve. Sans inventaire avant le déplacement, l'exhaustivité de
 cette copie antérieure reste inconnue ; la réparation conserve les fichiers qu'elle vérifie.
+
+
+## Local worker diagnostic (188)
+
+`bridget worker diagnose` reuses the worker permission recheck reads. A verified candidate can run this command without restarting any service. It creates no worker, provider, slot or task and dispatches no mission. Master state remains separate.
+
+Supply the installed worker’s seven options (`--machine-id`, `--worker-id`, `--provisioning-revision`, `--credential-file`, `--state-root`, `--registry-file`, `--master-socket`) and its complete admitted tuple (`--command-id`, `--task-id`, `--instance-id`, `--generation`). Run as the private files’ owner, using the live worker’s environment. Do not print its variables or credential. Delegated CLI restrictions still apply.
+
+The output has `scope: local_read_only_recheck`, `authoritative: false`, `check`, `stage`, `reason`, a closed `cause`, `recovery` and `human_action`. A local pass is neither a live worker attestation nor proof of mission dispatch. Different environments may change the verdict. A file changed during the read yields `diagnostic_observation_changed`: wait for the observed write to finish and read the same tuple again. A missing receipt remains unknown and does not prove process termination. Preserve the task, original request key and all files. Use native repair or request an owner decision if restoring the refused source exceeds the authorized scope.
