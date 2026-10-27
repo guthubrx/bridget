@@ -10921,6 +10921,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     "queued" | "starting" | "mission_pending" | "working"
                 )
             {
+                if let Some(event)=super::dispatch_diagnostics::record_locked(&mut st,&task,
+                    super::dispatch_diagnostics::Stage::Control,"referent_paused",None) {
+                    dispatch_events.push(event);
+                }
                 continue;
             }
             // O(1) par tâche : l'expiration conserve l'état et le résultat.
@@ -11240,8 +11244,6 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                     ),
                     crate::referent_control::Admission::Admitted
                 ) {
-                    let code=if control.paused {"referent_paused"} else {"dispatch_control_deferred"};
-                    if let Some(event)=record_locked(&mut st,&task,Stage::Control,code,None) {dispatch_events.push(event);}
                     continue;
                 }
                 if task.mission_issued_at.is_none() {
@@ -31951,6 +31953,54 @@ for frame in frames: print(json.dumps(frame),flush=True)
             "origin_proof_unavailable",
             None,
         );
+        drop(state);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_known_settings_refusal_is_preserved() {
+        use super::super::dispatch_diagnostics::{Stage, observe};
+        let (st, config, task) = diagnostics190_fixture();
+        let state = Arc::new(Mutex::new(st));
+        let outcome: Result<(), String> = observe(
+            &state,
+            &task,
+            Stage::ParentProof,
+            Err("settings_revision_changed".into()),
+        );
+        assert_eq!(outcome.unwrap_err(), "settings_revision_changed");
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["code"],
+            "settings_revision_changed"
+        );
+        assert_eq!(view["detail"]["dispatch_refusal"]["stage"], "parent_proof");
+        drop(st);
+        drop(state);
+        cleanup(&config);
+    }
+    #[test]
+    fn spec190_real_paused_tick_retains_refusal_before_early_exit() {
+        let (mut st, config, task) = diagnostics190_fixture();
+        pauser_150(&st, true);
+        let (_sender, receiver) = mpsc::channel();
+        st.remote_result_reservation = Some(receiver);
+        let before = serde_json::to_value(&task).unwrap();
+        let state = Arc::new(Mutex::new(st));
+        tick(&state);
+        let st = state.lock().unwrap();
+        let view = current_task_view(&st, &task, true).unwrap();
+        assert_eq!(view["detail"]["dispatch_refusal"]["stage"], "control");
+        assert_eq!(
+            view["detail"]["dispatch_refusal"]["code"],
+            "referent_paused"
+        );
+        assert_eq!(
+            serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),
+            before
+        );
+        assert!(st.pending_worker_responses.is_empty());
+        drop(st);
         drop(state);
         cleanup(&config);
     }

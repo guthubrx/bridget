@@ -92,6 +92,7 @@ fn closed_code(code: &str) -> String {
             | "remote_parent_proof_invalid"
             | "remote_parent_proof_changed"
             | "permission_revision_changed"
+            | "settings_revision_changed"
             | "permission_source_unavailable"
             | "permission_not_inherited"
             | "remote_execution_unconfirmed"
@@ -107,7 +108,6 @@ fn closed_code(code: &str) -> String {
             | "remote_execution_payload_missing"
             | "remote_result_slot_mismatch"
             | "remote_result_slot_unconfirmed"
-            | "dispatch_control_deferred"
     ) {
         return code.into();
     }
