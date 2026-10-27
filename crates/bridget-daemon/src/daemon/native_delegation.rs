@@ -624,6 +624,18 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
     result
 }
 
+// Les relectures du choix retournent une erreur String. Transporter seulement
+// les motifs fermés déjà observés ; aucun message libre ni nouvelle sonde.
+fn routing_probe_error(plan: &RoutingAdmissionPlan, code: String) -> String {
+    if code != "routing_candidate_unavailable" { return code; }
+    let failure = routing_probe_failure(plan);
+    let Some(reasons) = failure["detail"]["reasons"].as_array() else { return code; };
+    let reasons = reasons.iter().map(|reason| json!({
+        "kind":reason["kind"], "code":reason["code"], "candidates":reason["candidates"]
+    })).collect::<Vec<_>>();
+    format!("{code}:{}", json!(reasons))
+}
+
 /// O(M) sur les mappings de la machine, une fois par machine et par sonde.
 /// Une identité explicite reste stricte ; aucune priorité arbitraire entre racines.
 fn routing_project_mapping(
@@ -1533,7 +1545,9 @@ fn refresh_routing_selected(
     single.machines.clear();
     single.connections.clear();
     single.scores.clear();
-    observe_routing_candidates(conn, request, &mut single, attested, state)?;
+    single.decision_notes.clear();
+    observe_routing_candidates(conn, request, &mut single, attested, state)
+        .map_err(|code| routing_probe_error(&single, code))?;
     let observed = single
         .observations
         .first()
@@ -1557,7 +1571,9 @@ fn refresh_routing_selected(
         single.observations.clear();
         single.machines.clear();
         single.connections.clear();
-        observe_routing_candidates(conn, request, &mut single, attested, state)?;
+        single.decision_notes.clear();
+        observe_routing_candidates(conn, request, &mut single, attested, state)
+            .map_err(|code| routing_probe_error(&single, code))?;
         let observed_effort = |wanted: Option<&str>| {
             single
                 .candidates
@@ -3473,6 +3489,27 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if let Some(encoded) = code.strip_prefix("routing_candidate_unavailable:") {
+        // O(R), R <=128. Refuser le contenu libre avant toute projection MCP.
+        use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
+        let mut result = failure("routing_candidate_unavailable");
+        if encoded.len() <= 16384
+            && let Ok(Value::Array(reasons)) = serde_json::from_str::<Value>(encoded)
+            && !reasons.is_empty() && reasons.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTES
+            && reasons.iter().all(|reason| {
+                reason.as_object().is_some_and(|r| r.len()==3)
+                    && reason["candidates"].as_u64().is_some_and(|n| (1..=128).contains(&n))
+                    && match reason["kind"].as_str() {
+                        Some("candidate") => serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone()).is_ok(),
+                        Some("worker") => serde_json::from_value::<WorkerRefusal>(reason["code"].clone()).is_ok(),
+                        _ => false,
+                    }
+            }) {
+            result["detail"]["reasons"] = json!(reasons);
+        }
+        return result;
+    }
+
     if code.starts_with("workspace_repair") {
         let (message,recovery,human)=match code {
             "workspace_repair_child_upgrade_required" => (
@@ -3585,6 +3622,10 @@ fn failure(code: &str) -> Value {
             "detail":{"message":message,"recovery":recovery}});
     }
     let guidance = match code {
+        "permission_attestation_unavailable" => Some((
+            "Bridget n'a pas pu confirmer l'identité et les droits actuels de la session appelante. La cause précise n'est pas établie.",
+            "Ce refus ne permet pas de conclure sur l'état d'une tâche distante. Vérifiez son rattachement Bridget et la disponibilité de son attestation native de droits dans le tour actif. L'outil bridget_session n'a pas besoin d'être exposé au modèle : Bridget l'appelle par son adaptateur. Conservez task_id, request_id et le refus exact ; aucune reprise, nouvelle mission ou modification de droits.",
+            "Si l'attestation ne peut pas être rétablie depuis le même fil actif, demandez au responsable de rétablir le rattachement ou la source de droits de ce fil. Ne demandez pas une relance distante sur ce seul code.")),
         "remote_execution_ended" => Some((
             "La commande distante est terminée ou son lancement a été refusé. Elle ne peut plus recevoir de travail.",
             "Lisez le résultat et les éléments conservés de cette même tâche. Confirmez son arrêt et son nettoyage avant de préparer une suite autorisée. Le rejeu de cette reprise ne redémarre pas la commande.",
@@ -4460,9 +4501,9 @@ pub(super) fn handle_attested(
     let proof = match attested {
         Ok(p) => p,
         Err(_) => {
-            return DaemonToWrapper::NativeDelegationResult {
-                result: failure("permission_attestation_unavailable"),
-            };
+            let mut result = failure("permission_attestation_unavailable");
+            result["detail"]["verification"] = json!("origin_session_reattest");
+            return DaemonToWrapper::NativeDelegationResult { result };
         }
     };
     let valid = {
@@ -4480,9 +4521,9 @@ pub(super) fn handle_attested(
             .is_ok()
     };
     if !valid {
-        return DaemonToWrapper::NativeDelegationResult {
-            result: failure("permission_attestation_unavailable"),
-        };
+        let mut result = failure("permission_attestation_unavailable");
+        result["detail"]["verification"] = json!("current_session_binding");
+        return DaemonToWrapper::NativeDelegationResult { result };
     }
     handle_with_fact(
         conn,
@@ -12620,9 +12661,25 @@ mod tests {
             (correlation,admission)
         });
         let mut plan = routing168_plan(&state, &request);
+        let mut selected_plan = plan.clone();
+        selected_plan.observations = vec![RoutingCandidateObservation {
+            definition_digest:"a".repeat(64), permission_digest:"b".repeat(64),
+            mapping_revision:Some(1), project_id:Some("project171".into()),
+            connection_epoch:"fixture".into(), observed_at:unix_timestamp(), received_at:unix_timestamp(),
+        }; selected_plan.candidates.len()];
         assert_eq!(observe_routing_candidates("conn-1", &request, &mut plan, None, &state)
             .unwrap_err(), "routing_candidate_unavailable");
         let (correlation,admission) = responder.join().unwrap();
+        // Incident186 : la relecture finale doit garder le motif du worker.
+        state.lock().unwrap().remote_workers.clear();
+        let error = refresh_routing_selected("conn-1",&request,&selected_plan,0,
+            selected_plan.candidates[0].default_effort.as_deref(),None,&state,false).unwrap_err();
+        let reread = failure(&error);
+        assert_eq!(reread["code"], "routing_candidate_unavailable");
+        assert_eq!(reread["detail"]["reasons"], json!([
+            {"kind":"worker","code":"worker_unavailable","candidates":1}
+        ]));
+        assert!(auto_terminal_refusal_code(&error).is_none(), "la même admission reste réconciliable");
         assert!(plan.candidates.is_empty());
         assert_eq!(plan.decision_notes.len(), 3);
         for (index,note) in plan.decision_notes.iter().enumerate() {
@@ -12685,6 +12742,53 @@ mod tests {
         assert_eq!(last["code"], "worker_unavailable");
         drop(state);
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec186_refus_attestation_explicite_sans_contexte_non_autorise() {
+        let result=failure("permission_attestation_unavailable");
+        assert_eq!(result["code"],"permission_attestation_unavailable");
+        for key in ["message","recovery","human_action"] {
+            assert!(!result["detail"][key].as_str().unwrap().is_empty());
+        }
+        assert!(result["detail"]["message"].as_str().unwrap().contains("n'est pas établie"));
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("ne permet pas de conclure"));
+        assert!(result["detail"].get("execution").is_none());
+        assert!(result.get("task_id").is_none());
+    }
+
+    #[test]
+    fn spec186_statut_refuse_avant_lecture_si_rattachement_absent() {
+        let (st,config,_rx,_reader)=fixture("186-attestation");
+        let state=Arc::new(Mutex::new(st));
+        let proof=bridget_transport::protocol::NativePermissionProof {
+            endpoint:"http://invalid.local/secret-endpoint".into(),
+            authorization:bridget_transport::protocol::IdentityCredential::new("secret-fixture".into()),
+        };
+        let response=handle_attested("conn-1",NativeDelegationRequest::Status {
+            task_id:"foreign-task".into()
+        },&proof,&state,None);
+        let DaemonToWrapper::NativeDelegationResult {result}=response else { panic!("refus attendu"); };
+        assert_eq!(result["code"],"permission_attestation_unavailable");
+        assert_eq!(result["detail"]["verification"],"origin_session_reattest");
+        assert!(!result.to_string().contains("foreign-task"));
+        assert!(!result.to_string().contains("secret-"));
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec186_motifs_fermes_seuls_traversent_la_projection() {
+        for encoded in [
+            r#"[{"kind":"worker","code":"SECRET /private/path","candidates":1}]"#,
+            r#"[{"kind":"worker","code":"worker_unavailable","candidates":0}]"#,
+            r#"[{"kind":"worker","code":"worker_unavailable","candidates":1,"secret":"secret"}]"#,
+        ] {
+            let result=failure(&format!("routing_candidate_unavailable:{encoded}"));
+            assert_eq!(result["code"],"routing_candidate_unavailable");
+            assert!(result["detail"].get("reasons").is_none());
+            assert!(!result.to_string().contains("/private/path"));
+        }
     }
 
     #[test]
