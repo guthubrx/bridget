@@ -40,3 +40,8 @@ Aucun retrait de travail ni arrêt de processus d'autrui.
 ## Verdict de la contre-revue
 57018bf6 : défavorable sur8bdbfab0. Ce binaire reste un candidat de diagnostic, non éligible à l'activation.
 Cinq corrections et14tests daemon185 passent dans la source suivante ; nouvelle revue nécessaire avant intégration.
+
+## Révision suivante
+La revue06 sur177d0a5e a refusé une publication hors délai. Le point atomique relit désormais l'échéance après les contrôles, sous le verrou d'annulation. Les tests expirés conservent le reçu et la barrière.
+Le complément conserve aussi le diagnostic des nouveaux briefs refusés dans le format historique borné, et corrige la collecte des anciennes commandes sans marqueurs.
+15tests daemon185 passent. Cette révision doit encore recevoir son verdict indépendant ; aucune activation ni intégration principale revendiquée à ce stade.

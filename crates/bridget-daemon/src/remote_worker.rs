@@ -7313,10 +7313,22 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(observed.phase,"resumed","un ACK perdu ne rejoue pas le contrôle wrapper");
         assert_eq!(runtime.store.command(&identity).unwrap().workspace_repair.as_ref().unwrap().phase,"prepared",
             "l'observation ne publie aucune liaison");
+        let before=runtime.store.command(&identity).unwrap();
+        assert_eq!(runtime.repair_workspace(&identity,&request,
+            bridget_transport::protocol::WorkspaceRepairActionV1::Commit,worker_now()-1).unwrap_err(),
+            WorkerRefusal::PrepareExpired);
+        assert_eq!(runtime.store.command(&identity).unwrap(),before,"expiration avant commit sans mutation");
         let WorkerResponseOperation::WorkspaceRepair {status:published}=runtime.repair_workspace(
             &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Commit,worker_now()+60).unwrap() else {panic!("publication attendue")};
         assert_eq!(published.phase,"committed","{published:?}");
         assert!(!workspace_repair::published(&runtime.store.root,&identity,&request));
+        let before=runtime.store.command(&identity).unwrap();
+        assert_eq!(runtime.repair_workspace(&identity,&request,
+            bridget_transport::protocol::WorkspaceRepairActionV1::Publish,worker_now()-1).unwrap_err(),
+            WorkerRefusal::PrepareExpired);
+        assert_eq!(runtime.store.command(&identity).unwrap(),before,"expiration avant publication sans mutation");
+        assert!(!workspace_repair::published(&runtime.store.root,&identity,&request),"barrière conservée");
+
         let WorkerResponseOperation::WorkspaceRepair {status:published}=runtime.repair_workspace(
             &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Publish,worker_now()+60).unwrap()
             else {panic!("publication attendue")};
@@ -7360,7 +7372,7 @@ while not stop.exists(): time.sleep(.01)
         // Une annulation arrivée après les relectures ferme le point atomique de publication.
         let before=runtime.store.command(&identity).unwrap();
         runtime.cancelled.lock().unwrap().insert(json_digest(&identity).unwrap());
-        assert_eq!(runtime.publish_repair_status(&identity,published.clone()).unwrap_err(),WorkerRefusal::Unauthorized);
+        assert_eq!(runtime.publish_repair_status(&identity,published.clone(),worker_now()+60).unwrap_err(),WorkerRefusal::Unauthorized);
         assert_eq!(runtime.store.command(&identity).unwrap(),before);
         let WorkerResponseOperation::WorkspaceRepair {status:observed}=runtime.repair_workspace(
             &identity,&request,bridget_transport::protocol::WorkspaceRepairActionV1::Observe,0).unwrap()

@@ -878,11 +878,12 @@ fn native149_developpement_d_un_parent_lecteur_refuse_sans_tache_ni_invitation()
     )
     .unwrap_err();
     assert_eq!(erreur, "permission_not_inherited");
-    // Le refus publié est le JSON exact : aucun champ de grant humain.
-    assert_eq!(
-        failure("permission_not_inherited"),
-        json!({"status":"refused","code":"permission_not_inherited"})
-    );
+    // Le refus conserve son code et donne désormais un guidage explicite.
+    let result=failure("permission_not_inherited");
+    assert_eq!(result["status"],"refused");
+    assert_eq!(result["code"],"permission_not_inherited");
+    assert!(result["detail"]["recovery"].as_str().is_some_and(|v|!v.is_empty()));
+    assert!(result["detail"]["human_action"].as_str().is_some_and(|v|!v.is_empty()));
     assert!(
         st.delegation_store.tasks().unwrap().is_empty(),
         "aucune tâche insérée"

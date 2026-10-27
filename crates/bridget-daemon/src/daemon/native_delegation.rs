@@ -2521,10 +2521,21 @@ fn auto_receipt_view(
 // Liste volontairement fermée : l'admission auto ne clôt durablement qu'un
 // refus métier déjà décidé. Une chaîne SQLite/Git/E/S inconnue reste `chosen`
 // et sera entretenue avec le même choix, sans nouvelle décision.
+fn handoff_error_code(error:crate::handoff::HandoffError)->String {
+    let mut detail:String=error.to_string().chars().map(|c|
+        if bridget_core::is_disallowed_control(c) {' '} else {c}).collect();
+    // Le reçu historique borne refusal_code à128octets : garder son format.
+    detail.truncate(detail.floor_char_boundary(114));
+    format!("brief_invalid:{detail}")
+}
+
 fn auto_terminal_refusal_code(code: &str) -> Option<&str> {
     let canonical = code
         .split_once(':')
         .map_or(code, |(canonical, _)| canonical);
+    // Le champ et la cause validés sont bornés par handoff_error_code.
+    // Les conserver dans le reçu rend aussi le rejeu du refus actionnable.
+    if canonical=="brief_invalid" && code.len()<=128 {return Some(code);}
     if matches!(
         canonical,
         "agent_type_unknown"
@@ -3548,7 +3559,7 @@ fn failure(code: &str) -> Value {
                 "La réparation n'est pas encore confirmée de bout en bout.",
                 "Relisez le statut de la même tâche. Rejouez uniquement la même réparation avec la même request_id et les mêmes paramètres pour réconcilier son reçu. N'envoyez aucune nouvelle mission.",
                 "Si un arrêt ou une reprise reste incertain, transmettez la phase et le code au responsable ; aucune relance forcée."),
-            "workspace_repair_authority_expired" => (
+            "workspace_repair_authority_expired" | "workspace_repair_remote:PrepareExpired" => (
                 "La fenêtre autorisée de cette réparation est terminée.",
                 "Conservez la tâche, ses fichiers et son reçu. Vérifiez sa phase : un arrêt engagé ne doit pas devenir une nouvelle tentative sous une autre clé.",
                 "Le responsable doit renouveler explicitement les conditions de reprise si l'exécution est déjà arrêtée."),
@@ -6667,7 +6678,7 @@ fn admit_delegate(
         .map(|draft| {
             crate::handoff::validate_and_render(draft)
                 .map(|rendered| format!("{}\n\n--- Consigne ---\n{task}", rendered.body))
-                .map_err(|error| format!("brief_invalid:{error}"))
+                .map_err(handoff_error_code)
         })
         .transpose()?;
     let canonical = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
@@ -7660,7 +7671,7 @@ fn handle_locked_with_remote_proof(
             }
             let round_body = if let Some(draft) = brief {
                 let rendered = crate::handoff::validate_and_render(draft)
-                    .map_err(|error| format!("brief_invalid:{error}"))?;
+                    .map_err(handoff_error_code)?;
                 format!("{}\n\n--- Consigne ---\n{task}", rendered.body)
             } else {
                 task.clone()
@@ -31312,6 +31323,38 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(saved.state,"cancelled");assert!(saved.guard_released);
         assert_eq!(saved.workspace.unwrap().path,"/mnt/storage/repair185");
         drop(state);cleanup(&config);
+    }
+
+    #[test]
+    fn spec185_brief_refusal_keeps_field_and_cause_in_durable_replay_code() {
+        let invalid=json!({"objective":"Revoir le diff","summary":"Lecture seule",
+            "references":[{"kind":"file","label":"Validation","source_label":"worktree","path":"relative.md"}]});
+        let code=handoff_error_code(crate::handoff::validate_and_render(&invalid).unwrap_err());
+        let durable=auto_terminal_refusal_code(&code).unwrap();
+        assert_eq!(durable,code);
+        let replay=failure(durable);
+        assert_eq!(replay["code"],"brief_invalid");
+        let message=replay["message"].as_str().unwrap();
+        assert!(message.contains("references[0]")&&message.contains("source_label"),"{message}");
+        let huge=handoff_error_code(crate::handoff::HandoffError {field:"summary".into(),reason:"é".repeat(4096)});
+        assert!(huge.len()<=128);
+        assert!(auto_terminal_refusal_code(&huge).is_some());
+        assert!(auto_terminal_refusal_code("workspace_preflight_technical: private-io").is_none());
+        let (mut st,config,rx,_reader)=fixture("brief185");
+        let now=unix_timestamp();
+        let receipt=AutoAdmissionReceipt {owner:OWNER.into(),request_id:"brief185-durable".into(),
+            canonical:b"{}".to_vec(),metadata:b"{}".to_vec(),metadata_version:1,
+            state:AutoAdmissionState::Pending,coordinator_epoch:0,revision:0,policy_revision:1,
+            policy_digest:"0".repeat(64),candidate_id:None,delegate_canonical:None,mode:None,
+            reason:None,task_id:None,refusal_code:None,created_at:now,updated_at:now};
+        assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt,now).unwrap());
+        assert_eq!(close_auto_admission_error(&st,&receipt,code.clone()).unwrap(),code);
+        let stored=st.delegation_store.auto_admission_receipt(OWNER,"brief185-durable").unwrap().unwrap();
+        assert_eq!(stored.refusal_code.as_deref(),Some(code.as_str()));
+        assert_eq!(auto_receipt_view(&mut st,&stored).unwrap_err(),code);
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        cleanup(&config);
     }
 
     #[test]

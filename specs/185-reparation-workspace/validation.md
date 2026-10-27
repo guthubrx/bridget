@@ -65,3 +65,18 @@ Cinq objections :
 - Collecte : la capacité et chaque reçu de réparation sont retirés avec le reçu de commande, sous ses conditions de terminalité, rétention et absence de slot référent. Une commande active les conserve.
 
 14tests daemon185 : PASS après ces corrections. Un aller-retour réel de protocole vérifie Observe après expiration et annulation ; la tâche reste annulée. Le test de délégation vérifie le nouveau fait parent et les preuves worker. La fixture d'écriture défaillante ne retourne aucun refus terminal puis persiste le même reçu dès rétablissement. La collecte conserve les marqueurs actifs puis retire les marqueurs avec la commande terminale hors rétention.
+
+## Troisième revue et échéance finale
+Tâche0d1fd469-d80d-4650-afbd-440c7081747d ; clébridget-spec185-code-review-20261027-06 ; source177d0a5e : un bloquant.
+L'échéance est désormais relue au point atomique de commit/publication, sous le verrou d'annulation et après Git/droits. Un dépassement conserve la phase et la barrière. Les lectures idempotentes et Observe restent possibles sans nouvel effet. Le test worker refuse Commit puis Publish avec un délai expiré et vérifie l'absence de mutation.
+15tests daemon185 PASS dans la source corrigée.
+
+## Guidage des briefs refusés
+La demande de revue05 a été refusée sans tâche : référence de fichier mal formée (source_label interdit pour kind=file, chemin relatif et host absent). Le brief a été corrigé avant la demande06 ; aucun doublon de mission.
+Le diagnostic source a confirmé que l'admission durable supprimait le suffixe de brief_invalid. Le champ et la cause sont maintenant conservés pour les nouveaux refus et leur rejeu, dans la borne historique128octets et sans caractères de contrôle. Aucun changement du schéma ni assouplissement de validation. Un test réserve puis refuse un vrai reçu SQL, relit le code durable et sa projection publique, et constate l'absence de tâche/lancement.
+Les anciens reçus dont le diagnostic n'a jamais été enregistré ne sont pas réécrits.
+
+## Régression élargie
+La suite de droits a passé128tests avec un échec d'attente JSON ancien et1test explicitement ignoré. Le refus permission_not_inherited était correct ; seul son nouveau guidage manquait dans l'attente. Le test conserve ses contrôles d'absence de tâche/lancement et vérifie désormais le code plus le guidage.
+La régression du collecteur a aussi révélé le cas ancien sans dossier markers : cette absence est désormais une collecte vide, et un dossier existant doit rester privé avant tout retrait.
+Les passages finaux de ces régressions restent à consigner.

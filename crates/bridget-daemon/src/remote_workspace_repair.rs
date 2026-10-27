@@ -166,6 +166,7 @@ impl WorkerRuntime {
         &self,
         command: &WorkerCommandIdentity,
         status: WorkspaceRepairStatusV1,
+        expires_at: i64,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
         // Même verrou que dispatch_worker_inbound : l'annulation reçue et
         // la publication durable possèdent un ordre unique, après les relectures.
@@ -175,6 +176,10 @@ impl WorkerRuntime {
             .map_err(|_| WorkerRefusal::StoreUnavailable)?;
         if cancelled.contains(&json_digest(command).map_err(unavailable)?) {
             return Err(WorkerRefusal::Unauthorized);
+        }
+        let now = worker_now();
+        if now >= expires_at || expires_at > now + 60 {
+            return Err(WorkerRefusal::PrepareExpired);
         }
         self.save_repair_status(command, status)
     }
@@ -374,7 +379,7 @@ impl WorkerRuntime {
                 "committed"
             }
             .into();
-            return self.publish_repair_status(command, observed);
+            return self.publish_repair_status(command, observed, expires_at);
         }
         if action != WorkspaceRepairActionV1::Prepare {
             return Ok(refused("workspace_repair_not_prepared"));
@@ -549,6 +554,12 @@ pub(crate) fn published(
 }
 
 pub(super) fn collect_markers(root: &Path, receipt: &WorkerCommandReceipt) -> io::Result<()> {
+    let markers = root.join("markers");
+    match fs::symlink_metadata(&markers) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+        Ok(_) => check_private(&markers, true).map_err(|e| io::Error::other(e.to_string()))?,
+    }
     let mut paths = vec![capability_path(root, &receipt.identity)];
     for status in receipt
         .workspace_repair
