@@ -3539,7 +3539,7 @@ fn failure(code: &str) -> Value {
         let (cause,message)=match code {
             "project_preparation_disk_full" => ("storage_full","Le système a signalé un espace de stockage épuisé pendant la préparation."),
             "project_preparation_disk_quota" => ("storage_quota","Le système a signalé un quota de stockage épuisé pendant la préparation."),
-            _ => ("not_recorded","La préparation a échoué ; sa cause précise n’a pas été conservée ou reconnue."),
+            _ => ("unobserved","La préparation a échoué ; sa cause précise n’a pas été conservée ou reconnue."),
         };
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"stage":"project_preparation","cause":cause,
@@ -4240,9 +4240,9 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     if task.projected_error()==Some("stdout Codex fermé pendant le tour") {
         view["error_message"]=json!("Le flux de sortie du fournisseur est devenu indisponible pendant le tour. Sa cause précise reste à vérifier.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-            json!("Inspectez le stderr conservé pour cette même commande, instance et génération, ainsi que les volumes et inodes du journal fournisseur, du dépôt et du dossier temporaire. Un ENOSPC observé établit un disque plein à cet instant ; sans preuve, la cause reste inconnue. Conservez commits, fichiers et sorties. Cet échec ne reprend pas par bridget_task_continue ni par rejeu de la clé initiale. Après correction et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle tâche et une nouvelle clé, avec passation explicite du travail conservé.")
+            json!("Depuis le parent propriétaire, consultez le statut complet. Avec detail.provider_failure, demandez au responsable de vérifier le reçu natif de la tâche et le stderr corrélé à la commande, instance et génération confirmées, ainsi que les volumes et inodes du journal fournisseur, du dépôt et du dossier temporaire. Un ENOSPC observé établit un disque plein à cet instant ; sans preuve, la cause reste inconnue. Conservez commits, fichiers et sorties. Cet échec ne reprend pas par bridget_task_continue ni par rejeu de la clé initiale. Après correction et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle tâche et une nouvelle clé, avec passation explicite du travail conservé.")
         } else {
-            json!("Inspectez le stderr de cette même commande et l’espace de stockage du journal fournisseur et du dossier temporaire. Sans preuve conservée, la cause reste inconnue. Conservez tous les fichiers et attendez la confirmation native d’arrêt et le rapport du dossier avant toute nouvelle demande ; continuable=false ne prouve pas l’arrêt.")
+            json!("Depuis le parent propriétaire, consultez le statut complet. Transmettez detail.provider_failure au responsable pour retrouver le reçu natif de la tâche et vérifier son stderr, puis l’espace de stockage du journal fournisseur et du dossier temporaire. Sans preuve conservée, la cause reste inconnue. Conservez tous les fichiers et attendez la confirmation native d’arrêt et le rapport du dossier avant toute nouvelle demande ; continuable=false ne prouve pas l’arrêt.")
         };
         view["error_human_action"]=json!("Si la source de l’échec ne peut pas être rétablie dans votre mandat, demandez au responsable ou à l’utilisateur la décision précise sur les fichiers à archiver ou le stockage à ajouter. Aucun arrêt d’autrui, déplacement d’un dossier vivant ou redémarrage forcé.");
     }
@@ -4375,6 +4375,23 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
+    if full && task.projected_error()==Some("stdout Codex fermé pendant le tour") {
+        // Projection après autorisation : aucun contenu de stderr ni chemin privé.
+        // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
+        let command=task.remote_placement.as_ref().and_then(|_|remote_command_identity(st,task).ok());
+        let request_id=match &task.request {NativeDelegationRequest::Delegate {request_id,..}=>Some(request_id),_=>None};
+        if !view["detail"].is_object() {view["detail"]=json!({});}
+        view["detail"]["provider_failure"]=json!({
+            "task_id":task.task_id,"admission_request_id":request_id,"child_agent_id":task.child,
+            "machine_id":task.remote_placement.as_ref().map(|p|&p.machine_id),
+            "daemon_host":if task.remote_placement.is_none() {Some(&st.host)} else {None},
+            "instance_id":task.child_instance,
+            "command_id":command.as_ref().map(|c|&c.command_id),
+            "generation":command.as_ref().map(|c|c.generation),
+            "command_identity_confirmed":command.is_some(),
+            "cause":"unobserved",
+            "verification":"Transmettez cette référence au responsable de la machine : retrouver le reçu natif lié à task_id, vérifier instance et génération, puis lire seulement le stderr de cette identité. Si command_identity_confirmed=false, la référence de commande reste à vérifier ; ne choisissez pas un journal par approximation ni un ancien slot. Ces identifiants n’autorisent aucune reprise et ne prouvent pas un état courant du fournisseur."});
+    }
     Ok(view)
 }
 
@@ -31908,7 +31925,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
     #[test]
     fn spec191_preparation_guidance_preserves_closed_codes_and_unknown_cause() {
         for (code,cause) in [("project_preparation_disk_full","storage_full"),
-            ("project_preparation_disk_quota","storage_quota"),("project_preparation_failed","not_recorded")] {
+            ("project_preparation_disk_quota","storage_quota"),("project_preparation_failed","unobserved")] {
             let view=failure(code);assert_eq!(view["code"],code);
             assert_eq!(view["detail"]["cause"],cause);
             assert!(view["detail"]["recovery"].as_str().unwrap().contains("not_recorded"));
@@ -31929,6 +31946,36 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let stopped=task_view(&task,None,true);
         assert!(stopped["error_recovery"].as_str().unwrap().contains("nouvelle tâche"));
         assert!(stopped["error_recovery"].as_str().unwrap().contains("cause reste inconnue"));
+        drop(st);cleanup(&config);
+    }
+
+    #[test]
+    fn spec191_owned_eof_status_exposes_only_correlated_command_reference() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        let command=remote_command_identity(&st,&task).unwrap();
+        task.state="failed".into();task.error=Some("stdout Codex fermé pendant le tour".into());
+        st.delegation_store.save(&task).unwrap();let before=serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        let state=Arc::new(Mutex::new(st));
+        let DaemonToWrapper::NativeDelegationResult {result}=handle("conn-1",NativeDelegationRequest::Status {task_id:task.task_id.clone()},&state) else {panic!("statut propriétaire")};
+        let context=&result["detail"]["provider_failure"];
+        assert_eq!(context["task_id"],task.task_id);assert_eq!(context["machine_id"],"cartae");
+        assert_eq!(context["instance_id"],command.instance_id);assert_eq!(context["command_id"],command.command_id);
+        assert_eq!(context["generation"],command.generation);assert_eq!(context["command_identity_confirmed"],true);
+        let DaemonToWrapper::NativeDelegationResult {result:foreign}=handle("foreign191",NativeDelegationRequest::Status {task_id:task.task_id.clone()},&state) else {panic!("refus étranger")};
+        assert!(foreign["detail"]["provider_failure"].is_null());
+        let st=state.lock().unwrap();assert!(current_task_view(&st,&task,false).unwrap()["detail"]["provider_failure"].is_null());
+        assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        drop(st);drop(state);cleanup(&config);
+    }
+    #[test]
+    fn spec191_missing_command_reference_is_not_guessed_from_old_slot() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.state="failed".into();task.error=Some("stdout Codex fermé pendant le tour".into());
+        task.child_instance=Some(Uuid::new_v4().to_string());
+        let view=current_task_view(&st,&task,true).unwrap();let context=&view["detail"]["provider_failure"];
+        assert_eq!(context["instance_id"],task.child_instance.unwrap());
+        assert_eq!(context["command_identity_confirmed"],false);
+        assert!(context["command_id"].is_null());assert!(context["generation"].is_null());
         drop(st);cleanup(&config);
     }
 
