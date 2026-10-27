@@ -44,8 +44,14 @@ Tâche58459353-0d42-4fc2-acc4-692949616648, propriétaire monuments.
 Dossier historique : /home/moi/.local/share/bridget-projects/opus2d/repository/.worktrees/58459353.
 Dossier réel : /mnt/storage/opus2d/worktrees/58459353.
 Lecture SYS du27octobre vers07h42UTC : dossier réel présent, Git propre, branche158-sys-lot-suivant-20261027, HEADc1b1221038947a66ceff62109a168dffe0acf0b3. Les anciens PID115301 et115521 ne sont plus présents. Ce fait ne prouve ni le statut natif actuel ni l'absence d'une autre exécution.
-Une unique demande de projection propriétaire actuelle a été envoyée, message mcp-677-6ae0560a-b. Aucune projection nouvelle reçue à la rédaction de ce reçu ; aucune continuation, annulation ou mission de remplacement créée.
-185 répare un wrapper récent vivant, à repos, avec garde valide et reprise native attestée. Il ne migre pas un ancien wrapper ni ne récupère une garde terminée. La projection propriétaire est nécessaire pour choisir le parcours suivant ; aucun succès rétroactif n'est revendiqué.
+La projection propriétaire demandée une fois est maintenant reçue, message t3-01ae4b7e-9597-4444-94c8-2ac138858616 de monuments, après la clôture documentaire initiale :
+- status et work_state=result_available ; continuable=false ; suspended=false ; error=null.
+- round=1 ; resume_attempts=0 ; aucune demande en attente.
+- Workspace kept, branche158-sys-lot-suivant-20261027, chemin historique inchangé.
+- Rapport déclaré report_unavailable ; head_commit, branch_commit, dirty et head_on_branch=null.
+Ce rapport ne confirme pas le SHA lu sur disque et ne précise pas la cause de continuable=false. Il ne permet pas de conclure à une garde expirée, une annulation ou une révocation. Le contenu Git propre observé sur disque ne remplace pas la preuve native manquante.
+185 répare un wrapper récent vivant, à repos, avec garde valide et reprise native attestée. Il ne migre pas un ancien wrapper ni ne récupère une garde terminée. Ces conditions ne sont pas établies pour58459353 ; aucun essai de réparation ou de continuation n'est donc lancé.
+La récupération éventuelle après arrêt devra réattester cette même tâche, le fil fournisseur et ses droits par un mécanisme natif admis. Ce parcours n'est pas livré par185 ; aucune commande existante ne permet de le forcer. Aucune mission de remplacement, annulation ou modification directe de garde n'est effectuée. Aucun nouveau relevé périodique n'est demandé.
 
 ## Git et conservation
 Main Cartae est propre et aligné au distant au commit source qualifié ; la clôture documentaire est publiée séparément.

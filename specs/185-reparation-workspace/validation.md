@@ -85,3 +85,8 @@ Les passages finaux de ces régressions restent à consigner.
 Revue07, tâche712649ac-673d-4bbd-a192-0980aed0d903 sur46021dda : favorable, aucun blocage concret. Le cas de droits corrigé est passé avec les128autres tests de la suite complète (129PASS,1ignoré). Collecte3PASS ; briefs7PASS ; réparation15PASS ; transport8PASS.
 Source46021dda intégrée/poussée sur main ; CI verte. Compilation optimisée et installation du candidat185-repair-46021dda412a vérifiées.
 La maintenance native a réellement refusé update_missions_active_or_unconfirmed. Runtime core/mobile/workerCartae relu183-admission-7478e9e7. Aucun succès d'activation ou de réparation métier. Le reçu final précise les chemins, le hash et les préalables.
+
+## Projection propriétaire reçue après clôture documentaire
+Message t3-01ae4b7e-9597-4444-94c8-2ac138858616 : tâche58459353 result_available, continuable=false, round1, resume_attempts0, error=null ; workspace kept/report_unavailable, rapport Git incomplet et chemin historique inchangé. Cette projection ne confirme pas le HEAD lu sur disque ni la cause de fermeture. Aucune expiration de garde ni annulation n'est déduite.
+Les autres messages du lot sont les revues antérieures déjà traitées, jusqu'au verdict favorable sur46021dda. Aucun nouveau défaut de code ou nouveau périmètre de revue n'est présenté.
+Le reçu est mis à jour. Aucun nouvel appel de continuation/réparation, aucune nouvelle mission, aucune répétition de maintenance ; son prérequis global n'a pas changé.
