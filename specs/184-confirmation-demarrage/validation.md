@@ -115,3 +115,13 @@ Nouvelle préparation native après ce changement d'état :
 Refus actuel : update_missions_active_or_unconfirmed. Aucun bail obtenu, aucun chargement ou redémarrage. Le maître reste183-admission-7478e9e7.
 L'annulation demandée de b0f614ff est confirmée. La livraison runtime184/186 reste bloquée par d'autres travaux ou états à réconcilier ; la liste active n'exclut pas les autres gardes internes.
 La tentative de retrait de la demande de lecture propriétaire mcp-19961-6ae09bf2-1 est refusée : demande déjà terminale timed_out. Aucune réponse supplémentaire n’est attendue ; la confirmation native est maintenant disponible. Aucun réveil périodique, rejeu ou mission de substitution.
+
+
+## Confirmation propriétaire KS et diagnostic du dernier verrou historique
+Source : Politique sol, message mcp-60861-6ae09cd5-c. Sa lecture native confirme b0f614ff-b4c4-47bf-b5b7-4b3f9ce649a8 cancelled/work_state cancelled/error null. Le worktree est kept/report_unavailable ; ce rapport natif reste inconnu malgré la lecture physique Git propre précédemment rapportée. Aucun retrait autorisé ni effectué.
+La demande de lecture expirée et sa notification de délai ne rouvrent pas cette tâche. Aucune nouvelle mission n'est créée.
+Contrôle courant : maître183-admission-7478e9e7 ; la vue active native contient toujours les deux autres tâches c99a257f-ba09-491c-98e0-51e5255ad464 result_available et e5959986-e426-422d-956f-e035dbcf89be cancelling.
+Cette dernière appartient au mainteneur de ce fil. Son statut natif porte native_cancel_unverifiable:5022fa13-52e5-48a1-beba-2d6e27ff79f2, continuable=false, sans résultat.
+Enfant déclaré unreachable, connexion vide, persistent null, lien native_delegate réservé ; aucun journal disponible. Ancien dossier /home/moi/10.Scripts/64.bridget/.worktrees/e5959986 absent. Ces absences ne prouvent pas l'arrêt du fournisseur et ne justifient aucune réécriture d'état.
+Une seule reprise de l'annulation native propriétaire, bridget_task_cancel sur e5959986-e426-422d-956f-e035dbcf89be, restitue cancelling et le même refus d'arrêt invérifiable. Aucun arrêt manuel, adoption d'identité, modification du store ou action sur la tâche de monuments.
+Les gardes n'ont donc pas changé favorablement. Pas de nouvelle préparation identique de mise à jour après le refus réel déjà conservé ci-dessus. Le correctif184/186 reste préparé, non chargé. La tâche KS reste annulée ; son worktree est conservé.
