@@ -162,12 +162,19 @@ fn diagnostic_cli_guard(
         Err(error) => Err(error),
     }
 }
-fn current_diagnostic_cli_guard() -> Result<(), crate::mcp_identity::IdentityError> {
+fn current_diagnostic_cli_guard(config:&crate::remote_worker::WorkerRuntimeConfig) -> Result<crate::remote_worker::LiveWorkerBinding,String> {
     use crate::mcp_identity::{IdentityError, SystemProcessTree};
-    let namespace=crate::environment::Namespace::from_environment().map_err(|_|IdentityError::NamespaceConfiguration)?;
+    let namespace=crate::environment::Namespace::from_environment().map_err(|_|IdentityError::NamespaceConfiguration.code().to_owned())?;
     let delegated=crate::mcp_identity::has_delegated_marker(&namespace.root.join("delegated-pids"),std::process::id(),&SystemProcessTree);
+    if delegated {return Err(IdentityError::DelegatedMcpOnly.code().into());}
+    let binding=crate::remote_worker::live_worker_binding(config).map_err(str::to_owned)?;
+    // Ce namespace est lié au détenteur noyau du verrou worker, pas choisi
+    // depuis l'environnement du lecteur. Les options doivent égaler son argv.
+    let target_delegated=crate::mcp_identity::has_delegated_marker(&binding.namespace_root.join("delegated-pids"),std::process::id(),&SystemProcessTree);
     let explicit=std::env::var_os("BRIDGET_AGENT_ID_FILE").is_some() || std::env::var_os("BRIDGET_AGENT_INSTANCE_ID").is_some();
-    diagnostic_cli_guard(crate::mcp_identity::resolve_current_identity(),delegated,explicit)
+    diagnostic_cli_guard(crate::mcp_identity::resolve_current_identity(),target_delegated,explicit)
+        .map_err(|error|error.code().to_owned())?;
+    Ok(binding)
 }
 
 pub fn run() {
@@ -195,14 +202,18 @@ fn run_with_args(args: Vec<String>) {
     // Le worker n'ouvre pas le namespace métier et ne démarre aucun daemon.
     if cmd == "worker" {
         if args.get(2).is_some_and(|s| s == "diagnose") {
-            if let Err(error) = current_diagnostic_cli_guard() {
-                eprintln!("bridget worker diagnose : {} : {}", error.code(), error.remediation());
-                std::process::exit(1);
-            }
             let (config, command) = parse_worker_diagnostic_args(&args[3..])
                 .unwrap_or_else(|error| exit_argument_error(&error));
-            match crate::remote_worker::diagnose_local(&config, &command) {
-                Ok(value) => println!("{value}"),
+            let binding=match current_diagnostic_cli_guard(&config) {
+                Ok(binding)=>binding,
+                Err(code)=>{
+                    eprintln!("{}",crate::remote_worker::diagnostic_failure(&code,&command));
+                    std::process::exit(1);
+                }
+            };
+            let outcome=crate::remote_worker::diagnose_live_local(&config,&command,&binding);
+            match outcome {
+                Ok(mut value)=>{value["live_worker_pid"]=serde_json::json!(binding.pid);value["live_worker_birth"]=serde_json::json!(binding.birth);println!("{value}");},
                 Err(code) => {
                     eprintln!("{}", crate::remote_worker::diagnostic_failure(&code, &command));
                     std::process::exit(1);

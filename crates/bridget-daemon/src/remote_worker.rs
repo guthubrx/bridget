@@ -24,7 +24,9 @@ use std::sync::Mutex;
 
 #[path = "remote_worker_read.rs"]
 mod read;
-pub(crate) use read::{diagnose_local, diagnostic_failure};
+pub(crate) use read::{diagnose_live_local, diagnostic_failure, live_worker_binding, LiveWorkerBinding};
+#[cfg(test)]
+use read::diagnose_local;
 
 #[path = "remote_workspace_repair.rs"]
 pub(crate) mod workspace_repair;
@@ -2112,7 +2114,7 @@ struct WorkerRuntime {
 impl WorkerRuntime {
     fn read_view(&self) -> read::WorkerReadView<'_> {
         read::WorkerReadView { config: &self.config, identity: &self.identity,
-            credential: &self.credential, source: &self.source }
+            credential: &self.credential, source: &self.source, quiet: false }
     }
 
     fn new(config: WorkerRuntimeConfig) -> Result<Self, String> {

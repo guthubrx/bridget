@@ -7,6 +7,7 @@ pub(super) struct WorkerReadView<'a> {
     pub(super) identity: &'a WorkerIdentity,
     pub(super) credential: &'a IdentityCredential,
     pub(super) source: &'a crate::lifecycle::SourceEnvironment,
+    pub(super) quiet: bool,
 }
 #[derive(Default)]
 pub(super) struct ReadTrace {
@@ -23,6 +24,20 @@ impl ReadTrace {
 }
 pub(super) fn inputs(
     config: &WorkerRuntimeConfig,
+) -> Result<
+    (
+        WorkerIdentity,
+        IdentityCredential,
+        crate::lifecycle::SourceEnvironment,
+    ),
+    String,
+> {
+    inputs_observed(config, false, crate::lifecycle::source_environment())
+}
+fn inputs_observed(
+    config: &WorkerRuntimeConfig,
+    quiet: bool,
+    mut source: crate::lifecycle::SourceEnvironment,
 ) -> Result<
     (
         WorkerIdentity,
@@ -70,7 +85,11 @@ pub(super) fn inputs(
         return Err("worker_credential_invalid".into());
     }
     let credential = IdentityCredential::new(secret.trim_end_matches(['\r', '\n']).to_owned());
-    let registry = AgentRegistry::load_from_path(config.registry_path.clone())?;
+    let registry = if quiet {
+        AgentRegistry::load_from_path_quiet(config.registry_path.clone())
+    } else {
+        AgentRegistry::load_from_path(config.registry_path.clone())
+    }?;
     let provision = registry
         .machines()
         .get(&identity.machine_id)
@@ -81,7 +100,6 @@ pub(super) fn inputs(
     {
         return Err("worker_provisioning_mismatch".into());
     }
-    let mut source = crate::lifecycle::source_environment();
     let namespace = crate::environment::Namespace::resolve(
         config.master_socket.parent().map(Path::to_path_buf),
         Some(config.master_socket.clone()),
@@ -100,8 +118,12 @@ impl WorkerReadView<'_> {
             .join(format!("{}.json", marker_key(command)))
     }
     pub(super) fn registry(&self) -> Result<AgentRegistry, WorkerRefusal> {
-        let registry = AgentRegistry::load_from_path(self.config.registry_path.clone())
-            .map_err(|_| WorkerRefusal::Unauthorized)?;
+        let registry = if self.quiet {
+            AgentRegistry::load_from_path_quiet(self.config.registry_path.clone())
+        } else {
+            AgentRegistry::load_from_path(self.config.registry_path.clone())
+        }
+        .map_err(|_| WorkerRefusal::Unauthorized)?;
         let provision = registry
             .machines()
             .get(&self.identity.machine_id)
@@ -454,6 +476,7 @@ impl WorkerReadView<'_> {
 
 /// Observation locale seulement : aucun WorkerStore écrivain ni runtime vivant.
 /// Le même environnement que le worker est requis pour interpréter les refus.
+#[cfg(test)]
 pub(crate) fn diagnose_local(
     config: &WorkerRuntimeConfig,
     command: &WorkerCommandIdentity,
@@ -548,23 +571,38 @@ fn observe_stably(
     }
     outcome
 }
+#[cfg(test)]
 pub(super) fn diagnose_local_observed(
     config: &WorkerRuntimeConfig,
     command: &WorkerCommandIdentity,
+    after_check: impl FnOnce(),
+) -> Result<serde_json::Value, String> {
+    diagnose_with_source(
+        config,
+        command,
+        crate::lifecycle::source_environment(),
+        after_check,
+    )
+}
+fn diagnose_with_source(
+    config: &WorkerRuntimeConfig,
+    command: &WorkerCommandIdentity,
+    source: crate::lifecycle::SourceEnvironment,
     after_check: impl FnOnce(),
 ) -> Result<serde_json::Value, String> {
     let paths = diagnostic_paths(config, command)?;
     observe_stably(
         &paths,
         || {
-            let (identity, credential, source) =
-                inputs(config).map_err(|_| "diagnostic_context_unavailable")?;
+            let (identity, credential, source) = inputs_observed(config, true, source)
+                .map_err(|_| "diagnostic_context_unavailable")?;
             diagnose_inner(
                 WorkerReadView {
                     config,
                     identity: &identity,
                     credential: &credential,
                     source: &source,
+                    quiet: true,
                 },
                 command,
             )
@@ -685,6 +723,37 @@ fn diagnose_inner(
 
 pub(crate) fn diagnostic_failure(code: &str, command: &WorkerCommandIdentity) -> serde_json::Value {
     let (message, recovery, human_action) = match code {
+        "delegated_mcp_only" => (
+            "Ce processus délégué ne peut pas utiliser le lecteur local du worker.",
+            "Rendez le besoin de diagnostic au parent par sa façade native, en conservant la tâche et sa clé.",
+            "Le parent ou le responsable du worker doit prendre en charge ce contrôle dans son propre périmètre.",
+        ),
+        "namespace_configuration_invalid"
+        | "identity_not_found"
+        | "legacy_marker"
+        | "t3_session_unavailable" => (
+            "Le contexte du lecteur n’est pas résolu de manière sûre.",
+            "Vérifiez le namespace configuré et les preuves natives de ce processus. Conservez les identités d’origine.",
+            "Si ce rattachement ne peut pas être vérifié, demandez au responsable de le rétablir.",
+        ),
+        "diagnostic_worker_binding_unsupported" => (
+            "Le rattachement du lecteur au worker vivant requiert Linux.",
+            "Exécutez ce diagnostic sur l’hôte Linux du worker, avec ses options exactes.",
+            "Pour un autre système, faites qualifier un parcours adapté par le responsable.",
+        ),
+        "diagnostic_worker_binding_unavailable"
+        | "diagnostic_worker_binding_mismatch"
+        | "diagnostic_worker_binding_ambiguous"
+        | "diagnostic_worker_binding_changed" => (
+            "Le détenteur vivant du store et ses options ne sont pas vérifiés de manière univoque.",
+            "Vérifiez le worker Linux qui détient le verrou, son PID et ses sept options. Aucun reçu ni verrou ne doit être recréé pour ce contrôle.",
+            "Si le processus ou ses informations noyau restent invérifiables, demandez une inspection au responsable ; aucune fin de tâche n’est déduite.",
+        ),
+        "diagnostic_worker_environment_unavailable" | "diagnostic_worker_environment_changed" => (
+            "L’environnement source du worker vivant est inaccessible ou instable.",
+            "Vérifiez le processus détenteur du verrou et son accès procfs ; aucune variable d’identité du lecteur ne doit être remplacée.",
+            "Si cette observation reste impossible, demandez une inspection au responsable du worker ; ce refus ne prouve pas une fin de tâche.",
+        ),
         "diagnostic_identity_invalid" | "diagnostic_identity_mismatch" => (
             "Le tuple demandé ne correspond pas à un reçu valide de ce worker.",
             "Comparez commande, tâche, instance et génération avec l’admission d’origine ; conservez la clé et le reçu existants.",
@@ -721,7 +790,229 @@ pub(crate) fn diagnostic_failure(code: &str, command: &WorkerCommandIdentity) ->
             "Demandez au responsable du worker d’inspecter les données ou de décider une récupération conservant la tâche.",
         ),
     };
-    serde_json::json!({"status":"refused","code":code,"command":command,
+    let stage = match code {
+        "diagnostic_identity_invalid" | "diagnostic_identity_mismatch" => "identity",
+        "diagnostic_receipt_unavailable" | "diagnostic_receipt_invalid" => "receipt",
+        "diagnostic_context_unavailable" => "context",
+        "diagnostic_enrollment_invalid" | "diagnostic_enrollment_unavailable" => "enrollment",
+        "namespace_configuration_invalid" | "delegated_mcp_only" | "identity_not_found" => "caller",
+        code if code.starts_with("diagnostic_worker_environment_") => "worker_environment",
+        code if code.starts_with("diagnostic_worker_binding_") => "worker_binding",
+        _ => "observation",
+    };
+    let cause = match code {
+        "diagnostic_receipt_unavailable" => "receipt_missing",
+        "diagnostic_identity_mismatch" => "command_tuple_mismatch",
+        "diagnostic_file_type_invalid" => "not_regular_file",
+        "diagnostic_observation_changed" => "observed_files_changed",
+        "namespace_configuration_invalid" => "namespace_invalid",
+        "delegated_mcp_only" => "delegated_cli_denied",
+        _ => "unknown",
+    };
+    serde_json::json!({"version":1,"status":"refused","code":code,"command":command,"stage":stage,
+        "cause":cause,"environment":"diagnostic_process",
         "message":message,"recovery":recovery,"human_action":human_action,
         "scope":"local_read_only_recheck","authoritative":false})
+}
+
+#[cfg(target_os = "linux")]
+fn live_environment(
+    binding: &LiveWorkerBinding,
+) -> Result<crate::lifecycle::SourceEnvironment, String> {
+    use std::os::unix::ffi::OsStringExt;
+    if crate::managed_process::process_birth(binding.pid).ok() != Some(binding.birth) {
+        return Err("diagnostic_worker_binding_changed".into());
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(format!("/proc/{}/environ", binding.pid))
+        .map_err(|_| "diagnostic_worker_environment_unavailable")?;
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "diagnostic_worker_environment_unavailable")?;
+    if bytes.len() > 1024 * 1024 {
+        return Err("diagnostic_worker_environment_unavailable".into());
+    }
+    let mut source = crate::lifecycle::SourceEnvironment::new();
+    for field in bytes.split(|b| *b == 0).filter(|v| !v.is_empty()) {
+        let i = field
+            .iter()
+            .position(|b| *b == b'=')
+            .ok_or("diagnostic_worker_environment_unavailable")?;
+        let name = std::str::from_utf8(&field[..i])
+            .map_err(|_| "diagnostic_worker_environment_unavailable")?;
+        source.insert(
+            name.to_owned(),
+            std::ffi::OsString::from_vec(field[i + 1..].to_vec()),
+        );
+    }
+    Ok(source)
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn diagnose_live_local(
+    config: &WorkerRuntimeConfig,
+    command: &WorkerCommandIdentity,
+    binding: &LiveWorkerBinding,
+) -> Result<serde_json::Value, String> {
+    if live_worker_binding(config).ok().as_ref() != Some(binding) {
+        return Err("diagnostic_worker_binding_changed".into());
+    }
+    let environment = live_environment(binding)?;
+    let outcome = diagnose_with_source(config, command, environment.clone(), || {});
+    if live_worker_binding(config).ok().as_ref() != Some(binding) {
+        return Err("diagnostic_worker_binding_changed".into());
+    }
+    if live_environment(binding)? != environment {
+        return Err("diagnostic_worker_environment_changed".into());
+    }
+    outcome.map(|mut value| {
+        value["source_environment"] = serde_json::json!("live_worker_observed");
+        value["worker_pid"] = serde_json::json!(binding.pid);
+        value["worker_birth"] = serde_json::json!(binding.birth);
+        value
+    })
+}
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn diagnose_live_local(
+    _: &WorkerRuntimeConfig,
+    _: &WorkerCommandIdentity,
+    _: &LiveWorkerBinding,
+) -> Result<serde_json::Value, String> {
+    Err("diagnostic_worker_binding_unsupported".into())
+}
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LiveWorkerBinding {
+    pub(crate) pid: u32,
+    pub(crate) birth: u64,
+    pub(crate) namespace_root: PathBuf,
+}
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn live_worker_binding(
+    _: &WorkerRuntimeConfig,
+) -> Result<LiveWorkerBinding, &'static str> {
+    Err("diagnostic_worker_binding_unsupported")
+}
+#[cfg(target_os = "linux")]
+pub(crate) fn live_worker_binding(
+    config: &WorkerRuntimeConfig,
+) -> Result<LiveWorkerBinding, &'static str> {
+    fn bounded(path: &Path, max: u64) -> Result<Vec<u8>, &'static str> {
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(path)
+            .map_err(|_| "diagnostic_worker_binding_unavailable")?;
+        let mut bytes = Vec::new();
+        file.take(max + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "diagnostic_worker_binding_unavailable")?;
+        if bytes.len() as u64 > max {
+            return Err("diagnostic_worker_binding_unavailable");
+        }
+        Ok(bytes)
+    }
+    let root = config.state_root.join("store");
+    let key = digest_bytes(root.as_os_str().as_encoded_bytes());
+    let lock = config.state_root.join(format!(".worker-{key}.lock"));
+    check_private(&config.state_root, true).map_err(|_| "diagnostic_worker_binding_unavailable")?;
+    check_private(&lock, false).map_err(|_| "diagnostic_worker_binding_unavailable")?;
+    let m = fs::symlink_metadata(&lock).map_err(|_| "diagnostic_worker_binding_unavailable")?;
+    if !m.is_file() || m.nlink() != 1 {
+        return Err("diagnostic_worker_binding_unavailable");
+    }
+    let locks = bounded(Path::new("/proc/locks"), 2 * 1024 * 1024)?;
+    let locks = std::str::from_utf8(&locks).map_err(|_| "diagnostic_worker_binding_unavailable")?;
+    let mut owner = None;
+    for line in locks.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 6 || fields[1] != "FLOCK" || fields[3] != "WRITE" {
+            continue;
+        }
+        let dev = fields[5].split(':').collect::<Vec<_>>();
+        if dev.len() != 3
+            || u64::from_str_radix(dev[0], 16).ok() != Some(libc::major(m.dev()) as u64)
+            || u64::from_str_radix(dev[1], 16).ok() != Some(libc::minor(m.dev()) as u64)
+            || dev[2].parse::<u64>().ok() != Some(m.ino())
+        {
+            continue;
+        }
+        let pid = fields[4]
+            .parse::<u32>()
+            .ok()
+            .filter(|p| *p > 1)
+            .ok_or("diagnostic_worker_binding_unavailable")?;
+        if owner.replace(pid).is_some() {
+            return Err("diagnostic_worker_binding_ambiguous");
+        }
+    }
+    let pid = owner.ok_or("diagnostic_worker_binding_unavailable")?;
+    let process = PathBuf::from(format!("/proc/{pid}"));
+    if fs::metadata(&process)
+        .map_err(|_| "diagnostic_worker_binding_unavailable")?
+        .uid()
+        != unsafe { libc::geteuid() }
+    {
+        return Err("diagnostic_worker_binding_unavailable");
+    }
+    let birth = crate::managed_process::process_birth(pid)
+        .map_err(|_| "diagnostic_worker_binding_unavailable")?;
+    let args = bounded(&process.join("cmdline"), 32768)?;
+    let args = args
+        .split(|b| *b == 0)
+        .filter(|b| !b.is_empty())
+        .collect::<Vec<_>>();
+    if args.len() != 16 || args[1] != b"worker" {
+        return Err("diagnostic_worker_binding_mismatch");
+    }
+    let mut options = BTreeMap::new();
+    for pair in args[2..].chunks_exact(2) {
+        let key = std::str::from_utf8(pair[0]).map_err(|_| "diagnostic_worker_binding_mismatch")?;
+        if options.insert(key, pair[1]).is_some() {
+            return Err("diagnostic_worker_binding_mismatch");
+        }
+    }
+    for (key, value) in [
+        ("--machine-id", config.machine_id.as_bytes()),
+        ("--worker-id", config.worker_id.as_bytes()),
+        (
+            "--credential-file",
+            config.credential_path.as_os_str().as_encoded_bytes(),
+        ),
+        (
+            "--state-root",
+            config.state_root.as_os_str().as_encoded_bytes(),
+        ),
+        (
+            "--registry-file",
+            config.registry_path.as_os_str().as_encoded_bytes(),
+        ),
+        (
+            "--master-socket",
+            config.master_socket.as_os_str().as_encoded_bytes(),
+        ),
+    ] {
+        if options.get(key).copied() != Some(value) {
+            return Err("diagnostic_worker_binding_mismatch");
+        }
+    }
+    if options
+        .get("--provisioning-revision")
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        != Some(config.provisioning_revision)
+        || crate::managed_process::process_birth(pid).ok() != Some(birth)
+    {
+        return Err("diagnostic_worker_binding_mismatch");
+    }
+    Ok(LiveWorkerBinding {
+        pid,
+        birth,
+        namespace_root: config
+            .master_socket
+            .parent()
+            .ok_or("diagnostic_worker_binding_mismatch")?
+            .to_path_buf(),
+    })
 }

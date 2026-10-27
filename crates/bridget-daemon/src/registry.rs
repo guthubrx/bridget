@@ -626,6 +626,12 @@ impl AgentRegistry {
     }
 
     pub(crate) fn load_from_path(source: PathBuf) -> Result<Self, String> {
+        Self::load_from_path_observed(source, true)
+    }
+    pub(crate) fn load_from_path_quiet(source: PathBuf) -> Result<Self, String> {
+        Self::load_from_path_observed(source, false)
+    }
+    fn load_from_path_observed(source: PathBuf, emit_warnings: bool) -> Result<Self, String> {
         let mut agents = default_agents()?;
         let mut machines = BTreeMap::new();
         let mut decision_services = BTreeMap::new();
@@ -634,8 +640,10 @@ impl AgentRegistry {
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
-                for warning in registry_warnings(&content, &source, &agents) {
-                    eprintln!("avertissement: {warning}");
+                if emit_warnings {
+                    for warning in registry_warnings(&content, &source, &agents) {
+                        eprintln!("avertissement: {warning}");
+                    }
                 }
                 let user: AgentRegistryFile = serde_json::from_str(&content)
                     .map_err(|err| format!("registre invalide {}: {err}", source.display()))?;
