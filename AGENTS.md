@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session196 lecture d’attente : sourcea42d133cd3d21f31c07c146a8d8bf8bc0418c685,75contrôles ciblésPASS, guides vérifiés et revue5007923b favorable. Après échec de transport du seul task_wait, une relecture1s des mêmes tâches refait toutes les gardes ; aucune mutation ou refus métier rejoué, second échec guidé. Cause exacte du délai historique inconnue. CandidatLinux196-wait-a42d133cd3d2 construit/vérifié NON actif ; clientMac183-e2987fb7175f et maître183 inchangés, T004 ouverte. Correction commune disponible dans les sources poussées, pas dans une ancienne release déjà publiée. Réparation Git195 toujours opérationnelle, pas encore une prévention automatique. Revue close nativement ; référence SYS conservée sous usages partiellement inconnus. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/196-relecture-attente/validation.md.
+
+
 Session195 réparation opérationnelleKS : index stat du worktree bef1 actualisé par Git, entrées/HEAD/chemin/inode conservés ; status1,700→0,081s, refresh/sum_lstat1774→0. Vérification native4157daa7 surKS a livré un témoin exact inconnu du brief, errornull, résultat lu/ACK et garde clôturée cleanup_done. La mission métier bef1 a enfin enregistré sa remise1793164798 puis result_available/errornull, même tâche/clé, sans rejeu ni annulation du mainteneur. Fichiers métier intacts, aucun restart/binaire/config modifié ; runtime183 reste actif, maintenance globale et activation194 toujours distinctes. Preuves privées KS conservées ; reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/195-reparation-ks-index/validation.md.
 
 
