@@ -1612,3 +1612,11 @@ La preuve distante de remise attend au plus30secondes pour son `Reconcile` (192)
 Un worker silencieux peut retenir ce créneau jusqu’à30secondes et retarder les autres preuves qui partagent ce créneau ; le tick reste non bloquant et l’ordre de rotation est conservé. Le passage à la preuve suivante attend la libération du créneau.
 
 Une vérification distante calcule un seul rapport Git frais pour contrôler le workspace et construire sa réponse (193). Le reçu de préparation et l’ancre Git restent vérifiés. Un refus des droits ne devient jamais une preuve autorisant la remise ; le rapport technique disponible reste consultable. Aucun rapport n’est réutilisé entre deux appels. Ce changement réduit les lectures redondantes ; il ne garantit pas l’absence de saturation et ne change ni la file de huit entrées ni les critères d’admission.
+
+## Démarrage refusé avant remise de mission
+
+`remote_start_failed:remote_start:ResourceLimit` ne prouve ni un manque de mémoire, ni un disque plein, ni un quota du fournisseur. Sur les versions qui attestent la capacité `worker_start_recovery_v1`, Bridget distingue la file technique, le stockage de commandes et les métadonnées lorsque ce fait a été observé. Un ancien refus sans cette preuve garde une cause inconnue.
+
+Conservez la tâche, la clé et les paramètres. Suivez le parcours de reprise rendu par Bridget. Quand il est disponible et autorisé, le rejeu strict de l’admission reprend la même tâche après vérification des droits actuels et clôture durable de l’ancienne commande avant naissance. Il ne crée ni nouvelle mission ni nouvelle ronde, et conserve le dossier. Une commande déjà enregistrée ou d’issue incertaine interdit cette reprise.
+
+Un ancien maître ou worker peut exiger une mise à jour avant cette opération. Ne remplacez pas la mission et ne changez ni moteur, ni cible, ni droits pour contourner ce refus. Si la preuve ou l’activation manque, demandez au responsable l’opération native précise et son prérequis humain. La disponibilité de sources corrigées ne prouve pas le chargement du binaire.

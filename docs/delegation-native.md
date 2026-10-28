@@ -859,3 +859,11 @@ The remote dispatch proof waits at most30seconds for its `Reconcile` (192). A wo
 A silent worker may hold this slot for up to30seconds and delay other proofs sharing it; the tick stays nonblocking and rotation order is preserved. The next proof waits for the slot to become available.
 
 A remote check computes one fresh Git workspace report for both validation and its response (193). The preparation receipt and Git anchor remain checked. A permission refusal never becomes dispatch authorization; an available technical report is still returned. No report is reused across calls. This removes redundant reads without guaranteeing freedom from saturation or changing the eight-entry queue or admission criteria.
+
+## Start refused before mission delivery
+
+`remote_start_failed:remote_start:ResourceLimit` does not prove low memory, a full disk, or a provider quota. Versions that attest `worker_start_recovery_v1` distinguish the technical queue, command store and metadata when the cause was observed. A historical refusal without that evidence keeps an unknown cause.
+
+Keep the task, request key and original arguments. Follow the recovery guidance returned by Bridget. When supported and authorized, strict admission replay resumes the same task after checking current permissions and durably closing the previous command before any birth. It creates no new mission or round and preserves the workspace. An existing command receipt or an uncertain execution blocks this recovery.
+
+An older master or worker can require an upgrade first. Do not replace the mission or change the engine, target or permissions to bypass the refusal. If evidence or activation is missing, ask the maintainer for the exact native operation and its human prerequisite. Corrected sources do not prove that the running binary has loaded them.
