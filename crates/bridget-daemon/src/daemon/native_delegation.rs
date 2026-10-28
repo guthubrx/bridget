@@ -4246,7 +4246,8 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             };
         } else if preparation_failed {
             view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
-        } else if task.state == "starting" && task.mission_issued_at.is_none() {
+        } else if task.state == "starting" && task.mission_issued_at.is_none()
+            && task.error.as_deref().is_some_and(start_recovery::recoverable_refusal) {
             view["error_recovery"] = json!("Conservez cette tâche, sa request_id et son dossier. Rejouez à l’identique la même demande auto (mêmes paramètres) : Bridget ferme d’abord l’ancienne commande côté worker, puis reprend la MÊME tâche si les droits, la source et la définition sont inchangés. Prérequis : un worker qui annonce start_recovery_v1 et aucune pause ou annulation. Les reprises sont bornées à trois ; ne créez pas de nouvelle tâche.");
             view["error_human_action"] = json!("Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission.");
         }
@@ -6025,7 +6026,8 @@ fn start_remote_task_with(
         let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
             return Err("invalid_record".into());
         };
-        let now = recovery.map_or_else(unix_timestamp, |plan| plan.issued_at);
+        let now = unix_timestamp();
+        let issued_at = recovery.map_or(now, |plan| plan.issued_at);
         // Le canon du premier lancement ne change jamais lors d'une reprise.
         if recovery.is_none() {
             task.launch_issued_at = Some(now);
@@ -6040,8 +6042,8 @@ fn start_remote_task_with(
             persistent: true,
             command_id: recovery
                 .map_or_else(|| task.task_id.clone(), |plan| plan.new_command_id.clone()),
-            issued_at: now,
-            deadline_at: now + 300,
+            issued_at,
+            deadline_at: issued_at + 300,
             ownership: Some(SpawnOwnership {
                 parent_instance_id: task.origin_owner_instance.clone(),
                 parent_execution_id: task.parent_execution_id.clone(),
@@ -7525,7 +7527,7 @@ fn admit_delegate(
         let record = Task {
             remote_prepared: false,
             start_recovery: None,
-        workspace_repairs: Vec::new(),
+            workspace_repairs: Vec::new(),
             remote_result_slots: Vec::new(),
             remote_result_receipts: Vec::new(),
             remote_placement: if let WorkspacePass::Remote { prepared, .. } = pass {
@@ -23215,7 +23217,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         cleanup(&config);
     }
 
-    fn tache_151(st: &mut DaemonState, key: &str) -> Task {
+    pub(super) fn tache_151(st: &mut DaemonState, key: &str) -> Task {
         let created = handle_locked("conn-1", request(key), st).unwrap();
         st.delegation_store
             .get(created["task_id"].as_str().unwrap())
@@ -24692,7 +24694,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         cleanup(&config);
     }
 
-    fn fixture(
+    pub(super) fn fixture(
         label: &str,
     ) -> (
         DaemonState,
@@ -24753,7 +24755,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             workspace: None,
         }
     }
-    fn continuation172_parent() -> bridget_transport::protocol::ProviderPermissions {
+    pub(super) fn continuation172_parent() -> bridget_transport::protocol::ProviderPermissions {
         serde_json::from_value(json!({
             "version":1,"source":"provider_turn","run_id":"run:850",
             "provider_session_id":"session-172","provider_instance_id":"codex",
@@ -25471,7 +25473,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(st); drop(state); cleanup(&config);
     }
 
-    fn remote162_capture_fixture() -> (
+    pub(super) fn remote162_capture_fixture() -> (
         DaemonState,
         DaemonConfig,
         Task,
@@ -26467,7 +26469,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         cleanup(&config);
     }
 
-    fn cleanup(config: &DaemonConfig) {
+    pub(super) fn cleanup(config: &DaemonConfig) {
         let _ = std::fs::remove_file(&config.db_path);
     }
 

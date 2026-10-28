@@ -18942,6 +18942,8 @@ fn handle_worker_message(
                         | WorkerResponseOperation::DispositionRecorded { .. }
                         | WorkerResponseOperation::Released {}
                         | WorkerResponseOperation::Rejected { .. }
+                        | WorkerResponseOperation::StartFenced {}
+                        | WorkerResponseOperation::StartRejected { .. }
                 ) && remote_worker_has_command(&st, &response.worker, Some(&response.command))
                 {
                     return None;

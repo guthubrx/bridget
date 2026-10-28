@@ -494,7 +494,7 @@ struct WorkspacePreparationReceipt {
     record: Option<crate::delegation::WorkspaceRecord>,
 }
 
-fn same_workspace_anchor(record: &crate::delegation::WorkspaceRecord,
+pub(crate) fn same_workspace_anchor(record: &crate::delegation::WorkspaceRecord,
     workspace: &serde_json::Value) -> bool {
     let Ok(sent) = serde_json::from_value::<crate::delegation::WorkspaceRecord>(workspace.clone())
         else { return false; };

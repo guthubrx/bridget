@@ -19,7 +19,6 @@ use std::sync::LazyLock;
 
 const FENCE_TIMEOUT: Duration = Duration::from_secs(30);
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
-const NEW_LEASE_SECS: i64 = 300;
 
 /// Sous-codes fermés d'un refus de capacité. `unknown` = le pair négocié n'a pas
 /// pu préciser ; l'absence de sous-code désigne un refus historique sans preuve.
@@ -65,12 +64,18 @@ pub(super) fn capacity_refusal(error: &str) -> Option<Option<&str>> {
     CAUSES.contains(&cause).then_some(Some(cause))
 }
 
+/// Le quota de métadonnées suit déjà la création du reçu : il ne relève pas
+/// de la reprise avant reçu. Un refus ancien reste vérifiable par fence.
+pub(super) fn recoverable_refusal(error: &str) -> bool {
+    matches!(capacity_refusal(error), Some(cause) if cause != Some("preparation_metadata"))
+}
+
 pub(super) fn capacity_message(cause: Option<&str>) -> &'static str {
     match cause {
-        None => "Le démarrage distant a été refusé pour capacité avant tout reçu de commande. L’ancien refus ne précise pas la cause : file du worker, stockage de commandes ou file du maître restent non distingués.",
+        None => "Le démarrage distant a été refusé pour capacité. L’ancien retour ne précise ni la cause ni l’état du reçu de commande : file du worker, stockage de commandes ou file du maître restent non distingués.",
         Some("inbound_queue") => "Le démarrage distant a été refusé : la file d’entrée du worker était pleine à cet instant. La mission n’a pas été remise.",
         Some("command_store") => "Le démarrage distant a été refusé : le stockage de commandes du worker était saturé à cet instant. La mission n’a pas été remise.",
-        Some("preparation_metadata") => "Le démarrage distant a été refusé : les métadonnées de préparation du worker ont atteint leur borne. La mission n’a pas été remise.",
+        Some("preparation_metadata") => "Le démarrage distant a été refusé : la réservation des métadonnées de préparation du worker a été refusée pour capacité. La mission n’a pas été remise.",
         Some("request_frame") => "Le démarrage distant a été refusé : l’enveloppe de la demande dépasse la borne du worker. La mission n’a pas été remise.",
         Some("master_pending") => "Le maître n’a pas envoyé le démarrage : sa table de réponses en attente était pleine. Le worker n’a rien reçu.",
         Some("master_request_frame") => "Le maître n’a pas envoyé le démarrage : l’enveloppe dépasse sa borne. Le worker n’a rien reçu.",
@@ -131,7 +136,7 @@ pub(super) fn wanted(task: &Task, receipt: &AutoAdmissionReceipt) -> bool {
     match &task.start_recovery {
         Some(plan) if plan.in_progress() => true,
         Some(plan) if plan.phase != StartRecoveryPhase::Closed => false,
-        _ => task.error.as_deref().and_then(capacity_refusal).is_some(),
+        _ => task.error.as_deref().is_some_and(recoverable_refusal),
     }
 }
 
@@ -212,11 +217,10 @@ fn admission_open(st: &DaemonState) -> Result<(), String> {
         .delegation_store
         .delegation_halt()
         .map_err(|_| "control_state_unavailable")?;
-    if !matches!(
-        crate::referent_control::admit_native_delegation(&control, &halt),
-        crate::referent_control::Admission::Admitted
-    ) {
-        return Err("referent_paused".into());
+    if let crate::referent_control::Admission::Deferred { motif } =
+        crate::referent_control::admit_native_delegation(&control, &halt)
+    {
+        return Err(if motif == "pause" { "referent_paused" } else { motif }.into());
     }
     Ok(())
 }
@@ -235,6 +239,8 @@ fn fresh(
         Some(plan)
             if task.state == "starting"
                 && task.mission_issued_at.is_none()
+                && !task.guard_released && !task.cleanup_done
+                && task.result.is_none() && task.round_no() == 1
                 && phases.contains(&plan.phase) =>
         {
             admission_open(&st)?;
@@ -262,12 +268,14 @@ fn gather(
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
     recheck_attested_thread(&st, conn, thread)?;
     let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
-    let mut task = st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
+    let task = st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
     if !wanted(&task, receipt) {
         // Autre rejeu, autre reprise ou état modifié : simple lecture.
         return Ok(Err(current_task_view(&st, &task, true)?));
     }
-    recover_owner(&st, &mut task, &owner, &instance)?;
+    if !can_own_task(&st, &task, &owner, &instance)? {
+        return Err("task_unavailable".into());
+    }
     let NativeDelegationRequest::Delegate {
         request_id,
         agent_type,
@@ -559,11 +567,16 @@ fn prepare_same_worktree(
         .as_ref()
         .map(|snapshot| snapshot.child_policy.clone())
         .ok_or("permission_not_inherited")?;
+    let workspace_matches = match (&task.workspace, &prepared.workspace) {
+        (Some(frozen), Some(observed)) => crate::remote_worker::same_workspace_anchor(frozen, observed),
+        (None, None) => true,
+        _ => false,
+    };
     if prepared.token == WORKER_INSPECTION_TOKEN
         || prepared.placement != placement
         || prepared.definition != task.definition
         || Some(prepared.effective_posture) != task.effective_posture
-        || prepared.workspace != workspace
+        || !workspace_matches
     {
         return Err("start_recovery_prepared_changed".into());
     }
@@ -773,3 +786,7 @@ mod tests {
         assert!(Claim::take("task-claim-test").is_some());
     }
 }
+
+#[cfg(test)]
+#[path = "native_start_recovery198_tests.rs"]
+mod admission_tests;
