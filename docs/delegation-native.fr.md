@@ -1552,6 +1552,8 @@ Cette observation ne couvre pas un appel concurrent envoyé ensuite. Une coupure
 
 Un rejeu explicite V2 peut reprendre une admission `chosen` interrompue après sa décision, dans la même époque du coordinateur. Il conserve l'enveloppe et le choix enregistrés, puis relit la source Git, les droits et la cible. Une préparation déjà en cours pour le même propriétaire et la même clé rend `admission_pending`. Les états `pending` et `decision_started` ne déclenchent pas de nouvelle décision au rejeu. Une tâche déjà admise et un refus durable restent inchangés. La garde de maintenance reste fermée tant que l'admission n'est pas soldée.
 
+Le choix validé est enregistré avant la sonde de revalidation, sous l’état `chosen`. Un refus temporaire de cette sonde ne relance pas le décideur et ne perd pas l’effort choisi. Après correction de la cause, un rejeu strict reprend seulement ce choix ; la source, les droits et la cible doivent encore être acceptés avant création de tâche. Si le refus devient durable, le reçu passe à `refused` et une même clé ne le rouvre pas. Un ancien reçu déjà bloqué en `decision_started` n’est pas réparé par cette lecture : demander au responsable la vérification du reçu et du binaire chargé, sans modifier le store ni forcer un redémarrage.
+
 
 ## Diagnostic local du worker (188)
 

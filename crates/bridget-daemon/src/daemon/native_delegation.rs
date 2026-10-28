@@ -1960,21 +1960,11 @@ fn choose_routing_admission(
         )
         .map_err(|error| error.code().to_owned())?;
         let index = routing_choice_index(plan, &choice.candidate_id)?;
-        let mut chosen_plan = plan.clone();
-        let observed = refresh_routing_selected(
-            conn,
-            request,
-            plan,
-            index,
-            choice.effort.as_deref(),
-            attested,
-            state,
-            recovering,
-        )?;
-        chosen_plan.observations[index] = observed;
-        // Le digest désormais figé décrit exactement l'effort du choix.
-        chosen_plan.candidates[index].default_effort = choice.effort.clone();
-        let candidate = &chosen_plan.candidates[index];
+        // Persister le choix avant toute sonde : un refus temporaire doit
+        // garder Chosen, que le rejeu strict sait reprendre sans décideur.
+        // Le profil observé reste celui de la matrice initiale. Le parcours
+        // exclusif ci-dessous vérifie aussi l’effort décidé avant tout Prepare.
+        let candidate = &plan.candidates[index];
         let decision = LineageDecisionV4 {
             candidate_id: choice.candidate_id.clone(),
             connection_id: candidate.connection_id.clone(),
@@ -1983,7 +1973,7 @@ fn choose_routing_admission(
             model: candidate.model.clone(),
             effort: choice.effort.clone(),
             source,
-            facts: routing_choice_facts(&chosen_plan, index)?,
+            facts: routing_choice_facts(plan, index)?,
             reason: choice.reason.clone(),
         };
         let mode = match source {
@@ -1998,7 +1988,7 @@ fn choose_routing_admission(
                 return Err("admission_pending".into());
             }
             let delegate = routing_delegate(request, candidate, choice.effort.clone(), &st.host,
-                chosen_plan.observations[index].project_id.as_deref());
+                plan.observations[index].project_id.as_deref());
             st.delegation_store.choose_auto_admission_at(
                 receipt,
                 receipt.coordinator_epoch,
@@ -2008,7 +1998,7 @@ fn choose_routing_admission(
                 serde_json::to_vec(&delegate).map_err(|e| e.to_string())?,
                 mode,
                 choice.reason,
-                serde_json::to_vec(&routing_snapshot(&chosen_plan, Some(decision)))
+                serde_json::to_vec(&routing_snapshot(plan, Some(decision)))
                     .map_err(|e| e.to_string())?,
                 unix_timestamp(),
             )?
@@ -2016,7 +2006,7 @@ fn choose_routing_admission(
         match route_selected_admission(
             conn,
             request,
-            &chosen_plan,
+            plan,
             &chosen,
             project,
             attested,
@@ -15586,6 +15576,52 @@ for frame in frames: print(json.dumps(frame),flush=True)
         );
         drop(state);
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec194_refus_apres_decision_garde_choix_et_rejeu_strict_unique() {
+        for effort in ["high", "low"] {
+            let (state, config, rx, _reader, request, _root) = routing168_fixture(2);
+            let mut plan = routing168_plan(&state, &request);
+            observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+            let receipt = {
+                let st = state.lock().unwrap();
+                let now = unix_timestamp();
+                let receipt = routing_auto_receipt(OWNER.into(), &request,
+                    serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
+                    &plan, st.coordinator_epoch, now).unwrap();
+                assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap());
+                st.delegation_store.start_auto_decision_level(&receipt, receipt.coordinator_epoch,
+                    receipt.revision, plan.decision_level, now).unwrap()
+            };
+            // La cible déclarée disparaît après le choix, avant la sonde finale.
+            routing168_update(&state, |v| v["routing_policy"]["connections"][0]["enabled"] = json!(false));
+            let code = choose_routing_admission("conn-1", &request, &plan, &receipt,
+                RoutingDecisionChoice {candidate_id:"c002".into(),effort:Some(effort.into()),reason:None},
+                bridget_transport::protocol::LineageDecisionSourceV4::Deterministic,
+                None, None, None, None, &state, false).unwrap_err();
+            assert_eq!(failure(&code)["code"], "routing_candidate_unavailable");
+            let chosen = routing168_receipt(&state, &request);
+            assert_eq!(chosen.state, AutoAdmissionState::Chosen, "choix durable avant la sonde refusée");
+            assert_eq!(chosen.candidate_id.as_deref(), Some("c002"));
+            let metadata: Value = serde_json::from_slice(&chosen.metadata).unwrap();
+            assert_eq!(metadata["decision"]["effort"], effort);
+            let reopened = crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+            assert_eq!(reopened.auto_admission_receipt(OWNER, &request.request_id).unwrap().unwrap(), chosen);
+            assert!(reopened.tasks().unwrap().is_empty());
+            drop(reopened);
+            assert!(rx.try_recv().is_err(), "aucun lancement avant validation de la cible");
+            routing168_update(&state, |v| v["routing_policy"]["connections"][0]["enabled"] = json!(true));
+            let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+            let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+            assert_eq!(admitted["task_id"], replay["task_id"]);
+            let settled = routing168_receipt(&state, &request);
+            assert_eq!(settled.state, AutoAdmissionState::Admitted);
+            assert_eq!(settled.metadata, chosen.metadata, "aucune nouvelle décision au rejeu");
+            assert_eq!(settled.delegate_canonical, chosen.delegate_canonical);
+            assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+            drop(state); cleanup(&config);
+        }
     }
 
     #[test]

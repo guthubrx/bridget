@@ -758,6 +758,8 @@ The observation does not cover a concurrent call submitted later. Transport fail
 
 An explicit V2 replay can resume a `chosen` admission interrupted after its decision, within the same coordinator epoch. It preserves the recorded envelope and choice, then rechecks the Git source, permissions and target. An ongoing preparation for the same owner and key returns `admission_pending`. Replaying `pending` or `decision_started` does not start a new decision. An admitted task and a durable refusal remain unchanged. Maintenance remains blocked until the admission is settled.
 
+The validated choice is stored as `chosen` before its revalidation probe. A temporary probe refusal neither reruns the decision maker nor loses the selected effort. After the cause is corrected, an identical replay resumes that choice only; source, permissions and target must still pass before task creation. A terminal refusal is stored as `refused` and identical replay does not reopen it. Reading a legacy receipt already stuck in `decision_started` does not repair it: ask the maintainer to check the receipt and loaded binary, without editing the store or forcing a restart.
+
 ## Réparer le dossier déplacé d'une tâche — contrat185
 
 Ce parcours exige la capacité `task_workspace_repair_v1` du maître,
