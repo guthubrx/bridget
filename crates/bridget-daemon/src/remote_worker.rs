@@ -7723,6 +7723,8 @@ while not stop.exists(): time.sleep(.01)
             WorkerResponseOperation::StartFenced {});
         let receipt = runtime.store.command(&command()).unwrap();
         assert_eq!(receipt.phase, WorkerCommandPhase::Refused);
+        assert!(receipt.deadline_at < receipt.created_at,
+            "le fence conserve le délai historique, même déjà expiré");
         assert!(receipt.pre_start_fence.is_some());
         assert!(receipt.marker.is_none() && receipt.permit.is_none() && receipt.child_id.is_none());
         assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
@@ -7755,6 +7757,25 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(reopened.fence_unstarted(&command(), &placement(), deadline).unwrap(),
             WorkerResponseOperation::StartFenced {});
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn spec198_fence_quota_refuse_sans_recu_puis_accepte_meme_cle() {
+        let fixture = Fixture::new();
+        let runtime = runtime_fixture(&fixture);
+        let deadline = worker_now() - 1;
+        let quota_file = runtime.store.root.join("quota-fence198");
+        let quota = OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(&quota_file).unwrap();
+        quota.set_len(MAX_WORKER_STORE_BYTES as u64).unwrap();
+        assert_eq!(runtime.fence_unstarted(&command(), &placement(), deadline).unwrap_err(),
+            WorkerRefusal::ResourceLimit);
+        assert!(!runtime.store.command_path(&command()).exists());
+        assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
+        fs::remove_file(quota_file).unwrap();
+        assert_eq!(runtime.fence_unstarted(&command(), &placement(), deadline).unwrap(),
+            WorkerResponseOperation::StartFenced {});
+        assert_eq!(runtime.store.command(&command()).unwrap().phase, WorkerCommandPhase::Refused);
     }
 
     #[test]
@@ -7840,6 +7861,12 @@ while not stop.exists(): time.sleep(.01)
         let wire = serde_json::to_value(&fence).unwrap();
         assert_eq!(wire["request"]["operation"], "fence_unstarted");
         assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), fence);
+        assert!(matches!(worker_inbound_busy(WorkerInbound::Request(fence)),
+            WrapperToDaemon::WorkerResponse { response: WorkerResponse {
+                response: WorkerResponseOperation::Rejected {
+                    reason: WorkerRefusal::ResourceLimit,
+                }, ..
+            } }));
     }
 
     #[test]
