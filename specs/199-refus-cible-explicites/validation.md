@@ -11,3 +11,6 @@ Première compilation :3tests199PASS. État suivant :4tests199PASS,3tests de rej
 
 ## Livraison
 Source, revue et candidat en préparation. Maître183 encore actif ; aucune activation ni reprise de bd3dabf6. Maintenance198 reste distincte et son refus ne donne aucun droit de redémarrer. Correction technique : aucun diaporama d’interface requis.
+
+## Contre-revue et complément
+La revue native3ad2f1b9-a2e6-4838-949b-0cfa7d2e030b sur5e209eeb identifie uneP2 : la catégorie machine, autorisée par le validateur, manquait dans le guidage et atteignaitunreachable. Correction : guidage machine ajouté, sortie de repli sans panique, test exhaustif des12catégories fermées.5tests199PASS sur le complément. Aucun binaire de5e209eeb activé ; sa compilation réussie ne qualifie pas cette ancienne tête.

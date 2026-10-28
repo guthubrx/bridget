@@ -3729,9 +3729,10 @@ fn failure(code: &str) -> Value {
                 "permissions" => "Comparez la politique et la preuve de droits du parent et de la cible. Ne les élargissez pas pour faire passer le contrôle.",
                 "mapping" | "project" => "Vérifiez le mapping et le projet de la machine choisie avec leur responsable. Préservez les placements déjà utilisés.",
                 "definition" | "protocol" | "profile" | "model" | "effort" => "Comparez la définition du profil choisi, son moteur, son modèle et son effort aux paramètres autorisés. Ne choisissez pas un remplaçant silencieusement.",
+                "machine" => "Comparez la machine du contrat avec la cible choisie dans le reçu. Ne déplacez pas la mission sur une autre machine pour contourner ce refus.",
                 "canonical" => "Vérifiez que la décision persistée et le contrat Delegate concordent. Ne modifiez ni l'enveloppe ni le reçu à la main.",
                 "base" => "Vérifiez le SHA demandé et la base renvoyée par la préparation. Ne déplacez pas un checkout utilisé et ne remplacez pas le SHA attendu.",
-                _ => unreachable!(),
+                _ => "Le contrôle n’est pas reconnu. Conservez le refus et demandez sa vérification au responsable Bridget.",
             };
             json!({"field": field, "recovery": recovery})
         }).collect();
@@ -13075,6 +13076,21 @@ mod tests {
             assert_eq!(view["code"], "routing_connection_changed");
             assert_eq!(view["detail"]["stage"], "unobserved");
             assert!(!view.to_string().contains("private-secret"));
+        }
+    }
+
+    #[test]
+    fn spec199_chaque_categorie_validee_produit_un_refus_sans_panique() {
+        for field in ["definition", "permissions", "worker_epoch", "mapping", "project",
+            "protocol", "canonical", "effort", "machine", "profile", "model", "base"] {
+            let code = format!("routing_connection_changed:delegate_contract:{field}");
+            assert!(routing_change_detail(&code).is_some());
+            let refusal = failure(&code);
+            assert_eq!(refusal["code"], "routing_connection_changed");
+            assert_eq!(refusal["detail"]["changes"], json!([field]));
+            assert_eq!(refusal["detail"]["checks"][0]["field"], field);
+            assert!(!refusal["detail"]["checks"][0]["recovery"].as_str().unwrap().is_empty());
+            assert!(!refusal["detail"]["checks"][0]["recovery"].as_str().unwrap().contains("pas reconnu"));
         }
     }
 
