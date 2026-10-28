@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session195 réparation opérationnelleKS : index stat du worktree bef1 actualisé par Git, entrées/HEAD/chemin/inode conservés ; status1,700→0,081s, refresh/sum_lstat1774→0. Vérification native4157daa7 surKS a livré un témoin exact inconnu du brief, errornull, résultat lu/ACK et garde clôturée cleanup_done. La mission métier bef1 a enfin enregistré sa remise1793164798 puis result_available/errornull, même tâche/clé, sans rejeu ni annulation du mainteneur. Fichiers métier intacts, aucun restart/binaire/config modifié ; runtime183 reste actif, maintenance globale et activation194 toujours distinctes. Preuves privées KS conservées ; reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/195-reparation-ks-index/validation.md.
+
+
 Session194 admission rejouable : source b38a08713c95c0858807cdaed7fcf78ce7fa7b3d,40contrôles ciblés PASS, contre-épreuves locales et protocole distant, revue finale790cce5d favorable après correction du P1 effort distant. Choix/effort/canon durcis avant revalidation ; aucun décideur neuf au rejeu chosen, gardes source/droits/cible conservées. Candidat194-admission-b38a08713c95 vérifié NON actif ; maître183 et ancienne annulation e595 non attestée inchangés. Clé propriétaire opus167-revue-fermeture-et-gardes-20261028-01 reste decision_started sans tâche, dernier refus corrélé workspace_diverged ; aucun rejeu ou mission métier. T005 chargement/usage ouverte. Sources intégrées/poussées ; revues clôturées, worktrees de revue et exécutables193/194fee retirés après gardes, référence légère SYS conservée sous ancien HEAD. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/194-admission-rejouable/validation.md.
 
 
