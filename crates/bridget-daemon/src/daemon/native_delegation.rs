@@ -3547,6 +3547,9 @@ fn routing_failure_admission(
         Err(_) => ("unknown", None),
     };
     let recovery = match admission {
+        "not_recorded" if result["code"] == "auto_admission_invalid"
+            && result["detail"]["field"] == "agent_type" =>
+            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Omettez agent_type et utilisez engine pour le moteur ; connection_id reste facultatif. Après confirmation de la fin de tout appel avec cette clé et de l’absence d’appel concurrent, vous pouvez corriger les paramètres avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conservez son canon et suivez son état. Gardez expected_base_commit et le workspace demandés.",
         "not_recorded" => "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Corrigez la cause indiquée puis rejouez avec la même request_id et les mêmes paramètres. Si les paramètres doivent changer, attendez la fin de tout appel déjà envoyé avec cette clé avant une nouvelle request_id : un appel concurrent peut encore enregistrer une admission. Cette lecture du registre est fournie par Bridget ; inutile de la demander à un autre agent. Ne changez pas expected_base_commit sans autorisation.",
         "envelope_mismatch" => "Cette clé appartient déjà à une demande dont les paramètres sont différents. Le nouveau corps n'est pas admis. Reprenez la clé avec ses paramètres d'origine pour lire le sort de cette demande ; ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
         "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Après correction de la cause, rejouez avec la même request_id et tous les paramètres d’origine. Si le choix est déjà enregistré et aucune préparation de cette demande ne tourne, Bridget reprend ce choix après revalidation ; sinon l’admission reste en attente. Ne créez pas de nouvelle demande.",
@@ -13013,6 +13016,11 @@ mod tests {
         assert_eq!(result["code"], "auto_admission_invalid");
         assert_eq!(result["detail"]["field"], "agent_type");
         assert_eq!(result["detail"]["admission"]["state"], "not_recorded");
+        let advice = result["detail"]["admission"]["recovery"].as_str().unwrap();
+        assert!(advice.contains("corriger les paramètres avec la même request_id"));
+        assert!(advice.contains("absence d’appel concurrent"));
+        assert!(!advice.contains("les mêmes paramètres"));
+        assert!(!advice.contains("une nouvelle request_id"));
         assert!(!result.to_string().contains("private-profile-never-echo"));
         assert!(state.lock().unwrap().delegation_store.auto_admission_receipt(OWNER, &request.request_id).unwrap().is_none());
         assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
