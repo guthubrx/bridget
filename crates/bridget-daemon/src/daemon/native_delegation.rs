@@ -1549,6 +1549,34 @@ fn routing_delegate(
     }
 }
 
+// Diagnostic fermé199 : seules les catégories de contrôle sont conservées.
+// Aucun hash, chemin, identifiant de connexion ou texte externe n'est repris.
+fn routing_change_detail(code: &str) -> Option<(&str, Vec<&str>)> {
+    if code.len() > 128 { return None; }
+    let rest = code.strip_prefix("routing_connection_changed:")?;
+    let (stage, fields) = rest.split_once(':')?;
+    if !matches!(stage, "selected_probe" | "effort_probe" | "decision_definition"
+        | "delegate_contract" | "worker_prepare" | "local_definition") { return None; }
+    let fields: Vec<_> = fields.split(',').collect();
+    if fields.is_empty() || fields.len() > 8 { return None; }
+    let mut seen = std::collections::BTreeSet::new();
+    for field in &fields {
+        if !matches!(*field, "definition" | "permissions" | "worker_epoch" | "mapping"
+            | "project" | "protocol" | "canonical" | "effort" | "machine" | "profile"
+            | "model" | "base") || !seen.insert(*field) { return None; }
+    }
+    Some((stage, fields))
+}
+
+fn routing_change_error(stage: &str, checks: &[(&str, bool)]) -> Option<String> {
+    let fields: Vec<_> = checks.iter().filter(|(_, changed)| *changed)
+        .map(|(field, _)| *field).collect();
+    if fields.is_empty() { return None; }
+    let code = format!("routing_connection_changed:{stage}:{}", fields.join(","));
+    Some(if routing_change_detail(&code).is_some() { code }
+        else { "routing_connection_changed".into() })
+}
+
 /// Un seul candidat déjà choisi est re-sondé. Un refus ne déclenche jamais de
 /// sélection de remplacement. Le registre de départ ne peut pas être élargi.
 fn refresh_routing_selected(
@@ -1580,15 +1608,14 @@ fn refresh_routing_selected(
         .first()
         .cloned()
         .ok_or("routing_candidate_unavailable")?;
-    if observed.definition_digest != previous.definition_digest
-        || observed.permission_digest != previous.permission_digest
-        || (!allow_epoch_change && observed.connection_epoch != previous.connection_epoch)
-        || observed.mapping_revision != previous.mapping_revision
-        || observed.project_id.as_deref() != previous.project_id.as_deref()
-            .or_else(|| previous.mapping_revision.and(request.project_id.as_deref()))
-    {
-        return Err("routing_connection_changed".into());
-    }
+    if let Some(code) = routing_change_error("selected_probe", &[
+        ("definition", observed.definition_digest != previous.definition_digest),
+        ("permissions", observed.permission_digest != previous.permission_digest),
+        ("worker_epoch", !allow_epoch_change && observed.connection_epoch != previous.connection_epoch),
+        ("mapping", observed.mapping_revision != previous.mapping_revision),
+        ("project", observed.project_id.as_deref() != previous.project_id.as_deref()
+            .or_else(|| previous.mapping_revision.and(request.project_id.as_deref()))),
+    ]) { return Err(code); }
     if effort != original.default_effort.as_deref() {
         single.candidates[0].default_effort = effort.map(str::to_owned);
         // Une définition distante inclut les arguments de l'effort. Re-sonder
@@ -1616,17 +1643,15 @@ fn refresh_routing_selected(
             .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
         // La variation d'effort n'autorise aucune dérive du profil initial.
         // Les droits du choix restent attestés, puis revalidés à Prepare.
-        if control.definition_digest != observed.definition_digest
-            || control.permission_digest != observed.permission_digest
-            || control.connection_epoch != observed.connection_epoch
-            || control.mapping_revision != observed.mapping_revision
-            || control.project_id != observed.project_id
-            || selected.connection_epoch != observed.connection_epoch
-            || selected.mapping_revision != observed.mapping_revision
-            || selected.project_id != observed.project_id
-        {
-            return Err("routing_connection_changed".into());
-        }
+        if let Some(code) = routing_change_error("effort_probe", &[
+            ("definition", control.definition_digest != observed.definition_digest),
+            ("permissions", control.permission_digest != observed.permission_digest),
+            ("worker_epoch", control.connection_epoch != observed.connection_epoch
+                || selected.connection_epoch != observed.connection_epoch),
+            ("mapping", control.mapping_revision != observed.mapping_revision
+                || selected.mapping_revision != observed.mapping_revision),
+            ("project", control.project_id != observed.project_id || selected.project_id != observed.project_id),
+        ]) { return Err(code); }
         return Ok(selected.clone());
     }
     Ok(observed)
@@ -1669,11 +1694,10 @@ fn routing_lightweight_options(
     let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())
         .map_err(|_| "lightweight_decision_unavailable")?;
     let definition = registry.resolved_definition(&connection.agent_type)?;
-    if Some(&definition.digest) != plan.lightweight_definition_digest.as_ref()
-        || definition.protocol != "claude_stream_json"
-    {
-        return Err("routing_connection_changed".into());
-    }
+    if let Some(code) = routing_change_error("decision_definition", &[
+        ("definition", Some(&definition.digest) != plan.lightweight_definition_digest.as_ref()),
+        ("protocol", definition.protocol != "claude_stream_json"),
+    ]) { return Err(code); }
     let pinned = registry.clone().pin_delegation_model(
         &connection.agent_type,
         model,
@@ -2598,6 +2622,7 @@ fn auto_terminal_refusal_code(code: &str) -> Option<&str> {
     // Le champ et la cause validés sont bornés par handoff_error_code.
     // Les conserver dans le reçu rend aussi le rejeu du refus actionnable.
     if canonical=="brief_invalid" && code.len()<=128 {return Some(code);}
+    if routing_change_detail(code).is_some() { return Some(code); }
     if matches!(
         canonical,
         "agent_type_unknown"
@@ -2656,7 +2681,7 @@ fn close_auto_admission_error(
         st.delegation_store.refuse_auto_admission(receipt, refusal, unix_timestamp())
     };
     match closed {
-        Ok(closed) if capacity.is_some() => Ok(auto_refusal_error(&closed)),
+        Ok(closed) if capacity.is_some() || routing_change_detail(&code).is_some() => Ok(auto_refusal_error(&closed)),
         Ok(_) => Ok(code),
         Err(refusal_error) if refusal_error == "admission_pending" => {
             let current = st
@@ -3696,11 +3721,29 @@ fn failure(code: &str) -> Value {
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"message":message,"recovery":recovery}});
     }
-    if code == "routing_connection_changed" {
+    if code.split(':').next() == Some("routing_connection_changed") {
+        let (stage, changes) = routing_change_detail(code).unwrap_or(("unobserved", Vec::new()));
+        let checks: Vec<_> = changes.iter().map(|field| {
+            let recovery = match *field {
+                "worker_epoch" => "La session du worker a changé. Vérifiez sa disponibilité native sur la même machine. Ce fait seul ne prouve ni une panne réseau ni une révocation de compte.",
+                "permissions" => "Comparez la politique et la preuve de droits du parent et de la cible. Ne les élargissez pas pour faire passer le contrôle.",
+                "mapping" | "project" => "Vérifiez le mapping et le projet de la machine choisie avec leur responsable. Préservez les placements déjà utilisés.",
+                "definition" | "protocol" | "profile" | "model" | "effort" => "Comparez la définition du profil choisi, son moteur, son modèle et son effort aux paramètres autorisés. Ne choisissez pas un remplaçant silencieusement.",
+                "canonical" => "Vérifiez que la décision persistée et le contrat Delegate concordent. Ne modifiez ni l'enveloppe ni le reçu à la main.",
+                "base" => "Vérifiez le SHA demandé et la base renvoyée par la préparation. Ne déplacez pas un checkout utilisé et ne remplacez pas le SHA attendu.",
+                _ => unreachable!(),
+            };
+            json!({"field": field, "recovery": recovery})
+        }).collect();
         let message = "Les faits vérifiés pour la cible ont changé pendant l’admission.";
-        let recovery = "Vérifiez le catalogue et la connexion de la machine choisie, sans changer les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission joint et suivez toute tâche connue. Ne dupliquez pas une demande en attente ou d’issue inconnue. Un refus durable confirmé sans tâche ne se rouvre pas au rejeu ; une nouvelle request_id n’est utilisable qu’après correction de sa cause.";
-        return json!({"status":"refused","code":code,"message":message,
-            "detail":{"message":message,"recovery":recovery}});
+        let recovery = if changes.is_empty() {
+            "Le contrôle divergent n’a pas été conservé dans ce refus historique. Conservez request_id et les paramètres. Le responsable doit comparer définition, droits, session worker, mapping, projet et contrat choisi ; ne déduisez pas une cause du code seul. Ne changez ni les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission : suivez toute tâche connue et ne dupliquez pas une issue inconnue. Un refus durable sans tâche ne se rouvre pas au rejeu."
+        } else {
+            "Appliquez les vérifications de detail.checks sur la cible choisie. Ne changez ni les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission et suivez toute tâche connue. Ne dupliquez pas une demande en attente ou d’issue inconnue. Après confirmation d’un refus durable sans tâche et résolution ou validation explicite du changement constaté, une nouvelle request_id demande une nouvelle vérification native ; la clé close ne se rouvre pas. Aucun redémarrage ni gain de droits n’est autorisé par ce message."
+        };
+        return json!({"status":"refused","code":"routing_connection_changed","message":message,
+            "detail":{"message":message,"stage":stage,"changes":changes,"checks":checks,"recovery":recovery,
+                "human_action":"Si le changement de configuration, de droits ou de projet n’est pas justifié dans votre mandat, demandez à son responsable de confirmer la configuration attendue avant une nouvelle admission. Si le contrôle reste inconnu, transmettez request_id et ce refus au responsable Bridget ; aucune décision de suppression ou de relance n’est déduite."}});
     }
     let guidance = match code {
         "round_limit" => Some((
@@ -5188,14 +5231,13 @@ fn delegate_remote_with_routing(
             let decision = snapshot.decision.ok_or("auto_admission_invalid")?;
             // Le profil initial sert à la revalidation. L’effort d’exécution
             // appartient à la décision durable et au canon Delegate figé.
-            if receipt.delegate_canonical.as_deref() != Some(canonical.as_slice())
-                || decision.effort != *effort
-                || candidate.machine_id != *machine
-                || candidate.agent_type != *agent_type
-                || candidate.model != *model
-            {
-                return Err("routing_connection_changed".to_owned());
-            }
+            if let Some(code) = routing_change_error("delegate_contract", &[
+                ("canonical", receipt.delegate_canonical.as_deref() != Some(canonical.as_slice())),
+                ("effort", decision.effort != *effort),
+                ("machine", candidate.machine_id != *machine),
+                ("profile", candidate.agent_type != *agent_type),
+                ("model", candidate.model != *model),
+            ]) { return Err(code); }
             Ok::<_, String>((auto, candidate, observation))
         })
         .transpose()?;
@@ -5266,7 +5308,7 @@ fn delegate_remote_with_routing(
                 .map(|session| session.epoch.as_str())
                 != Some(observation.connection_epoch.as_str())
             {
-                return Err("routing_connection_changed".into());
+                return Err("routing_connection_changed:worker_prepare:worker_epoch".into());
             }
         }
         let prepare = WorkerPrepare {
@@ -5320,12 +5362,11 @@ fn delegate_remote_with_routing(
         return Err("remote_prepare_invalid".into());
     }
     if let Some((auto, _, observation)) = &routing {
-        if prepared.placement.base_commit != auto.expected_base_commit
-            || prepared.placement.definition_digest != observation.definition_digest
-            || prepared.placement.permission_digest != observation.permission_digest
-        {
-            return Err("routing_connection_changed".into());
-        }
+        if let Some(code) = routing_change_error("worker_prepare", &[
+            ("base", prepared.placement.base_commit != auto.expected_base_commit),
+            ("definition", prepared.placement.definition_digest != observation.definition_digest),
+            ("permissions", prepared.placement.permission_digest != observation.permission_digest),
+        ]) { return Err(code); }
     }
     if remote_parent_proof(state, &owner, &parent)? != proof {
         return Err("permission_changed".into());
@@ -7116,7 +7157,7 @@ fn admit_delegate(
         if st.registry.resolved_definition(agent_type)?.digest
             != plan.observations[index].definition_digest
         {
-            return Err("routing_connection_changed".into());
+            return Err("routing_connection_changed:local_definition:definition".into());
         }
     }
     let result: Result<WorkspaceAdmission, String> = (|| {
@@ -12950,6 +12991,114 @@ mod tests {
     ) -> RoutingAdmissionPlan {
         let st = state.lock().unwrap();
         routing_admission_plan(&st.registry, "local", request).unwrap()
+    }
+
+    #[test]
+    fn spec199_refus_de_definition_persiste_et_rejeu_sans_task() {
+        use bridget_transport::protocol::LineageDecisionSourceV4;
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let mut plan = routing168_plan(&state, &request);
+        observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+        let receipt = {
+            let st = state.lock().unwrap();
+            let now = unix_timestamp();
+            let receipt = routing_auto_receipt(OWNER.into(), &request,
+                serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
+                &plan, st.coordinator_epoch, now).unwrap();
+            assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap());
+            st.delegation_store.start_auto_decision_level(&receipt, receipt.coordinator_epoch,
+                receipt.revision, plan.decision_level, now).unwrap()
+        };
+        routing168_update(&state, |v| v["agents"]["native-test"]["args"] = json!(["app-server", "--changed-definition"]));
+        let code = choose_routing_admission("conn-1", &request, &plan, &receipt,
+            RoutingDecisionChoice { candidate_id: "c001".into(), effort: Some("high".into()), reason: None },
+            LineageDecisionSourceV4::Deterministic, None, None, None, None, &state, false).unwrap_err();
+        assert_eq!(code, "routing_connection_changed:selected_probe:definition");
+        let closed = routing168_receipt(&state, &request);
+        assert_eq!(closed.state, AutoAdmissionState::Refused);
+        assert!(closed.task_id.is_none());
+        assert_eq!(closed.refusal_code.as_deref(), Some(code.as_str()));
+        let reopened = crate::delegation::DelegationStore::open(&config.db_path).unwrap();
+        assert_eq!(reopened.auto_admission_receipt(OWNER, &request.request_id).unwrap().unwrap(), closed);
+        assert!(reopened.tasks().unwrap().is_empty());
+        let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap_err();
+        assert_eq!(replay, code);
+        assert_eq!(failure(&replay)["code"], "routing_connection_changed");
+        assert_eq!(failure(&replay)["detail"]["changes"], json!(["definition"]));
+        assert!(rx.try_recv().is_err());
+        drop(reopened); drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec199_epoque_et_droits_restent_des_gardes_distinctes() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let mut plan = routing168_plan(&state, &request);
+        observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+        plan.observations[0].connection_epoch = "old-epoch199".into();
+        let code = refresh_routing_selected("conn-1", &request, &plan, 0,
+            Some("high"), None, &state, false).unwrap_err();
+        assert_eq!(code, "routing_connection_changed:selected_probe:worker_epoch");
+        assert_eq!(failure(&code)["detail"]["changes"], json!(["worker_epoch"]));
+        let accepted = refresh_routing_selected("conn-1", &request, &plan, 0,
+            Some("high"), None, &state, true).unwrap();
+        assert_eq!(accepted.permission_digest, plan.observations[0].permission_digest);
+        plan.observations[0].permission_digest = "0".repeat(64);
+        let denied = refresh_routing_selected("conn-1", &request, &plan, 0,
+            Some("high"), None, &state, true).unwrap_err();
+        assert_eq!(denied, "routing_connection_changed:selected_probe:permissions");
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec199_causes_fermees_et_ancien_refus_inconnu() {
+        let proof = routing_change_error("selected_probe", &[
+            ("definition", true), ("permissions", true), ("worker_epoch", true),
+            ("mapping", true), ("project", true),
+        ]).unwrap();
+        assert!(proof.len() <= 128);
+        assert_eq!(auto_terminal_refusal_code(&proof), Some(proof.as_str()));
+        let projected = failure(&proof);
+        assert_eq!(projected["code"], "routing_connection_changed");
+        assert_eq!(projected["detail"]["changes"], json!(["definition", "permissions", "worker_epoch", "mapping", "project"]));
+        assert_eq!(projected["detail"]["checks"].as_array().unwrap().len(), 5);
+        assert_eq!(routing_change_error("selected_probe", &[("worker_epoch", false)]), None);
+        let old = failure("routing_connection_changed");
+        assert_eq!(old["detail"]["stage"], "unobserved");
+        assert_eq!(old["detail"]["changes"], json!([]));
+        assert!(old["detail"]["recovery"].as_str().unwrap().contains("historique"));
+        for invalid in ["routing_connection_changed:selected_probe:private-secret", "routing_connection_changed:selected_probe:definition,definition", "routing_connection_changed:foreign:definition"] {
+            assert!(routing_change_detail(invalid).is_none());
+            assert_eq!(auto_terminal_refusal_code(invalid), Some("routing_connection_changed"));
+            let view = failure(invalid);
+            assert_eq!(view["code"], "routing_connection_changed");
+            assert_eq!(view["detail"]["stage"], "unobserved");
+            assert!(!view.to_string().contains("private-secret"));
+        }
+    }
+
+    #[test]
+    fn spec199_premier_diagnostic_gagne_le_cas_de_cloture() {
+        let (state, config, _rx, _reader, request, _root) = routing168_fixture(1);
+        let mut plan = routing168_plan(&state, &request);
+        observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+        let st = state.lock().unwrap();
+        let now = unix_timestamp();
+        let receipt = routing_auto_receipt(OWNER.into(), &request,
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
+            &plan, st.coordinator_epoch, now).unwrap();
+        assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap());
+        let first = "routing_connection_changed:selected_probe:worker_epoch".to_owned();
+        assert_eq!(close_auto_admission_error(&st, &receipt, first.clone()).unwrap(), first);
+        let other = "routing_connection_changed:selected_probe:permissions".to_owned();
+        assert_eq!(close_auto_admission_error(&st, &receipt, other).unwrap(), first);
+        let closed = st.delegation_store.auto_admission_receipt(OWNER, &request.request_id).unwrap().unwrap();
+        assert_eq!(closed.canonical, receipt.canonical);
+        assert_eq!(closed.metadata, receipt.metadata);
+        assert!(closed.task_id.is_none());
+        assert_eq!(auto_refusal_error(&closed), first);
+        drop(st); drop(state); cleanup(&config);
     }
 
     fn routing168_receipt(

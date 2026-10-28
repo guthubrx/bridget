@@ -1620,3 +1620,11 @@ Une vérification distante calcule un seul rapport Git frais pour contrôler le 
 Conservez la tâche, la clé et les paramètres. Suivez le parcours de reprise rendu par Bridget. Quand il est disponible et autorisé, le rejeu strict de l’admission reprend la même tâche après vérification des droits actuels et clôture durable de l’ancienne commande avant naissance. Il ne crée ni nouvelle mission ni nouvelle ronde, et conserve le dossier. Une commande déjà enregistrée ou d’issue incertaine interdit cette reprise.
 
 Un ancien maître ou worker peut exiger une mise à jour avant cette opération. Ne remplacez pas la mission et ne changez ni moteur, ni cible, ni droits pour contourner ce refus. Si la preuve ou l’activation manque, demandez au responsable l’opération native précise et son prérequis humain. La disponibilité de sources corrigées ne prouve pas le chargement du binaire.
+
+### Refus après changement de cible (199)
+
+`routing_connection_changed` conserve son code public. `detail.stage` nomme le contrôle et `detail.changes` liste uniquement les catégories constatées : définition, droits, époque de connexion du worker, mapping, projet ou contrat d’exécution. `detail.checks` donne les vérifications correspondantes. Aucun contenu de configuration, chemin privé ou empreinte n’est exposé. Le diagnostic fermé et borné est conservé avec le refus durable ; le rejeu restitue la première cause enregistrée sans nouvelle sonde ni tâche.
+
+Un ancien refus sans ce détail rend `stage=unobserved` et une liste vide. Il faut alors faire comparer les faits par le responsable Bridget ; ni panne réseau, ni compte révoqué, ni changement de droits ne sont établis par le code seul. Une réattestation du parent ne rouvre pas un refus durable.
+
+Si seule l’époque du worker a changé, vérifier la disponibilité native de la même machine. Pour une définition, des droits ou un mapping modifiés, vérifier la configuration attendue avec son responsable ; ne pas élargir les permissions pour contourner le refus. Après confirmation d’un refus durable sans tâche et résolution ou validation explicite du changement constaté, une nouvelle clé demande une nouvelle admission. Une issue inconnue conserve sa clé et interdit un doublon. Aucun gel ou redémarrage n’est prescrit par ce refus.

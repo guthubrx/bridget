@@ -867,3 +867,11 @@ A remote check computes one fresh Git workspace report for both validation and i
 Keep the task, request key and original arguments. Follow the recovery guidance returned by Bridget. When supported and authorized, strict admission replay resumes the same task after checking current permissions and durably closing the previous command before any birth. It creates no new mission or round and preserves the workspace. An existing command receipt or an uncertain execution blocks this recovery.
 
 An older master or worker can require an upgrade first. Do not replace the mission or change the engine, target or permissions to bypass the refusal. If evidence or activation is missing, ask the maintainer for the exact native operation and its human prerequisite. Corrected sources do not prove that the running binary has loaded them.
+
+### Refusal after target facts change (199)
+
+`routing_connection_changed` keeps its public code. `detail.stage` identifies the check and `detail.changes` contains only observed categories: definition, permissions, worker connection epoch, mapping, project or execution contract. `detail.checks` supplies the corresponding checks. No configuration content, private path or digest is exposed. The closed, bounded diagnostic is stored with the durable refusal; replay returns the first recorded cause without another probe or task.
+
+An older refusal without this detail returns `stage=unobserved` and an empty list. Its facts must be compared by the Bridget maintainer. The code alone establishes no network outage, revoked account or changed permission. Reattesting the parent does not reopen a durable refusal.
+
+If only the worker epoch changed, verify native availability on the same machine. For changed definitions, permissions or mappings, confirm the expected configuration with its owner; do not broaden permissions to bypass the refusal. After a durable refusal without a task is confirmed and the observed change is resolved or explicitly validated, a new key requests a new admission. An unknown outcome retains its key and prohibits duplication. This refusal prescribes no halt or restart.
