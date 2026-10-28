@@ -1,6 +1,8 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
 #[path = "native_workspace_repair.rs"]
 pub(super) mod workspace_repair;
+#[path = "native_start_recovery.rs"]
+mod start_recovery;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -2072,6 +2074,18 @@ fn admit_auto_routing(
                 return Err("envelope_mismatch".into());
             }
             if receipt.state != AutoAdmissionState::Chosen {
+                // Reprise198 : le reçu Admitted au même canon peut rouvrir la même
+                // tâche après un refus Start de capacité connu ; sinon simple lecture.
+                if receipt.state == AutoAdmissionState::Admitted
+                    && let Some(task_id) = receipt.task_id.clone()
+                    && let Some(task) = st.delegation_store.get(&task_id)?
+                    && start_recovery::wanted(&task, &receipt)
+                {
+                    drop(st);
+                    return start_recovery::resume(
+                        state, conn, &task_id, &receipt, attested, thread, permission_proof,
+                    );
+                }
                 return auto_receipt_view(&mut st, &receipt);
             }
             // Un rejeu reprend uniquement le choix durable, jamais le décideur.
@@ -3525,6 +3539,10 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if let Some((message, recovery, human)) = start_recovery::refusal_guidance(code) {
+        return json!({"status":"refused","code":code,"message":message,
+            "detail":{"message":message,"recovery":recovery,"human_action":human}});
+    }
     if matches!(code,"project_preparation_failed"|"project_preparation_disk_full"|"project_preparation_disk_quota") {
         let (cause,message)=match code {
             "project_preparation_disk_full" => ("storage_full","Le système a signalé un espace de stockage épuisé pendant la préparation."),
@@ -4088,6 +4106,9 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    if let Some(cause) = start_recovery::capacity_refusal(error) {
+        return Some(start_recovery::capacity_message(cause));
+    }
     if let Some(reason) = remote_result_slot_error_reason(error) {
         return Some(match reason {
             "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le travail métier n’a pas été remis à l’agent.",
@@ -4225,6 +4246,9 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             };
         } else if preparation_failed {
             view["error_recovery"] = json!("Corrigez la cause, puis annulez cette tâche avant de créer une nouvelle demande. Rejouer la même demande ne la redémarre pas.");
+        } else if task.state == "starting" && task.mission_issued_at.is_none() {
+            view["error_recovery"] = json!("Conservez cette tâche, sa request_id et son dossier. Rejouez à l’identique la même demande auto (mêmes paramètres) : Bridget ferme d’abord l’ancienne commande côté worker, puis reprend la MÊME tâche si les droits, la source et la définition sont inchangés. Prérequis : un worker qui annonce start_recovery_v1 et aucune pause ou annulation. Les reprises sont bornées à trois ; ne créez pas de nouvelle tâche.");
+            view["error_human_action"] = json!("Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission.");
         }
     }
     if task.projected_error()==Some("stdout Codex fermé pendant le tour") {
@@ -5953,6 +5977,34 @@ fn start_remote_task(
     thread: Option<&str>,
     permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
 ) -> Result<(), String> {
+    start_remote_task_with(state, task_id, prepared, parent, conn, thread, permission_proof, None)
+}
+
+/// Refus de capacité connu : code stable puis sous-code fermé facultatif.
+fn start_refusal_code(
+    reason: bridget_transport::protocol::WorkerRefusal,
+    cause: Option<&str>,
+) -> String {
+    match (reason, cause) {
+        (bridget_transport::protocol::WorkerRefusal::ResourceLimit, Some(cause)) => {
+            format!("remote_start:ResourceLimit:cause={cause}")
+        }
+        _ => format!("remote_start:{reason:?}"),
+    }
+}
+
+/// `recovery` : même tâche et même enfant logique, commande nouvelle déjà
+/// persistée dans le plan, après fence et préparation (reprise198).
+fn start_remote_task_with(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    prepared: &bridget_transport::protocol::WorkerPrepared,
+    parent: &bridget_transport::protocol::ProviderPermissions,
+    conn: &str,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    recovery: Option<&crate::delegation::StartRecovery>,
+) -> Result<(), String> {
     use bridget_transport::protocol::*;
     // Une inspection n'acquiert jamais de slot ni d'identité de lancement.
     if prepared.token == WORKER_INSPECTION_TOKEN {
@@ -5964,7 +6016,7 @@ fn start_remote_task(
             .delegation_store
             .get(task_id)?
             .ok_or("task_unavailable")?;
-        if task.state != "queued"
+        if !(task.state == "queued" || (recovery.is_some() && task.state == "starting"))
             || !task.remote_prepared
             || task.remote_placement.as_ref() != Some(&prepared.placement)
         {
@@ -5973,8 +6025,11 @@ fn start_remote_task(
         let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
             return Err("invalid_record".into());
         };
-        let now = unix_timestamp();
-        task.launch_issued_at = Some(now);
+        let now = recovery.map_or_else(unix_timestamp, |plan| plan.issued_at);
+        // Le canon du premier lancement ne change jamais lors d'une reprise.
+        if recovery.is_none() {
+            task.launch_issued_at = Some(now);
+        }
         let order = FleetSpawnOrder {
             remote_placement: task.remote_placement.clone(),
             posture: None,
@@ -5983,7 +6038,8 @@ fn start_remote_task(
             requested_name: Some(task.child.clone()),
             cwd: PathBuf::from(&task.cwd),
             persistent: true,
-            command_id: task.task_id.clone(),
+            command_id: recovery
+                .map_or_else(|| task.task_id.clone(), |plan| plan.new_command_id.clone()),
             issued_at: now,
             deadline_at: now + 300,
             ownership: Some(SpawnOwnership {
@@ -5997,11 +6053,19 @@ fn start_remote_task(
                 max_depth: Some(8),
             }),
         };
-        let crate::fleet::SpawnSubmission::Start(lease) = st
-            .fleet
-            .request_spawn(&order, now)
-            .map_err(|e| e.to_string())?
-        else {
+        let submission = if recovery.is_some()
+            && st
+                .fleet
+                .desired_entry(&task.child)
+                .map_err(|e| e.to_string())?
+                .is_some_and(|entry| entry.lifecycle_state == DesiredLifecycleState::Stopped)
+        {
+            st.fleet.request_relaunch(&order, now)
+        } else {
+            st.fleet.request_spawn(&order, now)
+        }
+        .map_err(|e| e.to_string())?;
+        let crate::fleet::SpawnSubmission::Start(lease) = submission else {
             return Err("remote_spawn_not_new".into());
         };
         st.fleet
@@ -6009,6 +6073,12 @@ fn start_remote_task(
             .map_err(|e| e.to_string())?;
         task.child_instance = Some(lease.instance_id.clone());
         task.state = "starting".into();
+        if let Some(plan) = recovery {
+            // Même sauvegarde que la lease : dès lors la commande est observée, jamais rejouée.
+            let mut plan = plan.clone();
+            plan.phase = crate::delegation::StartRecoveryPhase::Relaunched;
+            task.start_recovery = Some(plan);
+        }
         st.delegation_store.save(&task)?;
         let command = WorkerCommandIdentity {
             command_id: lease.command_id.clone(),
@@ -6049,14 +6119,36 @@ fn start_remote_task(
     let digest = crate::remote_worker::worker_command_digest(&worker, &command, &start)
         .map_err(|e| e.to_string())?;
     let confirmation_timeout = Duration::from_secs(30);
+    let detailed = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.remote_workers.get(&worker.machine_id).is_some_and(|peer| {
+            peer.capabilities.contains(&WorkerCapability::StartRecoveryV1)
+        })
+    };
+    let operation = if detailed {
+        WorkerRequestOperation::StartDetailed { start }
+    } else {
+        WorkerRequestOperation::Start { start }
+    };
     let response = remote_worker_roundtrip(
         state,
         &worker,
         &command,
-        WorkerRequestOperation::Start { start },
+        operation,
         Instant::now() + confirmation_timeout,
-    )
-    .map_err(|e| format!("remote_start:{e:?}"))?;
+    );
+    let response = match response {
+        Ok(WorkerResponseOperation::StartRejected { reason, cause }) => {
+            start_recovery::record_refusal(state, task_id, recovery, reason, Some(cause.code()));
+            return Err(start_refusal_code(reason, Some(cause.code())));
+        }
+        Ok(response) => response,
+        Err(reason) => {
+            let local = super::take_local_roundtrip_limit();
+            start_recovery::record_refusal(state, task_id, recovery, reason, local);
+            return Err(start_refusal_code(reason, local));
+        }
+    };
     let WorkerResponseOperation::ReadyToRelease { ready_at } = response else {
         return Err("remote_start_not_ready".into());
     };
@@ -6168,6 +6260,7 @@ fn start_remote_task(
     if !matches!(response, WorkerResponseOperation::Released {}) {
         return Err("remote_release_unconfirmed".into());
     }
+    start_recovery::record_released(state, task_id, recovery);
     Ok(())
 }
 
@@ -7431,7 +7524,8 @@ fn admit_delegate(
         };
         let record = Task {
             remote_prepared: false,
-            workspace_repairs: Vec::new(),
+            start_recovery: None,
+        workspace_repairs: Vec::new(),
             remote_result_slots: Vec::new(),
             remote_result_receipts: Vec::new(),
             remote_placement: if let WorkspacePass::Remote { prepared, .. } = pass {
@@ -10646,6 +10740,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 && task.state == "starting"
                 && task.child_instance.is_some()
                 && task.mission_issued_at.is_none()
+                && !task.start_recovery.as_ref().is_some_and(|plan| plan.in_progress())
         });
         let candidate = if candidates.is_empty() {
             None
@@ -10870,6 +10965,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             if task.remote_placement.is_some()
                 && task.state == "starting"
                 && task.mission_issued_at.is_none()
+                && !task.start_recovery.as_ref().is_some_and(|plan| plan.in_progress())
             {
                 let stopped = remote_command_identity(&st, &task)
                     .ok()

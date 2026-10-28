@@ -42,6 +42,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         substitution: None,
         remote_placement: None,
         remote_prepared: false,
+        start_recovery: None,
         workspace_repairs: Vec::new(),
         remote_result_slots: Vec::new(),
         remote_result_receipts: Vec::new(),

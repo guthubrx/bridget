@@ -944,6 +944,69 @@ pub(crate) struct RemoteResultReceipt {
     pub conflict_seen: bool,
 }
 
+/// Étape durable d'une reprise après refus de Start (198). L'ordre est celui des effets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StartRecoveryPhase {
+    /// Intention durable, avant toute E/S vers le worker.
+    Planned,
+    /// Le worker a fermé durablement l'ancienne commande sans naissance.
+    Fenced,
+    /// L'ancienne lease Fleet est invalidée (idempotent après crash).
+    Invalidated,
+    /// Préparation refaite sur le même worktree, snapshot parent courant écrit.
+    Prepared,
+    /// Nouvelle lease réservée ; toute commande existante est désormais observée.
+    Relaunched,
+    /// Refus de capacité connu de la nouvelle commande : une reprise bornée reste possible.
+    Closed,
+    /// Release confirmé.
+    Done,
+}
+
+/// Commande précédente et cause fermées d'une tentative terminée.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StartAttemptRecord {
+    pub command: bridget_transport::protocol::WorkerCommandIdentity,
+    pub issued_at: i64,
+    pub deadline_at: i64,
+    /// Sous-code fermé ; absent pour un refus historique sans cause.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+}
+
+/// Plan stable : un rejeu, un restart ou un ACK perdu retrouvent exactement
+/// la même nouvelle commande, jamais une seconde.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StartRecovery {
+    pub phase: StartRecoveryPhase,
+    pub previous: bridget_transport::protocol::WorkerCommandIdentity,
+    pub previous_issued_at: i64,
+    pub previous_deadline_at: i64,
+    pub new_command_id: String,
+    pub issued_at: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<StartAttemptRecord>,
+}
+
+pub(crate) const MAX_START_RECOVERIES: usize = 3;
+
+impl StartRecovery {
+    /// Vrai tant que la nouvelle lease n'existe pas : les effets restants sont
+    /// ceux du plan, et la boucle de clôture ne doit pas lire l'ancienne lease.
+    pub fn in_progress(&self) -> bool {
+        matches!(
+            self.phase,
+            StartRecoveryPhase::Planned
+                | StartRecoveryPhase::Fenced
+                | StartRecoveryPhase::Invalidated
+                | StartRecoveryPhase::Prepared
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Task {
     pub task_id: String,
@@ -978,6 +1041,9 @@ pub(crate) struct Task {
     pub remote_placement: Option<bridget_transport::protocol::RemotePlacement>,
     #[serde(default)]
     pub remote_prepared: bool,
+    /// Reprise198 après refus de Start ; absente pour toute tâche historique.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_recovery: Option<StartRecovery>,
     /// Réparations explicites185. Le canon de lancement reste inchangé.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspace_repairs: Vec<bridget_transport::protocol::WorkspaceRepairStatusV1>,
