@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session194 admission rejouable : source b38a08713c95c0858807cdaed7fcf78ce7fa7b3d,40contrôles ciblés PASS, contre-épreuves locales et protocole distant, revue finale790cce5d favorable après correction du P1 effort distant. Choix/effort/canon durcis avant revalidation ; aucun décideur neuf au rejeu chosen, gardes source/droits/cible conservées. Candidat194-admission-b38a08713c95 vérifié NON actif ; maître183 et ancienne annulation e595 non attestée inchangés. Clé propriétaire opus167-revue-fermeture-et-gardes-20261028-01 reste decision_started sans tâche, dernier refus corrélé workspace_diverged ; aucun rejeu ou mission métier. T005 chargement/usage ouverte. Sources intégrées/poussées ; revues clôturées, worktrees de revue et exécutables193/194fee retirés après gardes, référence légère SYS conservée sous ancien HEAD. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/194-admission-rejouable/validation.md.
+
+
 Session193 rapport Git unique : source180c0aa4c74333616919d1709dcbc8249c1c264b,39contrôles ciblés PASS, contre-épreuve2→1status, revueacc0f775 favorable. Candidat193-report-180c0aa4c743 vérifié NON actif ; maître183 confirmé, maintenance native toujours bloquée. Aucun rejeu/purge/annulation métier. Huit demandes historiques non persistées ; refus Cartae final sans mesure conservée en183. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/193-rapport-unique/validation.md.
 
 
