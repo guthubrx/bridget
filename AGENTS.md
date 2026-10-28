@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session199 — Refus de cible explicites : source2918b957cfbeabeb286ff4ac5173cf3a026bb590 qualifiée et poussée. Cinq tests199, trois rejeux183, deux tests194 et un test168 PASS ; guides32/522/13 et CI hygiène PASS. Revue3ad2f1b9 ronde2 favorable après correction de la catégorie machine. Comparaisons inchangées, diagnostic fermé borné à128octets conservé avec le refus, code public stable et anciens refus inconnus. Candidat Linux199-routing-2918b957cfbe construit et vérifié NON actif ; Prepare094a0da5 refuse update_missions_active_or_unconfirmed, maître183/PID351206 confirmé. Aucun gel, restart ni acte métier. Revue close et worktreeSYS retiré après gardes ; cache commun conservé sous observation incomplète. T005 chargement ouverte. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/199-refus-cible-explicites/validation.md.
+
+
 Session198 repriseStart : sources6617aee8ab4a6f898e360af1f28acaba3539d730 intégrées/poussées ;24testsmaître/46daemonremote162/59worker/32droits(7ignorés)/11transport ciblésPASS (recoupements conservés), guides32/522/13 etCIhygiènePASS, revuefinaleddccc585 favorablelimité après corrections. MêmeTask/clé/enfantlogique/mission/ronde/worktree, clôture prénaissance, bail/routage/ACK/reconnexion/Cancel/quota locaux gardés ; format183lisible, retour183 opérationnel limité. CandidatsMac/Linux construits/vérifiés198-start-6617aee8ab4a NONactifs. Prepare53ba0c37 refuséupdate_missions_active_or_unconfirmed ; maître183/PID351206 enligne, aucun nouveaugel, actebd3 ou serviceOpus2D. T006activation/usageréelouverte ; décisionhumaineexceptionnelle etpréconditions précisées enmaintenance.md.4candidatsrejetés retirésMac/SYS ;3copiesCartae/KS etworktreesgardés conservés sousobservationincomplète ;1worktreederevueSYS retiré aprèsgardescomplètes. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/198-reprise-start/validation.md.
 
 
