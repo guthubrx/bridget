@@ -4337,7 +4337,9 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["error_message"] = json!("L’annulation est enregistrée, mais sa preuve de clôture n’est pas encore acquise.");
         view["error_recovery"] = json!(match cause {
             "capability_required" => "Le worker doit annoncer worker_start_recovery_v1 pour fermer une commande sans reçu avant naissance. Faites qualifier et charger maître/worker compatibles par la maintenance admise ; conservez cette tâche et sa clé. Aucun nouveau travail n’est lancé par cette clôture.",
-            "capacity" => "Le worker ne peut pas conserver la preuve durable de clôture. Faites vérifier sa capacité native avec le responsable, sans purger de garde ni de travail actif. La même annulation reste en attente.",
+            "master_pending" => "ResourceLimit : la table des réponses en attente du maître est pleine ; aucune requête de clôture n’a été envoyée. Laissez se terminer les opérations natives en cours ; le responsable vérifie leur drainage sans purger de demande. La même annulation reste en attente.",
+            "master_request_frame" => "ResourceLimit : la trame de clôture dépasse la borne locale du maître ; aucune requête n’a été envoyée. Le responsable doit vérifier le contrat de cette commande exacte, sans changer son identité ni élargir la borne.",
+            "resource_limit_unobserved" => "ResourceLimit refuse la clôture ; sa sous-cause distante n’est pas observée. Le responsable doit vérifier la file d’entrée et la capacité du store du même worker, sans en déduire un manque de stockage, de mémoire ou de disque et sans purger de garde. La même annulation reste en attente.",
             "reply_unavailable" => "La réponse de clôture n’est pas confirmée. La même annulation pourra relire son reçu ; ne créez ni commande ni mission de remplacement.",
             "not_unstarted" => "La commande n’est plus éligible à une clôture avant naissance. Le responsable doit réconcilier son reçu et son exécution ; ne déduisez pas l’arrêt d’une absence de reçu.",
             "identity_changed" | "identity_unavailable" => "Le responsable doit retrouver la commande, l’instance, la génération et le placement exacts depuis l’autorité native. Ne reconstituez pas une identité et ne modifiez pas le store à la main.",
@@ -11962,7 +11964,11 @@ fn fence_cancel_unstarted(
         Instant::now() + Duration::from_secs(30)).map_err(|e| match e {
             WorkerRefusal::CapabilityRequired => "capability_required",
             WorkerRefusal::WorkerUnavailable | WorkerRefusal::StaleConnection => "reply_unavailable",
-            WorkerRefusal::ResourceLimit => "capacity",
+            WorkerRefusal::ResourceLimit => match super::take_local_roundtrip_limit() {
+                Some("master_pending") => "master_pending",
+                Some("master_request_frame") => "master_request_frame",
+                _ => "resource_limit_unobserved",
+            },
             WorkerRefusal::CommandMismatch | WorkerRefusal::PlacementMismatch => "identity_changed",
             _ => "refused",
         })?;
@@ -11983,7 +11989,8 @@ fn fence_cancel_unstarted(
 fn cancel_fence_cause(state: &str) -> Option<&str> {
     state.strip_prefix("cancel_fence:").filter(|cause| matches!(*cause,
         "store_unavailable" | "identity_unavailable" | "not_unstarted" | "identity_changed"
-        | "capability_required" | "reply_unavailable" | "capacity" | "refused" | "invalid_reply"))
+        | "capability_required" | "reply_unavailable" | "master_pending" | "master_request_frame"
+        | "resource_limit_unobserved" | "refused" | "invalid_reply"))
 }
 
 pub(super) fn cancel_remote_task(

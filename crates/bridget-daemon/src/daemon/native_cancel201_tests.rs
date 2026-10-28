@@ -113,7 +113,7 @@ fn spec201_fence_requires_cancelling_unissued_exact_task_and_capability() {
 fn spec201_cancel_guidance_is_closed_and_keeps_unknown_unknown() {
     let (state, config, mut task, _, _) = fixture_guarded(true);
     task.state = "cancelling".into();
-    for cause in ["capability_required", "capacity", "reply_unavailable", "identity_changed", "not_unstarted"] {
+    for cause in ["capability_required", "resource_limit_unobserved", "reply_unavailable", "identity_changed", "not_unstarted"] {
         task.error = Some(format!("native_cancel_unverifiable:{}:{cause}", task.child));
         let view = task_view(&task, None, true);
         assert_eq!(view["error_cause"], cause);
@@ -163,10 +163,41 @@ fn fence_refusal_case(response: WorkerResponseOperation, change_task: bool, expe
 }
 #[test]
 fn spec201_capacity_or_missing_ack_never_closes_guard() {
-    fence_refusal_case(WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResourceLimit }, false, "capacity");
+    fence_refusal_case(WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResourceLimit }, false, "resource_limit_unobserved");
     fence_refusal_case(WorkerResponseOperation::Rejected { reason: WorkerRefusal::WorkerUnavailable }, false, "reply_unavailable");
 }
 #[test]
 fn spec201_state_changed_during_fence_does_not_close_guard() {
     fence_refusal_case(WorkerResponseOperation::StartFenced {}, true, "identity_changed");
+}
+
+#[test]
+fn spec201_local_pending_capacity_is_known_without_worker_send() {
+    use bridget_transport::protocol::MAX_WORKER_STORE_ENTRIES;
+    let (state, config, mut task, _, _) = fixture_guarded(true);
+    task.state = "cancelling".into();
+    state.lock().unwrap().delegation_store.save(&task).unwrap();
+    let command = remote_command_identity(&state.lock().unwrap(), &task).unwrap();
+    let worker = remote_worker_identity(task.remote_placement.as_ref().unwrap());
+    let (socket, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+    {
+        let mut st = state.lock().unwrap();
+        st.connections.insert("worker198".into(), Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
+        for n in 0..MAX_WORKER_STORE_ENTRIES {
+            let (tx, _rx) = mpsc::sync_channel(1);
+            st.pending_worker_responses.insert(format!("pending201-{n}"),
+                super::super::super::PendingWorkerResponse { conn_id: "worker198".into(),
+                    epoch: "epoch198".into(), worker: worker.clone(), command: command.clone(), reply: tx });
+        }
+    }
+    assert_eq!(fence_cancel_unstarted(&state, &task.task_id, &command), Err("master_pending"));
+    let mut reader = std::io::BufReader::new(peer); let mut line = String::new();
+    assert!(std::io::BufRead::read_line(&mut reader, &mut line).is_err());
+    assert!(line.is_empty());
+    task.error = Some(format!("native_cancel_unverifiable:{}:master_pending", task.child));
+    let view = task_view(&task, None, true);
+    assert_eq!(view["error_cause"], "master_pending");
+    assert!(view["error_recovery"].as_str().unwrap().contains("aucune requête"));
+    drop(state); cleanup(&config);
 }
