@@ -3635,6 +3635,13 @@ pub enum WorkerRequestOperation {
         expected_definition_digest: String,
         expected_permission_digest: String,
     },
+    /// Réemploie un worktree attesté après fence du Start précédent.
+    PrepareFenced {
+        previous: WorkerCommandIdentity,
+        prepare: WorkerPrepare,
+        placement: RemotePlacement,
+        workspace: Option<serde_json::Value>,
+    },
     ParentProof {
         parent: ProviderPermissions,
         expected_revision: u64,
@@ -4031,7 +4038,9 @@ impl WorkerRequest {
         self.worker.validate()?;
         if matches!(
             &self.request,
-            WorkerRequestOperation::Prepare { .. } | WorkerRequestOperation::PrepareV2 { .. }
+            WorkerRequestOperation::Prepare { .. }
+                | WorkerRequestOperation::PrepareV2 { .. }
+                | WorkerRequestOperation::PrepareFenced { .. }
         ) {
             self.command.validate_preparation()?;
         } else {
@@ -4073,6 +4082,19 @@ impl WorkerRequest {
                         && worker_digest(expected_definition_digest)
                         && worker_digest(expected_permission_digest),
                 )
+            }
+            WorkerRequestOperation::PrepareFenced { previous, prepare, placement, workspace } => {
+                previous.validate()?;
+                prepare.validate()?;
+                placement.validate()?;
+                worker_require(previous.task_id == self.command.task_id
+                    && previous.command_id != self.command.command_id
+                    && prepare.machine_id == self.worker.machine_id
+                    && prepare.provisioning_revision == self.worker.provisioning_revision
+                    && placement.matches_worker(&self.worker)
+                    && matches!(prepare.workspace, Some(WorkspaceRequest::Worktree { .. }))
+                    && workspace.as_ref().is_some_and(serde_json::Value::is_object))?;
+                worker_serialized_size(workspace, 64 * 1024)
             }
             WorkerRequestOperation::ParentProof {
                 parent,
@@ -7677,6 +7699,40 @@ mod tests {
         let mut unknown = current.clone();
         unknown["request"]["credential_path"] = serde_json::json!("/private");
         assert!(serde_json::from_value::<WorkerRequest>(unknown).is_err());
+        let mut fenced = serde_json::from_value::<WorkerRequest>(current.clone()).unwrap();
+        fenced.command.command_id = "new-prepare198".into();
+        let WorkerRequestOperation::PrepareV2 { mut prepare, .. } = fenced.request else {
+            unreachable!()
+        };
+        prepare.workspace = Some(WorkspaceRequest::Worktree { base_ref: None, branch: None });
+        let placement = RemotePlacement {
+            machine_id: fenced.worker.machine_id.clone(),
+            worker_id: fenced.worker.worker_id.clone(),
+            provisioning_revision: fenced.worker.provisioning_revision,
+            project_id: prepare.project_id.clone(),
+            mapping_revision: prepare.mapping_revision,
+            origin_host: prepare.origin_host.clone(),
+            origin_cwd: prepare.origin_cwd.clone(),
+            source_root_identity: prepare.source_root_identity.clone(),
+            relative_cwd: prepare.relative_cwd.clone(),
+            execution_cwd: "/remote/project/.worktrees/existing198".into(),
+            base_commit: prepare.base_commit.clone(),
+            definition_digest: "a".repeat(64),
+            permission_digest: "b".repeat(64),
+        };
+        fenced.request = WorkerRequestOperation::PrepareFenced {
+            previous: worker162_command(), prepare, placement,
+            workspace: Some(serde_json::json!({"path":"/remote/project/.worktrees/existing198"})),
+        };
+        fenced.validate().unwrap();
+        let wire = serde_json::to_value(&fenced).unwrap();
+        assert_eq!(wire["request"]["operation"], "prepare_fenced");
+        assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), fenced);
+        if let WorkerRequestOperation::PrepareFenced { workspace, .. } = &mut fenced.request {
+            *workspace = None;
+        }
+        assert_eq!(fenced.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        assert_eq!(legacy["request"]["operation"], "prepare");
         let mut missing = current;
         missing["request"]
             .as_object_mut()

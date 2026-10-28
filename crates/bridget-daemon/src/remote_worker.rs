@@ -489,6 +489,8 @@ struct WorkspacePreparationReceipt {
     worker: WorkerIdentity,
     command: WorkerCommandIdentity,
     prepare_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fenced_previous: Option<WorkerCommandIdentity>,
     record: Option<crate::delegation::WorkspaceRecord>,
 }
 
@@ -1527,6 +1529,84 @@ impl WorkerStore {
             .join(format!("{}.json", marker_key(command)))
     }
 
+    /// L'appelant détient transition. Le reçu fence est l'autorité ; le
+    /// message du maître ne peut ni créer ni remplacer son ancre Git.
+    fn fenced_workspace_locked(
+        &self,
+        previous: &WorkerCommandIdentity,
+        placement: &RemotePlacement,
+        workspace: &serde_json::Value,
+    ) -> Result<crate::delegation::WorkspaceRecord, WorkerStoreError> {
+        let fence = self.read_command(previous)?.ok_or(WorkerStoreError::Unknown)?;
+        if fence.pre_start_fence.is_none() || fence.phase != WorkerCommandPhase::Refused {
+            return Err(WorkerStoreError::Unknown);
+        }
+        if fence.placement != *placement {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let mut prepare_command = previous.clone();
+        prepare_command.instance_id.clear();
+        prepare_command.generation = 0;
+        let original: WorkspacePreparationReceipt =
+            read_optional(&self.workspace_path(&prepare_command), MAX_METADATA_BYTES)?
+                .ok_or(WorkerStoreError::Unknown)?;
+        if original.version != STORE_VERSION || original.worker != self.worker
+            || original.command != prepare_command || !valid_digest(&original.prepare_digest)
+        {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let record = original.record.ok_or(WorkerStoreError::Unknown)?;
+        if serde_json::to_value(&record).map_err(|_| WorkerStoreError::Unknown)? != *workspace {
+            return Err(WorkerStoreError::Conflict);
+        }
+        Ok(record)
+    }
+
+    fn fenced_workspace(
+        &self,
+        previous: &WorkerCommandIdentity,
+        placement: &RemotePlacement,
+        workspace: &serde_json::Value,
+    ) -> Result<crate::delegation::WorkspaceRecord, WorkerStoreError> {
+        let _guard = self.transition.lock().map_err(|_| WorkerStoreError::Quarantined)?;
+        self.health()?;
+        self.fenced_workspace_locked(previous, placement, workspace)
+    }
+
+    /// O(n) via admit/inventory ; n est borné par MAX_WORKER_STORE_ENTRIES.
+    fn bind_fenced_workspace(
+        &self,
+        previous: &WorkerCommandIdentity,
+        command: &WorkerCommandIdentity,
+        request: &WorkerPrepare,
+        placement: &RemotePlacement,
+        workspace: &serde_json::Value,
+    ) -> Result<(), WorkerStoreError> {
+        let _guard = self.transition.lock().map_err(|_| WorkerStoreError::Quarantined)?;
+        self.health()?;
+        command.validate_preparation()?;
+        if previous.task_id != command.task_id || previous.command_id == command.command_id {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let record = self.fenced_workspace_locked(previous, placement, workspace)?;
+        let digest = json_digest(&(command, request))?;
+        let path = self.workspace_path(command);
+        if let Some(existing) = read_optional::<WorkspacePreparationReceipt>(&path, MAX_METADATA_BYTES)? {
+            return if existing.version == STORE_VERSION && existing.worker == self.worker
+                && existing.command == *command && existing.prepare_digest == digest
+                && existing.fenced_previous.as_ref() == Some(previous)
+                && existing.record.as_ref().is_some_and(|value|
+                    serde_json::to_value(value).ok().as_ref() == Some(workspace)) {
+                Ok(())
+            } else { Err(WorkerStoreError::Conflict) };
+        }
+        self.admit(2 * MAX_METADATA_BYTES as u64, 1)?;
+        self.persist(&path, &WorkspacePreparationReceipt {
+            version: STORE_VERSION, worker: self.worker.clone(), command: command.clone(),
+            prepare_digest: digest, fenced_previous: Some(previous.clone()), record: Some(record),
+        })
+    }
+
     fn prepare_workspace(
         &self,
         command: &WorkerCommandIdentity,
@@ -1542,6 +1622,7 @@ impl WorkerStore {
             if receipt.worker != self.worker
                 || receipt.command != *command
                 || receipt.prepare_digest != digest
+                || receipt.fenced_previous.is_some()
             {
                 return Err(WorkerStoreError::Conflict);
             }
@@ -1574,6 +1655,7 @@ impl WorkerStore {
             worker: self.worker.clone(),
             command: command.clone(),
             prepare_digest: digest,
+            fenced_previous: None,
             record: None,
         };
         {
@@ -2027,6 +2109,13 @@ fn refuse(error: WorkerStoreError) -> WorkerRefusal {
             WorkerRefusal::FilesystemAccessDenied
         }
         _ => WorkerRefusal::StoreUnavailable,
+    }
+}
+fn refuse_fenced_workspace(error: WorkerStoreError) -> WorkerRefusal {
+    match error {
+        WorkerStoreError::Conflict => WorkerRefusal::CommandMismatch,
+        WorkerStoreError::Unknown => WorkerRefusal::UnknownExecution,
+        error => refuse(error),
     }
 }
 fn marker_key(command: &WorkerCommandIdentity) -> String {
@@ -3037,6 +3126,115 @@ impl WorkerRuntime {
         Ok(prepared)
     }
 
+    /// Reprend uniquement l'ancre du worktree déjà créé. Les appels Git de ce
+    /// chemin sont des lectures ; le reçu de préparation neuf lie le recheck.
+    fn prepare_fenced(
+        &mut self,
+        command: &WorkerCommandIdentity,
+        previous: &WorkerCommandIdentity,
+        request: &WorkerPrepare,
+        placement: &RemotePlacement,
+        workspace: Option<&serde_json::Value>,
+    ) -> Result<WorkerPrepared, WorkerRefusal> {
+        validate_prepare_command(command)?;
+        previous.validate()?;
+        request.validate()?;
+        placement.validate()?;
+        let workspace = workspace.ok_or(WorkerRefusal::InvalidEnvelope)?;
+        if previous.task_id != command.task_id || previous.command_id == command.command_id
+            || !placement.matches_worker(&self.identity)
+            || !matches!(request.workspace,
+                Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. }))
+        {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
+        if !self.held.is_empty() {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        if self.prepared.len() >= 128 && !self.prepared.contains_key(&command.command_id) {
+            return Err(WorkerRefusal::ResourceLimit);
+        }
+        let original = self.store.fenced_workspace(previous, placement, workspace)
+            .map_err(refuse_fenced_workspace)?;
+        if !matches!(original.strategy, crate::delegation::WorkspaceStrategy::Worktree)
+            || request.base_commit.as_deref() != Some(original.base_commit.as_str())
+            || placement.base_commit.as_deref() != Some(original.base_commit.as_str())
+            || !matches!(&request.workspace,
+                Some(bridget_transport::protocol::WorkspaceRequest::Worktree { branch, .. })
+                    if branch.as_ref().is_none_or(|value| value == &original.branch))
+        {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let registry = self.registry()?;
+        let (mut mapping, source_cwd) = self.mapping_for(request, &registry, None)?;
+        let cwd = self.remap_prepared_worktree(&mut mapping, &source_cwd, &original)?;
+        if cwd != Path::new(&placement.execution_cwd) {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let report = crate::workspace_git::report(&original)
+            .map_err(|_| WorkerRefusal::PlacementMismatch)?;
+        if report.head_commit.as_deref() != Some(original.base_commit.as_str())
+            || report.head_on_branch != Some(true)
+        {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        let mut operation = crate::native_permissions::PermissionReadOperation::default();
+        let readiness = self.inspect_candidate(&registry, request, &mapping, &cwd,
+            &mut operation, None)?;
+        operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        let expected = RemotePlacement {
+            machine_id: self.identity.machine_id.clone(),
+            worker_id: self.identity.worker_id.clone(),
+            provisioning_revision: self.identity.provisioning_revision,
+            project_id: request.project_id.clone(),
+            mapping_revision: request.mapping_revision,
+            origin_host: request.origin_host.clone(),
+            origin_cwd: request.origin_cwd.clone(),
+            source_root_identity: request.source_root_identity.clone(),
+            relative_cwd: request.relative_cwd.clone(),
+            execution_cwd: cwd.to_string_lossy().into_owned(),
+            base_commit: Some(original.base_commit.clone()),
+            definition_digest: readiness.definition.digest.clone(),
+            permission_digest: json_digest(&readiness.child_policy).map_err(refuse)?,
+        };
+        if expected.definition_digest != placement.definition_digest {
+            return Err(WorkerRefusal::DefinitionChanged);
+        }
+        if expected.permission_digest != placement.permission_digest {
+            return Err(WorkerRefusal::PermissionsChanged);
+        }
+        if expected != *placement {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        if let Some(retained) = self.prepared.get(&command.command_id)
+            .filter(|retained| retained.expires > Instant::now()) {
+            if retained.command != *command || retained.request != *request
+                || retained.prepared.placement != *placement
+                || retained.prepared.workspace.as_ref() != Some(workspace)
+            {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
+            self.store.bind_fenced_workspace(previous, command, request, placement, workspace)
+                .map_err(refuse_fenced_workspace)?;
+            self.recheck(retained)?;
+            return Ok(retained.prepared.clone());
+        }
+        self.store.bind_fenced_workspace(previous, command, request, placement, workspace)
+            .map_err(refuse_fenced_workspace)?;
+        let now = worker_now();
+        let prepared = WorkerPrepared {
+            placement: placement.clone(), workspace: Some(workspace.clone()),
+            token: uuid::Uuid::new_v4().to_string(),
+            definition: readiness.definition, child_policy: readiness.child_policy,
+            effective_posture: readiness.effective_posture, prepared_at: now,
+        };
+        self.prepared.insert(command.command_id.clone(), PreparedRuntime {
+            routing: None, command: command.clone(), request: request.clone(),
+            prepared: prepared.clone(), expires: Instant::now() + Duration::from_secs(30),
+        });
+        Ok(prepared)
+    }
+
     fn recheck(&self, prepared: &PreparedRuntime) -> Result<AgentRegistry, WorkerRefusal> {
         self.recheck_at(prepared, true)
     }
@@ -3840,6 +4038,10 @@ impl WorkerRuntime {
                     *inspect_only,
                 )
                 .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
+            WorkerRequestOperation::PrepareFenced {
+                previous, prepare, placement, workspace,
+            } => self.prepare_fenced(&request.command, previous, prepare, placement,
+                workspace.as_ref()).map(|prepared| WorkerResponseOperation::Prepared { prepared }),
             WorkerRequestOperation::Start { start } => {
                 self.start(&request.command, start, disconnected, &mut WorkerStartCapacityCause::Unknown)
             }
@@ -4323,7 +4525,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                 ))
                                 && (start_recovery_negotiated || !matches!(
                                     &request.request,
-                                    WorkerRequestOperation::StartDetailed { .. }
+                                    WorkerRequestOperation::PrepareFenced { .. }
+                                        | WorkerRequestOperation::StartDetailed { .. }
                                         | WorkerRequestOperation::FenceUnstarted { .. }
                                 )) =>
                         {
@@ -6841,6 +7044,53 @@ while not stop.exists(): time.sleep(.01)
         let replay = runtime.prepare(&identity, &request).unwrap();
         assert_eq!(replay.workspace, prepared.workspace);
         assert_eq!(git(&project, &["worktree", "list", "--porcelain"]), before);
+        let original_receipt = fs::read(runtime.store.workspace_path(&identity)).unwrap();
+        let worktree_status = git(Path::new(&record.path), &["status", "--porcelain=v1"]);
+        let mut previous = identity.clone();
+        previous.instance_id = "previous-198".into();
+        previous.generation = 1;
+        let mut next = identity.clone();
+        next.command_id = "fenced-prepare-198".into();
+        let mut next_request = request.clone();
+        next_request.parent.revision += 1;
+        next_request.parent.run_id = "new-run-198".into();
+        assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
+            &prepared.placement, prepared.workspace.as_ref()).unwrap_err(),
+            WorkerRefusal::UnknownExecution);
+        runtime.fence_unstarted(&previous, &prepared.placement, worker_now() + 300).unwrap();
+        let mut other_placement = prepared.placement.clone();
+        other_placement.mapping_revision += 1;
+        assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
+            &other_placement, prepared.workspace.as_ref()).unwrap_err(),
+            WorkerRefusal::CommandMismatch);
+        let mut other_workspace = prepared.workspace.clone().unwrap();
+        other_workspace["branch"] = serde_json::json!("other-branch");
+        assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
+            &prepared.placement, Some(&other_workspace)).unwrap_err(),
+            WorkerRefusal::CommandMismatch);
+        assert!(!runtime.store.workspace_path(&next).exists());
+        assert_eq!(git(&project, &["worktree", "list", "--porcelain"]), before);
+        let fresh = runtime.prepare_fenced(&next, &previous, &next_request,
+            &prepared.placement, prepared.workspace.as_ref()).unwrap();
+        assert_eq!(fresh.placement, prepared.placement);
+        assert_eq!(fresh.workspace, prepared.workspace);
+        assert_ne!(fresh.token, prepared.token);
+        assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
+            &prepared.placement, prepared.workspace.as_ref()).unwrap().token, fresh.token);
+        let bound: WorkspacePreparationReceipt =
+            read_optional(&runtime.store.workspace_path(&next), MAX_METADATA_BYTES).unwrap().unwrap();
+        assert_eq!(bound.fenced_previous, Some(previous.clone()));
+        runtime.recheck(runtime.prepared.get(&next.command_id).unwrap()).unwrap();
+        assert_eq!(fs::read(runtime.store.workspace_path(&identity)).unwrap(), original_receipt);
+        assert_eq!(git(&project, &["worktree", "list", "--porcelain"]), before);
+        assert_eq!(git(Path::new(&record.path), &["status", "--porcelain=v1"]), worktree_status);
+        assert_eq!(fs::read(Path::new(&record.path).join("base.txt")).unwrap(), b"base\n");
+        assert!(!runtime.store.command_path(&next).exists());
+        assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
+        // Le reste de ce test historique attend un store sans commande.
+        runtime.prepared.remove(&next.command_id);
+        fs::remove_file(runtime.store.workspace_path(&next)).unwrap();
+        fs::remove_file(runtime.store.command_path(&previous)).unwrap();
         let retained = runtime.prepared.get(&identity.command_id).unwrap();
         runtime.recheck(retained).unwrap();
         fs::write(
