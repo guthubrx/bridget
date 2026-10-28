@@ -1,6 +1,6 @@
 # ADR198 — Reprendre un démarrage refusé sans doubler la mission
 
-Statut : proposé, qualification en cours.
+Statut : accepté dans les sources qualifiées6617aee8 ; chargement en production non réalisé.
 
 ## Contexte
 Une admission distante peut persister sa tâche et son dossier, puis recevoir ResourceLimit avant qu’un reçu de commande soit enregistré. Le rejeu restitue alors indéfiniment starting. Le jeton de préparation et le bail300s peuvent expirer. Prolonger silencieusement le canon ou créer une nouvelle mission ferait perdre les garanties d’identité et d’unicité.
