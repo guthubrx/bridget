@@ -10,6 +10,7 @@ use bridget_transport::protocol::{
     WORKER_RELEASE_LEASE_SECS,
     RemotePlacement, RemoteResultEnvelope, WORKER_RECEIPT_RETENTION_SECS, WorkerCommandIdentity,
     WorkerCommandPhase, WorkerIdentity, WorkerRefusal, WorkerReleasePermit,
+    WorkerStartCapacityCause,
     WorkerResultDisposition, WorkerResultIdentity, WorkerResultSlot, WorkerSlotClosureProof,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -256,6 +257,9 @@ pub struct WorkerCommandReceipt {
     pub worker: WorkerIdentity,
     pub identity: WorkerCommandIdentity,
     pub command_digest: String,
+    /// Empreinte fermée du fence pré-Start. Un reçu historique n'a jamais ce champ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_start_fence: Option<String>,
     pub placement: RemotePlacement,
     pub deadline_at: i64,
     pub phase: WorkerCommandPhase,
@@ -584,6 +588,9 @@ impl WorkerStore {
             return Err(WorkerStoreError::Invalid(WorkerRefusal::PlacementMismatch));
         }
         if let Some(receipt) = self.read_command(identity)? {
+            if receipt.pre_start_fence.is_some() {
+                return Err(WorkerStoreError::Conflict);
+            }
             if receipt.identity != *identity
                 || receipt.command_digest != command_digest
                 || receipt.placement != *placement
@@ -599,6 +606,7 @@ impl WorkerStore {
             worker: self.worker.clone(),
             identity: identity.clone(),
             command_digest: command_digest.into(),
+            pre_start_fence: None,
             placement: placement.clone(),
             deadline_at,
             phase: WorkerCommandPhase::Reserved,
@@ -619,6 +627,70 @@ impl WorkerStore {
         };
         self.persist(&self.command_path(identity), &receipt)?;
         Ok(CommandReservation::Created(receipt))
+    }
+
+    /// O(n) via admit/inventory ; n est borné par MAX_WORKER_STORE_ENTRIES.
+    /// Crée un refus durable sans transformer un reçu Start déjà existant.
+    fn fence_unstarted(
+        &self,
+        identity: &WorkerCommandIdentity,
+        placement: &RemotePlacement,
+        deadline_at: i64,
+        now: i64,
+    ) -> Result<(), WorkerStoreError> {
+        let _guard = self.transition.lock().map_err(|_| WorkerStoreError::Quarantined)?;
+        self.health()?;
+        identity.validate()?;
+        placement.validate()?;
+        if !placement.matches_worker(&self.worker) || deadline_at <= 0 || now < 0 {
+            return Err(WorkerRefusal::InvalidEnvelope.into());
+        }
+        let digest = json_digest(&("pre_start_fence_v1", &self.worker, identity, placement, deadline_at))?;
+        if let Some(receipt) = self.read_command(identity)? {
+            return if receipt.pre_start_fence.as_deref() == Some(digest.as_str())
+                && receipt.command_digest == digest
+                && receipt.placement == *placement
+                && receipt.deadline_at == deadline_at
+                && receipt.phase == WorkerCommandPhase::Refused
+            {
+                Ok(())
+            } else if receipt.pre_start_fence.is_some() || receipt.placement != *placement {
+                Err(WorkerStoreError::Conflict)
+            } else {
+                Err(WorkerStoreError::Unknown)
+            };
+        }
+        match fs::symlink_metadata(self.root.join("markers").join(format!("{}.json", marker_key(identity)))) {
+            Ok(_) => return Err(WorkerStoreError::Unknown),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
+        }
+        self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
+        let receipt = WorkerCommandReceipt {
+            version: STORE_VERSION,
+            worker: self.worker.clone(),
+            identity: identity.clone(),
+            command_digest: digest.clone(),
+            pre_start_fence: Some(digest),
+            placement: placement.clone(),
+            deadline_at,
+            phase: WorkerCommandPhase::Refused,
+            marker: None,
+            permit: None,
+            release_epoch: None,
+            child_id: None,
+            native_ready: false,
+            workspace_repair: None,
+            workspace_repair_history: Vec::new(),
+            startup_failed: false,
+            startup_failure: None,
+            terminal_exit_code: None,
+            preparation: None,
+            routing: None,
+            created_at: now,
+            updated_at: now,
+        };
+        self.persist(&self.command_path(identity), &receipt)
     }
 
     pub fn command(
@@ -1258,10 +1330,23 @@ impl WorkerStore {
                 return Err(WorkerStoreError::Conflict);
             }
             receipt.placement.validate()?;
+            let expected_fence = receipt.pre_start_fence.as_ref().map(|_| {
+                json_digest(&("pre_start_fence_v1", &self.worker, identity,
+                    &receipt.placement, receipt.deadline_at))
+            }).transpose()?;
             if !receipt.placement.matches_worker(&self.worker)
                 || !valid_digest(&receipt.command_digest)
                 || receipt.created_at < 0
-                || receipt.deadline_at <= receipt.created_at
+                || (receipt.pre_start_fence.is_none() && receipt.deadline_at <= receipt.created_at)
+                || receipt.pre_start_fence.as_ref().is_some_and(|digest|
+                    !valid_digest(digest) || Some(digest) != expected_fence.as_ref()
+                    || *digest != receipt.command_digest
+                    || receipt.phase != WorkerCommandPhase::Refused
+                    || receipt.marker.is_some() || receipt.permit.is_some()
+                    || receipt.child_id.is_some() || receipt.preparation.is_some()
+                    || receipt.routing.is_some() || receipt.release_epoch.is_some()
+                    || receipt.native_ready || receipt.startup_failed
+                    || receipt.startup_failure.is_some() || receipt.terminal_exit_code.is_some())
             {
                 return Err(WorkerStoreError::Quarantined);
             }
@@ -1979,6 +2064,23 @@ enum WorkerInbound {
 // missions. La demande refusée n'entre jamais dans la file du consommateur.
 fn worker_inbound_busy(inbound: WorkerInbound) -> WrapperToDaemon {
     match inbound {
+        WorkerInbound::Request(request @ WorkerRequest {
+            request: WorkerRequestOperation::StartDetailed { .. }, ..
+        }) => WrapperToDaemon::WorkerResponse {
+            response: WorkerResponse {
+                version: REMOTE_WORKER_VERSION,
+                correlation_id: request.correlation_id.clone(),
+                connection_epoch: request.connection_epoch.clone(),
+                worker: request.worker.clone(),
+                command: request.command.clone(),
+                response: WorkerResponseOperation::StartRejected {
+                    reason: WorkerRefusal::ResourceLimit,
+                    cause: if request.validate() == Err(WorkerRefusal::ResourceLimit) {
+                        WorkerStartCapacityCause::RequestFrame
+                    } else { WorkerStartCapacityCause::InboundQueue },
+                },
+            },
+        },
         WorkerInbound::Request(request) => WrapperToDaemon::WorkerResponse {
             response: WorkerResponse {
                 version: REMOTE_WORKER_VERSION,
@@ -2956,6 +3058,7 @@ impl WorkerRuntime {
         command: &WorkerCommandIdentity,
         start: &WorkerStart,
         disconnected: &AtomicBool,
+        capacity_cause: &mut WorkerStartCapacityCause,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
         // Même un rejeu durable ne transforme jamais une inspection en Start.
         if start.prepared_token == bridget_transport::protocol::WORKER_INSPECTION_TOKEN {
@@ -2965,6 +3068,9 @@ impl WorkerRuntime {
         // Le rejeu durable ne dépend pas d'un token volatil toujours présent.
         match self.store.command(command) {
             Ok(receipt) => {
+                if receipt.pre_start_fence.is_some() {
+                    return Err(WorkerRefusal::CommandMismatch);
+                }
                 if receipt.command_digest != digest || receipt.placement != start.placement {
                     return Err(WorkerRefusal::CommandMismatch);
                 }
@@ -2997,11 +3103,7 @@ impl WorkerRuntime {
             return Err(WorkerRefusal::CommandMismatch);
         }
         let registry = self.recheck(prepared)?;
-        // Une trame retardée/divergente ne consomme jamais le token courant.
-        let prepared = self
-            .prepared
-            .remove(&command.command_id)
-            .ok_or(WorkerRefusal::PrepareExpired)?;
+        // Le quota est testé avant de retirer le token volatil.
         match self
             .store
             .reserve_command(
@@ -3011,7 +3113,12 @@ impl WorkerRuntime {
                 start.deadline_at,
                 worker_now(),
             )
-            .map_err(refuse)?
+            .map_err(|error| {
+                if matches!(error, WorkerStoreError::Quota) {
+                    *capacity_cause = WorkerStartCapacityCause::CommandStore;
+                }
+                refuse(error)
+            })?
         {
             CommandReservation::Existing(receipt) => {
                 return Ok(Self::observation_native(
@@ -3022,13 +3129,20 @@ impl WorkerRuntime {
             }
             CommandReservation::Created(_) => {}
         }
+        let prepared = self.prepared.remove(&command.command_id)
+            .ok_or(WorkerRefusal::PrepareExpired)?;
         // Toute erreur de ce bloc précède une naissance réussie : le helper
         // de spawn ne fait aucune opération faillible après command.spawn().
         let launch_result = (|| {
             let cancel_key = json_digest(command).map_err(refuse)?;
             self.store
                 .bind_preparation(command, &prepared)
-                .map_err(refuse)?;
+                .map_err(|error| {
+                    if matches!(error, WorkerStoreError::Quota) {
+                        *capacity_cause = WorkerStartCapacityCause::PreparationMetadata;
+                    }
+                    refuse(error)
+                })?;
             self.store
                 .bind_launch(command, &start.child_id)
                 .map_err(refuse)?;
@@ -3200,6 +3314,27 @@ impl WorkerRuntime {
             },
         );
         Ok(WorkerResponseOperation::ReadyToRelease { ready_at })
+    }
+
+    fn fence_unstarted(
+        &self,
+        command: &WorkerCommandIdentity,
+        placement: &RemotePlacement,
+        deadline_at: i64,
+    ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        if self.held.contains_key(&command.command_id)
+            || self.running.contains_key(&command.command_id)
+            || self.abandoned.contains_key(&command.command_id)
+        {
+            return Err(WorkerRefusal::UnknownExecution);
+        }
+        self.store.fence_unstarted(command, placement, deadline_at, worker_now())
+            .map_err(|error| match error {
+                WorkerStoreError::Conflict => WorkerRefusal::CommandMismatch,
+                WorkerStoreError::Unknown => WorkerRefusal::UnknownExecution,
+                error => refuse(error),
+            })?;
+        Ok(WorkerResponseOperation::StartFenced {})
     }
 
     fn release(
@@ -3652,12 +3787,30 @@ impl WorkerRuntime {
         epoch: &str,
         disconnected: &AtomicBool,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
-        request.validate()?;
+        if let Err(reason) = request.validate() {
+            return if matches!(request.request, WorkerRequestOperation::StartDetailed { .. }) {
+                Ok(WorkerResponseOperation::StartRejected {
+                    reason,
+                    cause: if reason == WorkerRefusal::ResourceLimit {
+                        WorkerStartCapacityCause::RequestFrame
+                    } else { WorkerStartCapacityCause::Unknown },
+                })
+            } else {
+                Err(reason)
+            };
+        }
         if request.worker != self.identity
             || request.connection_epoch != epoch
             || disconnected.load(Ordering::Acquire)
         {
-            return Err(WorkerRefusal::StaleConnection);
+            return if matches!(request.request, WorkerRequestOperation::StartDetailed { .. }) {
+                Ok(WorkerResponseOperation::StartRejected {
+                    reason: WorkerRefusal::StaleConnection,
+                    cause: WorkerStartCapacityCause::Unknown,
+                })
+            } else {
+                Err(WorkerRefusal::StaleConnection)
+            };
         }
         match &request.request {
             WorkerRequestOperation::Prepare { prepare } => self
@@ -3688,7 +3841,21 @@ impl WorkerRuntime {
                 )
                 .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
             WorkerRequestOperation::Start { start } => {
-                self.start(&request.command, start, disconnected)
+                self.start(&request.command, start, disconnected, &mut WorkerStartCapacityCause::Unknown)
+            }
+            WorkerRequestOperation::StartDetailed { start } => {
+                let mut cause = WorkerStartCapacityCause::Unknown;
+                match self.start(&request.command, start, disconnected, &mut cause) {
+                    Ok(response) => Ok(response),
+                    Err(reason) => Ok(WorkerResponseOperation::StartRejected {
+                        reason,
+                        cause: if reason == WorkerRefusal::ResourceLimit { cause }
+                            else { WorkerStartCapacityCause::Unknown },
+                    }),
+                }
+            }
+            WorkerRequestOperation::FenceUnstarted { placement, deadline_at } => {
+                self.fence_unstarted(&request.command, placement, *deadline_at)
             }
             WorkerRequestOperation::Release { permit } => {
                 self.release(&request.command, permit, epoch, disconnected)
@@ -3945,6 +4112,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
+    start_recovery:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -3956,16 +4124,18 @@ impl MasterWorkerFeatures {
             WorkerCapability::ResultSlotDeadlineV1=>self.slot_deadline,
             WorkerCapability::OriginProofV1=>self.origin_proof,
             WorkerCapability::WorkspaceRepairV1=>self.workspace_repair,
+            WorkerCapability::StartRecoveryV1=>self.start_recovery,
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1].into_iter().filter(|v|self.supports(*v)).collect()
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1]
+            .into_iter().filter(|v|self.supports(*v)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=7 && accepted.iter().enumerate().all(|(index,capability)|
+        accepted.len()<=8 && accepted.iter().enumerate().all(|(index,capability)|
             self.supports(*capability) && !accepted[..index].contains(capability))
     }
 }
@@ -3987,6 +4157,7 @@ fn probe_worker_capability(
                 slot_deadline:has("worker_result_slot_deadline_v1"),
                 workspace_diagnostics:has("worker_workspace_diagnostics_v1"),
                 origin_proof:has("worker_origin_proof_v1"),workspace_repair:has("worker_workspace_repair_v1"),
+                start_recovery:has("worker_start_recovery_v1"),
             })
         }
         _=>Err("worker_capability_required".into()),
@@ -4097,6 +4268,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let slot_deadline_negotiated=negotiated.contains(&WorkerCapability::ResultSlotDeadlineV1);
         let origin_proof_negotiated=negotiated.contains(&WorkerCapability::OriginProofV1);
         let workspace_repair_negotiated=negotiated.contains(&WorkerCapability::WorkspaceRepairV1);
+        let start_recovery_negotiated=negotiated.contains(&WorkerCapability::StartRecoveryV1);
         runtime.host_resources.reset();
         runtime.last_resource_refresh = Instant::now();
         let disconnected = Arc::new(AtomicBool::new(false));
@@ -4135,7 +4307,9 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         Ok(DaemonToWrapper::WorkerRequest { request })
                             if request.connection_epoch == read_epoch
                                 && request.worker == read_worker
-                                && request.validate().is_ok()
+                                && (request.validate().is_ok()
+                                    || (matches!(&request.request, WorkerRequestOperation::StartDetailed { .. })
+                                        && request.validate() == Err(WorkerRefusal::ResourceLimit)))
                                 && (candidate_probe_v2_negotiated
                                     || !matches!(
                                         &request.request,
@@ -4146,6 +4320,11 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                 ))
                                 && (workspace_repair_negotiated || !matches!(
                                     &request.request, WorkerRequestOperation::RepairWorkspace { .. }
+                                ))
+                                && (start_recovery_negotiated || !matches!(
+                                    &request.request,
+                                    WorkerRequestOperation::StartDetailed { .. }
+                                        | WorkerRequestOperation::FenceUnstarted { .. }
                                 )) =>
                         {
                             WorkerInbound::Request(request)
@@ -6017,7 +6196,7 @@ while not stop.exists(): time.sleep(.01)
         ));
         let disconnected = AtomicBool::new(false);
         assert!(matches!(
-            runtime.start(&command(), &start, &disconnected).unwrap(),
+            runtime.start(&command(), &start, &disconnected, &mut WorkerStartCapacityCause::Unknown).unwrap(),
             WorkerResponseOperation::Observation {
                 observation: WorkerObservation {
                     phase: WorkerCommandPhase::Unknown,
@@ -6031,7 +6210,7 @@ while not stop.exists(): time.sleep(.01)
         start.child_id = "autre-child".into();
         assert_eq!(
             runtime
-                .start(&command(), &start, &disconnected)
+                .start(&command(), &start, &disconnected, &mut WorkerStartCapacityCause::Unknown)
                 .unwrap_err(),
             WorkerRefusal::CommandMismatch
         );
@@ -6209,7 +6388,7 @@ while not stop.exists(): time.sleep(.01)
                 WorkerCommandPhase::Unknown
             };
             let observed = recovered
-                .start(&command(), &start, &AtomicBool::new(false))
+                .start(&command(), &start, &AtomicBool::new(false), &mut WorkerStartCapacityCause::Unknown)
                 .unwrap();
             assert!(
                 matches!(observed, WorkerResponseOperation::Observation { observation }
@@ -6620,6 +6799,30 @@ while not stop.exists(): time.sleep(.01)
         assert!(root_prepared.workspace.is_none());
         assert_eq!(root_prepared.effective_posture, SpawnPosture::Discovery);
         assert_eq!(Path::new(&root_prepared.placement.execution_cwd), project);
+        // Quota du store avant reçu : le même token reste utilisable après
+        // retour de capacité. Aucun reçu ni processus n'est né.
+        let quota_file = runtime.store.root.join("quota198");
+        let quota = OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(&quota_file).unwrap();
+        quota.set_len(MAX_WORKER_STORE_BYTES as u64).unwrap();
+        let mut quota_command = identity.clone();
+        quota_command.instance_id = "instance-quota198".into();
+        quota_command.generation = 1;
+        let quota_start = WorkerStart {
+            prepared_token: root_prepared.token.clone(), child_id: "child-quota198".into(),
+            mission_id: "mission-quota198".into(), forward_child_requests: false,
+            placement: root_prepared.placement.clone(), definition: root_prepared.definition.clone(),
+            child_policy: root_prepared.child_policy.clone(),
+            effective_posture: root_prepared.effective_posture, deadline_at: worker_now() + 300,
+        };
+        let mut capacity_cause = WorkerStartCapacityCause::Unknown;
+        assert_eq!(runtime.start(&quota_command, &quota_start, &AtomicBool::new(false),
+            &mut capacity_cause).unwrap_err(), WorkerRefusal::ResourceLimit);
+        assert_eq!(capacity_cause, WorkerStartCapacityCause::CommandStore);
+        assert_eq!(runtime.prepared.get(&identity.command_id).unwrap().prepared.token, root_prepared.token);
+        assert!(!runtime.store.command_path(&quota_command).exists());
+        assert!(runtime.running.is_empty() && runtime.held.is_empty() && runtime.abandoned.is_empty());
+        fs::remove_file(quota_file).unwrap();
         request.workspace = Some(WorkspaceRequest::Worktree {
             base_ref: None,
             branch: None,
@@ -6694,7 +6897,7 @@ while not stop.exists(): time.sleep(.01)
         };
         assert_eq!(
             runtime
-                .start(&refused_command, &start, &AtomicBool::new(false))
+                .start(&refused_command, &start, &AtomicBool::new(false), &mut WorkerStartCapacityCause::Unknown)
                 .unwrap_err(),
             WorkerRefusal::StoreUnavailable
         );
@@ -7237,6 +7440,204 @@ while not stop.exists(): time.sleep(.01)
         assert!(features.admits(&[WorkerCapability::WorkspaceRepairV1]));
         assert!(!features.admits(&[WorkerCapability::OriginProofV1]));
         assert!(!features.admits(&[WorkerCapability::WorkspaceRepairV1,WorkerCapability::WorkspaceRepairV1]));
+    }
+
+    fn start198(deadline_at: i64) -> WorkerStart {
+        WorkerStart {
+            prepared_token: "token-198".into(),
+            child_id: "child-198".into(),
+            mission_id: "mission-198".into(),
+            forward_child_requests: false,
+            placement: placement(),
+            definition: ResolvedAgentDefinition {
+                command: "/bin/true".into(), args: vec![], protocol: "codex_app_server".into(),
+                forbidden_env: vec![], pass_env: vec![], permissions: "plan".into(),
+                claude_config_dir: None, queue_capacity: 1, notify_timeout_secs: 60,
+                mcp: bridget_transport::protocol::ResolvedMcpDefinition {
+                    interactive: "off".into(), acp_session: false,
+                },
+                capabilities: Default::default(), digest: "a".repeat(64),
+            },
+            child_policy: serde_json::json!({}),
+            effective_posture: SpawnPosture::Discovery,
+            deadline_at,
+        }
+    }
+
+    #[test]
+    fn spec198_fence_durable_replay_divergence_et_start_tardif() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let deadline = worker_now() - 1;
+        assert_eq!(runtime.fence_unstarted(&command(), &placement(), deadline).unwrap(),
+            WorkerResponseOperation::StartFenced {});
+        let receipt = runtime.store.command(&command()).unwrap();
+        assert_eq!(receipt.phase, WorkerCommandPhase::Refused);
+        assert!(receipt.pre_start_fence.is_some());
+        assert!(receipt.marker.is_none() && receipt.permit.is_none() && receipt.child_id.is_none());
+        assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
+        assert!(!runtime.store.root.join("markers").join(format!("{}.json", marker_key(&command()))).exists());
+        let path = runtime.store.command_path(&command());
+        let bytes = fs::read(&path).unwrap();
+        assert_eq!(runtime.fence_unstarted(&command(), &placement(), deadline).unwrap(),
+            WorkerResponseOperation::StartFenced {});
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(runtime.fence_unstarted(&command(), &placement(), deadline + 1).unwrap_err(),
+            WorkerRefusal::CommandMismatch);
+        let mut divergent = placement();
+        divergent.mapping_revision += 1;
+        assert_eq!(runtime.fence_unstarted(&command(), &divergent, deadline).unwrap_err(),
+            WorkerRefusal::CommandMismatch);
+        assert_eq!(runtime.start(&command(), &start198(deadline), &AtomicBool::new(false),
+            &mut WorkerStartCapacityCause::Unknown).unwrap_err(), WorkerRefusal::CommandMismatch);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        let config = WorkerRuntimeConfig {
+            machine_id: runtime.config.machine_id.clone(),
+            worker_id: runtime.config.worker_id.clone(),
+            provisioning_revision: runtime.config.provisioning_revision,
+            credential_path: runtime.config.credential_path.clone(),
+            state_root: runtime.config.state_root.clone(),
+            registry_path: runtime.config.registry_path.clone(),
+            master_socket: runtime.config.master_socket.clone(),
+        };
+        drop(runtime);
+        let reopened = WorkerRuntime::new(config).unwrap();
+        assert_eq!(reopened.fence_unstarted(&command(), &placement(), deadline).unwrap(),
+            WorkerResponseOperation::StartFenced {});
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn spec198_fence_refuse_tous_reçus_existants_et_marqueur_orphelin() {
+        for phase in [WorkerCommandPhase::Reserved, WorkerCommandPhase::Unknown,
+            WorkerCommandPhase::Refused] {
+            let fixture = Fixture::new();
+            let runtime = runtime_fixture(&fixture);
+            let now = worker_now();
+            runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
+            if phase != WorkerCommandPhase::Reserved {
+                runtime.store.set_phase(&command(), phase, now + 1).unwrap();
+            }
+            let path = runtime.store.command_path(&command());
+            let before = fs::read(&path).unwrap();
+            assert_eq!(runtime.fence_unstarted(&command(), &placement(), now + 300).unwrap_err(),
+                WorkerRefusal::UnknownExecution);
+            assert_eq!(fs::read(path).unwrap(), before);
+        }
+        let fixture = Fixture::new();
+        let runtime = runtime_fixture(&fixture);
+        let marker = runtime.store.root.join("markers").join(format!("{}.json", marker_key(&command())));
+        write_private_file_atomic(&marker, b"orphan").unwrap();
+        assert_eq!(runtime.fence_unstarted(&command(), &placement(), worker_now() - 1).unwrap_err(),
+            WorkerRefusal::UnknownExecution);
+        assert!(!runtime.store.command_path(&command()).exists());
+    }
+
+    #[test]
+    fn spec198_file_pleine_distingue_start_detaille_et_wire_historique() {
+        let request = WorkerRequest {
+            version: REMOTE_WORKER_VERSION, correlation_id: "request-198".into(),
+            connection_epoch: "epoch-198".into(), worker: worker(), command: command(),
+            request: WorkerRequestOperation::StartDetailed { start: start198(worker_now() + 300) },
+        };
+        request.validate().unwrap();
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["request"]["operation"], "start_detailed");
+        assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), request);
+        let busy = worker_inbound_busy(WorkerInbound::Request(request.clone()));
+        assert!(matches!(busy, WrapperToDaemon::WorkerResponse { response: WorkerResponse {
+            response: WorkerResponseOperation::StartRejected {
+                reason: WorkerRefusal::ResourceLimit,
+                cause: WorkerStartCapacityCause::InboundQueue,
+            }, ..
+        } }));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(inbound172("occupant", WorkerRequestOperation::Reconcile {})).unwrap();
+        let (socket, peer) = UnixStream::pair().unwrap();
+        let writer = Arc::new(Mutex::new(socket));
+        let disconnected = AtomicBool::new(false);
+        dispatch_worker_inbound(&sender, WorkerInbound::Request(request.clone()), &writer,
+            &disconnected, &Mutex::new(BTreeSet::new())).unwrap();
+        let WrapperToDaemon::WorkerResponse { response } = read_inbound172(&mut std::io::BufReader::new(peer))
+            else { panic!("réponse détaillée attendue"); };
+        response.validate().unwrap();
+        assert_eq!(response.response, WorkerResponseOperation::StartRejected {
+            reason: WorkerRefusal::ResourceLimit, cause: WorkerStartCapacityCause::InboundQueue,
+        });
+        assert!(matches!(receiver.try_recv().unwrap(), WorkerInbound::Request(WorkerRequest {
+            request: WorkerRequestOperation::Reconcile {}, ..
+        })));
+        assert!(receiver.try_recv().is_err(), "Start refusé ne doit pas rester en file");
+        let mut legacy = request;
+        legacy.request = WorkerRequestOperation::Start { start: start198(worker_now() + 300) };
+        assert_eq!(serde_json::to_value(&legacy).unwrap()["request"]["operation"], "start");
+        let busy = worker_inbound_busy(WorkerInbound::Request(legacy));
+        assert!(matches!(busy, WrapperToDaemon::WorkerResponse { response: WorkerResponse {
+            response: WorkerResponseOperation::Rejected { reason: WorkerRefusal::ResourceLimit }, ..
+        } }));
+        let features = MasterWorkerFeatures { start_recovery: true, ..Default::default() };
+        assert_eq!(features.capabilities(), vec![WorkerCapability::StartRecoveryV1]);
+        assert!(features.admits(&[WorkerCapability::StartRecoveryV1]));
+        assert!(!MasterWorkerFeatures::default().admits(&[WorkerCapability::StartRecoveryV1]));
+        assert_eq!(WorkerStartCapacityCause::PreparationMetadata.code(), "preparation_metadata");
+        assert_eq!(serde_json::to_value(WorkerCapability::StartRecoveryV1).unwrap(), "start_recovery_v1");
+        let fence = WorkerRequest {
+            version: REMOTE_WORKER_VERSION, correlation_id: "fence-198".into(),
+            connection_epoch: "epoch-198".into(), worker: worker(), command: command(),
+            request: WorkerRequestOperation::FenceUnstarted { placement: placement(), deadline_at: 1 },
+        };
+        fence.validate().unwrap();
+        let wire = serde_json::to_value(&fence).unwrap();
+        assert_eq!(wire["request"]["operation"], "fence_unstarted");
+        assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), fence);
+    }
+
+    #[test]
+    fn spec198_fence_exige_epoque_et_frame_trop_grande_reste_sans_effet() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let mut request = WorkerRequest {
+            version: REMOTE_WORKER_VERSION, correlation_id: "fence-198".into(),
+            connection_epoch: "epoch-198".into(), worker: worker(), command: command(),
+            request: WorkerRequestOperation::FenceUnstarted {
+                placement: placement(), deadline_at: worker_now() - 1,
+            },
+        };
+        let connected = AtomicBool::new(false);
+        assert_eq!(runtime.handle(&request, "other-epoch", &connected).unwrap_err(),
+            WorkerRefusal::StaleConnection);
+        assert!(!runtime.store.command_path(&command()).exists());
+        assert_eq!(runtime.handle(&request, "epoch-198", &connected).unwrap(),
+            WorkerResponseOperation::StartFenced {});
+        request.request = WorkerRequestOperation::StartDetailed {
+            start: start198(worker_now() + 300),
+        };
+        if let WorkerRequestOperation::StartDetailed { start } = &mut request.request {
+            start.child_policy = serde_json::json!({"large": "x".repeat(65 * 1024)});
+        }
+        assert_eq!(request.validate(), Err(WorkerRefusal::ResourceLimit));
+        assert!(matches!(worker_inbound_busy(WorkerInbound::Request(request.clone())),
+            WrapperToDaemon::WorkerResponse { response: WorkerResponse {
+                response: WorkerResponseOperation::StartRejected {
+                    reason: WorkerRefusal::ResourceLimit,
+                    cause: WorkerStartCapacityCause::RequestFrame,
+                }, ..
+            } }));
+        assert_eq!(runtime.handle(&request, "epoch-198", &connected).unwrap(),
+            WorkerResponseOperation::StartRejected {
+                reason: WorkerRefusal::ResourceLimit,
+                cause: WorkerStartCapacityCause::RequestFrame,
+            });
+        if let WorkerRequestOperation::StartDetailed { start } = &mut request.request {
+            start.child_policy = serde_json::json!({});
+            start.prepared_token = bridget_transport::protocol::WORKER_INSPECTION_TOKEN.into();
+        }
+        assert_eq!(runtime.handle(&request, "epoch-198", &connected).unwrap(),
+            WorkerResponseOperation::StartRejected {
+                reason: WorkerRefusal::InvalidEnvelope,
+                cause: WorkerStartCapacityCause::Unknown,
+            });
+        assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
     }
 
 }
