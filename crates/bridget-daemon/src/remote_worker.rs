@@ -498,6 +498,26 @@ struct WorkspacePreparationReceipt {
     record: Option<crate::delegation::WorkspaceRecord>,
 }
 
+/// Canon de la seule preuve de préparation fencée : un nouveau tour
+/// `provider_turn` renouvelle run, session et révision sans changer les droits.
+/// Driver, cwd, politique, source, version et instance restent stricts ;
+/// `native_wrapper` n'est jamais normalisé. Les droits réels sont recalculés
+/// avec le parent courant avant toute préparation.
+fn fenced_prepare_canon(request: &WorkerPrepare) -> WorkerPrepare {
+    let mut canon = request.clone();
+    if canon.parent.source == "provider_turn" {
+        canon.parent.run_id.clear();
+        canon.parent.provider_session_id.clear();
+        canon.parent.revision = 0;
+    }
+    canon
+}
+
+fn fenced_prepare_digest(command: &WorkerCommandIdentity, request: &WorkerPrepare)
+    -> Result<String, WorkerStoreError> {
+    json_digest(&(command, fenced_prepare_canon(request)))
+}
+
 pub(crate) fn same_workspace_anchor(record: &crate::delegation::WorkspaceRecord,
     workspace: &serde_json::Value) -> bool {
     let Ok(sent) = serde_json::from_value::<crate::delegation::WorkspaceRecord>(workspace.clone())
@@ -1710,7 +1730,7 @@ impl WorkerStore {
             return Err(WorkerStoreError::Conflict);
         }
         self.fenced_workspace_locked(previous, placement, workspace)?;
-        let digest = json_digest(&(command, request))?;
+        let digest = fenced_prepare_digest(command, request)?;
         let path = self.workspace_path(command);
         let proof = proof198::BindProof {
             version: STORE_VERSION, worker: self.worker.clone(), command: command.clone(),
@@ -3266,6 +3286,7 @@ impl WorkerRuntime {
 
     /// Reprend l'emplacement attesté sans mutation Git. Le worktree garde
     /// l'ancre originale ; Shared garde le HEAD et la politique courants.
+    #[cfg(test)]
     fn prepare_fenced(
         &mut self,
         command: &WorkerCommandIdentity,
@@ -3274,6 +3295,25 @@ impl WorkerRuntime {
         placement: &RemotePlacement,
         workspace: Option<&serde_json::Value>,
     ) -> Result<WorkerPrepared, WorkerRefusal> {
+        self.prepare_fenced_routed(command, previous, request, placement, workspace, None)
+    }
+
+    /// `fenced_routing` None ne vaut que pour un reçu Prepare162 ; un reçu
+    /// PrepareV2 garde sa sélection168 jusqu'à Release.
+    fn prepare_fenced_routed(
+        &mut self,
+        command: &WorkerCommandIdentity,
+        previous: &WorkerCommandIdentity,
+        request: &WorkerPrepare,
+        placement: &RemotePlacement,
+        workspace: Option<&serde_json::Value>,
+        fenced_routing: Option<&bridget_transport::protocol::WorkerFencedRouting>,
+    ) -> Result<WorkerPrepared, WorkerRefusal> {
+        let routing = fenced_routing.map(|value| RoutingPreparation {
+            connection_id: value.connection_id.clone(),
+            engine: value.engine.clone(),
+            workload: value.workload,
+        });
         validate_prepare_command(command)?;
         previous.validate()?;
         request.validate()?;
@@ -3312,7 +3352,11 @@ impl WorkerRuntime {
             None
         };
         let registry = self.registry()?;
-        let (mut mapping, source_cwd) = self.mapping_for(request, &registry, None)?;
+        if let Some(selection) = &routing {
+            self.check_routing_connection(&registry, request, selection)?;
+        }
+        let (mut mapping, source_cwd) = self.mapping_for(
+            request, &registry, routing.as_ref().map(|selection| selection.workload))?;
         let cwd = if let Some(original) = &original {
             self.remap_prepared_worktree(&mut mapping, &source_cwd, original)?
         } else {
@@ -3334,6 +3378,15 @@ impl WorkerRuntime {
         let readiness = self.inspect_candidate(&registry, request, &mapping, &cwd,
             &mut operation, None)?;
         operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
+        if let Some(value) = fenced_routing {
+            if readiness.definition.digest != value.expected_definition_digest {
+                return Err(WorkerRefusal::DefinitionChanged);
+            }
+            if json_digest(&readiness.child_policy).map_err(refuse)?
+                != value.expected_permission_digest {
+                return Err(WorkerRefusal::PermissionsChanged);
+            }
+        }
         let expected = RemotePlacement {
             machine_id: self.identity.machine_id.clone(),
             worker_id: self.identity.worker_id.clone(),
@@ -3362,7 +3415,9 @@ impl WorkerRuntime {
             serde_json::to_value(value).map_err(unavailable)).transpose()?;
         if let Some(retained) = self.prepared.get(&command.command_id)
             .filter(|retained| retained.expires > Instant::now()) {
-            if retained.command != *command || retained.request != *request
+            if retained.command != *command
+                || fenced_prepare_canon(&retained.request) != fenced_prepare_canon(request)
+                || retained.routing != routing
                 || retained.prepared.placement != *placement
                 || retained.prepared.workspace != workspace_value
             {
@@ -3391,7 +3446,7 @@ impl WorkerRuntime {
             effective_posture: readiness.effective_posture, prepared_at: now,
         };
         self.prepared.insert(command.command_id.clone(), PreparedRuntime {
-            routing: None, command: command.clone(), request: request.clone(),
+            routing, command: command.clone(), request: request.clone(),
             prepared: prepared.clone(), expires: Instant::now() + Duration::from_secs(30),
         });
         Ok(prepared)
@@ -4201,9 +4256,10 @@ impl WorkerRuntime {
                 )
                 .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
             WorkerRequestOperation::PrepareFenced {
-                previous, prepare, placement, workspace,
-            } => self.prepare_fenced(&request.command, previous, prepare, placement,
-                workspace.as_ref()).map(|prepared| WorkerResponseOperation::Prepared { prepared }),
+                previous, prepare, placement, workspace, routing,
+            } => self.prepare_fenced_routed(&request.command, previous, prepare, placement,
+                workspace.as_ref(), routing.as_ref())
+                .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
             WorkerRequestOperation::Start { start } => {
                 self.start(&request.command, start, disconnected, &mut WorkerStartCapacityCause::Unknown)
             }
@@ -7283,6 +7339,19 @@ while not stop.exists(): time.sleep(.01)
         let mut volatile_workspace = prepared.workspace.clone().unwrap();
         volatile_workspace["dirty"] = serde_json::json!(true);
         volatile_workspace["state"] = serde_json::json!("kept");
+        // Sélection168 d'un reçu PrepareV2 : candidat absent ou désactivé refuse avant tout lien.
+        let disabled = bridget_transport::protocol::WorkerFencedRouting {
+            workload: AutoDelegateWorkload::General,
+            connection_id: "connexion-desactivee-198".into(),
+            engine: "codex".into(),
+            expected_definition_digest: prepared.definition.digest.clone(),
+            expected_permission_digest: prepared.placement.permission_digest.clone(),
+        };
+        assert_eq!(runtime.prepare_fenced_routed(&next, &previous, &next_request,
+            &prepared.placement, Some(&volatile_workspace), Some(&disabled)).unwrap_err(),
+            WorkerRefusal::CapabilityRequired);
+        assert!(!runtime.store.workspace_path(&next).exists());
+        assert!(!proof198::bind_path(&runtime.store.root, &next).exists());
         let fresh = runtime.prepare_fenced(&next, &previous, &next_request,
             &prepared.placement, Some(&volatile_workspace)).unwrap();
         assert_eq!(fresh.placement, prepared.placement);
@@ -7290,6 +7359,31 @@ while not stop.exists(): time.sleep(.01)
         assert_ne!(fresh.token, prepared.token);
         assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
             &prepared.placement, prepared.workspace.as_ref()).unwrap().token, fresh.token);
+        // ACK Prepare perdu puis nouveau tour équivalent : même preuve, mêmes droits recontrôlés.
+        let mut later_turn = next_request.clone();
+        later_turn.parent.revision += 1;
+        later_turn.parent.run_id = "later-run-198".into();
+        later_turn.parent.provider_session_id = "later-session-198".into();
+        let replay = runtime.prepare_fenced(&next, &previous, &later_turn,
+            &prepared.placement, prepared.workspace.as_ref());
+        if next_request.parent.source == "provider_turn" {
+            assert_eq!(replay.unwrap().token, fresh.token);
+        } else {
+            assert_eq!(replay.unwrap_err(), WorkerRefusal::CommandMismatch);
+        }
+        let mut other_cwd = next_request.clone();
+        other_cwd.parent.cwd.push_str("-autre");
+        assert!(runtime.prepare_fenced(&next, &previous, &other_cwd,
+            &prepared.placement, prepared.workspace.as_ref()).is_err());
+        let mut other_driver = next_request.clone();
+        other_driver.parent.driver.push_str("-autre");
+        assert!(runtime.prepare_fenced(&next, &previous, &other_driver,
+            &prepared.placement, prepared.workspace.as_ref()).is_err());
+        let mut other_policy = next_request.clone();
+        other_policy.parent.provider_policy["sandbox_policy"]["networkAccess"] =
+            serde_json::json!(true);
+        assert!(runtime.prepare_fenced(&next, &previous, &other_policy,
+            &prepared.placement, prepared.workspace.as_ref()).is_err());
         let bound = proof198::read_workspace_receipt(&runtime.store.root, &runtime.store.worker, &next)
             .unwrap().unwrap();
         assert_eq!(bound.fenced_previous, Some(previous.clone()));
@@ -8027,6 +8121,47 @@ while not stop.exists(): time.sleep(.01)
             }
         }
         seen
+    }
+
+    #[test]
+    fn spec198_canon_fence_ne_normalise_que_le_renouvellement_provider_turn() {
+        let parent = ProviderPermissions {
+            version: 1, source: "provider_turn".into(), run_id: "run".into(),
+            provider_session_id: "session".into(), provider_instance_id: "parent".into(),
+            revision: 1, driver: "codex_app_server".into(), cwd: "/origin".into(),
+            runtime_mode: "full-access".into(), interaction_mode: "default".into(),
+            provider_policy: serde_json::json!({"kind":"codex","approval_policy":"never"}),
+        };
+        let a = WorkerPrepare {
+            machine_id: "cartae".into(), project_id: "project".into(), provisioning_revision: 1,
+            mapping_revision: 1, origin_host: "origin".into(), origin_cwd: "/origin".into(),
+            source_root: "/origin".into(), remote_root: "/remote".into(),
+            source_root_identity: "git:held".into(), relative_cwd: ".".into(), base_commit: None,
+            agent_type: "codex".into(), model: "fixture".into(), effort: None, posture: None,
+            workspace: None, parent,
+        };
+        let mut b = a.clone();
+        b.parent.run_id = "autre".into();
+        b.parent.provider_session_id = "autre-session".into();
+        b.parent.revision += 7;
+        assert_eq!(fenced_prepare_canon(&a), fenced_prepare_canon(&b));
+        for mutate in [
+            (|r: &mut WorkerPrepare| r.parent.cwd.push('x')) as fn(&mut WorkerPrepare),
+            |r| r.parent.driver.push('x'),
+            |r| r.parent.provider_instance_id.push('x'),
+            |r| r.parent.runtime_mode.push('x'),
+            |r| r.parent.provider_policy = serde_json::json!({"autre": true}),
+            |r| r.model.push('x'),
+        ] {
+            let mut c = a.clone();
+            mutate(&mut c);
+            assert_ne!(fenced_prepare_canon(&a), fenced_prepare_canon(&c));
+        }
+        let mut native = a.clone();
+        native.parent.source = "native_wrapper".into();
+        let mut native_b = native.clone();
+        native_b.parent.run_id = "autre".into();
+        assert_ne!(fenced_prepare_canon(&native), fenced_prepare_canon(&native_b));
     }
 
     #[test]
