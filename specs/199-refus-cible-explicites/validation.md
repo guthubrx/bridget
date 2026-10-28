@@ -14,3 +14,6 @@ Source, revue et candidat en préparation. Maître183 encore actif ; aucune acti
 
 ## Contre-revue et complément
 La revue native3ad2f1b9-a2e6-4838-949b-0cfa7d2e030b sur5e209eeb identifie uneP2 : la catégorie machine, autorisée par le validateur, manquait dans le guidage et atteignaitunreachable. Correction : guidage machine ajouté, sortie de repli sans panique, test exhaustif des12catégories fermées.5tests199PASS sur le complément. Aucun binaire de5e209eeb activé ; sa compilation réussie ne qualifie pas cette ancienne tête.
+
+## Avis final
+Contre-revue3ad2f1b9, ronde2, favorable limitée sur2918b957cfbeabeb286ff4ac5173cf3a026bb590. Aucun blocage concret restant dans les sources.5tests199PASS,3rejeux183PASS,2tests194PASS,1test168PASS ; guides32/522/13PASS. La revue n’atteste aucun chargement. La préparation, la remise et la continuation de cette revue surSYS ont effectivement fonctionné ; cela ne reconstruit pas la cause du refus métier historique.
