@@ -19059,6 +19059,18 @@ fn handle_worker_message(
     }
 }
 
+thread_local! {
+    /// Cause locale du dernier ResourceLimit du maître sur ce thread (198) :
+    /// aucune E/S n'a atteint le worker. Lue puis effacée par l'appelant.
+    static LOCAL_ROUNDTRIP_LIMIT: std::cell::Cell<Option<&'static str>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Cause fermée d'un refus produit par le maître lui-même, sinon `None`.
+pub(crate) fn take_local_roundtrip_limit() -> Option<&'static str> {
+    LOCAL_ROUNDTRIP_LIMIT.with(|cell| cell.take())
+}
+
 fn remote_worker_roundtrip(
     state: &Arc<Mutex<DaemonState>>,
     worker: &bridget_transport::protocol::WorkerIdentity,
@@ -19070,6 +19082,7 @@ fn remote_worker_roundtrip(
     bridget_transport::protocol::WorkerRefusal,
 > {
     use bridget_transport::protocol::*;
+    LOCAL_ROUNDTRIP_LIMIT.with(|cell| cell.set(None));
     let correlation_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = mpsc::sync_channel(1);
     let (writer, request, conn_id) = {
@@ -19129,6 +19142,16 @@ fn remote_worker_roundtrip(
             && !session.capabilities.contains(&WorkerCapability::ResultSlotDeadlineV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
+        // Reprise198 : un ancien pair ne reçoit jamais ces enveloppes.
+        if matches!(
+            &operation,
+            WorkerRequestOperation::StartDetailed { .. }
+                | WorkerRequestOperation::FenceUnstarted { .. }
+                | WorkerRequestOperation::PrepareFenced { .. }
+        ) && !session.capabilities.contains(&WorkerCapability::StartRecoveryV1)
+        {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
         let writer = st
             .connections
             .get(&session.conn_id)
@@ -19143,8 +19166,14 @@ fn remote_worker_roundtrip(
             command: command.clone(),
             request: operation,
         };
-        request.validate()?;
+        if let Err(reason) = request.validate() {
+            if reason == WorkerRefusal::ResourceLimit {
+                LOCAL_ROUNDTRIP_LIMIT.with(|cell| cell.set(Some("master_request_frame")));
+            }
+            return Err(reason);
+        }
         if st.pending_worker_responses.len() >= MAX_WORKER_STORE_ENTRIES {
+            LOCAL_ROUNDTRIP_LIMIT.with(|cell| cell.set(Some("master_pending")));
             return Err(WorkerRefusal::ResourceLimit);
         }
         st.pending_worker_responses.insert(
