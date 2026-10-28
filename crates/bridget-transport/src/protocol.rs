@@ -3613,6 +3613,17 @@ impl WorkspaceRepairStatusV1 {
         !matches!(self.phase.as_str(), "published" | "refused")
     }
 }
+/// Mêmes champs de routage que PrepareV2, pour une reprise PrepareFenced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerFencedRouting {
+    pub workload: AutoDelegateWorkload,
+    pub connection_id: String,
+    pub engine: String,
+    pub expected_definition_digest: String,
+    pub expected_permission_digest: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequestOperation {
@@ -3643,6 +3654,10 @@ pub enum WorkerRequestOperation {
         prepare: WorkerPrepare,
         placement: RemotePlacement,
         workspace: Option<serde_json::Value>,
+        /// Sélection168 d'un reçu PrepareV2 : revalidée comme PrepareV2 puis
+        /// conservée jusqu'à Release. Absent seulement pour un reçu Prepare162.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        routing: Option<WorkerFencedRouting>,
     },
     ParentProof {
         parent: ProviderPermissions,
@@ -4085,8 +4100,14 @@ impl WorkerRequest {
                         && worker_digest(expected_permission_digest),
                 )
             }
-            WorkerRequestOperation::PrepareFenced { previous, prepare, placement, workspace } => {
+            WorkerRequestOperation::PrepareFenced { previous, prepare, placement, workspace, routing } => {
                 previous.validate()?;
+                if let Some(routing) = routing {
+                    worker_require(worker_atom(&routing.connection_id, MAX_WORKER_ATOM_BYTES)
+                        && matches!(routing.engine.as_str(), "codex" | "claude")
+                        && worker_digest(&routing.expected_definition_digest)
+                        && worker_digest(&routing.expected_permission_digest))?;
+                }
                 prepare.validate()?;
                 placement.validate()?;
                 worker_require(previous.task_id == self.command.task_id
@@ -7727,9 +7748,28 @@ mod tests {
         fenced.request = WorkerRequestOperation::PrepareFenced {
             previous: worker162_command(), prepare, placement,
             workspace: Some(serde_json::json!({"path":"/remote/project/.worktrees/existing198"})),
+            routing: None,
         };
         fenced.validate().unwrap();
         let wire = serde_json::to_value(&fenced).unwrap();
+        assert!(wire["request"].get("routing").is_none(), "reçu162 : aucun champ neuf");
+        let routing = WorkerFencedRouting {
+            workload: AutoDelegateWorkload::General, connection_id: "connexion-198".into(),
+            engine: "codex".into(), expected_definition_digest: "a".repeat(64),
+            expected_permission_digest: "b".repeat(64),
+        };
+        let plain = fenced.clone();
+        if let WorkerRequestOperation::PrepareFenced { routing: slot, .. } = &mut fenced.request {
+            *slot = Some(routing.clone());
+        }
+        fenced.validate().unwrap();
+        let routed = serde_json::to_value(&fenced).unwrap();
+        assert_eq!(serde_json::from_value::<WorkerRequest>(routed).unwrap(), fenced);
+        if let WorkerRequestOperation::PrepareFenced { routing: slot, .. } = &mut fenced.request {
+            slot.as_mut().unwrap().engine = "autre".into();
+        }
+        assert_eq!(fenced.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        fenced = plain;
         assert_eq!(wire["request"]["operation"], "prepare_fenced");
         assert_eq!(serde_json::from_value::<WorkerRequest>(wire).unwrap(), fenced);
         if let WorkerRequestOperation::PrepareFenced { workspace, .. } = &mut fenced.request {

@@ -391,10 +391,14 @@ impl WorkerReadView<'_> {
                 &self.config.state_root.join("store"), self.identity, &prepared.command)
                 .map_err(refuse)?
                 .ok_or(WorkerRefusal::UnknownExecution)?;
+            let expected_digest = if receipt.fenced_previous.is_some() {
+                fenced_prepare_digest(&prepared.command, &prepared.request)
+            } else {
+                json_digest(&(&prepared.command, &prepared.request))
+            }.map_err(refuse)?;
             if receipt.worker != *self.identity
                 || receipt.command != prepared.command
-                || receipt.prepare_digest
-                    != json_digest(&(&prepared.command, &prepared.request)).map_err(refuse)?
+                || receipt.prepare_digest != expected_digest
             {
                 return Err(WorkerRefusal::CommandMismatch);
             }
