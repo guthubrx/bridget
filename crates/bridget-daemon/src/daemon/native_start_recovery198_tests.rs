@@ -13,7 +13,7 @@ fn fixture() -> (
     fixture_guarded(false)
 }
 
-fn fixture_guarded(
+pub(super) fn fixture_guarded(
     guarded: bool,
 ) -> (
     Arc<Mutex<DaemonState>>,
@@ -192,7 +192,7 @@ fn fixture_guarded(
     (Arc::new(Mutex::new(st)), config, task, receipt, parent)
 }
 
-fn saved(state: &Arc<Mutex<DaemonState>>, id: &str) -> Value {
+pub(super) fn saved(state: &Arc<Mutex<DaemonState>>, id: &str) -> Value {
     serde_json::to_value(
         state
             .lock()

@@ -1634,3 +1634,16 @@ Si seule l’époque du worker a changé, vérifier la disponibilité native de 
 `bridget_auto_delegate` n’accepte pas `agent_type`. Omettre ce champ ; `engine` désigne le moteur (par exemple `codex`), `machine_id` la destination, et `connection_id` une connexion précise du catalogue seulement si elle est imposée. Les axes non imposés restent libres. `agent_type` appartient au parcours explicite distinct.
 
 Le client refuse ce champ avant connexion et le maître conserve le code public `auto_admission_invalid` avec `detail.field=agent_type`. Une correction avec la même clé n’est permise qu’avant tout reçu, après vérification de l’absence de tâche et d’autre appel en vol. Si un reçu existe, conserver son canon et suivre son état ; ne jamais présenter une enveloppe modifiée comme un rejeu strict. Conserver le SHA exact et le workspace demandés.
+
+
+Pour un lancement distant annulé sans reçu de commande, un maître et un worker
+compatibles peuvent fermer la commande exacte avec `FenceUnstarted`, après un
+`Cancel` refusé par `UnknownExecution`. La tâche doit être `cancelling`, sans
+mission émise, avec commande, instance, génération, placement et échéance connus.
+Seul `StartFenced` confirme la clôture durable contre un Start tardif ; aucun
+fournisseur ne démarre. Une absence de reçu, une réponse perdue ou un ancien
+worker laisse l’arrêt non confirmé. Lire `error_cause` et `error_recovery` et
+conserver tâche, clé et sorties. Si `worker_start_recovery_v1` manque, demander
+au responsable de qualifier et charger les binaires compatibles par la
+maintenance admise. Ne pas forcer de redémarrage, modifier le stockage ou créer
+une mission de remplacement.

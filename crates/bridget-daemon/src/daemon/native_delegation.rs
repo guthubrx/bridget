@@ -4328,6 +4328,23 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             json!("Attendez la confirmation d’arrêt et le rapport du dossier dans bridget_task_status. Conservez la tâche et ses sorties ; ne lancez pas de remplacement pendant ce contrôle. bridget_task_continue ne reprend pas une tâche failed.")
         };
     }
+    if task.state == "cancelling" && task.error.as_deref().is_some_and(|e|
+        e.starts_with("native_cancel_unverifiable:")) {
+        let cause = task.error.as_deref().and_then(|e| e.rsplit(':').next())
+            .filter(|c| cancel_fence_cause(&format!("cancel_fence:{c}")).is_some())
+            .unwrap_or("unobserved");
+        view["error_cause"] = json!(cause);
+        view["error_message"] = json!("L’annulation est enregistrée, mais sa preuve de clôture n’est pas encore acquise.");
+        view["error_recovery"] = json!(match cause {
+            "capability_required" => "Le worker doit annoncer worker_start_recovery_v1 pour fermer une commande sans reçu avant naissance. Faites qualifier et charger maître/worker compatibles par la maintenance admise ; conservez cette tâche et sa clé. Aucun nouveau travail n’est lancé par cette clôture.",
+            "capacity" => "Le worker ne peut pas conserver la preuve durable de clôture. Faites vérifier sa capacité native avec le responsable, sans purger de garde ni de travail actif. La même annulation reste en attente.",
+            "reply_unavailable" => "La réponse de clôture n’est pas confirmée. La même annulation pourra relire son reçu ; ne créez ni commande ni mission de remplacement.",
+            "not_unstarted" => "La commande n’est plus éligible à une clôture avant naissance. Le responsable doit réconcilier son reçu et son exécution ; ne déduisez pas l’arrêt d’une absence de reçu.",
+            "identity_changed" | "identity_unavailable" => "Le responsable doit retrouver la commande, l’instance, la génération et le placement exacts depuis l’autorité native. Ne reconstituez pas une identité et ne modifiez pas le store à la main.",
+            _ => "Le responsable doit vérifier le reçu de commande et les faits du worker pour cette même tâche. Un état inconnu ne prouve pas un arrêt ; conservez le dossier, la clé et tous les travaux.",
+        });
+        view["error_human_action"] = json!("Si la maintenance native refuse le chargement ou si l’identité ne peut pas être établie, demander à l’utilisateur une décision ciblée de maintenance qualifiée. Ne pas forcer un redémarrage, élargir les droits, recréer la mission ou déclarer Terminal sans preuve.");
+    }
     if task.state == "failed"
         && task.error.as_deref().is_some_and(|error| error.starts_with("cross_project_reason_required:"))
     {
@@ -11907,6 +11924,68 @@ fn cancellation_root(st: &DaemonState, task: &Task) -> Result<bool, String> {
 /// La sauvegarde après chaque arrêt sérialise la liste croissante : O(n²)
 /// octets cumulés, requis par la reprise durable. n <= 4096 membres,
 /// m lancements, f flotte, p présences.
+// Une absence de reçu ne suffit jamais à déclarer Stopped. Après un Cancel
+// explicite, le worker198 peut fermer durablement la commande avant naissance.
+fn fence_cancel_unstarted(
+    state: &Arc<Mutex<DaemonState>>,
+    task_id: &str,
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+) -> Result<(), &'static str> {
+    use bridget_transport::protocol::*;
+    let (worker, placement, deadline_at) = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let task = st.delegation_store.get(task_id).map_err(|_| "store_unavailable")?
+            .ok_or("identity_unavailable")?;
+        if task.state != "cancelling" || task.mission_issued_at.is_some()
+            || !task.remote_prepared || task.cleanup_done {
+            return Err("not_unstarted");
+        }
+        if remote_command_identity(&st, &task).ok().as_ref() != Some(command) {
+            return Err("identity_changed");
+        }
+        let placement = task.remote_placement.ok_or("identity_unavailable")?;
+        let worker = remote_worker_identity(&placement);
+        if !st.remote_workers.get(&worker.machine_id).is_some_and(|w|
+            w.identity == worker && w.capabilities.contains(&WorkerCapability::StartRecoveryV1)) {
+            return Err("capability_required");
+        }
+        let commands = st.idempotency.spawn_commands(&st.fleet.supervisor_scope())
+            .map_err(|_| "store_unavailable")?;
+        let known = commands.iter().find(|c| c.command_id == command.command_id
+            && c.instance_id.as_deref() == Some(command.instance_id.as_str())
+            && c.generation == command.generation && c.remote_placement.as_ref() == Some(&placement))
+            .ok_or("identity_unavailable")?;
+        (worker, placement, known.deadline_at)
+    };
+    let response = remote_worker_roundtrip(state, &worker, command,
+        WorkerRequestOperation::FenceUnstarted { placement, deadline_at },
+        Instant::now() + Duration::from_secs(30)).map_err(|e| match e {
+            WorkerRefusal::CapabilityRequired => "capability_required",
+            WorkerRefusal::WorkerUnavailable | WorkerRefusal::StaleConnection => "reply_unavailable",
+            WorkerRefusal::ResourceLimit => "capacity",
+            WorkerRefusal::CommandMismatch | WorkerRefusal::PlacementMismatch => "identity_changed",
+            _ => "refused",
+        })?;
+    if !matches!(response, WorkerResponseOperation::StartFenced {}) {
+        return Err("invalid_reply");
+    }
+    // L’état métier est relu après l’E/S ; aucun ACK ancien ne clôt une autre tentative.
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let task = st.delegation_store.get(task_id).map_err(|_| "store_unavailable")?
+        .ok_or("identity_unavailable")?;
+    if task.state != "cancelling" || task.mission_issued_at.is_some()
+        || remote_command_identity(&st, &task).ok().as_ref() != Some(command) {
+        return Err("identity_changed");
+    }
+    Ok(())
+}
+
+fn cancel_fence_cause(state: &str) -> Option<&str> {
+    state.strip_prefix("cancel_fence:").filter(|cause| matches!(*cause,
+        "store_unavailable" | "identity_unavailable" | "not_unstarted" | "identity_changed"
+        | "capability_required" | "reply_unavailable" | "capacity" | "refused" | "invalid_reply"))
+}
+
 pub(super) fn cancel_remote_task(
     state: &Arc<Mutex<DaemonState>>,
     task: &Task,
@@ -11954,7 +12033,11 @@ pub(super) fn cancel_remote_task(
         },
         Instant::now() + Duration::from_secs(10),
     );
-    if !matches!(
+    if matches!(result, Err(WorkerRefusal::UnknownExecution)) {
+        if let Err(cause) = fence_cancel_unstarted(state, &task.task_id, &command) {
+            return StopOutcome::Timeout { state: format!("cancel_fence:{cause}") };
+        }
+    } else if !matches!(
         result,
         Ok(WorkerResponseOperation::Observation {
             observation: WorkerObservation {
@@ -12176,7 +12259,12 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         ) {
             success = false;
             if root.state == "cancelling" {
-                root.error = Some(format!("native_cancel_unverifiable:{name}"));
+                root.error = Some(match &outcome {
+                    bridget_transport::protocol::StopOutcome::Timeout { state }
+                        if cancel_fence_cause(state).is_some() =>
+                        format!("native_cancel_unverifiable:{name}:{}", cancel_fence_cause(state).unwrap()),
+                    _ => format!("native_cancel_unverifiable:{name}"),
+                });
                 if st.delegation_store.save(&root).is_err() {
                     return;
                 }

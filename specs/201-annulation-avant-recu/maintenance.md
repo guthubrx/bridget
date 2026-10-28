@@ -1,0 +1,11 @@
+# Passage201 — état vérifié et limite
+
+Le maître183/PID351206 et le workerCartae/PID35887 restent chargés. Les candidats198–200 ne modifient pas ces processus. Le parcours201 exige maître et workerCartae compatibles198. Installer un fichier ne suffit pas.
+
+À19:18UTC le28octobre,6231 est encore cancelling sans reçu worker, bd3 est starting ;96f99d60 et34d3ae99 ont des missions réellement émises et restent working. Leur interruption est interdite. Un arrêt du maître183 peut faire arrêter leurs anciens wrappers : ne pas présenter un remplacement maître seul comme une bascule sans interruption.
+
+Préparer candidat201, tests et revue ; les anciennes préconditions197 ne sont pas actuelles. Ne pas poser de gel prolongé. Demander aux propriétaires seulement de fermer leurs gardes devenues inutiles au prochain point sûr, en conservant leurs travaux, sans annuler les missions en cours.
+
+Le Prepare183 refuse tant que tâches/admissions/contrôles restent actifs ou inconnus. Le cas historiquee595 sans identité attestée ne peut pas être soldé par201. Aucune écriture DB ni Terminal inventé. Si les propriétaires libèrent les travaux mais que les états historiques bloquent encore Prepare, une décision humaine ciblée de maintenance exceptionnelle reste nécessaire. Avant de la proposer : actualiser les PID, cgroups, reçus, reprises désirées et files enfant, qualifier la sauvegarde cohérente, exclure l’updater et vérifier SendSIGKILL=no. Un arrêt qui ne se confirme pas impose de conserver le binaire et la socket, sans escalade.
+
+Après chargement prouvé par /proc/PID/exe, SHA256 et capacité négociée : le tick natif reprend la même annulation6231. Seuls cleanup_done/guard_released et la preuve de clôture autorisent l’annonce de fin. Aucun nouveau Start ni remplacement. Prévenir ensuite Politique sol. Si une activation reste impossible, fournir le contrôle exact manquant ; ne pas annoncer un correctif actif depuis les seules sources.

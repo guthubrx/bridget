@@ -506,6 +506,18 @@ stopping them, descendants first. An unverifiable precheck stops none.
 Confirmed stops remain durable if a later stop fails. A task can stay
 `cancelling` with `native_cancel_unverifiable`; that is not confirmed cleanup.
 
+For a cancelled remote launch that has no command receipt, a compatible master
+and worker can close the exact command with `FenceUnstarted` after `Cancel`
+returns `UnknownExecution`. This requires a cancelling task with no mission
+issued and a known command, instance, generation, placement and deadline. Only
+`StartFenced` confirms durable closure against a late Start; no provider is
+started. An absent receipt, lost reply or old worker leaves cleanup unconfirmed.
+Read `error_cause` and `error_recovery`; retain the task, request key and outputs.
+If `worker_start_recovery_v1` is unavailable, ask the maintainer to qualify and
+load compatible binaries through admitted maintenance. Do not force a restart,
+edit storage or create a replacement mission.
+
+
 Capacity limits are 128 active tasks and 16 active children per instance.
 Retention is at most 4096 tasks, purged by complete root trees. Age maintenance
 targets trees older than seven days, up to 128 per hourly pass; capacity pressure
