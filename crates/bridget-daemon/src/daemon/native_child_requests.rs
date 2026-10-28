@@ -1109,6 +1109,11 @@ pub(super) fn settle_after_stop(st: &DaemonState, task: &Task) -> Result<(), Str
 /// O(t(log n+32+B)), coldrestart appelé APRÈS groupes152 fermés, avant reprise.
 pub(super) fn prepare_restart(st: &DaemonState) -> Result<(), String> {
     for task in st.delegation_store.tasks()? {
+        // Le redémarrage de ce maître ne ferme pas les groupes des workers
+        // distants. Ils conservent leurs callbacks jusqu’à leur preuve propre.
+        if task.remote_placement.is_some() {
+            continue;
+        }
         for row in st.delegation_store.child_requests_for_task(&task.task_id)? {
             if matches!(row.delivery_state.as_str(), "delivered" | "unknown")
                 || row.void_reason.as_deref() == Some("closed_before_apply")

@@ -2203,3 +2203,30 @@ fn spec184_slow_release_confirmation_keeps_existing_task() {
     assert_eq!(st.delegation_store.tasks().unwrap().len(), 1, "aucune mission dupliquée");
     assert!(st.pending_worker_responses.is_empty());
 }
+
+#[test]
+fn spec201_master_restart_preserves_remote_child_callbacks_without_stop_proof() {
+    for stage in ["open", "pending", "sent"] {
+        let fixture = RequestFixture155::with_remote("restart-remote201", true);
+        let request = fixture.approval(201);
+        fixture.receive(request.clone());
+        let row = fixture.row(&request);
+        if stage != "open" {
+            fixture.decide(&row);
+        }
+        if stage == "sent" {
+            assert!(fixture.state.lock().unwrap().delegation_store
+                .claim_child_request(&row.request_id, unix_timestamp()).unwrap());
+        }
+        let before = serde_json::to_value(fixture.row(&request)).unwrap();
+        let task_before = serde_json::to_value(fixture.state.lock().unwrap().delegation_store
+            .get(&fixture.task.task_id).unwrap().unwrap()).unwrap();
+        {
+            let mut st = fixture.state.lock().unwrap();
+            native_delegation::prepare_restart(&mut st).unwrap();
+        }
+        assert_eq!(serde_json::to_value(fixture.row(&request)).unwrap(), before, "{stage}");
+        assert_eq!(serde_json::to_value(fixture.state.lock().unwrap().delegation_store
+            .get(&fixture.task.task_id).unwrap().unwrap()).unwrap(), task_before, "{stage}");
+    }
+}
