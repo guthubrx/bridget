@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session201 annulation avant reçu : source56e0bfd59a6f8077f4d594fc136b82849d0feb1d qualifiée et poussée ;8tests201/9lifecycle155/26tests198/13updater/1préservation197/1grâce172 PASS, guides32/522/13 etCIhygiènePASS, revue4adfc814 ronde4 favorable limitée. CancelUnknownExecution utilise FenceUnstarted pour tuple exact cancelling sansmission, clôture durable sansStart ; causes fermées distinguées ; callbacks distants conservés au redémarrage et à la reconnexion sans gain de droits. CandidatLinux201-cancel-56e0bfd59a6f construit/vérifié NONactif. Prepare3504db41 refuse update_missions_active_or_unconfirmed ; maître183/PID351206 conservé,6231toujourscancelling, missionsSYS/KSactivespréservées. Aucun gel, restart, remplacement ou serviceOpus2D. T005chargement/clôtureouverte. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/201-annulation-avant-recu/validation.md.
+
+
 Session200 — Champ interdit en admission automatique : source5f320738b96ed96eb7cf926497d8836f7b824b18 qualifiée et poussée. Le schéma automatique omet agent_type, le client le refuse avant connexion et le maître nomme le champ avec code public auto_admission_invalid. Conseils de correction avant reçu cohérents ; canon existant préservé et parcours explicite inchangé. Deux tests200, quatre états d’admission174, un précontrôle174 et un protocole168 PASS ; guides32/522/13 et CI hygiène PASS. Revue d7f01d39 ronde2 favorable. Candidat Linux200-field-5f320738b96e construit/vérifié NON actif ; chargement soumis à la maintenance encore bloquée. Omettre agent_type et utiliser engine fonctionne déjà avec183. Revue close, worktreeSYS retiré après gardes ; caches et worktree d’intégration conservés sous observation incomplète/livraison runtime ouverte. T005 ouverte. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/200-champ-admission-auto/validation.md.
 
 
