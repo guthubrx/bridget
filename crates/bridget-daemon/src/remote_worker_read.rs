@@ -387,10 +387,10 @@ impl WorkerReadView<'_> {
             Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
         ) {
             trace.at("workspace_receipt");
-            let receipt: WorkspacePreparationReceipt =
-                read_optional(&self.workspace_path(&prepared.command), MAX_METADATA_BYTES)
-                    .map_err(refuse)?
-                    .ok_or(WorkerRefusal::UnknownExecution)?;
+            let receipt = proof198::read_workspace_receipt(
+                &self.config.state_root.join("store"), self.identity, &prepared.command)
+                .map_err(refuse)?
+                .ok_or(WorkerRefusal::UnknownExecution)?;
             if receipt.worker != *self.identity
                 || receipt.command != prepared.command
                 || receipt.prepare_digest
