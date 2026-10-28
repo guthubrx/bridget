@@ -6023,6 +6023,35 @@ fn start_remote_task_with(
         {
             return Err("remote_task_changed".into());
         }
+        if let Some(plan) = recovery {
+            // La préparation distante a libéré le mutex. Revalider avant de
+            // réserver une nouvelle commande, y compris Cancel qui peut garder starting.
+            if task.guard_released || task.cleanup_done || task.mission_issued_at.is_some()
+                || task.result.is_some() || task.round_no() != 1
+                || task.start_recovery.as_ref() != Some(plan)
+                || plan.phase != crate::delegation::StartRecoveryPhase::Prepared
+            {
+                return Err("start_recovery_task_changed".into());
+            }
+            start_recovery::admission_open(&st)?;
+            recheck_attested_thread(&st, conn, thread)?;
+            if live_connection_identity(&st, conn)
+                != Some((task.owner.clone(), task.owner_instance.clone()))
+                || task.permission_snapshot.as_ref().is_none_or(|snapshot| snapshot.parent != *parent
+                    || snapshot.child_policy != prepared.child_policy)
+                || task.definition != prepared.definition
+            {
+                return Err("permission_changed".into());
+            }
+            let machine = st.registry.machine(&prepared.placement.machine_id)?;
+            let mapping = st.registry.project_mapping(&prepared.placement.machine_id,
+                &prepared.placement.project_id)?;
+            if machine.provisioning_revision != prepared.placement.provisioning_revision
+                || mapping.mapping_revision != prepared.placement.mapping_revision
+            {
+                return Err("remote_placement_changed".into());
+            }
+        }
         let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
             return Err("invalid_record".into());
         };

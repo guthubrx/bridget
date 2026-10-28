@@ -374,3 +374,33 @@ fn spec198_expired_original_lease_resumes_same_task_once_through_native_response
     assert_eq!(saved(&state,&task.task_id),after);
     drop(state);cleanup(&config);
 }
+
+#[test]
+fn spec198_cancel_or_halt_after_prepare_blocks_new_lease() {
+    use bridget_transport::protocol::WorkerPrepared;
+    for cancel in [true,false] {
+        let (state,config,task,_,parent)=fixture();
+        persist_plan(&state,&task.task_id).unwrap();
+        set_phase(&state,&task.task_id,StartRecoveryPhase::Planned,StartRecoveryPhase::Fenced).unwrap();
+        invalidate_previous(&state,&task.task_id).unwrap();
+        let plan={
+            let st=state.lock().unwrap();let mut current=st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            current.start_recovery.as_mut().unwrap().phase=StartRecoveryPhase::Prepared;
+            let plan=current.start_recovery.clone().unwrap();
+            if cancel {current.guard_released=true;} else {
+                st.delegation_store.set_delegation_halt("halt-after-prepare198",true,"cli",None,||Ok(0),unix_timestamp()).unwrap();
+            }
+            st.delegation_store.save(&current).unwrap();plan
+        };
+        let prepared=WorkerPrepared {workspace:None,placement:task.remote_placement.clone().unwrap(),
+            token:"prepared198".into(),definition:task.definition.clone(),
+            child_policy:task.permission_snapshot.as_ref().unwrap().child_policy.clone(),
+            effective_posture:task.effective_posture.unwrap(),prepared_at:unix_timestamp()};
+        let before=saved(&state,&task.task_id);
+        let result=start_remote_task_with(&state,&task.task_id,&prepared,&parent,"conn-1",None,None,Some(&plan));
+        assert_eq!(result.err().as_deref(),Some(if cancel {"start_recovery_task_changed"} else {"delegations_halted"}));
+        assert_eq!(saved(&state,&task.task_id),before);
+        let st=state.lock().unwrap();assert!(st.managed_spawns.is_empty());assert!(st.pending_worker_responses.is_empty());
+        drop(st);drop(state);cleanup(&config);
+    }
+}

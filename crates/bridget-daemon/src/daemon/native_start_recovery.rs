@@ -210,7 +210,7 @@ fn lease_of(st: &DaemonState, command: &WorkerCommandIdentity) -> Option<crate::
         })
 }
 
-fn admission_open(st: &DaemonState) -> Result<(), String> {
+pub(super) fn admission_open(st: &DaemonState) -> Result<(), String> {
     let control = crate::referent_control::read(st.store.connection())
         .map_err(|_| "control_state_unavailable")?;
     let halt = st
