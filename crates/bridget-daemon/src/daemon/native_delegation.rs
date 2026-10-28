@@ -6114,8 +6114,12 @@ fn start_remote_task_with(
             st.fleet.request_spawn(&order, now)
         }
         .map_err(|e| e.to_string())?;
-        let crate::fleet::SpawnSubmission::Start(lease) = submission else {
-            return Err("remote_spawn_not_new".into());
+        let lease=match submission {
+            crate::fleet::SpawnSubmission::Start(lease)=>lease,
+            crate::fleet::SpawnSubmission::Terminal(issue) if recovery.is_some()=>{
+                return Err(start_recovery::local_reservation_refusal(&st,&mut task,&issue)?);
+            },
+            _=>return Err("remote_spawn_not_new".into()),
         };
         st.fleet
             .mark_starting(&lease, now, &prepared.definition)

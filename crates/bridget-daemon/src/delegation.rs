@@ -976,6 +976,15 @@ pub(crate) struct StartAttemptRecord {
     pub cause: Option<String>,
 }
 
+/// Refus local avant toute réservation active et avant tout Start distant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StartLocalRefusal {
+    pub command_id:String,
+    pub issued_at:i64,
+    pub code:String,
+}
+
 /// Plan stable : un rejeu, un restart ou un ACK perdu retrouvent exactement
 /// la même nouvelle commande, jamais une seconde.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -989,6 +998,8 @@ pub(crate) struct StartRecovery {
     pub issued_at: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub history: Vec<StartAttemptRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_refusals:Vec<StartLocalRefusal>,
 }
 
 pub(crate) const MAX_START_RECOVERIES: usize = 3;

@@ -40,3 +40,18 @@ Le choixV2 figé est extrait du reçu durable (connexion, moteur, charge, emprei
 
 ## Contrôles finaux avant contre-revue
 21 tests maître start_recovery PASS ;59 tests worker PASS ;32 tests droits PASS et7 ignorés ;9 protocole162 PASS. La régression185/193 est soldée. Le test worktree utilise explicitement provider_turn et exige la réussite de la reprise après réponse perdue, redémarrage et nouveau tour ; aucune alternative conditionnelle ne masque ce cas. Les tests stricts183 décodent les deux schémas de reçus. Le token repris conserve son expiration ; la preuve du parent est renouvelée pourRelease. Les guides32/522/13 sont vérifiés. Aucun fournisseur réel de qualification198 lancé.
+
+## Candidats198 non actifs
+Source fonctionnelle71b5da3628c468369c2852e3fd91125c9853aad9, build198-start-71b5da3628c4, versionaffichée0.6.3. Les trois compilationsrelease sont PASS ; identifiant présent dans chaque exécutable, empreintes vérifiées, copies hors staging. Aucun lien actif remplacé.
+- Cartae/KS : /home/moi/.local/lib/bridget-communication/198-start-71b5da3628c4/bin/bridget ; SHA2562d7524b588f3bce0980d237eb157af398be5ce269e83d3c14bcffdada530e94a. Les deux copies sont identiques et exécutent--version. installed a été appelé surCartae ; retrait des intermédiaires différé par observation des processus incomplète, sortie1. La compilation a réussi ; aucun nettoyage forcé.
+- MacARM64 : /Users/moi/.local/lib/bridget-communication/198-start-71b5da3628c4/bin/bridget ; SHA256dd31485aca75ab165d242e4a3c87141904dd284a4217dfe32b7b607bbd43f411. Signature locale vérifiée, installedPASS.
+- SYSglibc2.36 : /home/moi/.local/lib/bridget-communication/198-start-71b5da3628c4/bin/bridget ; SHA256b66394bbc634c29abfe31f93b61c36d711913ac5e6e7564768a801199f974ade. Construction sur/mnt/storage, installedPASS.
+
+ProtocolePrepareV2/PrepareFenced :1testPASS supplémentaire, distinct du filtre198. GitHub Repositoryhygiene sur71b5 : succès40701456855 (https://github.com/guthubrx/bridget/actions/runs/40701456855). Ce contrôle GitHub n’est pas une suiteRust complète ; les tests ciblés ci-dessus restent les preuves Rust exécutées.
+
+La première tentative de contre-revue71b5 ne pouvait pas lire les objets nouveaux dans son environnement lectureseule ; aucun verdict n’a été inventé. Le responsable a importé uniquement les objetsGit dans le miroirSYS, sans déplacer sonHEAD, ni changer les droits. Même tâche ddccc585 reprise à la ronde3 pour examiner71b5 pargitshow/gitdiff.
+
+## Seconde contre-revue : raccord réel
+71b5 reçoit trois P1 supplémentaires : annonce/acceptation de capacité manquantes, observation historiqueRefused qui coupe la reconnexion, issue Fleetquota locale terminale qui bloque le plan. Ces constats rendent les candidats71b5 impropres à l’activation, malgré leurs buildsPASS. Aucun n’a été activé.
+
+Le complément corrige les trois points. Le test fait transiter DaemonIdentityRequest par le vrai handler maître, passe le vrai parseur worker, puis HelloWithCapabilities et Accepted ; huit capacités sont négociées. Après une reprise, une reconnexion authentifiée peut republier le tuple historiqueRefused sans mutation de la tâche courante ; époque périmée et identité étrangère restent refusées. Un quotaFleet produit une issue locale connue avantStart, conservée dans un historique borné ; la prochaine clé interne reste dans la même tâche et le rejeu strict progresse après libération native de capacité. Aucun Start distant inconnu n’est rejoué.23tests maîtrePASS après correction d’une fixture de quota dont le nom n’était pas unUUID natif.

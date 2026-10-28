@@ -18703,11 +18703,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 6
+                && capabilities.len() <= 8
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18878,6 +18878,17 @@ fn handle_worker_message(
                 }
             }
             if let WorkerResponseOperation::Observation { observation } = &response.response {
+                // La reconnexion republie aussi les refus des anciennes tentatives.
+                // Un tuple historique exact, déjà connu de Fleet, ne modifie
+                // ni la tentative courante ni la connexion authentifiée.
+                if observation.phase == WorkerCommandPhase::Refused
+                    && remote_worker_has_command(&st,&response.worker,Some(&response.command))
+                    && st.delegation_store.get(&response.command.task_id).is_ok_and(|task|
+                        task.is_some_and(|task| task.start_recovery.as_ref().is_some_and(|plan|
+                            plan.previous == response.command || plan.history.iter().any(|old|
+                                old.command == response.command)))) {
+                    return None;
+                }
                 if !remote_worker_has_command(&st, &response.worker, Some(&response.command))
                     || !st
                         .delegation_store
@@ -23820,6 +23831,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_origin_proof_v1".to_string(),
                     "worker_workspace_repair_v1".to_string(),
                     "task_workspace_repair_v1".to_string(),
+                    "worker_start_recovery_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })

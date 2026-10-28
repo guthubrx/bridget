@@ -46,7 +46,7 @@ fn fixture() -> (
             "protocol":"codex_app_server","forbidden_env":[],"capabilities":{
                 "execution_paths":["codex_app_server"],"models":{"custom/model":{"efforts":["high"]}}}}},
         "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
-            "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],
+            "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"worker198-secret")),"allowed_agent_types":["native-test"],
             "mappings":{"project":{"source_host":st.host,"source_root":task.cwd,
                 "remote_root":"/tmp","expected_git_identity":"git:fixture162","mapping_revision":1}}}}
     }).to_string(), &root.join("registry198.json")).unwrap();
@@ -655,13 +655,13 @@ fn spec198_recovery_cannot_reuse_an_expired_new_lease_as_current_time() {
     cleanup(&config);
 }
 
-fn native_flow(cut_after_fleet: bool, old_plan: bool) {
+fn native_flow(cut_after_fleet: bool, old_plan: bool, local_quota: bool) {
     use bridget_transport::protocol::WorkerPrepared;
     let (state, config, task, receipt, parent) = fixture();
     let original = saved(&state, &task.task_id);
     let old = remote_command_identity(&state.lock().unwrap(), &task).unwrap();
     assert!(lease_of(&state.lock().unwrap(), &old).unwrap().deadline_at < unix_timestamp());
-    if cut_after_fleet || old_plan {
+    if cut_after_fleet || old_plan || local_quota {
         prepare_plan(
             &state,
             &task.task_id,
@@ -675,6 +675,47 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
             reserve_plan_only(&state, &task);
         }
     }
+    if local_quota {
+        let blockers = fill_fleet198(&state);
+        let plan = launch_plan(&state, &task.task_id).unwrap();
+        let prepared = bridget_transport::protocol::WorkerPrepared {
+            workspace: None,
+            placement: task.remote_placement.clone().unwrap(),
+            token: "quota-before-start198".into(),
+            definition: task.definition.clone(),
+            child_policy: task
+                .permission_snapshot
+                .as_ref()
+                .unwrap()
+                .child_policy
+                .clone(),
+            effective_posture: task.effective_posture.unwrap(),
+            prepared_at: unix_timestamp(),
+        };
+        let result = start_remote_task_with(
+            &state,
+            &task.task_id,
+            &prepared,
+            &parent,
+            "conn-1",
+            None,
+            None,
+            Some(&plan),
+        );
+        assert_eq!(
+            result.err().as_deref(),
+            Some("start_recovery_local_capacity:quota_exceeded")
+        );
+        let st = state.lock().unwrap();
+        let current = st.delegation_store.get(&task.task_id).unwrap().unwrap();
+        let new_plan = current.start_recovery.as_ref().unwrap();
+        assert_eq!(new_plan.local_refusals[0].command_id, plan.new_command_id);
+        assert_ne!(new_plan.new_command_id, plan.new_command_id);
+        assert!(st.pending_worker_responses.is_empty());
+        for lease in blockers {
+            st.fleet.invalidate_for_stop(&lease).unwrap();
+        }
+    }
     let (socket, peer) = UnixStream::pair().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
     state.lock().unwrap().connections.insert(
@@ -683,11 +724,16 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
     );
     let responder = state.clone();
     let expected = task.clone();
+    let old_for_listener = old.clone();
     let listener = thread::spawn(move || {
         let mut reader = std::io::BufReader::new(peer);
         let mut started = None;
         let mut calls = Vec::new();
-        for _ in 0..if cut_after_fleet || old_plan { 4 } else { 5 } {
+        for _ in 0..if cut_after_fleet || old_plan || local_quota {
+            4
+        } else {
+            5
+        } {
             let mut line = String::new();
             match std::io::BufRead::read_line(&mut reader, &mut line) {
                 Ok(0) | Err(_) => {
@@ -704,7 +750,7 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
             let operation = match &request.request {
                 WorkerRequestOperation::FenceUnstarted { .. } => {
                     calls.push("fence");
-                    assert_eq!(request.command, old);
+                    assert_eq!(request.command, old_for_listener);
                     WorkerResponseOperation::StartFenced {}
                 }
                 WorkerRequestOperation::PrepareFenced {
@@ -713,7 +759,7 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
                     ..
                 } => {
                     calls.push("prepare");
-                    assert_eq!(previous, &old);
+                    assert_eq!(previous, &old_for_listener);
                     assert_eq!(placement, expected.remote_placement.as_ref().unwrap());
                     WorkerResponseOperation::Prepared {
                         prepared: WorkerPrepared {
@@ -734,9 +780,9 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
                 }
                 WorkerRequestOperation::StartDetailed { start } => {
                     calls.push("start");
-                    assert_ne!(request.command.command_id, old.command_id);
-                    assert_ne!(request.command.instance_id, old.instance_id);
-                    assert_eq!(request.command.task_id, old.task_id);
+                    assert_ne!(request.command.command_id, old_for_listener.command_id);
+                    assert_ne!(request.command.instance_id, old_for_listener.instance_id);
+                    assert_eq!(request.command.task_id, old_for_listener.task_id);
                     assert!(start.deadline_at > unix_timestamp());
                     assert_eq!(start.child_id, expected.child);
                     assert_eq!(start.mission_id, expected.mission);
@@ -807,7 +853,7 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
     );
     assert_eq!(
         calls,
-        if cut_after_fleet || old_plan {
+        if cut_after_fleet || old_plan || local_quota {
             vec!["prepare", "start", "slot", "release"]
         } else {
             vec!["fence", "prepare", "start", "slot", "release"]
@@ -828,6 +874,59 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool) {
     }
     assert_eq!(after["start_recovery"]["phase"], "done");
     assert_ne!(after["child_instance"], original["child_instance"]);
+    let accepted = negotiate198(&state, "worker-reconnected198");
+    let observation = bridget_transport::protocol::WorkerObservation {
+        startup_failure: None,
+        workspace: None,
+        permission_digest: None,
+        phase: bridget_transport::protocol::WorkerCommandPhase::Refused,
+        native_ready: false,
+        exit_code: None,
+        observed_at: unix_timestamp(),
+    };
+    let response = WorkerResponse {
+        version: REMOTE_WORKER_VERSION,
+        correlation_id: "historical198".into(),
+        connection_epoch: accepted.connection_epoch.clone(),
+        worker: accepted.identity.clone(),
+        command: old.clone(),
+        response: WorkerResponseOperation::Observation { observation },
+    };
+    assert!(
+        super::super::super::handle_worker_message(
+            &state,
+            "worker-reconnected198",
+            WrapperToDaemon::WorkerResponse {
+                response: response.clone()
+            }
+        )
+        .is_none()
+    );
+    assert_eq!(
+        saved(&state, &task.task_id),
+        after,
+        "ancien refus ne modifie pas la nouvelle tentative"
+    );
+    let mut foreign = response.clone();
+    foreign.command.instance_id = "foreign198".into();
+    assert!(
+        super::super::super::handle_worker_message(
+            &state,
+            "worker-reconnected198",
+            WrapperToDaemon::WorkerResponse { response: foreign }
+        )
+        .is_some()
+    );
+    let mut stale = response;
+    stale.connection_epoch = "stale198".into();
+    assert!(
+        super::super::super::handle_worker_message(
+            &state,
+            "worker-reconnected198",
+            WrapperToDaemon::WorkerResponse { response: stale }
+        )
+        .is_some()
+    );
     assert_eq!(
         state
             .lock()
@@ -999,15 +1098,15 @@ fn reserve_plan_only(state: &Arc<Mutex<DaemonState>>, task: &Task) -> crate::fle
 
 #[test]
 fn spec198_expired_original_lease_resumes_same_task_once_through_native_responses() {
-    native_flow(false, false);
+    native_flow(false, false, false);
 }
 #[test]
 fn spec198_crash_after_fleet_before_task_reuses_exact_reserved_command_once() {
-    native_flow(true, false);
+    native_flow(true, false, false);
 }
 #[test]
 fn spec198_plan_wait_does_not_consume_unreserved_launch_lease() {
-    native_flow(false, true);
+    native_flow(false, true, false);
 }
 
 #[test]
@@ -1112,4 +1211,108 @@ fn spec198_v2_recovery_preserves_exact_frozen_connection_and_rejects_changed_cho
     cleanup(&config);
     drop(routing_state);
     cleanup(&routing_config);
+}
+
+fn fill_fleet198(state: &Arc<Mutex<DaemonState>>) -> Vec<crate::fleet::SpawnLease> {
+    let st = state.lock().unwrap();
+    let mut leases = Vec::new();
+    for n in st.fleet.active_count()..st.fleet.quota() {
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder {
+            posture: None,
+            agent_type: "native-test".into(),
+            project: None,
+            requested_name: Some(Uuid::new_v4().to_string()),
+            cwd: std::env::temp_dir(),
+            persistent: false,
+            command_id: format!("blocker198-{n}"),
+            issued_at: now,
+            deadline_at: now + 300,
+            ownership: None,
+            remote_placement: None,
+        };
+        let crate::fleet::SpawnSubmission::Start(lease) =
+            st.fleet.request_spawn(&order, now).unwrap()
+        else {
+            panic!("blocage quota fixture")
+        };
+        leases.push(lease);
+    }
+    leases
+}
+
+fn negotiate198(
+    state: &Arc<Mutex<DaemonState>>,
+    conn: &str,
+) -> bridget_transport::protocol::WorkerAccepted {
+    use bridget_transport::protocol::{
+        ClientCapability, ConnectionRole, IdentityCredential, WorkerHello,
+        WorkerHelloWithCapabilities,
+    };
+    use std::io::{BufRead, Write};
+    let (worker, mut server) = UnixStream::pair().unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let reader = worker.try_clone().unwrap();
+    let client = thread::spawn(move || {
+        crate::remote_worker::probe_capabilities198_for_test(
+            &Mutex::new(worker),
+            &mut std::io::BufReader::new(reader),
+        )
+        .unwrap()
+    });
+    let mut read = std::io::BufReader::new(server.try_clone().unwrap());
+    let mut line = String::new();
+    read.read_line(&mut line).unwrap();
+    let message: WrapperToDaemon = serde_json::from_str(&line).unwrap();
+    assert!(matches!(message, WrapperToDaemon::DaemonIdentityRequest));
+    let report = super::super::super::handle_wrapper_message("conn-1", message, state).unwrap();
+    server
+        .write_all(format!("{}\n", serde_json::to_string(&report).unwrap()).as_bytes())
+        .unwrap();
+    let caps = client.join().unwrap();
+    assert_eq!(caps.len(), 8);
+    assert!(caps.contains(&WorkerCapability::StartRecoveryV1));
+    let identity = {
+        let mut st = state.lock().unwrap();
+        st.peer_uids.insert(conn.into(), unsafe { libc::geteuid() });
+        st.connection_roles
+            .insert(conn.into(), ConnectionRole::Worker);
+        st.remote_workers["cartae"].identity.clone()
+    };
+    let hello = WorkerHello {
+        version: 1,
+        identity,
+        credential: IdentityCredential::new("worker198-secret".into()),
+        build: "198-test".into(),
+        capability: ClientCapability::RemoteWorkerV1,
+    };
+    let result = super::super::super::handle_worker_message(
+        state,
+        conn,
+        WrapperToDaemon::WorkerHelloWithCapabilities {
+            hello: WorkerHelloWithCapabilities {
+                hello,
+                capabilities: caps.clone(),
+            },
+        },
+    );
+    let Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { accepted }) = result else {
+        panic!("Hello198 refusé: {result:?}")
+    };
+    assert_eq!(accepted.capabilities, caps);
+    accepted.accepted
+}
+
+#[test]
+fn spec198_real_identity_hello_accepted_negotiates_all_eight_capabilities() {
+    let (state, config, _, _, _) = fixture();
+    negotiate198(&state, "worker-wire198");
+    drop(state);
+    cleanup(&config);
+}
+#[test]
+fn spec198_local_fleet_quota_refusal_replays_same_task_after_capacity_returns() {
+    native_flow(false, false, true);
 }

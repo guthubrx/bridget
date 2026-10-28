@@ -112,6 +112,11 @@ pub(super) fn refusal_guidance(code: &str) -> Option<(&'static str, &'static str
             "Conservez la tâche, la request_id et le refus d’origine. Aucun nouveau Start n’a été envoyé à ce pair. Rejouez la même demande après chargement d’un worker qui annonce cette capacité ; ne créez pas de nouvelle tâche.",
             "Une mise à jour du worker par la maintenance native est nécessaire ; demandez à l’utilisateur de l’autoriser, sans redémarrage forcé.",
         ),
+        "start_recovery_local_capacity" => (
+            "Fleet a refusé localement la réservation avant tout Start distant. La cause fermée figure après les deux-points et la clé est conservée dans l’historique.",
+            "Attendez que le propriétaire libère nativement la capacité concernée, puis rejouez exactement la même admission. Bridget réserve une autre tentative dans la même tâche ; aucune commande distante incertaine n’est rejouée.",
+            "Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur quelle mission doit être terminée. Ne forcez aucun quota ni arrêt tiers.",
+        ),
         "start_recovery_reservation_expired" => (
             "La réservation interrompue a expiré avant tout envoi de Start. Son identité est conservée, sans conclure à un arrêt distant.",
             "Rejouez strictement la même admission. Bridget doit fermer cette réservation auprès du worker avant une nouvelle commande, sans changer la tâche ni le dossier.",
@@ -476,7 +481,7 @@ fn persist_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<(), St
     let previous = remote_command_identity(&st, &task)
         .map_err(|e| format!("start_recovery_lease_unknown:{e:?}"))?;
     let lease = lease_of(&st, &previous).ok_or("start_recovery_lease_unknown")?;
-    let (history, previous_issued_at) = match task.start_recovery.take() {
+    let (history, previous_issued_at, local_refusals) = match task.start_recovery.take() {
         Some(old) => {
             // Cause fermée de la tentative qui se termine ; "historical" = refus sans sous-code.
             let cause = task
@@ -491,9 +496,13 @@ fn persist_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<(), St
                 deadline_at: old.previous_deadline_at,
                 cause,
             });
-            (history, old.issued_at)
+            (history, old.issued_at, old.local_refusals)
         }
-        None => (Vec::new(), task.launch_issued_at.unwrap_or(task.created_at)),
+        None => (
+            Vec::new(),
+            task.launch_issued_at.unwrap_or(task.created_at),
+            Vec::new(),
+        ),
     };
     if history.len() >= MAX_START_RECOVERIES {
         return Err("start_recovery_exhausted".into());
@@ -507,6 +516,7 @@ fn persist_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<(), St
         new_command_id: format!("{}-start-{attempt}", task.task_id),
         issued_at: unix_timestamp(),
         history,
+        local_refusals,
     });
     st.delegation_store.save(&task)
 }
@@ -767,6 +777,51 @@ fn prepare_same_worktree(
     Ok(prepared)
 }
 
+/// Une issue locale de quota est connue sans exécution distante : archiver
+/// sa clé puis préparer une clé nouvelle, toujours dans la même tâche.
+pub(super) fn local_reservation_refusal(
+    st: &DaemonState,
+    task: &mut Task,
+    issue: &crate::idempotency::SpawnCommandIssue,
+) -> Result<String, String> {
+    let crate::idempotency::SpawnCommandIssue::Failed { category, .. } = issue else {
+        return Err("start_recovery_lease_unknown".into());
+    };
+    if !matches!(
+        category.as_str(),
+        "quota_exceeded" | "children_quota_exceeded" | "spawn_timeout"
+    ) {
+        return Err("start_recovery_lease_unknown".into());
+    }
+    let plan = task
+        .start_recovery
+        .as_mut()
+        .ok_or("start_recovery_task_changed")?;
+    if plan.phase != StartRecoveryPhase::Prepared {
+        return Err("start_recovery_task_changed".into());
+    }
+    if plan.local_refusals.len() >= MAX_START_RECOVERIES {
+        return Err("start_recovery_exhausted".into());
+    }
+    plan.local_refusals
+        .push(crate::delegation::StartLocalRefusal {
+            command_id: plan.new_command_id.clone(),
+            issued_at: plan.issued_at,
+            code: category.clone(),
+        });
+    plan.new_command_id = format!(
+        "{}-local-{}",
+        plan.local_refusals[0].command_id,
+        plan.local_refusals.len()
+    );
+    plan.issued_at = unix_timestamp();
+    task.error = Some(format!(
+        "remote_start_failed:start_recovery_local_capacity:{category}"
+    ));
+    st.delegation_store.save(task)?;
+    Ok(format!("start_recovery_local_capacity:{category}"))
+}
+
 /// Le plan peut attendre sans consommer son futur bail. L'heure du canon est
 /// fixée durablement juste avant sa première réservation, jamais prolongée ensuite.
 fn launch_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<StartRecovery, String> {
@@ -815,7 +870,16 @@ fn launch_plan(state: &Arc<Mutex<DaemonState>>, task_id: &str) -> Result<StartRe
             return Err("start_recovery_reservation_expired".into());
         }
     } else {
-        return Err("start_recovery_lease_unknown".into());
+        let issue = st
+            .idempotency
+            .spawn_commands(&st.fleet.supervisor_scope())
+            .map_err(|_| "start_recovery_lease_unknown")?
+            .into_iter()
+            .find(|command| command.command_id == plan.new_command_id)
+            .and_then(|command| command.issue)
+            .ok_or("start_recovery_lease_unknown")?;
+        let code = local_reservation_refusal(&st, &mut task, &issue)?;
+        return Err(code);
     }
     Ok(plan)
 }
@@ -956,6 +1020,7 @@ mod tests {
             new_command_id: "task-start-1".into(),
             issued_at: 400,
             history: Vec::new(),
+            local_refusals: Vec::new(),
         }
     }
 

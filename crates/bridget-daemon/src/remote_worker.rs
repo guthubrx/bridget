@@ -4590,6 +4590,12 @@ fn probe_worker_capability(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn probe_capabilities198_for_test(writer:&Mutex<UnixStream>,reader:&mut BufReader<UnixStream>)
+    ->Result<Vec<WorkerCapability>,String> {
+    probe_worker_capability(writer,reader).map(|features|features.capabilities())
+}
+
 /// Client technique supervisé par l'unité existante. Une reconnexion ne détruit
 /// ni processus relâché ni reçu ; seuls les permis en mémoire sont abandonnés.
 pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
