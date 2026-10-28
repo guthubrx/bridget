@@ -12,3 +12,8 @@ Contre-épreuve : le test194 échoue avant correction (exit101, DecisionStarted 
 
 ## Limites et livraison en cours
 Revue indépendante et candidat à qualifier. Le maître chargé reste183 ; la maintenance native est bloquée par une ancienne clôture non attestée. La correction ne modifie pas le binaire déjà vivant et ne répare pas par lecture l’ancien reçu decision_started. Aucun restart forcé ou modification manuelle du store admis. Chargement et usage propriétaire restent ouverts.
+
+## Complément après contre-revue
+La revue native ccda1f30 a relevé un vrai P1 : la garde distante comparait encore l’effort décidé au défaut initial du candidat. Le candidat fee0621 est donc refusé pour activation. Correction ciblée : la garde compare désormais l’effort de la décision persistée et l’égalité du canon Delegate. Les sondes restent liées au profil initial puis à l’effort choisi ; la préparation reçoit les empreintes de ce dernier. Aucun critère de droits retiré.
+
+Contre-épreuve distante avant complément : le test échoue avec routing_connection_changed au lieu d’atteindre PrepareV2. Après complément : une vraie conversation protocolaire de worker refuse d’abord workspace_busy, puis les deux rejeux atteignent PrepareV2 avec low et les empreintes attendues. Le worker contrôlé refuse volontairement Prepare par ResourceLimit : aucune tâche, Start ou Release et aucun effet fournisseur. Le choix/canon restent strictement identiques. Cette épreuve ne prétend pas lancer une mission distante réelle. L’unicité de la tâche et l’effort initial/différent sont vérifiés par le scénario local194 ; concurrence/source/révocation par183. Le résultat de la première revue a été lu, acquitté et sa garde clôturée nativement (cleanup_done confirmé).

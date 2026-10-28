@@ -5158,10 +5158,16 @@ fn delegate_remote_with_routing(
                 .cloned()
                 .ok_or("routing_probe_required")?;
             let candidate = plan.candidates[index].clone();
-            if candidate.machine_id != *machine
+            let snapshot: RoutingAdmissionSnapshot = serde_json::from_slice(&receipt.metadata)
+                .map_err(|_| "auto_admission_invalid")?;
+            let decision = snapshot.decision.ok_or("auto_admission_invalid")?;
+            // Le profil initial sert à la revalidation. L’effort d’exécution
+            // appartient à la décision durable et au canon Delegate figé.
+            if receipt.delegate_canonical.as_deref() != Some(canonical.as_slice())
+                || decision.effort != *effort
+                || candidate.machine_id != *machine
                 || candidate.agent_type != *agent_type
                 || candidate.model != *model
-                || candidate.default_effort != *effort
             {
                 return Err("routing_connection_changed".to_owned());
             }
@@ -15622,6 +15628,100 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
             drop(state); cleanup(&config);
         }
+    }
+
+    #[test]
+    fn spec194_effort_distant_rejoue_apres_refus_et_atteint_prepare_epingle() {
+        use bridget_transport::protocol::*;
+        let (state, config, rx, _reader, mut request, root) = routing168_fixture(1);
+        {
+            let mut st=state.lock().unwrap(); st.host="coordinator194".into();
+            st.presences.get_mut("instance-1").unwrap().host="coordinator194".into();
+        }
+        request.machine_id=Some("cartae".into());request.project_id=Some("project194".into());
+        let fingerprint=format!("{:x}",sha2::Sha256::digest(b"worker194-secret"));
+        routing168_update(&state, |v| {
+            v["routing_policy"]["connections"][0]["machine_id"]=json!("cartae");
+            v["routing_policy"]["machine_policies"]["cartae"]=json!({"enabled":true});
+            v["machines"]=json!({"cartae":{"enabled":true,"worker_id":"worker194",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project194":{
+                    "source_host":"coordinator194","source_root":request.cwd,
+                    "remote_root":root.join("remote194"),"expected_git_identity":"fixture194",
+                    "mapping_revision":1}}}});
+        });
+        let (writer,mut reader)=super::super::presence_tests::control_socket("remote194");
+        reader.get_ref().set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        {
+            let mut st=state.lock().unwrap();st.connections.insert("worker194".into(),writer);
+            st.peer_uids.insert("worker194".into(),unsafe {libc::geteuid()});
+        }
+        assert!(matches!(handle_worker_message(&state,"worker194",
+            WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {
+                hello:WorkerHello {version:REMOTE_WORKER_VERSION,identity:WorkerIdentity {
+                    machine_id:"cartae".into(),worker_id:"worker194".into(),provisioning_revision:1},
+                    credential:IdentityCredential::new("worker194-secret".into()),build:"fixture194".into(),
+                    capability:ClientCapability::RemoteWorkerV1},capabilities:vec![WorkerCapability::CandidateProbeV2]}}),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities {..})));
+        let shared=state.clone();
+        let responder=std::thread::spawn(move || {
+            let mut probes=0;let mut prepares=0;
+            while prepares<2 {
+                match super::super::presence_tests::read_control(&mut reader) {
+                    DaemonToWrapper::CandidateProbeV2 {probe}=>{
+                        probes+=1;let now=unix_timestamp();
+                        let verdicts=probe.candidates.into_iter().map(|c| {
+                            if probes==2 {return CandidateProbeV2Verdict::Ineligible {
+                                candidate_id:c.candidate_id,reason:CandidateProbeRefusal::WorkspaceBusy};}
+                            let low=c.effort.as_deref()==Some("low");
+                            CandidateProbeV2Verdict::Eligible {candidate_id:c.candidate_id,mapping_revision:1,
+                                definition_digest:if low {"c"} else {"a"}.repeat(64),
+                                permission_digest:if low {"d"} else {"b"}.repeat(64),observed_at:now}
+                        }).collect();
+                        let result=CandidateProbeV2Result {version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                            correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
+                            worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                            resources:HostResourceSnapshotV1 {source_observed_at:now,received_at:now,cpu_percent:None,
+                                available_memory_percent:None,normalized_load_percent:None,compilation_slots:None},verdicts};
+                        assert!(handle_worker_message(&shared,"worker194",WrapperToDaemon::CandidateProbeResultV2 {result}).is_none());
+                    }
+                    DaemonToWrapper::WorkerRequest {request}=>{
+                        let WorkerRequestOperation::PrepareV2 {prepare,expected_definition_digest,
+                            expected_permission_digest,..}=&request.request else {panic!("aucun Start/Release admis")};
+                        assert_eq!(prepare.effort.as_deref(),Some("low"));
+                        assert_eq!(expected_definition_digest,&"c".repeat(64));
+                        assert_eq!(expected_permission_digest,&"d".repeat(64));prepares+=1;
+                        let response=WorkerResponse {version:request.version,correlation_id:request.correlation_id,
+                            connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+                            response:WorkerResponseOperation::Rejected {reason:WorkerRefusal::ResourceLimit}};
+                        assert!(handle_worker_message(&shared,"worker194",WrapperToDaemon::WorkerResponse {response}).is_none());
+                    }
+                    other=>panic!("trame inattendue: {other:?}"),
+                }
+            }
+            assert_eq!(probes,6);prepares
+        });
+        let mut plan=routing168_plan(&state,&request);
+        observe_routing_candidates("conn-1",&request,&mut plan,None,&state).unwrap();
+        let receipt={let st=state.lock().unwrap();let now=unix_timestamp();
+            let r=routing_auto_receipt(OWNER.into(),&request,
+                serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
+                &plan,st.coordinator_epoch,now).unwrap();
+            assert!(st.delegation_store.reserve_auto_admission_receipt(&r,now).unwrap());
+            st.delegation_store.start_auto_decision_level(&r,r.coordinator_epoch,r.revision,plan.decision_level,now).unwrap()};
+        let code=choose_routing_admission("conn-1",&request,&plan,&receipt,
+            RoutingDecisionChoice {candidate_id:"c001".into(),effort:Some("low".into()),reason:None},
+            LineageDecisionSourceV4::Deterministic,None,None,None,None,&state,false).unwrap_err();
+        assert_eq!(failure(&code)["detail"]["reasons"][0]["code"],"workspace_busy");
+        let chosen=routing168_receipt(&state,&request);assert_eq!(chosen.state,AutoAdmissionState::Chosen);
+        for _ in 0..2 {
+            let code=admit_auto_routing("conn-1",&request,None,None,None,None,&state).unwrap_err();
+            assert_eq!(code,"remote_prepare:ResourceLimit","le vrai PrepareV2 doit recevoir low");
+            assert_eq!(routing168_receipt(&state,&request),chosen,"pas de refus durable ni nouveau décideur");
+            assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        }
+        assert_eq!(responder.join().unwrap(),2);assert!(rx.try_recv().is_err());
+        drop(state);cleanup(&config);
     }
 
     #[test]
