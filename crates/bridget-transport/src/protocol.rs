@@ -2876,6 +2876,30 @@ pub enum WorkerCapability {
     ParentSourceProofV1,
     ResultSlotDeadlineV1,
     OriginProofV1,
+    StartRecoveryV1,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerStartCapacityCause {
+    Unknown,
+    InboundQueue,
+    CommandStore,
+    PreparationMetadata,
+    RequestFrame,
+}
+
+impl WorkerStartCapacityCause {
+    /// O(1) : code stable du domaine fermé.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::InboundQueue => "inbound_queue",
+            Self::CommandStore => "command_store",
+            Self::PreparationMetadata => "preparation_metadata",
+            Self::RequestFrame => "request_frame",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3622,6 +3646,13 @@ pub enum WorkerRequestOperation {
     Start {
         start: WorkerStart,
     },
+    StartDetailed {
+        start: WorkerStart,
+    },
+    FenceUnstarted {
+        placement: RemotePlacement,
+        deadline_at: i64,
+    },
     ReserveResultSlot {
         slot: WorkerResultSlot,
     },
@@ -3687,6 +3718,11 @@ pub enum WorkerResponseOperation {
     Rejected {
         reason: WorkerRefusal,
     },
+    StartRejected {
+        reason: WorkerRefusal,
+        cause: WorkerStartCapacityCause,
+    },
+    StartFenced {},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4058,9 +4094,14 @@ impl WorkerRequest {
                 repair.validate()?;
                 worker_require(if *action==WorkspaceRepairActionV1::Observe {*expires_at==0} else {*expires_at>0})
             },
-            WorkerRequestOperation::Start { start } => {
+            WorkerRequestOperation::Start { start }
+            | WorkerRequestOperation::StartDetailed { start } => {
                 start.validate()?;
                 worker_require(start.placement.matches_worker(&self.worker))
+            }
+            WorkerRequestOperation::FenceUnstarted { placement, deadline_at } => {
+                placement.validate()?;
+                worker_require(placement.matches_worker(&self.worker) && *deadline_at > 0)
             }
             WorkerRequestOperation::ReserveResultSlot { slot }
             | WorkerRequestOperation::ReserveResultSlotUntil { slot, .. } => {
@@ -4192,7 +4233,13 @@ impl WorkerResponse {
                 result.validate()?;
                 worker_require(result.identity.command == self.command)
             }
-            WorkerResponseOperation::Released {} | WorkerResponseOperation::Rejected { .. } => {
+            WorkerResponseOperation::StartRejected { reason, cause } => {
+                worker_require(*reason == WorkerRefusal::ResourceLimit
+                    || *cause == WorkerStartCapacityCause::Unknown)
+            }
+            WorkerResponseOperation::Released {}
+            | WorkerResponseOperation::Rejected { .. }
+            | WorkerResponseOperation::StartFenced {} => {
                 Ok(())
             }
         }
