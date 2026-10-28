@@ -407,8 +407,10 @@ impl WorkerReadView<'_> {
                 ).map_err(refuse_fenced_workspace)?,
                 _ => return Err(WorkerRefusal::CommandMismatch),
             };
+            // Sous réparation185, le prepared porte légitimement le nouveau chemin ;
+            // report_repaired_workspace valide déjà l'ancre contre l'original.
             if !prepared.prepared.workspace.as_ref().is_some_and(|value|
-                same_workspace_anchor(&original, value)) {
+                repair.is_some() || same_workspace_anchor(&original, value)) {
                 return Err(WorkerRefusal::CommandMismatch);
             }
             let report = if let Some(anchor) = repair {
