@@ -6084,6 +6084,24 @@ fn start_remote_task_with(
                 max_depth: Some(8),
             }),
         };
+        // Un plan encore Prepared prouve qu'aucun Start n'a été envoyé.
+        // Après coupure Fleet→Task, réutiliser le tuple exact déjà réservé.
+        let existing = recovery.and_then(|plan| st.fleet.recovery_candidates().into_iter()
+            .find(|c| c.lease.command_id == plan.new_command_id));
+        let lease = if let Some(candidate) = existing {
+            if candidate.lease.name != task.child || candidate.cwd != order.cwd
+                || candidate.agent_type != order.agent_type
+                || candidate.lease.remote_placement != order.remote_placement
+                || candidate.lease.deadline_at != order.deadline_at
+                || candidate.lease.deadline_at <= now
+                || candidate.resolved_definition.as_ref().is_some_and(|d| d != &prepared.definition)
+            {return Err("start_recovery_lease_unknown".into());}
+            if candidate.resolved_definition.is_none() {
+                st.fleet.mark_starting(&candidate.lease, now, &prepared.definition)
+                    .map_err(|e|e.to_string())?;
+            }
+            candidate.lease
+        } else {
         let submission = if recovery.is_some()
             && st
                 .fleet
@@ -6102,6 +6120,8 @@ fn start_remote_task_with(
         st.fleet
             .mark_starting(&lease, now, &prepared.definition)
             .map_err(|e| e.to_string())?;
+        lease
+        };
         task.child_instance = Some(lease.instance_id.clone());
         task.state = "starting".into();
         if let Some(plan) = recovery {
@@ -12682,7 +12702,7 @@ mod tests {
         drop(state); cleanup(&config);
     }
 
-    fn routing168_fixture(
+    pub(super) fn routing168_fixture(
         count: usize,
     ) -> (
         Arc<Mutex<DaemonState>>,
@@ -12920,7 +12940,7 @@ mod tests {
         cleanup(&config);
     }
 
-    fn routing168_plan(
+    pub(super) fn routing168_plan(
         state: &Arc<Mutex<DaemonState>>,
         request: &AutoDelegateV2,
     ) -> RoutingAdmissionPlan {
@@ -13392,7 +13412,7 @@ mod tests {
         cleanup(&config);
     }
 
-    fn routing168_observation() -> RoutingCandidateObservation {
+    pub(super) fn routing168_observation() -> RoutingCandidateObservation {
         RoutingCandidateObservation {
             definition_digest: "a".repeat(64),
             permission_digest: "b".repeat(64),

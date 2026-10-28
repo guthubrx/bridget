@@ -15,3 +15,6 @@ Le maître183 ne sait pas employer les nouvelles opérations198. Installer un ex
 
 ## Après chargement attesté
 Le propriétaire de bd3dabf6 conserve l’enveloppe opus2d-cartae-suite-cameras-20261028-01 et son expected_base_commit4da983d292571dec8054cd12922e7a6b3e4da104. Seulement après attestation du maître et worker compatibles, il rejoue strictement cette admission pour demander la reprise de la même tâche. Ne créer aucune autre mission et ne réinjecter aucun brief par un canal différent. Lire le résultat ou le refus fermé. Si la commande antérieure ne peut être clôturée avant naissance, aucune nouvelle tentative ne doit être annoncée.
+
+## Décision de maintenance éventuelle
+Le dernier geste à demander ne sera pas de rejouer une mission ni de supprimer une garde : ce sera une autorisation explicite de remplacement exceptionnel des seuls services Bridget, avec conservation des états inconnus. Avant de la demander, le candidat et la procédure doivent être qualifiés et revus. Le contexte a changé depuis la fenêtre197 : les chaînes ont repris et le gel est levé. Les anciens relevés de cgroups vides ne sont donc plus une condition actuelle acquise. Aucun arrêt ne peut s’appuyer sur ces relevés historiques.

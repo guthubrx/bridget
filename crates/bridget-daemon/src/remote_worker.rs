@@ -3429,8 +3429,14 @@ impl WorkerRuntime {
             } else {
                 self.store.fenced_placement(previous, placement).map_err(refuse_fenced_workspace)?;
             }
-            self.recheck(retained)?;
-            return Ok(retained.prepared.clone());
+            // Le canon durable exclut le numéro de tour, pas la preuve fraîche
+            // qui devra signer Release. Garder le token sans garder l'ancienne révision.
+            let renewed = PreparedRuntime {routing:retained.routing.clone(),command:retained.command.clone(),
+                request:request.clone(),prepared:retained.prepared.clone(),expires:retained.expires};
+            self.recheck(&renewed)?;
+            let prepared=renewed.prepared.clone();
+            self.prepared.insert(command.command_id.clone(),renewed);
+            return Ok(prepared);
         }
         if let Some(workspace) = workspace {
             self.store.bind_fenced_workspace(previous, command, request, placement, workspace)
@@ -7300,6 +7306,7 @@ while not stop.exists(): time.sleep(.01)
         let mut next_request = request.clone();
         next_request.parent.revision += 1;
         next_request.parent.run_id = "new-run-198".into();
+        next_request.parent.source = "provider_turn".into();
         assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
             &prepared.placement, prepared.workspace.as_ref()).unwrap_err(),
             WorkerRefusal::UnknownExecution);
@@ -7366,11 +7373,23 @@ while not stop.exists(): time.sleep(.01)
         later_turn.parent.provider_session_id = "later-session-198".into();
         let replay = runtime.prepare_fenced(&next, &previous, &later_turn,
             &prepared.placement, prepared.workspace.as_ref());
-        if next_request.parent.source == "provider_turn" {
-            assert_eq!(replay.unwrap().token, fresh.token);
-        } else {
-            assert_eq!(replay.unwrap_err(), WorkerRefusal::CommandMismatch);
-        }
+        assert_eq!(replay.unwrap().token, fresh.token);
+        assert_eq!(runtime.prepared.get(&next.command_id).unwrap().request.parent,later_turn.parent,
+            "Release doit employer la révision actuelle, même quand le token reste identique");
+        let proof_before=fs::read(proof198::bind_path(&runtime.store.root,&next)).unwrap();
+        let restart_config=WorkerRuntimeConfig {
+            machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+            provisioning_revision:runtime.config.provisioning_revision,credential_path:runtime.config.credential_path.clone(),
+            state_root:runtime.config.state_root.clone(),registry_path:runtime.config.registry_path.clone(),
+            master_socket:runtime.config.master_socket.clone()};
+        drop(runtime);
+        let mut runtime=WorkerRuntime::new(restart_config).unwrap();
+        runtime.source.clear();runtime.source.insert("HOME".into(),fixture.0.as_os_str().to_owned());
+        runtime.source.insert("PATH".into(),OsString::from("/usr/bin:/bin"));
+        let fresh=runtime.prepare_fenced(&next,&previous,&later_turn,&prepared.placement,
+            prepared.workspace.as_ref()).unwrap();
+        assert_eq!(fs::read(proof198::bind_path(&runtime.store.root,&next)).unwrap(),proof_before,
+            "ACK perdu puis redémarrage et parent renouvelé : canon durable inchangé");
         let mut other_cwd = next_request.clone();
         other_cwd.parent.cwd.push_str("-autre");
         assert!(runtime.prepare_fenced(&next, &previous, &other_cwd,
@@ -7426,7 +7445,7 @@ while not stop.exists(): time.sleep(.01)
         runtime.source.insert("PATH".into(), OsString::from("/usr/bin:/bin"));
         let persisted = runtime.store.command(&launched).unwrap();
         let (persisted_request, persisted_prepared) = persisted.preparation.unwrap();
-        assert_eq!(persisted_request.parent.run_id, "new-run-198");
+        assert_eq!(persisted_request.parent.run_id, "later-run-198");
         let reconstructed = PreparedRuntime {
             routing: persisted.routing, command: next.clone(), request: persisted_request,
             prepared: persisted_prepared, expires: Instant::now() + Duration::from_secs(30),

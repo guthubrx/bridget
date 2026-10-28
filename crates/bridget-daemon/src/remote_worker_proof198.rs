@@ -29,9 +29,19 @@ pub(super) struct BindProof {
     pub previous: WorkerCommandIdentity,
 }
 
-pub(super) fn fence_digest(worker: &WorkerIdentity, identity: &WorkerCommandIdentity,
-    placement: &RemotePlacement, deadline_at: i64) -> Result<String, WorkerStoreError> {
-    json_digest(&("pre_start_fence_v1", worker, identity, placement, deadline_at))
+pub(super) fn fence_digest(
+    worker: &WorkerIdentity,
+    identity: &WorkerCommandIdentity,
+    placement: &RemotePlacement,
+    deadline_at: i64,
+) -> Result<String, WorkerStoreError> {
+    json_digest(&(
+        "pre_start_fence_v1",
+        worker,
+        identity,
+        placement,
+        deadline_at,
+    ))
 }
 
 /// Un reçu format183 exige deadline_at > created_at.
@@ -39,8 +49,12 @@ pub(super) fn legacy_deadline(deadline_at: i64, created_at: i64) -> i64 {
     deadline_at.max(created_at.saturating_add(1))
 }
 
-fn dir(root: &Path) -> PathBuf { root.join(PROOF_DIR) }
-pub(super) fn ensure_dir(root: &Path) -> Result<(), WorkerStoreError> { private_dir(&dir(root)) }
+fn dir(root: &Path) -> PathBuf {
+    root.join(PROOF_DIR)
+}
+pub(super) fn ensure_dir(root: &Path) -> Result<(), WorkerStoreError> {
+    private_dir(&dir(root))
+}
 pub(super) fn fence_path(root: &Path, identity: &WorkerCommandIdentity) -> PathBuf {
     dir(root).join(format!("fence-{}.json", marker_key(identity)))
 }
@@ -48,13 +62,22 @@ pub(super) fn bind_path(root: &Path, command: &WorkerCommandIdentity) -> PathBuf
     dir(root).join(format!("bind-{}.json", marker_key(command)))
 }
 
-pub(super) fn read_fence(root: &Path, worker: &WorkerIdentity,
-    identity: &WorkerCommandIdentity) -> Result<Option<FenceProof>, WorkerStoreError> {
+pub(super) fn read_fence(
+    root: &Path,
+    worker: &WorkerIdentity,
+    identity: &WorkerCommandIdentity,
+) -> Result<Option<FenceProof>, WorkerStoreError> {
     let Some(proof) = read_optional::<FenceProof>(&fence_path(root, identity), MAX_METADATA_BYTES)?
-        else { return Ok(None); };
+    else {
+        return Ok(None);
+    };
     proof.placement.validate()?;
-    if proof.version != STORE_VERSION || proof.worker != *worker || proof.identity != *identity
-        || !proof.placement.matches_worker(worker) || proof.deadline_at <= 0 || proof.created_at < 0
+    if proof.version != STORE_VERSION
+        || proof.worker != *worker
+        || proof.identity != *identity
+        || !proof.placement.matches_worker(worker)
+        || proof.deadline_at <= 0
+        || proof.created_at < 0
         || proof.digest != fence_digest(worker, identity, &proof.placement, proof.deadline_at)?
     {
         return Err(WorkerStoreError::Quarantined);
@@ -62,12 +85,20 @@ pub(super) fn read_fence(root: &Path, worker: &WorkerIdentity,
     Ok(Some(proof))
 }
 
-pub(super) fn read_bind(root: &Path, worker: &WorkerIdentity,
-    command: &WorkerCommandIdentity) -> Result<Option<BindProof>, WorkerStoreError> {
+pub(super) fn read_bind(
+    root: &Path,
+    worker: &WorkerIdentity,
+    command: &WorkerCommandIdentity,
+) -> Result<Option<BindProof>, WorkerStoreError> {
     let Some(proof) = read_optional::<BindProof>(&bind_path(root, command), MAX_METADATA_BYTES)?
-        else { return Ok(None); };
-    if proof.version != STORE_VERSION || proof.worker != *worker || proof.command != *command
-        || !valid_digest(&proof.prepare_digest) || proof.previous.validate().is_err()
+    else {
+        return Ok(None);
+    };
+    if proof.version != STORE_VERSION
+        || proof.worker != *worker
+        || proof.command != *command
+        || !valid_digest(&proof.prepare_digest)
+        || proof.previous.validate().is_err()
         || proof.previous.task_id != command.task_id
         || proof.previous.command_id == command.command_id
     {
@@ -78,18 +109,31 @@ pub(super) fn read_bind(root: &Path, worker: &WorkerIdentity,
 
 /// Relie le reçu format183 à sa preuve : le fence retrouve son délai d'origine.
 /// Sans preuve, le reçu est un refus ordinaire et garde la règle183.
-pub(super) fn overlay_fence(root: &Path, worker: &WorkerIdentity,
-    receipt: &mut WorkerCommandReceipt) -> Result<(), WorkerStoreError> {
-    let Some(proof) = read_fence(root, worker, &receipt.identity)? else { return Ok(()); };
-    if receipt.command_digest != proof.digest || receipt.placement != proof.placement
+pub(super) fn overlay_fence(
+    root: &Path,
+    worker: &WorkerIdentity,
+    receipt: &mut WorkerCommandReceipt,
+) -> Result<(), WorkerStoreError> {
+    let Some(proof) = read_fence(root, worker, &receipt.identity)? else {
+        return Ok(());
+    };
+    if receipt.command_digest != proof.digest
+        || receipt.placement != proof.placement
         || receipt.created_at != proof.created_at
         || receipt.deadline_at != legacy_deadline(proof.deadline_at, proof.created_at)
         || receipt.phase != WorkerCommandPhase::Refused
-        || receipt.marker.is_some() || receipt.permit.is_some() || receipt.child_id.is_some()
-        || receipt.preparation.is_some() || receipt.routing.is_some()
-        || receipt.release_epoch.is_some() || receipt.native_ready || receipt.startup_failed
-        || receipt.startup_failure.is_some() || receipt.terminal_exit_code.is_some()
-        || receipt.workspace_repair.is_some() || !receipt.workspace_repair_history.is_empty()
+        || receipt.marker.is_some()
+        || receipt.permit.is_some()
+        || receipt.child_id.is_some()
+        || receipt.preparation.is_some()
+        || receipt.routing.is_some()
+        || receipt.release_epoch.is_some()
+        || receipt.native_ready
+        || receipt.startup_failed
+        || receipt.startup_failure.is_some()
+        || receipt.terminal_exit_code.is_some()
+        || receipt.workspace_repair.is_some()
+        || !receipt.workspace_repair_history.is_empty()
     {
         return Err(WorkerStoreError::Quarantined);
     }
@@ -98,18 +142,31 @@ pub(super) fn overlay_fence(root: &Path, worker: &WorkerIdentity,
     Ok(())
 }
 
-pub(super) fn read_workspace_receipt(root: &Path, worker: &WorkerIdentity,
-    command: &WorkerCommandIdentity) -> Result<Option<WorkspacePreparationReceipt>, WorkerStoreError> {
-    let path = root.join("workspaces").join(format!("{}.json", marker_key(command)));
-    let Some(mut receipt) = read_optional::<WorkspacePreparationReceipt>(&path, MAX_METADATA_BYTES)?
-        else { return Ok(None); };
+pub(super) fn read_workspace_receipt(
+    root: &Path,
+    worker: &WorkerIdentity,
+    command: &WorkerCommandIdentity,
+) -> Result<Option<WorkspacePreparationReceipt>, WorkerStoreError> {
+    let path = root
+        .join("workspaces")
+        .join(format!("{}.json", marker_key(command)));
+    let Some(mut receipt) =
+        read_optional::<WorkspacePreparationReceipt>(&path, MAX_METADATA_BYTES)?
+    else {
+        return Ok(None);
+    };
     overlay_bind(root, worker, &mut receipt)?;
     Ok(Some(receipt))
 }
 
-pub(super) fn overlay_bind(root: &Path, worker: &WorkerIdentity,
-    receipt: &mut WorkspacePreparationReceipt) -> Result<(), WorkerStoreError> {
-    let Some(proof) = read_bind(root, worker, &receipt.command)? else { return Ok(()); };
+pub(super) fn overlay_bind(
+    root: &Path,
+    worker: &WorkerIdentity,
+    receipt: &mut WorkspacePreparationReceipt,
+) -> Result<(), WorkerStoreError> {
+    let Some(proof) = read_bind(root, worker, &receipt.command)? else {
+        return Ok(());
+    };
     if receipt.record.is_some() || receipt.prepare_digest != proof.prepare_digest {
         return Err(WorkerStoreError::Quarantined);
     }
@@ -129,18 +186,32 @@ pub(super) fn count(root: &Path, worker: &WorkerIdentity) -> Result<usize, Worke
     for entry in fs::read_dir(&directory)? {
         let path = entry?.path();
         total += 1;
-        if total > MAX_WORKER_STORE_ENTRIES { return Err(WorkerStoreError::Quota); }
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+        if total > MAX_WORKER_STORE_ENTRIES {
+            return Err(WorkerStoreError::Quota);
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
         let valid = if name.starts_with("fence-") {
-            read_optional::<FenceProof>(&path, MAX_METADATA_BYTES)?
-                .is_some_and(|p| read_fence(root, worker, &p.identity).ok().flatten().is_some()
-                    && fence_path(root, &p.identity) == path)
+            read_optional::<FenceProof>(&path, MAX_METADATA_BYTES)?.is_some_and(|p| {
+                read_fence(root, worker, &p.identity)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                    && fence_path(root, &p.identity) == path
+            })
         } else if name.starts_with("bind-") {
-            read_optional::<BindProof>(&path, MAX_METADATA_BYTES)?
-                .is_some_and(|p| read_bind(root, worker, &p.command).ok().flatten().is_some()
-                    && bind_path(root, &p.command) == path)
-        } else { false };
-        if !valid { return Err(WorkerStoreError::Quarantined); }
+            read_optional::<BindProof>(&path, MAX_METADATA_BYTES)?.is_some_and(|p| {
+                read_bind(root, worker, &p.command).ok().flatten().is_some()
+                    && bind_path(root, &p.command) == path
+            })
+        } else {
+            false
+        };
+        if !valid {
+            return Err(WorkerStoreError::Quarantined);
+        }
     }
     Ok(total)
 }
