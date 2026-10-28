@@ -2887,6 +2887,7 @@ pub enum WorkerStartCapacityCause {
     CommandStore,
     PreparationMetadata,
     RequestFrame,
+    MasterPending,
 }
 
 impl WorkerStartCapacityCause {
@@ -2898,6 +2899,7 @@ impl WorkerStartCapacityCause {
             Self::CommandStore => "command_store",
             Self::PreparationMetadata => "preparation_metadata",
             Self::RequestFrame => "request_frame",
+            Self::MasterPending => "master_pending",
         }
     }
 }
@@ -4092,8 +4094,10 @@ impl WorkerRequest {
                     && prepare.machine_id == self.worker.machine_id
                     && prepare.provisioning_revision == self.worker.provisioning_revision
                     && placement.matches_worker(&self.worker)
-                    && matches!(prepare.workspace, Some(WorkspaceRequest::Worktree { .. }))
-                    && workspace.as_ref().is_some_and(serde_json::Value::is_object))?;
+                    && (matches!((&prepare.workspace, workspace),
+                        (Some(WorkspaceRequest::Worktree { .. }), Some(value)) if value.is_object())
+                        || matches!((&prepare.workspace, workspace),
+                            (Some(WorkspaceRequest::Shared {}), None))))?;
                 worker_serialized_size(workspace, 64 * 1024)
             }
             WorkerRequestOperation::ParentProof {
@@ -7732,6 +7736,11 @@ mod tests {
             *workspace = None;
         }
         assert_eq!(fenced.validate(), Err(WorkerRefusal::InvalidEnvelope));
+        if let WorkerRequestOperation::PrepareFenced { prepare, .. } = &mut fenced.request {
+            prepare.workspace = Some(WorkspaceRequest::Shared {});
+        }
+        fenced.validate().unwrap();
+        assert_eq!(serde_json::to_value(&fenced).unwrap()["request"]["operation"], "prepare_fenced");
         assert_eq!(legacy["request"]["operation"], "prepare");
         let mut missing = current;
         missing["request"]
@@ -7742,6 +7751,20 @@ mod tests {
         request.command.instance_id = "instance".into();
         request.command.generation = 1;
         assert_eq!(request.validate(), Err(WorkerRefusal::InvalidEnvelope));
+    }
+
+    #[test]
+    fn spec198_start_capacity_cause_fermee_et_master_pending() {
+        assert_eq!(WorkerStartCapacityCause::RequestFrame.code(), "request_frame");
+        assert_eq!(serde_json::to_value(WorkerStartCapacityCause::RequestFrame).unwrap(),
+            "request_frame");
+        assert_eq!(WorkerStartCapacityCause::MasterPending.code(), "master_pending");
+        assert_eq!(serde_json::to_value(WorkerStartCapacityCause::MasterPending).unwrap(),
+            "master_pending");
+        assert_eq!(serde_json::from_value::<WorkerStartCapacityCause>(
+            serde_json::json!("master_pending")).unwrap(), WorkerStartCapacityCause::MasterPending);
+        assert!(serde_json::from_value::<WorkerStartCapacityCause>(
+            serde_json::json!("future_unknown_cause")).is_err());
     }
 
     #[test]

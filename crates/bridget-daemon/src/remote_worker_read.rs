@@ -399,7 +399,18 @@ impl WorkerReadView<'_> {
                 return Err(WorkerRefusal::CommandMismatch);
             }
             trace.at("workspace_report");
-            let original = receipt.record.ok_or(WorkerRefusal::UnknownExecution)?;
+            let original = match (receipt.record, receipt.fenced_previous) {
+                (Some(record), None) => record,
+                (None, Some(_)) => original_workspace_at(
+                    &self.config.state_root.join("store"), self.identity,
+                    &prepared.command,
+                ).map_err(refuse_fenced_workspace)?,
+                _ => return Err(WorkerRefusal::CommandMismatch),
+            };
+            if !prepared.prepared.workspace.as_ref().is_some_and(|value|
+                same_workspace_anchor(&original, value)) {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
             let report = if let Some(anchor) = repair {
                 crate::workspace_git::report_repaired_workspace(&original, anchor)
             } else {
