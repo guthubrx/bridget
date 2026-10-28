@@ -930,8 +930,20 @@ peut avoir été exécutée. Attendez le retour du lien, puis lisez
 `bridget_task_status` avec le même `task_id`. Sans TaskID, conservez le
 `request_id` d’admission et tous les paramètres pour retrouver son sort.
 Ne créez pas de demande de remplacement tant que ce sort est inconnu.
-La récupération bornée d’une admission garde la même clé ; ce changement
-n’ajoute aucun rejeu aux lectures de statut ou d’attente.
+La récupération bornée d’une admission garde la même clé.
+
+Avec le client196, un échec de transport de `bridget_task_wait` déclenche une
+seule relecture des mêmes tâches, avec une attente de 1 seconde. Le client refait
+les contrôles d’identité, de propriété et de permissions. Un succès porte
+`read_recovery` avec `cause: daemon_read_unavailable`, `initial_wait_secs` et
+`recheck_wait_secs: 1`. Le constat peut être plus récent que la première lecture.
+Un refus métier ou une interruption par l’hôte ne déclenche pas cette récupération.
+Un second échec de transport rend `task_wait_read_unavailable` : consulter
+`bridget_task_status` sur les mêmes tâches et transmettre le code, l’heure et les
+identifiants au responsable si le refus persiste. La cause exacte du délai reste
+inconnue tant qu’elle n’est pas mesurée. Aucune mission, ronde ou annulation n’est
+rejouée. Les autres outils ne changent pas. Le client vivant doit avoir chargé
+ce code ; installer un fichier ne recharge pas un ancien processus.
 
 Pour `t3_session_unavailable` avec `binding_transport_unavailable`, `primary_absent`
 ou `primary_not_live`, attendez la reconnexion du lien Bridget du fil, puis

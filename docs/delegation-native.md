@@ -304,7 +304,19 @@ have run. Wait for the connection to return, then read `bridget_task_status`
 with the same `task_id`. Without a task ID, retain the admission `request_id`
 and all arguments to recover its outcome. Do not create a replacement request
 while the original outcome is unknown. Existing bounded admission recovery
-keeps the same key; this change adds no replay to status or wait.
+keeps the same key.
+
+With client196, a transport failure from `bridget_task_wait` triggers one new
+read of the same task IDs, with a 1-second wait. Identity, ownership and permission
+checks run again. Success includes `read_recovery` with
+`cause: daemon_read_unavailable`, `initial_wait_secs` and `recheck_wait_secs: 1`.
+This observation can be newer than the first read. Native denials and host
+cancellation do not trigger recovery. A second transport failure returns
+`task_wait_read_unavailable`: read `bridget_task_status` for the same tasks, then
+report the code, time and task IDs to the maintainer if it persists. The exact
+latency cause remains unknown until measured. No mission, round or cancellation
+is replayed. Other tools are unchanged. The running client must have loaded this
+code; installing a file does not reload an old process.
 
 For `t3_session_unavailable` with `binding_transport_unavailable`, `primary_absent`
 or `primary_not_live`, wait for the thread's Bridget link to reconnect and retry

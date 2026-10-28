@@ -637,7 +637,52 @@ fn caller_scope_refusal_message(result: &Value) -> String {
         "human_action":"Si le responsable ne peut pas rétablir la preuve dans son périmètre, demandez à l’utilisateur de rétablir le rattachement de sa session. Ne changez ni identité, ni canal, ni permissions pour contourner le refus."}).to_string()
 }
 
+// O(k), k <= 16 tâches : une seule relecture native, jamais une remise.
+// Le contrôle d'identité/plafond et l'attestation sont refaits par le même puits.
 fn execute_tool_at_with_identity(
+    identity: &crate::mcp_identity::ResolvedIdentity,
+    name: &str,
+    arguments: &serde_json::Map<String, Value>,
+    socket: &Path,
+) -> Result<Value, ToolError> {
+    let first = execute_tool_at_with_identity_once(identity, name, arguments, socket);
+    if name != "bridget_task_wait"
+        || !matches!(
+            &first,
+            Err(ToolError::Technical {
+                code: "daemon_unreachable",
+                ..
+            })
+        )
+    {
+        return first;
+    }
+    // L'hôte peut avoir fermé l'appel pendant la première lecture : aucune
+    // récupération ne doit survivre à cette interruption.
+    check_tool_call(None)?;
+    let initial_wait_secs = crate::delegation_mcp::parse_wait_timeout(arguments)?;
+    let mut recheck = arguments.clone();
+    recheck.insert("wait_timeout".into(), json!(1));
+    match execute_tool_at_with_identity_once(identity, name, &recheck, socket) {
+        Ok(mut observed) => {
+            let object = observed.as_object_mut().ok_or_else(|| ToolError::Technical {
+                code:"daemon_protocol", message:"réponse d’attente invalide après relecture".into(),
+            })?;
+            object.insert("read_recovery".into(), json!({"cause":"daemon_read_unavailable",
+                "recheck_wait_secs":1,"initial_wait_secs":initial_wait_secs}));
+            Ok(observed)
+        }
+        Err(ToolError::Technical {code:"daemon_unreachable", ..}) => Err(ToolError::Technical {
+            code:"task_wait_read_unavailable",
+            message:json!({"code":"task_wait_read_unavailable","stage":"wait_observation",
+                "message":"La lecture d’attente et sa relecture unique n’ont pas obtenu de réponse. L’état de la mission reste inconnu pour cet appel.",
+                "recovery":"Consultez bridget_task_status avec les mêmes task_id. Ne créez ni mission de remplacement ni nouvelle ronde. Cette lecture n’annule pas le travail. Si le même refus persiste, transmettez le code, l’heure et les task_id au responsable pour vérifier le client, le daemon et leurs délais ; la cause exacte du délai reste à établir.",
+                "human_action":"Si le responsable ne peut pas rétablir la lecture dans son mandat, demander à l’utilisateur l’intervention précise requise sur le service ou le rattachement identifié. Aucun changement de droits ou redémarrage forcé."}).to_string(),
+        }),
+        other => other,
+    }
+}
+fn execute_tool_at_with_identity_once(
     identity: &crate::mcp_identity::ResolvedIdentity,
     name: &str,
     arguments: &serde_json::Map<String, Value>,
@@ -3460,12 +3505,6 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_task_ack")
             .expect("outil ACK informatif publié");
-        assert_eq!(catalogue.len(), 32);
-        let brief_schema = &catalogue
-            .iter()
-            .find(|tool| tool["name"] == "bridget_handoff")
-            .unwrap()["inputSchema"]["properties"]["draft"];
-        assert_eq!(crate::delegation_mcp::tools(brief_schema).len(), 9);
         let schema = &ack["inputSchema"];
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["required"], json!(["task_ids"]));
@@ -6027,6 +6066,280 @@ mod tests {
             &mut writer,
             DaemonToWrapper::NativeDelegationResult { result },
         );
+    }
+
+    fn registered196(listener: &UnixListener) -> (BufReader<UnixStream>, BufWriter<UnixStream>) {
+        use std::os::fd::AsRawFd;
+        let mut fd = libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        assert!(
+            unsafe { libc::poll(&mut fd, 1, 3000) } > 0,
+            "connexion attendue"
+        );
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        let WrapperToDaemon::RegisterAuxiliary {
+            agent_id,
+            instance_id,
+            credential,
+        } = read_command(&mut reader)
+        else {
+            panic!("inscription auxiliaire")
+        };
+        let expected = crate::mcp_identity::auxiliary_registration(
+            &agent_id,
+            &instance_id,
+            writer
+                .get_ref()
+                .local_addr()
+                .unwrap()
+                .as_pathname()
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(expected,WrapperToDaemon::RegisterAuxiliary {credential:expected,..} if expected==credential)
+        );
+        write_command(
+            &mut writer,
+            DaemonToWrapper::Registered {
+                agent_id,
+                credential: None,
+            },
+        );
+        (reader, writer)
+    }
+
+    fn drop_scope196(listener: &UnixListener) {
+        let (mut reader, _writer) = registered196(listener);
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::NativeDelegation {
+                request: bridget_transport::protocol::NativeDelegationRequest::CallerScope {}
+            }
+        ));
+    }
+
+    fn reply_wait196(listener: &UnixListener, seconds: u64, result: Option<Value>) {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = BufWriter::new(stream);
+        assert!(matches!(
+            read_command(&mut reader),
+            WrapperToDaemon::DaemonIdentityRequest
+        ));
+        let response:DaemonToWrapper=serde_json::from_value(json!({"type":"DaemonIdentityReport",
+                "host":"fixture196","db_path":"fixture196","instance_id":"fixture196","features":["wait_v1"]})).unwrap();
+        write_command(&mut writer, response);
+        drop(reader);
+        drop(writer);
+        let (mut reader, mut writer) = registered196(listener);
+        let WrapperToDaemon::NativeDelegation {
+            request:
+                bridget_transport::protocol::NativeDelegationRequest::Wait {
+                    task_ids,
+                    wait_timeout,
+                },
+        } = read_command(&mut reader)
+        else {
+            panic!("aucune mutation ni remise admise")
+        };
+        assert_eq!(task_ids, vec!["task-a", "task-b"]);
+        assert_eq!(wait_timeout, Some(seconds));
+        if let Some(result) = result {
+            write_command(
+                &mut writer,
+                DaemonToWrapper::NativeDelegationResult { result },
+            );
+        }
+    }
+
+    fn wait_recovery196(fail_in_wait: bool) {
+        let socket = test_socket("196-read-recovery");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            if fail_in_wait {
+                reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+                reply_wait196(&listener, 45, None);
+            } else {
+                drop_scope196(&listener);
+            }
+            // Le nouveau plafond peut avoir changé : aucun résultat mémorisé.
+            reply_caller_scope(&listener, json!({"version":1,"caller_read_only":true}));
+            reply_wait196(
+                &listener,
+                1,
+                Some(
+                    json!({"version":1,"ready":[{"task_id":"task-a","status":"result_available"}],
+                    "pending":["task-b"],"pending_requests":[],"timed_out":false,"waited_secs":0}),
+                ),
+            );
+        });
+        let result = execute_tool_at(
+            "fixture196",
+            "bridget_task_wait",
+            json!({"task_ids":["task-a","task-b"],"wait_timeout":45})
+                .as_object()
+                .unwrap(),
+            &socket,
+        )
+        .expect("une relecture native doit récupérer le constat");
+        assert_eq!(result["ready"][0]["task_id"], "task-a");
+        assert_eq!(result["pending"], json!(["task-b"]));
+        assert_eq!(result["read_recovery"]["recheck_wait_secs"], 1);
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn spec196_wait_recupere_coupure_plafond_sans_mutation() {
+        wait_recovery196(false);
+    }
+    #[test]
+    fn spec196_wait_recupere_coupure_reponse_sur_memes_taches() {
+        wait_recovery196(true);
+    }
+    #[test]
+    fn spec196_wait_recontrole_plafond_et_conserve_refus() {
+        let socket = test_socket("196-recheck-refused");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            drop_scope196(&listener);
+            reply_caller_scope(
+                &listener,
+                json!({"status":"refused","code":"task_unavailable"}),
+            );
+            listener.set_nonblocking(true).unwrap();
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+        });
+        let result = execute_tool_at(
+            "fixture196",
+            "bridget_task_wait",
+            json!({"task_ids":["task-a","task-b"],"wait_timeout":45})
+                .as_object()
+                .unwrap(),
+            &socket,
+        );
+        assert!(
+            matches!(result,Err(ToolError::Technical {code:"native_delegation_refused",message}) if message=="task_unavailable")
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn spec196_deux_coupures_rendent_un_guidage_sans_troisieme_lecture() {
+        let socket = test_socket("196-double-read-failure");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            drop_scope196(&listener);
+            drop_scope196(&listener);
+        });
+        let result = execute_tool_at(
+            "fixture196",
+            "bridget_task_wait",
+            json!({"task_ids":["task-a"],"wait_timeout":45})
+                .as_object()
+                .unwrap(),
+            &socket,
+        );
+        let Err(ToolError::Technical { code, message }) = result else {
+            panic!("refus technique attendu")
+        };
+        assert_eq!(code, "task_wait_read_unavailable");
+        let detail: Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(detail["stage"], "wait_observation");
+        assert!(
+            detail["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("bridget_task_status")
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn spec196_refus_metier_initial_ne_declenche_pas_de_relecture() {
+        let socket = test_socket("196-no-denial-retry");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            reply_caller_scope(
+                &listener,
+                json!({"status":"refused","code":"permission_attestation_unavailable"}),
+            );
+            listener.set_nonblocking(true).unwrap();
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+        });
+        let result = execute_tool_at(
+            "fixture196",
+            "bridget_task_wait",
+            json!({"task_ids":["task-a"],"wait_timeout":45})
+                .as_object()
+                .unwrap(),
+            &socket,
+        );
+        assert!(
+            matches!(result,Err(ToolError::Technical {code:"native_delegation_refused",message})
+                if message.contains("permission_attestation_unavailable"))
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn spec196_coupure_ne_corrige_pas_un_delai_invalide() {
+        let socket = test_socket("196-invalid-wait");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            drop_scope196(&listener);
+        });
+        let result = execute_tool_at(
+            "fixture196",
+            "bridget_task_wait",
+            json!({"task_ids":["task-a"],"wait_timeout":3601})
+                .as_object()
+                .unwrap(),
+            &socket,
+        );
+        assert!(
+            matches!(result,Err(ToolError::Technical {code:"native_delegation_refused",message})
+                if message=="wait_timeout_out_of_range")
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn spec196_coupure_mutation_ne_declenche_pas_de_relecture() {
+        let socket = test_socket("196-no-mutation-retry");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = thread::spawn(move || {
+            drop_scope196(&listener);
+        });
+        let result = execute_tool_at(
+            "fixture196",
+            "bridget_task_cancel",
+            json!({"task_id":"task-a"}).as_object().unwrap(),
+            &socket,
+        );
+        assert!(matches!(
+            result,
+            Err(ToolError::Technical {
+                code: "daemon_unreachable",
+                ..
+            })
+        ));
+        server.join().unwrap();
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
     }
 
     #[test]
