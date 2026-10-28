@@ -9,3 +9,7 @@ Deux tests200PASS, un test174PASS ; un contrôle de compatibilité168PASS. Guide
 La première revue d7f01d39 a relevé une contradiction entre detail.recovery et le conseil générique detail.admission.recovery pour not_recorded. Le complément spécialise uniquement cette projection pour le champ agent_type : correction avant reçu avec même clé après fin des appels concurrents. Les autres erreurs et états conservent leurs conseils. Le test du handler réel vérifie le message joint et le canon d’un reçu existant.
 
 Complément :2tests200PASS et4contrôles174 des états d’admissionPASS ; le message joint est désormais cohérent. Aucun binaire de8db9fb80 n’a été activé.
+
+Revue d7f01d39 reprise à la ronde2 sur5f320738 ; le HEAD de son worktree reste8db9fb80 et les objets nouveaux ont été importés sans checkout. Le build8db9fb80 n’a été ni installé ni activé.
+
+Contre-revue d7f01d39 ronde2 favorable limitée sur5f320738b96ed96eb7cf926497d8836f7b824b18. Aucun défaut concret restant ; aucune activation attestée par cette revue.
