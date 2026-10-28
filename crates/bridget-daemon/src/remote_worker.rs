@@ -23,6 +23,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+#[path = "remote_worker_proof198.rs"]
+mod proof198;
 #[path = "remote_worker_read.rs"]
 mod read;
 pub(crate) use read::{diagnose_live_local, diagnostic_failure, live_worker_binding, LiveWorkerBinding};
@@ -257,8 +259,9 @@ pub struct WorkerCommandReceipt {
     pub worker: WorkerIdentity,
     pub identity: WorkerCommandIdentity,
     pub command_digest: String,
-    /// Empreinte fermée du fence pré-Start. Un reçu historique n'a jamais ce champ.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Empreinte fermée du fence pré-Start, lue depuis la preuve annexe198.
+    /// Jamais sérialisée : le reçu reste strictement au format183.
+    #[serde(skip)]
     pub pre_start_fence: Option<String>,
     pub placement: RemotePlacement,
     pub deadline_at: i64,
@@ -489,7 +492,8 @@ struct WorkspacePreparationReceipt {
     worker: WorkerIdentity,
     command: WorkerCommandIdentity,
     prepare_digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Lien198 lu depuis la preuve annexe ; jamais écrit dans ce reçu format183.
+    #[serde(skip)]
     fenced_previous: Option<WorkerCommandIdentity>,
     record: Option<crate::delegation::WorkspaceRecord>,
 }
@@ -508,10 +512,10 @@ pub(crate) fn same_workspace_anchor(record: &crate::delegation::WorkspaceRecord,
 fn exact_fence_at(root: &Path, worker: &WorkerIdentity,
     previous: &WorkerCommandIdentity, placement: &RemotePlacement) -> Result<(), WorkerStoreError> {
     let path = root.join("commands").join(format!("{}.json", marker_key(previous)));
-    let receipt: WorkerCommandReceipt = read_optional(&path, MAX_METADATA_BYTES)?
+    let mut receipt: WorkerCommandReceipt = read_optional(&path, MAX_METADATA_BYTES)?
         .ok_or(WorkerStoreError::Unknown)?;
-    let digest = json_digest(&("pre_start_fence_v1", worker, previous,
-        &receipt.placement, receipt.deadline_at))?;
+    proof198::overlay_fence(root, worker, &mut receipt)?;
+    let digest = proof198::fence_digest(worker, previous, &receipt.placement, receipt.deadline_at)?;
     if receipt.version != STORE_VERSION || receipt.worker != *worker
         || receipt.identity != *previous || receipt.placement != *placement
         || receipt.deadline_at <= 0 || receipt.created_at < 0
@@ -537,8 +541,7 @@ fn original_workspace_at(root: &Path, worker: &WorkerIdentity,
     let mut visited = BTreeSet::new();
     for _ in 0..MAX_WORKER_STORE_ENTRIES {
         if !visited.insert(command.command_id.clone()) { return Err(WorkerStoreError::Conflict); }
-        let path = root.join("workspaces").join(format!("{}.json", marker_key(&command)));
-        let receipt: WorkspacePreparationReceipt = read_optional(&path, MAX_METADATA_BYTES)?
+        let receipt = proof198::read_workspace_receipt(root, worker, &command)?
             .ok_or(WorkerStoreError::Unknown)?;
         if receipt.version != STORE_VERSION || receipt.worker != *worker
             || receipt.command != command || !valid_digest(&receipt.prepare_digest)
@@ -673,6 +676,10 @@ impl WorkerStore {
             }
             return Ok(CommandReservation::Existing(receipt));
         }
+        // Une preuve de fence198 sans reçu (crash) interdit encore tout Start.
+        if proof198::read_fence(&self.root, &self.worker, identity)?.is_some() {
+            return Err(WorkerStoreError::Conflict);
+        }
         self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
         let receipt = WorkerCommandReceipt {
             version: STORE_VERSION,
@@ -718,7 +725,13 @@ impl WorkerStore {
         if !placement.matches_worker(&self.worker) || deadline_at <= 0 || now < 0 {
             return Err(WorkerRefusal::InvalidEnvelope.into());
         }
-        let digest = json_digest(&("pre_start_fence_v1", &self.worker, identity, placement, deadline_at))?;
+        let digest = proof198::fence_digest(&self.worker, identity, placement, deadline_at)?;
+        // La preuve est écrite avant le reçu ; seule elle reste après un crash.
+        let existing = proof198::read_fence(&self.root, &self.worker, identity)?;
+        if existing.as_ref().is_some_and(|proof| proof.digest != digest
+            || proof.placement != *placement || proof.deadline_at != deadline_at) {
+            return Err(WorkerStoreError::Conflict);
+        }
         if let Some(receipt) = self.read_command(identity)? {
             return if receipt.pre_start_fence.as_deref() == Some(digest.as_str())
                 && receipt.command_digest == digest
@@ -738,15 +751,35 @@ impl WorkerStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {},
             Err(error) => return Err(error.into()),
         }
-        self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
+        let proof = match existing {
+            Some(proof) => {
+                self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
+                proof
+            }
+            None => {
+                self.admit(MAX_METADATA_BYTES as u64 * 3 + DRAIN_PROOF_RESERVATION, 2)?;
+                let proof = proof198::FenceProof {
+                    version: STORE_VERSION,
+                    worker: self.worker.clone(),
+                    identity: identity.clone(),
+                    placement: placement.clone(),
+                    deadline_at,
+                    created_at: now,
+                    digest: digest.clone(),
+                };
+                proof198::ensure_dir(&self.root)?;
+                self.persist(&proof198::fence_path(&self.root, identity), &proof)?;
+                proof
+            }
+        };
         let receipt = WorkerCommandReceipt {
             version: STORE_VERSION,
             worker: self.worker.clone(),
             identity: identity.clone(),
-            command_digest: digest.clone(),
-            pre_start_fence: Some(digest),
+            command_digest: digest,
+            pre_start_fence: None,
             placement: placement.clone(),
-            deadline_at,
+            deadline_at: proof198::legacy_deadline(proof.deadline_at, proof.created_at),
             phase: WorkerCommandPhase::Refused,
             marker: None,
             permit: None,
@@ -760,8 +793,8 @@ impl WorkerStore {
             terminal_exit_code: None,
             preparation: None,
             routing: None,
-            created_at: now,
-            updated_at: now,
+            created_at: proof.created_at,
+            updated_at: proof.created_at,
         };
         self.persist(&self.command_path(identity), &receipt)
     }
@@ -1299,6 +1332,11 @@ impl WorkerStore {
                     Err(error) => return Err(error.into()),
                 }
                 workspace_repair::collect_markers(&self.root,&command)?;
+                // Preuve annexe d'abord : un crash laisse au pire un refus ordinaire.
+                if command.pre_start_fence.is_some() {
+                    fs::remove_file(proof198::fence_path(&self.root, &command.identity))?;
+                    File::open(self.root.join("start198"))?.sync_all()?;
+                }
                 fs::remove_file(self.command_path(&command.identity))?;
                 File::open(self.root.join("commands"))?.sync_all()?;
             }
@@ -1393,8 +1431,13 @@ impl WorkerStore {
         identity: &WorkerCommandIdentity,
     ) -> Result<Option<WorkerCommandReceipt>, WorkerStoreError> {
         identity.validate()?;
-        let result: Option<WorkerCommandReceipt> =
+        let mut result: Option<WorkerCommandReceipt> =
             read_optional(&self.command_path(identity), MAX_METADATA_BYTES)?;
+        if let Some(receipt) = result.as_mut() {
+            if receipt.worker == self.worker && receipt.identity == *identity {
+                proof198::overlay_fence(&self.root, &self.worker, receipt)?;
+            }
+        }
         if let Some(receipt) = &result {
             if receipt.worker != self.worker
                 || receipt.version != STORE_VERSION
@@ -1404,8 +1447,8 @@ impl WorkerStore {
             }
             receipt.placement.validate()?;
             let expected_fence = receipt.pre_start_fence.as_ref().map(|_| {
-                json_digest(&("pre_start_fence_v1", &self.worker, identity,
-                    &receipt.placement, receipt.deadline_at))
+                proof198::fence_digest(&self.worker, identity,
+                    &receipt.placement, receipt.deadline_at)
             }).transpose()?;
             if !receipt.placement.matches_worker(&self.worker)
                 || !valid_digest(&receipt.command_digest)
@@ -1524,7 +1567,8 @@ impl WorkerStore {
             if self.command_path(&command.identity) != path {
                 return Err(WorkerStoreError::Quarantined);
             }
-            self.read_command(&command.identity)?;
+            let command = self.read_command(&command.identity)?
+                .ok_or(WorkerStoreError::Quarantined)?;
             // Terminal/Refused ne peut plus recevoir de préparation ni de permis.
             // Les 4 Kio gardent la preuve de drainage et les détails de sortie tardifs.
             used = used.saturating_add(DRAIN_PROOF_RESERVATION);
@@ -1569,10 +1613,11 @@ impl WorkerStore {
                 if path.extension().is_none_or(|ext| ext != "json") {
                     continue;
                 }
-                let receipt: WorkspacePreparationReceipt =
+                let mut receipt: WorkspacePreparationReceipt =
                     read_optional(&path, MAX_METADATA_BYTES)?
                         .ok_or(WorkerStoreError::Quarantined)?;
                 validate_prepare_command(&receipt.command)?;
+                proof198::overlay_bind(&self.root, &self.worker, &mut receipt)?;
                 if receipt.version != STORE_VERSION
                     || receipt.worker != self.worker
                     || !valid_digest(&receipt.prepare_digest)
@@ -1587,7 +1632,8 @@ impl WorkerStore {
                 }
             }
         }
-        let count = commands.len() + slots.len() + workspaces;
+        let count = commands.len() + slots.len() + workspaces
+            + proof198::count(&self.root, &self.worker)?;
         if used > MAX_WORKER_STORE_BYTES as u64 || count > MAX_WORKER_STORE_ENTRIES {
             return Err(WorkerStoreError::Quota);
         }
@@ -1666,7 +1712,15 @@ impl WorkerStore {
         self.fenced_workspace_locked(previous, placement, workspace)?;
         let digest = json_digest(&(command, request))?;
         let path = self.workspace_path(command);
-        if let Some(existing) = read_optional::<WorkspacePreparationReceipt>(&path, MAX_METADATA_BYTES)? {
+        let proof = proof198::BindProof {
+            version: STORE_VERSION, worker: self.worker.clone(), command: command.clone(),
+            prepare_digest: digest.clone(), previous: previous.clone(),
+        };
+        let stored = proof198::read_bind(&self.root, &self.worker, command)?;
+        if stored.as_ref().is_some_and(|stored| *stored != proof) {
+            return Err(WorkerStoreError::Conflict);
+        }
+        if let Some(existing) = proof198::read_workspace_receipt(&self.root, &self.worker, command)? {
             return if existing.version == STORE_VERSION && existing.worker == self.worker
                 && existing.command == *command && existing.prepare_digest == digest
                 && existing.fenced_previous.as_ref() == Some(previous)
@@ -1674,10 +1728,16 @@ impl WorkerStore {
                 Ok(())
             } else { Err(WorkerStoreError::Conflict) };
         }
-        self.admit(2 * MAX_METADATA_BYTES as u64, 1)?;
+        if stored.is_none() {
+            self.admit(3 * MAX_METADATA_BYTES as u64, 2)?;
+            proof198::ensure_dir(&self.root)?;
+            self.persist(&proof198::bind_path(&self.root, command), &proof)?;
+        } else {
+            self.admit(2 * MAX_METADATA_BYTES as u64, 1)?;
+        }
         self.persist(&path, &WorkspacePreparationReceipt {
             version: STORE_VERSION, worker: self.worker.clone(), command: command.clone(),
-            prepare_digest: digest, fenced_previous: Some(previous.clone()), record: None,
+            prepare_digest: digest, fenced_previous: None, record: None,
         })
     }
 
@@ -1691,7 +1751,7 @@ impl WorkerStore {
         let digest = json_digest(&(command, request))?;
         let path = self.workspace_path(command);
         if let Some(receipt) =
-            read_optional::<WorkspacePreparationReceipt>(&path, MAX_METADATA_BYTES)?
+            proof198::read_workspace_receipt(&self.root, &self.worker, command)?
         {
             if receipt.worker != self.worker
                 || receipt.command != *command
@@ -1737,6 +1797,10 @@ impl WorkerStore {
                 .transition
                 .lock()
                 .map_err(|_| WorkerStoreError::Quarantined)?;
+            // Un lien198 sans reçu interdit de créer un autre worktree.
+            if proof198::read_bind(&self.root, &self.worker, command)?.is_some() {
+                return Err(WorkerStoreError::Conflict);
+            }
             self.admit(2 * MAX_METADATA_BYTES as u64, 1)?;
             private_dir(&self.root.join("workspaces"))?;
             self.persist(&path, &receipt)?;
@@ -7226,10 +7290,15 @@ while not stop.exists(): time.sleep(.01)
         assert_ne!(fresh.token, prepared.token);
         assert_eq!(runtime.prepare_fenced(&next, &previous, &next_request,
             &prepared.placement, prepared.workspace.as_ref()).unwrap().token, fresh.token);
-        let bound: WorkspacePreparationReceipt =
-            read_optional(&runtime.store.workspace_path(&next), MAX_METADATA_BYTES).unwrap().unwrap();
+        let bound = proof198::read_workspace_receipt(&runtime.store.root, &runtime.store.worker, &next)
+            .unwrap().unwrap();
         assert_eq!(bound.fenced_previous, Some(previous.clone()));
         assert!(bound.record.is_none(), "la nouvelle préparation ne copie pas l'ancre Git");
+        let raw: serde_json::Value = serde_json::from_slice(
+            &fs::read(runtime.store.workspace_path(&next)).unwrap()).unwrap();
+        assert!(raw.get("fenced_previous").is_none(), "reçu workspace strictement au format183");
+        assert!(proof198::bind_path(&runtime.store.root, &next).exists());
+        assert!(runtime.store.inventory().is_ok());
         runtime.recheck(runtime.prepared.get(&next.command_id).unwrap()).unwrap();
         let mut launched = next.clone();
         launched.instance_id = "new-instance-198".into();
@@ -7909,6 +7978,44 @@ while not stop.exists(): time.sleep(.01)
             effective_posture: SpawnPosture::Discovery,
             deadline_at,
         }
+    }
+
+    #[test]
+    fn spec198_fence_reste_lisible_format183_et_preuve_seule_bloque_start() {
+        let fixture = Fixture::new();
+        let mut runtime = runtime_fixture(&fixture);
+        let deadline = worker_now() - 1;
+        runtime.fence_unstarted(&command(), &placement(), deadline).unwrap();
+        let raw: serde_json::Value = serde_json::from_slice(
+            &fs::read(runtime.store.command_path(&command())).unwrap()).unwrap();
+        assert!(raw.get("pre_start_fence").is_none(), "reçu commande strictement au format183");
+        assert!(raw["deadline_at"].as_i64().unwrap() > raw["created_at"].as_i64().unwrap());
+        let proof = proof198::read_fence(&runtime.store.root, &runtime.store.worker, &command())
+            .unwrap().unwrap();
+        assert_eq!(proof.deadline_at, deadline, "le délai historique reste exact dans la preuve");
+        assert_eq!(runtime.store.command(&command()).unwrap().deadline_at, deadline);
+        assert!(runtime.store.inventory().is_ok());
+
+        // Crash après la preuve et avant le reçu : aucun Start neuf, le rejeu termine.
+        let other = WorkerCommandIdentity { command_id: "command-198-proof-only".into(), ..command() };
+        let created_at = worker_now();
+        let digest = proof198::fence_digest(&runtime.store.worker, &other, &placement(), deadline)
+            .unwrap();
+        proof198::ensure_dir(&runtime.store.root).unwrap();
+        runtime.store.persist(&proof198::fence_path(&runtime.store.root, &other),
+            &proof198::FenceProof { version: STORE_VERSION, worker: runtime.store.worker.clone(),
+                identity: other.clone(), placement: placement(), deadline_at: deadline,
+                created_at, digest }).unwrap();
+        assert!(runtime.store.inventory().is_ok());
+        assert!(matches!(runtime.store.reserve_command(&other, &"a".repeat(64), &placement(),
+            worker_now() + 300, worker_now()), Err(WorkerStoreError::Conflict)));
+        assert_eq!(runtime.fence_unstarted(&other, &placement(), deadline + 1).unwrap_err(),
+            WorkerRefusal::CommandMismatch);
+        assert!(!runtime.store.command_path(&other).exists());
+        runtime.fence_unstarted(&other, &placement(), deadline).unwrap();
+        let receipt = runtime.store.command(&other).unwrap();
+        assert_eq!((receipt.created_at, receipt.deadline_at), (created_at, deadline));
+        assert_eq!(receipt.phase, WorkerCommandPhase::Refused);
     }
 
     #[test]
