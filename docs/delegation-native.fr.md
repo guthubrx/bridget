@@ -1647,3 +1647,11 @@ conserver tâche, clé et sorties. Si `worker_start_recovery_v1` manque, demande
 au responsable de qualifier et charger les binaires compatibles par la
 maintenance admise. Ne pas forcer de redémarrage, modifier le stockage ou créer
 une mission de remplacement.
+
+La reprise d’un Start refusé pour capacité conserve l’effort décidé, même s’il
+diffère de l’effort initial du profil. L’empreinte attendue reste celle de
+l’exécution admise et le worker la revalide avant Start/Release. Un refus
+`routing_connection_changed` à `detail.stage=start_recovery` nomme uniquement
+les catégories divergentes. Il conserve la tâche admise : après correction
+ou validation du changement, rejouer strictement sa même clé et son enveloppe,
+sans nouvelle mission ni modification des reçus.

@@ -22,6 +22,12 @@ pub(super) fn fixture_guarded(
     AutoAdmissionReceipt,
     ProviderPermissions,
 ) {
+    fixture_guarded202(guarded, false)
+}
+
+fn fixture_guarded202(guarded: bool, selected_effort: bool) -> (
+    Arc<Mutex<DaemonState>>, DaemonConfig, Task, AutoAdmissionReceipt, ProviderPermissions,
+) {
     let (mut st, config, _rx, _reader) = parent_fixture("r198");
     let mut task = if guarded {
         let mut request = super::super::tests::request("start198");
@@ -107,6 +113,16 @@ pub(super) fn fixture_guarded(
             serde_json::to_vec(&task.permission_snapshot.as_ref().unwrap().child_policy).unwrap()
         )
     );
+    if selected_effort {
+        let mut definition = serde_json::to_value(&task.definition).unwrap();
+        definition.as_object_mut().unwrap().remove("digest");
+        definition["capabilities"]["models"]["custom/model"]["efforts"] = json!(["low", "high"]);
+        task.definition = AgentRegistry::from_json(&json!({"agents":{"native-test":definition}}).to_string(),
+            &config.db_path.with_extension("registry202.json")).unwrap()
+            .pin_delegation_model("native-test", "custom/model", Some("high")).unwrap()
+            .resolved_definition("native-test").unwrap();
+        task.remote_placement.as_mut().unwrap().definition_digest = task.definition.digest.clone();
+    }
     let issued = unix_timestamp() - 600;
     let order = FleetSpawnOrder {
         posture: None,
@@ -327,7 +343,7 @@ fn spec198_halt_revocation_and_old_worker_refuse_without_plan() {
 
 #[test]
 fn spec198_unknown_start_or_release_never_enters_recovery() {
-    let (state, config, mut task, receipt, _) = fixture();
+    let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
     for error in [
         "remote_start_failed:remote_start:WorkerUnavailable",
         "remote_start_failed:remote_release:ResourceLimit",
@@ -683,8 +699,17 @@ fn spec198_recovery_cannot_reuse_an_expired_new_lease_as_current_time() {
 }
 
 fn native_flow(cut_after_fleet: bool, old_plan: bool, local_quota: bool) {
+    native_flow_with_routing202(cut_after_fleet, old_plan, local_quota, false)
+}
+fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quota: bool, selected_effort: bool) {
     use bridget_transport::protocol::WorkerPrepared;
-    let (state, config, task, receipt, parent) = fixture();
+    let (state, config, mut task, mut receipt, parent) = fixture_guarded202(false, selected_effort);
+    if selected_effort {
+        task.error = Some("remote_start_failed:remote_start:ResourceLimit:cause=inbound_queue".into());
+        state.lock().unwrap().delegation_store.save(&task).unwrap();
+        receipt = v2_receipt202(&task, receipt, true);
+        state.lock().unwrap().delegation_store.save(&task).unwrap();
+    }
     let original = saved(&state, &task.task_id);
     let old = remote_command_identity(&state.lock().unwrap(), &task).unwrap();
     assert!(lease_of(&state.lock().unwrap(), &old).unwrap().deadline_at < unix_timestamp());
@@ -783,9 +808,15 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool, local_quota: bool) {
                 WorkerRequestOperation::PrepareFenced {
                     previous,
                     placement,
+                    routing,
                     ..
                 } => {
                     calls.push("prepare");
+                    if selected_effort {
+                        let routing = routing.as_ref().expect("routage V2 conservé");
+                        assert_eq!(routing.expected_definition_digest, expected.definition.digest);
+                        assert_eq!(routing.expected_permission_digest, placement.permission_digest);
+                    }
                     assert_eq!(previous, &old_for_listener);
                     assert_eq!(placement, expected.remote_placement.as_ref().unwrap());
                     WorkerResponseOperation::Prepared {
@@ -1263,7 +1294,7 @@ fn spec198_v2_recovery_preserves_exact_frozen_connection_and_rejects_changed_cho
     receipt.metadata = serde_json::to_vec(&routing_snapshot(&plan, Some(changed))).unwrap();
     assert_eq!(
         frozen_start_routing(&task, &receipt).err().as_deref(),
-        Some("routing_connection_changed")
+        Some("routing_connection_changed:start_recovery:profile")
     );
     drop(state);
     cleanup(&config);
@@ -1508,4 +1539,76 @@ fn spec198_crash_after_fence_restart_cancel_receives_refused_and_closes_guard() 
     assert_eq!(after["mission"], before["mission"]);
     drop(state);
     cleanup(&config);
+}
+
+
+// Reproduit le reçu de92965 : profil low, exécution high, empreintes distinctes.
+fn v2_receipt202(task: &Task, mut receipt: AutoAdmissionReceipt, distinct: bool) -> AutoAdmissionReceipt {
+    use super::super::tests::{routing168_fixture, routing168_observation, routing168_plan};
+    use bridget_transport::protocol::{LineageDecisionSourceV4, LineageDecisionV4};
+    let (routing_state, routing_config, _rx, _reader, mut auto, _root) = routing168_fixture(1);
+    let mut plan = routing168_plan(&routing_state, &auto);
+    let NativeDelegationRequest::Delegate { request_id, cwd, .. } = &task.request else { unreachable!() };
+    auto.request_id = request_id.clone(); auto.cwd = cwd.clone();
+    auto.expected_base_commit = task.remote_placement.as_ref().unwrap().base_commit.clone();
+    let candidate = &mut plan.candidates[0];
+    candidate.machine_id = "cartae".into(); candidate.agent_type = "native-test".into();
+    candidate.model = "custom/model".into();
+    candidate.default_effort = Some(if distinct { "low" } else { "high" }.into());
+    candidate.supported_efforts = vec!["low".into(), "high".into()];
+    let candidate = candidate.clone();
+    let initial = AgentRegistry::from_resolved("native-test", &task.definition).unwrap()
+        .pin_delegation_model("native-test", "custom/model", candidate.default_effort.as_deref())
+        .unwrap().resolved_definition("native-test").unwrap();
+    let mut observed = routing168_observation();
+    observed.definition_digest = initial.digest;
+    observed.permission_digest = task.remote_placement.as_ref().unwrap().permission_digest.clone();
+    plan.observations = vec![observed]; plan.scores = vec![0];
+    let decision = LineageDecisionV4 {
+        candidate_id: "c001".into(), connection_id: candidate.connection_id.clone(),
+        machine_id: candidate.machine_id.clone(), engine: candidate.engine.clone(), model: candidate.model.clone(),
+        effort: Some("high".into()), source: LineageDecisionSourceV4::Deterministic, facts: None, reason: None,
+    };
+    receipt.metadata_version = 2; receipt.candidate_id = Some("c001".into());
+    receipt.policy_revision = plan.policy.revision as i64; receipt.policy_digest = plan.policy_digest.clone();
+    receipt.canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(auto)).unwrap();
+    receipt.metadata = serde_json::to_vec(&routing_snapshot(&plan, Some(decision))).unwrap();
+    drop(routing_state); cleanup(&routing_config); receipt
+}
+
+#[test]
+fn spec202_selected_effort_uses_admitted_execution_digest() {
+    let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
+    let receipt = v2_receipt202(&task, receipt, true);
+    let before = saved(&state, &task.task_id);
+    let selected = frozen_start_routing(&task, &receipt).expect("low→high n'est pas une dérive").unwrap();
+    assert_eq!(selected.expected_definition_digest, task.definition.digest);
+    assert_eq!(selected.expected_permission_digest, task.remote_placement.as_ref().unwrap().permission_digest);
+    assert_eq!(saved(&state, &task.task_id), before);
+    assert!(state.lock().unwrap().pending_worker_responses.is_empty());
+    drop(state); cleanup(&config);
+}
+
+#[test]
+fn spec202_real_definition_drift_and_effort_change_still_refuse_precisely() {
+    let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
+    for distinct in [false, true] {
+        let receipt = v2_receipt202(&task, receipt.clone(), distinct);
+        let mut changed = task.clone(); changed.definition.digest = "f".repeat(64);
+        let code = frozen_start_routing(&changed, &receipt).unwrap_err();
+        assert_eq!(code, "routing_connection_changed:start_recovery:definition");
+        let response = failure(&code);
+        assert_eq!(response["detail"]["stage"], "start_recovery");
+        assert_eq!(response["detail"]["changes"], json!(["definition"]));
+        let mut changed = task.clone();
+        if let NativeDelegationRequest::Delegate { effort, .. } = &mut changed.request { *effort = Some("low".into()); }
+        assert_eq!(frozen_start_routing(&changed, &receipt).unwrap_err(),
+            "routing_connection_changed:start_recovery:effort");
+    }
+    drop(state); cleanup(&config);
+}
+
+#[test]
+fn spec202_inbound_queue_strict_recovery_keeps_task_and_selected_routing() {
+    native_flow_with_routing202(false, false, false, true);
 }

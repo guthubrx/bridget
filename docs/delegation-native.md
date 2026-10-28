@@ -893,3 +893,11 @@ If only the worker epoch changed, verify native availability on the same machine
 `bridget_auto_delegate` does not accept `agent_type`. Omit it; `engine` selects the runtime (for example `codex`), `machine_id` selects the destination, and `connection_id` selects a specific catalog connection only when required. Unspecified axes remain free. `agent_type` belongs to the separate explicit path.
 
 The client rejects this field before connecting, and the coordinator keeps the public `auto_admission_invalid` code with `detail.field=agent_type`. Parameters may be corrected under the same key only before any receipt, after checking that no task or concurrent call exists. If a receipt exists, preserve its canonical contract and follow its state; never describe a changed envelope as a strict replay. Keep the requested exact SHA and workspace.
+
+Recovery of a capacity-refused Start preserves the chosen effort, including
+a choice different from the profile default. The expected digest is the
+admitted execution definition, revalidated by the worker before Start/Release.
+A `routing_connection_changed` refusal with `detail.stage=start_recovery`
+reports only closed change categories. The admitted task stays preserved:
+after correction or approval of the change, replay its exact key and envelope;
+do not create another mission or edit receipts.

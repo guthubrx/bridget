@@ -1556,7 +1556,7 @@ fn routing_change_detail(code: &str) -> Option<(&str, Vec<&str>)> {
     let rest = code.strip_prefix("routing_connection_changed:")?;
     let (stage, fields) = rest.split_once(':')?;
     if !matches!(stage, "selected_probe" | "effort_probe" | "decision_definition"
-        | "delegate_contract" | "worker_prepare" | "local_definition") { return None; }
+        | "delegate_contract" | "worker_prepare" | "local_definition" | "start_recovery") { return None; }
     let fields: Vec<_> = fields.split(',').collect();
     if fields.is_empty() || fields.len() > 8 { return None; }
     let mut seen = std::collections::BTreeSet::new();
@@ -3748,8 +3748,12 @@ fn failure(code: &str) -> Value {
             };
             json!({"field": field, "recovery": recovery})
         }).collect();
-        let message = "Les faits vérifiés pour la cible ont changé pendant l’admission.";
-        let recovery = if changes.is_empty() {
+        let message = if stage == "start_recovery" {
+            "Le contrat figé de la cible ne concorde plus pendant la reprise du démarrage."
+        } else { "Les faits vérifiés pour la cible ont changé pendant l’admission." };
+        let recovery = if stage == "start_recovery" {
+            "Cette admission conserve sa tâche. Aucun nouveau fence, Start ni remplacement n’a été envoyé par ce contrôle. Conservez la tâche, request_id et l’enveloppe. Faites vérifier les champs de detail.checks par le responsable Bridget ; une fois la cause corrigée ou le changement validé, seul un rejeu strict de cette même admission peut reprendre cette tâche. Ne créez pas de nouvelle clé et ne modifiez pas ses reçus."
+        } else if changes.is_empty() {
             "Le contrôle divergent n’a pas été conservé dans ce refus historique. Conservez request_id et les paramètres. Le responsable doit comparer définition, droits, session worker, mapping, projet et contrat choisi ; ne déduisez pas une cause du code seul. Ne changez ni les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission : suivez toute tâche connue et ne dupliquez pas une issue inconnue. Un refus durable sans tâche ne se rouvre pas au rejeu."
         } else {
             "Appliquez les vérifications de detail.checks sur la cible choisie. Ne changez ni les contraintes ni les permissions pour contourner ce refus. Consultez le sort d’admission et suivez toute tâche connue. Ne dupliquez pas une demande en attente ou d’issue inconnue. Après confirmation d’un refus durable sans tâche et résolution ou validation explicite du changement constaté, une nouvelle request_id demande une nouvelle vérification native ; la clé close ne se rouvre pas. Aucun redémarrage ni gain de droits n’est autorisé par ce message."

@@ -339,28 +339,37 @@ fn frozen_start_routing(
         .remote_placement
         .as_ref()
         .ok_or("remote_placement_missing")?;
-    if machine_id.as_deref() != Some(candidate.machine_id.as_str())
-        || *agent_type != candidate.agent_type
-        || *model != candidate.model
-        || *effort != decision.effort
-        || *cwd != auto.cwd
-        || auto.expected_base_commit != placement.base_commit
-        || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
-        || decision.connection_id != candidate.connection_id
-        || decision.engine != candidate.engine
-        || decision.machine_id != candidate.machine_id
-        || decision.model != candidate.model
-        || observed.definition_digest != placement.definition_digest
-        || observed.permission_digest != placement.permission_digest
-    {
-        return Err("routing_connection_changed".into());
-    }
+    // La sonde figée décrit le profil initial. Quand le décideur a changé
+    // l'effort, sa définition diffère légitimement de celle attestée à Prepare.
+    // Le tuple Task/placement porte cette définition d'exécution admise ; le
+    // worker la revalide encore sur le même dossier avant Start et Release.
+    let initial_definition_matches = if decision.effort == candidate.default_effort {
+        observed.definition_digest == placement.definition_digest
+    } else {
+        AgentRegistry::from_resolved(agent_type, &task.definition)
+            .and_then(|registry| registry.pin_delegation_model(agent_type, model, candidate.default_effort.as_deref()))
+            .and_then(|registry| registry.resolved_definition(agent_type))
+            .is_ok_and(|initial| initial.digest == observed.definition_digest)
+    };
+    if let Some(code) = routing_change_error("start_recovery", &[
+        ("machine", machine_id.as_deref() != Some(candidate.machine_id.as_str())
+            || decision.machine_id != candidate.machine_id),
+        ("profile", *agent_type != candidate.agent_type
+            || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
+            || decision.connection_id != candidate.connection_id || decision.engine != candidate.engine),
+        ("model", *model != candidate.model || decision.model != candidate.model),
+        ("effort", *effort != decision.effort),
+        ("canonical", *cwd != auto.cwd),
+        ("base", auto.expected_base_commit != placement.base_commit),
+        ("definition", task.definition.digest != placement.definition_digest || !initial_definition_matches),
+        ("permissions", observed.permission_digest != placement.permission_digest),
+    ]) { return Err(code); }
     Ok(Some(WorkerFencedRouting {
         workload: auto.workload,
         connection_id: candidate.connection_id.clone(),
         engine: candidate.engine.clone(),
-        expected_definition_digest: observed.definition_digest.clone(),
-        expected_permission_digest: observed.permission_digest.clone(),
+        expected_definition_digest: placement.definition_digest.clone(),
+        expected_permission_digest: placement.permission_digest.clone(),
     }))
 }
 
