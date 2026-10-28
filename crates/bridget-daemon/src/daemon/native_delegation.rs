@@ -26005,6 +26005,25 @@ for frame in frames: print(json.dumps(frame),flush=True)
         cleanup(&config);
     }
 
+    #[test]
+    fn spec197_restart_preserve_annulation_distante_sans_flotte_desiree() {
+        let (mut st, config, mut task, _) = remote162_capture_fixture();
+        task.state = "cancelling".into();
+        task.guarded = true;
+        task.cleanup_done = false;
+        task.guard_released = false;
+        task.error = Some("native_cancel_unverifiable:fixture197".into());
+        task.mission_deadline_at = Some(unix_timestamp() - 86_400);
+        st.delegation_store.save(&task).unwrap();
+        st.fleet.remove_desired(&task.child).unwrap();
+        let before = serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        assert!(reserve_managed_recoveries(&mut st, unix_timestamp()).unwrap().is_empty(),
+            "aucun fournisseur local préparé pour cette annulation distante inconnue");
+        assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(), before,
+            "l’échéance et l’absence de flotte ne constituent pas une preuve d’arrêt");
+        cleanup(&config);
+    }
+
     fn remote162_complete_execution(st: &DaemonState, execution: &str) {
         for next in ["running", "completed"] {
             let snapshot = st

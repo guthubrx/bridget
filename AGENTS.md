@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session197 compatibilitémacOS : source04214db5f89e4159a25a4061bb8b7dfb5969ce52 corrige la taille des constantes de mode dans le diagnostic188 ; buildsMacARM64/Linux2.39/Linux2.36PASS,10tests188Linux+7tests196MacPASS. Candidats197 construits et vérifiés surMac/Cartae/KS/SYS, NON actifs.14contrôles de maintenance et1contre-épreuve de préservation distantePASS. RevueBridget refusée delegations_halted, aucun avis197 inventé. Gelhumain génération7 posé ; gardesOpus6eea/b871 closes et tousreçusworkersterminaux, cgroupsdesunitésseuls. Prepare reste refusé pour annulationhistorique/admissions non soldées ; aucune modificationdustore ou restartforcé. Sauvegarde cohérente prête ; activationT004ouverte. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/197-compatibilite-macos/validation.md.
+
+
 Session196 lecture d’attente : sourcea42d133cd3d21f31c07c146a8d8bf8bc0418c685,75contrôles ciblésPASS, guides vérifiés et revue5007923b favorable. Après échec de transport du seul task_wait, une relecture1s des mêmes tâches refait toutes les gardes ; aucune mutation ou refus métier rejoué, second échec guidé. Cause exacte du délai historique inconnue. CandidatLinux196-wait-a42d133cd3d2 construit/vérifié NON actif ; clientMac183-e2987fb7175f et maître183 inchangés, T004 ouverte. Correction commune disponible dans les sources poussées, pas dans une ancienne release déjà publiée. Réparation Git195 toujours opérationnelle, pas encore une prévention automatique. Revue close nativement ; référence SYS conservée sous usages partiellement inconnus. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/196-relecture-attente/validation.md.
 
 
