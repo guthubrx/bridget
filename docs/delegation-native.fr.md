@@ -1628,3 +1628,9 @@ Un ancien maître ou worker peut exiger une mise à jour avant cette opération.
 Un ancien refus sans ce détail rend `stage=unobserved` et une liste vide. Il faut alors faire comparer les faits par le responsable Bridget ; ni panne réseau, ni compte révoqué, ni changement de droits ne sont établis par le code seul. Une réattestation du parent ne rouvre pas un refus durable.
 
 Si seule l’époque du worker a changé, vérifier la disponibilité native de la même machine. Pour une définition, des droits ou un mapping modifiés, vérifier la configuration attendue avec son responsable ; ne pas élargir les permissions pour contourner le refus. Après confirmation d’un refus durable sans tâche et résolution ou validation explicite du changement constaté, une nouvelle clé demande une nouvelle admission. Une issue inconnue conserve sa clé et interdit un doublon. Aucun gel ou redémarrage n’est prescrit par ce refus.
+
+### Paramètres du parcours automatique (200)
+
+`bridget_auto_delegate` n’accepte pas `agent_type`. Omettre ce champ ; `engine` désigne le moteur (par exemple `codex`), `machine_id` la destination, et `connection_id` une connexion précise du catalogue seulement si elle est imposée. Les axes non imposés restent libres. `agent_type` appartient au parcours explicite distinct.
+
+Le client refuse ce champ avant connexion et le maître conserve le code public `auto_admission_invalid` avec `detail.field=agent_type`. Une correction avec la même clé n’est permise qu’avant tout reçu, après vérification de l’absence de tâche et d’autre appel en vol. Si un reçu existe, conserver son canon et suivre son état ; ne jamais présenter une enveloppe modifiée comme un rejeu strict. Conserver le SHA exact et le workspace demandés.

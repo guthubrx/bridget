@@ -2077,9 +2077,11 @@ fn admit_auto_routing(
     use bridget_transport::protocol::LineageDecisionSourceV4;
     let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
         .map_err(|e| e.to_string())?;
+    if request.agent_type.is_some() {
+        return Err("auto_admission_invalid:agent_type_not_supported".into());
+    }
     if request.task.trim().is_empty()
         || request.task.len() > 65536
-        || request.agent_type.is_some()
         || request.request_id.is_empty()
         || request.request_id.len() > 128
         || canonical.len() > crate::delegation::MAX_AUTO_ADMISSION_CANONICAL_BYTES
@@ -3715,6 +3717,13 @@ fn failure(code: &str) -> Value {
             "detail":{"message":message,"recovery":recovery,"human_action":human}});
     }
 
+    if code == "auto_admission_invalid:agent_type_not_supported" {
+        return json!({"status":"refused","code":"auto_admission_invalid",
+            "message":"Le champ agent_type est interdit dans l’admission automatique.",
+            "detail":{"field":"agent_type","cause":"not_supported_in_automatic_admission",
+                "recovery":"Omettez agent_type. Conservez machine_id et utilisez engine pour le moteur ; connection_id est facultatif et désigne une connexion précise du catalogue. Gardez les contraintes de base et de workspace. Consultez detail.admission : suivez toute tâche connue et conservez une demande en attente ou d’issue inconnue. Une correction de paramètres avec la même request_id n’est admise qu’avant tout reçu, après confirmation de l’absence de tâche et d’autre appel en vol ; un reçu existant impose son canon et ne doit jamais être réécrit.",
+                "human_action":"Si une connexion précise est requise mais n’est pas identifiable dans le catalogue autorisé, demandez au responsable laquelle utiliser ; ne choisissez pas une autre machine ou un autre moteur pour contourner le refus."}});
+    }
     if code == "routing_candidate_unavailable" {
         let message = "Aucun candidat requis n’a pu être confirmé comme éligible lors du contrôle.";
         let recovery = "Consultez detail.reasons s’il est présent, puis le catalogue sur la machine demandée avec le même cwd et la même posture. Vérifiez la disponibilité du profil, du modèle, de l’effort, du dossier et des sources de droits selon le motif reçu. Ce code seul ne prouve ni une déconnexion du compte ni l’absence du programme. Corrigez la cause sans changer les contraintes ni les permissions pour contourner le refus. Consultez detail.admission : suivez toute tâche connue ; si la demande reste en attente ou d’issue inconnue, conservez request_id et les paramètres, sans créer de doublon. Si detail.admission indique not_recorded, après correction de la cause sans changement de paramètres, rejouez strictement la même demande avec sa request_id. L’absence de tâche enregistrée à une lecture ne suffit pas à exclure un appel concurrent. Une nouvelle request_id exige un refus durable confirmé sans tâche et sa cause corrigée, ou des paramètres corrigés après confirmation de la clôture de l’ancienne demande.";
@@ -12992,6 +13001,36 @@ mod tests {
     ) -> RoutingAdmissionPlan {
         let st = state.lock().unwrap();
         routing_admission_plan(&st.registry, "local", request).unwrap()
+    }
+
+    #[test]
+    fn spec200_auto_type_natif_nommee_sans_recu_et_canon_existant_preserve() {
+        let (state, config, rx, _reader, mut request, _root) = routing168_fixture(1);
+        request.request_id = "field200".into();
+        request.agent_type = Some("private-profile-never-echo".into());
+        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1",
+            NativeDelegationRequest::AutoDelegateV2(request.clone()), &state) else { panic!("refus natif attendu") };
+        assert_eq!(result["code"], "auto_admission_invalid");
+        assert_eq!(result["detail"]["field"], "agent_type");
+        assert_eq!(result["detail"]["admission"]["state"], "not_recorded");
+        assert!(!result.to_string().contains("private-profile-never-echo"));
+        assert!(state.lock().unwrap().delegation_store.auto_admission_receipt(OWNER, &request.request_id).unwrap().is_none());
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        request.agent_type = None;
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let receipt = routing168_receipt(&state, &request);
+        assert_eq!(receipt.state, AutoAdmissionState::Admitted);
+        assert_eq!(receipt.task_id.as_deref(), admitted["task_id"].as_str());
+        request.agent_type = Some("private-profile-never-echo".into());
+        let DaemonToWrapper::NativeDelegationResult { result } = handle("conn-1",
+            NativeDelegationRequest::AutoDelegateV2(request.clone()), &state) else { panic!("refus natif attendu") };
+        assert_eq!(result["code"], "auto_admission_invalid");
+        assert_eq!(result["detail"]["field"], "agent_type");
+        assert_eq!(result["detail"]["admission"]["state"], "envelope_mismatch");
+        assert_eq!(routing168_receipt(&state, &request), receipt);
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        assert!(rx.try_recv().is_err());
+        drop(state); cleanup(&config);
     }
 
     #[test]

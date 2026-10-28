@@ -875,3 +875,9 @@ An older master or worker can require an upgrade first. Do not replace the missi
 An older refusal without this detail returns `stage=unobserved` and an empty list. Its facts must be compared by the Bridget maintainer. The code alone establishes no network outage, revoked account or changed permission. Reattesting the parent does not reopen a durable refusal.
 
 If only the worker epoch changed, verify native availability on the same machine. For changed definitions, permissions or mappings, confirm the expected configuration with its owner; do not broaden permissions to bypass the refusal. After a durable refusal without a task is confirmed and the observed change is resolved or explicitly validated, a new key requests a new admission. An unknown outcome retains its key and prohibits duplication. This refusal prescribes no halt or restart.
+
+### Automatic admission parameters (200)
+
+`bridget_auto_delegate` does not accept `agent_type`. Omit it; `engine` selects the runtime (for example `codex`), `machine_id` selects the destination, and `connection_id` selects a specific catalog connection only when required. Unspecified axes remain free. `agent_type` belongs to the separate explicit path.
+
+The client rejects this field before connecting, and the coordinator keeps the public `auto_admission_invalid` code with `detail.field=agent_type`. Parameters may be corrected under the same key only before any receipt, after checking that no task or concurrent call exists. If a receipt exists, preserve its canonical contract and follow its state; never describe a changed envelope as a strict replay. Keep the requested exact SHA and workspace.
