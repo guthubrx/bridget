@@ -18,3 +18,6 @@ Le propriétaire de bd3dabf6 conserve l’enveloppe opus2d-cartae-suite-cameras-
 
 ## Décision de maintenance éventuelle
 Le dernier geste à demander ne sera pas de rejouer une mission ni de supprimer une garde : ce sera une autorisation explicite de remplacement exceptionnel des seuls services Bridget, avec conservation des états inconnus. Avant de la demander, le candidat et la procédure doivent être qualifiés et revus. Le contexte a changé depuis la fenêtre197 : les chaînes ont repris et le gel est levé. Les anciens relevés de cgroups vides ne sont donc plus une condition actuelle acquise. Aucun arrêt ne peut s’appuyer sur ces relevés historiques.
+
+## Retour de version : limite opérationnelle
+Le décodage des reçus198 par le schéma183 évite une quarantaine de format. Il ne rend pas183 capable de poursuivre une reprise198. Un retour183 n’est admissible que dans la fenêtre de maintenance avant tout emploi du parcours198, ou après preuve que les reprises et commandes198 sont closes et qu’aucune réattestation de worktree198 n’est encore requise. Une phase de plan en cours ou une issue distante inconnue interdit ce retour automatique. Les liaisons annexes et leurs fichiers restent conservés. Ne pas présenter un test de décodage comme une qualification de reprise métier avec un ancien binaire.

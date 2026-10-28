@@ -18884,9 +18884,22 @@ fn handle_worker_message(
                 if observation.phase == WorkerCommandPhase::Refused
                     && remote_worker_has_command(&st,&response.worker,Some(&response.command))
                     && st.delegation_store.get(&response.command.task_id).is_ok_and(|task|
-                        task.is_some_and(|task| task.start_recovery.as_ref().is_some_and(|plan|
-                            plan.previous == response.command || plan.history.iter().any(|old|
-                                old.command == response.command)))) {
+                        task.is_some_and(|task|
+                            native_delegation::remote_command_identity(&st,&task)
+                                .is_ok_and(|current|current != response.command)
+                            && task.start_recovery.as_ref().is_some_and(|plan|
+                                plan.previous == response.command || plan.history.iter().any(|old|
+                                    old.command == response.command)))) {
+                    // Même une ancienne observation peut être la réponse à une
+                    // lecture déjà en vol. Ne jamais absorber son attente corrélée.
+                    if let Some(pending)=st.pending_worker_responses.get(&response.correlation_id) {
+                        if pending.conn_id!=conn_id || pending.epoch!=response.connection_epoch
+                            || pending.worker!=response.worker || pending.command!=response.command {
+                            return refused(WorkerRefusal::CommandMismatch);
+                        }
+                        let pending=st.pending_worker_responses.remove(&response.correlation_id).unwrap();
+                        let _=pending.reply.try_send(response.response);
+                    }
                     return None;
                 }
                 if !remote_worker_has_command(&st, &response.worker, Some(&response.command))

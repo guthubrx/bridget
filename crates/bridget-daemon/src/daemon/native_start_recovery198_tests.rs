@@ -10,8 +10,35 @@ fn fixture() -> (
     AutoAdmissionReceipt,
     ProviderPermissions,
 ) {
+    fixture_guarded(false)
+}
+
+fn fixture_guarded(
+    guarded: bool,
+) -> (
+    Arc<Mutex<DaemonState>>,
+    DaemonConfig,
+    Task,
+    AutoAdmissionReceipt,
+    ProviderPermissions,
+) {
     let (mut st, config, _rx, _reader) = parent_fixture("r198");
-    let mut task = tache_151(&mut st, "start198");
+    let mut task = if guarded {
+        let mut request = super::super::tests::request("start198");
+        if let NativeDelegationRequest::Delegate {
+            keep_alive_secs, ..
+        } = &mut request
+        {
+            *keep_alive_secs = Some(60);
+        }
+        let view = handle_locked("conn-1", request, &mut st).unwrap();
+        st.delegation_store
+            .get(view["task_id"].as_str().unwrap())
+            .unwrap()
+            .unwrap()
+    } else {
+        tache_151(&mut st, "start198")
+    };
     task.remote_prepared = true;
     task.remote_placement = Some(bridget_transport::protocol::RemotePlacement {
         machine_id: "cartae".into(),
@@ -907,6 +934,37 @@ fn native_flow(cut_after_fleet: bool, old_plan: bool, local_quota: bool) {
         after,
         "ancien refus ne modifie pas la nouvelle tentative"
     );
+    let (tx, rx) = mpsc::sync_channel(1);
+    let mut correlated = response.clone();
+    correlated.correlation_id = "historical-wait198".into();
+    state.lock().unwrap().pending_worker_responses.insert(
+        correlated.correlation_id.clone(),
+        super::super::super::PendingWorkerResponse {
+            conn_id: "worker-reconnected198".into(),
+            epoch: accepted.connection_epoch.clone(),
+            worker: accepted.identity.clone(),
+            command: old.clone(),
+            reply: tx,
+        },
+    );
+    assert!(
+        super::super::super::handle_worker_message(
+            &state,
+            "worker-reconnected198",
+            WrapperToDaemon::WorkerResponse {
+                response: correlated
+            }
+        )
+        .is_none()
+    );
+    assert!(
+        matches!(
+            rx.try_recv(),
+            Ok(WorkerResponseOperation::Observation { .. })
+        ),
+        "une réponse historique attendue atteint son appelant"
+    );
+    assert_eq!(saved(&state, &task.task_id), after);
     let mut foreign = response.clone();
     foreign.command.instance_id = "foreign198".into();
     assert!(
@@ -1315,4 +1373,139 @@ fn spec198_real_identity_hello_accepted_negotiates_all_eight_capabilities() {
 #[test]
 fn spec198_local_fleet_quota_refusal_replays_same_task_after_capacity_returns() {
     native_flow(false, false, true);
+}
+
+#[test]
+fn spec198_crash_after_fence_restart_cancel_receives_refused_and_closes_guard() {
+    use bridget_transport::protocol::{WorkerCommandPhase, WorkerObservation};
+    let (state, config, task, _, _) = fixture_guarded(true);
+    assert_eq!(saved(&state, &task.task_id)["guarded"], true);
+    persist_plan(&state, &task.task_id).unwrap();
+    set_phase(
+        &state,
+        &task.task_id,
+        StartRecoveryPhase::Planned,
+        StartRecoveryPhase::Fenced,
+    )
+    .unwrap();
+    let before = saved(&state, &task.task_id);
+    {
+        let mut st = state.lock().unwrap();
+        let root = st.fixture_root.as_ref().unwrap().0.clone();
+        st.managed_spawns.clear();
+        st.managed_by_instance.clear();
+        st.fleet = Arc::new(
+            FleetSupervisor::open(
+                &config.db_path,
+                DesiredStateStore::at_path(root.join("fleet.json")),
+                FleetConfig::from_env(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            reserve_managed_recoveries(&mut st, unix_timestamp())
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(saved(&state, &task.task_id), before);
+    let (socket, peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    state.lock().unwrap().connections.insert(
+        "worker198".into(),
+        Arc::new(Mutex::new(std::io::BufWriter::new(socket))),
+    );
+    let responder = state.clone();
+    let listener = thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(peer);
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+        let DaemonToWrapper::WorkerRequest { request } = serde_json::from_str(&line).unwrap()
+        else {
+            panic!("cancel198")
+        };
+        assert!(matches!(
+            request.request,
+            WorkerRequestOperation::Cancel { .. }
+        ));
+        let response = WorkerResponse {
+            version: REMOTE_WORKER_VERSION,
+            correlation_id: request.correlation_id,
+            connection_epoch: request.connection_epoch,
+            worker: request.worker,
+            command: request.command,
+            response: WorkerResponseOperation::Observation {
+                observation: WorkerObservation {
+                    startup_failure: None,
+                    workspace: None,
+                    permission_digest: None,
+                    phase: WorkerCommandPhase::Refused,
+                    native_ready: false,
+                    exit_code: None,
+                    observed_at: unix_timestamp(),
+                },
+            },
+        };
+        assert!(
+            super::super::super::handle_worker_message(
+                &responder,
+                "worker198",
+                WrapperToDaemon::WorkerResponse { response }
+            )
+            .is_none()
+        );
+    });
+    let view = handle(
+        "conn-1",
+        NativeDelegationRequest::Cancel {
+            task_id: task.task_id.clone(),
+        },
+        &state,
+    );
+    listener.join().unwrap();
+    let DaemonToWrapper::NativeDelegationResult { result } = view else {
+        panic!("annulationnative198")
+    };
+    assert!(
+        matches!(result["status"].as_str(), Some("cancelling" | "cancelled")),
+        "{result}"
+    );
+    let waited = handle(
+        "conn-1",
+        NativeDelegationRequest::Wait {
+            task_ids: vec![task.task_id.clone()],
+            wait_timeout: Some(2),
+        },
+        &state,
+    );
+    let epoch = state.lock().unwrap().delegation_store.wait_epoch();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let after = loop {
+        let seen = epoch.get();
+        let current = saved(&state, &task.task_id);
+        if current["cleanup_done"] == true || Instant::now() >= deadline {
+            break current;
+        }
+        epoch.wait_changed(seen, deadline.saturating_duration_since(Instant::now()));
+    };
+    assert_eq!(
+        after["state"], "cancelled",
+        "état={after}, attente={waited:?}"
+    );
+    assert_eq!(after["cleanup_done"], true);
+    assert_eq!(after["guard_released"], true);
+    assert_eq!(
+        after["error"], before["error"],
+        "le refus d’origine reste conservé"
+    );
+    assert!(
+        after["cancel_stopped"]
+            .as_array()
+            .unwrap()
+            .contains(&before["child"])
+    );
+    assert_eq!(after["task_id"], before["task_id"]);
+    assert_eq!(after["mission"], before["mission"]);
+    drop(state);
+    cleanup(&config);
 }

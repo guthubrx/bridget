@@ -24788,7 +24788,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             .unwrap();
         (st, config, rx, reader)
     }
-    fn request(key: &str) -> NativeDelegationRequest {
+    pub(super) fn request(key: &str) -> NativeDelegationRequest {
         NativeDelegationRequest::Delegate {
             machine_id: None,
             project_id: None,
