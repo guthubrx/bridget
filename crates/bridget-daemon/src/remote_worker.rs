@@ -7299,6 +7299,7 @@ while not stop.exists(): time.sleep(.01)
         assert!(raw.get("fenced_previous").is_none(), "reçu workspace strictement au format183");
         assert!(proof198::bind_path(&runtime.store.root, &next).exists());
         assert!(runtime.store.inventory().is_ok());
+        assert!(assert_legacy183_readable(&runtime.store.root) >= 1);
         runtime.recheck(runtime.prepared.get(&next.command_id).unwrap()).unwrap();
         let mut launched = next.clone();
         launched.instance_id = "new-instance-198".into();
@@ -7980,6 +7981,54 @@ while not stop.exists(): time.sleep(.01)
         }
     }
 
+    /// Schémas copiés de 7478e9e7 (183) : tout champ inconnu ou délai incohérent échoue.
+    #[allow(dead_code)]
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Legacy183Command {
+        version: u16, worker: WorkerIdentity, identity: WorkerCommandIdentity,
+        command_digest: String, placement: RemotePlacement, deadline_at: i64,
+        phase: WorkerCommandPhase, marker: Option<ManagedMarker>,
+        permit: Option<WorkerReleasePermit>, release_epoch: Option<String>,
+        #[serde(default)] child_id: Option<String>,
+        #[serde(default)] native_ready: bool,
+        #[serde(default)] startup_failed: bool,
+        #[serde(default)] startup_failure: Option<bridget_transport::protocol::WorkerStartupFailure>,
+        #[serde(default)] terminal_exit_code: Option<i32>,
+        #[serde(default)] preparation: Option<(WorkerPrepare, WorkerPrepared)>,
+        #[serde(default)] routing: Option<RoutingPreparation>,
+        created_at: i64, updated_at: i64,
+    }
+    #[allow(dead_code)]
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Legacy183Workspace {
+        version: u16, worker: WorkerIdentity, command: WorkerCommandIdentity,
+        prepare_digest: String, record: Option<crate::delegation::WorkspaceRecord>,
+    }
+    /// Relit tout `commands` et `workspaces` comme le ferait l'inventaire183.
+    fn assert_legacy183_readable(root: &Path) -> usize {
+        let mut seen = 0;
+        for entry in fs::read_dir(root.join("commands")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|ext| ext != "json") { continue; }
+            let receipt: Legacy183Command =
+                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert!(receipt.deadline_at > receipt.created_at, "règle183 deadline > created_at");
+            seen += 1;
+        }
+        if let Ok(entries) = fs::read_dir(root.join("workspaces")) {
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.extension().is_none_or(|ext| ext != "json") { continue; }
+                let _: Legacy183Workspace =
+                    serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                seen += 1;
+            }
+        }
+        seen
+    }
+
     #[test]
     fn spec198_fence_reste_lisible_format183_et_preuve_seule_bloque_start() {
         let fixture = Fixture::new();
@@ -7995,6 +8044,7 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(proof.deadline_at, deadline, "le délai historique reste exact dans la preuve");
         assert_eq!(runtime.store.command(&command()).unwrap().deadline_at, deadline);
         assert!(runtime.store.inventory().is_ok());
+        assert_eq!(assert_legacy183_readable(&runtime.store.root), 1);
 
         // Crash après la preuve et avant le reçu : aucun Start neuf, le rejeu termine.
         let other = WorkerCommandIdentity { command_id: "command-198-proof-only".into(), ..command() };
@@ -8006,7 +8056,8 @@ while not stop.exists(): time.sleep(.01)
             &proof198::FenceProof { version: STORE_VERSION, worker: runtime.store.worker.clone(),
                 identity: other.clone(), placement: placement(), deadline_at: deadline,
                 created_at, digest }).unwrap();
-        assert!(runtime.store.inventory().is_ok());
+        let (_, _, _, before_orphan) = runtime.store.inventory().unwrap();
+        assert!(before_orphan >= 2, "la preuve annexe orpheline compte dans la quota d'entrées");
         assert!(matches!(runtime.store.reserve_command(&other, &"a".repeat(64), &placement(),
             worker_now() + 300, worker_now()), Err(WorkerStoreError::Conflict)));
         assert_eq!(runtime.fence_unstarted(&other, &placement(), deadline + 1).unwrap_err(),
@@ -8016,6 +8067,25 @@ while not stop.exists(): time.sleep(.01)
         let receipt = runtime.store.command(&other).unwrap();
         assert_eq!((receipt.created_at, receipt.deadline_at), (created_at, deadline));
         assert_eq!(receipt.phase, WorkerCommandPhase::Refused);
+        assert_eq!(assert_legacy183_readable(&runtime.store.root), 2);
+        // Réponse perdue puis redémarrage : même inventaire, aucune quarantaine, rejeu identique.
+        let bytes = fs::read(runtime.store.command_path(&other)).unwrap();
+        let config = WorkerRuntimeConfig {
+            machine_id: runtime.config.machine_id.clone(),
+            worker_id: runtime.config.worker_id.clone(),
+            provisioning_revision: runtime.config.provisioning_revision,
+            credential_path: runtime.config.credential_path.clone(),
+            state_root: runtime.config.state_root.clone(),
+            registry_path: runtime.config.registry_path.clone(),
+            master_socket: runtime.config.master_socket.clone(),
+        };
+        drop(runtime);
+        let mut reopened = WorkerRuntime::new(config).unwrap();
+        assert_eq!(reopened.fence_unstarted(&other, &placement(), deadline).unwrap(),
+            WorkerResponseOperation::StartFenced {});
+        assert_eq!(fs::read(reopened.store.command_path(&other)).unwrap(), bytes);
+        assert_eq!(reopened.store.command(&command()).unwrap().deadline_at, deadline);
+        assert_eq!(assert_legacy183_readable(&reopened.store.root), 2);
     }
 
     #[test]
