@@ -31,6 +31,15 @@ const ANSWER: &str = "fixture-glm5.3-answer-148";
 
 // Le harnais existant fournit environnement fermé, client, Register et preuve.
 // Ses watchdogs et nettoyages SIGKILL ne sont pas utilisés par cette recette.
+fn fixture_binary201(command: &str) -> bool {
+    command.contains(env!("CARGO_BIN_EXE_bridget"))
+        || ["BRIDGET_TEST_OLD_BINARY", "BRIDGET_TEST_NEW_BINARY"].iter().any(|key| {
+            std::env::var(key).ok().is_some_and(|path| {
+                Path::new(&path).is_absolute() && Path::new(&path).is_file()
+                    && command.contains(&path)
+            })
+        })
+}
 struct OwnedChild(Child);
 impl OwnedChild {
     fn crash(&mut self) {
@@ -55,7 +64,7 @@ impl OwnedChild {
                 .and_then(|value| value.parse::<u32>().ok()),
             Some(std::process::id())
         );
-        assert!(command.contains(env!("CARGO_BIN_EXE_bridget")));
+        assert!(fixture_binary201(&command));
         assert!(!command.to_lowercase().contains("firefox"));
         // SIGABRT interrompt le daemon sans son arrêt propre, sans SIGKILL.
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGABRT) }, 0);
@@ -111,7 +120,7 @@ impl OwnedChild {
             Some(std::process::id())
         );
         assert!(
-            command.contains(env!("CARGO_BIN_EXE_bridget"))
+            fixture_binary201(&command)
                 && !command.to_lowercase().contains("firefox")
         );
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
@@ -330,7 +339,7 @@ impl Fixture {
                 }
                 Some(_) => continue,
             }
-            assert!(command.contains(env!("CARGO_BIN_EXE_bridget")));
+            assert!(fixture_binary201(&command));
             assert!(!command.to_lowercase().contains("firefox"));
             signal_group(marker.pgid, libc::SIGTERM).unwrap();
             Self::await_native_group_gone(marker.pgid);

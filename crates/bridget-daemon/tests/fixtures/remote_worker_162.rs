@@ -1095,7 +1095,7 @@ impl RemoteFixture {
             .unwrap();
         let process = String::from_utf8_lossy(&observed.stdout);
         assert!(
-            process.contains(env!("CARGO_BIN_EXE_bridget"))
+            fixture_binary201(&process)
                 && !process.to_lowercase().contains("firefox")
         );
         assert!(matches!(
@@ -1899,6 +1899,18 @@ fn real_master_parent(
     parent
 }
 
+#[test]
+#[ignore = "recette explicite avec binaires ancien et nouveau vérifiés"]
+fn spec201_upgrade183_preserves_remote_worker_and_results() {
+    for key in ["BRIDGET_TEST_OLD_BINARY", "BRIDGET_TEST_NEW_BINARY"] {
+        let binary = std::env::var(key).expect("binaire de recette requis");
+        assert!(Path::new(&binary).is_absolute() && Path::new(&binary).is_file());
+    }
+    for case in ["master-restart-upgrade201", "master-restart-completed-upgrade201"] {
+        real_master_case(case);
+    }
+}
+
 fn real_master_case(case: &str) {
     let mut f = RemoteFixture::new();
     let socket = support::socket(&f.fixture.root);
@@ -1912,6 +1924,10 @@ fn real_master_case(case: &str) {
     // Cette variante n'utilise aucun faux maître. Le registre est installé
     // avant le lancement du daemon qui admet réellement la délégation.
     f.fixture.stop();
+    if case.ends_with("upgrade201") {
+        support::private_write(&f.fixture.root.join("test-binary201"),
+            std::env::var("BRIDGET_TEST_OLD_BINARY").unwrap()).unwrap();
+    }
     f.relay.take();
     fs::remove_file(&f.front).unwrap();
     f.front = socket.clone();
@@ -2264,11 +2280,15 @@ fn real_master_case(case: &str) {
         let worker_pid = f.worker.as_ref().unwrap().0.id();
         let provider_birth = process_birth(provider_pid).unwrap();
         f.fixture.stop();
-        let completes_offline = case == "master-restart-completed172";
+        let completes_offline = case.starts_with("master-restart-completed");
         if completes_offline {
             assert_eq!(process_birth(marker.pgid).unwrap(), marker.birth);
             support::private_write(&execution_cwd.join("release162"), b"go").unwrap();
             wait_evidence152(&f.fixture, "completed162", &command.instance_id);
+        }
+        if case.ends_with("upgrade201") {
+            support::private_write(&f.fixture.root.join("test-binary201"),
+                std::env::var("BRIDGET_TEST_NEW_BINARY").unwrap()).unwrap();
         }
         f.start_master_with_one_slot();
         parent = real_master_parent(&mut f, &socket, &host, &origin);

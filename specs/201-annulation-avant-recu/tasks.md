@@ -4,4 +4,4 @@
 - [x] T002 Implémenter clôture et diagnostic sans nouvelle exécution.
 - [x] T003 Tests et revue indépendante.
 - [x] T004 Sources intégrées/poussées et candidat vérifié.
-- [ ] T005 Chargement et clôture effective de la tâche existante ; notification au propriétaire.
+- [x] T005 Chargement et clôture effective de la tâche existante ; notification au propriétaire.

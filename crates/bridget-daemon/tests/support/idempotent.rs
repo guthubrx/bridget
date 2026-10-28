@@ -184,7 +184,10 @@ pub fn fixture_store(database: &Path) -> Result<Store, bridget_daemon::store::St
     Store::open(database)
 }
 pub fn isolated_command(root: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bridget"));
+    // Sélection explicite réservée à la recette isolée de changement de version.
+    let selected = std::fs::read_to_string(root.join("test-binary201")).ok();
+    let binary = selected.as_deref().unwrap_or(env!("CARGO_BIN_EXE_bridget"));
+    let mut command = Command::new(binary);
     command
         .env_clear()
         .env("HOME", root.join("provider"))
