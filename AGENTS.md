@@ -63,6 +63,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session200 — Champ interdit en admission automatique : source5f320738b96ed96eb7cf926497d8836f7b824b18 qualifiée et poussée. Le schéma automatique omet agent_type, le client le refuse avant connexion et le maître nomme le champ avec code public auto_admission_invalid. Conseils de correction avant reçu cohérents ; canon existant préservé et parcours explicite inchangé. Deux tests200, quatre états d’admission174, un précontrôle174 et un protocole168 PASS ; guides32/522/13 et CI hygiène PASS. Revue d7f01d39 ronde2 favorable. Candidat Linux200-field-5f320738b96e construit/vérifié NON actif ; chargement soumis à la maintenance encore bloquée. Omettre agent_type et utiliser engine fonctionne déjà avec183. Revue close, worktreeSYS retiré après gardes ; caches et worktree d’intégration conservés sous observation incomplète/livraison runtime ouverte. T005 ouverte. Reçu : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/200-champ-admission-auto/validation.md.
+
+
 Session199 — Refus de cible explicites : source2918b957cfbeabeb286ff4ac5173cf3a026bb590 qualifiée et poussée. Cinq tests199, trois rejeux183, deux tests194 et un test168 PASS ; guides32/522/13 et CI hygiène PASS. Revue3ad2f1b9 ronde2 favorable après correction de la catégorie machine. Comparaisons inchangées, diagnostic fermé borné à128octets conservé avec le refus, code public stable et anciens refus inconnus. Candidat Linux199-routing-2918b957cfbe construit et vérifié NON actif ; Prepare094a0da5 refuse update_missions_active_or_unconfirmed, maître183/PID351206 confirmé. Aucun gel, restart ni acte métier. Revue close et worktreeSYS retiré après gardes ; cache commun conservé sous observation incomplète. T005 chargement ouverte. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/199-refus-cible-explicites/validation.md.
 
 
