@@ -130,17 +130,28 @@ pub(super) fn valid_delivery(
     if task.child_instance.as_deref() != Some(row.child_instance.as_str()) {
         return Err("instance_changed");
     }
-    let route = st.router.get_agent(&task.child).ok_or("instance_changed")?;
+    let disconnected = if task.remote_placement.is_some() {
+        "remote_reconnecting"
+    } else {
+        "instance_changed"
+    };
+    let route = st.router.get_agent(&task.child).ok_or(disconnected)?;
     let conn = route.connection_id.clone();
-    if live_connection_identity(st, &conn) != Some((task.child.clone(), row.child_instance.clone()))
-    {
-        return Err("instance_changed");
+    match live_connection_identity(st, &conn) {
+        Some(identity) if identity == (task.child.clone(), row.child_instance.clone()) => {}
+        None if st.conn_instances.get(&conn).is_none_or(|instance| instance == &row.child_instance) => {
+            return Err(disconnected);
+        }
+        _ => return Err("instance_changed"),
     }
     let proved = linked_task(st, &conn).map_err(|_| "instance_changed")?;
     if proved.task_id != task.task_id {
         return Err("instance_changed");
     }
     if !parent_available(st, task) {
+        if task.remote_placement.is_some() && st.router.get_agent(&task.owner).is_none() {
+            return Err("remote_reconnecting");
+        }
         return Err("delivery_check_unavailable");
     }
     if task.remote_placement.is_some() {
@@ -416,7 +427,8 @@ pub(super) fn receive(
             if row.delivery_state == "delivered" {
                 // Reçu historique : l'application déjà prouvée reste delivered.
                 // Ce n'est ni une nouvelle décision, ni un nouveau claim de droit.
-                if valid_delivery(&st, &task, &row, now).is_ok() && row.sent_at.is_some() {
+                let validity = valid_delivery(&st, &task, &row, now);
+                if validity.is_ok() && row.sent_at.is_some() {
                     if let Some(writer) = st.connections.get(conn) {
                         receipt = Some((
                             row.request_id.clone(),
@@ -427,7 +439,11 @@ pub(super) fn receive(
                     }
                     return Ok(None);
                 }
-                return Ok(Some(cancel_frame(&row)?));
+                return Ok(if validity == Err("remote_reconnecting") {
+                    None
+                } else {
+                    Some(cancel_frame(&row)?)
+                });
             }
             if row.state == "open" {
                 if row.verdict == "human" {
@@ -772,6 +788,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 continue;
             };
             if let Err(reason) = valid_delivery(&st, &task, &row, now) {
+                if reason == "remote_reconnecting" {
+                    continue;
+                }
                 // Pause/révocation/échéance : fermer et acquitter sans stocker
                 // un accord qui serait exécuté après la reprise.
                 let _ = invalidate(&st, &row, reason, unix_timestamp());
@@ -871,6 +890,12 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             let closing = row.void_reason.is_some()
                 || row.state == "refused"
                 || matches!(row.state.as_str(), "expired" | "cancelled");
+            // Aucun write fournisseur pendant l’absence de connexion. Les
+            // refus définitifs (annulation, délai, révocation, autre instance)
+            // sont évalués avant ce report ; aucune grâce ne les annule.
+            if !closing && validity == Err("remote_reconnecting") {
+                continue;
+            }
             if closing || validity.is_err() {
                 let reason = validity.as_ref().err().copied().unwrap_or("cancelled");
                 if invalidate(&st, &row, reason, now).is_err() {
@@ -1025,6 +1050,9 @@ fn emit(
                     return Err(fail("request_closed".into()));
                 }
                 if let Err(reason) = valid_delivery(&st, &task, &row, unix_timestamp()) {
+                    if reason == "remote_reconnecting" {
+                        return Err(fail(reason.into()));
+                    }
                     invalidate(&st, &row, reason, unix_timestamp()).map_err(fail)?;
                     let cancel = cancel_frame(&row).map_err(fail)?;
                     permit = Some(st);

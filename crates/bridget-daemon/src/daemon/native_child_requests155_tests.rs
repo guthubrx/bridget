@@ -2230,3 +2230,46 @@ fn spec201_master_restart_preserves_remote_child_callbacks_without_stop_proof() 
             .get(&fixture.task.task_id).unwrap().unwrap()).unwrap(), task_before, "{stage}");
     }
 }
+
+#[test]
+fn spec201_remote_reconnect_gap_keeps_callbacks_but_not_cancel_or_expiry() {
+    // Le tick peut acquitter l’inbox d’une décision humaine déjà durable.
+    // Ce seul bit n’est ni la décision ni l’application par le fournisseur.
+    let callback = |row: ChildRequest| {
+        let mut value = serde_json::to_value(row).unwrap();
+        value.as_object_mut().unwrap().remove("inbox_settled");
+        value
+    };
+    for stage in ["open", "pending", "sent"] {
+        let fixture = RequestFixture155::with_remote("reconnect-remote201", true);
+        let request = fixture.approval(202);
+        fixture.receive(request.clone());
+        let row = fixture.row(&request);
+        if stage != "open" { fixture.decide(&row); }
+        if stage == "sent" { assert!(fixture.state.lock().unwrap().delegation_store
+            .claim_child_request(&row.request_id, unix_timestamp()).unwrap()); }
+        let before = callback(fixture.row(&request));
+        let route = fixture.state.lock().unwrap().router.unregister_by_conn("child155").unwrap();
+        native_child_requests::tick(&fixture.state);
+        assert_eq!(callback(fixture.row(&request)), before, "{stage}");
+        let persisted = fixture.row(&request);
+        let mut st = fixture.state.lock().unwrap();
+        let mut current = st.delegation_store.get(&fixture.task.task_id).unwrap().unwrap();
+        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("remote_reconnecting"));
+        current.state = "cancelling".into();
+        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("cancelled"));
+        current.state = "working".into();
+        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, persisted.deadline_at), Err("expired"));
+        st.router.register(&route.agent_id, &route.agent_type, &route.connection_id).unwrap();
+        assert_ne!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("remote_reconnecting"));
+        let owner_route = st.router.unregister_by_conn("conn-1").unwrap();
+        drop(st);
+        native_child_requests::tick(&fixture.state);
+        assert_eq!(callback(fixture.row(&request)), before, "parent/{stage}");
+        let mut st = fixture.state.lock().unwrap();
+        st.router.register(&owner_route.agent_id, &owner_route.agent_type, &owner_route.connection_id).unwrap();
+        assert_ne!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("remote_reconnecting"));
+        st.conn_instances.insert("child155".into(), "foreign-instance201".into());
+        assert_eq!(native_child_requests::valid_delivery(&st, &current, &persisted, unix_timestamp()), Err("instance_changed"));
+    }
+}
