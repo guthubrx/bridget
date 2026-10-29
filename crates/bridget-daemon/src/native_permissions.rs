@@ -92,6 +92,10 @@ fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
 /// Cas fermé du parent natif T3 : sa seule règle locale d’approbation MCP
 /// n’est pas une restriction sur les outils de fichiers et n’est jamais exportée.
 /// Les profils de hooks, règles privées et callbacks tiers restent non traduits.
+/// Ce prédicat valide la forme ; l’appelant doit d’abord authentifier le port,
+/// l’origine, l’hôte et les révocations. Il ne constitue jamais une preuve seul.
+/// plan_exit=deny ne crée aucun droit Codex : ce moteur n’émet pas cet événement ;
+/// approval_policy=never refuse toute approbation au lieu d’ouvrir une médiation.
 fn native_t3_codex_scope214(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
     let policy = &parent.provider_policy;
     authenticated_t3_tool_scope171(parent)
@@ -1943,7 +1947,10 @@ fn child_policy_reader_catalogue_scope171<'a>(
             ("claude_stream_json", "codex_app_server") => {
                 // Seul le fait natif authentifié sans profil local peut omettre
                 // launch_context. Ne pas déduire cette exception d’un nom d’outil seul.
-                let native_scope = origin_attested && native_t3_codex_scope214(parent, definition);
+                let native_scope = native_t3_codex_scope214(parent, definition);
+                if native_scope && !origin_attested {
+                    return Err("permission_attestation_unavailable".into());
+                }
                 if native_scope {
                     policy.as_object_mut().unwrap().remove("allowed_tools");
                 } else {

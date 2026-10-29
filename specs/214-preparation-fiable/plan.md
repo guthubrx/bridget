@@ -13,3 +13,5 @@ Sources officielles consultées le29octobre2026 :
 - https://docs.cursor.com/en/cli/installation
 
 SpecKit sync projet refusé avant mutation : specify absent sur Cartae. Les ponts constitution/standards existants ont été lus et le workflow appliqué sans installer un nouvel outil global.
+
+Le callback natif plan_exit=deny n’est pas un droit Codex exporté : ce moteur ne produit pas cet événement. Les demandes d’approbation restent interdites via approval_policy=never. Le prédicat de forme ne remplace pas l’authentification native de l’appelant. Gemini utilise le paquet officiel npm stable non épinglé (choix du parcours officiel), pas un script téléchargé ; ce mode est documenté, sans promesse de reproductibilité de son numéro de version. Les scripts des trois autres programmes sont téléchargés complètement avant exécution.

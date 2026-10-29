@@ -210,6 +210,38 @@ else:
             self.run_install(*args)
         self.assertFalse((self.root / "provider-installs").exists())
 
+    def test214_refused_federation_does_not_install_selected_programs(self):
+        self.provider_fixtures214()
+        self.existing()
+        state = self.home / ".cache/bridget-core"
+        state.mkdir(parents=True)
+        (state / "federation.env").write_text("fixture unavailable federation")
+        result = self.run_install("--providers", "all", ok=False)
+        self.assertIn("existing federation", result.stderr)
+        self.assertFalse((self.root / "provider-installs").exists())
+        self.assertNotIn("claude.ai", (self.root / "downloads").read_text())
+        self.assertEqual(self.installed.read_bytes(), b"previous executable")
+
+    def test214_incompatible_existing_client_precedes_any_provider_install(self):
+        self.provider_fixtures214()
+        self.existing()
+        (self.root / "client-incompatible").touch()
+        self.run_install("--providers", "codex", ok=False)
+        self.assertFalse((self.root / "provider-installs").exists())
+        self.assertFalse((self.root / "service-commands").exists())
+
+    def test214_new_program_is_checked_again_before_link_and_service_start(self):
+        self.provider_fixtures214()
+        self.existing()
+        installer = self.root / "codex.installer"
+        installer.write_text(installer.read_text() + 'touch "$FIXTURE/client-incompatible"\n')
+        result = self.run_install("--providers", "codex", ok=False)
+        self.assertIn("compatibility check refused", result.stderr)
+        self.assertEqual((self.root / "provider-installs").read_text().splitlines(), ["codex"])
+        self.assertEqual(self.installed.read_bytes(), b"previous executable")
+        self.assertFalse((self.root / "service-active").exists())
+        self.assertFalse((self.home / ".profile").exists())
+
     def test214_invalid_selection_refuses_before_download(self):
         for value in ["claude,,codex", "claude,", ",codex", "codex,codex",
                       "claude;echo PWN", "other", ""]:
@@ -226,7 +258,9 @@ else:
         self.assertIn("Node.js 20", result.stderr)
         self.assertEqual(self.installed.read_bytes(), b"previous executable")
         self.assertFalse((self.root / "provider-installs").exists())
-        self.assertFalse((self.root / "service-commands").exists())
+        self.assertFalse((self.root / "service-active").exists())
+        self.assertNotIn(" enable ", (self.root / "service-commands").read_text())
+        self.assertFalse((self.home / ".profile").exists())
 
     def test214_failed_provider_install_keeps_existing_bridget(self):
         self.provider_fixtures214()
@@ -234,7 +268,9 @@ else:
         self.existing()
         self.run_install("--providers", "codex", ok=False)
         self.assertEqual(self.installed.read_bytes(), b"previous executable")
-        self.assertFalse((self.root / "service-commands").exists())
+        self.assertFalse((self.root / "service-active").exists())
+        self.assertNotIn(" enable ", (self.root / "service-commands").read_text())
+        self.assertFalse((self.home / ".profile").exists())
 
     def test209_client_incompatibility_precedes_link_profiles_and_services(self):
         self.existing()

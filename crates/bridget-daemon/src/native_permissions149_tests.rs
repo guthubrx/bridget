@@ -2495,6 +2495,6 @@ fn spec214_native_t3_codex_projection_preserves_ceiling_and_refuses_other_rules(
     let mut unmounted=definition.clone();unmounted.mcp.interactive="none".into();
     assert!(project(&parent,&unmounted,SpawnPosture::Development).is_err());
     // Sans origine attestée, l’exception ne s’applique jamais.
-    assert!(child_policy(&parent,&definition,&cwd,&env,Some(SpawnPosture::Development)).is_err());
+    assert_eq!(child_policy(&parent,&definition,&cwd,&env,Some(SpawnPosture::Development)).unwrap_err(),"permission_attestation_unavailable");
     fs::remove_dir_all(root).unwrap();
 }

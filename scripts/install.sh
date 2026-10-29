@@ -27,6 +27,7 @@ shell_literal() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # Closed provider selection. Accounts and models are not installation inputs.
 prepare_providers() {
+    providers_installed=false
     if [ "$providers" = ask ]; then
         providers=none
         if [ -t 2 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
@@ -77,6 +78,7 @@ prepare_providers() {
                     node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' || fail 'Gemini CLI needs Node.js 20 or later. Update Node.js explicitly, then repeat --providers gemini. Existing Bridget services were preserved.'
                     npm install --global --prefix "$HOME/.local" @google/gemini-cli </dev/null || fail 'Gemini CLI installation failed; existing Bridget services were preserved.' ;;
             esac
+            providers_installed=true
             command -v "$program" >/dev/null 2>&1 || fail "$program was not found after installation. Inspect the official installer result and PATH; no model access is confirmed."
         fi
         case "$provider" in
@@ -86,10 +88,24 @@ prepare_providers() {
             cursor) login_hint='cursor-agent login' ;;
         esac
         say "$provider program present. Authentication and model access are NOT checked. Personal sign-in, if needed: $login_hint"
-        IFS=,
     done
     IFS=$old_provider_ifs
     say 'Program installation does not declare a remote fleet route or guarantee that parent permissions can be translated. Use the native catalogue and the admission result for the requested project and machine.'
+}
+
+check_clients() {
+    if "$candidate" clients check 2>"$work/client-check-error"; then
+        :
+    else
+        client_check_status=$?
+        # Published 0.6.3 predates this port. Preserve its historical installation path,
+        # with an explicit warning, without calling an unknown version compatible.
+        if [ "$mode" = release ] && [ "$version" = v0.6.3 ] && [ "$client_check_status" = 2 ] && grep -Eq '^bridget 0[.]6[.]3([[:space:]]|$)' "$work/version"; then
+            say 'Legacy release 0.6.3: provider-client compatibility is NOT verified by this package. This preserves its historical installation behavior. Use --source for the current client-version check. No provider client will be updated, and model access is not guaranteed.'
+        else
+            fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the machine, installed/minimum versions and action above. Ask the user before updating Claude Code or Codex through its existing official installer; then repeat this installation. No account or model change is authorized by this refusal.'
+        fi
+    fi
 }
 
 prepare_service() {
@@ -406,21 +422,10 @@ main() {
     chmod 755 "$candidate"
     "$candidate" --version > "$work/version" || fail 'Candidate cannot run. Installed Bridget was not changed.'
     grep -qi 'bridget' "$work/version" || fail 'Unexpected candidate version response.'
-    prepare_providers
-    # Ask the candidate before changing a link, profile or service. Existing clients were preserved.
-    if "$candidate" clients check 2>"$work/client-check-error"; then
-        :
-    else
-        client_check_status=$?
-        # Published 0.6.3 predates this port. Preserve its historical installation path,
-        # with an explicit warning, without calling an unknown version compatible.
-        if [ "$mode" = release ] && [ "$version" = v0.6.3 ] && [ "$client_check_status" = 2 ] && grep -Eq '^bridget 0[.]6[.]3([[:space:]]|$)' "$work/version"; then
-            say 'Legacy release 0.6.3: provider-client compatibility is NOT verified by this package. This preserves its historical installation behavior. Use --source for the current client-version check. No provider client will be updated, and model access is not guaranteed.'
-        else
-            fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the machine, installed/minimum versions and action above. Ask the user before updating Claude Code or Codex through its existing official installer; then repeat this installation. No account or model change is authorized by this refusal.'
-        fi
-    fi
+    check_clients
     prepare_service
+    prepare_providers
+    if $providers_installed; then check_clients; fi
 
     # Prepare PATH before replacing the executable; preserve existing shell settings.
     [ ! -L "$envdir/env" ] || fail "Symlink refused: $envdir/env"

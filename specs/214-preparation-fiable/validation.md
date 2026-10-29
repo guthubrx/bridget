@@ -12,3 +12,11 @@
 - Première compilation de test a dépassé le budget de cache et son entretien automatique a purgé les intermédiaires ; contrôle ciblé --lib avec debug=0 ensuite, cache observé2,21Gio. Pas de Cargo direct.
 
 Aucune activation214 ni reprise Opus2D encore attestée à ce stade.
+
+## Complément après revue
+
+Revue native8c1b76e4-c879-4a26-9dbf-258eaf1c8b62 lue/ACK/clôturée. AucunP1 ; ordre installateur corrigé avant livraison. Le contrôle de support des programmes présents et prepare_service passent avant toute installation choisie ; après un programme neuf, même contrôle de support avant lien/profil/démarrage. Trois contre-épreuves ajoutées : fédération refusée sans installation fournisseur, client existant incompatible sans installation, client neuf incompatible sans bascule Bridget. 39 tests installateur PASS, dont10session214. Les tests initialement attendus « aucune commande service » ont été corrigés après lecture de la trace réelle (show-environment/show uniquement) : une sonde de lecture n’est pas un démarrage. Aucun service actif ni profil modifié dans ces contre-épreuves.
+
+Le commentaire formalise l’authentification exigée de l’appelant et le callback plan_exit non applicable au protocole Codex ; aucune autorité nouvelle du callback n’est exportée. Sans origine attestée, le cas natif fermé retourne maintenant permission_attestation_unavailable, testé exactement. Le guidage candidat précise la portée et les conditions not_recorded/aucun appel concurrent/rejeu strict. Les autres états conservent tâche et clé. Deux tests214 relancés PASS après complément. Gemini suit le paquet officiel npm stable non épinglé, documenté ; aucune prétention de téléchargement préalable d’un script pour cette branche.
+
+Le lien public cartae.app/bridget/install.sh pointe encore sur d09d39398ff2f48af3805b5701682b126b2f916a au contrôle initial. Sa redirection doit être publiée vers le commit final vérifié, sinon la nouvelle option ne serait pas utilisée par ce parcours. Aucun autre routage web ne doit être modifié.
