@@ -14,7 +14,7 @@ format AAAA-MM-JJ.
 - Proposer les programmes fournisseurs absents à l’installation, avec sélection explicite et comptes existants conservés.
 - Distinguer programmes installés, compatibilité, connexion personnelle et accès réel aux modèles.
 - Publier les corrections natives livrées depuis0.6.3 : admissions rejouables, diagnostics bornés, préparation économe et catalogue de flotte explicite.
-- Conserver le client Android0.6.3 et son archive inchangés ; cette mise à jour concerne le programme Bridget des ordinateurs et serveurs.
+- Reconstruire le paquet Android en0.6.4 pour aligner la version de publication, avec la même interface, le même certificat et la même lignée de signature.
 
 ## [0.6.3] - 2026-10-25
 

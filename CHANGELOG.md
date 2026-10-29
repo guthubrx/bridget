@@ -12,7 +12,7 @@ figures below describe the named release's evidence, not the current checkout.
 - Offer missing provider programs during installation with explicit selection and existing accounts preserved.
 - Distinguish installed programs, compatibility, personal sign-in and actual model access.
 - Publish native fixes delivered since0.6.3: replayable admissions, bounded diagnostics, compact preparation and an explicit fleet catalogue.
-- Keep the Android0.6.3 client and its archive unchanged; this update concerns the Bridget program on computers and servers.
+- Rebuild the Android package as0.6.4 to align the release version, with the same interface, certificate and signing lineage.
 
 ## [0.6.3] - 2026-10-25
 

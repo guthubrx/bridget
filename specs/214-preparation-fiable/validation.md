@@ -29,3 +29,35 @@ Le vrai paquet publié0.6.3 MacARM64 a été téléchargé et vérifié par son 
 
 Publication0.6.4 préparée : seuls versionworkspace, trois entréesworkspace du lock et changelogs changent pour le paquet. Les programmes et comptes fournisseurs ne sont pas modifiés. Les binaires2140.6.3 de qualification ne sont pas présentés comme des paquets0.6.4.
 La compilation Cartae porte GLIBC2.39 ; la cibleSYS demande un build sur sa plateformeGLIBC2.36. Rust1.92 existe déjà sous /home/moi/.cargo/bin mais n’était pas dans le PATH SSH initial ; aucune absence de toolchain ni nouvelle installation n’est déduite. Source privée exacte sur /mnt/storage/bridget-build/source214 et cache existant source204/target réutilisé. Une fois construit et vérifié, son binaire compatible sera commun aux trois serveursLinux.
+
+## Activation et usage réel
+
+Source fonctionnelle compilée30581503bf9eac47211bf154b43160b9803189f5 ; version0.6.4, build214-clients-30581503. Revue finale6c2adcf0-d31f-4b97-b1b6-74b249ef22c6 favorable, aucunP1/P2 concret. Résultat lu/ACK/clôturé comme les deux revues précédentes ; aucune revue statique n’est transformée en qualification runtime.
+
+Binaire Linux construit surSYS/glibc2.36, symboles requis jusqu’à2.34 : SHA256ebb9ad5efbc534e7b446f1efec59f7be20034b97d7c82c105be7e5536bcfbd45.
+Binaire MacARM64 : SHA25601cd1e490f9bc831fc5796491ce594fea87ae45061883b65ff447609d1def47e.
+Installés sous /home/moi/.local/lib/bridget-communication/214-clients-30581503/bin/bridget et /Users/moi/.local/lib/bridget-communication/214-clients-30581503/bin/bridget.
+Les quatre contrôles clients sont compatibles avec inventaires non vides (Cartae2,SYS2,KS1,Mac4), revalidés par le binaire installé précédent. CodexKS reste désactivé : son compte n’a pas été essayé ni réactivé.
+
+MaîtreCartae3414383, workerCartae3416760, mobile3414449 ; workerSYS378844 etworkerKS694607 ; Macworker75024 etpont75068. Images réellement chargées et empreintes vérifiées, pas seulement liens installés. Updaters restaurés.
+Sauvegardes cohérentes puis arrêts natifs : coupure maître2,16s ; trois wrappers Cartae et un wrapperKS observés préservés par identité de naissance. Aucun wrapperSYS actif au contrôle. Aucun service Opus2D/NE02/Roadie arrêté et aucun calcul métier relancé. Les reçus privés sont dans /home/moi/.cache/bridget214/{core-loaded.json,worker-loaded.json,candidate.json} et /Users/moi/.cache/bridget214/mac-loaded.json.
+UNE bridget_session et UNE bridget_capabilities après activation : lien disponible, fleet declared45options, delegations_halted=false. Les MCP ouverts avant livraison restent à distinguer des services rechargés.
+
+Campagne propriétaire unique214-reprise-terra-opus2d-20261029 : fil existant32e1b8f8, clientRequestIdbridget214-reprise-terra-opus2d-20261029-01, tour591. Après UNE réattestation, UN rejeu strict de chaque enveloppe originale213 a admis les mêmes demandes, sans nouvelle clé ni moteur de remplacement :
+- qual213-opus2d-20261029-terra-cartae → edbeeaea-f753-4634-a12b-525f56b363ce → QUAL213-OPUS2D-TERRA-CARTAE-OK ;
+- qual213-opus2d-20261029-terra-sysle2 → ca5c7ba3-d66e-44d9-a3de-07379f73ccdf → QUAL213-OPUS2D-TERRA-SYSLE2-OK.
+Même base/base_ref d96b0b7ec88bce5b1ffdeb1a9ddea67ecb021de4, worktree/development. Résultats réels reçus par le propriétaire et relus au registre maître : result_available,errornull,guarded=false,cleanup_done=true. Aucun acquittement fait en son nom. Les autres modèles ne sont pas tous qualifiés par ces deux témoins.
+
+Les trois propriétaires ont reçu des avis de maintenance puis de reprise. MessagesBridget de fin mcp-35474-6ae39e6a-11, mcp-35474-6ae39fa0-12 et mcp-35474-6ae39fa2-13 : reçus in_flight, pas de lecture déduite. Le fil natif monuments confirme la reprise effective.
+
+## Paquet Android cohérent
+
+Une release publique devient aussi la source de mise à jour Android. Ne pas réétiqueter l’ancienAPK0.6.3 en0.6.4 : le client contrôle versionName et versionCode. L’APK a été reconstruit avec le Cargo0.6.4, configuration Firebase publique existante et identité de signature existante, sans modification du codeAndroid (diff contrev0.6.3 vide).
+assembleRelease, lintVital et30testsJVM release PASS. VersionName0.6.4,versionCode6004,packageapp.cartae.bridget.
+CertificatSHA2560c43c621254d9a6e0dbe148466f453f1aaba1a62bf23bd7332c61086f16a6588 identique au paquet0.6.3 publié ; mêmes schémas de signature (v3 uniquement) et même lignée existante. Premier appel sign refusé faute de plus ancien signataire pourv1 ; lecture de l’ancienAPK et des options officielles a établi quev1/v2 étaient déjà désactivés. Les mêmes options ont été utilisées, sans changement de clé ni réinstallation d’application.
+APK SHA2562ec44aa47d559abcee8620e428c673ec4d3e47435d824318be22b662e682e410.
+Aucun téléphone n’a été désinstallé ni mis à jour de force. Cette recette n’est pas une nouvelle qualification exhaustive de l’interface mobile.
+
+Sources : https://source.android.com/docs/security/features/apksigning/v3 et https://developer.android.com/tools/apksigner.
+
+Publication publique, téléchargement et nettoyage : à attester à l’étape suivante.
