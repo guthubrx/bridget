@@ -15,3 +15,7 @@ Le guidage distingue nettoyage/rapport en cours et fin confirmée. Une tâche fa
 ## Contrôles et livraison
 
 Tests ciblés et revue en cours. Aucun chargement206 encore effectué. L’envoi utile à monuments mcp-50239-6ae2cf59-6 est accepté in_flight, lecture non déduite. Il ne demande ni gel global ni attente des quatre chantiers indépendants.
+
+## Revue initiale
+
+Revue b2e1fe8a : égalités strictes, confidentialité et code public conformes. P2 de guidage : workspace_report_ready n’atteste pas un rapport complet. Complément : le conseil exige explicitement inspection en cas de report_unavailable et vérification du dossier avant nouvelle admission ; aucune preuve de rapport inventée. Test ajouté avec rapport terminé mais mesures absentes. Trois tests206 et33tests de reprise198/201/202 initialement PASS ; nouvelle vérification du complément en cours. Le premier filtre de régression native_start_recovery ne sélectionnait aucun test ; filtre corrigé start_recovery::,33 réellement exécutés.

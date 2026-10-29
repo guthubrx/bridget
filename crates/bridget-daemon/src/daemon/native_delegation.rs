@@ -25847,6 +25847,18 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let done=task_view(&task,None,true);
             assert!(done["error_recovery"].as_str().unwrap().contains("nouvelle request_id"));
             assert_eq!(done["status"],"failed");
+            // Un rapport achevé peut être indisponible ; ne jamais le dire confirmé.
+            task.workspace=Some(crate::delegation::WorkspaceRecord {
+                strategy:crate::delegation::WorkspaceStrategy::Worktree, state:crate::delegation::WorkspaceState::Kept, toplevel:"/private".into(), path:"/private".into(),
+                branch:"review".into(), base_commit:"a".repeat(40), branch_commit:None,
+                head_commit:None, head_on_branch:None, commit_count:None,
+                commits:Vec::new(), truncated:false, dirty:None,
+            });
+            task.workspace_report_mission=Some(task.mission.clone());
+            let incomplete=task_view(&task,None,true);
+            assert_eq!(incomplete["workspace"]["retention"]["code"],"report_unavailable");
+            assert!(incomplete["error_recovery"].as_str().unwrap().contains("report_unavailable impose une inspection"));
+            assert!(!incomplete["error_recovery"].as_str().unwrap().contains("rapport du dossier sont confirmés"));
             task.error=Some("remote_start_failed:permission_changed".into());
             let legacy=task_view(&task,None,true);
             assert_eq!(legacy["detail"]["permission_change"]["stage"],"unobserved");

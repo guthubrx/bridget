@@ -62,7 +62,7 @@ pub(super) fn project_task(task: &Task, view: &mut Value) {
     if !view["detail"].is_object() { view["detail"] = json!({}); }
     view["detail"]["permission_change"] = projection(raw);
     view["error_recovery"] = json!(if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-        "L’arrêt et le rapport du dossier sont confirmés. Conservez fichiers et commits, puis clôturez la garde propriétaire. Réattestez CE parent avec bridget_session avant une nouvelle admission autorisée, avec nouvelle request_id et passation du seul travail restant. Cette tâche failed ne reprend ni par Continue ni par rejeu de sa clé."
+        "L’arrêt natif est confirmé. Vérifiez le dernier rapport du dossier : report_unavailable impose une inspection du dossier et de ses usages ; préservez fichiers, commits et sorties. Après cette vérification et la clôture de la garde propriétaire, réattestez CE parent avec bridget_session avant une nouvelle admission autorisée, avec nouvelle request_id et passation du seul travail restant. Cette tâche failed ne reprend ni par Continue ni par rejeu de sa clé."
     } else {
         "Conservez cette tâche, sa request_id et son dossier. Consultez son statut natif jusqu’à la confirmation d’arrêt, de nettoyage et du rapport du dossier. Ne rejouez pas ce refus comme un Start et ne créez pas de remplacement pendant cette vérification. Une attestation fraîche du parent n’annule pas le refus historique."
     });
