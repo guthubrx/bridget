@@ -101,7 +101,7 @@ class Updates179Tests(unittest.TestCase):
         install = home / ".local/lib/bridget-communication"
         old = install / "old/bin/bridget"
         old.parent.mkdir(parents=True)
-        old.write_text("#!/bin/sh\necho 'bridget 0.5.0'\n")
+        old.write_text("#!/bin/sh\nif [ \"$1\" = clients ]; then cat >/dev/null; echo '{\"valid\":true}'; else echo 'bridget 0.5.0'; fi\n")
         old.chmod(0o700)
         link = home / ".local/bin/bridget"
         link.parent.mkdir(parents=True)
@@ -112,7 +112,7 @@ class Updates179Tests(unittest.TestCase):
         c = update.candidate(self.metadata(), "0.5.0", "linux-x86_64")
         new = install / "v0.6.0-auto/bin/bridget"
         new.parent.mkdir(parents=True)
-        new.write_text("#!/bin/sh\nif [ \"$1\" = clients ]; then echo '{\"version\":1,\"verdict\":\"compatible\"}'; else echo 'bridget 0.6.0'; fi\n")
+        new.write_text("#!/bin/sh\nif [ \"$1:$2\" = clients:validate-report ]; then cat >/dev/null; echo '{\"valid\":true}'; elif [ \"$1\" = clients ]; then echo '{\"version\":1,\"verdict\":\"compatible\"}'; else echo 'bridget 0.6.0'; fi\n")
         new.chmod(0o700)
         digest = update.hashlib.sha256(new.read_bytes()).hexdigest()
         update.atomic_json(new.parent.parent / "receipt.json", {"version": "0.6.0", "sha256": digest})
@@ -149,6 +149,33 @@ class Updates179Tests(unittest.TestCase):
             self.assertFalse(any(call.args[1] == "prepare" for call in rpc.call_args_list))
             restart.assert_not_called()
             self.assertEqual(updater.link.resolve(), old)
+
+    def test209_unconfirmed_probe_stop_is_not_automatically_repeated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, new = self.fixture(Path(temp))
+            report={"version":1,"verdict":"client_check_unavailable","clients":[{"state":"probe_stop_unconfirmed"}]}
+            with patch.object(update,"client_check",return_value=report) as check, patch.object(update,"rpc",return_value={"status":"ok","automatic":True}) as rpc, patch.object(update,"restart") as restart:
+                updater.step()
+                updater.step()
+            self.assertEqual(check.call_count,1)
+            self.assertEqual(updater.state["client_probe_block_generation"],0)
+            restart.assert_not_called()
+            self.assertFalse(any(call.args[1]=="prepare" for call in rpc.call_args_list))
+            self.assertEqual(updater.link.resolve(),old)
+
+    def test209_both_candidate_streams_are_bounded_without_raw_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            p=Path(temp)/"probe"
+            for stream in ["stdout","stderr"]:
+                body = "import os\nfor i in range(1024): os.write(" + ("1" if stream=="stdout" else "2") + ", b'x'*4096)\n"
+                p.write_text("#!/usr/bin/env python3\n"+body)
+                p.chmod(0o700)
+                if stream=="stdout":
+                    with self.assertRaisesRegex(update.Refused,"update_client_check_unavailable"):
+                        update.bounded_client_command([str(p)])
+                else:
+                    code, raw=update.bounded_client_command([str(p)])
+                    self.assertEqual((code,raw),(0,b""))
 
     def test_disabled_never_downloads_or_prepares(self):
         with tempfile.TemporaryDirectory() as temp:

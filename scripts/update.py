@@ -159,19 +159,52 @@ def binary_version(path):
 
 
 
-def client_check(binary):
-    # --version only, no provider request or installation. The candidate owns its policy.
+def bounded_client_command(args, input_bytes=None):
+    child = subprocess.Popen(args, stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    raw = bytearray()
+    deadline = time.monotonic() + 20
     try:
-        response = subprocess.run([str(binary), "clients", "check", "--json"],
-                                  capture_output=True, timeout=20)
-        if len(response.stdout) > 32768:
-            raise ValueError("oversized")
-        report = json.loads(response.stdout)
+        if input_bytes is not None:
+            child.stdin.write(input_bytes)
+            child.stdin.close()
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise Refused("update_client_check_unavailable")
+                for key, _ in selector.select(0.1):
+                    block = os.read(key.fileobj.fileno(), 4096)
+                    if not block:
+                        selector.unregister(key.fileobj)
+                    else:
+                        raw.extend(block)
+                        if len(raw) > 32768:
+                            raise Refused("update_client_check_unavailable")
+        return child.wait(timeout=max(0.01, deadline-time.monotonic())), bytes(raw)
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+        child.stdout.close()
+
+
+def client_check(binary, validator):
+    # The installed controller checks the candidate report against the local registry.
+    try:
+        code, raw = bounded_client_command([str(binary), "clients", "check", "--json"])
+        report = json.loads(raw)
         if not isinstance(report, dict) or report.get("version") != 1 or report.get("verdict") not in (
                 "compatible", "client_update_required", "client_check_unavailable"):
             raise ValueError("invalid")
-        if response.returncode != (0 if report["verdict"] == "compatible" else 1):
+        if code != (0 if report["verdict"] == "compatible" else 1):
             raise ValueError("status")
+        valid_code, valid_raw = bounded_client_command([str(validator), "clients", "validate-report"], raw)
+        if valid_code or json.loads(valid_raw) != {"valid": True}:
+            raise ValueError("report")
         return report
     except (OSError, subprocess.TimeoutExpired, ValueError):
         raise Refused("update_client_check_unavailable")
@@ -366,6 +399,9 @@ class Updater:
             self.report("disabled", self.state.get("available"))
             return
         installed = binary_version(self.link)
+        if self.state.get("client_probe_block_generation") == policy.get("check_generation", 0):
+            self.report("client_check_unavailable", self.state.get("available"))
+            return
         pending = self.state.get("candidate")
         if force or requested or time.time() - self.state.get("checked_at", 0) >= CHECK_INTERVAL:
             # Record attempt before I/O, so an outage does not cause a 60-second download loop.
@@ -434,10 +470,17 @@ class Updater:
             self.report("disabled", v)
             return
         try:
-            clients = client_check(executable)
+            clients = client_check(executable, self.binary)
         except Refused:
+            # Policy comes from the installed validator, never a duplicated version table.
+            try:
+                policy_code, policy_raw = bounded_client_command([str(self.binary), "clients", "policy"])
+                support_policy = json.loads(policy_raw) if policy_code == 0 else None
+            except (OSError, subprocess.TimeoutExpired, ValueError, Refused):
+                support_policy = None
             self.save(client_compatibility={
                 "version": 1, "host": self.host, "bridget_build": "unobserved",
+                "policy": support_policy,
                 "scope": "installed_local_clients", "verdict": "client_check_unavailable",
                 "clients": [], "authentication_checked": False, "model_access_checked": False,
                 "message": "update_client_check_unavailable : le contrôle local du candidat n’a pas abouti. Aucune version client n’est attestée.",
@@ -447,6 +490,8 @@ class Updater:
             self.report("client_check_unavailable", v)
             return
         self.save(client_compatibility=clients, error=None)
+        if any(c.get("state") == "probe_stop_unconfirmed" for c in clients.get("clients", [])):
+            self.save(client_probe_block_generation=current.get("check_generation", 0))
         if clients["verdict"] != "compatible":
             self.report(clients["verdict"], v)
             return

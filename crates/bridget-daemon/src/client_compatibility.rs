@@ -157,8 +157,45 @@ fn probe(program: &str, engine: &str, deadline: Instant) -> (String, Option<Stri
         while child.try_wait().ok().flatten().is_none() && Instant::now() < grace {
             std::thread::sleep(Duration::from_millis(10));
         }
+        if child.try_wait().ok().flatten().is_none() {
+            return (format!("probe_stop_unconfirmed:{}", child.id()), None);
+        }
     }
     result
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Requirement {
+    minimum: String,
+    provenance: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Policy {
+    version: u8,
+    requirements: BTreeMap<String, Requirement>,
+}
+fn policy() -> Policy {
+    Policy {
+        version: 1,
+        requirements: BTreeMap::from([
+            (
+                "claude".into(),
+                Requirement {
+                    minimum: minimum("claude").into(),
+                    provenance: "provider_minimum_208".into(),
+                },
+            ),
+            (
+                "codex".into(),
+                Requirement {
+                    minimum: minimum("codex").into(),
+                    provenance: "child_requests_schema_155".into(),
+                },
+            ),
+        ]),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -166,6 +203,8 @@ fn probe(program: &str, engine: &str, deadline: Instant) -> (String, Option<Stri
 struct Client {
     engine: String,
     program: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    probe_pid: Option<u32>,
     connections: Vec<String>,
     installed: Option<String>,
     minimum: String,
@@ -177,6 +216,7 @@ struct Client {
 #[serde(deny_unknown_fields)]
 struct Report {
     version: u8,
+    policy: Policy,
     host: String,
     bridget_build: String,
     scope: String,
@@ -241,12 +281,23 @@ fn report_with(
 ) -> Result<Value, String> {
     let mut clients = Vec::new();
     for ((engine, program), connections) in entries(registry, host)? {
-        let (state, installed) = check(&program, &engine);
+        let (mut state, installed) = check(&program, &engine);
+        let probe_pid = state
+            .strip_prefix("probe_stop_unconfirmed:")
+            .and_then(|p| p.parse::<u32>().ok())
+            .filter(|p| *p > 0);
+        if probe_pid.is_some() {
+            state = "probe_stop_unconfirmed".into();
+        }
         let required = minimum(&engine).to_string();
         let message = match state.as_str() {
             "compatible" => format!(
                 "{engine} {} respecte le minimum pris en charge {required} de cette version Bridget.",
                 installed.as_deref().unwrap_or("?")
+            ),
+            "probe_stop_unconfirmed" => format!(
+                "L’arrêt de la seule sonde --version n’est pas confirmé (PID {}). Aucun lancement métier n’en est déduit.",
+                probe_pid.unwrap_or(0)
             ),
             "not_installed" => format!(
                 "{engine} est absent sur cette machine ; il reste indisponible. Son absence n’empêche pas d’installer Bridget seul."
@@ -261,12 +312,14 @@ fn report_with(
         };
         let recovery=match state.as_str() {
             "compatible"|"not_installed"=>"Ce contrôle ne garantit ni authentification ni accès aux modèles. Aucune installation ou mission n’a été lancée.".into(),
+            "probe_stop_unconfirmed"=>format!("Faire inspecter sur {host} le PID {} de la sonde du programme {program}. Ne pas répéter automatiquement le contrôle, ne pas redémarrer de service et ne pas toucher aux missions métier. Après résolution et décision explicite, demander une nouvelle vérification par bridget updates check.",probe_pid.unwrap_or(0)),
             "outdated"=>format!("Souhaitez-vous autoriser la mise à jour officielle de {engine} sur {host} ? Demander cet accord avant toute modification du programme {program}. Conserver comptes, modèles et gestionnaire d’installation. Après accord, mettre à jour par le mécanisme officiel existant, exécuter bridget clients check, puis qualifier un lancement réel autorisé. Sans accord, conserver Bridget actif et ses missions ; ne pas basculer le candidat."),
             _=>format!("Faire vérifier le programme {program} et sa version sur {host}, puis exécuter bridget clients check. Ne pas installer, changer de compte ou modifier les droits pour masquer une cause inconnue. La bascule reste suspendue ; les missions actuelles continuent."),
         };
         clients.push(Client {
             engine,
             program,
+            probe_pid,
             connections,
             installed,
             minimum: required,
@@ -285,13 +338,13 @@ fn report_with(
     } else {
         "compatible"
     };
-    serde_json::to_value(Report{version:1,host:host.into(),bridget_build:crate::build_info::BUILD_ID.into(),
+    serde_json::to_value(Report{version:1,policy:policy(),host:host.into(),bridget_build:crate::build_info::BUILD_ID.into(),
         scope:"installed_local_clients".into(),verdict:verdict.into(),registry_file:None,clients,
         authentication_checked:false,model_access_checked:false,
         message:"Contrôle des versions des seuls clients locaux installés ; aucun accès fournisseur vérifié.".into(),
         recovery:"Si une mise à jour est nécessaire, demander l’accord utilisateur pour le programme et la machine indiqués. Conserver les comptes, modèles et gestionnaires d’installation. Refaire ce contrôle après mise à jour, puis qualifier un usage réel autorisé.".into()}).map_err(|_|"client_check_unavailable".into())
 }
-pub(crate) fn check() -> Result<Value, String> {
+fn local_registry() -> Result<(AgentRegistry, std::path::PathBuf), String> {
     let namespace = crate::environment::Namespace::from_environment()?;
     let mut source = namespace.root.join("agents.json");
     if let Some(explicit) = std::env::var_os("BRIDGET_CLIENTS_REGISTRY") {
@@ -315,7 +368,14 @@ pub(crate) fn check() -> Result<Value, String> {
         }
     }
     let registry = AgentRegistry::load_from_path_quiet(source.clone())?;
+    Ok((registry, source))
+}
+pub(crate) fn check() -> Result<Value, String> {
+    let (registry, source) = local_registry()?;
     let host = crate::build_info::local_host();
+    if !bridget_core::host_is_attested(&host) {
+        return Err("client_host_unavailable".into());
+    }
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut report = report_with(&registry, &host, |p, e| {
         if Instant::now() >= deadline {
@@ -348,11 +408,20 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
     };
     report.version == 1
         && report.host == host
+        && bridget_core::host_is_attested(host)
         && atom(&report.bridget_build, 256)
         && report
             .registry_file
             .as_deref()
             .is_none_or(|p| atom(p, 4096) && Path::new(p).is_absolute())
+        && report.policy.version == 1
+        && report.policy.requirements.len() == 2
+        && ["claude", "codex"].iter().all(|engine| {
+            report.policy.requirements.get(*engine).is_some_and(|r| {
+                triplet(&r.minimum).is_some_and(|v| v >= triplet(minimum(engine)).unwrap())
+                    && atom(&r.provenance, 128)
+            })
+        })
         && report.scope == "installed_local_clients"
         && !report.authentication_checked
         && !report.model_access_checked
@@ -371,7 +440,14 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
                 && c.connections.len() <= 64
                 && c.connections.iter().all(|s| atom(s, 256))
                 && c.installed.as_deref().is_none_or(|v| triplet(v).is_some())
+                && report
+                    .policy
+                    .requirements
+                    .get(&c.engine)
+                    .is_some_and(|r| r.minimum == c.minimum)
                 && triplet(&c.minimum).is_some()
+                && ((c.state == "probe_stop_unconfirmed" && c.probe_pid.is_some_and(|p| p > 0))
+                    || (c.state != "probe_stop_unconfirmed" && c.probe_pid.is_none()))
                 && matches!(
                     c.state.as_str(),
                     "compatible"
@@ -380,6 +456,7 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
                         | "launcher_unverified"
                         | "probe_unavailable"
                         | "probe_failed"
+                        | "probe_stop_unconfirmed"
                         | "probe_timeout"
                         | "output_limit"
                         | "version_unverified"
@@ -400,7 +477,49 @@ pub(crate) fn valid_report(value: &Value, host: &str) -> bool {
                 && atom(&c.recovery, 4096)
         })
 }
+fn inventory_matches(value: &Value, registry: &AgentRegistry, host: &str) -> bool {
+    if !valid_report(value, host) {
+        return false;
+    }
+    let Ok(report) = serde_json::from_value::<Report>(value.clone()) else {
+        return false;
+    };
+    let Ok(expected) = entries(registry, host) else {
+        return false;
+    };
+    let mut actual = BTreeMap::new();
+    for c in report.clients {
+        if actual
+            .insert((c.engine, c.program), c.connections)
+            .is_some()
+        {
+            return false;
+        }
+    }
+    actual == expected
+}
+fn validate_local_report(value: &Value) -> bool {
+    let Ok((registry, source)) = local_registry() else {
+        return false;
+    };
+    value["registry_file"] == json!(source)
+        && inventory_matches(value, &registry, &crate::build_info::local_host())
+}
 pub(crate) fn run(args: &[String]) {
+    if args == ["policy"] {
+        println!("{}", serde_json::to_value(policy()).unwrap());
+        return;
+    }
+    if args == ["validate-report"] {
+        let mut raw = Vec::new();
+        let valid = std::io::stdin().take(32769).read_to_end(&mut raw).is_ok()
+            && raw.len() <= 32768
+            && serde_json::from_slice::<Value>(&raw)
+                .ok()
+                .is_some_and(|v| validate_local_report(&v));
+        println!("{}", json!({"valid":valid}));
+        std::process::exit(if valid { 0 } else { 1 });
+    }
     let as_json = match args
         .iter()
         .map(String::as_str)
@@ -417,10 +536,11 @@ pub(crate) fn run(args: &[String]) {
     let result=check().unwrap_or_else(|error| {
         let message=match error.as_str() {
             "client_check_program_limit"=>"client_check_program_limit : plus de16 programmes distincts ; le contrôle automatique est refusé. Faire qualifier ce périmètre local avant la bascule.",
+            "client_host_unavailable"=>"client_host_unavailable : la machine locale n’est pas attestée. Vérifier son identité native avant d’en déduire les connexions à contrôler.",
             "client_definition_unverified"=>"client_definition_unverified : moteur et pilote déclarés ne concordent pas. Faire vérifier le registre local avant la bascule.",
             _=>"client_check_unavailable : le contrôle local n’a pas abouti ; sa cause précise reste à vérifier. Aucune version client n’est attestée.",
         };
-        json!({"version":1,"verdict":"client_check_unavailable",
+        json!({"version":1,"policy":policy(),"verdict":"client_check_unavailable",
             "host":crate::build_info::local_host(),"bridget_build":crate::build_info::BUILD_ID,
             "scope":"installed_local_clients","clients":[],"authentication_checked":false,"model_access_checked":false,
             "message":message,
@@ -513,6 +633,19 @@ mod tests {
         bad = report.clone();
         bad["secret"] = json!("private");
         assert!(!valid_report(&bad, "here"));
+        let mut bad = report.clone();
+        bad["clients"] = json!([]);
+        bad["verdict"] = json!("compatible");
+        assert!(!inventory_matches(&bad, &r, "here"));
+        bad = report.clone();
+        bad["clients"][0]["minimum"] = json!("0.0.1");
+        bad["policy"]["requirements"]["claude"]["minimum"] = json!("0.0.1");
+        assert!(!valid_report(&bad, "here"));
+        assert_eq!(
+            report["policy"]["requirements"]["claude"]["provenance"],
+            "provider_minimum_208"
+        );
+        assert!(inventory_matches(&report, &r, "here"));
     }
     #[test]
     fn spec209_numeric_versions_and_unknown_are_never_guessed() {
@@ -569,6 +702,41 @@ mod tests {
         let mut bad = report;
         bad["clients"][0]["installed"] = json!("2.1.312");
         assert!(!valid_report(&bad, "here"));
+    }
+
+    #[test]
+    fn spec209_unconfirmed_probe_stop_is_explicit_without_forced_kill() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("clients209-term-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("claude");
+        std::fs::write(&file, "#!/bin/sh\ntrap '' TERM\nsleep 2\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let result = probe(
+            file.to_str().unwrap(),
+            "claude",
+            Instant::now() + Duration::from_millis(300),
+        );
+        let pid = result
+            .0
+            .strip_prefix("probe_stop_unconfirmed:")
+            .unwrap()
+            .parse::<i32>()
+            .unwrap();
+        let report = report_with(&registry(), "here", |_, _| result.clone()).unwrap();
+        assert_eq!(report["verdict"], "client_check_unavailable");
+        assert_eq!(report["clients"][0]["probe_pid"], pid);
+        assert!(valid_report(&report, "here"));
+        assert!(
+            report["clients"][0]["recovery"]
+                .as_str()
+                .unwrap()
+                .contains("Ne pas répéter automatiquement")
+        );
+        // Cette fixture termine naturellement après2s ; récolter notre seul enfant connu.
+        assert_eq!(unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) }, pid);
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]
