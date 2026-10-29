@@ -968,3 +968,6 @@ correlated turn's diagnostic. An older provider program may reject a model;
 updating that program requires a separate authorized, qualified action. A failed
 or cancelled task does not restart with its original key. Preserve files and
 confirm shutdown and workspace state before any authorized follow-up.
+
+
+208: after a coordinator restart, an admitted but unconfirmed remote preparation can remain queued. Status exposes admission_interruption/coordinator_restarted_before_prepared. This read-only diagnostic does not prove that worker execution stopped. The owner cancels the task and verifies native closure and any prepared directory before a new admission. No automatic retry or implicit replacement.

@@ -1725,3 +1725,6 @@ le diagnostic du tour corrélé. Un programme fournisseur trop ancien peut refus
 un modèle ; sa mise à jour doit être décidée et qualifiée séparément. Une tâche
 failed ou cancelled ne redémarre pas avec sa clé initiale. Préserver les fichiers
 et confirmer l'arrêt et le dossier avant toute suite.
+
+
+208 : après redémarrage du maître, une préparation distante admise mais non confirmée peut rester queued. Le statut expose admission_interruption/coordinator_restarted_before_prepared. Ce diagnostic est en lecture seule ; il ne prouve pas l’arrêt physique. Le propriétaire annule la tâche, vérifie sa clôture et le dossier éventuellement préparé avant toute nouvelle admission. Aucun rejeu automatique ni remplacement implicite.

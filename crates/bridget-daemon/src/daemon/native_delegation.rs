@@ -4481,6 +4481,25 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             )
     );
     view["resume_attempts"] = json!(task.restart_resumes);
+    // Ancien handler d’admission interrompu : diagnostic seul, jamais une preuve d’arrêt.
+    if task.state == "queued" && task.remote_placement.is_some() && !task.remote_prepared
+        && task.child_instance.is_none() && task.launch_issued_at.is_none()
+        && task.mission_issued_at.is_none()
+        && let NativeDelegationRequest::Delegate {request_id,..} = &task.request
+        && let Some(receipt) = st.delegation_store.auto_admission_receipt(&task.owner,request_id)?
+        && receipt.state == AutoAdmissionState::Admitted
+        && receipt.task_id.as_deref() == Some(task.task_id.as_str())
+        && receipt.coordinator_epoch < st.coordinator_epoch
+    {
+        if !view["detail"].is_object() {view["detail"]=json!({});}
+        view["detail"]["admission_interruption"]=json!({
+            "cause":"coordinator_restarted_before_prepared",
+            "task_id":task.task_id,"request_id":request_id,
+            "message":"Le maître a redémarré avant confirmation de la préparation distante. Cette admission reste en attente ; aucun lancement n’est attesté dans son reçu. Ce constat ne prouve ni une révocation des droits ni l’arrêt physique sur le worker.",
+            "recovery":"Le propriétaire doit annuler CETTE tâche par bridget_task_cancel, puis lire sa clôture native. Préserver et inspecter le dossier éventuellement préparé sur le worker, ses fichiers et ses usages avant une nouvelle admission avec une nouvelle clé. Le rejeu de l’ancienne clé ne reprend pas cette préparation. Ne pas créer de remplacement tant que la clôture et le dossier ne sont pas vérifiés. Les autres tâches suivent leur propre état."
+        });
+    }
+
     let mut rows = st.delegation_store.child_requests_for_task(&task.task_id)?;
     view["pending_requests"]=json!(rows.iter().filter(|row|row.state=="open").map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"summary":row.summary,"verdict":row.verdict,"deadline_at":row.deadline_at})).collect::<Vec<_>>());
@@ -33327,6 +33346,47 @@ for frame in frames: print(json.dumps(frame),flush=True)
         task.error=None;task.state="working".into();
         assert!(task_view(&task,None,true).get("error_human_action").is_none());
         cleanup(&config);
+    }
+
+
+    #[test]
+    fn spec208_interrupted_remote_preparation_is_read_only_and_epoch_scoped() {
+        let (state,config,rx,_reader,request,_root)=routing168_fixture(1);
+        let admitted=admit_auto_routing("conn-1",&request,None,None,None,None,&state).unwrap();
+        let id=admitted["task_id"].as_str().unwrap();
+        let (remote,remote_config,remote_task,_)=remote162_capture_fixture();
+        let mut st=state.lock().unwrap();
+        let mut task=st.delegation_store.get(id).unwrap().unwrap();
+        task.remote_placement=remote_task.remote_placement;
+        task.remote_prepared=false;task.child_instance=None;
+        task.launch_issued_at=None;task.mission_issued_at=None;task.state="queued".into();
+        let original_epoch=st.coordinator_epoch;
+        assert!(current_task_view(&st,&task,true).unwrap()["detail"]["admission_interruption"].is_null());
+        st.coordinator_epoch+=1;
+        let before=serde_json::to_vec(&task).unwrap();
+        let receipt=st.delegation_store.auto_admission_receipt(&task.owner,&request.request_id).unwrap().unwrap();
+        let view=current_task_view(&st,&task,true).unwrap();
+        assert_eq!(view["status"],"queued");
+        assert_eq!(view["detail"]["admission_interruption"]["cause"],"coordinator_restarted_before_prepared");
+        assert!(view["detail"]["admission_interruption"]["recovery"].as_str().unwrap().contains("bridget_task_cancel"));
+        assert_eq!(before,serde_json::to_vec(&task).unwrap());
+        assert_eq!(receipt,st.delegation_store.auto_admission_receipt(&task.owner,&request.request_id).unwrap().unwrap());
+        for kind in 0..6 {
+            let mut changed=task.clone();
+            match kind {
+                0=>changed.remote_prepared=true,
+                1=>changed.child_instance=Some("other".into()),
+                2=>changed.launch_issued_at=Some(1),
+                3=>changed.mission_issued_at=Some(1),
+                4=>changed.state="working".into(),
+                _=>changed.remote_placement=None,
+            }
+            assert!(current_task_view(&st,&changed,true).unwrap()["detail"]["admission_interruption"].is_null());
+        }
+        st.coordinator_epoch=original_epoch;
+        assert!(rx.try_recv().is_err());
+        drop(st);drop(state);drop(remote);
+        cleanup(&config);cleanup(&remote_config);
     }
 
 }
