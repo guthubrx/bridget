@@ -4,6 +4,7 @@
 
 
 In bridget_capabilities, providers and their can_run verdicts describe only the origin machine named in providers_scope. A local refusal does not establish that a server lacks the program. For automatic remote delegation, read fleet.options and use its exact machine_id, engine and model. These options are declared and enabled; eligibility=not_checked means admission must still check permissions, preparation and access. Do not invent a machine alias for a missing option. Do not restart a task with an unknown outcome to refresh this catalogue.
+
 Bridget owns its task engine. It creates and stores native tasks through its CLI
 and MCP contracts. Manage each existing task through the engine that created it.
 

@@ -4818,8 +4818,9 @@ fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::
     let held=st.presences.get(&instance).and_then(|p|st.registry.get(&p.agent_type).ok()).is_some_and(|d|d.held_queue);
     let halted=st.delegation_store.delegation_halt().map_err(|_|"control_state_unavailable")?.halted;
     let mut result=catalogue_projection177(entries,held,halted,Some(&parent),permission.as_ref(),Some(Path::new(&parent.cwd)));
-    result["verdict_context"]["machine_id"]=json!(super::origin_proof::host_for_owner(&st,&owner)?);
-    catalogue_scope212(&mut result, st.registry.routing_catalogue(unix_timestamp()), &super::origin_proof::host_for_owner(&st,&owner)?);
+    let origin_machine = super::origin_proof::host_for_owner(&st,&owner)?;
+    result["verdict_context"]["machine_id"]=json!(origin_machine);
+    catalogue_scope212(&mut result, st.registry.routing_catalogue(unix_timestamp()), &origin_machine);
     Ok(Some(result))
 }
 
@@ -7000,6 +7001,9 @@ fn catalogue_scope212(
             "next_action":"Faire vérifier le catalogue de flotte par le responsable Bridget. Ce constat ne modifie aucune mission existante."
         }),
     };
+    if result["fleet"]["status"] == "unavailable" {
+        result["catalogue_guidance"]["next_action"] = result["fleet"]["next_action"].clone();
+    }
 }
 
 #[cfg(test)]
@@ -7041,6 +7045,7 @@ mod catalogue212_tests {
             catalogue_scope212(&mut view, Err(code.into()), "monordinateur");
             assert_eq!(view["fleet"]["status"], "unavailable");
             assert_eq!(view["fleet"]["options"], json!([]));
+            assert_eq!(view["catalogue_guidance"]["next_action"], view["fleet"]["next_action"]);
             assert!(!view.to_string().contains("SECRET"));
             assert!(!view.to_string().contains("private-path"));
         }
