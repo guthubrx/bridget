@@ -57,7 +57,7 @@ pub(super) fn project(task: &Task, view: &mut Value) {
         "Conserver la tâche, sa clé et le dossier éventuel. Le parent propriétaire doit annuler cette tâche, puis vérifier sa clôture native et inspecter le dossier avant une nouvelle admission autorisée après correction de la cause."
     };
     view["error_recovery"] = json!(format!("{closure} Le rejeu de cette clé ne relance pas la préparation."));
-    view["error_human_action"] = json!("Si la correction dépasse vos droits, demandez à l’utilisateur une intervention ciblée sur la machine indiquée, avec cette tâche et sa clé : qualifier le stockage, corriger le profil Git ou mettre à jour Git selon la cause constatée. Si la cause reste inconnue, demander d’abord l’accès au diagnostic manquant. Ne pas demander une remise à zéro générale, un autre modèle ou une nouvelle mission d’issue inconnue.");
+    view["error_human_action"] = json!(format!("Si cette intervention dépasse vos droits, demandez à l’utilisateur de l’autoriser sur la machine indiquée, avec cette tâche et sa clé : {action} Si la cause reste inconnue, demander d’abord l’accès au diagnostic manquant. Ne pas demander une remise à zéro générale ou un autre modèle. Ne pas lancer de nouvelle mission pour diagnostiquer ou remplacer une tâche dont l’issue reste inconnue."));
     if !view["detail"].is_object() { view["detail"]=json!({}); }
     let request_id = match &task.request { NativeDelegationRequest::Delegate {request_id,..} => Some(request_id), _ => None };
     view["detail"]["workspace_preparation"] = json!({

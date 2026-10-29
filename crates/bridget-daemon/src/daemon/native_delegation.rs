@@ -25527,6 +25527,14 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let closed_view=task_view(&closed,None,true);
         assert!(closed_view["error_recovery"].as_str().unwrap().contains("clôture native est acquise"));
         assert!(!closed_view["error_recovery"].as_str().unwrap().contains("doit annuler"));
+        for (cause, action) in [(C::BranchExists,"branche déjà présente"),
+            (C::PathUnsafe,"chemin préparé"),(C::WorktreeLimit,"worktrees enregistrés")] {
+            let mut specific=task.clone();
+            specific.error=Some(format!("remote_start_failed:{}",workspace_preparation210::error_code(
+                R::WorkspacePrepareFailed,F{stage:S::Preflight,cause})));
+            let projection=task_view(&specific,None,true);
+            assert!(projection["error_human_action"].as_str().unwrap().contains(action));
+        }
         let mut old=task.clone();old.error=Some("remote_start_failed:remote_workspace_prepare:WorkspacePrepareFailed".into());
         let old_view=task_view(&old,None,true);
         assert_eq!(old_view["detail"]["workspace_preparation"]["cause"],"unknown");
