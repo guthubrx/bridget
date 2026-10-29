@@ -7,6 +7,8 @@ mod start_recovery;
 mod permission_change;
 #[path = "native_workspace_preparation210.rs"]
 mod workspace_preparation210;
+#[path = "native_admission_guidance211.rs"]
+mod admission_guidance211;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -3554,6 +3556,8 @@ fn routing_failure_admission(
         "not_recorded" if result["code"] == "auto_admission_invalid"
             && result["detail"]["field"] == "agent_type" =>
             "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Omettez agent_type et utilisez engine pour le moteur ; connection_id reste facultatif. Après confirmation de la fin de tout appel avec cette clé et de l’absence d’appel concurrent, vous pouvez corriger les paramètres avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conservez son canon et suivez son état. Gardez expected_base_commit et le workspace demandés.",
+        "not_recorded" if result["code"]=="expected_base_commit_required" =>
+            "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Après confirmation de la fin de tous les appels et de l’absence d’appel concurrent, vous pouvez ajouter le SHA source exact avec la même request_id avant admission. Ce n’est pas un rejeu strict. Si un reçu ou une tâche apparaît, conserver son canon et suivre son état ; ne pas corriger une enveloppe déjà enregistrée.",
         "not_recorded" => "Aucun reçu ni tâche enregistré pour cette clé à cette lecture. Corrigez la cause indiquée puis rejouez avec la même request_id et les mêmes paramètres. Si les paramètres doivent changer, attendez la fin de tout appel déjà envoyé avec cette clé avant une nouvelle request_id : un appel concurrent peut encore enregistrer une admission. Cette lecture du registre est fournie par Bridget ; inutile de la demander à un autre agent. Ne changez pas expected_base_commit sans autorisation.",
         "envelope_mismatch" => "Cette clé appartient déjà à une demande dont les paramètres sont différents. Le nouveau corps n'est pas admis. Reprenez la clé avec ses paramètres d'origine pour lire le sort de cette demande ; ne créez pas de nouvelle demande tant que ce sort reste inconnu.",
         "pending" => "Une admission reste en cours pour cette clé et peut encore créer une tâche. Après correction de la cause, rejouez avec la même request_id et tous les paramètres d’origine. Si le choix est déjà enregistré et aucune préparation de cette demande ne tourne, Bridget reprend ce choix après revalidation ; sinon l’admission reste en attente. Ne créez pas de nouvelle demande.",
@@ -3573,6 +3577,7 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if let Some(view)=admission_guidance211::refusal(code){return view;}
     if permission_change::recognizes(code) {
         return permission_change::failure(code);
     }
@@ -12839,7 +12844,28 @@ mod tests {
         assert!(recovery.contains("même SHA complet"));
         assert!(recovery.contains("nouvelle request_id"));
         assert!(recovery.contains("si une tâche existe, suivez-la"));
-        assert!(failure("expected_base_commit_required").get("detail").is_none());
+        assert_eq!(failure("expected_base_commit_required")["detail"]["field"],"expected_base_commit");
+    }
+
+    #[test]
+    fn spec211_missing_sha_not_recorded_guidance_allows_only_safe_correction(){
+        let (state,config,rx,_reader,mut request,_root)=routing168_fixture(1);
+        let cwd=PathBuf::from(&request.cwd);
+        for args in [vec!["init","-q"],vec!["-c","user.name=Fixture","-c","user.email=fixture@example.invalid",
+            "-c","commit.gpgSign=false","-c","core.hooksPath=/dev/null","commit","--allow-empty","-qm","fixture"]]{
+            assert!(std::process::Command::new("git").arg("-C").arg(&cwd).args(args).status().unwrap().success());
+        }
+        request.expected_base_commit=None;
+        let DaemonToWrapper::NativeDelegationResult{result}=handle("conn-1",
+            NativeDelegationRequest::AutoDelegateV2(request.clone()),&state) else{panic!("response")};
+        assert_eq!(result["code"],"expected_base_commit_required");
+        assert_eq!(result["detail"]["field"],"expected_base_commit");
+        assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
+        assert!(result["detail"]["admission"]["recovery"].as_str().unwrap().contains("Ce n’est pas un rejeu strict"));
+        let st=state.lock().unwrap();
+        assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().is_none());
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());drop(st);drop(state);cleanup(&config);
     }
 
     #[test]

@@ -231,10 +231,20 @@ pub(super) fn reattest(
     }
     Ok(attested)
 }
+fn source_in_parent211(parent:&bridget_transport::protocol::ProviderPermissions,
+    source:Option<&bridget_transport::protocol::WorkerSourceBase>)->Result<(),String>{
+    if source.is_some_and(|s|{
+        let p=std::path::Path::new(&s.cwd);
+        !p.is_absolute() || p.components().any(|c|matches!(c,std::path::Component::ParentDir))
+            || !p.starts_with(&parent.cwd)
+    }) {return Err("cwd_outside_parent_project".into());}
+    Ok(())
+}
 pub(super) fn sources(
     state:&Arc<Mutex<DaemonState>>,owner:&str,parent:&bridget_transport::protocol::ProviderPermissions,
     source:Option<bridget_transport::protocol::WorkerSourceBase>,
 )->Result<Option<(String,Option<String>)>,String>{
+    source_in_parent211(parent,source.as_ref())?;
     match parent_operation(state,owner,parent,OriginProofOperation::Sources {parent:parent.clone(),source},Duration::from_secs(30))? {
         None=>Ok(None),Some(OriginProofResult::Sources {permission_digest,source_error})=>Ok(Some((permission_digest,source_error))),
         _=>Err("origin_proof_unavailable".into()),
@@ -244,6 +254,7 @@ pub(super) fn prepare_project(
     state:&Arc<Mutex<DaemonState>>,owner:&str,parent:&bridget_transport::protocol::ProviderPermissions,
     source:bridget_transport::protocol::WorkerSourceBase,target_machine:&str,project_id:Option<&str>,deadline:Instant,
 )->Result<(),String>{
+    source_in_parent211(parent,Some(&source))?;
     let budget=deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(595));
     if budget.is_zero() {return Err("project_preparation_timeout".into());}
     let result=parent_operation(state,owner,parent,OriginProofOperation::PrepareProject {
@@ -650,4 +661,29 @@ mod tests {
         drop(shared);std::fs::remove_dir_all(root).unwrap();
     }
 
+}
+
+#[cfg(test)]
+mod source211_tests {
+    use super::*;
+    #[test]
+    fn spec211_source_scope_is_refused_before_relay_without_wider_rights(){
+        let parent=bridget_transport::protocol::ProviderPermissions {
+            version:1,source:"provider_turn".into(),run_id:"run".into(),provider_session_id:"session".into(),
+            provider_instance_id:"instance".into(),revision:1,driver:"codex_app_server".into(),
+            cwd:"/project/.worktrees/parent".into(),runtime_mode:"full-access".into(),
+            interaction_mode:"default".into(),provider_policy:serde_json::json!({"kind":"codex"})
+        };
+        let mut source=bridget_transport::protocol::WorkerSourceBase {
+            cwd:parent.cwd.clone(),expected_base_commit:None,workspace:None,
+            workload:bridget_transport::protocol::AutoDelegateWorkload::General,
+        };
+        assert!(source_in_parent211(&parent,Some(&source)).is_ok());
+        source.cwd="/project/.worktrees/parent/sub".into();
+        assert!(source_in_parent211(&parent,Some(&source)).is_ok());
+        for cwd in ["/project","/project/.worktrees/sibling","/project/.worktrees/parent/../sibling","relative"]{
+            source.cwd=cwd.into();
+            assert_eq!(source_in_parent211(&parent,Some(&source)),Err("cwd_outside_parent_project".into()));
+        }
+    }
 }

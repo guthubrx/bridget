@@ -986,3 +986,17 @@ authorized admission requires correction of the cause and a new key. Replaying
 a cancelled task does not restart it.
 
 If a correction exceeds the operator's authority, guidance asks for a targeted user decision on the affected machine, or access to missing diagnostics. It does not prescribe a global stop.
+
+### Source SHA and scope refusals
+
+expected_base_commit is required inside Git, for compilation, and for a worktree.
+Only general/shared work outside Git may omit it. Supply a full40character source
+SHA; shared requires the source HEAD. Source cwd must remain inside the parent's
+attested cwd. Another worktree of the same repository, or the Git root, does not
+automatically grant broader rights. An old origin_request_invalid does not prove
+revocation. File references in a brief require label, host and an absolute path;
+bridget_handoff action=preview validates the format without sending a mission.
+
+A shape error does not permit changing an existing receipt. Guidance distinguishes
+not_recorded after all calls end with no concurrency, from pending/admitted/refused
+whose canon is retained. Never duplicate an uncertain mission to test formatting.

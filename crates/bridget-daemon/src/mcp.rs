@@ -29,6 +29,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[path = "mcp_directory211.rs"]
+mod directory211;
+
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 const MAX_IN_FLIGHT_TOOL_CALLS: usize = 8;
 const MAX_WAITING_TOOL_CALLS: usize = 4;
@@ -1263,7 +1266,7 @@ fn execute_send(
     let supplied_issued_at = arguments.get("issued_at");
     if supplied_id.is_some() != supplied_issued_at.is_some() {
         return Err(ToolError::InvalidParams(
-            "id et issued_at doivent être fournis ensemble pour un retry".to_string(),
+            "id et issued_at doivent être fournis ensemble. Premier envoi : omettez les deux ; Bridget les génère. Rejeu : recopiez les deux valeurs du reçu avec le même contenu. Cet appel incomplet n’a pas été envoyé.".to_string(),
         ));
     }
     let id = match supplied_id {
@@ -1731,7 +1734,8 @@ fn execute_who(
     arguments: &serde_json::Map<String, Value>,
     socket: &Path,
 ) -> Result<Value, ToolError> {
-    reject_unknown_arguments(arguments, &["domain", "scope"])?;
+    reject_unknown_arguments(arguments, &["domain", "scope", "limit", "cursor", "include_stopped"])?;
+    let options=directory211::Options::parse(arguments)?;
     let scope = match arguments.get("scope") {
         None => bridget_transport::protocol::CommunicationDirectoryScope::SameProject,
         Some(Value::String(scope)) if scope == "same_project" => {
@@ -1765,14 +1769,8 @@ fn execute_who(
             agents,
             project,
             project_warnings,
-        } => Ok(json!({
-            "agents": agents.into_iter().filter(|agent| {
-                domain.as_deref().is_none_or(|wanted| agent.agent.domain.as_deref() == Some(wanted))
-            }).collect::<Vec<_>>(),
-            "project": project,
-            "project_warnings": project_warnings,
-            "scope": scope,
-        })),
+        } => directory211::page(agents, &options, domain.as_deref(), scope,
+            json!({"project":project,"project_warnings":project_warnings,"scope":scope})),
         other => unexpected_response(other),
     }
 }
@@ -2754,10 +2752,14 @@ pub(crate) fn tools() -> Vec<Value> {
                     "reply": { "type": "boolean", "default": false },
                     "reply_timeout": { "type": "integer", "minimum": 1 },
                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
-                    "id": { "type": "string", "minLength": 1, "description": "Clé métier à réutiliser pour un retry explicite." },
+                    "id": { "type": "string", "minLength": 1, "description": "Premier envoi : omettre id et issued_at. Pour un rejeu strict, recopier ensemble id et issued_at reçus ; ne pas créer un id seul." },
                     "issued_at": { "type": "integer", "minimum": 1, "description": "Horodatage renvoyé par le premier appel ; requis avec id pour rejouer le même contrat." }
                 },
                 "required": ["to", "body"],
+                "allOf":[
+                    {"if":{"required":["id"]},"then":{"required":["issued_at"]}},
+                    {"if":{"required":["issued_at"]},"then":{"required":["id"]}}
+                ],
                 "additionalProperties": false
             }
         }),
@@ -2791,10 +2793,10 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_who",
-            "description": "Proposer les équipiers du même projet par défaut. scope=global affiche les autres projets volontairement, sans autoriser un envoi extérieur. Un projet inconnu ne produit aucun candidat local.",
+            "description": "Annuaire par pages de 24 Kio au plus, 20 agents par défaut. Les présences arrêtées sont masquées sauf include_stopped=true. Recopier next_cursor avec les mêmes filtres ; annuaire vivant, sans snapshot. scope=global affiche volontairement les autres projets sans autoriser un envoi extérieur. Projet inconnu : aucun candidat local.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "domain": { "type": "string" }, "scope": {"enum":["same_project","global"],"default":"same_project"} },
+                "properties": { "domain": { "type": "string", "maxLength":256 }, "scope": {"enum":["same_project","global"],"default":"same_project"}, "limit":{"type":"integer","minimum":1,"maximum":100,"default":20}, "cursor":{"type":"string","minLength":1,"maxLength":1024,"description":"next_cursor reçu, mêmes scope/domain/include_stopped ; limit peut changer."}, "include_stopped":{"type":"boolean","default":false} },
                 "additionalProperties": false
             }
         }),
@@ -8800,7 +8802,7 @@ mod tests {
             execute_tool_at("codex-1", "bridget_who", &serde_json::Map::new(), &socket).unwrap();
         assert_eq!(
             result,
-            json!({ "agents": [], "project":null, "project_warnings":[], "scope":"same_project" })
+            json!({ "agents": [], "project":null, "project_warnings":[], "scope":"same_project", "total_matching":0, "live":true, "has_more":false, "next_cursor":null })
         );
         server.join().unwrap();
         std::fs::remove_file(socket).unwrap();
@@ -9465,4 +9467,20 @@ mod capacity189_mcp_tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod schema211_tests {
+    use super::*;
+    #[test]
+    fn spec211_send_and_who_schemas_expose_real_contract(){
+        let list=tools();
+        let send=list.iter().find(|t|t["name"]=="bridget_send").unwrap();
+        assert_eq!(send["inputSchema"]["allOf"].as_array().unwrap().len(),2);
+        assert!(send["inputSchema"]["properties"]["id"]["description"].as_str().unwrap().contains("Premier envoi"));
+        let who=list.iter().find(|t|t["name"]=="bridget_who").unwrap();
+        assert_eq!(who["inputSchema"]["properties"]["limit"]["default"],20);
+        assert_eq!(who["inputSchema"]["properties"]["include_stopped"]["default"],false);
+        assert_eq!(who["inputSchema"]["properties"]["cursor"]["maxLength"],1024);
+    }
 }

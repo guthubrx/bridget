@@ -293,3 +293,17 @@ is a read, not permission to perform human-only mutations.
 Private credentials protect cooperative clients, not hostile processes with
 control over the same operating-system account. Keep that account private.
 Referenced HTML, paths and links remain inert in the communication core.
+
+### Bounded MCP directory
+
+bridget_who returns at most24KiB per page, with20agents by default (limit1to100).
+Stopped presences are hidden unless include_stopped=true. Copy next_cursor into
+cursor with the same scope, domain and include_stopped; limit may change.
+Stop at has_more=false. The directory is live (live=true), without a snapshot
+guarantee during presence changes. No presence or history is deleted.
+Authenticated project scope is applied before pagination. An oversized single
+entry is explicitly refused rather than silently truncated.
+
+For the first bridget_send, omit both id and issued_at; Bridget returns them.
+For replay, copy both values and the same content. An id alone is invalid even
+on the first send; no message is sent in that case.

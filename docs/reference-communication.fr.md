@@ -1143,3 +1143,18 @@ A2A et la greffière ne sont pas requis pour ces observations. Aucun framework
 d'orchestration supplémentaire n'est introduit.
 
 [Détail du contrat de l’adaptateur](adapters/t3.md#note-37).
+
+### Annuaire MCP borné
+
+bridget_who rend une page de 24 Kio au plus, 20 agents par défaut (limit de1à100).
+Les présences stopped sont masquées par défaut ; include_stopped=true les inclut.
+S'il reste une page, recopier next_cursor dans cursor et garder scope, domain et
+include_stopped identiques. limit peut changer. has_more=false termine la lecture.
+L'annuaire est vivant (live=true), sans instantané garanti pendant les changements
+de présence. Aucun agent ni historique n'est supprimé. Le filtrage authentifié du
+projet reste appliqué avant la pagination. Une entrée seule trop grosse est refusée
+explicitement ; elle n'est pas silencieusement tronquée.
+
+Premier bridget_send : omettre id et issued_at. Bridget renvoie les deux.
+Pour un rejeu, recopier ensemble ces deux valeurs et le même contenu. Un id seul
+est une erreur de forme, même au premier envoi ; aucun message n'est alors envoyé.

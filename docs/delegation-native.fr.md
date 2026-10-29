@@ -1743,3 +1743,19 @@ et le dossier éventuel. Une nouvelle admission autorisée exige la correction d
 la cause et une nouvelle clé. Le rejeu d'une tâche annulée ne la redémarre pas.
 
 Si une correction dépasse les droits du responsable, le refus demande une décision ciblée de l’utilisateur sur la machine concernée, ou l’accès au diagnostic manquant. Il ne prescrit aucun arrêt global.
+
+### SHA source et refus de périmètre
+
+expected_base_commit est requis dans un dépôt Git, pour compilation et pour un
+worktree. Seul un travail general/shared hors Git peut l'omettre. Fournir un SHA
+source complet de40caractères ; en shared, il doit correspondre à HEAD source.
+La source doit rester incluse dans le cwd attesté du parent. Un autre worktree
+du même dépôt ou la racine Git ne donne pas automatiquement de droits supplémentaires.
+Un refus origin_request_invalid historique ne suffit pas à conclure à une révocation.
+Les références kind=file d'un brief exigent label, host et path absolu ;
+bridget_handoff action=preview valide le format sans envoyer de mission.
+
+Une erreur de forme ne donne pas le droit de modifier un reçu existant.
+Le conseil distingue le cas not_recorded confirmé après fin de tous les appels
+sans concurrence, du cas pending/admitted/refused qui conserve son canon.
+Aucune ancienne mission d'issue inconnue ne doit être dupliquée pour tester un format.
