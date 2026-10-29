@@ -19109,6 +19109,21 @@ fn remote_worker_roundtrip(
     bridget_transport::protocol::WorkerResponseOperation,
     bridget_transport::protocol::WorkerRefusal,
 > {
+    remote_worker_roundtrip_with_send_deadline(state, worker, command, operation, deadline, deadline)
+}
+
+// The response budget must not retain the shared writer during a slow read-only probe.
+fn remote_worker_roundtrip_with_send_deadline(
+    state: &Arc<Mutex<DaemonState>>,
+    worker: &bridget_transport::protocol::WorkerIdentity,
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+    operation: bridget_transport::protocol::WorkerRequestOperation,
+    deadline: Instant,
+    send_deadline: Instant,
+) -> Result<
+    bridget_transport::protocol::WorkerResponseOperation,
+    bridget_transport::protocol::WorkerRefusal,
+> {
     use bridget_transport::protocol::*;
     LOCAL_ROUNDTRIP_LIMIT.with(|cell| cell.set(None));
     let correlation_id = uuid::Uuid::new_v4().to_string();
@@ -19220,7 +19235,7 @@ fn remote_worker_roundtrip(
     let written = push_control_message_until(
         &writer,
         &DaemonToWrapper::WorkerRequest { request },
-        deadline,
+        send_deadline.min(deadline),
     )
     .is_ok();
     let response = if written {

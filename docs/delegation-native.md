@@ -909,3 +909,5 @@ The code terminal Codex: failed:cause=server_overloaded preserves a provider-att
 ## Start monitoring and technical capacity (205)
 
 The coordinator keeps at most one start-monitor request in flight per worker through the existing correlated round-trip. A long Git checkout no longer causes another monitor request every second on that worker. Other machines remain monitored. This slot is neither a mission nor Start authorization; its bounded wait extends no lease or business deadline. The queue still has eight entries. An inbound_queue refusal keeps its historical meaning and the same task recovery prerequisites; other concurrent requests can still cause it. This regulation performs no business replay or substitution.
+
+This probe retains the short control-write budget (1s). Only its response gets the checkout-sized wait; the socket lock is not held during that wait. Other calls keep their previous deadlines.

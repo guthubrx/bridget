@@ -10961,8 +10961,10 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     if let Some((worker, command, done)) = start_probe {
         let state = state.clone();
         let _ = thread::Builder::new().name("start-monitor".into()).spawn(move || {
-            let _ = remote_worker_roundtrip(&state, &worker, &command,
-                bridget_transport::protocol::WorkerRequestOperation::Reconcile {}, Instant::now() + START_MONITOR_BUDGET);
+            let now = Instant::now();
+            let _ = remote_worker_roundtrip_with_send_deadline(&state, &worker, &command,
+                bridget_transport::protocol::WorkerRequestOperation::Reconcile {},
+                now + START_MONITOR_BUDGET, now + CANCEL_NOTIFICATION_BUDGET);
             let _ = done.try_send(());
         });
     }
@@ -32647,7 +32649,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let root=st.fixture_root.as_ref().unwrap().0.clone();
         st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":{"cartae":{
             "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
-            "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+            "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"secret205")),"allowed_agent_types":["native-test"],"mappings":{}
         }}}).to_string(),&root.join("registry205.json")).unwrap();
         task.state="starting".into();task.remote_prepared=false;task.mission_issued_at=None;
         st.delegation_store.save(&task).unwrap();
@@ -32746,7 +32748,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let mut machines=json!({});
             for machine in ["cartae","sysle2"] {
                 machines[machine]=json!({"enabled":true,"worker_id":format!("worker-{machine}"),"provisioning_revision":1,
-                    "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}});
+                    "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"secret205")),"allowed_agent_types":["native-test"],"mappings":{}});
             }
             st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":machines}).to_string(),&root.join("machines205.json")).unwrap();
             let mut task=original.clone();task.task_id=Uuid::new_v4().to_string();task.child=Uuid::new_v4().to_string();
@@ -32776,6 +32778,60 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(state.lock().unwrap().remote_start_reconciles.len(),2);
         answer_monitor205(&state,"sys205",second);answer_monitor205(&state,"worker205",first);
         drop(state);cleanup(&config);
+    }
+
+    #[test]
+    fn spec205_saturated_socket_releases_writer_before_cancel_and_reconnect() {
+        use bridget_transport::protocol::*;
+        use std::os::fd::AsRawFd;
+        let (state,config,task,_reader)=monitor_fixture205();
+        let (writer,worker,command)={
+            let st=state.lock().unwrap();
+            (st.connections["worker205"].clone(),st.remote_workers["cartae"].identity.clone(),
+                remote_command_identity(&st,&task).unwrap())
+        };
+        {
+            let locked=writer.lock().unwrap();let bytes=[b'x';4096];let mut sent=0;
+            loop {
+                let n=unsafe {libc::send(locked.get_ref().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),
+                    libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
+                if n<0 {assert_eq!(std::io::Error::last_os_error().kind(),std::io::ErrorKind::WouldBlock);break;}
+                assert!(n>0);sent+=n as usize;assert!(sent<16*1024*1024);
+            }
+            assert!(sent>0);
+        }
+        let started=Instant::now();
+        let result=remote_worker_roundtrip_with_send_deadline(&state,&worker,&command,WorkerRequestOperation::Reconcile {},
+            started+Duration::from_secs(2),started+Duration::from_millis(20));
+        assert_eq!(result.unwrap_err(),WorkerRefusal::WorkerUnavailable);
+        assert!(started.elapsed()<Duration::from_millis(800),"le budget long ne doit pas retenir le writer");
+        let cancel_at=Instant::now();
+        let cancel=remote_worker_roundtrip(&state,&worker,&command,
+            WorkerRequestOperation::Cancel {target:WorkerCancelScope::Command {}},cancel_at+Duration::from_millis(200));
+        assert_eq!(cancel.unwrap_err(),WorkerRefusal::WorkerUnavailable);
+        assert!(cancel_at.elapsed()<Duration::from_millis(800));
+        assert!(state.lock().unwrap().pending_worker_responses.is_empty());
+
+        let (new_writer,mut new_reader)=super::super::presence_tests::control_socket("reconnect205");
+        {
+            let mut st=state.lock().unwrap();st.connections.insert("worker205-new".into(),new_writer);
+            st.peer_uids.insert("worker205-new".into(),unsafe {libc::geteuid()});
+        }
+        let accepted=handle_worker_message(&state,"worker205-new",WrapperToDaemon::WorkerHello {hello:WorkerHello {
+            version:REMOTE_WORKER_VERSION,identity:worker.clone(),credential:IdentityCredential::new("secret205".into()),
+            build:"fixture205".into(),capability:ClientCapability::RemoteWorkerV1}});
+        assert!(matches!(accepted,Some(DaemonToWrapper::WorkerAccepted {..})));
+        let responder=state.clone();
+        let reply=thread::spawn(move || {
+            let DaemonToWrapper::WorkerRequest {request}=super::super::presence_tests::read_control(&mut new_reader) else {panic!("Cancel après reconnexion")};
+            assert!(matches!(&request.request,WorkerRequestOperation::Cancel {..}));
+            answer_monitor205(&responder,"worker205-new",request);
+        });
+        let after=remote_worker_roundtrip(&state,&worker,&command,WorkerRequestOperation::Cancel {target:WorkerCancelScope::Command {}},
+            Instant::now()+Duration::from_secs(2));
+        reply.join().unwrap();assert_eq!(after.unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert!(state.lock().unwrap().pending_worker_responses.is_empty());
+        drop(state);drop(writer);cleanup(&config);
     }
 
     fn delayed_proof192(digest: String) -> (Result<Task,String>, Duration) {

@@ -1663,3 +1663,5 @@ Le code terminal Codex: failed:cause=server_overloaded conserve une saturation d
 ## Vérifications de démarrage et capacité technique (205)
 
 Le maître conserve au plus une vérification de démarrage en cours par worker, avec la corrélation native existante. Un checkout Git long ne provoque plus une nouvelle vérification chaque seconde sur le même worker. Les autres machines restent suivies. Ce créneau n’est ni une mission ni une autorisation de Start ; son attente bornée ne prolonge aucun bail ou délai métier. La file conserve huit places. Un refus inbound_queue conserve sa signification historique et les mêmes prérequis de reprise de la tâche ; il peut encore provenir d’autres demandes concurrentes. Aucun rejeu de mission ni substitution ne résulte de cette régulation.
+
+L’écriture de cette sonde garde le budget court de contrôle (1s). Seule la réponse dispose du budget couvrant le checkout ; le verrou du socket n’est pas détenu pendant cette attente. Les autres appels gardent leurs délais antérieurs.
