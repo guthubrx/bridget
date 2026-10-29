@@ -27,3 +27,21 @@ Trois tests206 PASS après le complément, dont rapport terminé/incomplet et co
 ## Contre-revue finale
 
 Contre-revue296670ce favorable sur780ea521 contre85852ca3, P2 levé. Résultat complet lu, ACK et clôture native ; revueinitialeb2e1fe8a également lue/ACK/close. Les deux rapports Git sont propres,0commit ; conservés jusqu’à vérification des usages. Aucun avis runtime déduit de ces revues.
+
+## Activation effective
+
+Source fonctionnelle780ea521520a1b60633a604b83d57e2fda88a9f1, sources intégrées sur main ea109932 et poussées avant le chargement. CI hygiène40820700340 success. Binaire final206-permissions-780ea521 construit enrelease, copié hors target et octets vérifiés ; installedPASS. SHA2567ccae3b2077b1744db4f66907f86748da323b74732dc521429af5e481de384f0.
+
+Le29octobre2026à04:59:32UTC, maîtreCartaePID903680 et mobilePID903820 chargent /home/moi/.local/lib/bridget-communication/206-permissions-780ea521/bin/bridget. UpdaterPID903831 actif. Arrêt propre, SendSIGKILL=no, mise à jour concurrente exclue par le verrou natif ; sauvegardes SQLite quick_checkOK et flotte/config avant/après arrêt : /home/moi/.local/share/bridget-maintenance/206-production-20261029T045928Z. Coupure2,79s. Retour205 conservé. WorkerCartae201PID3750537 et wrapper historique inchangés (PID/naissance/exécutable comparés), aucun fournisseur physique Cartae actif observé au passage. Workers SYS/KS204 et Mac183 non redémarrés : cette correction agit uniquement dans le maître pour toutes les destinations, aucune opération ou API worker nouvelle. Ne pas présenter ces composants comme des binaires206.
+
+La première lecture MCP pendant la réinscription applicative a rendu primary_absent malgré l’attestation réussie ; aucune identité fabriquée ni mission recréée. Reprise vérifiée ensuite par le catalogue et l’annuaire natifs : delegations_halted=false,16fournisseurs, présencebridge1016 busy. La coupure du maître et le délai de retour du pont restent distincts.
+
+## Notifications et issue de la tâche
+
+Notifications de bascule : mcp-50239-6ae2d29f-7(monuments),6ae2d2a4-8(Politique),6ae2d2a6-9(trajets). Bilan livré à monuments mcp-50239-6ae2d30a-a/deliveryf81c8ef0-7d29-4261-a4c3-01fb5dff8e73 ; disponibilité après chargement signalée aux deux autres sous mcp-50239-6ae2d349-b et6ae2d34c-c. Messages acceptésin_flight, lecture non déduite.
+
+Après sa clôture propriétaire, eba4db89 est observée cancelled/cleanup_done=true, mission_issued_at=null, garde non déclarée libérée. Aucun Start/rejeu/Cancel de cette tâche par le mainteneur. Le205 n’avait pas enregistré le champ divergent : cette cause historique n’est pas déclarée résolue ni attribuée à l’interruption. Les nouvelles demandes distinctes autorisées n’ont pas de gel de maintenance à attendre. Le nouveau diagnostic et les conseils sont actifs ; aucune réussite future universelle n’est promise.
+
+## Nettoyage
+
+Caches Cargo entretenus avant/après etinstalled,4,23Gio sous budget10Gio ; aucun ancien candidat206 installé, la première construction84988ab7 a été remplacée dans target. Actif206 et retour205 conservés ; anciens201/204/183 encore sous usage conservés. Les deux revues b2e1fe8a/296670ce sont closes/cleanup_done, worktrees propres y compris ignorés,0commit ; observation SYS des fichiers ouverts indisponible (process_access_unavailable), donc dossiers et branches conservés. Aucun retrait forcé. Correction purement technique : tests usuels, aucun diaporama d’interface requis. Aucun service ou calcul métier Opus2D/NE02 touché.
