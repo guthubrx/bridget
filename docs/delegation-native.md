@@ -951,3 +951,20 @@ guarantee future free space. Reports reject altered profiles or index flags that
 could hide edits. Native receipts keep their existing format; older binaries do
 not check the compact manifest. Keep a 207 binary for reports and cleanup of
 these new worktrees.
+
+## Reattestation before release and API refusals (208)
+
+A new native proof of the same thread may renew its turn, technical session and
+revision. After native reattestation, Bridget checks the same exact permission
+ceiling used for continuations: provider identity, driver, directory, modes and
+the complete policy. Technical renewal alone no longer rejects Start.
+Missing proof, another thread, actual changes or revocation remain refused.
+Native wrapper proofs stay strict. The admitted snapshot and worker permit
+revision are not rewritten.
+
+api_error alone does not establish quota, invalid credentials or an unsuitable
+duration. Full status provides detail.provider_failure to inspect only that
+correlated turn's diagnostic. An older provider program may reject a model;
+updating that program requires a separate authorized, qualified action. A failed
+or cancelled task does not restart with its original key. Preserve files and
+confirm shutdown and workspace state before any authorized follow-up.

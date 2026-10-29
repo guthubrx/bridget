@@ -1708,3 +1708,20 @@ altéré ou des drapeaux d'index qui pourraient cacher des modifications.
 Les reçus natifs restent au format existant ; un ancien binaire ne vérifie pas
 le manifeste compact. Conserver un binaire 207 pour les rapports et la clôture de
 ces nouveaux dossiers.
+
+## Réattestation avant démarrage et refus API (208)
+
+Une nouvelle preuve du même fil peut renouveler le tour, la session technique et
+sa révision. Après réattestation native, Bridget vérifie les mêmes droits exacts
+que pour une continuation : identité fournisseur, pilote, dossier, modes et
+politique complète. Un simple renouvellement technique ne ferme plus le Start.
+Une preuve absente, un autre fil, une modification réelle ou une révocation
+restent refusés. Les preuves native_wrapper restent strictes. Le snapshot et la
+révision du permis worker admis ne sont pas réécrits.
+
+api_error ne suffit pas à conclure à un quota, un compte invalide ou une durée
+inadaptée. Le statut complet fournit detail.provider_failure pour lire seulement
+le diagnostic du tour corrélé. Un programme fournisseur trop ancien peut refuser
+un modèle ; sa mise à jour doit être décidée et qualifiée séparément. Une tâche
+failed ou cancelled ne redémarre pas avec sa clé initiale. Préserver les fichiers
+et confirmer l'arrêt et le dossier avant toute suite.

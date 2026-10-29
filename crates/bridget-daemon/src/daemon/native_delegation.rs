@@ -4328,6 +4328,11 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         view["error_human_action"]=json!("Si le modèle reste saturé, demandez à l’utilisateur de choisir entre attendre et autoriser une suite avec une autre contrainte de modèle. Ne changez ni moteur, ni compte, ni droits et ne redémarrez aucun service pour contourner ce refus.");
     }
+    if task.projected_error()==Some("api_error") {
+        view["error_message"]=json!("Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive.");
+        view["error_recovery"]=json!("Conservez cette tâche, sa clé et ses fichiers. Depuis son statut complet, transmettez detail.provider_failure au responsable pour retrouver le dernier diagnostic fournisseur de CE tour dans son journal et son stderr corrélés. Un modèle non pris en charge peut demander une mise à jour du programme fournisseur ; seule la preuve corrélée permet de le conclure. Une tâche failed ne reprend ni par Continue ni par rejeu initial. Vérifiez son arrêt et son dossier avant une suite autorisée ; ne créez pas de remplacement pendant ce contrôle. Les autres travaux autorisés suivent leur propre état.");
+        view["error_human_action"]=json!("Si le diagnostic exige une mise à jour du programme, une reconnexion au compte ou un choix de modèle hors de votre mandat, demandez cette décision précise à l’utilisateur. Ne changez ni compte, ni modèle, ni droits sur le seul code api_error.");
+    }
     if task.projected_error()==Some("stdout Codex fermé pendant le tour") {
         view["error_message"]=json!("Le flux de sortie du fournisseur est devenu indisponible pendant le tour. Sa cause précise reste à vérifier.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
@@ -4488,7 +4493,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
-    if full && task.projected_error()==Some("stdout Codex fermé pendant le tour") {
+    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error")) {
         // Projection après autorisation : aucun contenu de stderr ni chemin privé.
         // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
         let command=task.remote_placement.as_ref().and_then(|_|remote_command_identity(st,task).ok());
@@ -6323,7 +6328,7 @@ fn start_remote_task_with(
         (Some(expected_thread), Some(proof)) => {
             let fresh = super::origin_proof::reattest(conn, proof, state)
                 .map_err(|_| "permission_attestation_unavailable")?;
-            permission_change::check_parent("before_release_attestation", parent,
+            permission_change::check_reattested_parent("before_release_attestation", parent,
                 fresh.permissions.as_ref(), fresh.thread_id != expected_thread)?;
             fresh.permissions
         }
@@ -6349,7 +6354,7 @@ fn start_remote_task_with(
         let current = parent_fact(
             &st, &task.owner, &task.owner_instance, Some(request_id), fresh_attested.as_ref(),
         )?;
-        permission_change::check_parent("before_release_parent", parent, current.as_ref(), false)?;
+        permission_change::check_reattested_parent("before_release_parent", parent, current.as_ref(), false)?;
         let provision = st.registry.machine(&worker.machine_id)?;
         let mapping = st
             .registry
@@ -33303,6 +33308,24 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert!(view["future_mission_duration"].as_str().unwrap().contains("14400"));
             assert_eq!(before,serde_json::to_vec(&task).unwrap());
         }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec208_api_error_guidance_is_owned_unknown_and_read_only() {
+        let (mut st,config,mut task,_) = remote162_capture_fixture();
+        task.state="failed".into();task.error=Some("api_error".into());task.result=None;
+        let before=serde_json::to_vec(&task).unwrap();
+        let view=current_task_view(&st,&task,true).unwrap();
+        assert_eq!(view["error"],"api_error");
+        assert!(view["error_message"].as_str().unwrap().contains("ne prouve ni quota"));
+        assert!(view["error_recovery"].as_str().unwrap().contains("CE tour"));
+        assert_eq!(view["detail"]["provider_failure"]["cause"],"unobserved");
+        assert_eq!(view["detail"]["provider_failure"]["task_id"],task.task_id);
+        assert!(current_task_view(&st,&task,false).unwrap()["detail"]["provider_failure"].is_null());
+        assert_eq!(before,serde_json::to_vec(&task).unwrap());
+        task.error=None;task.state="working".into();
+        assert!(task_view(&task,None,true).get("error_human_action").is_none());
         cleanup(&config);
     }
 

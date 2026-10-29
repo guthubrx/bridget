@@ -43,6 +43,15 @@ pub(super) fn check_parent(stage: &str, expected: &ProviderPermissions,
     if thread_changed { changes.push("thread"); }
     if changes.is_empty() { Ok(()) } else { Err(code(stage, &changes)) }
 }
+/// Uniquement après une réattestation native du propriétaire et de son fil.
+/// Réutilise le plafond exact déjà admis pour une continuation provider_turn.
+pub(super) fn check_reattested_parent(stage: &str, expected: &ProviderPermissions,
+    current: Option<&ProviderPermissions>, thread_changed: bool) -> Result<(), String> {
+    if !thread_changed && continuation_parent_matches(Some(expected), current) {
+        return Ok(());
+    }
+    check_parent(stage, expected, current, thread_changed)
+}
 fn projection(code: &str) -> Value {
     let (stage, changes) = detail(code).unwrap_or(("unobserved", Vec::new()));
     json!({"stage":stage,"changes":changes,"evidence_available":stage!="unobserved",
@@ -172,6 +181,40 @@ mod tests {
         let known=failure("permission_changed:before_start:revision");
         assert!(known["message"].as_str().unwrap().contains("version de l’attestation"));
         assert!(!known["message"].as_str().unwrap().contains("droits révoqués"));
+    }
+
+    #[test]
+    fn spec208_reattested_turn_accepts_only_equivalent_permission_ceiling() {
+        let frozen=parent();
+        let before=serde_json::to_vec(&frozen).unwrap();
+        for stage in ["before_release_attestation","before_release_parent"] {
+            let mut current=frozen.clone();current.revision+=1;
+            assert!(check_reattested_parent(stage,&frozen,Some(&current),false).is_ok());
+            current.run_id="renewed-run".into();current.provider_session_id="renewed-session".into();
+            current.revision=1;
+            assert!(check_reattested_parent(stage,&frozen,Some(&current),false).is_ok());
+            assert_eq!(serde_json::to_vec(&frozen).unwrap(),before,"frozen worker authority is not rewritten");
+            for field in ["version","source","provider_instance_id","driver","cwd","runtime_mode","interaction_mode","provider_policy"] {
+                let mut changed=serde_json::to_value(&current).unwrap();
+                changed[field]=match field {
+                    "version"=>json!(2),
+                    "provider_policy"=>json!({"changed":true}),
+                    _=>json!("changed"),
+                };
+                let changed=serde_json::from_value(changed).unwrap();
+                let error=check_reattested_parent(stage,&frozen,Some(&changed),false).unwrap_err();
+                assert!(detail(&error).unwrap().1.contains(&field),"{field}");
+                assert!(!error.contains("private"));
+            }
+            assert!(check_reattested_parent(stage,&frozen,Some(&current),true).unwrap_err().ends_with(":run_id,provider_session_id,revision,thread"));
+            assert!(check_reattested_parent(stage,&frozen,None,false).unwrap_err().ends_with(":parent_missing"));
+            let mut wrapper=frozen.clone();wrapper.source="native_wrapper".into();
+            let mut changed=wrapper.clone();changed.revision+=1;
+            assert!(check_reattested_parent(stage,&wrapper,Some(&changed),false).unwrap_err().ends_with(":revision"));
+        }
+        // Les comparaisons sans nouvelle preuve restent strictes.
+        let mut changed=frozen.clone();changed.revision+=1;
+        assert!(check_parent("before_start",&frozen,Some(&changed),false).is_err());
     }
 
 }
