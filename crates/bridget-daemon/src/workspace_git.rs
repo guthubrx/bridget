@@ -165,14 +165,15 @@ fn allowed(args: &[&str]) -> bool {
     match args {
         ["--version"] => true,
         ["rev-parse", "--absolute-git-dir"] => true,
-        ["ls-tree", "-r", "-l", "-z", base] => sha(base),
+        ["ls-tree", "--full-tree", "-r", "-l", "-z", base] => sha(base),
         ["ls-files", "-v", "-z"] => true,
         ["read-tree", "-mu", "HEAD"] => true,
         ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile" | "extensions.worktreeConfig"] => true,
-        ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone"] => true,
+        ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone" | "bridget.compactFormat"] => true,
         ["config", "--worktree", "core.sparseCheckout", "true"]
         | ["config", "--worktree", "core.sparseCheckoutCone", "false"]
-        | ["config", "--worktree", "index.sparse", "false"] => true,
+        | ["config", "--worktree", "index.sparse", "false"]
+        | ["config", "--worktree", "bridget.compactFormat", "207"] => true,
         ["rev-parse", "--show-toplevel" | "--git-common-dir"] => true,
         ["rev-parse", "--short", "HEAD"] => true,
         ["rev-parse", "--verify", "--end-of-options", value] => revision(value),
@@ -849,7 +850,10 @@ pub(crate) fn create(
         ));
     }
     if let Some(plan) = compact {
-        compact::apply(&path, plan).map_err(|e| residue("workspace_create_failed", e))?;
+        compact::apply(&path, plan).map_err(|e| {
+            let code=compact::failure_code(&e);
+            residue(code,e)
+        })?;
     }
     let canonical = path
         .canonicalize()

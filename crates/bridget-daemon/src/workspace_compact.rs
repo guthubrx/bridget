@@ -109,7 +109,14 @@ pub(super) fn plan(preflight: &WorkspacePreflight) -> Result<Option<Plan>, Strin
     }
     let listing = run_git(
         &preflight.cwd,
-        &["ls-tree", "-r", "-l", "-z", &preflight.base_commit],
+        &[
+            "ls-tree",
+            "--full-tree",
+            "-r",
+            "-l",
+            "-z",
+            &preflight.base_commit,
+        ],
         READ_TIMEOUT,
     )?
     .complete()?;
@@ -161,15 +168,15 @@ fn read_private(path: &Path) -> Result<Vec<u8>, String> {
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
-        .map_err(|e| e.to_string())?;
-    let meta = file.metadata().map_err(|e| e.to_string())?;
+        .map_err(io_failure)?;
+    let meta = file.metadata().map_err(io_failure)?;
     if !meta.is_file() || meta.len() > MAX_MANIFEST {
         return Err("métadonnées compactes invalides".into());
     }
     let mut bytes = Vec::new();
     file.take(MAX_MANIFEST + 1)
         .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+        .map_err(io_failure)?;
     if bytes.len() as u64 > MAX_MANIFEST {
         return Err("métadonnées compactes excessives".into());
     }
@@ -182,10 +189,10 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
-        .map_err(|e| e.to_string())?;
+        .map_err(io_failure)?;
     f.write_all(bytes)
         .and_then(|_| f.sync_all())
-        .map_err(|e| e.to_string())
+        .map_err(io_failure)
 }
 pub(super) fn apply(path: &Path, plan: Plan) -> Result<(), String> {
     let dir = PathBuf::from(
@@ -200,7 +207,7 @@ pub(super) fn apply(path: &Path, plan: Plan) -> Result<(), String> {
         return Err("manifeste compact excessif".into());
     }
     write_new(&dir.join(MANIFEST), &data)?;
-    fs::create_dir_all(dir.join("info")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(dir.join("info")).map_err(io_failure)?;
     write_new(
         &dir.join("info/sparse-checkout"),
         patterns(&plan.selected)?.as_bytes(),
@@ -209,17 +216,36 @@ pub(super) fn apply(path: &Path, plan: Plan) -> Result<(), String> {
         ("core.sparseCheckout", "true"),
         ("core.sparseCheckoutCone", "false"),
         ("index.sparse", "false"),
+        ("bridget.compactFormat", "207"),
     ] {
-        run_git(path, &["config", "--worktree", key, value], READ_TIMEOUT)?.complete()?;
+        run_git(path, &["config", "--worktree", key, value], READ_TIMEOUT)?.workspace_complete()?;
     }
     run_git(path, &["read-tree", "-mu", "HEAD"], WORKTREE_ADD_TIMEOUT)?.workspace_complete()?;
     audit(&dir, path)
 }
 pub(super) fn audit(dir: &Path, path: &Path) -> Result<(), String> {
+    let read = |args: &[&str]| capture(path, args, READ_TIMEOUT, Some((dir, path)));
+    let flags = read(&["ls-files", "-v", "-z"])?.complete()?;
+    for entry in flags.split('\0').filter(|e| !e.is_empty()) {
+        let (tag, _) = entry.split_once(' ').ok_or("index Git illisible")?;
+        if tag.len() != 1 || tag.as_bytes()[0].is_ascii_lowercase() {
+            return Err("rapport indisponible : drapeau Git susceptible de masquer une modification ; vérifier les fichiers et rétablir les drapeaux avant une suite".into());
+        }
+    }
+    let marker = read(&["config", "--worktree", "--get", "bridget.compactFormat"])?;
+    let expected = if marker.code == Some(1) && !marker.truncated {
+        false
+    } else {
+        marker.complete()? == "207"
+    };
     match fs::symlink_metadata(dir.join(MANIFEST)) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.to_string()),
+        Err(e) if e.kind()==io::ErrorKind::NotFound && !expected => return Ok(()),
+        Err(e) if e.kind()==io::ErrorKind::NotFound => return Err("rapport indisponible : manifeste compact absent ; faire vérifier le dossier par le responsable".into()),
+        Err(e) => return Err(io_failure(e)),
         Ok(_) => {}
+    }
+    if !expected {
+        return Err("rapport indisponible : marqueur compact altéré".into());
     }
     let plan: Plan = serde_json::from_slice(&read_private(&dir.join(MANIFEST))?)
         .map_err(|_| "manifeste compact invalide")?;
@@ -258,4 +284,35 @@ pub(super) fn is_compact(cwd: &Path) -> bool {
     run_git(cwd, &["rev-parse", "--absolute-git-dir"], READ_TIMEOUT)
         .and_then(GitOutput::complete)
         .is_ok_and(|dir| fs::symlink_metadata(Path::new(&dir).join(MANIFEST)).is_ok())
+}
+
+fn io_failure(error: io::Error) -> String {
+    let code = match error.raw_os_error() {
+        Some(libc::ENOSPC | libc::EDQUOT) => "workspace_disk_full",
+        Some(libc::EACCES | libc::EPERM | libc::EROFS) => "workspace_access_denied",
+        _ => "workspace_create_failed",
+    };
+    format!("{code}: {error}")
+}
+pub(super) fn failure_code(error: &str) -> &'static str {
+    match error.split(':').next() {
+        Some("workspace_disk_full") => "workspace_disk_full",
+        Some("workspace_access_denied") => "workspace_access_denied",
+        _ => "workspace_create_failed",
+    }
+}
+#[cfg(test)]
+#[test]
+fn spec207_compact_preserves_io_codes() {
+    for (errno, code) in [
+        (libc::ENOSPC, "workspace_disk_full"),
+        (libc::EDQUOT, "workspace_disk_full"),
+        (libc::EACCES, "workspace_access_denied"),
+        (libc::EROFS, "workspace_access_denied"),
+    ] {
+        assert_eq!(
+            failure_code(&io_failure(io::Error::from_raw_os_error(errno))),
+            code
+        );
+    }
 }

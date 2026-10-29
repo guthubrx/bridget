@@ -1076,6 +1076,14 @@ fn spec207_compact_rejects_hidden_edits_and_changed_profile() {
         fixture_git(child,&["update-index","--no-skip-worktree","sub/tracked"]);
         fixture_git(child,&["restore","--","sub/tracked"]);
         let (dir,_)=report_anchor(&ws).unwrap();
+        let manifest=fs::read(dir.join("bridget-compact207.json")).unwrap();
+        fs::remove_file(dir.join("bridget-compact207.json")).unwrap();
+        assert!(report(&ws).unwrap_err().contains("manifeste compact absent"));
+        fixture_git(child,&["update-index","--assume-unchanged","sub/tracked"]);
+        fs::write(child.join("sub/tracked"),"hidden without manifest").unwrap();
+        assert!(report(&ws).unwrap_err().contains("masquer"));
+        fixture_git(child,&["update-index","--no-assume-unchanged","sub/tracked"]);
+        fs::write(dir.join("bridget-compact207.json"),manifest).unwrap();
         fs::write(dir.join("info/sparse-checkout"),"/*\n").unwrap();
         assert!(report(&ws).unwrap_err().contains("profil compact modifié"));
     });
@@ -1089,7 +1097,8 @@ fn spec207_compact_requires_explicit_valid_policy_before_creation() {
         assert!(create(&plan,&uuid::Uuid::new_v4().to_string()).unwrap_err().contains("inconnu"));
         fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
         let ws=create(&preflight(&repo.join("sub"),None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
-        assert!(Path::new(&ws.path).join("sub").is_dir());
+        assert_eq!(fs::read(Path::new(&ws.path).join("sub/tracked")).unwrap(),b"initial\n");
+        assert!(Path::new(&ws.path).join("large.js").is_file());
         assert_eq!(report(&ws).unwrap().dirty,Some(false));
         fixture_git(repo,&["config","--unset","bridget.worktreeProfile"]);
         let full=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
