@@ -3,6 +3,8 @@
 [English](delegation-native.md) · [Français](delegation-native.fr.md)
 
 
+Dans bridget_capabilities, providers et leurs verdicts can_run décrivent seulement la machine d’origine nommée dans providers_scope. Un refus local ne prouve pas qu’un serveur manque du programme. Pour une auto-délégation distante, consulter fleet.options et reprendre exactement machine_id, engine et model. Ces options sont déclarées et activées ; eligibility=not_checked signifie que les droits, la préparation et l’accès restent à vérifier par l’admission. Une option absente ne peut pas être créée en inventant un alias de machine. Ne pas relancer une mission d’issue inconnue pour rafraîchir ce catalogue.
+
 Bridget possède son moteur de délégation. La CLI et MCP utilisent le même contrat
 natif pour créer, suivre et conserver les tâches.
 

@@ -4819,6 +4819,7 @@ fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::
     let halted=st.delegation_store.delegation_halt().map_err(|_|"control_state_unavailable")?.halted;
     let mut result=catalogue_projection177(entries,held,halted,Some(&parent),permission.as_ref(),Some(Path::new(&parent.cwd)));
     result["verdict_context"]["machine_id"]=json!(super::origin_proof::host_for_owner(&st,&owner)?);
+    catalogue_scope212(&mut result, st.registry.routing_catalogue(unix_timestamp()), &super::origin_proof::host_for_owner(&st,&owner)?);
     Ok(Some(result))
 }
 
@@ -6958,6 +6959,94 @@ fn catalogue_projection177(entries:Vec<Value>,caller_held_queue:bool,halted:bool
     json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3,"resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.map(|f|Path::new(&f.cwd)).or_else(||permission.and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_default_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8})
 }
 
+
+// O(P+O), P entrées locales et O options déclarées. Aucun accès fournisseur,
+// aucune sonde distante, aucun changement du verdict local ni des droits.
+fn catalogue_scope212(
+    result: &mut Value,
+    declared: Result<bridget_transport::protocol::RoutingCatalogueV1, String>,
+    origin_machine: &str,
+) {
+    result["providers_scope"] = json!({"kind":"origin_machine","machine_id":origin_machine});
+    result["catalogue_guidance"] = json!({
+        "next_action":"Pour une auto-délégation distante, choisir les identifiants machine_id, engine et model dans fleet.options. L’admission vérifie ensuite la cible et les droits.",
+        "scope":"Les verdicts providers portent seulement sur la machine d’origine. Un refus local ne prouve pas que le programme manque sur un serveur.",
+        "other_work":"Les autres travaux autorisés suivent leur propre état."
+    });
+    if let Some(providers) = result.get_mut("providers").and_then(Value::as_array_mut) {
+        for provider in providers {
+            provider["execution_scope"] = json!("origin_machine");
+            provider["machine_id"] = json!(origin_machine);
+        }
+    }
+    result["fleet"] = match declared {
+        Ok(catalogue) => json!({
+            "status":"declared",
+            "scope":"enabled_routes",
+            "eligibility":"not_checked",
+            "auth":"not_checked",
+            "observed_at":catalogue.observed_at,
+            "options":catalogue.options,
+        }),
+        Err(code) => json!({
+            "status":"unavailable",
+            "code":match code.as_str() {
+                "routing_policy_disabled" => "routing_policy_disabled",
+                "routing_policy_unavailable" => "routing_policy_unavailable",
+                _ => "routing_catalogue_unavailable",
+            },
+            "eligibility":"not_checked",
+            "options":[],
+            "next_action":"Faire vérifier le catalogue de flotte par le responsable Bridget. Ce constat ne modifie aucune mission existante."
+        }),
+    };
+}
+
+#[cfg(test)]
+mod catalogue212_tests {
+    use super::*;
+    use bridget_transport::protocol::{RoutingCatalogueOptionV1, RoutingCatalogueV1, RoutingEntitlement};
+
+    #[test]
+    fn spec212_local_refusal_does_not_deny_remote_declared_route() {
+        let option = RoutingCatalogueOptionV1 {
+            machine_id:"sysle2".into(), engine:"claude".into(),
+            connection_id:"claude-sysle2".into(), model:"claude-opus-5-5".into(),
+            supported_efforts:vec![], default_effort:None,
+            provenance:"declared".into(), observed_at:None,
+            entitlement:RoutingEntitlement::Unknown,
+        };
+        let mut view = json!({"providers":[{"agent_type":"claude-sysle2","can_run":false,
+            "constraints":[{"code":"command_missing"}]}],"delegations_halted":true});
+        let original = view.clone();
+        catalogue_scope212(&mut view, Ok(RoutingCatalogueV1 {
+            version:1, observed_at:42, options:vec![option],
+        }), "monordinateur");
+        assert_eq!(view["providers"][0]["can_run"], original["providers"][0]["can_run"]);
+        assert_eq!(view["providers"][0]["constraints"], original["providers"][0]["constraints"]);
+        assert_eq!(view["delegations_halted"], true);
+        assert_eq!(view["providers"][0]["machine_id"], "monordinateur");
+        assert_eq!(view["providers_scope"]["kind"], "origin_machine");
+        assert_eq!(view["fleet"]["options"][0]["machine_id"], "sysle2");
+        assert_eq!(view["fleet"]["options"][0]["entitlement"], "unknown");
+        assert_eq!(view["fleet"]["eligibility"], "not_checked");
+        assert_eq!(view["fleet"]["auth"], "not_checked");
+        assert!(view["fleet"]["options"][0].get("can_run").is_none());
+    }
+
+    #[test]
+    fn spec212_missing_fleet_is_not_success_or_private_error() {
+        for code in ["routing_policy_disabled", "routing_policy_unavailable", "private-path SECRET"] {
+            let mut view = json!({"providers":[]});
+            catalogue_scope212(&mut view, Err(code.into()), "monordinateur");
+            assert_eq!(view["fleet"]["status"], "unavailable");
+            assert_eq!(view["fleet"]["options"], json!([]));
+            assert!(!view.to_string().contains("SECRET"));
+            assert!(!view.to_string().contains("private-path"));
+        }
+    }
+}
+
 fn target_resolver_in_catalogue171<'a>(
     registry: &'a AgentRegistry,
     source: &'a crate::lifecycle::SourceEnvironment,
@@ -7953,7 +8042,9 @@ fn handle_locked_with_remote_proof(
             });
             let entries=catalogue_entries177(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
                 fact.as_ref(),verdict_cwd.as_deref(),&[])?;
-            Ok(catalogue_projection177(entries,caller_held_queue,halted,fact.as_ref(),permission.as_ref(),verdict_cwd.as_deref()))
+            let mut result = catalogue_projection177(entries,caller_held_queue,halted,fact.as_ref(),permission.as_ref(),verdict_cwd.as_deref());
+            catalogue_scope212(&mut result, st.registry.routing_catalogue(unix_timestamp()), &crate::build_info::local_host());
+            Ok(result)
         }
         NativeDelegationRequest::Delegate { .. } => {
             match admit_delegate(
@@ -27905,6 +27996,19 @@ for frame in frames: print(json.dumps(frame),flush=True)
             "instance-2"
         );
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec212_catalogue_handler_is_read_only_and_marks_origin_scope() {
+        let (mut st, config, rx, _reader) = fixture("catalogue212");
+        let before = st.delegation_store.tasks().unwrap().len();
+        let view = handle_locked("conn-1", NativeDelegationRequest::Catalogue, &mut st).unwrap();
+        assert_eq!(view["providers_scope"]["kind"], "origin_machine");
+        assert_eq!(view["fleet"]["status"], "unavailable");
+        assert_eq!(view["fleet"]["eligibility"], "not_checked");
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), before);
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
         cleanup(&config);
     }
 
