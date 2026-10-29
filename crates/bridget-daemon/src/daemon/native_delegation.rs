@@ -4312,6 +4312,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             view["error_human_action"] = json!("Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission.");
         }
     }
+    if task.projected_error()==Some("terminal Codex: failed:cause=server_overloaded") {
+        view["error_message"]=json!("Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé.");
+        view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
+            json!("Conservez les commits, fichiers et sorties, puis clôturez la garde propriétaire. Une tâche failed ne reprend ni par bridget_task_continue ni par rejeu de sa clé initiale. Après retour de capacité du modèle et confirmation de l’arrêt et du rapport du dossier, une suite autorisée utilise une nouvelle clé, avec passation explicite du travail conservé ; aucune substitution automatique de modèle.")
+        } else {
+            json!("Conservez la tâche, sa clé, les fichiers et les sorties. Attendez la confirmation native d’arrêt et le rapport du dossier avant toute suite ; continuable=false ne prouve pas l’arrêt. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant le nettoyage.")
+        };
+        view["error_human_action"]=json!("Si le modèle reste saturé, demandez à l’utilisateur de choisir entre attendre et autoriser une suite avec une autre contrainte de modèle. Ne changez ni moteur, ni compte, ni droits et ne redémarrez aucun service pour contourner ce refus.");
+    }
     if task.projected_error()==Some("stdout Codex fermé pendant le tour") {
         view["error_message"]=json!("Le flux de sortie du fournisseur est devenu indisponible pendant le tour. Sa cause précise reste à vérifier.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
@@ -32553,6 +32562,28 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert!(view["detail"]["human_action"].as_str().unwrap().contains("propriétaire"));
         }
     }
+    #[test]
+    fn spec204_provider_overload_guidance_preserves_state_and_stop_prerequisites() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.state="failed".into();
+        task.error=Some("terminal Codex: failed:cause=server_overloaded".into());
+        task.cleanup_done=false;
+        let before=serde_json::to_value(&task).unwrap();
+        let waiting=task_view(&task,None,true);
+        assert_eq!(waiting["error"],task.error.as_deref().unwrap());
+        assert!(waiting["error_message"].as_str().unwrap().contains("saturation du modèle"));
+        assert!(waiting["error_recovery"].as_str().unwrap().contains("Attendez"));
+        assert!(waiting["error_recovery"].as_str().unwrap().contains("Ne rejouez pas"));
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        task.cleanup_done=true;
+        let stopped=task_view(&task,None,true);
+        assert!(stopped["error_recovery"].as_str().unwrap().contains("nouvelle clé"));
+        assert!(stopped["error_human_action"].as_str().unwrap().contains("utilisateur"));
+        task.error=Some("terminal Codex: failed".into());
+        assert!(!task_view(&task,None,true).to_string().contains("saturation du modèle"));
+        drop(st);cleanup(&config);
+    }
+
     #[test]
     fn spec191_eof_guidance_preserves_error_and_waits_for_native_stop() {
         let (st,config,mut task,_)=remote162_capture_fixture();

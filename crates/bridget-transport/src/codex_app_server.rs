@@ -4465,7 +4465,10 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                     &observations,
                                     "turn_end",
                                     Some(&message_id),
-                                    json!({"provider_turn_id": turn_id, "stop_reason": status}),
+                                    json!({"provider_turn_id": turn_id, "stop_reason": match codex_turn_terminal(&value, status) {
+                                        ManagedTerminal::Failed { detail } => detail,
+                                        _ => status.to_string(),
+                                    }}),
                                 );
                                 *active_detail.lock().unwrap_or_else(|e| e.into_inner()) = None;
                                 state.external_turn = None;
@@ -4488,13 +4491,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                 }
                             }
                         }
-                        let terminal = match status {
-                            "completed" => ManagedTerminal::Completed,
-                            "interrupted" => ManagedTerminal::Cancelled,
-                            other => ManagedTerminal::Failed {
-                                detail: format!("terminal Codex: {other}"),
-                            },
-                        };
+                        let terminal = codex_turn_terminal(&value, status);
                         observations
                             .0
                             .lock()
@@ -4700,6 +4697,19 @@ fn project_request_id(request_id: &Value) -> String {
         }
     }
 }
+// Project only an attested protocol code; free-form provider errors stay private.
+fn codex_turn_terminal(value: &Value, status: &str) -> ManagedTerminal {
+    match status {
+        "completed" => ManagedTerminal::Completed,
+        "interrupted" => ManagedTerminal::Cancelled,
+        "failed" if value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str)
+            == Some("serverOverloaded") => ManagedTerminal::Failed {
+                detail: "terminal Codex: failed:cause=server_overloaded".to_string(),
+            },
+        other => ManagedTerminal::Failed { detail: format!("terminal Codex: {other}") },
+    }
+}
+
 fn provider_error_reason(error: &Value) -> String {
     let code = error.get("code").and_then(Value::as_i64);
     if code == Some(-32001) {
@@ -5951,6 +5961,57 @@ for line in sys.stdin:
         assert_eq!(facts[0]["payload"]["status"],"running");
         assert_eq!(facts[1]["payload"]["status"],"completed");
         assert!(facts.iter().all(|e|e["payload"]["item_id"]=="compact183"));
+    }
+
+    #[test]
+    fn spec204_terminal_cause_requires_attested_code_and_failed_status() {
+        let overloaded = json!({"params":{"turn":{"error":{"codexErrorInfo":"serverOverloaded",
+            "message":"PRIVATE_PROVIDER_MESSAGE", "additionalDetails":"PRIVATE_DETAIL"}}}});
+        assert!(matches!(codex_turn_terminal(&overloaded,"failed"), ManagedTerminal::Failed { detail }
+            if detail == "terminal Codex: failed:cause=server_overloaded"));
+        for error in [Value::Null, json!({"message":"serverOverloaded"}),
+            json!({"codexErrorInfo":"PRIVATE_UNKNOWN_CODE"}), json!({"codexErrorInfo":{"serverOverloaded":"PRIVATE"}})] {
+            let value=json!({"params":{"turn":{"error":error}}});
+            assert!(matches!(codex_turn_terminal(&value,"failed"), ManagedTerminal::Failed { detail }
+                if detail == "terminal Codex: failed"));
+        }
+        assert!(matches!(codex_turn_terminal(&overloaded,"completed"),ManagedTerminal::Completed));
+        assert!(matches!(codex_turn_terminal(&overloaded,"interrupted"),ManagedTerminal::Cancelled));
+    }
+
+    #[test]
+    fn spec204_failed_terminal_reaches_real_transport_and_journal() {
+        let root=root("spec204-terminal");
+        let trace=root.join("trace.jsonl");
+        let mut options=fake_options(&trace);
+        let old=r#""id":"turn-native","status":"completed","items":[]"#;
+        let new=r#""id":"turn-native","status":"failed","items":[],"error":{"codexErrorInfo":"serverOverloaded","message":"PRIVATE_PROVIDER_MESSAGE"}"#;
+        assert!(options.args[1].contains(old));
+        options.args[1]=options.args[1].replace(old,new);
+        let mut transport=CodexAppServerTransport::spawn_with_environment(options,
+            &[("BRIDGET_CODEX_TRACE".into(),trace.to_string_lossy().into_owned())],false).unwrap();
+        transport.activate_journal(&root,"codex-native",None).unwrap();
+        transport.deliver(&message("spec204")).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(4);
+        let mut finished=false;
+        while Instant::now()<deadline && !finished {
+            for event in transport.drain_events() {
+                if let ManagedEventKind::TurnFinished {terminal,..}=event.kind {
+                    assert!(matches!(terminal,ManagedTerminal::Failed {detail}
+                        if detail=="terminal Codex: failed:cause=server_overloaded"));
+                    finished=true;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(finished);
+        transport.stop();
+        let journal_path=fs::read_dir(root.join("codex-native")).unwrap().next().unwrap().unwrap().path();
+        let events=crate::journal::valid_events(&journal_path);
+        assert!(events.iter().any(|event|event["event"]=="turn_end"
+            && event["payload"]["stop_reason"]=="terminal Codex: failed:cause=server_overloaded"));
+        assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE_PROVIDER_MESSAGE"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn fake_options(_trace: &std::path::Path) -> CodexAppServerOptions {

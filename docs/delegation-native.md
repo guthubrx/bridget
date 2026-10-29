@@ -901,3 +901,7 @@ A `routing_connection_changed` refusal with `detail.stage=start_recovery`
 reports only closed change categories. The admitted task stays preserved:
 after correction or approval of the change, replay its exact key and envelope;
 do not create another mission or edit receipts.
+
+## Model capacity failure during a turn (204)
+
+The code terminal Codex: failed:cause=server_overloaded preserves a provider-attested model capacity failure. It establishes neither a full Bridget queue, a full disk nor an account quota. Partial work is retained. A failed task cannot resume through Continue or replay of its initial key. Preserve files, wait for native stop confirmation and the workspace report, then close the owner guard. An authorized follow-up uses a new key and an explicit handoff of remaining work after model capacity returns. No automatic model, engine, account or permission change. If saturation persists, ask the user whether to wait or authorize another model constraint. Legacy terminal Codex: failed keeps an unknown cause: request the diagnostic for that same provider turn; do not infer saturation from failed alone.

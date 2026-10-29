@@ -1655,3 +1655,7 @@ l’exécution admise et le worker la revalide avant Start/Release. Un refus
 les catégories divergentes. Il conserve la tâche admise : après correction
 ou validation du changement, rejouer strictement sa même clé et son enveloppe,
 sans nouvelle mission ni modification des reçus.
+
+## Saturation du modèle pendant un tour (204)
+
+Le code terminal Codex: failed:cause=server_overloaded conserve une saturation du modèle attestée par le fournisseur. Il ne décrit ni la file technique Bridget, ni le disque, ni un quota de compte. Le travail partiel est conservé. Une tâche failed ne reprend ni par Continue ni par rejeu de sa clé initiale. Préservez les fichiers, attendez la confirmation native d’arrêt et le rapport du dossier, puis clôturez la garde propriétaire. Une suite autorisée utilise une nouvelle clé et une passation du travail restant après retour de capacité. Aucun changement automatique de modèle, moteur, compte ou droits. Si la saturation persiste, demandez à l’utilisateur s’il veut attendre ou autoriser une autre contrainte de modèle. Les anciens terminal Codex: failed restent de cause inconnue : demandez le diagnostic du même tour fournisseur ; ne déduisez pas la saturation du seul mot failed.
