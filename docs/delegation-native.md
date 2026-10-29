@@ -911,3 +911,9 @@ The code terminal Codex: failed:cause=server_overloaded preserves a provider-att
 The coordinator keeps at most one start-monitor request in flight per worker through the existing correlated round-trip. A long Git checkout no longer causes another monitor request every second on that worker. Other machines remain monitored. This slot is neither a mission nor Start authorization; its bounded wait extends no lease or business deadline. The queue still has eight entries. An inbound_queue refusal keeps its historical meaning and the same task recovery prerequisites; other concurrent requests can still cause it. This regulation performs no business replay or substitution.
 
 This probe retains the short control-write budget (1s). Only its response gets the checkout-sized wait; the socket lock is not held during that wait. Other calls keep their previous deadlines.
+
+### Permission refusal during remote launch206
+
+The public code remains remote_start_failed:permission_changed. Owner status includes detail.permission_change: stage, closed change categories and evidence availability. No permission or session values are published. For an old refusal, unobserved means details were not recorded; it proves neither revoked access nor an account outage.
+
+Keep the task, request key and workspace. Do not replace it while stop, cleanup or workspace reporting is unconfirmed. A failed task resumes through neither Continue nor replay of its original request. After owner guard closure and native reattestation of THIS parent, a newly authorized admission uses a new key and an explicit handoff of remaining work. If refusal recurs in the freshly attested turn, send task, key and diagnostic to the Bridget maintainer; do not widen permissions.

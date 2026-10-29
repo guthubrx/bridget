@@ -3,6 +3,8 @@
 pub(super) mod workspace_repair;
 #[path = "native_start_recovery.rs"]
 mod start_recovery;
+#[path = "native_permission_change.rs"]
+mod permission_change;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -3569,6 +3571,9 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if permission_change::recognizes(code) {
+        return permission_change::failure(code);
+    }
     if let Some((message, recovery, human)) = start_recovery::refusal_guidance(code) {
         return json!({"status":"refused","code":code,"message":message,
             "detail":{"message":message,"recovery":recovery,"human_action":human}});
@@ -4312,6 +4317,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             view["error_human_action"] = json!("Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission.");
         }
     }
+    permission_change::project_task(task, &mut view);
     if task.projected_error()==Some("terminal Codex: failed:cause=server_overloaded") {
         view["error_message"]=json!("Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
@@ -5414,7 +5420,7 @@ fn delegate_remote_with_routing(
         ]) { return Err(code); }
     }
     if remote_parent_proof(state, &owner, &parent)? != proof {
-        return Err("permission_changed".into());
+        return Err(permission_change::code("after_inspection", &["permission_sources"]));
     }
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -5457,7 +5463,7 @@ fn delegate_remote_with_routing(
             prepared = isolated;
         }
         if remote_parent_proof(state, &owner, &parent)? != proof {
-            return Err("permission_changed".into());
+            return Err(permission_change::code("after_workspace", &["permission_sources"]));
         }
         {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -5476,9 +5482,7 @@ fn delegate_remote_with_routing(
                 Some(request_id),
                 attested,
             )?;
-            if current.as_ref() != Some(&parent) {
-                return Err("permission_changed".into());
-            }
+            permission_change::check_parent("before_start", &parent, current.as_ref(), false)?;
             let mapping = st.registry.project_mapping(machine, project_id)?;
             if mapping.mapping_revision != prepared.placement.mapping_revision
                 || !prepared.placement.matches_worker(&worker)
@@ -6121,13 +6125,18 @@ fn start_remote_task_with(
             }
             start_recovery::admission_open(&st)?;
             recheck_attested_thread(&st, conn, thread)?;
+            let mut changes = permission_change::parent_changes(parent,
+                task.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent));
             if live_connection_identity(&st, conn)
-                != Some((task.owner.clone(), task.owner_instance.clone()))
-                || task.permission_snapshot.as_ref().is_none_or(|snapshot| snapshot.parent != *parent
-                    || snapshot.child_policy != prepared.child_policy)
-                || task.definition != prepared.definition
-            {
-                return Err("permission_changed".into());
+                != Some((task.owner.clone(), task.owner_instance.clone())) {
+                changes.push("connection_identity");
+            }
+            if task.permission_snapshot.as_ref().is_none_or(|snapshot| snapshot.child_policy != prepared.child_policy) {
+                changes.push("child_policy");
+            }
+            if task.definition != prepared.definition { changes.push("definition"); }
+            if !changes.is_empty() {
+                return Err(permission_change::code("recovery_before_start", &changes));
             }
             let machine = st.registry.machine(&prepared.placement.machine_id)?;
             let mapping = st.registry.project_mapping(&prepared.placement.machine_id,
@@ -6310,9 +6319,8 @@ fn start_remote_task_with(
         (Some(expected_thread), Some(proof)) => {
             let fresh = super::origin_proof::reattest(conn, proof, state)
                 .map_err(|_| "permission_attestation_unavailable")?;
-            if fresh.thread_id != expected_thread || fresh.permissions.as_ref() != Some(parent) {
-                return Err("permission_changed".into());
-            }
+            permission_change::check_parent("before_release_attestation", parent,
+                fresh.permissions.as_ref(), fresh.thread_id != expected_thread)?;
             fresh.permissions
         }
         (None, None) => None,
@@ -6334,18 +6342,10 @@ fn start_remote_task_with(
         let NativeDelegationRequest::Delegate { request_id, .. } = &task.request else {
             return Err("invalid_record".into());
         };
-        if parent_fact(
-            &st,
-            &task.owner,
-            &task.owner_instance,
-            Some(request_id),
-            fresh_attested.as_ref(),
-        )?
-        .as_ref()
-            != Some(parent)
-        {
-            return Err("permission_changed".into());
-        }
+        let current = parent_fact(
+            &st, &task.owner, &task.owner_instance, Some(request_id), fresh_attested.as_ref(),
+        )?;
+        permission_change::check_parent("before_release_parent", parent, current.as_ref(), false)?;
         let provision = st.registry.machine(&worker.machine_id)?;
         let mapping = st
             .registry
@@ -25822,6 +25822,40 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
         assert!(rx.try_recv().is_err(), "aucune remise métier ni relance au rejeu");
         drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec206_durable_refusal_replay_and_cleanup_guidance_without_spawn() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted=admit_auto_routing("conn-1",&request,None,None,None,None,&state).unwrap();
+        let task_id=admitted["task_id"].as_str().unwrap().to_owned();
+        let code=permission_change::code("before_release_attestation",&["revision","provider_session_id"]);
+        let view=remote_admission_outcome(&state,&task_id,Err(code.clone())).unwrap();
+        assert_eq!(view["error"],"remote_start_failed:permission_changed");
+        assert_eq!(view["detail"]["permission_change"]["changes"],json!(["revision","provider_session_id"]));
+        assert!(view["error_recovery"].as_str().unwrap().contains("Ne rejouez pas"));
+        let replay=admit_auto_routing("conn-1",&request,None,None,None,None,&state).unwrap();
+        assert_eq!(replay,view);
+        {
+            let st=state.lock().unwrap();
+            let mut task=st.delegation_store.get(&task_id).unwrap().unwrap();
+            assert_eq!(task.error.as_deref(),Some(format!("remote_start_failed:{code}").as_str()));
+            task.state="failed".into();task.cleanup_done=false;
+            let pending=task_view(&task,None,true);
+            assert!(pending["error_recovery"].as_str().unwrap().contains("confirmation d’arrêt"));
+            task.cleanup_done=true;
+            let done=task_view(&task,None,true);
+            assert!(done["error_recovery"].as_str().unwrap().contains("nouvelle request_id"));
+            assert_eq!(done["status"],"failed");
+            task.error=Some("remote_start_failed:permission_changed".into());
+            let legacy=task_view(&task,None,true);
+            assert_eq!(legacy["detail"]["permission_change"]["stage"],"unobserved");
+            assert_eq!(legacy["detail"]["permission_change"]["changes"],json!([]));
+            assert_eq!(task.error.as_deref(),Some("remote_start_failed:permission_changed"));
+        }
+        assert!(rx.try_recv().is_err(),"aucune remise ou nouvelle tâche au rejeu");
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(),1);
+        drop(state);cleanup(&config);
     }
 
     #[test]

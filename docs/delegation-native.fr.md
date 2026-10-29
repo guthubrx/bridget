@@ -1665,3 +1665,9 @@ Le code terminal Codex: failed:cause=server_overloaded conserve une saturation d
 Le maître conserve au plus une vérification de démarrage en cours par worker, avec la corrélation native existante. Un checkout Git long ne provoque plus une nouvelle vérification chaque seconde sur le même worker. Les autres machines restent suivies. Ce créneau n’est ni une mission ni une autorisation de Start ; son attente bornée ne prolonge aucun bail ou délai métier. La file conserve huit places. Un refus inbound_queue conserve sa signification historique et les mêmes prérequis de reprise de la tâche ; il peut encore provenir d’autres demandes concurrentes. Aucun rejeu de mission ni substitution ne résulte de cette régulation.
 
 L’écriture de cette sonde garde le budget court de contrôle (1s). Seule la réponse dispose du budget couvrant le checkout ; le verrou du socket n’est pas détenu pendant cette attente. Les autres appels gardent leurs délais antérieurs.
+
+### Refus de permissions pendant le lancement206
+
+remote_start_failed:permission_changed conserve son code public. Le statut propriétaire rend detail.permission_change : étape, noms fermés des catégories divergentes et disponibilité de la preuve. Aucune valeur de droits ou de session n’est publiée. unobserved pour un ancien refus signifie que le détail n’a pas été conservé ; il ne prouve ni perte de droits ni panne de compte.
+
+Conserver la tâche, sa clé et son dossier. Tant que l’arrêt, le nettoyage et le rapport du dossier ne sont pas confirmés, ne créer aucun remplacement. Une tâche failed ne repart ni par Continue ni par rejeu initial. Après clôture de la garde propriétaire et réattestation native de CE parent, une nouvelle admission autorisée utilise une nouvelle clé et la passation du travail restant. Si le refus revient dans le même tour fraîchement attesté, transmettre tâche, clé et diagnostic au responsable Bridget ; ne pas élargir les droits.
