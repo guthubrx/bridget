@@ -227,12 +227,15 @@ pub(super) fn audit(dir: &Path, path: &Path) -> Result<(), String> {
     let read = |args: &[&str]| capture(path, args, READ_TIMEOUT, Some((dir, path)));
     let flags = read(&["ls-files", "-v", "-z"])?.complete()?;
     for entry in flags.split('\0').filter(|e| !e.is_empty()) {
-        let (tag, _) = entry.split_once(' ').ok_or("index Git illisible")?;
-        if tag.len() != 1 || tag.as_bytes()[0].is_ascii_lowercase() {
+        let (tag, name) = entry.split_once(' ').ok_or("index Git illisible")?;
+        if tag.len() != 1
+            || tag.as_bytes()[0].is_ascii_lowercase()
+            || (tag == "S" && fs::symlink_metadata(path.join(name)).is_ok())
+        {
             return Err("rapport indisponible : drapeau Git susceptible de masquer une modification ; vérifier les fichiers et rétablir les drapeaux avant une suite".into());
         }
     }
-    let marker = read(&["config", "--worktree", "--get", "bridget.compactFormat"])?;
+    let marker = read(&["config", "--no-includes", "--get", "bridget.compactFormat"])?;
     let expected = if marker.code == Some(1) && !marker.truncated {
         false
     } else {
@@ -266,7 +269,6 @@ pub(super) fn audit(dir: &Path, path: &Path) -> Result<(), String> {
         return Err("rapport indisponible : configuration compacte modifiée".into());
     }
     let selected: HashSet<_> = plan.selected.iter().map(String::as_str).collect();
-    let flags = read(&["ls-files", "-v", "-z"])?;
     for entry in flags.split('\0').filter(|e| !e.is_empty()) {
         let (tag, name) = entry.split_once(' ').ok_or("index compact illisible")?;
         if tag.len() != 1
@@ -286,7 +288,7 @@ pub(super) fn is_compact(cwd: &Path) -> bool {
         .is_ok_and(|dir| fs::symlink_metadata(Path::new(&dir).join(MANIFEST)).is_ok())
 }
 
-fn io_failure(error: io::Error) -> String {
+pub(super) fn io_failure(error: io::Error) -> String {
     let code = match error.raw_os_error() {
         Some(libc::ENOSPC | libc::EDQUOT) => "workspace_disk_full",
         Some(libc::EACCES | libc::EPERM | libc::EROFS) => "workspace_access_denied",

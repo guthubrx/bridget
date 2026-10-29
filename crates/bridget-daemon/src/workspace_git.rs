@@ -169,7 +169,8 @@ fn allowed(args: &[&str]) -> bool {
         ["ls-files", "-v", "-z"] => true,
         ["read-tree", "-mu", "HEAD"] => true,
         ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile" | "extensions.worktreeConfig"] => true,
-        ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone" | "bridget.compactFormat"] => true,
+        ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone"] => true,
+        ["config", "--no-includes", "--get", "bridget.compactFormat"] => true,
         ["config", "--worktree", "core.sparseCheckout", "true"]
         | ["config", "--worktree", "core.sparseCheckoutCone", "false"]
         | ["config", "--worktree", "index.sparse", "false"]
@@ -402,7 +403,7 @@ fn capture(
                 Ok(0) => eof[index] = true,
                 Ok(count) => {
                     // Comme T3, chaque flux garde son budget : stdout ne peut
-                    // pas effacer le diagnostic stderr. Total borné à 2 Mio.
+                    // pas effacer le diagnostic stderr. Arbres/index : stdout 8 Mio ; autres : 1 Mio.
                     let maximum = if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) { 8 * MAX_OUTPUT } else { MAX_OUTPUT };
                     let remaining = maximum.saturating_sub(bytes.len());
                     bytes.extend_from_slice(&buffer[..count.min(remaining)]);
@@ -860,7 +861,10 @@ pub(crate) fn create(
         .map_err(|error| residue("workspace_path_unsafe", error.to_string()))?;
     let child_path = path.join(&preflight.offset);
     if compact::is_compact(&path) && !child_path.exists() {
-        fs::create_dir_all(&child_path).map_err(|e| residue("workspace_path_unsafe",e.to_string()))?;
+        fs::create_dir_all(&child_path).map_err(|e| {
+            let error=compact::io_failure(e);
+            residue(compact::failure_code(&error),error)
+        })?;
     }
     if canonical != path
         || !canonical.starts_with(&preflight.cwd)
