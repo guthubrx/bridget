@@ -60,4 +60,38 @@ Aucun téléphone n’a été désinstallé ni mis à jour de force. Cette recet
 
 Sources : https://source.android.com/docs/security/features/apksigning/v3 et https://developer.android.com/tools/apksigner.
 
-Publication publique, téléchargement et nettoyage : à attester à l’étape suivante.
+Publication publique, téléchargement et nettoyage : clôture ci-dessous.
+
+
+## Clôture de publication et de livraison
+
+La version0.6.4 est publiée et définie comme dernière release : https://github.com/guthubrx/bridget/releases/tag/v0.6.4. Le tag désigne c77a2a4048b8bdfde0fb54b48f700f0666d0cf00. La source exécutable reste30581503bf9eac47211bf154b43160b9803189f5 ; le complément est documentaire. Le diff exécutable jusqu’au tag est vide.
+
+Les six fichiers publics ont été téléchargés ; leurs empreintes concordent avec les fichiers préparés. Les exécutables extraits concordent avec les images chargées. Preuve privée : /Users/moi/.cache/bridget214/public-verification.json. Les archives et le paquet Android portent réellement0.6.4 ; aucun téléphone n’a été mis à jour de force.
+
+Le lien https://cartae.app/bridget/install.sh sert maintenant le script exact30581503, SHA2568f0b5743f595e7f098d49c8f31c20c45d03336aaf8d6b6444f431b969d07fbe5. Une seule redirection Caddy a changé, après sauvegarde et validation. Rechargement sans redémarrage du processus Caddy ; autres routes conservées.
+
+### Limite des anciens clients MCP
+
+Après UNE reprise native, UNE attestation et UNE lecture du catalogue réussissent : flotte déclarée,45options,gel=false. Les appels de ce fil restent cependant servis par le MCP211/PID35474 : reçus mcp-35474-6ae3a6cd-16 et mcp-35474-6ae3a6d0-17. Deux autres processus214 visibles ne prouvent pas le remplacement de cette connexion.
+
+Le marqueur non autoritaire essayé dans la configuration Codex a été retiré. Configuration restaurée à l’octet près ; commande,HOME,socket et namespace inchangés. Aucune seconde reprise, aucun arrêt du serveur fournisseur partagé, aucune mission métier relancée. Preuve : /Users/moi/.cache/bridget214/mcp-reload-attempt.json.
+
+Les services sont chargés214. Les anciens MCP211 de ce fil,209 de monuments et les autres clients ouverts ne sont pas déclarés rechargés. Les deux admissions Terra réussies prouvent le fonctionnement corrigé avec ces anciens clients. Pour renouveler les connexions conservées par l’application : terminer le tour courant, quitter complètement T3 Code avec Cmd+Q, rouvrir T3 Code, puis reprendre les fils existants. Une simple reprise de tour n’a pas suffi. Ce geste reste à faire ; aucun redémarrage global implicite n’a été lancé. Aucun travail ni résultat à supprimer ; aucune mission d’issue inconnue à recréer.
+
+### Nettoyage et conservation
+
+Trois revues214 terminées, guarded=false/cleanup_done=true : dossiers propres, sans fichiers ignorés, sans processus ni ouverture lsof. Retrait normal git worktree remove, sans force :
+- /home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/8c1b76e4
+- /home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/1a27b0e3
+- /home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/6c2adcf0
+
+Leurs branches locales ont été retirées après preuve d’intégration à origin/main et absence de worktree. Branche de session214 localeCartae et distanteGitHub retirée après intégration. CandidatMac56c706c7 jamais actif, sans usage, retiré. Copie de transfertSYS retirée après empreinte et usage vérifiés ; copiesCartae/KS conservées car usage non entièrement exclu. Actif214, retour212, anciens exécutables209/211/198 encore utilisés et worktrees sous observation incomplète conservés.
+
+Entretien installed réussi sur Mac et SYS. Sur SYS, le premier appel depuis source214 a refusé le cache dont le propriétaire est source204 ; l’appel depuis source204 a ensuite réussi. Aucun registre de cache modifié, aucune compilation refaite. Main et tag poussés aux miroirsSYS/KS ; les anciens checkouts sous usage ne sont pas réinitialisés. La clôture documentaire peut avancer main après le tag sans changer les exécutables publiés.
+
+Les trois propriétaires ont été informés de la reprise. Messages finaux : monuments mcp-35474-6ae3a66a-15, Politique sol mcp-35474-6ae3a6cd-16, trajets bus mcp-35474-6ae3a6d0-17. Reçus in_flight, pas de lecture déduite. Le résultat réel propriétaire des deux demandesTerra prouve la reprise indépendamment de ces messages.
+
+CodexKS reste désactivé après401 attesté. Aucun essai ni authentification supplémentaire. Action utilisateur ciblée : ssh -t ksstore '/home/moi/.local/bin/codex login --device-auth'. Une connexion réussie doit précéder qualification distincte et réactivation. Aucun autre modèle non testé n’est présenté comme qualifié.
+
+Contrôles acquis, sans nouvelle exécution à la clôture :34testsRust distincts (7recettes privées ignorées),40installateur,30JVMAndroid, guides32/522/13 et revue finale favorable. Preuves : diaporama vérifié pour le terminal isolé ; il ne prouve pas l’authentification. Les deux admissionsTerra réelles complètent cette preuve technique.

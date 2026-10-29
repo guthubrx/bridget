@@ -6,4 +6,6 @@
 - [x] Revue indépendante sécurité et compatibilité.
 - [x] Construire, distribuer, activer et vérifier les images.
 - [x] Qualifier le parcours réel depuis le parent concerné.
-- [ ] Publier les preuves, informer et nettoyer les éléments intégrés.
+- [x] Publier les preuves, informer et nettoyer les éléments intégrés.
+
+Limite conservée : anciens clients MCP ouverts. Une reprise native ne remplace pas le MCP211 de ce fil ; configuration restaurée et geste de reconnexion documenté. Services214 et admissionsTerra vérifiés. CodexKS attend la connexion utilisateur après401.
