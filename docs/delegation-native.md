@@ -905,3 +905,7 @@ do not create another mission or edit receipts.
 ## Model capacity failure during a turn (204)
 
 The code terminal Codex: failed:cause=server_overloaded preserves a provider-attested model capacity failure. It establishes neither a full Bridget queue, a full disk nor an account quota. Partial work is retained. A failed task cannot resume through Continue or replay of its initial key. Preserve files, wait for native stop confirmation and the workspace report, then close the owner guard. An authorized follow-up uses a new key and an explicit handoff of remaining work after model capacity returns. No automatic model, engine, account or permission change. If saturation persists, ask the user whether to wait or authorize another model constraint. Legacy terminal Codex: failed keeps an unknown cause: request the diagnostic for that same provider turn; do not infer saturation from failed alone.
+
+## Start monitoring and technical capacity (205)
+
+The coordinator keeps at most one start-monitor request in flight per worker through the existing correlated round-trip. A long Git checkout no longer causes another monitor request every second on that worker. Other machines remain monitored. This slot is neither a mission nor Start authorization; its bounded wait extends no lease or business deadline. The queue still has eight entries. An inbound_queue refusal keeps its historical meaning and the same task recovery prerequisites; other concurrent requests can still cause it. This regulation performs no business replay or substitution.

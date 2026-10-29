@@ -10843,6 +10843,13 @@ fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
     }
 }
 
+// A slow checkout can occupy the serial worker for five minutes. Keep its
+// monitor request correlated until that bounded work can finish, without
+// accumulating one fire-and-forget probe per tick. This is no mission lease.
+const START_MONITOR_BUDGET: Duration = crate::workspace_git::WORKTREE_ADD_TIMEOUT
+    .saturating_add(crate::workspace_git::READ_TIMEOUT.saturating_mul(4))
+    .saturating_add(Duration::from_secs(10));
+
 pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -10857,8 +10864,9 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             st.host_resources.collect(now, capacity);
         }
     }
-    // Une sonde par cadence existante (1 s), sans attendre sa réponse réseau.
-    // L'observation revient par le handler worker corrélé, même après reprise maître.
+    // Cadence existante (1 s), au plus une sonde en cours par worker.
+    // Le round-trip natif conserve la corrélation et toutes les gardes de réponse.
+    // Un worker lent ne retient pas les sondes des autres machines.
     // Filtrage O(n), n tâches renvoyées par pending(), déjà triées par task_id en SQL.
     // Un seul candidat subit les E/S : canon spawn O(c) et chargement Fleet complet
     // (f entrées, désérialisation BTreeMap O(f log f)), plus le lien SQL indexé.
@@ -10867,6 +10875,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
     let start_probe = {
         use bridget_transport::protocol::*;
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let DaemonState { remote_workers, remote_start_reconciles, .. } = &mut *st;
+            remote_start_reconciles.retain(|machine, (epoch, receiver)| {
+                remote_workers.get(machine).is_some_and(|worker| worker.epoch == *epoch
+                    && worker.contact == WorkerContactState::Connected)
+                    && matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Empty))
+            });
+        }
         let due = st
             .remote_start_reconcile_last
             .as_ref()
@@ -10882,6 +10898,8 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 && task.child_instance.is_some()
                 && task.mission_issued_at.is_none()
                 && !task.start_recovery.as_ref().is_some_and(|plan| plan.in_progress())
+                && task.remote_placement.as_ref().is_some_and(|placement|
+                    !st.remote_start_reconciles.contains_key(&placement.machine_id))
         });
         let candidate = if candidates.is_empty() {
             None
@@ -10932,29 +10950,21 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
             {
                 return None;
             }
-            let writer = st.connections.get(&worker.conn_id)?.clone();
-            let request = WorkerRequest {
-                version: REMOTE_WORKER_VERSION,
-                correlation_id: Uuid::new_v4().to_string(),
-                connection_epoch: worker.epoch.clone(),
-                worker: worker.identity.clone(),
-                command,
-                request: WorkerRequestOperation::Reconcile {},
-            };
-            request.validate().ok()?;
-            Some((
-                task.task_id,
-                writer,
-                DaemonToWrapper::WorkerRequest { request },
-            ))
+            st.connections.get(&worker.conn_id)?;
+            let identity = worker.identity.clone();
+            let epoch = worker.epoch.clone();
+            let (done, receiver) = mpsc::sync_channel(1);
+            st.remote_start_reconciles.insert(identity.machine_id.clone(), (epoch, receiver));
+            Some((identity, command, done))
         })
     };
-    if let Some((_, writer, message)) = start_probe {
-        let _ = push_control_message_until(
-            &writer,
-            &message,
-            Instant::now() + CANCEL_NOTIFICATION_BUDGET,
-        );
+    if let Some((worker, command, done)) = start_probe {
+        let state = state.clone();
+        let _ = thread::Builder::new().name("start-monitor".into()).spawn(move || {
+            let _ = remote_worker_roundtrip(&state, &worker, &command,
+                bridget_transport::protocol::WorkerRequestOperation::Reconcile {}, Instant::now() + START_MONITOR_BUDGET);
+            let _ = done.try_send(());
+        });
     }
     // O(n) tâches triées par SQL, une opération réseau en vol pour tous les ticks.
     // Le canal ne contient qu'un résultat ; aucun thread n'attend dans cette boucle.
@@ -32629,6 +32639,143 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(context["command_identity_confirmed"],false);
         assert!(context["command_id"].is_null());assert!(context["generation"].is_null());
         drop(st);cleanup(&config);
+    }
+
+    fn monitor_fixture205() -> (Arc<Mutex<DaemonState>>, DaemonConfig, Task, std::io::BufReader<UnixStream>) {
+        use bridget_transport::protocol::*;
+        let (mut st,config,mut task,_)=remote162_capture_fixture();
+        let root=st.fixture_root.as_ref().unwrap().0.clone();
+        st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+        }}}).to_string(),&root.join("registry205.json")).unwrap();
+        task.state="starting".into();task.remote_prepared=false;task.mission_issued_at=None;
+        st.delegation_store.save(&task).unwrap();
+        let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+        let (writer,mut reader)=super::super::presence_tests::control_socket("probe205");
+        st.connections.insert("worker205".into(),writer);
+        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+            identity:worker,conn_id:"worker205".into(),epoch:"epoch205".into(),capabilities:vec![],
+            last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected,
+        });
+        let state=Arc::new(Mutex::new(st));
+        (state,config,task,reader)
+    }
+
+    #[test]
+    fn spec205_start_monitor_does_not_fill_queue_while_worker_is_busy() {
+        use bridget_transport::protocol::*;
+        let (state,config,task,mut reader)=monitor_fixture205();
+        let before=serde_json::to_value(state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        tick(&state);
+        let DaemonToWrapper::WorkerRequest {request:first}=super::super::presence_tests::read_control(&mut reader)
+            else {panic!("sonde initiale attendue")};
+        for _ in 0..9 {
+            state.lock().unwrap().remote_start_reconcile_last=Some((task.task_id.clone(),Instant::now()-Duration::from_secs(2)));
+            tick(&state);
+        }
+        reader.get_ref().set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        let mut count=1;
+        loop {
+            let mut line=String::new();
+            match std::io::BufRead::read_line(&mut reader,&mut line) {
+                Ok(0)=>break,
+                Ok(_)=>{let frame:DaemonToWrapper=serde_json::from_str(line.trim()).unwrap();
+                    assert!(matches!(frame,DaemonToWrapper::WorkerRequest {..}));count+=1;},
+                Err(e) if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut)=>break,
+                Err(e)=>panic!("{e}"),
+            }
+        }
+        assert!(handle_worker_message(&state,"worker205",WrapperToDaemon::WorkerResponse {response:WorkerResponse {
+            version:REMOTE_WORKER_VERSION,correlation_id:first.correlation_id,connection_epoch:first.connection_epoch,
+            worker:first.worker,command:first.command,response:WorkerResponseOperation::Rejected {reason:WorkerRefusal::UnknownExecution},
+        }}).is_none());
+        let saved=state.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(serde_json::to_value(saved).unwrap(),before);
+        drop(state);cleanup(&config);
+        assert_eq!(count,1,"une préparation lente ne doit pas accumuler les sondes jusqu’à remplir les huit places");
+    }
+
+    fn answer_monitor205(state:&Arc<Mutex<DaemonState>>,conn:&str,request:bridget_transport::protocol::WorkerRequest) {
+        use bridget_transport::protocol::*;
+        assert!(handle_worker_message(state,conn,WrapperToDaemon::WorkerResponse {response:WorkerResponse {
+            version:REMOTE_WORKER_VERSION,correlation_id:request.correlation_id,
+            connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+            response:WorkerResponseOperation::Rejected {reason:WorkerRefusal::UnknownExecution},
+        }}).is_none());
+    }
+
+    #[test]
+    fn spec205_only_correlated_reply_releases_monitor_and_closed_slot_can_retry() {
+        use bridget_transport::protocol::*;
+        let (state,config,task,mut reader)=monitor_fixture205();
+        tick(&state);
+        let DaemonToWrapper::WorkerRequest {request}=super::super::presence_tests::read_control(&mut reader) else {panic!("sonde")};
+        let correlation=request.correlation_id.clone();
+        let bad=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:correlation.clone(),
+            connection_epoch:"wrong-epoch".into(),worker:request.worker.clone(),command:request.command.clone(),
+            response:WorkerResponseOperation::Rejected {reason:WorkerRefusal::UnknownExecution}};
+        assert!(matches!(handle_worker_message(&state,"worker205",WrapperToDaemon::WorkerResponse {response:bad}),
+            Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::StaleConnection})));
+        assert!(state.lock().unwrap().pending_worker_responses.contains_key(&correlation));
+        answer_monitor205(&state,"worker205",request);
+        let (epoch,receiver)=state.lock().unwrap().remote_start_reconciles.remove("cartae").unwrap();
+        receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        {
+            let mut st=state.lock().unwrap();
+            st.remote_start_reconciles.insert("cartae".into(),(epoch,receiver));
+            st.remote_start_reconcile_last=Some((task.task_id.clone(),Instant::now()-Duration::from_secs(2)));
+        }
+        tick(&state);
+        let DaemonToWrapper::WorkerRequest {request:next}=super::super::presence_tests::read_control(&mut reader) else {panic!("sonde suivante")};
+        assert_ne!(next.correlation_id,correlation);
+        answer_monitor205(&state,"worker205",next);
+        drop(state);cleanup(&config);
+    }
+
+    #[test]
+    fn spec205_busy_worker_does_not_prevent_monitor_on_another_machine() {
+        use bridget_transport::protocol::*;
+        let (state,config,original,mut reader)=monitor_fixture205();
+        tick(&state);
+        let DaemonToWrapper::WorkerRequest {request:first}=super::super::presence_tests::read_control(&mut reader) else {panic!("sonde Cartae")};
+        let (writer,mut sys_reader)=super::super::presence_tests::control_socket("sys205");
+        {
+            let mut st=state.lock().unwrap();
+            let root=st.fixture_root.as_ref().unwrap().0.clone();
+            let mut machines=json!({});
+            for machine in ["cartae","sysle2"] {
+                machines[machine]=json!({"enabled":true,"worker_id":format!("worker-{machine}"),"provisioning_revision":1,
+                    "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}});
+            }
+            st.registry=AgentRegistry::from_json(&json!({"agents":{},"machines":machines}).to_string(),&root.join("machines205.json")).unwrap();
+            let mut task=original.clone();task.task_id=Uuid::new_v4().to_string();task.child=Uuid::new_v4().to_string();
+            task.mission=Uuid::new_v4().to_string();task.remote_result_slots.clear();
+            if let NativeDelegationRequest::Delegate {request_id,..}=&mut task.request {*request_id="sys205".into();}
+            let placement=task.remote_placement.as_mut().unwrap();placement.machine_id="sysle2".into();placement.worker_id="worker-sysle2".into();
+            let now=unix_timestamp();
+            let order=FleetSpawnOrder {posture:None,agent_type:"native-test".into(),project:None,
+                requested_name:Some(task.child.clone()),cwd:PathBuf::from("/tmp"),persistent:false,
+                command_id:Uuid::new_v4().to_string(),issued_at:now,deadline_at:now+120,
+                ownership:Some(SpawnOwnership {parent_instance_id:task.owner_instance.clone(),parent_execution_id:None,
+                    objective_id:None,delegation_id:Some(task.task_id.clone()),project:None,role:"native_delegate".into(),
+                    max_children:None,max_depth:None}),remote_placement:task.remote_placement.clone()};
+            let crate::fleet::SpawnSubmission::Start(lease)=st.fleet.request_spawn(&order,now).unwrap() else {panic!("bail SYS")};
+            task.child_instance=Some(lease.instance_id);
+            st.delegation_store.insert(&task,"sys205",&serde_json::to_vec(&task.request).unwrap()).unwrap();
+            st.connections.insert("sys205".into(),writer);
+            st.remote_workers.insert("sysle2".into(),super::super::RemoteWorkerConnection {
+                identity:remote_worker_identity(task.remote_placement.as_ref().unwrap()),conn_id:"sys205".into(),
+                epoch:"epoch-sys205".into(),capabilities:vec![],last_contact:Instant::now(),
+                last_contact_at:now,contact:WorkerContactState::Connected});
+            st.remote_start_reconcile_last=Some((original.task_id.clone(),Instant::now()-Duration::from_secs(2)));
+        }
+        tick(&state);
+        let DaemonToWrapper::WorkerRequest {request:second}=super::super::presence_tests::read_control(&mut sys_reader) else {panic!("sonde SYS")};
+        assert_eq!(second.worker.machine_id,"sysle2");
+        assert_eq!(state.lock().unwrap().remote_start_reconciles.len(),2);
+        answer_monitor205(&state,"sys205",second);answer_monitor205(&state,"worker205",first);
+        drop(state);cleanup(&config);
     }
 
     fn delayed_proof192(digest: String) -> (Result<Task,String>, Duration) {

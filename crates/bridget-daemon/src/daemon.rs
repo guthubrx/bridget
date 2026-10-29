@@ -1120,6 +1120,7 @@ struct DaemonState {
     remote_native_ready: HashSet<String>,
     /// Curseur de sondage uniquement ; aucune preuve d'arrêt ni permis durable.
     remote_start_reconcile_last: Option<(String, Instant)>,
+    remote_start_reconciles: HashMap<String, (String, Receiver<()>)>,
     /// Rotation des réservations ; ne remplace aucune preuve de droits.
     dispatch_diagnostics: dispatch_diagnostics::Cache,
     remote_result_reservation_last: Option<(String, Instant)>,
@@ -5067,6 +5068,7 @@ impl DaemonState {
             remote_workers: HashMap::new(),
             remote_native_ready: HashSet::new(),
             remote_start_reconcile_last: None,
+            remote_start_reconciles: HashMap::new(),
             dispatch_diagnostics: Default::default(),
             remote_result_reservation_last: None,
             remote_result_reservation: None,
