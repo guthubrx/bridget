@@ -1728,3 +1728,16 @@ et confirmer l'arrêt et le dossier avant toute suite.
 
 
 208 : après redémarrage du maître, une préparation distante admise mais non confirmée peut rester queued. Le statut expose admission_interruption/coordinator_restarted_before_prepared. Ce diagnostic est en lecture seule ; il ne prouve pas l’arrêt physique. Le propriétaire annule la tâche, vérifie sa clôture et le dossier éventuellement préparé avant toute nouvelle admission. Aucun rejeu automatique ni remplacement implicite.
+
+### Refus de préparation distante : étape et cause
+
+Après négociation native, le statut conserve detail.workspace_preparation avec
+une étape et une cause fermées. Aucun stderr ni contenu de fichier n'est transmis.
+Le code technique de l'erreur, la tâche et la clé restent conservés. Un ancien
+refus sans cette preuve garde unknown : une mesure actuelle ne réécrit pas son histoire.
+
+Le conseil indique d'abord la vérification utile sur la machine cible. Ce refus
+concerne cette préparation ; les autres travaux autorisés suivent leur propre état.
+Le propriétaire conserve les fichiers, annule la tâche puis vérifie sa clôture
+et le dossier éventuel. Une nouvelle admission autorisée exige la correction de
+la cause et une nouvelle clé. Le rejeu d'une tâche annulée ne la redémarre pas.

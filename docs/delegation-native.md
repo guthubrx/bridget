@@ -971,3 +971,16 @@ confirm shutdown and workspace state before any authorized follow-up.
 
 
 208: after a coordinator restart, an admitted but unconfirmed remote preparation can remain queued. Status exposes admission_interruption/coordinator_restarted_before_prepared. This read-only diagnostic does not prove that worker execution stopped. The owner cancels the task and verifies native closure and any prepared directory before a new admission. No automatic retry or implicit replacement.
+
+### Remote preparation refusal: stage and cause
+
+After native negotiation, status retains detail.workspace_preparation with a
+closed stage and cause. No stderr or file contents are transmitted. The technical
+error, task and request key are retained. An older refusal without this evidence
+keeps unknown; a current measurement does not rewrite its history.
+
+Guidance starts with the useful check on the target machine. This refusal affects
+this preparation; other authorized work follows its own state. The owner preserves
+files, cancels the task, then verifies native closure and any workspace. A new
+authorized admission requires correction of the cause and a new key. Replaying
+a cancelled task does not restart it.

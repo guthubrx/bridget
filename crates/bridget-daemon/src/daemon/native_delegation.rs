@@ -5,6 +5,8 @@ pub(super) mod workspace_repair;
 mod start_recovery;
 #[path = "native_permission_change.rs"]
 mod permission_change;
+#[path = "native_workspace_preparation210.rs"]
+mod workspace_preparation210;
 use super::*;
 use crate::decision_service::{
     CallerDeadline, DecisionBrief, DecisionCandidate, DecisionChoice, HealthStatus,
@@ -4319,6 +4321,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     }
     view["mission_reply_timeout_secs"] = json!(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
     permission_change::project_task(task, &mut view);
+    workspace_preparation210::project(task, &mut view);
     if task.projected_error()==Some("terminal Codex: failed:cause=server_overloaded") {
         view["error_message"]=json!("Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
@@ -5481,10 +5484,24 @@ fn delegate_remote_with_routing(
                 state,
                 &worker,
                 &provisional,
-                routing_prepare_operation(prepare, routing.as_ref(), false),
+                {
+                    let operation = routing_prepare_operation(prepare, routing.as_ref(), false);
+                    let negotiated = state.lock().unwrap_or_else(|e| e.into_inner())
+                        .remote_workers.get(&worker.machine_id)
+                        .is_some_and(|session| session.capabilities.contains(
+                            &bridget_transport::protocol::WorkerCapability::WorkspaceFailureV1));
+                    if negotiated {
+                        bridget_transport::protocol::WorkerRequestOperation::PrepareDiagnosed {
+                            prepare: Box::new(operation),
+                        }
+                    } else { operation }
+                },
                 Instant::now() + Duration::from_secs(30) + crate::workspace_git::WORKTREE_ADD_TIMEOUT,
             )
             .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
+            if let WorkerResponseOperation::WorkspaceRejected {reason,failure} = &response {
+                return Err(workspace_preparation210::error_code(*reason,*failure));
+            }
             let WorkerResponseOperation::Prepared { prepared: isolated } = response else {
                 return Err("remote_prepare_invalid".into());
             };
@@ -25484,15 +25501,47 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec210_preparation_diagnostic_is_durable_pure_and_scoped() {
+        use bridget_transport::protocol::{WorkspacePrepareFailure as F, WorkspacePrepareCause as C, WorkspacePrepareStage as S, WorkerRefusal as R};
+        let (state,config,rx,_reader,request,_root)=routing168_fixture(1);
+        let admitted=admit_auto_routing("conn-1",&request,None,None,None,None,&state).unwrap();
+        let id=admitted["task_id"].as_str().unwrap();
+        let code=workspace_preparation210::error_code(R::WorkspacePrepareFailed,F{stage:S::CompactPlan,cause:C::GitTimeout});
+        let view=remote_admission_outcome(&state,id,Err(code)).unwrap();
+        assert_eq!(view["detail"]["workspace_preparation"]["cause"],"git_timeout");
+        assert_eq!(view["detail"]["workspace_preparation"]["stage"],"compact_plan");
+        assert!(view["error_message"].as_str().unwrap().contains("autres travaux autorisés"));
+        let task=state.lock().unwrap().delegation_store.get(id).unwrap().unwrap();
+        let before=serde_json::to_value(&task).unwrap();
+        let pure=task_view(&task,None,true);
+        for key in ["error","detail","error_message","error_recovery","task_id","work_state"] {
+            assert_eq!(pure[key],view[key],"{key}");
+        }
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        let replay=admit_auto_routing("conn-1",&request,None,None,None,None,&state).unwrap();
+        assert_eq!(replay,view);
+        assert!(rx.try_recv().is_err(),"aucune nouvelle commande");
+        let mut closed=task.clone();closed.state="cancelled".into();closed.cleanup_done=true;
+        let closed_view=task_view(&closed,None,true);
+        assert!(closed_view["error_recovery"].as_str().unwrap().contains("clôture native est acquise"));
+        assert!(!closed_view["error_recovery"].as_str().unwrap().contains("doit annuler"));
+        let mut old=task.clone();old.error=Some("remote_start_failed:remote_workspace_prepare:WorkspacePrepareFailed".into());
+        let old_view=task_view(&old,None,true);
+        assert_eq!(old_view["detail"]["workspace_preparation"]["cause"],"unknown");
+        assert!(old_view["error_message"].as_str().unwrap().contains("cause précise reste inconnue"));
+        drop(state);cleanup(&config);
+    }
+
+    #[test]
     fn spec172_remote_workspace_error_message_preserves_receipt_and_replay() {
         let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
         let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
         let task_id = admitted["task_id"].as_str().unwrap().to_owned();
         for (reason, fragment) in [
-            ("DiskFull", "espace disque insuffisant"),
-            ("FilesystemAccessDenied", "accès au disque refusé"),
-            ("WorkspacePrepareFailed", "Git n’a pas pu"),
-            ("WorkspacePrepareIncomplete", "reçu d’une préparation précédente est incomplet"),
+            ("DiskFull", "quota du volume réellement ciblé"),
+            ("FilesystemAccessDenied", "accès du compte worker"),
+            ("WorkspacePrepareFailed", "cause précise reste inconnue"),
+            ("WorkspacePrepareIncomplete", "lecture corrélée du reçu"),
             ("StoreUnavailable", "n’a pas fourni de cause précise"),
             ("ResourceLimit", "capacité réservée par Bridget"),
             ("DiskFull:private-secret", "n’a pas fourni de cause précise"),
@@ -25503,7 +25552,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(result["error"], format!("remote_start_failed:remote_workspace_prepare:{reason}"));
             assert_eq!(result["work_state"], "failed");
             assert_eq!(result["status"], admitted["status"], "aucune mutation de l’état durable pour un libellé");
-            assert!(result["error_recovery"].as_str().unwrap().contains("annulez cette tâche"));
+            assert!(result["error_recovery"].as_str().unwrap().contains("cette tâche"));
             let message = result["error_message"].as_str().unwrap();
             assert!(message.contains(fragment), "{result}");
             assert!(!message.contains("private-secret"));

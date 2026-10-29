@@ -1783,7 +1783,9 @@ impl WorkerStore {
             let record = receipt.record.ok_or(WorkerStoreError::Workspace(
                 WorkerRefusal::WorkspacePrepareIncomplete,
             ))?;
-            crate::workspace_git::report(&record).map_err(workspace_failure)?;
+            crate::workspace_failure210::stage(
+                bridget_transport::protocol::WorkspacePrepareStage::Report,
+                crate::workspace_git::report(&record)).map_err(workspace_failure)?;
             return Ok(record);
         }
         let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
@@ -1792,10 +1794,14 @@ impl WorkerStore {
             return Err(WorkerRefusal::InvalidEnvelope.into());
         };
         if let Some(commit) = request.base_commit.as_deref() {
-            crate::workspace_git::import_remote_commit(root, commit)
+            crate::workspace_failure210::stage(
+                bridget_transport::protocol::WorkspacePrepareStage::Import,
+                crate::workspace_git::import_remote_commit(root, commit))
                 .map_err(workspace_failure)?;
         }
-        let plan = crate::workspace_git::preflight_remote(root, base_ref.as_deref(), branch.as_deref())
+        let plan = crate::workspace_failure210::stage(
+            bridget_transport::protocol::WorkspacePrepareStage::Preflight,
+            crate::workspace_git::preflight_remote(root, base_ref.as_deref(), branch.as_deref()))
             .map_err(workspace_failure)?;
         if request
             .base_commit
@@ -1827,7 +1833,9 @@ impl WorkerStore {
         }
         // Le maître a réservé sa Task avant ce second Prepare. Aucun bootstrap
         // n'existe encore et aucun verrou métier ne traverse cette E/S Git.
-        let record = crate::workspace_git::create(&plan, &command.task_id)
+        let record = crate::workspace_failure210::stage(
+            bridget_transport::protocol::WorkspacePrepareStage::Create,
+            crate::workspace_git::create(&plan, &command.task_id))
             .map_err(workspace_failure)?;
         receipt.record = Some(record.clone());
         self.persist(&path, &receipt)?;
@@ -4208,6 +4216,7 @@ impl WorkerRuntime {
         epoch: &str,
         disconnected: &AtomicBool,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        crate::workspace_failure210::clear();
         if let Err(reason) = request.validate() {
             return if matches!(request.request, WorkerRequestOperation::StartDetailed { .. }) {
                 Ok(WorkerResponseOperation::StartRejected {
@@ -4234,6 +4243,20 @@ impl WorkerRuntime {
             };
         }
         match &request.request {
+            WorkerRequestOperation::PrepareDiagnosed { prepare } => {
+                let mut inner = request.clone();
+                inner.request = *prepare.clone();
+                let outcome = self.handle(&inner, epoch, disconnected);
+                let failure = crate::workspace_failure210::take();
+                match (outcome, failure) {
+                    (Err(reason), Some(failure)) if failure.validate(reason).is_ok() => {
+                        eprintln!("bridget_workspace_prepare210 {}", serde_json::json!({
+                            "command":request.command, "failure":failure, "reason":reason}));
+                        Ok(WorkerResponseOperation::WorkspaceRejected {reason,failure})
+                    }
+                    (outcome, _) => outcome,
+                }
+            }
             WorkerRequestOperation::Prepare { prepare } => self
                 .prepare(&request.command, prepare)
                 .map(|prepared| WorkerResponseOperation::Prepared { prepared }),
@@ -4538,7 +4561,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
-    start_recovery:bool,
+    start_recovery:bool,workspace_failure:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -4551,17 +4574,18 @@ impl MasterWorkerFeatures {
             WorkerCapability::OriginProofV1=>self.origin_proof,
             WorkerCapability::WorkspaceRepairV1=>self.workspace_repair,
             WorkerCapability::StartRecoveryV1=>self.start_recovery,
+            WorkerCapability::WorkspaceFailureV1=>self.workspace_failure,
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1]
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1]
             .into_iter().filter(|v|self.supports(*v)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=8 && accepted.iter().enumerate().all(|(index,capability)|
+        accepted.len()<=9 && accepted.iter().enumerate().all(|(index,capability)|
             self.supports(*capability) && !accepted[..index].contains(capability))
     }
 }
@@ -4584,6 +4608,7 @@ fn probe_worker_capability(
                 workspace_diagnostics:has("worker_workspace_diagnostics_v1"),
                 origin_proof:has("worker_origin_proof_v1"),workspace_repair:has("worker_workspace_repair_v1"),
                 start_recovery:has("worker_start_recovery_v1"),
+                workspace_failure:has("worker_workspace_failure_v1"),
             })
         }
         _=>Err("worker_capability_required".into()),
@@ -4701,6 +4726,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let origin_proof_negotiated=negotiated.contains(&WorkerCapability::OriginProofV1);
         let workspace_repair_negotiated=negotiated.contains(&WorkerCapability::WorkspaceRepairV1);
         let start_recovery_negotiated=negotiated.contains(&WorkerCapability::StartRecoveryV1);
+        let workspace_failure_negotiated=negotiated.contains(&WorkerCapability::WorkspaceFailureV1);
         runtime.host_resources.reset();
         runtime.last_resource_refresh = Instant::now();
         let disconnected = Arc::new(AtomicBool::new(false));
@@ -4743,15 +4769,17 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                     || (matches!(&request.request, WorkerRequestOperation::StartDetailed { .. })
                                         && request.validate() == Err(WorkerRefusal::ResourceLimit)))
                                 && (candidate_probe_v2_negotiated
-                                    || !matches!(
-                                        &request.request,
-                                        WorkerRequestOperation::PrepareV2 { .. }
-                                    ))
+                                    || !(matches!(&request.request,WorkerRequestOperation::PrepareV2 {..})
+                                        || matches!(&request.request,WorkerRequestOperation::PrepareDiagnosed {prepare}
+                                            if matches!(prepare.as_ref(),WorkerRequestOperation::PrepareV2 {..}))))
                                 && (slot_deadline_negotiated || !matches!(
                                     &request.request, WorkerRequestOperation::ReserveResultSlotUntil { .. }
                                 ))
                                 && (workspace_repair_negotiated || !matches!(
                                     &request.request, WorkerRequestOperation::RepairWorkspace { .. }
+                                ))
+                                && (workspace_failure_negotiated || !matches!(
+                                    &request.request, WorkerRequestOperation::PrepareDiagnosed { .. }
                                 ))
                                 && (start_recovery_negotiated || !matches!(
                                     &request.request,
@@ -7228,6 +7256,41 @@ while not stop.exists(): time.sleep(.01)
                     "sandbox_policy":{"type":"readOnly","networkAccess":false}}),
             },
         };
+        //210 : vrai refus du profil compact, même handler et aucun fournisseur.
+        {
+            use bridget_transport::protocol::{WorkspacePrepareCause as C, WorkspacePrepareStage as S};
+            git(&project, &["config","bridget.worktreeProfile","invalid210"]);
+            let mut inner=request.clone();
+            inner.workspace=Some(WorkspaceRequest::Worktree {base_ref:Some(base.clone()),branch:Some("fixture210".into())});
+            let mut isolated=identity.clone();
+            isolated.task_id=uuid::Uuid::new_v4().to_string(); isolated.command_id=isolated.task_id.clone();
+            let frame=WorkerRequest {version:REMOTE_WORKER_VERSION,correlation_id:"diagnosed210".into(),
+                connection_epoch:"epoch210".into(),worker:worker(),command:isolated.clone(),
+                request:WorkerRequestOperation::PrepareDiagnosed {prepare:Box::new(
+                    WorkerRequestOperation::Prepare {prepare:inner.clone()})}};
+            let disconnected=AtomicBool::new(false);
+            let response=runtime.handle(&frame,"epoch210",&disconnected).unwrap();
+            assert!(matches!(response,WorkerResponseOperation::WorkspaceRejected {
+                reason:WorkerRefusal::WorkspacePrepareFailed,
+                failure:bridget_transport::protocol::WorkspacePrepareFailure {stage:S::CompactPlan,cause:C::RepoUnsupported}
+            }));
+            let response_frame=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:frame.correlation_id.clone(),
+                connection_epoch:"epoch210".into(),worker:worker(),command:isolated.clone(),response};
+            response_frame.validate().unwrap();
+            let wire=serde_json::to_string(&response_frame).unwrap();
+            assert!(!wire.contains(project.to_str().unwrap()));
+            assert!(!wire.contains("invalid210"));
+            assert!(!project.join(".worktrees").join(&isolated.task_id[..8]).exists());
+            let mut legacy=frame.clone();
+            legacy.command.task_id=uuid::Uuid::new_v4().to_string(); legacy.command.command_id=legacy.command.task_id.clone();
+            legacy.request=WorkerRequestOperation::Prepare {prepare:inner};
+            assert_eq!(runtime.handle(&legacy,"epoch210",&disconnected),Err(WorkerRefusal::WorkspacePrepareFailed));
+            assert!(crate::workspace_failure210::take().is_some());
+            let mut stale=frame.clone();stale.connection_epoch="foreign".into();
+            assert_eq!(runtime.handle(&stale,"epoch210",&disconnected),Err(WorkerRefusal::StaleConnection));
+            assert!(runtime.running.is_empty() && runtime.held.is_empty());
+            git(&project, &["config","--unset","bridget.worktreeProfile"]);
+        }
         let root_prepared = runtime.prepare(&identity, &request).unwrap();
         assert!(root_prepared.workspace.is_none());
         assert_eq!(root_prepared.effective_posture, SpawnPosture::Discovery);

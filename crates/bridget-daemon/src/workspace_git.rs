@@ -827,7 +827,9 @@ pub(crate) fn create(
         std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
     };
     let _serialized = lock.lock().unwrap_or_else(|error| error.into_inner());
-    let compact = compact::plan(preflight)?;
+    let compact = crate::workspace_failure210::stage(
+        bridget_transport::protocol::WorkspacePrepareStage::CompactPlan,
+        compact::plan(preflight))?;
     let mut checkout_args = vec!["worktree", "add"];
     if compact.is_some() { checkout_args.push("--no-checkout"); }
     checkout_args.extend(["-b", &branch, "--", path_text, &preflight.base_commit]);
@@ -851,7 +853,9 @@ pub(crate) fn create(
         ));
     }
     if let Some(plan) = compact {
-        compact::apply(&path, plan).map_err(|e| {
+        crate::workspace_failure210::stage(
+            bridget_transport::protocol::WorkspacePrepareStage::CompactApply,
+            compact::apply(&path, plan)).map_err(|e| {
             let code=compact::failure_code(&e);
             residue(code,e)
         })?;

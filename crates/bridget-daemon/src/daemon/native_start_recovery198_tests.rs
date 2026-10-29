@@ -1361,8 +1361,9 @@ fn negotiate198(
         .write_all(format!("{}\n", serde_json::to_string(&report).unwrap()).as_bytes())
         .unwrap();
     let caps = client.join().unwrap();
-    assert_eq!(caps.len(), 8);
+    assert_eq!(caps.len(), 9);
     assert!(caps.contains(&WorkerCapability::StartRecoveryV1));
+    assert!(caps.contains(&WorkerCapability::WorkspaceFailureV1));
     let identity = {
         let mut st = state.lock().unwrap();
         st.peer_uids.insert(conn.into(), unsafe { libc::geteuid() });
@@ -1395,7 +1396,7 @@ fn negotiate198(
 }
 
 #[test]
-fn spec198_real_identity_hello_accepted_negotiates_all_eight_capabilities() {
+fn spec210_real_identity_hello_accepted_negotiates_all_nine_capabilities() {
     let (state, config, _, _, _) = fixture();
     negotiate198(&state, "worker-wire198");
     drop(state);
@@ -1611,4 +1612,43 @@ fn spec202_real_definition_drift_and_effort_change_still_refuse_precisely() {
 #[test]
 fn spec202_inbound_queue_strict_recovery_keeps_task_and_selected_routing() {
     native_flow_with_routing202(false, false, false, true);
+}
+
+
+#[test]
+fn spec210_workspace_response_keeps_correlation_epoch_and_late_channel() {
+    use bridget_transport::protocol::{WorkspacePrepareFailure as F, WorkspacePrepareStage as S, WorkspacePrepareCause as C};
+    let (state,config,task,_,_)=fixture();
+    let before=saved(&state,&task.task_id);
+    let (worker,epoch)={
+        let mut st=state.lock().unwrap();
+        let session=st.remote_workers.get_mut("cartae").unwrap();
+        session.capabilities.push(WorkerCapability::WorkspaceFailureV1);
+        (session.identity.clone(),session.epoch.clone())
+    };
+    let command=WorkerCommandIdentity {command_id:task.task_id.clone(),task_id:task.task_id.clone(),
+        instance_id:String::new(),generation:0};
+    let response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:"workspace210".into(),
+        connection_epoch:epoch.clone(),worker:worker.clone(),command:command.clone(),
+        response:WorkerResponseOperation::WorkspaceRejected {reason:WorkerRefusal::WorkspacePrepareFailed,
+            failure:F{stage:S::CompactPlan,cause:C::GitTimeout}}};
+    response.validate().unwrap();
+    let (tx,rx)=std::sync::mpsc::sync_channel(1);
+    state.lock().unwrap().pending_worker_responses.insert(response.correlation_id.clone(),
+        super::super::super::PendingWorkerResponse {conn_id:"worker198".into(),epoch,
+            worker,command,reply:tx});
+    let mut foreign=response.clone();foreign.command.task_id="foreign210".into();
+    assert!(matches!(super::super::super::handle_worker_message(&state,"worker198",
+        WrapperToDaemon::WorkerResponse {response:foreign}),Some(DaemonToWrapper::WorkerRejected {..})));
+    let mut stale=response.clone();stale.connection_epoch="old210".into();
+    assert!(matches!(super::super::super::handle_worker_message(&state,"worker198",
+        WrapperToDaemon::WorkerResponse {response:stale}),Some(DaemonToWrapper::WorkerRejected {..})));
+    assert!(rx.try_recv().is_err());
+    assert!(super::super::super::handle_worker_message(&state,"worker198",
+        WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
+    assert_eq!(rx.try_recv().unwrap(),response.response);
+    assert!(super::super::super::handle_worker_message(&state,"worker198",
+        WrapperToDaemon::WorkerResponse {response}).is_none());
+    assert_eq!(saved(&state,&task.task_id),before);
+    drop(state);cleanup(&config);
 }

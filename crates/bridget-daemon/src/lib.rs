@@ -71,6 +71,7 @@ mod t3code_mcp;
 pub mod test_sync;
 pub mod threads;
 pub(crate) mod workspace_git;
+mod workspace_failure210;
 pub mod wrapper;
 
 pub(crate) mod wake_schedules;

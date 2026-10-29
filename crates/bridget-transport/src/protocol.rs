@@ -2881,6 +2881,36 @@ pub enum WorkerCapability {
     ResultSlotDeadlineV1,
     OriginProofV1,
     StartRecoveryV1,
+    WorkspaceFailureV1,
+}
+
+/// Diagnostic fermé : aucun chemin, stderr ou texte du dépôt ne passe sur le fil.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePrepareStage {
+    Import, Preflight, CompactPlan, Create, CompactApply, Report, Unknown,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspacePrepareCause {
+    GitTimeout, GitOutputTruncated, GitCommandFailed, GitUnavailable,
+    RepoUnsupported, BranchExists, PathUnsafe, WorktreeLimit,
+    DiskFull, AccessDenied, Unknown,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspacePrepareFailure {
+    pub stage: WorkspacePrepareStage,
+    pub cause: WorkspacePrepareCause,
+}
+impl WorkspacePrepareFailure {
+    pub fn validate(self, reason: WorkerRefusal) -> Result<(), WorkerRefusal> {
+        worker_require(match self.cause {
+            WorkspacePrepareCause::DiskFull => reason == WorkerRefusal::DiskFull,
+            WorkspacePrepareCause::AccessDenied => reason == WorkerRefusal::FilesystemAccessDenied,
+            _ => reason == WorkerRefusal::WorkspacePrepareFailed,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3631,6 +3661,8 @@ pub struct WorkerFencedRouting {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequestOperation {
+    /// Une enveloppe de diagnostic seulement, jamais une nouvelle autorité.
+    PrepareDiagnosed { prepare: Box<WorkerRequestOperation> },
     RepairWorkspace {
         repair: WorkspaceRepairRequestV1,
         action: WorkspaceRepairActionV1,
@@ -3707,6 +3739,7 @@ pub enum WorkerRequestOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerResponseOperation {
+    WorkspaceRejected { reason: WorkerRefusal, failure: WorkspacePrepareFailure },
     WorkspaceRepair {
         status: WorkspaceRepairStatusV1,
     },
@@ -4060,6 +4093,7 @@ impl WorkerRequest {
         if matches!(
             &self.request,
             WorkerRequestOperation::Prepare { .. }
+                | WorkerRequestOperation::PrepareDiagnosed { .. }
                 | WorkerRequestOperation::PrepareV2 { .. }
                 | WorkerRequestOperation::PrepareFenced { .. }
         ) {
@@ -4073,6 +4107,13 @@ impl WorkerRequest {
         )?;
         worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
         match &self.request {
+            WorkerRequestOperation::PrepareDiagnosed { prepare } => {
+                worker_require(matches!(prepare.as_ref(),
+                    WorkerRequestOperation::Prepare { .. } | WorkerRequestOperation::PrepareV2 { .. }))?;
+                let mut inner = self.clone();
+                inner.request = *prepare.clone();
+                inner.validate()
+            }
             WorkerRequestOperation::Prepare { prepare } => {
                 prepare.validate()?;
                 worker_require(
@@ -4192,7 +4233,7 @@ impl WorkerResponse {
             return Err(WorkerRefusal::UnsupportedVersion);
         }
         self.worker.validate()?;
-        if matches!(&self.response, WorkerResponseOperation::Prepared { .. })
+        if matches!(&self.response, WorkerResponseOperation::Prepared { .. } | WorkerResponseOperation::WorkspaceRejected {..})
             || (matches!(&self.response, WorkerResponseOperation::Rejected { .. })
                 && self.command.instance_id.is_empty()
                 && self.command.generation == 0)
@@ -4284,6 +4325,7 @@ impl WorkerResponse {
                 result.validate()?;
                 worker_require(result.identity.command == self.command)
             }
+            WorkerResponseOperation::WorkspaceRejected { reason, failure } => failure.validate(*reason),
             WorkerResponseOperation::StartRejected { reason, cause } => {
                 worker_require(*reason == WorkerRefusal::ResourceLimit
                     || *cause == WorkerStartCapacityCause::Unknown)
@@ -7675,6 +7717,22 @@ mod tests {
         };
         assert_eq!(request.validate(), Ok(()));
         let legacy = serde_json::to_value(&request).unwrap();
+        {
+            let mut diagnosed=request.clone();
+            diagnosed.request=WorkerRequestOperation::PrepareDiagnosed {prepare:Box::new(request.request.clone())};
+            diagnosed.validate().unwrap();
+            let wire=serde_json::to_vec(&diagnosed).unwrap();
+            assert_eq!(serde_json::from_slice::<WorkerRequest>(&wire).unwrap(),diagnosed);
+            let mut nested=diagnosed.clone();
+            nested.request=WorkerRequestOperation::PrepareDiagnosed {prepare:Box::new(diagnosed.request.clone())};
+            assert_eq!(nested.validate(),Err(WorkerRefusal::InvalidEnvelope));
+            let mut no_authority=diagnosed;
+            no_authority.request=WorkerRequestOperation::PrepareDiagnosed {prepare:Box::new(WorkerRequestOperation::Reconcile {})};
+            assert_eq!(no_authority.validate(),Err(WorkerRefusal::InvalidEnvelope));
+            let f=WorkspacePrepareFailure {stage:WorkspacePrepareStage::CompactPlan,cause:WorkspacePrepareCause::GitTimeout};
+            assert!(f.validate(WorkerRefusal::WorkspacePrepareFailed).is_ok());
+            assert_eq!(f.validate(WorkerRefusal::DiskFull),Err(WorkerRefusal::InvalidEnvelope));
+        }
         assert_eq!(legacy["request"]["operation"], "prepare");
         assert!(legacy["request"].get("connection_id").is_none());
         request.request = WorkerRequestOperation::PrepareV2 {

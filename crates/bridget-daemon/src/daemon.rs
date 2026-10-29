@@ -18705,11 +18705,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 8
+                && capabilities.len() <= 9
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18960,7 +18960,19 @@ fn handle_worker_message(
                     complete_remote_registration(&mut st, &response.command.command_id);
                 }
             }
+            if matches!(response.response, WorkerResponseOperation::WorkspaceRejected {..})
+                && !st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceFailureV1) {
+                return refused(WorkerRefusal::CapabilityRequired);
+            }
             let Some(pending) = st.pending_worker_responses.get(&response.correlation_id) else {
+                // Une réponse de préparation tardive n'est pas une commande Fleet.
+                // Identité et forme sont déjà vérifiées ; aucun effet de tâche.
+                if matches!(response.response, WorkerResponseOperation::WorkspaceRejected {..})
+                    && st.delegation_store.get(&response.command.task_id).ok().flatten()
+                        .is_some_and(|task| task.task_id == response.command.command_id
+                            && task.remote_placement.as_ref().is_some_and(|p| p.matches_worker(&response.worker))) {
+                    return None;
+                }
                 // Une sonde sans attente ou une réponse tardive ne ferme pas le canal de sa commande connue.
                 if matches!(
                     &response.response,
@@ -19139,6 +19151,7 @@ fn remote_worker_roundtrip_with_send_deadline(
             && matches!(
                 &operation,
                 WorkerRequestOperation::Prepare { .. }
+                    | WorkerRequestOperation::PrepareDiagnosed { .. }
                     | WorkerRequestOperation::PrepareV2 { .. }
                     | WorkerRequestOperation::Start { .. }
                     | WorkerRequestOperation::Release { .. }
@@ -19166,7 +19179,14 @@ fn remote_worker_roundtrip_with_send_deadline(
         {
             return Err(WorkerRefusal::WorkerUnavailable);
         }
-        if matches!(&operation, WorkerRequestOperation::PrepareV2 { .. })
+        if matches!(&operation, WorkerRequestOperation::PrepareDiagnosed { .. })
+            && !session.capabilities.contains(&WorkerCapability::WorkspaceFailureV1) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        let routed_prepare = matches!(&operation, WorkerRequestOperation::PrepareV2 { .. })
+            || matches!(&operation, WorkerRequestOperation::PrepareDiagnosed {prepare}
+                if matches!(prepare.as_ref(), WorkerRequestOperation::PrepareV2 {..}));
+        if routed_prepare
             && !session
                 .capabilities
                 .contains(&WorkerCapability::CandidateProbeV2)
@@ -23862,6 +23882,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_workspace_repair_v1".to_string(),
                     "task_workspace_repair_v1".to_string(),
                     "worker_start_recovery_v1".to_string(),
+                    "worker_workspace_failure_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })
