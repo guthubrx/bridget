@@ -19,3 +19,11 @@ Tests ciblés et revue en cours. Aucun chargement206 encore effectué. L’envoi
 ## Revue initiale
 
 Revue b2e1fe8a : égalités strictes, confidentialité et code public conformes. P2 de guidage : workspace_report_ready n’atteste pas un rapport complet. Complément : le conseil exige explicitement inspection en cas de report_unavailable et vérification du dossier avant nouvelle admission ; aucune preuve de rapport inventée. Test ajouté avec rapport terminé mais mesures absentes. Trois tests206 et33tests de reprise198/201/202 initialement PASS ; nouvelle vérification du complément en cours. Le premier filtre de régression native_start_recovery ne sélectionnait aucun test ; filtre corrigé start_recovery::,33 réellement exécutés.
+
+## Contrôles du complément
+
+Trois tests206 PASS après le complément, dont rapport terminé/incomplet et conseil d’inspection. Les33tests198/201/202 réellement sélectionnés PASS. Guides32pages/522liens/13paires PASS et git diff--check propre. Première construction84988ab7 non activée ; une seconde construction est lancée depuis780ea521 avec le complément de guidage. Contre-revue296670ce en cours.
+
+## Contre-revue finale
+
+Contre-revue296670ce favorable sur780ea521 contre85852ca3, P2 levé. Résultat complet lu, ACK et clôture native ; revueinitialeb2e1fe8a également lue/ACK/close. Les deux rapports Git sont propres,0commit ; conservés jusqu’à vérification des usages. Aucun avis runtime déduit de ces revues.
