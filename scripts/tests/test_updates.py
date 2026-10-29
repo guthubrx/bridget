@@ -112,12 +112,43 @@ class Updates179Tests(unittest.TestCase):
         c = update.candidate(self.metadata(), "0.5.0", "linux-x86_64")
         new = install / "v0.6.0-auto/bin/bridget"
         new.parent.mkdir(parents=True)
-        new.write_text("#!/bin/sh\necho 'bridget 0.6.0'\n")
+        new.write_text("#!/bin/sh\nif [ \"$1\" = clients ]; then echo '{\"version\":1,\"verdict\":\"compatible\"}'; else echo 'bridget 0.6.0'; fi\n")
         new.chmod(0o700)
         digest = update.hashlib.sha256(new.read_bytes()).hexdigest()
         update.atomic_json(new.parent.parent / "receipt.json", {"version": "0.6.0", "sha256": digest})
         updater.save(candidate=c, checked_at=int(update.time.time()))
         return updater, old, new
+
+    def test209_client_refusal_happens_before_prepare_restart_and_switch(self):
+        for verdict in ["client_update_required", "client_check_unavailable"]:
+            with self.subTest(verdict=verdict), tempfile.TemporaryDirectory() as temp:
+                updater, old, new = self.fixture(Path(temp))
+                report = {"version": 1, "verdict": verdict}
+                new.write_text("#!/bin/sh\nif [ \"$1\" = clients ]; then echo '" + json.dumps(report) +
+                               "'; exit 1; else echo 'bridget 0.6.0'; fi\n")
+                update.atomic_json(new.parent.parent / "receipt.json",
+                                   {"version": "0.6.0", "sha256": update.file_digest(new)})
+                with patch.object(update, "rpc", return_value={"status":"ok","automatic":True}) as rpc, patch.object(update, "restart") as restart:
+                    updater.step()
+                self.assertFalse(any(call.args[1] == "prepare" for call in rpc.call_args_list))
+                restart.assert_not_called()
+                self.assertEqual(updater.link.resolve(), old)
+                self.assertEqual(updater.state["stage"], verdict)
+                self.assertEqual(updater.state["client_compatibility"], report)
+
+    def test209_candidate_check_failure_has_no_private_output_or_activation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, new = self.fixture(Path(temp))
+            new.write_text("#!/bin/sh\nif [ \"$1\" = clients ]; then echo PRIVATE-OUTPUT; exit 7; else echo 'bridget 0.6.0'; fi\n")
+            update.atomic_json(new.parent.parent / "receipt.json",
+                               {"version":"0.6.0","sha256":update.file_digest(new)})
+            with patch.object(update, "rpc", return_value={"status":"ok","automatic":True}) as rpc, patch.object(update, "restart") as restart:
+                updater.step()
+            self.assertEqual(updater.state["stage"], "client_check_unavailable")
+            self.assertNotIn("PRIVATE-OUTPUT", json.dumps(updater.state))
+            self.assertFalse(any(call.args[1] == "prepare" for call in rpc.call_args_list))
+            restart.assert_not_called()
+            self.assertEqual(updater.link.resolve(), old)
 
     def test_disabled_never_downloads_or_prepares(self):
         with tempfile.TemporaryDirectory() as temp:

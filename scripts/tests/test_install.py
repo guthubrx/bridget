@@ -15,6 +15,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "install.sh"
 BINARY = b'''#!/bin/sh
 case "$1" in
 --version) printf 'bridget 9.8.7 (fixture)\\n';;
+clients) [ ! -f "$FIXTURE/client-incompatible" ] || { echo 'Claude Code 2.1.251 < 2.1.280: user approval required'; exit 1; };;
 agents) [ -f "$FIXTURE/service-active" ] && [ ! -f "$FIXTURE/health-failure" ] || exit 1; printf '[]\\n';;
 *) exit 1;;
 esac
@@ -115,6 +116,16 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
     def existing(self):
         self.installed.parent.mkdir(parents=True)
         self.installed.write_bytes(b"previous executable")
+
+    def test209_client_incompatibility_precedes_link_profiles_and_services(self):
+        self.existing()
+        (self.root / "client-incompatible").touch()
+        result = self.run_install(ok=False)
+        self.assertIn("2.1.251", result.stdout)
+        self.assertIn("Ask the user", result.stderr)
+        self.assertEqual(self.installed.read_bytes(), b"previous executable")
+        self.assertFalse((self.root / "service-commands").exists())
+        self.assertFalse((self.home / ".profile").exists())
 
     def test_release_latest_and_update_preserve_data_and_profile(self):
         profile = self.home / ".bashrc"

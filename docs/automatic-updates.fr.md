@@ -43,3 +43,15 @@ Le premier déploiement doit installer un binaire capable de gérer les mises à
 Le droit de mise à jour est enregistré séparément des permissions historiques de l’appareil. Leur format reste lisible par la version de retour. Chaque appel vérifie toujours la révocation et l’expiration de l’association.
 
 Un fichier téléchargé n’est pas une version active. Un processus MCP conserve son code chargé jusqu’à un remontage pris en charge. Conserver les credentials de session. Deux identifiants de build différents ne prouvent pas à eux seuls que le daemon est ancien.
+
+## Vérifier les clients avant la bascule (209)
+
+Le candidat vérifie les programmes locaux avec bridget clients check, aussi disponible en JSON avec --json. Il ne teste ni compte ni accès aux modèles et ne lance aucune mission. Le registre inspecté figure dans registry_file : registre du namespace, puis registre natif worker par défaut s’il n’existe pas. Une installation personnalisée peut désigner son registre privé par BRIDGET_CLIENTS_REGISTRY=/chemin/absolu/agents.json. Ce choix ne modifie aucun fichier.
+
+Cette release prend en charge Claude Code à partir de2.1.280 et Codex à partir de0.162.1. Le premier seuil provient du refus de modèle attesté dans208 ; le second est le schéma de référence des demandes enfant155. Ce sont des minima de support Bridget, pas une promesse sur tous les modèles futurs.
+
+Avant tout arrêt, remplacement de lien ou activation, l’installateur et l’updater interrogent **le candidat**. Une version installée trop ancienne produit client_update_required ; un contrôle impossible produit client_check_unavailable. La machine, le programme, la version observée, le minimum et la décision attendue sont fournis dans le rapport. Le statut d’update conserve ce diagnostic dans client_compatibility. L’absence d’un client reste distincte : Bridget peut être installé seul, mais ce client reste indisponible.
+
+L’accord aux mises à jour Bridget n’autorise pas les mises à jour de Claude ou Codex. Le message demande un accord distinct. Après cet accord, utiliser le mécanisme officiel du gestionnaire déjà installé, préserver les comptes et modèles, refaire le contrôle puis qualifier un lancement réel autorisé. Aucun programme fournisseur n’est installé ou mis à jour par ce contrôle. Une commande opaque ou une version non reconnue reste non vérifiée.
+
+Les tâches en cours continuent avec leurs versions déjà chargées. Un refus de compatibilité suspend seulement la bascule du candidat sur cette machine. Un ancien candidat qui n’expose pas ce contrôle reste non vérifié ; aucune validation automatique fictive.

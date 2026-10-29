@@ -158,6 +158,25 @@ def binary_version(path):
     return result
 
 
+
+def client_check(binary):
+    # --version only, no provider request or installation. The candidate owns its policy.
+    try:
+        response = subprocess.run([str(binary), "clients", "check", "--json"],
+                                  capture_output=True, timeout=20)
+        if len(response.stdout) > 32768:
+            raise ValueError("oversized")
+        report = json.loads(response.stdout)
+        if not isinstance(report, dict) or report.get("version") != 1 or report.get("verdict") not in (
+                "compatible", "client_update_required", "client_check_unavailable"):
+            raise ValueError("invalid")
+        if response.returncode != (0 if report["verdict"] == "compatible" else 1):
+            raise ValueError("status")
+        return report
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        raise Refused("update_client_check_unavailable")
+
+
 def extract_binary(archive, member, destination):
     # Equivalent to install.sh: extract exactly the known regular member, no extractall.
     found = False
@@ -327,7 +346,10 @@ class Updater:
         os.close(fd)
         try:
             path = Path(name)
-            atomic_json(path, {"action": "report", "host": self.host, "installed": installed, "available": available, "stage": stage})
+            report = {"action": "report", "host": self.host, "installed": installed, "available": available, "stage": stage}
+            if self.state.get("client_compatibility") is not None:
+                report["client_compatibility"] = self.state["client_compatibility"]
+            atomic_json(path, report)
             rpc(self.binary, "report", str(path))
         finally:
             Path(name).unlink(missing_ok=True)
@@ -410,6 +432,23 @@ class Updater:
         current = rpc(self.binary, "status")
         if not current.get("automatic", False) and not (manual and current.get("install_target") == v):
             self.report("disabled", v)
+            return
+        try:
+            clients = client_check(executable)
+        except Refused:
+            self.save(client_compatibility={
+                "version": 1, "host": self.host, "bridget_build": "unobserved",
+                "scope": "installed_local_clients", "verdict": "client_check_unavailable",
+                "clients": [], "authentication_checked": False, "model_access_checked": False,
+                "message": "update_client_check_unavailable : le contrôle local du candidat n’a pas abouti. Aucune version client n’est attestée.",
+                "recovery": "Conserver les services et missions actuels. Faire vérifier le candidat " + str(executable) +
+                            " sur " + self.host + ", puis son contrôle bridget clients check. Une commande absente ou un délai ne prouve pas un problème de compte. Ne mettre à jour un client qu’après accord utilisateur."
+            }, error="update_client_check_unavailable")
+            self.report("client_check_unavailable", v)
+            return
+        self.save(client_compatibility=clients, error=None)
+        if clients["verdict"] != "compatible":
+            self.report(clients["verdict"], v)
             return
         old = self.link.resolve()
         if old == executable and self.state.get("rollback"):

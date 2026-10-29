@@ -78,5 +78,6 @@ pub(crate) mod wake_schedules;
 pub(crate) mod origin_proof;
 
 mod updates;
+mod client_compatibility;
 
 pub(crate) mod user_input;

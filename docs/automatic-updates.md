@@ -50,3 +50,13 @@ The first rollout must install the update-capable binary and configure the watch
 The update-management grant is stored in the private update policy, separately from legacy mobile device scopes. Revocation and expiry are still checked on every request. An older binary can therefore read the unchanged device scope after rollback.
 
 A downloaded file is not an active version. An existing MCP process keeps its loaded code until a supported remount. Preserve session credentials. A different build ID alone does not prove that the daemon is older.
+
+## Check provider clients before activation (209)
+
+The candidate exposes bridget clients check, with --json for a structured report. It inspects local configured programs only, without authentication, model access checks or missions. registry_file identifies the namespace registry, or the default native worker registry when the former is absent. A custom installation can select its private registry through BRIDGET_CLIENTS_REGISTRY=/absolute/path/agents.json. This selection changes no file.
+
+This release supports Claude Code2.1.280+ and Codex0.162.1+. The Claude floor follows the attested model rejection in208; the Codex floor follows the child-request reference schema in155. These are Bridget support floors, not guarantees for all future models.
+
+Before stopping services, replacing links or activating, the installer and updater query **the candidate**. An old installed client yields client_update_required; an unavailable check yields client_check_unavailable. The report identifies the host, program, observed and required versions, and the required decision. Update status preserves it under client_compatibility. A missing client remains unavailable; it does not prevent installing Bridget alone.
+
+Consent to Bridget updates does not authorize provider-client updates. Request separate consent, use the existing official installation mechanism, preserve accounts and models, rerun the check and qualify an authorized real launch. This check installs or upgrades no provider program. Opaque launchers and unreadable versions remain unverified. Existing tasks continue; only candidate activation on the affected host is suspended. A legacy candidate without this command remains unverified.

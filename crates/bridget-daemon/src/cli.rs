@@ -307,6 +307,7 @@ fn run_with_args(args: Vec<String>) {
         "federate" => crate::federate::run(&args[2..]),
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
+        "clients" => crate::client_compatibility::run(&args[2..]),
         "t3" => crate::t3code::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
@@ -837,7 +838,8 @@ fn print_usage() {
            delegate-grant <N>     Autorise la délégation dans une racine (--cwd CHEMIN --posture discovery|development) [--revoke]\n  \
            auto-delegate <OPTS>   Admission configurée native (auto-delegate --help)\n  \
            delegate <MISSION>     Choisit un profil, crée un agent et confie la mission (delegate --help)\n  \
-           task <OP>              Pilote les tâches natives : list|status|wait|continue|respond|cancel|ack\n  \
+           clients check         Vérifie les versions locales avant installation (--json)\n  \\
+  task <OP>              Pilote les tâches natives : list|status|wait|continue|respond|cancel|ack\n  \
            stop <N>               Arrête un équipier géré\n  \
            relaunch <N>           Relance un équipier géré arrêté\n  \
            decommission <N>       Retire un équipier de la flotte visible\n  \

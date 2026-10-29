@@ -318,6 +318,8 @@ main() {
     chmod 755 "$candidate"
     "$candidate" --version > "$work/version" || fail 'Candidate cannot run. Installed Bridget was not changed.'
     grep -qi 'bridget' "$work/version" || fail 'Unexpected candidate version response.'
+    # Ask the candidate before changing a link, profile or service. No client is upgraded here.
+    "$candidate" clients check || fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the machine, installed/minimum versions and action above. Ask the user before updating Claude Code or Codex through its existing official installer; then repeat this installation. No account or model change is authorized by this refusal.'
     prepare_service
 
     # Prepare PATH before replacing the executable; preserve existing shell settings.

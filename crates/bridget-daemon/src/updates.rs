@@ -154,6 +154,7 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
             installed,
             available,
             stage,
+            client_compatibility,
         } => {
             if host.is_empty()
                 || host.len() > 128
@@ -166,7 +167,12 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
             {
                 return Err("invalid_request");
             }
-            p.hosts.insert(host.clone(),json!({"installed":installed,"available":available,"stage":stage,"observed_at":now()}));
+            if client_compatibility.as_ref().is_some_and(|v| !crate::client_compatibility::valid_report(v,host)) {
+                return Err("invalid_request");
+            }
+            let mut report=json!({"installed":installed,"available":available,"stage":stage,"observed_at":now()});
+            if let Some(clients)=client_compatibility {report["client_compatibility"]=clients.clone();}
+            p.hosts.insert(host.clone(),report);
         }
         _ => return Err("invalid_request"),
     }
