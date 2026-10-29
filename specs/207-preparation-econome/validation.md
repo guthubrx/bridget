@@ -55,3 +55,7 @@ Observation Cartae complète (lecteur natif linux_system_lsof,10,799s, aucune la
 Le nouvel inventaire SYS rend encore process_access_unavailable : les checkouts de revue observés restent conservés pour cette raison, sans arrêt de processus pour les retirer. Aucun nettoyage d'une tâche Opus2D ou d'un binaire encore utilisé.
 
 La réponse au signalement Politique a aussi été remise dans le même canal T3 que sa demande, message client bridget207-politique-retour-lien-20261029-01, remise steered sur son run251 existant. Aucune nouvelle conversation ou tâche métier. Cela atteste la remise du message, pas la réussite de son prochain outil. Monuments a reçu la confirmation de livraison par le même mécanisme dans son fil existant, clé bridget207-monuments-livraison-20261029-01.
+
+## Lecture propriétaire confirmée après remise directe
+
+Trace native T3 du fil Politique sol : à07:50:04, bridget_task_status856c1e90 a rendu son résultat, error=null et mission_reply_timeout_secs3600. À07:51:47, son propriétaire a acquitté le résultat ; à07:51:50, il a demandé sa clôture native. Le refus de lecture est donc levé pour cet appel réel, pas seulement inféré du primaire. À07:52:09, le propriétaire a rejoué la clé de passation originale ; aucune issue de cette nouvelle admission n’est déduite du seul début d’appel. Aucun remplacement ni acte métier par le mainteneur.
