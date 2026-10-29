@@ -27,3 +27,15 @@ Source a42d133cd3d21f31c07c146a8d8bf8bc0418c685 intégrée et poussée sur main.
 Preuves privées : /home/moi/.cache/bridget196/ (tests/build/closure-review.json) et /Users/moi/.cache/bridget196/review-result.json. La source de revue sur SYS est conservée provisoirement : /home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/5007923b. Garde close, HEAD/branche conformes, Git propre et aucun ignoré ; scan du compte sans usage observé mais quatre processus partiellement illisibles empêchent de conclure absence totale d’usage. Aucun forçage. Référence légère SYS peut rester sous son main ancien ; ne pas supprimer de force.
 
 La version officielle déjà publiée n’est pas modifiée par un push de main. Une future installation ne bénéficie des sources196 que si son binaire est construit depuis ce commit ou un descendant. Le bilan distingue sources partagées, candidat et processus actif.
+
+## Nouveau signalement280b — 29octobre2026
+
+Message propriétaire opus167-lecture-resultat-budget-jsonl-20261029-01. Trace T3 native confirmée le29octobreà05:08:54.892UTC : bridget.bridget_task_wait, tâche280b29fa-5263-4377-95d4-b7ece5e5c3ef, wait_timeout=1, réponse brute « réponse daemon indisponible : budget JSONL dépassé ». C’est une expiration de lecture ; aucune preuve de dépassement de taille ou de perte du résultat.
+
+Lecture native de l’autorité sans mutation :280b=result_available/errornull/cleanup_done,2436octets conservés. Les tâches4e8f6675 et1c33ef1f également result_available/errornull/cleanup_done,2326et3785octets. Résultats signalés au propriétaire sous mcp-50239-6ae2d9f4-13, acceptéin_flight ; récupération par task_status surlesmêmesIDs, aucune nouvelle mission.
+
+Le correctif196 est déjà dans les sources et dans le binaireDarwin201 installé. SHA201 0f24f3afa881354ae89d8247aa45beb4bfea46fb4cc704ad94a7779135c912a5, chaîne task_wait_read_unavailable présente. Plusieurs MCPvivants, dontroot50239, chargent201. Un MCP183 PID66991, parentCodex63300, reste vivant ; son binaireSHAe3136509cbc3f6dfefe123cfe1e793d988a849fe00d0d68caa9b74f012eebeef ne contient pas la récupération196. Cela ne prouve pas encore qu’il a servi CET appel de Politique. L’erreur brute historique est compatible avec un ancien client, mais la cause détaillée du délai et son client exact restent à qualifier. Aucun second correctif196 ajouté.
+
+Le contrôle natif exposé ne fournit pas de rechargement MCP. L’entrée installée /Users/moi/.local/bin/bridget et la configuration Codex bridget pointent vers201, mais cela ne recharge pas un processus ouvert. Outil graphique indisponible (CUA_REPL_ENABLED_SURFACES is required). Aucun processus/client/fournisseur terminé à l’aveugle ; aucun serviceOpus2D ou calculNE02 touché.
+
+Demande ciblée au propriétaire mcp-50239-6ae2dbc8-14/delivery77c213bb-2562-4b53-861f-c8ebc58281a8 : un message natif sansidfourni permet de lire le PIDdansl’idgénéré (format vérifié dans mcp.rs), sans nouveau lancement. Requête encoreopen à l’attente native unique de30s ; ne pas multiplier les réveils. T004resteouverte : ne pas annoncer touslesclientsactualisés ni l’incidentcorrigé sans preuve dechargement duclientconcerné.
