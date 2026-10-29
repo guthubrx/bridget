@@ -47,3 +47,11 @@ Commande installed exécutée sur les caches correspondants au dépôt propriét
 Retirés : candidat207-c79bbc60 Cartae jamais chargé, copie de transfert Linux2.36 sur Mac et copie de transfert KS après comparaison avec les exécutables installés complets. Les exécutables207 actifs et les retours restent installés. Les versions201/183 encore utilisées par des wrappers/MCP restent conservées ; aucun processus d'un autre travail arrêté pour les retirer.
 
 Le clone privé de mesure (environ378Mio), ses fichiers Git et les journaux sont conservés comme preuve technique. Les checkouts de revue SYS restent conservés tant que leur absence d'usage n'est pas attestée. Leur tâche a été lue, acquittée puis clôturée nativement. Les branches et le worktree d'intégration207 sont examinés séparément avant retrait. Les références de base historiques d'autres sessions restent intactes.
+
+## Clôture du rangement
+
+Observation Cartae complète (lecteur natif linux_system_lsof,10,799s, aucune lacune). Le worktree d'intégration207 n'avait que les matériaux SpecKit générés ignorés ; ils ont été archivés, avec comparaison des empreintes, dans /home/moi/.cache/bridget207/specify-memory207. Le worktree /home/moi/10.Scripts/64.bridget/.worktrees/207-preparation-econome et sa branche locale ont ensuite été retirés sans force. La branche distante session-207-preparation-econome, intégrée à main, a été supprimée. Ses commits restent sur main. Reçu privé : /home/moi/.cache/bridget207/worktree-removed.json.
+
+Le nouvel inventaire SYS rend encore process_access_unavailable : les checkouts de revue observés restent conservés pour cette raison, sans arrêt de processus pour les retirer. Aucun nettoyage d'une tâche Opus2D ou d'un binaire encore utilisé.
+
+La réponse au signalement Politique a aussi été remise dans le même canal T3 que sa demande, message client bridget207-politique-retour-lien-20261029-01, remise steered sur son run251 existant. Aucune nouvelle conversation ou tâche métier. Cela atteste la remise du message, pas la réussite de son prochain outil. Monuments a reçu la confirmation de livraison par le même mécanisme dans son fil existant, clé bridget207-monuments-livraison-20261029-01.
