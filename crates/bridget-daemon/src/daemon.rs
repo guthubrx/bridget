@@ -18967,6 +18967,9 @@ fn handle_worker_message(
             let Some(pending) = st.pending_worker_responses.get(&response.correlation_id) else {
                 // Une réponse de préparation tardive n'est pas une commande Fleet.
                 // Identité et forme sont déjà vérifiées ; aucun effet de tâche.
+                // PrepareDiagnosed exclut PrepareFenced. L'unique Prepare initial
+                // émis par delegate_remote_with_routing porte command_id=task_id ;
+                // une autre commande sans preuve durable reste refusée.
                 if matches!(response.response, WorkerResponseOperation::WorkspaceRejected {..})
                     && st.delegation_store.get(&response.command.task_id).ok().flatten()
                         .is_some_and(|task| task.task_id == response.command.command_id

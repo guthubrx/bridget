@@ -1741,3 +1741,5 @@ concerne cette préparation ; les autres travaux autorisés suivent leur propre 
 Le propriétaire conserve les fichiers, annule la tâche puis vérifie sa clôture
 et le dossier éventuel. Une nouvelle admission autorisée exige la correction de
 la cause et une nouvelle clé. Le rejeu d'une tâche annulée ne la redémarre pas.
+
+Si une correction dépasse les droits du responsable, le refus demande une décision ciblée de l’utilisateur sur la machine concernée, ou l’accès au diagnostic manquant. Il ne prescrit aucun arrêt global.

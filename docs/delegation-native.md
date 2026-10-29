@@ -984,3 +984,5 @@ this preparation; other authorized work follows its own state. The owner preserv
 files, cancels the task, then verifies native closure and any workspace. A new
 authorized admission requires correction of the cause and a new key. Replaying
 a cancelled task does not restart it.
+
+If a correction exceeds the operator's authority, guidance asks for a targeted user decision on the affected machine, or access to missing diagnostics. It does not prescribe a global stop.

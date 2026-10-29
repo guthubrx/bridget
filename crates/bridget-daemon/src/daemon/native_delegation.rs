@@ -25511,10 +25511,12 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(view["detail"]["workspace_preparation"]["cause"],"git_timeout");
         assert_eq!(view["detail"]["workspace_preparation"]["stage"],"compact_plan");
         assert!(view["error_message"].as_str().unwrap().contains("autres travaux autorisés"));
+        assert!(view["error_message"].as_str().unwrap().contains("machine entière"));
+        assert!(view["error_human_action"].as_str().unwrap().contains("diagnostic manquant"));
         let task=state.lock().unwrap().delegation_store.get(id).unwrap().unwrap();
         let before=serde_json::to_value(&task).unwrap();
         let pure=task_view(&task,None,true);
-        for key in ["error","detail","error_message","error_recovery","task_id","work_state"] {
+        for key in ["error","detail","error_message","error_recovery","error_human_action","task_id","work_state"] {
             assert_eq!(pure[key],view[key],"{key}");
         }
         assert_eq!(serde_json::to_value(&task).unwrap(),before);

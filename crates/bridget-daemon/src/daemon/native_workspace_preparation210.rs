@@ -50,13 +50,14 @@ pub(super) fn project(task: &Task, view: &mut Value) {
         C::GitCommandFailed | C::Unknown => "Transmettre la tâche et sa clé au responsable Bridget pour une lecture corrélée du reçu et du journal worker. Le détail Git historique peut manquer ; ne pas inventer de cause ni lancer une autre mission pour diagnostiquer.",
     };
     let unknown = if failure.cause == C::Unknown { " La cause précise reste inconnue." } else { "" };
-    view["error_message"] = json!(format!("{action}{unknown} Ce refus concerne la préparation de cette tâche. Les autres travaux autorisés suivent leur propre état."));
+    view["error_message"] = json!(format!("{action}{unknown} Portée : la préparation de cette tâche. Ce diagnostic ne qualifie pas la machine entière ni un arrêt global. Les autres travaux autorisés suivent leur propre état."));
     let closure = if task.cleanup_done && matches!(task.state.as_str(),"cancelled"|"failed") {
         "La clôture native est acquise. Inspecter et préserver le dossier éventuel, puis corriger la cause avant une nouvelle admission autorisée avec une nouvelle clé."
     } else {
         "Conserver la tâche, sa clé et le dossier éventuel. Le parent propriétaire doit annuler cette tâche, puis vérifier sa clôture native et inspecter le dossier avant une nouvelle admission autorisée après correction de la cause."
     };
     view["error_recovery"] = json!(format!("{closure} Le rejeu de cette clé ne relance pas la préparation."));
+    view["error_human_action"] = json!("Si la correction dépasse vos droits, demandez à l’utilisateur une intervention ciblée sur la machine indiquée, avec cette tâche et sa clé : qualifier le stockage, corriger le profil Git ou mettre à jour Git selon la cause constatée. Si la cause reste inconnue, demander d’abord l’accès au diagnostic manquant. Ne pas demander une remise à zéro générale, un autre modèle ou une nouvelle mission d’issue inconnue.");
     if !view["detail"].is_object() { view["detail"]=json!({}); }
     let request_id = match &task.request { NativeDelegationRequest::Delegate {request_id,..} => Some(request_id), _ => None };
     view["detail"]["workspace_preparation"] = json!({

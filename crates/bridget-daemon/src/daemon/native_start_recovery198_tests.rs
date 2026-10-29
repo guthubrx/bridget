@@ -1648,7 +1648,13 @@ fn spec210_workspace_response_keeps_correlation_epoch_and_late_channel() {
         WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
     assert_eq!(rx.try_recv().unwrap(),response.response);
     assert!(super::super::super::handle_worker_message(&state,"worker198",
-        WrapperToDaemon::WorkerResponse {response}).is_none());
+        WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
+    let mut unissued=response;
+    unissued.command.command_id="unissued-prepare210".into();
+    assert!(matches!(super::super::super::handle_worker_message(&state,"worker198",
+        WrapperToDaemon::WorkerResponse {response:unissued}),
+        Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CommandMismatch})),
+        "une autre commande de préparation sans preuve n'est pas historique connue");
     assert_eq!(saved(&state,&task.task_id),before);
     drop(state);cleanup(&config);
 }
