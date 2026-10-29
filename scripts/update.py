@@ -479,7 +479,7 @@ class Updater:
             except (OSError, subprocess.TimeoutExpired, ValueError, Refused):
                 support_policy = None
             self.save(client_compatibility={
-                "version": 1, "host": self.host, "bridget_build": "unobserved",
+                "version": 1, "host": self.host, "machine_id":self.host,"bridget_build": "unobserved",
                 "policy": support_policy,
                 "scope": "installed_local_clients", "verdict": "client_check_unavailable",
                 "clients": [], "authentication_checked": False, "model_access_checked": False,
