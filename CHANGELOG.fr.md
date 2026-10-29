@@ -8,6 +8,14 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## [0.6.4] - 2026-10-29
+
+- Corriger la transmission du plafond natif attesté entre moteurs, sans exporter les droits de l’application d’origine.
+- Proposer les programmes fournisseurs absents à l’installation, avec sélection explicite et comptes existants conservés.
+- Distinguer programmes installés, compatibilité, connexion personnelle et accès réel aux modèles.
+- Publier les corrections natives livrées depuis0.6.3 : admissions rejouables, diagnostics bornés, préparation économe et catalogue de flotte explicite.
+- Conserver le client Android0.6.3 et son archive inchangés ; cette mise à jour concerne le programme Bridget des ordinateurs et serveurs.
+
 ## [0.6.3] - 2026-10-25
 
 - Volet gauche des conversations : favoris, recherche et états d’attention explicites.

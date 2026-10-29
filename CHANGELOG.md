@@ -6,6 +6,14 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## [0.6.4] - 2026-10-29
+
+- Correct the authenticated native permission ceiling across engines without exporting the origin application's authority.
+- Offer missing provider programs during installation with explicit selection and existing accounts preserved.
+- Distinguish installed programs, compatibility, personal sign-in and actual model access.
+- Publish native fixes delivered since0.6.3: replayable admissions, bounded diagnostics, compact preparation and an explicit fleet catalogue.
+- Keep the Android0.6.3 client and its archive unchanged; this update concerns the Bridget program on computers and servers.
+
 ## [0.6.3] - 2026-10-25
 
 - Add a left conversation drawer with favorites, search and explicit attention states.

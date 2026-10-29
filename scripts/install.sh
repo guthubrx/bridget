@@ -103,7 +103,7 @@ check_clients() {
         if [ "$mode" = release ] && [ "$version" = v0.6.3 ] && [ "$client_check_status" = 2 ] && grep -Eq '^bridget 0[.]6[.]3([[:space:]]|$)' "$work/version"; then
             say 'Legacy release 0.6.3: provider-client compatibility is NOT verified by this package. This preserves its historical installation behavior. Use --source for the current client-version check. No provider client will be updated, and model access is not guaranteed.'
         else
-            fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the machine, installed/minimum versions and action above. Ask the user before updating Claude Code or Codex through its existing official installer; then repeat this installation. No account or model change is authorized by this refusal.'
+            fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the reported cause and its action above; an unavailable registry or unverified version does not justify reinstalling a program. Ask the user before updating only when the report explicitly identifies an outdated client, using its existing official installer. Otherwise resolve the reported verification problem, then repeat this installation. No account, model or permission change is authorized by this refusal. Selected programs already installed in this run remain present.'
         fi
     fi
 }

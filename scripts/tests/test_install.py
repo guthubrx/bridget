@@ -272,6 +272,19 @@ else:
         self.assertNotIn(" enable ", (self.root / "service-commands").read_text())
         self.assertFalse((self.home / ".profile").exists())
 
+    def test214_unknown_client_failure_does_not_prescribe_an_upgrade(self):
+        binary = BINARY.replace(b"Claude Code 2.1.251 < 2.1.280: user approval required",
+                                b"client_machine_scope_unavailable: inspect the registry")
+        self.archive(binary=binary)
+        self.existing()
+        (self.root / "client-incompatible").touch()
+        result = self.run_install(ok=False)
+        self.assertIn("client_machine_scope_unavailable", result.stdout)
+        self.assertIn("does not justify reinstalling", result.stderr)
+        self.assertIn("only when the report explicitly identifies an outdated client", result.stderr)
+        self.assertEqual(self.installed.read_bytes(), b"previous executable")
+        self.assertFalse((self.root / "service-commands").exists())
+
     def test209_client_incompatibility_precedes_link_profiles_and_services(self):
         self.existing()
         (self.root / "client-incompatible").touch()
