@@ -11,6 +11,13 @@ de résolution précise. Il indique quand et quelle décision demander à
 l'utilisateur si l'agent ne peut pas résoudre la cause dans son périmètre.
 Une cause inconnue reste explicitement inconnue : nommer la vérification
 manquante, sans inventer un problème de réseau, de compte ou de droits.
+Le message distingue explicitement la portée du refus : cette demande, cette
+tâche, cette machine ou un arrêt global réellement constaté. Il donne d’abord
+la prochaine action utile en langage courant. Il indique quels autres travaux
+autorisés peuvent continuer selon leur propre état. Ne pas laisser un refus
+local imposer une attente globale ; ne pas annoncer non plus que tout est
+disponible sans l’avoir vérifié.
+
 Conserver le code technique, la tâche et la clé de requête ; ne pas conseiller
 un remplacement ou un nouvel essai sans préciser les prérequis. Informer ensuite le demandeur du
 correctif livré. Cette consigne permanente a été donnée le 24 octobre 2026.

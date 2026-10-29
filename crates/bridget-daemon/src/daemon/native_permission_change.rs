@@ -7,8 +7,8 @@ const FIELDS: &[&str] = &["version", "source", "run_id", "provider_session_id",
     "provider_instance_id", "revision", "driver", "cwd", "runtime_mode",
     "interaction_mode", "provider_policy", "parent_missing", "thread",
     "connection_identity", "child_policy", "definition", "permission_sources"];
-const MESSAGE: &str = "La preuve de permissions ou l’identité du parent a changé pendant le lancement. Le permis de remise de mission a été refusé ; cela ne prouve pas une panne de compte ou de serveur.";
-const HUMAN: &str = "Si le refus revient après une attestation fraîche dans le même tour, transmettez task_id, request_id et detail.permission_change au responsable Bridget. Il doit comparer les catégories constatées ; ne changez ni droits, moteur ni machine pour contourner le refus. Demandez à l’utilisateur une décision uniquement si les droits ou la session doivent réellement être changés.";
+const OTHER_WORK: &str = "Ce refus ne vous demande pas de suspendre vos autres chantiers. Continuez leurs travaux autorisés selon leur propre état. Leur lancement reste soumis aux contrôles habituels de Bridget.";
+const HUMAN: &str = "Vous pouvez actualiser l’attestation de votre propre session avec bridget_session. Si un nouveau lancement autorisé échoue encore avec ce code après cette actualisation, transmettez task_id, request_id et detail.permission_change au responsable Bridget. Relire l’erreur d’une ancienne tâche ne constitue pas un nouvel échec. N’attendez pas une maintenance globale pour ce seul refus. Demandez une décision à l’utilisateur seulement si un changement réel de droits ou de session sort de votre mandat.";
 
 pub(super) fn code(stage: &str, fields: &[&str]) -> String {
     let code = format!("permission_changed:{stage}:{}", fields.join(","));
@@ -48,24 +48,55 @@ fn projection(code: &str) -> Value {
     json!({"stage":stage,"changes":changes,"evidence_available":stage!="unobserved",
         "comparison":"strict","historical_cause":if stage=="unobserved" {"not_recorded_or_invalid"} else {"observed_difference"}})
 }
+fn message(code: &str) -> String {
+    let Some((_, changes)) = detail(code) else {
+        return "Le lancement de cette mission a été refusé pendant le contrôle des permissions. Le détail de la différence n’a pas été conservé. Ce message ne déclare pas tout Bridget ou le serveur indisponible.".into();
+    };
+    let labels: Vec<_> = changes.iter().map(|field| match *field {
+        "version" => "format de la preuve",
+        "source" => "origine de la preuve",
+        "run_id" => "tour de travail du demandeur",
+        "provider_session_id" => "session du demandeur",
+        "provider_instance_id" => "identité du demandeur",
+        "revision" => "version de l’attestation",
+        "driver" => "pilote de la session",
+        "cwd" => "dossier du demandeur",
+        "runtime_mode" => "mode de permissions",
+        "interaction_mode" => "mode de travail",
+        "provider_policy" => "règles de permissions",
+        "parent_missing" => "preuve du demandeur absente",
+        "thread" => "conversation du demandeur",
+        "connection_identity" => "identité de connexion",
+        "child_policy" => "permissions prévues pour l’agent",
+        "definition" => "définition de l’agent",
+        "permission_sources" => "sources des permissions",
+        _ => "preuve du demandeur",
+    }).collect();
+    format!("Le lancement de cette mission a été refusé. Différence constatée : {}. Ce refus concerne cette demande ; il ne constate pas une panne générale.", labels.join(", "))
+}
 pub(super) fn failure(code: &str) -> Value {
-    json!({"status":"refused","code":"permission_changed","message":MESSAGE,
+    json!({"status":"refused","code":"permission_changed","message":message(code),
         "detail":{"permission_change":projection(code),
-        "recovery":"Conservez request_id et enveloppe. Consultez l’état durable de cette admission avant toute reprise : une réponse perdue ou une tâche connue interdit un remplacement. Réattestez CE parent avec bridget_session. Un reçu admitted conserve sa tâche ; une tâche failed ne repart ni par Continue ni par rejeu. Une issue pending sans tâche garde sa clé et son enveloppe ; ne créez pas de doublon.",
+        "recovery":format!("Pour cette demande : conservez sa request_id et ses paramètres. Lisez son reçu et, si une tâche existe, son statut. Une réponse perdue ou une admission pending peut encore aboutir : ne créez pas de doublon. Une tâche failed ou cancelled ne redémarre pas avec son ancienne clé ; suivez le conseil de son statut. Actualisez l’attestation de CE demandeur avec bridget_session. {OTHER_WORK}"),
         "human_action":HUMAN}})
 }
 pub(super) fn project_task(task: &Task, view: &mut Value) {
     let Some(raw) = task.error.as_deref().and_then(|e| e.strip_prefix("remote_start_failed:")) else { return; };
     if !recognizes(raw) { return; }
     view["error"] = json!("remote_start_failed:permission_changed");
-    view["error_message"] = json!(MESSAGE);
+    view["error_message"] = json!(if task.terminal() {
+        format!("{} Ce message décrit l’échec de l’ancienne tentative ; il ne vérifie pas vos droits actuels.", message(raw))
+    } else { message(raw) });
     if !view["detail"].is_object() { view["detail"] = json!({}); }
     view["detail"]["permission_change"] = projection(raw);
-    view["error_recovery"] = json!(if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
-        "L’arrêt natif est confirmé. Vérifiez le dernier rapport du dossier : report_unavailable impose une inspection du dossier et de ses usages ; préservez fichiers, commits et sorties. Après cette vérification et la clôture de la garde propriétaire, réattestez CE parent avec bridget_session avant une nouvelle admission autorisée, avec nouvelle request_id et passation du seul travail restant. Cette tâche failed ne reprend ni par Continue ni par rejeu de sa clé."
+    let action = if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
+        "Cette tentative est arrêtée. Pour reprendre SON travail : 1. Conservez les fichiers et vérifiez le dossier ; report_unavailable impose une inspection du dossier et de ses usages. 2. Clôturez la garde depuis le parent propriétaire, puis actualisez son attestation avec bridget_session. 3. Faites une nouvelle admission autorisée, avec nouvelle request_id et passation du seul travail restant. L’ancienne tâche ne redémarrera ni par Continue ni par rejeu de sa clé."
+    } else if task.terminal() && task.cleanup_done {
+        "Cette tentative est arrêtée, mais son rapport de dossier n’est pas encore disponible. Conservez les fichiers et demandez le statut de CETTE tâche avant de reprendre son travail. Ne créez pas de remplacement tant que le dossier n’est pas vérifié."
     } else {
-        "Conservez cette tâche, sa request_id et son dossier. Consultez son statut natif jusqu’à la confirmation d’arrêt, de nettoyage et du rapport du dossier. Ne rejouez pas ce refus comme un Start et ne créez pas de remplacement pendant cette vérification. Une attestation fraîche du parent n’annule pas le refus historique."
-    });
+        "Pour CETTE mission, Bridget n’a pas encore confirmé la fin de la tentative et la vérification du dossier. Conservez sa task_id, sa request_id et ses fichiers. Consultez son statut avant de reprendre SON travail. Ne rejouez pas ce refus comme un Start et ne créez pas de remplacement pendant cette vérification. Une attestation fraîche ne redémarre pas l’ancienne tâche."
+    };
+    view["error_recovery"] = json!(format!("{action} {OTHER_WORK}"));
     view["error_human_action"] = json!(HUMAN);
 }
 
@@ -124,4 +155,23 @@ mod tests {
         }
         assert!(detail(&format!("permission_changed:before_start:{}", "x".repeat(600))).is_none());
     }
+    #[test]
+    fn spec206_scope_and_next_step_are_explicit_without_global_permission_claim() {
+        for raw in ["permission_changed", "permission_changed:before_start:revision"] {
+            let view = failure(raw);
+            let advice = view["detail"]["recovery"].as_str().unwrap();
+            assert!(view["message"].as_str().unwrap().contains("cette mission"));
+            assert!(advice.contains("ne vous demande pas de suspendre vos autres chantiers"));
+            assert!(advice.contains("selon leur propre état"));
+            assert!(advice.contains("contrôles habituels"));
+            assert!(!advice.contains("tout est disponible"));
+            assert!(!advice.contains("aucun blocage"));
+        }
+        let legacy=failure("permission_changed");
+        assert!(legacy["message"].as_str().unwrap().contains("n’a pas été conservé"));
+        let known=failure("permission_changed:before_start:revision");
+        assert!(known["message"].as_str().unwrap().contains("version de l’attestation"));
+        assert!(!known["message"].as_str().unwrap().contains("droits révoqués"));
+    }
+
 }
