@@ -30,6 +30,34 @@ même script. Les exécutables installés et sauvegardes restent hors de ce budg
 Conserver la version active et une version de retour ; traiter les autres copies
 identifiées à la livraison, sans supprimer de travaux non intégrés ni de preuves.
 
+## Livraison : distribuer et activer sans attente de fin des sessions
+
+Consigne permanente de l’utilisateur, confirmée le 29 octobre 2026 :
+chaque nouvelle version exécutable validée de Bridget doit être distribuée sur
+les serveurs concernés et activée dans la même livraison. Les composants de
+Bridget encore chargés avec une ancienne version doivent être pris en compte.
+Un candidat compilé ou un fichier installé ne constituent pas une activation.
+
+L’autorisation couvre les redémarrages de Bridget et les courtes interruptions
+de sessions nécessaires au chargement, sans nouveau GO intermédiaire.
+Ne pas attendre indéfiniment que toutes les sessions soient au repos et ne pas
+accumuler des versions corrigées qui ne sont pas utilisées. Préserver les
+travaux, résultats et reçus avant le passage, puis employer le parcours natif
+de maintenance et de reprise. Cette autorisation ne vaut pas effacement du
+travail ni duplication d’une mission dont l’issue reste inconnue.
+
+Prévenir les agents concernés avant une coupure lorsque le canal le permet.
+Après activation vérifiée, leur indiquer explicitement qu’ils peuvent reprendre,
+quelles sessions doivent être relancées et comment retrouver leurs tâches et
+travaux conservés. Vérifier les processus réellement chargés et le retour du
+lien natif avant d’annoncer la livraison. Signaler tout composant encore ancien
+et terminer sa mise à jour ; ne pas présenter cette situation comme une
+livraison entièrement activée.
+
+Cette consigne remplace la préférence historique consistant à différer
+l’activation pour préserver à tout prix toutes les sessions. Elle ne demande
+pas de redémarrage pour une modification documentaire sans effet exécutable.
+
 ## Fin de livraison : Git et nettoyage obligatoires
 
 À chaque livraison autorisée, sans nouvelle demande utilisateur :
