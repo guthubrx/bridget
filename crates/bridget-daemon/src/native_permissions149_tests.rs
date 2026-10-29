@@ -2445,3 +2445,56 @@ fn incident171_native_sdk_parent_fact_without_launch_context_preserves_auth_and_
         Some(&mapping), Some(&parent)).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn spec214_native_t3_codex_projection_preserves_ceiling_and_refuses_other_rules() {
+    let (root, env, mapping, protected) = remote162_fixture("native-t3-codex214");
+    let cwd = mapping.remote_root.join("src");
+    let mut parent = claude_fact(&root, &cwd, &env, "bypassPermissions", "t3_runtime", "allow", true);
+    parent.cwd = "/origin162/project/src".into();
+    parent.runtime_mode = "full-access".into();
+    parent.provider_policy["tools"] = json!({"type":"preset","preset":"claude_code"});
+    parent.provider_policy["allowed_tools"] = json!(["mcp__t3-code__*"]);
+    parent.provider_policy["settings_sources"] = json!("provider_default");
+    parent.provider_policy.as_object_mut().unwrap().remove("launch_context");
+    let original = parent.clone();
+    let mut definition = codex_definition();
+    definition.mcp.interactive = "codex".into();
+    let project = |p: &ProviderPermissions, d: &AgentDefinition, posture|
+        project_remote_permissions(p, d, &mapping, &cwd, &env, Some(posture), &protected);
+    let (policy, posture) = project(&parent, &definition, SpawnPosture::Development).unwrap();
+    assert_eq!(posture, SpawnPosture::Development);
+    assert_eq!(policy, json!({"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}));
+    assert_eq!(parent, original);
+    recheck_remote_child_permissions(&policy, &definition, &cwd, &env, &protected, Some(&mapping), Some(&parent)).unwrap();
+    let (policy, posture) = project(&parent, &definition, SpawnPosture::Discovery).unwrap();
+    assert_eq!(posture, SpawnPosture::Discovery);
+    assert_eq!(policy["sandbox_policy"],json!({"type":"readOnly","networkAccess":false}));
+    // Aucune règle autre que l’approbation T3 exacte n’est effacée.
+    for value in [json!(["Bash"]),json!(["mcp__other__*"]),json!(["mcp__t3-code__*","Bash"])] {
+        let mut bad=parent.clone();bad.provider_policy["allowed_tools"]=value;
+        assert!(project(&bad,&definition,SpawnPosture::Development).is_err());
+    }
+    for (key,value) in [
+        ("disallowed_tools",json!(["WebFetch"])),
+        ("tools",json!(["Read","Glob","Grep"])),
+        ("permission_mode",json!("plan")),
+        ("settings_sources",json!("user")),
+        ("launch_context",json!({"hooks":{"PreToolUse":[]}})),
+        ("permission_callback",json!({"kind":"native_wrapper","tool_approval":"allow","plan_exit":"deny"})),
+    ] {
+        let mut bad=parent.clone();bad.provider_policy[key]=value;
+        assert!(project(&bad,&definition,SpawnPosture::Development).is_err(),"{key}");
+    }
+    let mut bad=parent.clone();bad.source="native_wrapper".into();
+    assert!(project(&bad,&definition,SpawnPosture::Development).is_err());
+    bad=parent.clone();bad.runtime_mode="approval-required".into();
+    assert!(project(&bad,&definition,SpawnPosture::Development).is_err());
+    let mut unmapped=parent.clone();unmapped.cwd="/outside214".into();
+    assert!(project(&unmapped,&definition,SpawnPosture::Development).is_err());
+    let mut unmounted=definition.clone();unmounted.mcp.interactive="none".into();
+    assert!(project(&parent,&unmounted,SpawnPosture::Development).is_err());
+    // Sans origine attestée, l’exception ne s’applique jamais.
+    assert!(child_policy(&parent,&definition,&cwd,&env,Some(SpawnPosture::Development)).is_err());
+    fs::remove_dir_all(root).unwrap();
+}

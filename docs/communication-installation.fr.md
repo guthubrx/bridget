@@ -3,6 +3,22 @@
 [English](communication-installation.md) · [Français](communication-installation.fr.md)
 
 
+## Choisir les programmes fournisseurs
+
+Dans un terminal interactif, l’installateur propose les programmes absents, un par un. Répondre oui autorise leur installation officielle pour votre utilisateur. Entrée ou non conserve l’absence. Un programme déjà présent reste inchangé ; une version incompatible exige une décision séparée avant mise à jour.
+
+Pour préparer explicitement cette machine dans un script :
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --providers claude,codex,gemini,cursor
+```
+
+Choix possibles : claude, codex, gemini, cursor, all ou none. Sans terminal interactif ni option, aucun programme fournisseur n’est installé. Les noms inconnus ou répétés sont refusés avant téléchargement. Gemini CLI demande Node.js20+ et npm ; leur absence est signalée, sans installation système ou sudo automatique.
+
+Les programmes absents choisis passent par les installateurs officiels de leurs adaptateurs : [Claude Code](https://support.claude.com/en/articles/14554922-claude-code-user-faq), [Codex](https://learn.chatgpt.com/docs/codex/cli), [Gemini CLI](https://geminicli.com/docs/get-started/installation/) et [Cursor CLI](https://docs.cursor.com/en/cli/installation). Les téléchargements sont terminés avant exécution ; les installations existantes et les comptes sont conservés.
+
+Le bilan distingue programme présent, contrôle de compatibilité, connexion personnelle et accès aux modèles. La présence du programme ne prouve pas les trois autres faits. La commande de connexion est indiquée, sans connexion ni mission automatique. Gemini et Cursor gardent leur qualification d’adaptateur propre ; le contrôle de version209 ne leur invente pas de minimum de support. L’installation d’un programme ne crée pas de route de flotte distante et ne retire aucune restriction du parent. Consultez ensuite le catalogue natif et le résultat d’admission pour le projet et la machine demandés.
+
 ## Installer ou mettre à jour en une commande
 
 Dernière release publiée, déjà compilée :

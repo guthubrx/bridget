@@ -25,6 +25,73 @@ xml_text() { printf '%s' "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'; }
 systemd_quote() { printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/%/%%/g')"; }
 shell_literal() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# Closed provider selection. Accounts and models are not installation inputs.
+prepare_providers() {
+    if [ "$providers" = ask ]; then
+        providers=none
+        if [ -t 2 ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+            providers=
+            for provider in claude codex gemini cursor; do
+                case "$provider" in cursor) program=cursor-agent ;; *) program=$provider ;; esac
+                if command -v "$program" >/dev/null 2>&1; then
+                    say "$program is already installed; preserved."
+                    continue
+                fi
+                printf 'Bridget: Install %s from its official publisher for this user? [y/N] ' "$provider" >/dev/tty
+                answer=
+                read -r answer </dev/tty || answer=
+                case "$answer" in y|Y|yes|oui) providers="${providers:+$providers,}$provider" ;; esac
+            done
+            providers=${providers:-none}
+        else
+            say 'No provider selected: no provider program will be installed. Use --providers claude,codex,gemini,cursor, or --providers none.'
+        fi
+    fi
+    [ "$providers" != none ] || return 0
+    # All names were validated before any download or installation.
+    selected_providers=$providers
+    old_provider_ifs=$IFS
+    IFS=,
+    for provider in $selected_providers; do
+        IFS=$old_provider_ifs
+        case "$provider" in cursor) program=cursor-agent ;; *) program=$provider ;; esac
+        if command -v "$program" >/dev/null 2>&1; then
+            say "$program is already installed; no update or account change."
+        else
+            say "Installing $provider for this user from its official publisher."
+            case "$provider" in
+                claude)
+                    need bash
+                    download https://claude.ai/install.sh "$work/provider-install.sh"
+                    bash "$work/provider-install.sh" </dev/null || fail 'Claude Code installation failed; existing Bridget services were preserved.' ;;
+                codex)
+                    download https://chatgpt.com/codex/install.sh "$work/provider-install.sh"
+                    sh "$work/provider-install.sh" </dev/null || fail 'Codex installation failed; existing Bridget services were preserved.' ;;
+                cursor)
+                    need bash
+                    download https://cursor.com/install "$work/provider-install.sh"
+                    bash "$work/provider-install.sh" </dev/null || fail 'Cursor CLI installation failed; existing Bridget services were preserved.' ;;
+                gemini)
+                    need node
+                    need npm
+                    node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' || fail 'Gemini CLI needs Node.js 20 or later. Update Node.js explicitly, then repeat --providers gemini. Existing Bridget services were preserved.'
+                    npm install --global --prefix "$HOME/.local" @google/gemini-cli </dev/null || fail 'Gemini CLI installation failed; existing Bridget services were preserved.' ;;
+            esac
+            command -v "$program" >/dev/null 2>&1 || fail "$program was not found after installation. Inspect the official installer result and PATH; no model access is confirmed."
+        fi
+        case "$provider" in
+            claude) login_hint='claude auth login' ;;
+            codex) login_hint='codex login' ;;
+            gemini) login_hint='gemini' ;;
+            cursor) login_hint='cursor-agent login' ;;
+        esac
+        say "$provider program present. Authentication and model access are NOT checked. Personal sign-in, if needed: $login_hint"
+        IFS=,
+    done
+    IFS=$old_provider_ifs
+    say 'Program installation does not declare a remote fleet route or guarantee that parent permissions can be translated. Use the native catalogue and the admission result for the requested project and machine.'
+}
+
 prepare_service() {
     service_created=false
     daemon_root=${BRIDGET_HOME:-$HOME/.cache/bridget-core}
@@ -207,15 +274,34 @@ start_service() {
 main() {
     mode=release
     version=
+    providers=ask
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --source) mode=source; shift ;;
+            --providers)
+                [ "$#" -ge 2 ] || fail '--providers needs claude,codex,gemini,cursor or none.'
+                [ "$providers" = ask ] || fail '--providers must be supplied only once.'
+                providers=$2
+                case "$providers" in all) providers=claude,codex,gemini,cursor ;; none) ;; *)
+                    case "$providers" in ''|,*|*,|*,,*) fail 'Invalid --providers selection.' ;; esac
+                    check_names=$providers
+                    check_seen=,
+                    check_ifs=$IFS; IFS=,
+                    for name in $check_names; do
+                        case "$name" in claude|codex|gemini|cursor) ;; *) fail "Unknown provider: $name" ;; esac
+                        case "$check_seen" in *,"$name",*) fail "Duplicate provider: $name" ;; esac
+                        check_seen="$check_seen$name,"
+                    done
+                    IFS=$check_ifs ;;
+                esac
+                shift 2 ;;
             --version)
                 [ "$#" -ge 2 ] || fail '--version needs a release tag.'
                 version=$2; shift 2 ;;
             --help|-h)
-                printf '%s\n' 'Usage: sh install.sh [--source | --version vX.Y.Z]' \
+                printf '%s\n' 'Usage: sh install.sh [--source | --version vX.Y.Z] [--providers claude,codex,gemini,cursor|all|none]' \
                     'Default: latest published release. --source: build current main.' \
+                    'Interactive terminal: offers missing provider programs. Scripts: explicit --providers, otherwise no provider installation.' \
                     'Installs, starts and verifies a user service; preserves existing running services and accounts.'
                 return ;;
             *) fail "Unknown option: $1" ;;
@@ -256,6 +342,8 @@ main() {
     printf '%s\n' "$$" > "$lock/pid"
     work=$(mktemp -d "$state/stage.XXXXXXXX")
     candidate=$work/bridget
+    PATH=$bindir:$PATH
+    export PATH
 
     if [ "$mode" = release ]; then
         if [ -z "$version" ]; then
@@ -318,7 +406,8 @@ main() {
     chmod 755 "$candidate"
     "$candidate" --version > "$work/version" || fail 'Candidate cannot run. Installed Bridget was not changed.'
     grep -qi 'bridget' "$work/version" || fail 'Unexpected candidate version response.'
-    # Ask the candidate before changing a link, profile or service. No client is upgraded here.
+    prepare_providers
+    # Ask the candidate before changing a link, profile or service. Existing clients were preserved.
     if "$candidate" clients check 2>"$work/client-check-error"; then
         :
     else

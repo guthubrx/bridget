@@ -89,6 +89,23 @@ fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
             == json!({"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"})
 }
 
+/// Cas fermé du parent natif T3 : sa seule règle locale d’approbation MCP
+/// n’est pas une restriction sur les outils de fichiers et n’est jamais exportée.
+/// Les profils de hooks, règles privées et callbacks tiers restent non traduits.
+fn native_t3_codex_scope214(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
+    let policy = &parent.provider_policy;
+    authenticated_t3_tool_scope171(parent)
+        && definition.protocol == "codex_app_server"
+        && definition.mcp.interactive == "codex"
+        && parent.runtime_mode == "full-access"
+        && policy["permission_mode"] == "bypassPermissions"
+        && policy["tools"] == json!({"type":"preset","preset":"claude_code"})
+        && policy["allowed_tools"] == json!(["mcp__t3-code__*"])
+        && policy.get("disallowed_tools").is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))
+        && policy["settings_sources"] == "provider_default"
+        && policy.get("launch_context").is_none()
+}
+
 fn require_isolated_claude_mount171(definition: &AgentDefinition) -> Result<(), String> {
     if definition.protocol != "claude_stream_json" || definition.mcp.interactive != "claude"
         || definition.args.iter().any(|a| matches!(a.split('=').next(), Some("--mcp-config" | "--strict-mcp-config"))) {
@@ -401,7 +418,9 @@ pub(crate) fn project_remote_permissions_in_operation(
     if parent.driver == "claude_stream_json"
         && parent.provider_policy["allowed_tools"].as_array().is_some_and(|rules|
             rules.iter().any(|rule| rule == "mcp__t3-code__*")) {
-        require_isolated_claude_mount171(definition)?;
+        if !native_t3_codex_scope214(parent, definition) {
+            require_isolated_claude_mount171(definition)?;
+        }
     }
     project_policy_directories171(&mut translated.provider_policy, mapping, protected)?;
     let prepared = if definition.protocol == "claude_stream_json" {
@@ -1922,14 +1941,19 @@ fn child_policy_reader_catalogue_scope171<'a>(
                 policy["permission_callback"]["kind"] = json!("native_wrapper");
             }
             ("claude_stream_json", "codex_app_server") => {
-                let context = policy
-                    .get("launch_context")
-                    .ok_or("permission_source_unavailable")?;
-                if (!origin_attested
-                    && !without_rules
-                        .get_or_insert_with(|| claude_inputs_without_rules(context))
-                        .clone()?)
-                    || policy["disallowed_tools"]
+                // Seul le fait natif authentifié sans profil local peut omettre
+                // launch_context. Ne pas déduire cette exception d’un nom d’outil seul.
+                let native_scope = origin_attested && native_t3_codex_scope214(parent, definition);
+                if native_scope {
+                    policy.as_object_mut().unwrap().remove("allowed_tools");
+                } else {
+                    let context = policy.get("launch_context").ok_or("permission_source_unavailable")?;
+                    if !origin_attested && !without_rules
+                        .get_or_insert_with(|| claude_inputs_without_rules(context)).clone()? {
+                        return Err("permission_mapping_unavailable".into());
+                    }
+                }
+                if policy["disallowed_tools"]
                         .as_array()
                         .is_some_and(|a| !a.is_empty())
                 {

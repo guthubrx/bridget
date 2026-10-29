@@ -76,7 +76,11 @@ if url.endswith('/releases/latest'):
 if (r / 'network-failure').exists(): sys.exit(22)
 if 'darwin' in url and not (r / 'allow-darwin').exists(): sys.exit(22)
 out = pathlib.Path(args[args.index('-o') + 1])
-shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
+providers = {'https://claude.ai/install.sh':'claude', 'https://chatgpt.com/codex/install.sh':'codex', 'https://cursor.com/install':'cursor-agent'}
+if url in providers:
+    shutil.copyfile(r / (providers[url] + '.installer'), out)
+else:
+    shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
 ''')
         self.archive()
 
@@ -116,6 +120,121 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
     def existing(self):
         self.installed.parent.mkdir(parents=True)
         self.installed.write_bytes(b"previous executable")
+
+    def provider_fixtures214(self):
+        import shutil
+        # Only fixture programs are visible; a host Gemini must not hide this case.
+        for name in ("sh", "bash", "python3", "tar", "gzip", "sha256sum", "cut", "awk", "grep",
+                     "tr", "sed", "mkdir", "chmod", "cat", "mktemp", "touch", "cp",
+                     "mv", "rm", "rmdir", "wc"):
+            if not (self.bin / name).exists():
+                (self.bin / name).symlink_to(shutil.which(name))
+        self.env["PATH"] = str(self.bin)
+        client = self.root / "provider-client"
+        client.write_text("#!/bin/sh\nexit 97\n")
+        client.chmod(0o755)
+        for program in ("claude", "codex", "cursor-agent"):
+            (self.root / (program + ".installer")).write_text(
+                '#!/bin/sh\nmkdir -p "$HOME/.local/bin"\n'
+                f'cp "$FIXTURE/provider-client" "$HOME/.local/bin/{program}"\n'
+                f'printf "{program}\\n" >> "$FIXTURE/provider-installs"\n')
+        self.stub("node", "#!/bin/sh\nexit 0\n")
+        self.stub("npm", '#!/bin/sh\n'
+                  '[ "$1" = install ] && [ "$2" = --global ] && [ "$3" = --prefix ] && '
+                  '[ "$4" = "$HOME/.local" ] && [ "$5" = @google/gemini-cli ] || exit 99\n'
+                  'mkdir -p "$HOME/.local/bin"\n'
+                  'cp "$FIXTURE/provider-client" "$HOME/.local/bin/gemini"\n'
+                  'printf "gemini\\n" >> "$FIXTURE/provider-installs"\n')
+
+    def test214_explicit_selection_installs_four_without_login_or_model(self):
+        self.provider_fixtures214()
+        result = self.run_install("--providers", "all")
+        self.assertEqual(set((self.root / "provider-installs").read_text().splitlines()),
+                         {"claude", "codex", "gemini", "cursor-agent"})
+        self.assertIn("Authentication and model access are NOT checked", result.stderr)
+        self.assertIn("Personal sign-in", result.stderr)
+        self.assertTrue((self.root / "service-active").exists())
+
+    def test214_terminal_offers_each_missing_program_and_respects_no(self):
+        import errno
+        import pty
+        import select
+        import time
+        self.provider_fixtures214()
+        child, fd = pty.fork()
+        if child == 0:
+            os.execve("/bin/sh", ["sh", str(SCRIPT)], self.env)
+        output = bytearray()
+        os.write(fd, b"y\nn\nn\nn\n")
+        deadline = time.monotonic() + 15
+        try:
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([fd], [], [], 0.2)
+                if not ready:
+                    continue
+                try:
+                    chunk = os.read(fd, 8192)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    break
+                if not chunk:
+                    break
+                output.extend(chunk)
+        finally:
+            os.close(fd)
+        _, status = os.waitpid(child, 0)
+        text = output.decode(errors="replace")
+        self.assertEqual(os.waitstatus_to_exitcode(status), 0, text)
+        for name in ("claude", "codex", "gemini", "cursor"):
+            self.assertIn(f"Install {name} from its official publisher", text)
+        self.assertEqual((self.root / "provider-installs").read_text().splitlines(), ["claude"])
+        proof = os.environ.get("BRIDGET214_INSTALL_PROOF")
+        if proof:
+            Path(proof).write_text(text)
+
+    def test214_existing_program_and_credentials_are_preserved(self):
+        self.provider_fixtures214()
+        self.stub("claude", "#!/bin/sh\nexit 98\n")
+        credentials = self.home / ".claude.json"
+        credentials.write_text("unchanged account")
+        result = self.run_install("--providers", "claude")
+        self.assertIn("no update or account change", result.stderr)
+        self.assertFalse((self.root / "provider-installs").exists())
+        self.assertEqual(credentials.read_text(), "unchanged account")
+        self.assertNotIn("claude.ai", (self.root / "downloads").read_text())
+
+    def test214_none_and_noninteractive_default_do_not_install_provider(self):
+        self.provider_fixtures214()
+        for args in [(), ("--providers", "none")]:
+            self.run_install(*args)
+        self.assertFalse((self.root / "provider-installs").exists())
+
+    def test214_invalid_selection_refuses_before_download(self):
+        for value in ["claude,,codex", "claude,", ",codex", "codex,codex",
+                      "claude;echo PWN", "other", ""]:
+            self.run_install("--providers", value, ok=False)
+        self.run_install("--providers", "none", "--providers", "codex", ok=False)
+        self.assertFalse((self.root / "downloads").exists())
+        self.assertFalse(self.installed.exists())
+
+    def test214_gemini_old_node_keeps_existing_bridget_and_services(self):
+        self.provider_fixtures214()
+        self.stub("node", "#!/bin/sh\nexit 1\n")
+        self.existing()
+        result = self.run_install("--providers", "gemini", ok=False)
+        self.assertIn("Node.js 20", result.stderr)
+        self.assertEqual(self.installed.read_bytes(), b"previous executable")
+        self.assertFalse((self.root / "provider-installs").exists())
+        self.assertFalse((self.root / "service-commands").exists())
+
+    def test214_failed_provider_install_keeps_existing_bridget(self):
+        self.provider_fixtures214()
+        (self.root / "codex.installer").write_text("#!/bin/sh\nexit 1\n")
+        self.existing()
+        self.run_install("--providers", "codex", ok=False)
+        self.assertEqual(self.installed.read_bytes(), b"previous executable")
+        self.assertFalse((self.root / "service-commands").exists())
 
     def test209_client_incompatibility_precedes_link_profiles_and_services(self):
         self.existing()

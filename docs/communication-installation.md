@@ -6,6 +6,22 @@ Build and try Bridget in a private namespace before replacing an existing
 installation. A built binary does not update a running daemon, MCP server,
 worker or host application.
 
+## Choose provider programs
+
+In an interactive terminal, the installer offers each missing program separately. A yes answer authorizes its official installation for your user. Enter or no preserves its absence. Existing programs remain unchanged; an incompatible version requires a separate update decision.
+
+For an explicit selection in a script:
+
+```sh
+curl -fsSL https://cartae.app/bridget/install.sh | sh -s -- --providers claude,codex,gemini,cursor
+```
+
+Accepted selections are claude, codex, gemini, cursor, all or none. Without an interactive terminal or an explicit option, no provider program is installed. Unknown or duplicate names are refused before downloading. Gemini CLI requires Node.js20+ and npm; missing prerequisites are reported without automatic system installation or sudo.
+
+Selected missing programs use their adapters’ official installers: [Claude Code](https://support.claude.com/en/articles/14554922-claude-code-user-faq), [Codex](https://learn.chatgpt.com/docs/codex/cli), [Gemini CLI](https://geminicli.com/docs/get-started/installation/) and [Cursor CLI](https://docs.cursor.com/en/cli/installation). Downloads finish before execution; existing installations and accounts are preserved.
+
+The result distinguishes program presence, compatibility checks, personal sign-in and model access. Presence proves none of the other facts. Sign-in commands are shown without automatic authentication or model tasks. Gemini and Cursor retain their own adapter qualification; the209 version check does not invent support minima for them. Program installation does not create a remote fleet route or remove parent restrictions. Use the native catalogue and admission result for the requested project and machine.
+
 ## Install or update in one command
 
 Latest published release (precompiled, no Rust needed):

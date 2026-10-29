@@ -600,7 +600,15 @@ fn record_routing_probe_refusal(
 /// Rendre au demandeur les motifs fermés déjà reçus, sans nouvelle sonde.
 // Les deux appelants construisent ou valident d’abord des motifs fermés.
 // Aucune donnée libre de note ou de worker n’est reprise dans le guidage.
-fn project_probe_capacity(result: &mut Value, reasons: &[Value]) {
+fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
+    if reasons.iter().any(|r| r["kind"] == "candidate" && r["code"] == "permissions_changed") {
+        result["detail"]["permission_projection"] = json!({
+            "cause":"unobserved",
+            "message":"Les droits du parent n’ont pas pu être confirmés ou traduits pour au moins un candidat. Le code permissions_changed ne prouve pas à lui seul qu’un droit a changé.",
+            "recovery":"Ce refus concerne cette admission. Conserver la machine, le moteur, la clé et l’enveloppe. Faire lire au responsable Bridget le diagnostic worker corrélé pour distinguer règle non traduisible, contexte manquant et divergence constatée. Ne pas réinstaller le programme, changer de compte ou retirer une restriction pour essayer. Les autres travaux autorisés suivent leur propre état. Un rejeu strict attend la cause corrigée et les prérequis de detail.admission.",
+            "human_action":"Si la règle ne peut pas être conservée par le moteur demandé, demander à l’utilisateur la décision sur cette restriction ou sur le moteur ; aucun élargissement ni remplacement automatique."
+        });
+    }
     if reasons
         .iter()
         .any(|reason| reason["kind"] == "candidate" && reason["code"] == "resource_limit")
@@ -647,7 +655,7 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
             }
             reason
         }).collect::<Vec<_>>();
-        project_probe_capacity(&mut result, &reasons);
+        project_probe_constraints(&mut result, &reasons);
         result["detail"]["reasons"] = json!(reasons);
     }
     result
@@ -3627,7 +3635,7 @@ fn failure(code: &str) -> Value {
                         _ => false,
                     }
             }) {
-            project_probe_capacity(&mut result, &reasons);
+            project_probe_constraints(&mut result, &reasons);
             result["detail"]["reasons"] = json!(reasons);
         }
         return result;
@@ -33592,3 +33600,21 @@ pub(super) mod native_delegation_permissions149_tests;
 #[cfg(test)]
 #[path = "native_workspace154_tests.rs"]
 mod native_workspace154_tests;
+
+
+#[cfg(test)]
+mod permission_projection214_tests {
+    use super::*;
+    #[test]
+    fn spec214_candidate_refusal_distinguishes_unknown_translation_from_changed_rights() {
+        let reasons=json!([{"kind":"candidate","code":"permissions_changed","candidates":1}]);
+        let value=failure(&format!("routing_candidate_unavailable:{reasons}"));
+        assert_eq!(value["code"],"routing_candidate_unavailable");
+        assert_eq!(value["detail"]["permission_projection"]["cause"],"unobserved");
+        assert!(value["detail"]["permission_projection"]["recovery"].as_str().unwrap().contains("cette admission"));
+        assert!(value["detail"]["permission_projection"]["human_action"].is_string());
+        assert_eq!(value["detail"]["reasons"],reasons);
+        let unrelated=failure("routing_candidate_unavailable");
+        assert!(unrelated["detail"].get("permission_projection").is_none());
+    }
+}
