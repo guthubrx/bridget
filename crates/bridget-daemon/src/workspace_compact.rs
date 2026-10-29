@@ -107,7 +107,7 @@ pub(super) fn plan(preflight: &WorkspacePreflight) -> Result<Option<Plan>, Strin
     if enabled != "true" {
         return Err("workspace_repo_unsupported: compact-v1 exige extensions.worktreeConfig=true ; faire qualifier ce réglage par le responsable du dépôt".into());
     }
-    let listing = run_git(
+    let listing_output = run_git(
         &preflight.cwd,
         &[
             "ls-tree",
@@ -118,8 +118,11 @@ pub(super) fn plan(preflight: &WorkspacePreflight) -> Result<Option<Plan>, Strin
             &preflight.base_commit,
         ],
         READ_TIMEOUT,
-    )?
-    .complete()?;
+    )?;
+    if listing_output.truncated {
+        return Err("workspace_repo_unsupported: sortie Git tronquée pour compact-v1 (arbre limité à 8 Mio, diagnostic à 1 Mio). Cette préparation est refusée. Faire qualifier la taille du dépôt par son responsable, ou retirer son opt-in bridget.worktreeProfile avant une future admission ; conserver toute tâche déjà admise et sa clé.".into());
+    }
+    let listing = listing_output.complete()?;
     let mut selected = Vec::new();
     let mut total_bytes = 0_u64;
     let mut selected_bytes = 0_u64;
@@ -225,7 +228,11 @@ pub(super) fn apply(path: &Path, plan: Plan) -> Result<(), String> {
 }
 pub(super) fn audit(dir: &Path, path: &Path) -> Result<(), String> {
     let read = |args: &[&str]| capture(path, args, READ_TIMEOUT, Some((dir, path)));
-    let flags = read(&["ls-files", "-v", "-z"])?.complete()?;
+    let index_output = read(&["ls-files", "-v", "-z"])?;
+    if index_output.truncated {
+        return Err("rapport indisponible : sortie Git tronquée (index limité à 8 Mio, diagnostic à 1 Mio). Conserver le dossier ; faire qualifier sa taille par le responsable avant une nouvelle admission. Ce refus concerne ce rapport.".into());
+    }
+    let flags = index_output.complete()?;
     for entry in flags.split('\0').filter(|e| !e.is_empty()) {
         let (tag, name) = entry.split_once(' ').ok_or("index Git illisible")?;
         if tag.len() != 1

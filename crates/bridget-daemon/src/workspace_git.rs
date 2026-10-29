@@ -49,7 +49,7 @@ impl GitOutput {
 
     fn complete(self) -> Result<String, String> {
         if self.truncated {
-            return Err("sortie Git tronquée à 1 Mio".into());
+            return Err("sortie Git tronquée : limite de lecture atteinte".into());
         }
         if !self.success() {
             return Err(format!("Git {:?} : {}", self.code, self.stderr.trim()));
