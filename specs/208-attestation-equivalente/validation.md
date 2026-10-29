@@ -63,6 +63,6 @@ NotificationBridgetmcp-50239-6ae3085c-1e acceptéein_flight ; ce reçu n’est p
 - installed réussi surMac etSYS. SurCartae, appel effectué mais refus d’entretien : observation des processus incomplète. Aucun nettoyage forcé.
 - Worktree d’intégration208, worktrees de revue/qualification et leurs branches conservés : lsof annonce une observation incomplète (espaces de noms et montages non accessibles). Les tâches de contrôle sont clôturées ; ce fait ne remplace pas le contrôle des usages pour retirer les dossiers.
 - Les miroirs gérésSYS/KS restent des checkouts détachés natifs ; aucune réécriture de leurHEAD pour les aligner artificiellement. Les sources sont poussées et les objets208 disponibles par préparation native.
-- Copies de transfert privées retirables après vérification de l’installation ; aucune donnée métier touchée.
+- Copies de transfert privées retirées du Mac et de KS après comparaison au SHA256 installé ; aucune donnée métier touchée.
 
 Correction technique : pas de diaporama d’interface requis. Cette livraison n’affirme pas que tout incident historique ou toute connexion fournisseur est résolu.
