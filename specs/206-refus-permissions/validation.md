@@ -51,3 +51,7 @@ Contrôle final Cartae disponible : checkout d’intégration /home/moi/10.Scrip
 ## Complément de lisibilité demandé
 
 L’utilisateur constate qu’un agent s’est cru entièrement bloqué. Le guidage206 restait long et ne disait pas assez clairement que le refus concernait cette mission. Clarification envoyée à monuments sous mcp-50239-6ae2d460-d, acceptée in_flight, lecture non déduite. Complément : cause en mots courants, prochaine action selon l’état réel, portée de la tentative et autres chantiers autorisés selon leur propre état ; aucune disponibilité globale ou nouvelle permission déduite. Correction en cours, binaire initial206 toujours actif à ce relevé.
+
+Contrôles du complément lisible :4tests206 PASS sur la têtea84aaad3, dont explication historique sur cancelled, portée du refus, absence de disponibilité globale promise, arrêt/rapport incomplet et conseils associés. Guides32/522/13PASS, diff--check propre. Aucune comparaison ni condition de lancement modifiée. Revue5bf1cf18 et compilation du nouveau binaire en cours.
+
+Revue5bf1cf18 favorable sur16ac7c9a..a84aaad3 : aucune disponibilité générale, droit nouveau ou reprise de tâche incertaine promis ; rapport absent/incomplet et prochaine action distingués. Résultat complet lu, ACK et clôture native. CI hygiène40821782107 success sura84aaad3. Quatre tests206 PASS sur l’état final, source fonctionnelle inchangée depuis ce commit.
