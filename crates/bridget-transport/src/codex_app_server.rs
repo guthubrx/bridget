@@ -4465,10 +4465,7 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                                     &observations,
                                     "turn_end",
                                     Some(&message_id),
-                                    json!({"provider_turn_id": turn_id, "stop_reason": match codex_turn_terminal(&value, status) {
-                                        ManagedTerminal::Failed { detail } => detail,
-                                        _ => status.to_string(),
-                                    }}),
+                                    json!({"provider_turn_id": turn_id, "stop_reason": codex_turn_stop_reason(&value, status)}),
                                 );
                                 *active_detail.lock().unwrap_or_else(|e| e.into_inner()) = None;
                                 state.external_turn = None;
@@ -4697,16 +4694,26 @@ fn project_request_id(request_id: &Value) -> String {
         }
     }
 }
-// Project only an attested protocol code; free-form provider errors stay private.
+// Project only an attested protocol code; keep unknown interactive stop reasons unchanged.
+fn codex_turn_stop_reason<'a>(value: &Value, status: &'a str) -> &'a str {
+    if status == "failed" && value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str)
+        == Some("serverOverloaded") {
+        "terminal Codex: failed:cause=server_overloaded"
+    } else {
+        status
+    }
+}
+
 fn codex_turn_terminal(value: &Value, status: &str) -> ManagedTerminal {
     match status {
         "completed" => ManagedTerminal::Completed,
         "interrupted" => ManagedTerminal::Cancelled,
-        "failed" if value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str)
-            == Some("serverOverloaded") => ManagedTerminal::Failed {
-                detail: "terminal Codex: failed:cause=server_overloaded".to_string(),
-            },
-        other => ManagedTerminal::Failed { detail: format!("terminal Codex: {other}") },
+        _ => {
+            let reason = codex_turn_stop_reason(value, status);
+            ManagedTerminal::Failed { detail: if reason == status {
+                format!("terminal Codex: {status}")
+            } else { reason.to_string() } }
+        },
     }
 }
 
@@ -5975,6 +5982,10 @@ for line in sys.stdin:
             assert!(matches!(codex_turn_terminal(&value,"failed"), ManagedTerminal::Failed { detail }
                 if detail == "terminal Codex: failed"));
         }
+        assert_eq!(codex_turn_stop_reason(&overloaded,"failed"),"terminal Codex: failed:cause=server_overloaded");
+        assert_eq!(codex_turn_stop_reason(&json!({}),"failed"),"failed");
+        assert_eq!(codex_turn_stop_reason(&overloaded,"completed"),"completed");
+        assert_eq!(codex_turn_stop_reason(&overloaded,"interrupted"),"interrupted");
         assert!(matches!(codex_turn_terminal(&overloaded,"completed"),ManagedTerminal::Completed));
         assert!(matches!(codex_turn_terminal(&overloaded,"interrupted"),ManagedTerminal::Cancelled));
     }
