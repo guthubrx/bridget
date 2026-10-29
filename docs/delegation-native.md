@@ -919,3 +919,35 @@ The public code remains remote_start_failed:permission_changed. Owner status inc
 Keep the task, request key and workspace. Do not replace it while stop, cleanup or workspace reporting is unconfirmed. A failed task resumes through neither Continue nor replay of its original request. After owner guard closure and native reattestation of THIS parent, a newly authorized admission uses a new key and an explicit handoff of remaining work. If refusal recurs in the freshly attested turn, send task, key and diagnostic to the Bridget maintainer; do not widen permissions.
 
 The message separates refusal of this mission from other work. It names the next action based on confirmed stop and report availability. Other authorized work follows its own state; this refusal alone does not ask for a global maintenance wait. This guidance guarantees neither capacity nor admission of another request.
+
+## Mission duration and compact worktrees (207)
+
+bridget_auto_delegate already accepts reply_timeout, in seconds, from 60 to
+86400 within the parent's limit. The default is 3600 (1 h), including the
+development posture. For a future long mission, set e.g. 14400 (4 h) before
+the first admission. wait_timeout only controls result-reading waits;
+keep_alive_secs controls retention after the result. None extends an admitted
+mission. Replays preserve the exact envelope. Status exposes the effective round
+duration as mission_reply_timeout_secs.
+
+The repository administrator may opt into native compact-v1 using the local
+Git setting bridget.worktreeProfile. The repository must already use
+extensions.worktreeConfig=true after its Git settings have been qualified.
+Without that profile, new worktrees keep their full checkout. Existing worktrees
+and preparations are never converted.
+
+The profile checks out files smaller than 128 KiB, common source files and tracked
+symbolic links. Other files remain in Git. No project script runs and no shared
+mutable data links are created. Selection and Git settings belong to the new
+worktree. Its native context explains how to materialize a missing file.
+From that worktree root, after checking that the requested path has no local edits:
+
+    git restore --ignore-skip-worktree-bits -- path/to/file
+
+This writes a private copy and may overwrite that requested path. Do not disable
+the profile to copy the entire repository. Missing dependencies use the project's
+usual preparation. Savings depend on files in the admitted commit and do not
+guarantee future free space. Reports reject altered profiles or index flags that
+could hide edits. Native receipts keep their existing format; older binaries do
+not check the compact manifest. Keep a 207 binary for reports and cleanup of
+these new worktrees.

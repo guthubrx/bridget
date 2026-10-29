@@ -1673,3 +1673,38 @@ remote_start_failed:permission_changed conserve son code public. Le statut propr
 Conserver la tâche, sa clé et son dossier. Tant que l’arrêt, le nettoyage et le rapport du dossier ne sont pas confirmés, ne créer aucun remplacement. Une tâche failed ne repart ni par Continue ni par rejeu initial. Après clôture de la garde propriétaire et réattestation native de CE parent, une nouvelle admission autorisée utilise une nouvelle clé et la passation du travail restant. Si le refus revient dans le même tour fraîchement attesté, transmettre tâche, clé et diagnostic au responsable Bridget ; ne pas élargir les droits.
 
 Le message distingue le refus de cette mission de l’état des autres chantiers. Il donne la prochaine action selon l’arrêt et la disponibilité du rapport. Les autres travaux autorisés suivent leur propre état ; ce refus seul ne demande pas une attente de maintenance globale. Ce conseil ne garantit pas la capacité ni l’admission d’une autre demande.
+
+## Durée de mission et worktrees compacts (207)
+
+bridget_auto_delegate accepte déjà reply_timeout, en secondes, de 60 à
+86400 et sous la limite du parent. Le défaut est 3600 (1 h), même en posture
+development. Pour une future mission longue, définir par exemple 14400 (4 h)
+avant le premier appel. wait_timeout règle seulement l'attente de lecture ;
+keep_alive_secs règle la garde après résultat. Aucun de ces champs ne prolonge
+une mission déjà admise. Un rejeu conserve l'enveloppe exacte. Le statut expose
+mission_reply_timeout_secs, la durée effective de la ronde.
+
+Le responsable peut activer le profil natif compact-v1 avec le réglage Git
+local bridget.worktreeProfile. Le dépôt doit déjà utiliser
+extensions.worktreeConfig=true, après qualification de ses réglages Git.
+Sans ce profil, les nouveaux worktrees gardent leur extraction complète.
+Les worktrees et préparations existants ne sont jamais convertis.
+
+Ce profil extrait les fichiers de moins de 128 Kio, les sources courantes et les
+liens symboliques suivis dans Git. Les autres fichiers restent dans Git. Aucun
+script du projet n'est exécuté et aucun lien vers des données partagées modifiables
+n'est créé. La sélection et les réglages Git sont propres au nouveau worktree.
+La carte native explique au responsable comment extraire un fichier manquant.
+Depuis la racine de ce worktree, après vérification de l'absence de modification
+locale sur le chemin demandé :
+
+    git restore --ignore-skip-worktree-bits -- chemin/du/fichier
+
+Cette commande écrit une copie privée et peut écraser le chemin demandé.
+Ne pas désactiver le profil pour recopier tout le dépôt. Les dépendances absentes
+suivent la préparation habituelle du projet. Le gain dépend des fichiers du SHA
+admis ; il ne garantit pas l'espace libre futur. Un rapport refuse un profil
+altéré ou des drapeaux d'index qui pourraient cacher des modifications.
+Les reçus natifs restent au format existant ; un ancien binaire ne vérifie pas
+le manifeste compact. Conserver un binaire 207 pour les rapports et la clôture de
+ces nouveaux dossiers.

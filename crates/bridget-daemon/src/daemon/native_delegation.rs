@@ -4317,6 +4317,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             view["error_human_action"] = json!("Si le worker n’annonce pas start_recovery_v1 ou si les reprises sont épuisées, demandez à l’utilisateur d’autoriser la mise à jour du worker par la maintenance native ou de décider du sort de cette mission.");
         }
     }
+    view["mission_reply_timeout_secs"] = json!(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
     permission_change::project_task(task, &mut view);
     if task.projected_error()==Some("terminal Codex: failed:cause=server_overloaded") {
         view["error_message"]=json!("Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé.");
@@ -4340,7 +4341,10 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         && matches!(task.error.as_deref(),
             Some("mission_reply_timeout" | "échéance Claude dépassée"))
     {
-        view["error_message"] = json!("Le délai d’exécution est dépassé. La tâche est terminée ; ses effets et ses fichiers ne sont pas annulés.");
+        let duration = task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS);
+        view["mission_reply_timeout_secs"] = json!(duration);
+        view["error_message"] = json!(format!("La durée maximale de cette mission ({duration} secondes) est dépassée. La tâche est terminée ; ses effets et ses fichiers sont conservés."));
+        view["future_mission_duration"] = json!("Pour une future admission longue, fixer reply_timeout avant le premier appel, par exemple 14400 pour 4 h (maximum 86400, sous la limite du parent). Le défaut est 3600, y compris development. Ne pas modifier la clé ou l’enveloppe de cette tâche terminée ; suivre les contrôles d’arrêt et de dossier indiqués ci-dessous.");
         view["error_recovery"] = if task.cleanup_done && workspace_report_ready(task) {
             json!("bridget_task_continue ne reprend pas une tâche failed ; rejouer sa request_id ne la redémarre pas. Conservez les commits, le worktree et les sorties. Vérifiez aussi l’arrêt des calculs métier détachés. Une nouvelle mission de reprise, avec une nouvelle request_id, doit réutiliser ces sorties et ne faire que le travail restant.")
         } else {
@@ -6905,7 +6909,7 @@ pub(crate) fn catalogue_entries177(registry:&AgentRegistry,source:&crate::lifecy
 
 fn catalogue_projection177(entries:Vec<Value>,caller_held_queue:bool,halted:bool,
     fact:Option<&bridget_transport::protocol::ProviderPermissions>,permission:Option<&ParentPermission>,verdict_cwd:Option<&Path>)->Value {
-    json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3,"resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.map(|f|Path::new(&f.cwd)).or_else(||permission.and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8})
+    json!({"version":1,"providers":entries,"queue":{"held":caller_held_queue},"delegations_halted":halted,"features":{"fallback":true,"fallback_max":3,"resume_on_limit":true,"resume_max_wait_secs":21600,"resume_max_rounds":2},"checks":{"binary":true,"quota":"observed","auth":false},"verdict_context":{"cwd":verdict_cwd,"fact_scope":"session"},"workspace_strategies":["shared","worktree"],"child_requests_default":"deny","child_request_parent_window_secs":CHILD_REQUEST_PARENT_WINDOW_SECS,"child_request_human_window_secs":CHILD_REQUEST_HUMAN_WINDOW_SECS,"cwd_root":fact.map(|f|Path::new(&f.cwd)).or_else(||permission.and_then(ParentPermission::root)),"cwd_scope":if fact.is_some(){Some("project")}else{permission.map(ParentPermission::scope)},"max_children":16,"max_depth":8,"mission_reply_limit_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_default_secs":MISSION_REPLY_LIMIT_SECS,"mission_reply_min_secs":MISSION_REPLY_MIN_SECS,"mission_reply_max_secs":MISSION_REPLY_MAX_SECS,"wait_timeout_default_secs":WAIT_DEFAULT_SECS,"wait_timeout_max_secs":WAIT_MAX_SECS,"brief_max_bytes":crate::handoff::MAX_BODY_BYTES,"keep_alive_min_secs":60,"keep_alive_max_secs":7200,"max_rounds":8})
 }
 
 fn target_resolver_in_catalogue171<'a>(
@@ -33286,6 +33290,22 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(state);
         cleanup(&config);
     }
+    #[test]
+    fn spec207_timeout_reports_effective_duration_without_changing_task() {
+        let (shared,config,id,_,_)=parent_en_cours_150(request("duration207"),0);
+        let mut task=shared.lock().unwrap().delegation_store.get(&id).unwrap().unwrap();
+        task.state="failed".into();task.error=Some("mission_reply_timeout".into());
+        for duration in [None,Some(14400)] {
+            task.reply_timeout=duration;
+            let before=serde_json::to_vec(&task).unwrap();
+            let view=task_view(&task,None,true);
+            assert_eq!(view["mission_reply_timeout_secs"],duration.unwrap_or(3600));
+            assert!(view["future_mission_duration"].as_str().unwrap().contains("14400"));
+            assert_eq!(before,serde_json::to_vec(&task).unwrap());
+        }
+        cleanup(&config);
+    }
+
 }
 
 #[cfg(test)]

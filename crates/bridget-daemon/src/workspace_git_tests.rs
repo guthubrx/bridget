@@ -1019,3 +1019,95 @@ fn spec185_repair_fifo_is_refused_without_blocking_worker() {
         assert!(started.elapsed()<Duration::from_millis(500));
     });
 }
+
+fn compact207_fixture(repo:&Path) {
+    fs::create_dir_all(repo.join("data")).unwrap();
+    fs::write(repo.join("data/large.json"),vec![b'x';200_000]).unwrap();
+    fs::write(repo.join("large.js"),vec![b' ';200_000]).unwrap();
+    fs::write(repo.join("weird [x]* #!.txt"),"tracked").unwrap();
+    std::os::unix::fs::symlink("sub/tracked",repo.join("linked")).unwrap();
+    fixture_git(repo,&["add","."]);fixture_git(repo,&["commit","-qm","compact fixture"]);
+    fixture_git(repo,&["config","extensions.worktreeConfig","true"]);
+    fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
+}
+#[test]
+fn spec207_compact_preserves_parent_reports_edits_and_materializes_privately() {
+    with_repo(|repo| {
+        compact207_fixture(repo);
+        let common=fs::read(repo.join(".git/config")).unwrap();
+        let parent_index=fs::read(repo.join(".git/index")).unwrap();
+        let plan=preflight(repo,None,None).unwrap();
+        let ws=create(&plan,&uuid::Uuid::new_v4().to_string()).unwrap();
+        let child=Path::new(&ws.path);
+        assert!(!child.join("data/large.json").exists());
+        assert!(child.join("large.js").is_file());
+        assert!(child.join("weird [x]* #!.txt").is_file());
+        assert!(child.join("linked").is_symlink());
+        assert_eq!(report(&ws).unwrap().dirty,Some(false));
+        assert!(compact_notice(child).unwrap().contains("git restore"));
+        fs::write(child.join("sub/tracked"),"private edit").unwrap();
+        assert_eq!(report(&ws).unwrap().dirty,Some(true));
+        assert_eq!(fs::read(repo.join("sub/tracked")).unwrap(),b"initial\n");
+        fixture_git(child,&["restore","--","sub/tracked"]);
+        fixture_git(child,&["switch","-c","another-compact"]);
+        assert!(!child.join("data/large.json").exists(),"ordinary switch respects sparse profile");
+        fixture_git(child,&["restore","--ignore-skip-worktree-bits","--","data/large.json"]);
+        fs::write(child.join("data/large.json"),"private large edit").unwrap();
+        assert_eq!(report(&ws).unwrap().dirty,Some(true));
+        assert_eq!(fs::metadata(repo.join("data/large.json")).unwrap().len(),200_000);
+        assert_eq!(fs::read(repo.join(".git/config")).unwrap(),common);
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(),parent_index);
+    });
+}
+#[test]
+fn spec207_compact_rejects_hidden_edits_and_changed_profile() {
+    with_repo(|repo| {
+        compact207_fixture(repo);
+        let ws=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+        let child=Path::new(&ws.path);
+        fixture_git(child,&["update-index","--assume-unchanged","sub/tracked"]);
+        fs::write(child.join("sub/tracked"),"hidden").unwrap();
+        assert!(report(&ws).unwrap_err().contains("masquer"));
+        fixture_git(child,&["update-index","--no-assume-unchanged","sub/tracked"]);
+        fixture_git(child,&["restore","--","sub/tracked"]);
+        fixture_git(child,&["update-index","--skip-worktree","sub/tracked"]);
+        fs::remove_file(child.join("sub/tracked")).unwrap();
+        assert!(report(&ws).is_err(),"selected file cannot be hidden as an omission");
+        fixture_git(child,&["update-index","--no-skip-worktree","sub/tracked"]);
+        fixture_git(child,&["restore","--","sub/tracked"]);
+        let (dir,_)=report_anchor(&ws).unwrap();
+        fs::write(dir.join("info/sparse-checkout"),"/*\n").unwrap();
+        assert!(report(&ws).unwrap_err().contains("profil compact modifié"));
+    });
+}
+#[test]
+fn spec207_compact_requires_explicit_valid_policy_before_creation() {
+    with_repo(|repo| {
+        compact207_fixture(repo);
+        fixture_git(repo,&["config","bridget.worktreeProfile","unknown"]);
+        let plan=preflight(repo,None,None).unwrap();
+        assert!(create(&plan,&uuid::Uuid::new_v4().to_string()).unwrap_err().contains("inconnu"));
+        fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
+        let ws=create(&preflight(&repo.join("sub"),None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+        assert!(Path::new(&ws.path).join("sub").is_dir());
+        assert_eq!(report(&ws).unwrap().dirty,Some(false));
+        fixture_git(repo,&["config","--unset","bridget.worktreeProfile"]);
+        let full=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+        assert!(Path::new(&full.path).join("data/large.json").is_file());
+    });
+}
+
+// Mesure manuelle, uniquement sur une copie Git privée sous le cache de recette.
+#[test]
+#[ignore = "recette manuelle sur clone privé, sans mission ni fournisseur"]
+fn spec207_compact_measure_private_repository() {
+    let path=PathBuf::from(std::env::var("BRIDGET_207_PRIVATE_PROBE").expect("private probe path"));
+    let cache=std::env::var("HOME").unwrap()+"/.cache/bridget207/";
+    assert!(path.to_string_lossy().starts_with(&cache));
+    assert_eq!(path.canonicalize().unwrap(),path);
+    let ws=create(&preflight(&path,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+    assert_eq!(report(&ws).unwrap().dirty,Some(false));
+    let (dir,_)=report_anchor(&ws).unwrap();
+    let manifest:serde_json::Value=serde_json::from_slice(&fs::read(dir.join("bridget-compact207.json")).unwrap()).unwrap();
+    println!("BRIDGET207_PROBE={}",serde_json::json!({"workspace":ws,"selected_bytes":manifest["selected_bytes"],"total_bytes":manifest["total_bytes"]}));
+}

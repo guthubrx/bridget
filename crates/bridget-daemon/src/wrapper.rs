@@ -391,6 +391,9 @@ fn managed_resume_context(
             resume_card_external_text(&error)
         )),
     }
+    if let Some(notice) = crate::workspace_git::compact_notice(worktree) {
+        lines.push(notice.into());
+    }
     if is_protected_principal_checkout(worktree) {
         lines.push(
             "ALERTE règle 6 : ce chemin est le checkout principal d'un dépôt à worktrees liés (entrée primaire de `git worktree list`, ≥2 worktrees). Ce n'est ni un worktree lié ni un clone de revue. N'y écris PAS ; travaille uniquement dans un worktree attesté."

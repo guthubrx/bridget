@@ -14,6 +14,8 @@ mod tests;
 
 #[path = "workspace_repair_git.rs"]
 mod repair;
+#[path = "workspace_compact.rs"]
+mod compact;
 pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, report_repaired_workspace, apply_repair_git};
 
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -162,6 +164,15 @@ fn range(value: &str) -> bool {
 fn allowed(args: &[&str]) -> bool {
     match args {
         ["--version"] => true,
+        ["rev-parse", "--absolute-git-dir"] => true,
+        ["ls-tree", "-r", "-l", "-z", base] => sha(base),
+        ["ls-files", "-v", "-z"] => true,
+        ["read-tree", "-mu", "HEAD"] => true,
+        ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile" | "extensions.worktreeConfig"] => true,
+        ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone"] => true,
+        ["config", "--worktree", "core.sparseCheckout", "true"]
+        | ["config", "--worktree", "core.sparseCheckoutCone", "false"]
+        | ["config", "--worktree", "index.sparse", "false"] => true,
         ["rev-parse", "--show-toplevel" | "--git-common-dir"] => true,
         ["rev-parse", "--short", "HEAD"] => true,
         ["rev-parse", "--verify", "--end-of-options", value] => revision(value),
@@ -189,7 +200,8 @@ fn allowed(args: &[&str]) -> bool {
             Path::new(origin).is_absolute() && sha(commit),
         ["worktree", "repair", "--", path] => Path::new(path).is_absolute(),
         ["worktree", "list", "--porcelain"] | ["worktree", "list", "--porcelain", "-z"] => true,
-        ["worktree", "add", "-b", branch, "--", path, base] => {
+        ["worktree", "add", "-b", branch, "--", path, base]
+        | ["worktree", "add", "--no-checkout", "-b", branch, "--", path, base] => {
             validate_branch(branch).is_ok() && Path::new(path).is_absolute() && sha(base)
         }
         ["update-ref", "-d", reference, old] => {
@@ -271,6 +283,8 @@ fn capture(
     }
 
     let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add") {
+        WORKTREE_ADD_TIMEOUT
+    } else if args.first() == Some(&"read-tree") {
         WORKTREE_ADD_TIMEOUT
     } else if args.first() == Some(&"fetch") {
         CREATE_TIMEOUT
@@ -388,7 +402,8 @@ fn capture(
                 Ok(count) => {
                     // Comme T3, chaque flux garde son budget : stdout ne peut
                     // pas effacer le diagnostic stderr. Total borné à 2 Mio.
-                    let remaining = MAX_OUTPUT.saturating_sub(bytes.len());
+                    let maximum = if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) { 8 * MAX_OUTPUT } else { MAX_OUTPUT };
+                    let remaining = maximum.saturating_sub(bytes.len());
                     bytes.extend_from_slice(&buffer[..count.min(remaining)]);
                     truncated |= count > remaining;
                 }
@@ -810,17 +825,13 @@ pub(crate) fn create(
         std::sync::Arc::clone(locks.entry(preflight.toplevel.clone()).or_default())
     };
     let _serialized = lock.lock().unwrap_or_else(|error| error.into_inner());
+    let compact = compact::plan(preflight)?;
+    let mut checkout_args = vec!["worktree", "add"];
+    if compact.is_some() { checkout_args.push("--no-checkout"); }
+    checkout_args.extend(["-b", &branch, "--", path_text, &preflight.base_commit]);
     let checkout = run_git(
         &preflight.cwd,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            &branch,
-            "--",
-            path_text,
-            &preflight.base_commit,
-        ],
+        &checkout_args,
         WORKTREE_ADD_TIMEOUT,
     );
     let code = checkout.as_ref().map_or("workspace_create_failed", |output| {
@@ -837,10 +848,16 @@ pub(crate) fn create(
             format!("{error}; branche retirée : {released}"),
         ));
     }
+    if let Some(plan) = compact {
+        compact::apply(&path, plan).map_err(|e| residue("workspace_create_failed", e))?;
+    }
     let canonical = path
         .canonicalize()
         .map_err(|error| residue("workspace_path_unsafe", error.to_string()))?;
     let child_path = path.join(&preflight.offset);
+    if compact::is_compact(&path) && !child_path.exists() {
+        fs::create_dir_all(&child_path).map_err(|e| residue("workspace_path_unsafe",e.to_string()))?;
+    }
     if canonical != path
         || !canonical.starts_with(&preflight.cwd)
         || child_path.canonicalize().ok().as_ref() != Some(&child_path)
@@ -1048,6 +1065,7 @@ fn report_at(workspace: &WorkspaceRecord, git_dir: &Path, path: &Path) -> Result
         });
     }
     let status = read(&["status", "--porcelain=v1", "--untracked-files=normal"])?;
+    compact::audit(git_dir, path)?;
     if !status.success() {
         return Err(format!("état Git illisible : {}", status.stderr));
     }
@@ -1064,4 +1082,9 @@ fn report_at(workspace: &WorkspaceRecord, git_dir: &Path, path: &Path) -> Result
     result.truncated = count > 50;
     result.dirty = Some(!status.stdout.is_empty());
     Ok(result)
+}
+
+/// Conseil fourni au nouvel enfant dans sa carte native, sans autorité nouvelle.
+pub(crate) fn compact_notice(cwd: &Path) -> Option<&'static str> {
+    compact::is_compact(cwd).then_some("Worktree compact Git : les sources et petits fichiers sont extraits. Les gros fichiers restent dans Git ; leur absence initiale n’est pas une suppression. Si nécessaire, depuis la racine de ce worktree, matérialisez uniquement le fichier utile avec git restore --ignore-skip-worktree-bits -- chemin/du/fichier. Cette commande écrase le chemin demandé : vérifier d’abord qu’il n’a aucune modification locale. Ne désactivez pas le profil pour tout recopier, ne modifiez pas les drapeaux de l’index et ne créez pas de liens vers les données modifiables d’un autre travail. Les dépendances absentes suivent la préparation habituelle du projet.")
 }
