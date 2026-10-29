@@ -19,3 +19,5 @@ La portée reste locale ; il faut distribuer et contrôler le candidat sur chaqu
 ## Limites
 
 Les évolutions des fournisseurs peuvent imposer un minimum encore inconnu. api_error seul ne prouve jamais une incompatibilité. Le diagnostic corrélé208 reste le parcours de preuve si aucune règle ne couvre encore le cas.
+
+Transition de publication : l’installation manuelle du paquet historique officiel v0.6.3 (SHA de paquet vérifié, version binaire concordante, commande absente avec code2) conserve le comportement antérieur avec un avertissement non qualifié. Aucun refus d’un contrôle disponible n’est contourné. Les autres versions dépourvues du contrôle sont refusées. L’updater reste strict pour tout candidat non vérifiable.

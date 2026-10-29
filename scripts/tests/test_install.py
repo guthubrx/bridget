@@ -85,8 +85,8 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
         path.write_text(content)
         path.chmod(0o755)
 
-    def archive(self, binary=BINARY, member=None, link=False, platform="linux-x86_64"):
-        stem = "bridget-9.8.7-" + platform
+    def archive(self, binary=BINARY, member=None, link=False, platform="linux-x86_64", release="9.8.7"):
+        stem = "bridget-" + release + "-" + platform
         with tarfile.open(self.root / "archive", "w:gz") as archive:
             info = tarfile.TarInfo(member or f"{stem}/bridget")
             if link:
@@ -126,6 +126,24 @@ shutil.copyfile(r / ('checksum' if url.endswith('.sha256') else 'archive'), out)
         self.assertEqual(self.installed.read_bytes(), b"previous executable")
         self.assertFalse((self.root / "service-commands").exists())
         self.assertFalse((self.home / ".profile").exists())
+
+    def test209_published_legacy_package_warns_without_claiming_compatibility(self):
+        legacy=BINARY.replace(b"bridget 9.8.7 (fixture)",b"bridget 0.6.3 (fixture)")
+        start=legacy.index(b"clients)");end=legacy.index(b"agents)",start)
+        legacy=legacy[:start]+b"clients) exit 2;;\n"+legacy[end:]
+        self.archive(binary=legacy, release="0.6.3")
+        result=self.run_install("--version","v0.6.3")
+        self.assertIn("compatibility is NOT verified",result.stderr)
+        self.assertEqual(self.installed.read_bytes(),legacy)
+
+    def test209_future_package_without_check_preserves_existing_installation(self):
+        self.existing()
+        modern=BINARY
+        start=modern.index(b"clients)");end=modern.index(b"agents)",start)
+        modern=modern[:start]+b"clients) exit 2;;\n"+modern[end:]
+        self.archive(binary=modern)
+        self.run_install(ok=False)
+        self.assertEqual(self.installed.read_bytes(),b"previous executable")
 
     def test_release_latest_and_update_preserve_data_and_profile(self):
         profile = self.home / ".bashrc"

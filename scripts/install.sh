@@ -319,7 +319,18 @@ main() {
     "$candidate" --version > "$work/version" || fail 'Candidate cannot run. Installed Bridget was not changed.'
     grep -qi 'bridget' "$work/version" || fail 'Unexpected candidate version response.'
     # Ask the candidate before changing a link, profile or service. No client is upgraded here.
-    "$candidate" clients check || fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the machine, installed/minimum versions and action above. Ask the user before updating Claude Code or Codex through its existing official installer; then repeat this installation. No account or model change is authorized by this refusal.'
+    if "$candidate" clients check 2>"$work/client-check-error"; then
+        :
+    else
+        client_check_status=$?
+        # Published 0.6.3 predates this port. Preserve its historical installation path,
+        # with an explicit warning, without calling an unknown version compatible.
+        if [ "$mode" = release ] && [ "$version" = v0.6.3 ] && [ "$client_check_status" = 2 ] && grep -Eq '^bridget 0[.]6[.]3([[:space:]]|$)' "$work/version"; then
+            say 'Legacy release 0.6.3: provider-client compatibility is NOT verified by this package. This preserves its historical installation behavior. Use --source for the current client-version check. No provider client will be updated, and model access is not guaranteed.'
+        else
+            fail 'Client compatibility check refused this Bridget installation. Keep existing services running. Read the machine, installed/minimum versions and action above. Ask the user before updating Claude Code or Codex through its existing official installer; then repeat this installation. No account or model change is authorized by this refusal.'
+        fi
+    fi
     prepare_service
 
     # Prepare PATH before replacing the executable; preserve existing shell settings.
