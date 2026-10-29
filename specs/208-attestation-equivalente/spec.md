@@ -6,4 +6,4 @@ Réutiliser l'équivalence déjà appliquée aux continuations : source, version
 
 Le snapshot admis, son digest et sa révision de préparation worker restent inchangés ; ne pas réécrire de tâche ou de reçu réel pour cette correction. Les tâches cancelled ne sont jamais relancées. Préserver28414216 et son enveloppe, sans substitution.
 
-Deux api_error Opus/Cartae sont établis dans leurs journaux : CLI2.1.251 incompatible avec le modèle,2.1.280 minimum demandé par le fournisseur. Aucun fait de quota, compte ou durée fautive. Le statut doit guider la vérification corrélée d'un api_error sans déduire une cause et fournir une référence native au responsable. La mise à jour de Claude reste une opération distincte, non exécutée ici.
+Deux api_error Opus/Cartae sont établis dans leurs journaux : CLI2.1.251 incompatible avec le modèle,2.1.280 minimum demandé par le fournisseur. Aucun fait de quota, compte ou durée fautive. Le statut doit guider la vérification corrélée d'un api_error sans déduire une cause et fournir une référence native au responsable. La mise à jour de Claude a été autorisée et réalisée séparément ; son reçu figure dans claude-cartae.md.
