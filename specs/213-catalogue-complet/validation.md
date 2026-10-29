@@ -93,6 +93,10 @@ Réponse envoyée à trajets bus : mcp-35474-6ae38608-a, replyfalse/in_flight. A
 
 Contrôle final limité : aucun code, Cargo, build, fournisseur, qualification ou service relancé. Les guides passent32pages/522liens/13paires et git diff --check est propre.
 Le résultat a été envoyé à monuments par le nouveau message Bridget mcp-35474-6ae39189-c, deliveryf2a35ee5-0fe1-4758-9d80-a70987e2c88d, issued_at1793298825, reply=false. Le reçu est in_flight : aucune lecture du demandeur n’est déduite.
-Les quatre tâches opus2D ci-dessus restent result_available/error=null/cleanup_done=true ; guard_released=false au registre. Seul leur propriétaire les acquitte/clôture. Leurs dossiers sont conservés. Le témoin Bridget Haiku SYS est déjà clôturé ; son dossier reste conservé sous observation d’usage incomplète. Aucune suppression de travail ni de binaire sous usage.
+Les quatre tâches opus2D ci-dessus restent result_available/error=null/cleanup_done=true. La relecture complète confirme guarded=false, guard_released=false et idle_deadline_at=null : aucune garde n’est ouverte et aucune libération supplémentaire n’est requise. guard_released=false seul ne prouve pas un verrou. Leurs dossiers sont conservés. Le témoin Bridget Haiku SYS est déjà clôturé ; son dossier reste conservé sous observation d’usage incomplète. Aucune suppression de travail ni de binaire sous usage.
 L’onglet privé de diagnostic non apparié a été vidé ; aucun jeton copié ni contrôle d’un autre onglet.
 La session213 n’est pas déclarée intégralement résolue : accès Codex depuis le parent Claude et connexion utilisateur CodexKS restent ouverts. Les données ajoutées sont actives ; le binaire212 déjà chargé n’a pas besoin d’être reconstruit pour ce bilan.
+
+## Rectification de la lecture des gardes
+
+Relecture ciblée des quatre identités le29octobre2026 : guarded=false pour chacune, cleanup_done=true, état result_available, aucune échéance de garde. Task::holds_slot retourne false pour ces tâches terminales non gardées. Le message mcp-35474-6ae39189-c citait guard_released=false sans guarded : cette information incomplète ne devait pas laisser supposer une garde à fermer. Le propriétaire n’a aucune opération supplémentaire à effectuer pour ces quatre essais. Aucun état de tâche n’a été modifié pour corriger cette lecture.
