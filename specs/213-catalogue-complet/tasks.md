@@ -7,6 +7,9 @@
 - [x] Obtenir et clôturer le témoin Haiku SYS depuis Bridget, sans le présenter comme une preuve opus2D.
 - [x] Répondre à trajets bus sur not_parent, sans acte NE02.
 - [x] Transmettre une campagne unique au propriétaire opus2D, dans son fil existant.
-- [ ] Recevoir la matrice d’admissions opus2D ; garder les combinaisons non testées explicitement inconnues.
+- [x] Recevoir la matrice d’admissions opus2D ; garder les combinaisons non testées explicitement inconnues.
 - [ ] Codex KS : connexion officielle utilisateur validée, puis qualification et réactivation conditionnelle.
-- [ ] Pousser le bilan documentaire et les limites réelles.
+- [x] Pousser le bilan documentaire et les limites réelles.
+
+- [ ] Traduction des restrictions du parent Claude vers Codex : refus établi, aucun élargissement ni code modifié dans cette reprise documentaire.
+- [x] Consigner le retour du lien et le client racine encore211, sans boucle de restart.
