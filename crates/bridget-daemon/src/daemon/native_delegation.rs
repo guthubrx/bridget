@@ -4876,12 +4876,12 @@ fn handle_with_fact(
     }
     if let NativeDelegationRequest::ProviderCatalogueV1 {refresh,machine_id}=&request {
         let mut controls=Vec::new();
-        let result=(|| {
+        let mut result=(|| {
             let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
             let human=st.connection_roles.get(conn)==Some(&ConnectionRole::Client)
                 && !st.conn_names.contains_key(conn) && !st.auxiliary_connections.contains(conn)
                 && st.peer_uids.get(conn).copied()==Some(unsafe{libc::geteuid()})
-                && st.client_negotiations.get(conn).is_some_and(|n|n.capabilities.contains(&bridget_transport::protocol::ClientCapability::ProviderCatalogueV1));
+                && st.client_negotiations.get(conn).is_some_and(|n|n.version==CLIENT_CONTRACT_VERSION && n.capabilities.contains(&bridget_transport::protocol::ClientCapability::ProviderCatalogueV1));
             if !human {
                 recheck_attested_thread(&st,conn,thread)?;
                 let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
@@ -4889,9 +4889,22 @@ fn handle_with_fact(
                 // The ordinary own-state capability gate remains authoritative.
             }
             if *refresh {super::native_provider_catalogue220::refresh(&mut st,machine_id.as_deref(),&mut controls)}
-            else {super::native_provider_catalogue220::view(&st)}
+            else {
+                if machine_id.as_deref().is_some_and(|m|!bridget_transport::provider_catalogue::catalogue_token(m)) {return Err("provider_catalogue_machine_invalid".into());}
+                let mut view=super::native_provider_catalogue220::view(&st)?;
+                if let Some(machine)=machine_id {
+                    for key in ["options","connection_catalogues"] {
+                        if let Some(values)=view[key].as_array_mut() {values.retain(|v|v["machine_id"]==machine.as_str());}
+                    }
+                }
+                Ok(view)
+            }
         })().unwrap_or_else(|code:String|failure(&code));
-        execute_controls(controls);
+        let failed=super::native_provider_catalogue220::send_controls(controls);
+        if !failed.is_empty() {
+            result["status"]=json!("unconfirmed");result["code"]=json!("provider_catalogue_refresh_unconfirmed");
+            result["next_action"]=json!("La remise de la demande au worker n’est pas confirmée. Rétablir son lien natif et relire une fois le catalogue. Si aucune observation nouvelle n’arrive, demander un seul rafraîchissement après le délai de 30 secondes. Ne relancer aucune mission.");
+        }
         return DaemonToWrapper::NativeDelegationResult {result};
     }
     if matches!(&request, NativeDelegationRequest::RoutingCatalogueV1 {}) {
@@ -33749,14 +33762,21 @@ mod permission_projection214_tests {
             catalogue:ProviderCatalogue {connection_id:"main".into(),definition_digest:digest,observed_at:unix_timestamp(),state:CatalogueState::Observed,
                 account_scope:Some("b".repeat(32)),cause:None,models:vec![CatalogueModel {model:"announced-outside-policy".into(),supported_efforts:vec![],default_effort:None}]}};
         let mut wrong=update.clone();wrong.connection_epoch="foreign".into();assert!(catalogue::ingest(&mut st,"worker220",wrong).is_some());
+        for n in 0..32 {
+            st.remote_workers.get_mut("local").unwrap().catalogues.insert(format!("obsolete-{n}"),catalogue::CachedCatalogue {sequence:1,received:Instant::now(),value:update.catalogue.clone()});
+        }
         assert!(catalogue::ingest(&mut st,"worker220",update.clone()).is_none());
+        assert_eq!(st.remote_workers["local"].catalogues.len(),1);
         let observed=catalogue::project(&st,&st.registry);assert_eq!(observed[0]["status"],"reported_models");assert_eq!(observed[0]["models"][0]["declared_in_policy"],false);
         assert_eq!(observed[0]["entitlement"],"unknown");assert_eq!(observed[0]["provider_cache"],"not_attested");
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at-=181;
-        let stale=catalogue::project(&st,&st.registry);assert_eq!(stale[0]["status"],"stale");assert!(stale[0]["models"].as_array().unwrap().is_empty());
+        let stale=catalogue::project(&st,&st.registry);assert_eq!(stale[0]["status"],"stale");assert!(stale[0]["age_secs"].as_u64().unwrap()>=181);assert!(stale[0]["models"].as_array().unwrap().is_empty());
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.definition_digest="c".repeat(64);
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at=unix_timestamp();
         assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"definition_changed");
+        {let cached=&mut st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value;
+        *cached=update.catalogue.clone();cached.state=CatalogueState::Unavailable;cached.models.clear();cached.account_scope=None;cached.cause=Some(CatalogueCause::StopUnconfirmed);cached.observed_at-=181;}
+        let blocked=catalogue::project(&st,&st.registry);assert_eq!(blocked[0]["status"],"unavailable");assert!(blocked[0]["next_action"].as_str().unwrap().contains("maintenance"));
         st.remote_workers.get_mut("local").unwrap().catalogue_refresh_id="new-refresh".into();
         let mut late=update.clone();late.sequence=2;assert!(catalogue::ingest(&mut st,"worker220",late).is_none());
         assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,1);
@@ -33766,6 +33786,7 @@ mod permission_projection214_tests {
         let token=st.remote_workers["local"].catalogue_refresh_id.clone();
         let second=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();assert_eq!(second["workers"][0]["status"],"already_requested");assert_eq!(controls.len(),1);assert_eq!(token,st.remote_workers["local"].catalogue_refresh_id);
         st.remote_workers.get_mut("local").unwrap().capabilities.clear();assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"unverified_peer");
+        st.remote_workers.remove("local");assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"observation_source_unavailable");
         assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),original);
         drop(st);drop(shared);super::tests::cleanup(&config);
     }
@@ -33779,6 +33800,18 @@ mod permission_projection214_tests {
         st.client_negotiations.insert("human220".into(),NegotiatedClient {version:CLIENT_CONTRACT_VERSION,issuer_scope:"test220".into(),capabilities:vec![ClientCapability::ProviderCatalogueV1]});}
         let read=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:None},&shared);
         assert!(matches!(read,DaemonToWrapper::NativeDelegationResult {result} if result["connection_catalogues"].is_array()));
+        let filtered=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:Some("different".into())},&shared);
+        assert!(matches!(filtered,DaemonToWrapper::NativeDelegationResult {result} if result["options"]==json!([]) && result["connection_catalogues"]==json!([])));
+        {let mut st=shared.lock().unwrap();let (a,b)=UnixStream::pair().unwrap();drop(b);
+        st.connections.insert("worker220".into(),Arc::new(Mutex::new(std::io::BufWriter::new(a))));
+        st.remote_workers.insert("local".into(),RemoteWorkerConnection {identity:bridget_transport::protocol::WorkerIdentity {machine_id:"local".into(),worker_id:"worker220".into(),provisioning_revision:1},conn_id:"worker220".into(),epoch:"epoch".into(),
+        capabilities:vec![bridget_transport::protocol::WorkerCapability::ProviderCatalogueV1],catalogues:HashMap::new(),catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
+        contact:bridget_transport::protocol::WorkerContactState::Connected,last_contact:Instant::now(),last_contact_at:unix_timestamp()});}
+        let broken=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:true,machine_id:Some("local".into())},&shared);
+        assert!(matches!(broken,DaemonToWrapper::NativeDelegationResult {result} if result["status"]=="unconfirmed" && result["code"]=="provider_catalogue_refresh_unconfirmed"));
+        shared.lock().unwrap().client_negotiations.get_mut("human220").unwrap().version=0;
+        let stale=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:None},&shared);
+        assert!(matches!(stale,DaemonToWrapper::NativeDelegationResult {result} if result["status"]=="refused"));
         drop(shared);super::tests::cleanup(&config);
     }
 

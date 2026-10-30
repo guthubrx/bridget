@@ -540,6 +540,7 @@ fn execute_with_proof(
     }
     let mutation = !matches!(&request,
         NativeDelegationRequest::Catalogue | NativeDelegationRequest::RoutingCatalogueV1 { .. }
+        | NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,..}
         | NativeDelegationRequest::CallerScope { .. } | NativeDelegationRequest::Status { .. }
         | NativeDelegationRequest::Wait { .. });
     let message = match proof {

@@ -5120,6 +5120,8 @@ mod tests {
         let expected = [
             "bridget_capabilities",
             "bridget_refresh_models",
+            "bridget_ask_user",
+            "bridget_task_repair_workspace",
             "bridget_delegate",
             "bridget_auto_delegate",
             "bridget_task_continue",

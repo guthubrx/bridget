@@ -7,7 +7,7 @@ use crate::registry::AgentRegistry;
 use bridget_transport::provider_catalogue::*;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{BufReader, Write};
+use std::io::{Read, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -175,6 +175,7 @@ impl CatalogueService {
         let mut sequence = 0u64;
         let mut recovered = false;
         let mut recovery_attempted = false;
+        let mut recovery_cause = CatalogueCause::SourceUnavailable;
         while !self.stopping.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_secs(1));
             if let Some(child) = retained.as_mut() {
@@ -245,11 +246,18 @@ impl CatalogueService {
                 .unwrap_or_else(|e| e.into_inner())
                 .retain(|id, _| keep.contains(id.as_str()));
             if !recovered {
-                recovered = private_dir(&directory)
+                let private = private_dir(&directory)
                     .and_then(|_| private_dir(&directory.join("markers")))
-                    .is_ok()
-                    && recover_probe(&markers, !recovery_attempted);
-                recovery_attempted = true;
+                    .is_ok();
+                recovery_cause = if private {
+                    CatalogueCause::StopUnconfirmed
+                } else {
+                    CatalogueCause::SourceUnavailable
+                };
+                if private {
+                    recovered = recover_probe(&markers, !recovery_attempted);
+                    recovery_attempted = true;
+                }
             }
             for connection in connections {
                 if !self.enabled.load(Ordering::Acquire)
@@ -333,7 +341,7 @@ impl CatalogueService {
                         self.stopping.as_ref(),
                     )
                 } else {
-                    Err((CatalogueCause::StopUnconfirmed, None))
+                    Err((recovery_cause, None))
                 };
                 let mut value = observation(
                     &connection.connection_id,
@@ -409,62 +417,133 @@ impl CatalogueService {
     }
 }
 
+struct MetadataSocket {
+    stream: UnixStream,
+    deadline: Instant,
+    bytes: usize,
+}
+impl MetadataSocket {
+    fn remaining(&self) -> std::io::Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "metadata deadline"))
+    }
+}
+impl Read for MetadataSocket {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if self.bytes >= MAX_TOTAL_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "metadata output limit",
+            ));
+        }
+        self.stream.set_read_timeout(Some(self.remaining()?))?;
+        let limit = buffer.len().min(MAX_TOTAL_BYTES - self.bytes);
+        let n = self.stream.read(&mut buffer[..limit])?;
+        self.bytes += n;
+        Ok(n)
+    }
+}
+impl Write for MetadataSocket {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.stream
+            .set_write_timeout(Some(self.remaining()?.min(Duration::from_secs(1))))?;
+        self.stream.write(buffer)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.remaining()?;
+        self.stream.flush()
+    }
+}
+fn ws_config() -> tungstenite::protocol::WebSocketConfig {
+    tungstenite::protocol::WebSocketConfig::default()
+        .read_buffer_size(8192)
+        .write_buffer_size(0)
+        .max_write_buffer_size(MAX_PAGE_BYTES)
+        .max_frame_size(Some(MAX_PAGE_BYTES))
+        .max_message_size(Some(MAX_PAGE_BYTES))
+}
+fn ws_failure(error: tungstenite::Error) -> CatalogueCause {
+    match error {
+        tungstenite::Error::Io(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) =>
+        {
+            CatalogueCause::TimedOut
+        }
+        tungstenite::Error::Capacity(_) => CatalogueCause::OutputLimit,
+        tungstenite::Error::Io(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            CatalogueCause::OutputLimit
+        }
+        tungstenite::Error::Io(_)
+        | tungstenite::Error::ConnectionClosed
+        | tungstenite::Error::AlreadyClosed => CatalogueCause::SourceUnavailable,
+        _ => CatalogueCause::ProtocolUnavailable,
+    }
+}
 struct Rpc {
-    reader: BufReader<UnixStream>,
-    writer: UnixStream,
+    socket: tungstenite::WebSocket<MetadataSocket>,
     id: u64,
     bytes: usize,
-    deadline: Instant,
 }
 impl Rpc {
+    fn connect(stream: UnixStream, deadline: Instant) -> Result<Self, CatalogueCause> {
+        // The Codex Unix listener upgrades to WebSocket; no TCP port or copied identity.
+        let stream = MetadataSocket {
+            stream,
+            deadline,
+            bytes: 0,
+        };
+        let (socket, _) =
+            tungstenite::client::client_with_config("ws://localhost/", stream, Some(ws_config()))
+                .map_err(|e| match e {
+                tungstenite::HandshakeError::Failure(error) => ws_failure(error),
+                _ => CatalogueCause::ProtocolUnavailable,
+            })?;
+        Ok(Self {
+            socket,
+            id: 0,
+            bytes: 0,
+        })
+    }
     fn write(&mut self, value: &Value) -> Result<(), CatalogueCause> {
-        let mut bytes =
-            serde_json::to_vec(value).map_err(|_| CatalogueCause::ProtocolUnavailable)?;
-        bytes.push(b'\n');
-        self.writer
-            .set_write_timeout(Some(Duration::from_secs(1)))
-            .map_err(|_| CatalogueCause::SourceUnavailable)?;
-        self.writer
-            .write_all(&bytes)
-            .map_err(|_| CatalogueCause::SourceUnavailable)
+        let text = serde_json::to_string(value).map_err(|_| CatalogueCause::ProtocolUnavailable)?;
+        self.socket
+            .send(tungstenite::Message::Text(text.into()))
+            .map_err(ws_failure)
     }
     fn call(&mut self, method: &str, params: Value) -> Result<Value, CatalogueCause> {
-        // Liste fermée : aucun login, thread, tour, outil ou permission.
         if !matches!(method, "initialize" | "account/read" | "model/list") {
             return Err(CatalogueCause::ProtocolUnavailable);
         }
         self.id += 1;
         let id = self.id;
+        #[cfg(test)]
+        eprintln!("metadata220 rpc={method}");
         self.write(&json!({"id":id,"method":method,"params":params}))?;
         loop {
-            let line = bridget_transport::jsonl::read_unix_line(
-                &mut self.reader,
-                MAX_PAGE_BYTES,
-                bridget_transport::jsonl::LineDeadline::Absolute(self.deadline),
-            )
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::TimedOut {
-                    CatalogueCause::TimedOut
-                } else if e.kind() == std::io::ErrorKind::InvalidData {
-                    CatalogueCause::OutputLimit
-                } else {
-                    CatalogueCause::ProtocolUnavailable
-                }
-            })?
-            .ok_or(CatalogueCause::SourceUnavailable)?;
-            self.bytes += line.len();
+            let message = self.socket.read().map_err(ws_failure)?;
+            let text = match message {
+                tungstenite::Message::Text(text) => text,
+                tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => continue,
+                tungstenite::Message::Close(_) => return Err(CatalogueCause::SourceUnavailable),
+                _ => return Err(CatalogueCause::ProtocolUnavailable),
+            };
+            self.bytes += text.len();
             if self.bytes > MAX_TOTAL_BYTES {
                 return Err(CatalogueCause::OutputLimit);
             }
             let value: Value =
-                serde_json::from_slice(&line).map_err(|_| CatalogueCause::ProtocolUnavailable)?;
+                serde_json::from_str(&text).map_err(|_| CatalogueCause::ProtocolUnavailable)?;
             if value.get("id") == Some(&json!(id)) {
                 return value
                     .get("result")
                     .cloned()
                     .ok_or(CatalogueCause::ProtocolUnavailable);
             }
-            // Refuser toute demande du serveur, sans lui accorder d'autorité.
             if let Some(request_id) = value.get("id") {
                 self.write(&json!({"id":request_id,"error":{"code":-32601,"message":"unsupported metadata request"}}))?;
             }
@@ -494,11 +573,16 @@ fn probe(
     {
         return Err(plain(CatalogueCause::ProtocolUnavailable));
     }
+    #[cfg(test)]
+    eprintln!("metadata220 stage=environment");
     let env = crate::lifecycle::build_environment(def, source)
         .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
     let socket = directory.join("c.sock");
     match std::fs::symlink_metadata(&socket) {
-        Ok(m) if m.file_type().is_socket() && m.uid() == unsafe { libc::geteuid() } => {
+        Ok(m)
+            if (m.file_type().is_socket() || m.file_type().is_symlink())
+                && m.uid() == unsafe { libc::geteuid() } =>
+        {
             std::fs::remove_file(&socket).map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
         }
         Ok(_) => return Err(plain(CatalogueCause::SourceUnavailable)),
@@ -530,16 +614,24 @@ fn probe(
     bootstrap
         .set_ready_timeout(Duration::from_secs(2))
         .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
+    #[cfg(test)]
+    eprintln!("metadata220 stage=ready");
     let ready = bootstrap
         .wait_ready()
         .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
+    #[cfg(test)]
+    eprintln!("metadata220 stage=marker");
     let marked = ready
         .persist_marker(markers, "probe")
         .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
+    #[cfg(test)]
+    eprintln!("metadata220 stage=release");
     let mut child = match marked.release_retained() {
         Ok(child) => child,
         Err((_, child)) => return Err((CatalogueCause::StopUnconfirmed, Some(child))),
     };
+    #[cfg(test)]
+    eprintln!("metadata220 stage=connecting");
     let deadline = Instant::now() + PROBE_BUDGET;
     let result = (|| {
         let stream = loop {
@@ -566,22 +658,19 @@ fn probe(
                 Err(_) => return Err(CatalogueCause::SourceUnavailable),
             }
         };
-        let mut rpc = Rpc {
-            reader: BufReader::new(
-                stream
-                    .try_clone()
-                    .map_err(|_| CatalogueCause::SourceUnavailable)?,
-            ),
-            writer: stream,
-            id: 0,
-            bytes: 0,
-            deadline,
-        };
+        #[cfg(test)]
+        eprintln!("metadata220 stage=connected");
+        if crate::daemon::unix_peer_uid(&stream).ok() != Some(unsafe { libc::geteuid() }) {
+            return Err(CatalogueCause::SourceUnavailable);
+        }
+        let mut rpc = Rpc::connect(stream, deadline)?;
         rpc.call(
             "initialize",
             json!({"clientInfo":{"name":"bridget","version":env!("CARGO_PKG_VERSION")}}),
         )?;
         rpc.write(&json!({"method":"initialized"}))?;
+        #[cfg(test)]
+        eprintln!("metadata220 stage=account_before");
         let before = rpc.call("account/read", json!({"refreshToken":false}))?;
         let before_key = account_comparison(&before, salt);
         if before_key == Ok(None) {
@@ -600,6 +689,8 @@ fn probe(
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+        #[cfg(test)]
+        eprintln!("metadata220 stage=models");
         let mut models = Vec::new();
         let mut cursor = None;
         let mut cursors = BTreeSet::new();
@@ -636,8 +727,12 @@ fn probe(
         if models.windows(2).any(|p| p[0].model == p[1].model) {
             return Err(CatalogueCause::ProtocolUnavailable);
         }
+        #[cfg(test)]
+        eprintln!("metadata220 stage=account_after");
         let after = rpc.call("account/read", json!({"refreshToken":false}))?;
-        if before_key != account_comparison(&after, salt) {
+        if before.pointer("/account/type") != after.pointer("/account/type")
+            || before_key != account_comparison(&after, salt)
+        {
             return Err(CatalogueCause::AccountChanged);
         }
         Ok((models, before_key.ok().flatten()))
@@ -656,7 +751,9 @@ fn probe(
         return Err((CatalogueCause::StopUnconfirmed, Some(child)));
     }
     if let Ok(m) = std::fs::symlink_metadata(&socket) {
-        if m.file_type().is_socket() && m.uid() == unsafe { libc::geteuid() } {
+        if (m.file_type().is_socket() || m.file_type().is_symlink())
+            && m.uid() == unsafe { libc::geteuid() }
+        {
             let _ = std::fs::remove_file(&socket);
         }
     }
@@ -718,12 +815,34 @@ mod tests {
     ) {
         let program = root.join("codex");
         std::fs::write(&program,r#"#!/usr/bin/python3
-import socket,sys,json,os
+import socket,sys,json,os,base64,hashlib,struct
 path=sys.argv[sys.argv.index('--listen')+1].removeprefix('unix://')
 server=socket.socket(socket.AF_UNIX);server.bind(path);server.listen(1)
 conn,_=server.accept();reader=conn.makefile('rb');reads=0
-for line in reader:
-    v=json.loads(line);method=v.get('method');
+headers={}
+reader.readline()
+while True:
+    line=reader.readline()
+    if line in [b'\r\n',b'\n',b'']:break
+    name,value=line.decode().split(':',1);headers[name.lower()]=value.strip()
+key=headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+accept=base64.b64encode(hashlib.sha1(key.encode()).digest())
+conn.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: '+accept+b'\r\n\r\n')
+def send(value):
+    data=json.dumps(value).encode();n=len(data)
+    header=bytes([129,n]) if n<126 else bytes([129,126])+struct.pack('!H',n) if n<65536 else bytes([129,127])+struct.pack('!Q',n)
+    conn.sendall(header+data)
+while True:
+    h=reader.read(2)
+    if len(h)!=2:break
+    size=h[1]&127
+    if size==126:size=struct.unpack('!H',reader.read(2))[0]
+    elif size==127:size=struct.unpack('!Q',reader.read(8))[0]
+    mask=reader.read(4) if h[1]&128 else None
+    data=reader.read(size)
+    if mask:data=bytes(v^mask[i%4] for i,v in enumerate(data))
+    if h[0]&15==8:break
+    v=json.loads(data);method=v.get('method');
     with open(os.environ['BRIDGET220_LOG'],'a') as f:f.write(str(method)+'\n')
     if 'id' not in v:continue
     scenario=os.environ['BRIDGET220_SCENARIO']
@@ -732,10 +851,11 @@ for line in reader:
         reads+=1
         email='fake-before@example.invalid' if reads==1 or scenario!='changed' else 'fake-after@example.invalid'
         result={'account':None if scenario=='absent' else {'type':'chatgpt','email':email,'planType':'pro'},'requiresOpenaiAuth':True}
+        if scenario=='unidentified_change':result['account']={'type':'apiKey' if reads==1 else 'externalAuth'}
     elif method=='model/list':
         result={'data':[{'model':'model-'+str(n),'supportedReasoningEfforts':[{'reasoningEffort':'high'}],'defaultReasoningEffort':'high'} for n in range(257 if scenario=='large' else 1)],'nextCursor':None}
     else:raise Exception('forbidden method')
-    conn.sendall((json.dumps({'id':v['id'],'result':result})+'\n').encode())
+    send({'id':v['id'],'result':result})
 "#).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         let def=serde_json::from_value(json!({"command":program,"args":["app-server"],"protocol":"codex_app_server","pass_env":["BRIDGET220_LOG","BRIDGET220_SCENARIO"]})).unwrap();
@@ -791,6 +911,7 @@ for line in reader:
         for (scenario, expected) in [
             ("changed", Some(CatalogueCause::AccountChanged)),
             ("large", Some(CatalogueCause::OutputLimit)),
+            ("unidentified_change", Some(CatalogueCause::AccountChanged)),
             ("absent", None),
         ] {
             let (def, source) = fixture(&root, scenario);
@@ -814,12 +935,19 @@ for line in reader:
     #[test]
     fn spec220_rpc_timeout_and_unknown_method_are_bounded() {
         let (a, _b) = UnixStream::pair().unwrap();
+        let socket = tungstenite::WebSocket::from_raw_socket(
+            MetadataSocket {
+                stream: a,
+                deadline: Instant::now() + Duration::from_millis(30),
+                bytes: 0,
+            },
+            tungstenite::protocol::Role::Client,
+            Some(ws_config()),
+        );
         let mut rpc = Rpc {
-            reader: BufReader::new(a.try_clone().unwrap()),
-            writer: a,
+            socket,
             id: 0,
             bytes: 0,
-            deadline: Instant::now() + Duration::from_millis(30),
         };
         assert_eq!(
             rpc.call("thread/start", json!({})),
@@ -868,6 +996,52 @@ for line in reader:
         let link = root.join("link");
         std::os::unix::fs::symlink(&root, &link).unwrap();
         assert!(private_dir(&link).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod private_recipe220 {
+    use super::*;
+    #[test]
+    #[ignore = "requires an explicitly authorized local configured Codex metadata read"]
+    fn spec220_private_real_codex_metadata_without_thread_or_turn() {
+        let path = PathBuf::from(
+            std::env::var_os("BRIDGET220_REAL_REGISTRY").expect("private registry required"),
+        );
+        let machine = std::env::var("BRIDGET220_REAL_MACHINE").expect("machine required");
+        let output = PathBuf::from(
+            std::env::var_os("BRIDGET220_REAL_OUTPUT").expect("private output required"),
+        );
+        let registry = AgentRegistry::load_from_path_quiet(path).unwrap();
+        let connection = registry
+            .routing_policy()
+            .unwrap()
+            .connections
+            .iter()
+            .find(|c| c.machine_id == machine && c.engine == "codex" && c.enabled)
+            .expect("enabled Codex connection required");
+        let definition = registry.get(&connection.agent_type).unwrap();
+        let root =
+            std::env::temp_dir().join(format!("b220-real-{}", uuid::Uuid::new_v4().simple()));
+        private_dir(&root).unwrap();
+        private_dir(&root.join("markers")).unwrap();
+        let markers = ManagedMarkerStore::at_directory(root.join("markers"));
+        let (models, account) = probe(
+            &root,
+            &markers,
+            definition,
+            &crate::lifecycle::source_environment(),
+            &[9; 32],
+            &AtomicBool::new(false),
+        )
+        .map_err(|e| e.0)
+        .unwrap();
+        assert!(!models.is_empty());
+        assert!(recover_probe(&markers, false));
+        let value = json!({"machine_id":machine,"connection_id":connection.connection_id,"model_count":models.len(),"models":models,"account_identity_observable":account.is_some(),"scope":"advertised_by_program","entitlement":"unknown","provider_cache":"not_attested","probe_stopped":true,"observed_at":now(),"thread_or_turn":false});
+        std::fs::write(&output, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }

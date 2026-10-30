@@ -7697,7 +7697,7 @@ fn handle_connection(
 }
 
 #[cfg(target_os = "linux")]
-fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
     let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
     let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
     let result = unsafe {
@@ -7716,7 +7716,7 @@ fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
+pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
     let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
