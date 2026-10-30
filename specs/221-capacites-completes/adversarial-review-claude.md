@@ -130,3 +130,7 @@ Le message complémentaire au relecteur a rendu unknown_recipient car il avait f
 
 ## C16 — ronde2 sur57edad65
 Task0a69d860, ClaudeSonnet, résultat4331octets lu/ACK/clôture native demandée : APPROVE, aucunP1/P2. Lecture sans exécution, fichiers Python tests/worker/guidage non tous relus. P2 unique/neuf levé. P3 corrélation vérifié par le responsable : sixsondes de même admission recevaient deuxadmission_id avec le clone. RED atteint en0,07s sans attente ; correction avant construction : clé épinglée séparée de la demande originale, même coeur d'observation et mêmes gardes. GREEN1940,07s garde les sixidentifiants du canon et les deuxPrepareA. L'affirmation selon laquelle detail.admission public divergerait n'est pas établie ; seul l'identifiant technique de sonde est prouvé. Les préférences d'autres machines sont validées à leur usage, conformément à la portée tardive.
+
+
+## C16 — complément finalce08e352
+Task36057286-9c97-48ae-b126-44fac62920fa,ClaudeSonnet,3931octets intégralement lus/ACK/clôture native demandée : APPROVE, aucunP1/P2. Lecture statique sans shell/diff/exécution ; canon/admission_id depuis l'original, clé épinglée seule vers mapping, deuxsondesRefresh cohérentes et test194 sixIDs/deuxPrepare. Aucune correction minimale restante. L'option de commentaireP3 est déjà couverte par le doc-comment, donc aucun changement décoratif.

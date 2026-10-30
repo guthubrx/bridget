@@ -65,3 +65,7 @@ C18 est chargé et ses trois tâches sont closes ;28/179 tâches vérifiées. La
 
 ## Converge C16 après contre-revue
 Deux écarts dans T022 : portée excessive de la préférence invalide et revalidation d'un choix depuis la préférence future. Témoins atteints avant correction. Aucun nouveau périmètre ou tâche ajouté ; garder T022/T023 ouvertes jusqu'aux preuves finales et au chargement. La préférence ne sert qu'à la sélection implicite ambiguë neuve, jamais à la clé déjà choisie ou à une Task. Le programme reste In Progress ; les autres catégories n'ont pas été supprimées.
+
+
+## Après chargement C16
+32/179 tâches vérifiées. T022/T023 closes après41tests distincts, revue finaleAPPROVE, audit source13/13PASS et activation des images221-placement-ce08e352. Qualification d'activation séparée du score qualité source63–75. Primitive Analyze projet absente : rapprochement manuel de FR-016/contrats/plan/code/tests et secondelecture, aucunCRITICAL. Converge du lotC16CONVERGED,0tâche ajoutée ; le programmeglobal demeureInProgress. C19/T174 et gateT033 ouverts. T177 reste bloquée par MCP214 du mêmefil, pas par une copie manquante des services. QuatreWTrevuesSYS conservés malgré clôture native et intégration car processus non entièrement observables ; aucune levée de garde. La portée interfaces complètes web/bureau/iOS/Windows versMac/Linux est conservée.

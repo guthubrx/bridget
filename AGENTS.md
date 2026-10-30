@@ -98,6 +98,15 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/C16 — programme In Progress, 32/179 tâches vérifiées.
+Source fonctionnelle ce08e352 intégrée et poussée. Build221-placement-ce08e352 chargé sur le maître/mobile/worker Cartae, les workers SYS/KS et le worker/pont Mac. Cinq images Linux SHA0d586513… et deux images Mac SHAd6b76e43… vérifiées ; coupure du maître :2,06s.
+Le placement futur utilise une préférence entre mappings de même source et mêmes droits. La tâche vivante garde A ; les choix et identifiants de sonde restent liés au canon original. 41tests distincts PASS, deux recettes privées ignorées. Revue finale APPROVE ; audit source13/13 PASS, notes qualité63–75. Lien natif revenu, gel=false.
+MCP58296 reste214, T177 ouverte : finir le tour, quitter complètement T3 Code avecCmd+Q, rouvrir et reprendre ce même fil. Aucune boucle de reprise. Le correctifC16 ne modifie pas le schéma MCP.
+Deux fichiers KS et deux dossiers vides retirés. Copies/archives et quatre worktrees de revue SYS conservés faute d'observation complète des processus ; les gardes natives sont fermées. ActifC16, retour221-link et anciennes images encore utilisées ou non entièrement observables conservés. Aucun service métier relancé.
+C19/T174, gateL1c et les autres catégories restent ouverts. Les interfaces complètes web/bureau/iOS/Windows pilotent Mac/Linux ; aucun moteur Windows prévu. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/c16.md.
+
+
+
 Session221/C14–C18 et T179 — programme complet In Progress,29/179 tâches vérifiées. C14/C15/C17 réutilisés et qualifiés ; C18 : conseil Git sans écrasement,54tests distincts avec ses recettes, revueR2 favorable. Source30c8a469 intégrée/poussée et chargée, puis correctif de liaison f1286216 intégré/poussé et chargé : build221-link-f1286216 sur maître/worker/mobileCartae, workersSYS/KS et worker/pontMac. ImagesLinux SHA7fb24a47… et Mac SHAcc7386ad… vérifiées ; coupure maître2,64s, wrappers observés préservés, aucun service métier relancé. Le fil long dépassait16Mio par duplication des événements ; format compact officiel lu sans relever la borne,24tests ciblésPASS/2ignorés,5294éléments réels stables égaux et ordre conservé. Revue indépendante APPROVE_WITH_CHANGES, objections vérifiées et traitées sans nouveau code de production ; source audit12/12PASS, notes50–75. Lien natif et catalogue revenus, gel=false. MCP58296 de ce fil reste214 : fermeture complète de T3 Code puis reprise du même fil nécessaire pour son nouveau schéma, pas de boucle ni nouvelle mission. Quatre fichiers retirés (deuxKS/deuxCartae), transfertsCartae/SYS et images sous usage conservés faute d'observation complète. C16/C19, T177 et gateL1c restent ouverts ; interfaces complètes web/bureau/iOS/Windows vers Mac/Linux toujours à réaliser, aucun moteur Windows. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/c18.md et /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/t179.md.
 
 
