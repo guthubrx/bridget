@@ -4539,6 +4539,7 @@ fn send_catalogue_frame(writer:&Mutex<UnixStream>,message:&WrapperToDaemon)->Res
         let count=unsafe {libc::send(writer.as_raw_fd(),bytes[offset..].as_ptr().cast(),bytes.len()-offset,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
         if count>0 {offset+=count as usize;continue;}
         let error=std::io::Error::last_os_error();
+        if error.kind()==std::io::ErrorKind::WouldBlock && offset==0 {return Ok(false);}
         if error.kind()==std::io::ErrorKind::Interrupted {continue;}
         if error.kind()==std::io::ErrorKind::WouldBlock && Instant::now()<deadline {std::thread::sleep(Duration::from_millis(2));continue;}
         let _=writer.shutdown(std::net::Shutdown::Both);return Err("worker_connection_lost".into());
@@ -4744,7 +4745,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 _ => return Err("worker_handshake_invalid".into()),
             };
         if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {catalogues.activate(&epoch);} else {catalogues.deactivate();}
-        let mut catalogue_sent=BTreeMap::<String,u64>::new();
+        let mut catalogue_sent=BTreeMap::<String,(String,u64)>::new();
         let candidate_probe_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV1);
         let candidate_probe_v2_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV2);
         let slot_deadline_negotiated=negotiated.contains(&WorkerCapability::ResultSlotDeadlineV1);
@@ -4968,12 +4969,12 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             }
             if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {
                 for (refresh_id,sequence,catalogue) in catalogues.snapshots() {
-                    if catalogue_sent.get(&catalogue.connection_id)==Some(&sequence) {continue;}
+                    if catalogue_sent.get(&catalogue.connection_id)==Some(&(refresh_id.clone(),sequence)) {continue;}
                     let connection=catalogue.connection_id.clone();
                     let update=bridget_transport::provider_catalogue::WorkerCatalogueUpdate {
-                        version:1,worker:runtime.identity.clone(),connection_epoch:epoch.clone(),refresh_id,sequence,catalogue};
+                        version:1,worker:runtime.identity.clone(),connection_epoch:epoch.clone(),refresh_id:refresh_id.clone(),sequence,catalogue};
                     match send_catalogue_frame(&writer,&WrapperToDaemon::ProviderCatalogueUpdate {update}) {
-                        Ok(true)=>{catalogue_sent.insert(connection,sequence);},
+                        Ok(true)=>{catalogue_sent.insert(connection,(refresh_id,sequence));},
                         Ok(false)=>{},Err(_)=>{disconnected.store(true,Ordering::Release);break;}
                     }
                 }
@@ -8582,6 +8583,10 @@ mod catalogue220_tests {
             let n=unsafe{libc::send(writer.lock().unwrap().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
             if n<0 {break;}
         }
-        let start=Instant::now();assert!(send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).is_err());assert!(start.elapsed()<Duration::from_secs(1));
+        let start=Instant::now();assert!(!send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());assert!(start.elapsed()<Duration::from_millis(100));
+        let (a,_peer)=UnixStream::pair().unwrap();let size:libc::c_int=4096;
+        assert_eq!(unsafe{libc::setsockopt(a.as_raw_fd(),libc::SOL_SOCKET,libc::SO_SNDBUF,(&size as *const libc::c_int).cast(),std::mem::size_of_val(&size) as libc::socklen_t)},0);
+        let writer=Mutex::new(a);let large=WrapperToDaemon::NativeDelegation {request:bridget_transport::protocol::NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:Some("x".repeat(128*1024))}};
+        let start=Instant::now();assert!(send_catalogue_frame(&writer,&large).is_err());assert!(start.elapsed()<Duration::from_secs(1));
     }
 }

@@ -129,7 +129,18 @@ impl CatalogueService {
     pub fn activate(&self, token: &str) {
         let mut current = self.token.lock().unwrap_or_else(|e| e.into_inner());
         *current = token.into();
-        self.generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        // A new transport token cannot attest that an owned process stopped.
+        for (g, _, value) in self
+            .latest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values_mut()
+        {
+            if value.cause == Some(CatalogueCause::StopUnconfirmed) {
+                *g = generation;
+            }
+        }
         self.enabled.store(true, Ordering::Release);
     }
     pub fn deactivate(&self) {
@@ -815,8 +826,10 @@ mod tests {
     ) {
         let program = root.join("codex");
         std::fs::write(&program,r#"#!/usr/bin/python3
-import socket,sys,json,os,base64,hashlib,struct
+import socket,sys,json,os,base64,hashlib,struct,signal,time
 path=sys.argv[sys.argv.index('--listen')+1].removeprefix('unix://')
+hold=os.environ.get('BRIDGET220_SCENARIO')=='hold_stop'
+if hold:signal.signal(signal.SIGTERM,lambda *args:None)
 server=socket.socket(socket.AF_UNIX);server.bind(path);server.listen(1)
 conn,_=server.accept();reader=conn.makefile('rb');reads=0
 headers={}
@@ -856,6 +869,7 @@ while True:
         result={'data':[{'model':'model-'+str(n),'supportedReasoningEfforts':[{'reasoningEffort':'high'}],'defaultReasoningEffort':'high'} for n in range(257 if scenario=='large' else 1)],'nextCursor':None}
     else:raise Exception('forbidden method')
     send({'id':v['id'],'result':result})
+while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit')):time.sleep(.02)
 "#).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         let def=serde_json::from_value(json!({"command":program,"args":["app-server"],"protocol":"codex_app_server","pass_env":["BRIDGET220_LOG","BRIDGET220_SCENARIO"]})).unwrap();
@@ -932,6 +946,72 @@ while True:
         }
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn spec220_retained_probe_survives_refresh_and_reconnection_generation() {
+        let root = root();
+        let directory = root.join("catalogue");
+        private_dir(&directory).unwrap();
+        private_dir(&directory.join("markers")).unwrap();
+        struct Unblock(PathBuf);
+        impl Drop for Unblock {
+            fn drop(&mut self) {
+                let _ = std::fs::write(&self.0, b"exit");
+            }
+        }
+        let _unblock = Unblock(root.join("allow-exit"));
+        let markers = ManagedMarkerStore::at_directory(directory.join("markers"));
+        let (def, source) = fixture(&root, "hold_stop");
+        let result = probe(
+            &directory,
+            &markers,
+            &def,
+            &source,
+            &[8; 32],
+            &AtomicBool::new(false),
+        );
+        let (cause, child) = result.err().expect("retained probe expected");
+        assert_eq!(cause, CatalogueCause::StopUnconfirmed);
+        let mut child = child.expect("owned child retained");
+        assert!(child.try_wait().unwrap().is_none());
+        let service = CatalogueService {
+            generation: Arc::new(AtomicU64::new(0)),
+            token: Arc::new(Mutex::new(String::new())),
+            enabled: Arc::new(AtomicBool::new(false)),
+            stopping: Arc::new(AtomicBool::new(false)),
+            latest: Arc::new(Mutex::new(BTreeMap::new())),
+        };
+        service.activate("first-epoch");
+        let mut sequence = 0;
+        service.publish(
+            service.generation.load(Ordering::Acquire),
+            &mut sequence,
+            observation(
+                "main",
+                &"a".repeat(64),
+                CatalogueState::Unavailable,
+                Some(cause),
+            ),
+        );
+        for token in ["refresh-token", "reconnected-epoch"] {
+            service.activate(token);
+            let snapshots = service.snapshots();
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0].0, token);
+            assert_eq!(snapshots[0].2.cause, Some(CatalogueCause::StopUnconfirmed));
+        }
+        let trace = std::fs::read_to_string(root.join("trace")).unwrap();
+        assert_eq!(trace.lines().filter(|m| *m == "initialize").count(), 1);
+        std::fs::write(root.join("allow-exit"), b"exit").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !child.reap_terminated_group().unwrap() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(recover_probe(&markers, false));
+        service.shutdown();
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn spec220_rpc_timeout_and_unknown_method_are_bounded() {
         let (a, _b) = UnixStream::pair().unwrap();

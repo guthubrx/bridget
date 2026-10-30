@@ -33786,11 +33786,16 @@ mod permission_projection214_tests {
         assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,3);
         let (a,_b)=UnixStream::pair().unwrap();st.connections.insert("worker220".into(),Arc::new(Mutex::new(std::io::BufWriter::new(a))));
         let mut controls=Vec::new();let result=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();
-        assert_eq!(result["workers"][0]["status"],"requested");assert_eq!(controls.len(),1);assert!(st.remote_workers["local"].catalogues.is_empty());
+        assert_eq!(result["workers"][0]["status"],"requested");assert_eq!(controls.len(),1);assert_eq!(st.remote_workers["local"].catalogues["main"].value.cause,Some(CatalogueCause::StopUnconfirmed));
         let token=st.remote_workers["local"].catalogue_refresh_id.clone();
         let second=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();assert_eq!(second["workers"][0]["status"],"already_requested");assert_eq!(controls.len(),1);assert_eq!(token,st.remote_workers["local"].catalogue_refresh_id);
         st.remote_workers.get_mut("local").unwrap().capabilities.clear();assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"unverified_peer");
         st.remote_workers.remove("local");assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"observation_source_unavailable");
+        let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(st.registry.source()).unwrap()).unwrap();
+        raw["machines"]=json!({"local":{"enabled":false,"worker_id":"worker220","provisioning_revision":1,"credential_fingerprint":"a".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}}});
+        st.registry=AgentRegistry::from_json(&raw.to_string(),st.registry.source().to_path_buf()).unwrap();
+        let disabled=catalogue::project(&st,&st.registry);assert_eq!(disabled[0]["status"],"machine_disabled");assert!(disabled[0]["next_action"].as_str().unwrap().contains("activation"));
+
         assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),original);
         drop(st);drop(shared);super::tests::cleanup(&config);
     }

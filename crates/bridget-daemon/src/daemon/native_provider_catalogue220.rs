@@ -16,7 +16,7 @@ pub(super) fn ingest(
 ) -> Option<DaemonToWrapper> {
     use bridget_transport::protocol::*;
     let rejected = |reason| Some(DaemonToWrapper::WorkerRejected { reason });
-    let registry = AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf());
+    let registry_path = st.registry.source().to_path_buf();
     let Some(worker) = st.remote_workers.values_mut().find(|w| w.conn_id == conn) else {
         return rejected(WorkerRefusal::Unauthorized);
     };
@@ -35,6 +35,7 @@ pub(super) fn ingest(
     if update.refresh_id != worker.catalogue_refresh_id {
         return None;
     }
+    let registry = AgentRegistry::load_from_path_quiet(registry_path);
     let Ok(registry) = registry else {
         worker.catalogues.clear();
         return None;
@@ -101,6 +102,12 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
         let valid_definition = registry.resolved_definition(&connection.agent_type).ok();
         let (status, cause, observation, age) = if !connection.enabled {
             ("disabled", None, None, None)
+        } else if registry
+            .machines()
+            .get(&connection.machine_id)
+            .is_some_and(|m| !m.enabled)
+        {
+            ("machine_disabled", None, None, None)
         } else if policy
             .connections
             .iter()
@@ -195,6 +202,9 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
         let guidance = match status {
             "connection_limit" => {
                 "Ce serveur dépasse la borne de 32 connexions observées. Aucune sonde ne part sur ce worker. Faire qualifier la configuration par le responsable Bridget ; ne pas interpréter cette limite comme un refus du compte."
+            }
+            "machine_disabled" => {
+                "Ce serveur est désactivé dans Bridget. Demander au responsable si son activation est autorisée, puis qualifier le lien existant. Ne pas installer un autre worker ni changer de compte pour contourner cette décision."
             }
             "disabled" => {
                 "Cette connexion est désactivée. Une nouvelle connexion au fournisseur ne l’active pas. Demander au responsable de ce serveur de vérifier la décision d’activation ; aucun changement automatique."
@@ -312,7 +322,9 @@ pub(super) fn refresh(
         let worker = st.remote_workers.get_mut(id).unwrap();
         worker.catalogue_refresh_id = uuid::Uuid::new_v4().to_string();
         worker.catalogue_refresh_at = Some(Instant::now());
-        worker.catalogues.clear();
+        worker
+            .catalogues
+            .retain(|_, v| v.value.cause == Some(CatalogueCause::StopUnconfirmed));
         let conn = worker.conn_id.clone();
         let message = DaemonToWrapper::ProviderCatalogueRefresh {
             worker: worker.identity.clone(),
