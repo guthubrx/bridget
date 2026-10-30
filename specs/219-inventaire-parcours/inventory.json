@@ -1,0 +1,12 @@
+{
+  "t3_installed_version": "0.1.0-local.20261019.dev",
+  "t3_installed_bundle_sha256": "42eeb05baf987f0bfd1329f09955d94968a92bd8b6f6daddb888e78ec0650bc6",
+  "t3_upstream": {
+    "sha": "fa4e4677c0ecc437aece2dcea39f76ef31414152",
+    "date": "2026-10-30T06:04:17Z"
+  },
+  "bridget_commit": "0582c6bbce1b7c10b02f4ced54731347fdf79010",
+  "bridget_running_services_build": "217-guidance-aadd7b6d",
+  "bridget_calling_mcp_build": "214-clients-30581503",
+  "method": "read-only source and documentation; tool capability reads; no provider login, no model request, no mission"
+}
