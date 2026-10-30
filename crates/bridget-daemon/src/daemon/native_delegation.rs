@@ -33789,7 +33789,7 @@ mod permission_projection214_tests {
         assert_eq!(result["workers"][0]["status"],"requested");assert_eq!(controls.len(),1);assert_eq!(st.remote_workers["local"].catalogues["main"].value.cause,Some(CatalogueCause::StopUnconfirmed));
         let token=st.remote_workers["local"].catalogue_refresh_id.clone();
         let second=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();assert_eq!(second["workers"][0]["status"],"already_requested");assert_eq!(controls.len(),1);assert_eq!(token,st.remote_workers["local"].catalogue_refresh_id);
-        st.remote_workers.get_mut("local").unwrap().capabilities.clear();assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"unverified_peer");
+        st.remote_workers.get_mut("local").unwrap().capabilities.clear();assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"unverified_peer");assert_eq!(catalogue::project(&st,&st.registry)[0]["probe_constraint"]["state"],"stop_unconfirmed");
         st.remote_workers.remove("local");assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"observation_source_unavailable");
         let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(st.registry.source()).unwrap()).unwrap();
         raw["machines"]=json!({"local":{"enabled":false,"worker_id":"worker220","provisioning_revision":1,"credential_fingerprint":"a".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}}});
@@ -33821,6 +33821,32 @@ mod permission_projection214_tests {
         shared.lock().unwrap().client_negotiations.get_mut("human220").unwrap().version=0;
         let stale=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:None},&shared);
         assert!(matches!(stale,DaemonToWrapper::NativeDelegationResult {result} if result["status"]=="refused"));
+        drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec220_hello_clears_old_epoch_then_restores_retained_constraint() {
+        use bridget_transport::provider_catalogue::*;
+        use bridget_transport::protocol::*;
+        use sha2::{Digest,Sha256};
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
+        let credential=IdentityCredential::new("worker220-credential".into());
+        let worker=WorkerIdentity {machine_id:"local".into(),worker_id:"worker220".into(),provisioning_revision:1};
+        let value={let mut st=shared.lock().unwrap();let path=st.registry.source().to_path_buf();
+            let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            raw["machines"]=json!({"local":{"enabled":true,"worker_id":"worker220","provisioning_revision":1,"credential_fingerprint":format!("{:x}",Sha256::digest(b"worker220-credential")),"allowed_agent_types":["native-test"],"mappings":{}}});
+            std::fs::write(&path,raw.to_string()).unwrap();st.registry=AgentRegistry::load_from_path_quiet(path).unwrap();
+            let value=ProviderCatalogue {connection_id:"main".into(),definition_digest:st.registry.resolved_definition("native-test").unwrap().digest,observed_at:unix_timestamp(),state:CatalogueState::Unavailable,account_scope:None,models:vec![],cause:Some(CatalogueCause::StopUnconfirmed)};
+            let mut cache=HashMap::new();cache.insert("main".into(),catalogue::CachedCatalogue {sequence:9,received:Instant::now(),value:value.clone()});
+            st.remote_workers.insert("local".into(),RemoteWorkerConnection {identity:worker.clone(),conn_id:"old-worker".into(),epoch:"old-epoch".into(),capabilities:vec![WorkerCapability::ProviderCatalogueV1],catalogues:cache,catalogue_refresh_id:"old-epoch".into(),catalogue_refresh_at:None,last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected});
+            st.peer_uids.insert("new-worker".into(),unsafe{libc::geteuid()});value};
+        let accepted=super::super::handle_worker_message(&shared,"new-worker",WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {hello:WorkerHello {version:REMOTE_WORKER_VERSION,identity:worker.clone(),credential,build:"220".into(),capability:ClientCapability::RemoteWorkerV1},capabilities:vec![WorkerCapability::ProviderCatalogueV1]}});
+        let Some(DaemonToWrapper::WorkerAcceptedWithCapabilities {accepted})=accepted else {panic!("negotiation expected");};let epoch=accepted.accepted.connection_epoch;
+        {let st=shared.lock().unwrap();assert!(st.remote_workers["local"].catalogues.is_empty());assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"not_observed");}
+        assert!(super::super::handle_worker_message(&shared,"new-worker",WrapperToDaemon::ProviderCatalogueUpdate {update:WorkerCatalogueUpdate {version:1,worker,connection_epoch:epoch.clone(),refresh_id:epoch,sequence:1,catalogue:value}}).is_none());
+        {let mut st=shared.lock().unwrap();let observed=catalogue::project(&st,&st.registry);assert_eq!(observed[0]["status"],"unavailable");assert_eq!(observed[0]["probe_constraint"]["state"],"stop_unconfirmed");
+        let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(st.registry.source()).unwrap()).unwrap();raw["machines"]["local"]["enabled"]=json!(false);st.registry=AgentRegistry::from_json(&raw.to_string(),st.registry.source().to_path_buf()).unwrap();let disabled=catalogue::project(&st,&st.registry);assert_eq!(disabled[0]["status"],"machine_disabled");assert_eq!(disabled[0]["probe_constraint"]["state"],"stop_unconfirmed");}
         drop(shared);super::tests::cleanup(&config);
     }
 

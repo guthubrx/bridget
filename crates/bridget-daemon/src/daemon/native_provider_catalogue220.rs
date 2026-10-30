@@ -65,7 +65,9 @@ pub(super) fn ingest(
         update.catalogue.state = CatalogueState::Unavailable;
         update.catalogue.models.clear();
         update.catalogue.account_scope = None;
-        update.catalogue.cause = Some(CatalogueCause::DefinitionChanged);
+        if update.catalogue.cause != Some(CatalogueCause::StopUnconfirmed) {
+            update.catalogue.cause = Some(CatalogueCause::DefinitionChanged);
+        }
     }
     let key = update.catalogue.connection_id.clone();
     if worker
@@ -241,6 +243,7 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
             "status":status,"cause":cause,"scope":"advertised_by_program","entitlement":"unknown","provider_cache":"not_attested",
             "auth":match status {"sign_in_required"=>"reported_absent","reported_models" if observation.and_then(|o|o.account_scope.as_ref()).is_some()=>"reported_present",_=>"not_verified"},
             "account_scope":observation.and_then(|o|o.account_scope.as_ref()),"observed_at":observation.map(|o|o.observed_at),"age_secs":age,"ttl_secs":CATALOGUE_TTL_SECS,"refresh_target_secs":120,"scheduling":"sequential_per_connection",
+            "probe_constraint":cached.filter(|v|v.value.cause==Some(CatalogueCause::StopUnconfirmed)).map(|v|json!({"state":"stop_unconfirmed","observed_at":v.value.observed_at,"next_action":"Faire vérifier le marqueur privé probe de ce worker et son groupe de processus par le responsable Bridget. Le statut de connexion ou de serveur ne constate pas leur arrêt. Ne pas effacer le marqueur ni relancer de mission pour diagnostiquer."})),
             "models":models,"next_action":guidance,"other_work":"Ce constat porte sur cette connexion de ce serveur. Les autres travaux autorisés suivent leur propre état."}));
     }
     result.sort_by(|a, b| {
