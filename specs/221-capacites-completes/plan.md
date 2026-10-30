@@ -1,6 +1,6 @@
 # Plan221 — capacités complètes
 
-Statut : implémentation en cours ; programme global non terminé, L1a livré ; L1b validé en source, gate de livraison encore ouverte. Responsable unique : bridge1016.
+Statut : implémentation en cours ; programme global non terminé, L1a/L1b livrés ; compléments de guidage et C18 chargés, L1c global reste ouvert. Responsable unique : bridge1016.
 
 ## Contexte technique et invariants
 

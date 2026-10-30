@@ -122,6 +122,35 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
     if string(&projection["thread"], "id")? != thread_id {
         return Err(invalid("thread.id"));
     }
+    // La forme compacte officielle omet les éléments locaux déjà présents dans
+    // visibleTurnItems. Reconstituer des références, sans dupliquer leurs textes.
+    let compact = match value.get("turnItemsOmitLocalVisible") {
+        None | Some(Value::Bool(false)) => false,
+        Some(Value::Bool(true)) => true,
+        _ => return Err(invalid("turnItemsOmitLocalVisible")),
+    };
+    let mut items = Vec::new();
+    if compact {
+        for row in array(projection, "visibleTurnItems")? {
+            let local = string(row, "visibility")? == "local";
+            let source = string(row, "sourceThreadId")?;
+            if local || source == thread_id {
+                let item = row.get("item").ok_or_else(|| invalid("visibleTurnItems.item"))?;
+                if source != thread_id || string(item, "threadId")? != thread_id {
+                    return Err(invalid("visibleTurnItems.threadId"));
+                }
+                items.push(item);
+            }
+        }
+    }
+    items.extend(array(projection, "turnItems")?);
+    if items.len() > 100_000 { return Err(invalid("turnItems limit")); }
+    if compact {
+        let mut ids = std::collections::HashSet::new();
+        for item in &items {
+            if !ids.insert(string(item, "id")?) { return Err(invalid("turnItems duplicate")); }
+        }
+    }
     let runs = array(projection, "runs")?;
     let mut by_run = HashMap::new();
     let mut activities = Vec::new();
@@ -203,7 +232,7 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
             created_at: Some(string(message, "createdAt")?.into()),
         });
     }
-    for item in array(projection, "turnItems")? {
+    for item in &items {
         if string(item, "threadId")? != thread_id {
             return Err(invalid("item.threadId"));
         }
@@ -255,7 +284,7 @@ pub(crate) fn parse_detail(text: &str, thread_id: &str) -> Result<ThreadDetail, 
         }
     }
     let requests = array(projection, "runtimeRequests")?;
-    for item in array(projection, "turnItems")?.iter().filter(|i|i["type"]=="user_input_request") {
+    for item in items.iter().filter(|i|i["type"]=="user_input_request") {
         if string(item,"threadId")? != thread_id {return Err(invalid("user input thread"));}
         let run = nullable_string(item,"runId")?;
         if !root_message(item,run.and_then(|id|by_run.get(id).copied()),&nodes)? {continue;}
@@ -639,7 +668,7 @@ pub(crate) mod tests {
                 &listener,
                 200,
                 &detail().to_string(),
-                "GET /api/orchestration/threads/t/bounded ",
+                "GET /api/orchestration/threads/t/bounded?compactTurnItems=1 ",
             );
             let first = rpc_reply(
                 &listener,
@@ -812,6 +841,60 @@ pub(crate) mod tests {
         assert!(parse_detail(&raw.to_string(),"t").is_err());
     }
 
+    #[test]
+    fn spec221_compact_t3_snapshot_keeps_local_tools_and_rejects_foreign_rows() {
+        let mut plain = detail();
+        let root=json!({"id":"compact221","type":"compaction","threadId":"t","runId":"r","nodeId":"root","status":"running"});
+        let child=json!({"id":"child221","type":"compaction","threadId":"t","runId":"r","nodeId":"child","status":"running"});
+        plain["projection"]["turnItems"]=json!([root.clone(),child.clone()]);
+        let expected=parse_detail(&plain.to_string(),"t").unwrap();
+        let mut compact=plain.clone();
+        compact["turnItemsOmitLocalVisible"]=json!(true);
+        compact["projection"]["turnItems"]=json!([]);
+        compact["projection"]["visibleTurnItems"]=json!([
+            {"visibility":"local","sourceThreadId":"t","item":root.clone()},
+            {"visibility":"local","sourceThreadId":"t","item":child},
+            {"visibility":"inherited","sourceThreadId":"ancestor","item":{"id":"foreign221","threadId":"ancestor"}}
+        ]);
+        let actual=parse_detail(&compact.to_string(),"t").unwrap();
+        assert_eq!(actual,expected,
+            "la forme compacte ne doit perdre ni message, ni outil racine, ni état");
+        compact["projection"]["visibleTurnItems"][0]["item"]["threadId"]=json!("foreign");
+        assert!(parse_detail(&compact.to_string(),"t").is_err());
+        compact["projection"]["visibleTurnItems"][0]["item"]=root;
+        compact["projection"]["visibleTurnItems"][0]["sourceThreadId"]=json!("foreign");
+        assert!(parse_detail(&compact.to_string(),"t").is_err());
+        compact["projection"]["visibleTurnItems"][0]["sourceThreadId"]=json!("t");
+        compact["projection"]["turnItems"]=json!([compact["projection"]["visibleTurnItems"][0]["item"].clone()]);
+        assert!(parse_detail(&compact.to_string(),"t").is_err(),"un même outil ne doit pas être émis deux fois");
+    }
+
+    #[test]
+    fn spec221_compact_http_avoids_duplicate_payload_without_raising_limit() {
+        let mut plain=detail();
+        let item=json!({"id":"large221","threadId":"t","runId":"r","nodeId":"root",
+            "type":"dynamic_tool","status":"completed","output":"x".repeat(9*1024*1024)});
+        plain["projection"]["turnItems"]=json!([item.clone()]);
+        plain["projection"]["visibleTurnItems"]=json!([
+            {"visibility":"local","sourceThreadId":"t","item":item}]);
+        assert!(plain.to_string().len()>16*1024*1024);
+        plain["projection"]["turnItems"]=json!([]);
+        plain["turnItemsOmitLocalVisible"]=json!(true);
+        let body=plain.to_string();
+        assert!(body.len()<16*1024*1024);
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let client=Client::for_base_url(&format!("http://{}",listener.local_addr().unwrap()),"fixture");
+        client.set_test_protocol(true);
+        let server=std::thread::spawn(move||http_reply(&listener,200,&body,
+            "GET /api/orchestration/threads/t/bounded?compactTurnItems=1 "));
+        let parsed=client.thread_detail("t",20).unwrap();
+        let tool=parsed.activities.iter().find(|a|a.kind=="tool.progress").unwrap();
+        assert_eq!(tool.payload["tool_id"],"large221");
+        assert_eq!(tool.payload["details_truncated"],true);
+        assert!(tool.payload.to_string().len()<16*1024);
+        server.join().unwrap();
+    }
+
     pub(super) fn detail() -> Value {
         json!({"snapshotSequence":18,"projection":{
             "thread":{"id":"t"},
@@ -848,6 +931,12 @@ pub(crate) mod tests {
         let parsed=parse_detail(&value.to_string(),"t").unwrap();
         let question=parsed.activities.iter().find(|a|a.kind=="user_input.request").unwrap();
         assert_eq!(question.payload["questions"],questions);
+        let mut compact=value.clone();
+        compact["turnItemsOmitLocalVisible"]=json!(true);
+        compact["projection"]["visibleTurnItems"]=json!([{"visibility":"local","sourceThreadId":"t","item":value["projection"]["turnItems"][0].clone()}]);
+        compact["projection"]["turnItems"]=json!([]);
+        assert_eq!(parse_detail(&compact.to_string(),"t").unwrap(),parsed);
+
         value["projection"]["runtimeRequests"][0]["status"]=json!("resolved");
         value["projection"]["runtimeRequests"][0]["answers"]=json!({"q":["A"]});
         let parsed=parse_detail(&value.to_string(),"t").unwrap();

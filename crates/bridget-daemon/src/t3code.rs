@@ -5299,7 +5299,7 @@ mod tests {
         worker.answer_user_input(answer.clone());assert_eq!(worker.user_inputs[&request_id]["state"],"pending");
         let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let port=listener.local_addr().unwrap().port();
         {let mut inner=worker.session.lock();inner.runtime.port=port;inner.client=Client::for_base_url(&format!("http://127.0.0.1:{port}"),"fixture");inner.client.set_test_protocol(true);}
-        let body=pending.to_string();let path=format!("GET /api/orchestration/threads/{thread}/bounded ");
+        let body=pending.to_string();let path=format!("GET /api/orchestration/threads/{thread}/bounded?compactTurnItems=1 ");
         let server=thread::spawn(move ||{v2::tests::http_reply(&listener,200,&body,&path);v2::tests::rpc_reply(&listener,"orchestration.dispatchCommand",Some(serde_json::json!({"sequence":99})))});
         answer.provider_session=thread.clone();worker.answer_user_input(answer);
         let wire=server.join().unwrap();assert_eq!(wire["type"],"runtime-request.respond");assert_eq!(wire["commandId"],command_id);assert_eq!(wire["answers"],serde_json::json!({"q":["A","complément"]}));

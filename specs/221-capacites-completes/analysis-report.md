@@ -49,3 +49,7 @@ T178 vérifiée par le refus natif sans Task après chargement du maître2905a3e
 
 ## Gate source du conseil C18
 Complément autonome validé par6tests finaux (mesure explicitement incluse),54tests distincts sur les recettes C14/C15/C17/C18, revueR2 APPROVE et audit source12/12 PASS. Aucun code d'autorité nouveau. Converge du complément :0tâche ajoutée, aucun CRITICAL persistant. C16/C19 demeurent ouverts ; le gateL1c global n'est pas coché. Livrer ce conseil technique validé avant de poursuivre ces fonctionnalités distinctes ; ne pas présenter un ancien binaire comme corrigé.
+
+
+## Convergence C18 et défaut de liaison T179
+C18 est chargé et ses trois tâches sont closes ;28/179 tâches vérifiées. La nouvelle T179 conserve le défaut observé pendant le passage : le même fil ne se réinscrit pas car son détail HTTP dépasse la borne. La mesure établit une duplication évitable, traitée dans l'adaptateur existant. Aucune tâche de confort ni restriction de périmètre ajoutée. C16/C19 et le programme complet restent ouverts.

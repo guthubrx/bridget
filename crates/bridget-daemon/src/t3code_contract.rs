@@ -718,7 +718,7 @@ impl Client {
             self.snapshot()?;
         }
         if self.uses_v2() {
-            let suffix = if turn_limit <= 20 { "/bounded" } else { "" };
+            let suffix = if turn_limit <= 20 { "/bounded?compactTurnItems=1" } else { "" };
             let path = format!("/api/orchestration/threads/{segment}{suffix}");
             return v2::parse_detail(&self.request("GET", &path, None)?, thread_id);
         }
