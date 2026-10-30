@@ -1,0 +1,15 @@
+# C25 / L1a — drainage après destruction des propriétaires
+
+Source479f2c00 : checked_pidfd exige PPid/birth/pidfd et UIDégal ; reap_pass_after_owners utilise la même garde que signal_pass. Un descendant adopté peut changer d’UID sans cesser d’être notre enfant. Le noyau permet de récolter cet enfant, mais pas forcément de le signaler. RemoteDrainGuard::drop ne tente actuellement la récolte que si signal_pass réussit, ce qui bloque la preuve finale.
+
+Invariants : pidfdetnaissance/PPid restent contrôlés. Aucun wait avant la destruction et la jointure des propriétaires Child/lecteurs de transport. Aucun signal sur un PIDnonenfant et aucun SIGKILL. Le droit de signal reste celui du noyau. Après la barrière, la récolte doit être tentée même si le signal est refusé ; une erreur ne permet pas de publier la clôture. Seul ECHILDfinal (aucun enfant) autorise la preuve finale. Une liste de PIDvide n’est pas une preuve suffisante.
+
+Recette privilégiée isolée : un sous-processus de testroot crée son propre enfantroot qui termine ; le parent de test abandonne groupes/UIDroot pour nobody, vérifie le refus de signal, puis tente de récolter son propre zombie. Ce sont uniquement deux processus synthétiques, pas des tâches métier. Le test est ignoré par défaut et exécuté explicitement via sudo sur le seul binaire de test déjà construit ; Cargo et ses caches ne tournent jamaisroot. L’absence du droitroot serait un blocage de cette recette, pas un PASS.
+
+Régression normale : remote162_drain_pidfd_pipe_herite_et_barriere_child_wait protège déjà la barrière et les forks tardifs ; elle doit rester verte. Le testprivilégié vérifie aussi le refus de son propre PID qui n’est pas son enfant.
+
+## Descendant vivant / refus persistant
+
+Chaque phase de fermeture qui dépasse 5 s déclenche au plus un diagnostic natif avec une cause fermée, une portée tâche et une action propre à cette cause. Avant la barrière, closing_transport emploie le writer actif unique (signal_refused, owners_waiting ou signaler_unavailable). Après destruction des propriétaires et jointure du writer, draining_descendants rouvre le même journal (signal_refused, descendants_alive, reap_unavailable ou proof_store_unavailable). Un arrêt peut donc produire deux diagnostics, un par phase. Un journal indisponible ne devient jamais une preuve de clôture ; le code fermé reste aussi sur stderr. Le superviseur reste volontairement vivant afin de ne pas perdre les enfants adoptés. Aucun retour de Dropni preuve de clôture n’est fabriqué. La récolte continue après la barrière et peut confirmer la fin ultérieure. Ce choix rejette la sortie forcée proposée par la revue, car elle orphelinerait le travail ; le besoin de résultat borné/guidé est retenu. Les droits de signal ne sont pas élargis.
+
+Une erreur de création du thread de signalisation ne déclenche plus une boucle d’allocation. Le transport conserve son propre arrêt ; le diagnostic signaler_unavailable n’invente pas la sous-cause. Cette branche OS doit être vérifiée séparément des recettes du descendant vivant.

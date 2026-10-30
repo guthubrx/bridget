@@ -1324,6 +1324,11 @@ impl ManagedSession for CodexAppServerTransport {
         self.enable_journal_with_live_feed(root, agent, live_feed)
     }
 
+    fn journal_writer(&self) -> Option<(JournalWriter, String)> {
+        self.journal.lock().ok().and_then(|journal| journal.clone())
+            .map(|writer| (writer, self.thread_id.clone()))
+    }
+
     fn drain_events(&self) -> Vec<ManagedEvent> {
         self.observations
             .0

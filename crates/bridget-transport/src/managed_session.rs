@@ -5,7 +5,7 @@
 //! cycle de vie. Les adaptateurs conservent leurs détails propres derrière
 //! cette frontière.
 
-use crate::journal::JournalLiveFeed;
+use crate::journal::{JournalLiveFeed, JournalWriter};
 use crate::protocol::{
     ChildProviderRequest, ChildRequestAnswer, PresenceMode, ProviderObservation, ProviderOperation,
 };
@@ -358,6 +358,12 @@ pub trait ManagedSession: Transport {
         agent: &str,
         live_feed: Option<JournalLiveFeed>,
     ) -> std::io::Result<()>;
+    /// Canal du writer unique, pour un diagnostic de fermeture avant la
+    /// barrière Child, avec l'identité de session réellement écrite. Aucun
+    /// second écrivain de fichier n'est autorisé ici.
+    fn journal_writer(&self) -> Option<(JournalWriter, String)> {
+        None
+    }
     fn drain_events(&self) -> Vec<ManagedEvent>;
     /// Une implémentation qui ne peut pas attester son identité la laisse
     /// absente : le consommateur doit refuser les opérations qui la requièrent.

@@ -571,6 +571,11 @@ impl ManagedSession for ClaudeStreamJsonTransport {
         Ok(())
     }
 
+    fn journal_writer(&self) -> Option<(JournalWriter, String)> {
+        self.journal.lock().ok().and_then(|journal| journal.clone())
+            .map(|writer| (writer, self.connection_id.clone()))
+    }
+
     fn drain_events(&self) -> Vec<ManagedEvent> {
         self.events
             .lock()

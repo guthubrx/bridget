@@ -558,12 +558,26 @@ impl Drop for NativeTerminationSignal {
     }
 }
 
+#[cfg(target_os = "linux")]
+const REMOTE_DRAIN_DIAGNOSTIC_AFTER: Duration = Duration::from_secs(5);
+
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+struct RemoteDrainJournal {
+    root: PathBuf,
+    agent: String,
+    session: String,
+    writer: Option<JournalWriter>,
+}
+
 /// Déclarée AVANT le transport : son Drop vient après le dernier Child::wait.
 #[cfg(target_os = "linux")]
 struct RemoteDrainGuard {
     root: PathBuf,
     command: bridget_transport::protocol::WorkerCommandIdentity,
     proof: crate::remote_worker::WorkerDrainProof,
+    machine: String,
+    journal: Mutex<Option<RemoteDrainJournal>>,
     signaler: Mutex<Option<(Arc<AtomicBool>, thread::JoinHandle<()>)>>,
 }
 
@@ -580,32 +594,58 @@ impl RemoteDrainGuard {
             root: context.store_root.clone(),
             command: context.command.clone(),
             proof,
+            machine: context.worker.machine_id.clone(),
+            journal: Mutex::new(None),
             signaler: Mutex::new(None),
         })
     }
 
+    fn set_journal(&self, root: &Path, agent: &str, session: &str, writer: Option<JournalWriter>) {
+        *self.journal.lock().unwrap_or_else(|e| e.into_inner()) = Some(RemoteDrainJournal {
+            root: root.to_path_buf(), agent: agent.into(), session: session.into(), writer,
+        });
+    }
+
     fn begin_stop(&self) {
         let mut signaler = self.signaler.lock().unwrap_or_else(|e| e.into_inner());
-        if signaler.is_some() {
-            return;
-        }
+        if signaler.is_some() { return; }
         let stopped = Arc::new(AtomicBool::new(false));
-        loop {
-            let flag = stopped.clone();
-            match thread::Builder::new()
-                .name("remote-drain-term".into())
-                .spawn(move || {
-                    while !flag.load(Ordering::SeqCst) {
-                        // Ne récolter AUCUN statut pendant Child::wait du transport.
-                        let _ = crate::managed_process::remote_drain::signal_pass();
-                        thread::sleep(crate::managed_process::remote_drain::CADENCE);
+        let flag = stopped.clone();
+        let journal = self.journal.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let fallback = journal.clone();
+        let command = self.command.clone();
+        let machine = self.machine.clone();
+        match thread::Builder::new().name("remote-drain-term".into()).spawn(move || {
+            let started = Instant::now();
+            let mut reported = false;
+            while !flag.load(Ordering::SeqCst) {
+                // Ne récolter AUCUN statut pendant Child::wait du transport.
+                let signal = crate::managed_process::remote_drain::signal_pass();
+                if !reported && started.elapsed() >= REMOTE_DRAIN_DIAGNOSTIC_AFTER {
+                    let cause = if signal.is_err() { "signal_refused" } else { "owners_waiting" };
+                    if let Some(writer) = journal.as_ref().and_then(|j|j.writer.as_ref()) {
+                        if let Ok(payload) = remote_drain_wait_payload(&command, &machine, "closing_transport", cause) {
+                            let _ = writer.enqueue("error", None, payload);
+                        }
                     }
-                }) {
-                Ok(handle) => {
-                    *signaler = Some((stopped, handle));
-                    return;
+                    eprintln!("bridget_remote_drain221 task={} command={} machine={} phase=closing_transport cause={cause}",
+                        command.task_id, command.command_id, machine);
+                    reported = true;
                 }
-                Err(_) => thread::sleep(crate::managed_process::remote_drain::CADENCE),
+                thread::sleep(crate::managed_process::remote_drain::CADENCE);
+            }
+        }) {
+            Ok(handle) => *signaler = Some((stopped, handle)),
+            Err(_) => {
+                // Pas de boucle infinie d'allocation de threads. Le transport
+                // garde son propre arrêt et aucune preuve de fin n'est créée.
+                if let Some(writer) = fallback.as_ref().and_then(|j|j.writer.as_ref()) {
+                    if let Ok(payload) = remote_drain_wait_payload(&self.command, &self.machine, "closing_transport", "signaler_unavailable") {
+                        let _ = writer.enqueue("error", None, payload);
+                    }
+                }
+                eprintln!("bridget_remote_drain221 task={} command={} machine={} phase=closing_transport cause=signaler_unavailable",
+                    self.command.task_id, self.command.command_id, self.machine);
             }
         }
     }
@@ -625,21 +665,83 @@ impl Drop for RemoteDrainGuard {
         }
         // Les deux transports natifs ont attendu leur Child et joint leurs
         // threads dans Drop. Aucun TUI distant ni autre producteur n'est admis.
+        let started = Instant::now();
+        let mut reported = false;
         loop {
+            // Après la barrière, un refus de signal n'interdit jamais waitid.
             let signalled = crate::managed_process::remote_drain::signal_pass();
-            if signalled.is_ok()
-                && matches!(
-                    crate::managed_process::remote_drain::reap_pass_after_owners(),
-                    Ok(true)
-                )
-                && crate::remote_worker::publish_drain_proof(&self.root, &self.command, &self.proof)
-                    .is_ok()
-            {
-                break;
+            let reaped = crate::managed_process::remote_drain::reap_pass_after_owners();
+            let cause = match reaped {
+                Ok(true) => {
+                    if crate::remote_worker::publish_drain_proof(&self.root, &self.command, &self.proof).is_ok() {
+                        break;
+                    }
+                    "proof_store_unavailable"
+                }
+                Err(_) => "reap_unavailable",
+                Ok(false) if signalled.is_err() => "signal_refused",
+                Ok(false) => "descendants_alive",
+            };
+            if !reported && started.elapsed() >= REMOTE_DRAIN_DIAGNOSTIC_AFTER {
+                // Les writers du transport sont joints. Réutiliser le journal
+                // natif, sans second canal de preuve ni fausse fin de tâche.
+                let journal = self.journal.get_mut().unwrap_or_else(|e| e.into_inner());
+                if let Some(journal) = journal.as_ref() {
+                    let _ = record_remote_drain_wait(&journal.root, &journal.agent, &journal.session, &self.command, &self.machine, cause);
+                }
+                eprintln!("bridget_remote_drain221 task={} command={} generation={} cause={cause}",
+                    self.command.task_id, self.command.command_id, self.command.generation);
+                reported = true;
             }
+            // Garder la filiation des survivants : aucun abandon, aucun SIGKILL.
             thread::sleep(crate::managed_process::remote_drain::CADENCE);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn remote_drain_wait_payload(
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+    machine: &str,
+    phase: &str,
+    cause: &str,
+) -> std::io::Result<serde_json::Value> {
+    if !matches!(phase, "closing_transport" | "draining_descendants") {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid_drain_cause"));
+    }
+    let action = match cause {
+        "signal_refused" => "Faites vérifier les identités et les droits de signalisation des descendants de cette commande.",
+        "descendants_alive" => "Faites inspecter les descendants encore présents avant de décider leur arrêt ciblé.",
+        "reap_unavailable" => "Faites vérifier la filiation, les identités de processus et la disponibilité de la récolte native.",
+        "proof_store_unavailable" => "Faites vérifier le reçu et le stockage de la preuve de clôture de cette commande ; aucun manque de disque n’est déduit.",
+        "owners_waiting" => "Faites vérifier la fermeture du transport, de ses lecteurs et du journal de cette commande.",
+        "signaler_unavailable" => "Faites vérifier pourquoi le thread de signalisation n’a pas pu démarrer ; la sous-cause reste inconnue.",
+        _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid_drain_cause")),
+    };
+    let guidance = format!("{action} Conservez la tâche et son dossier ; ne créez pas de remplacement.");
+    Ok(serde_json::json!({
+        "code":"native_drain_stop_unconfirmed", "scope":"task", "cause":cause, "phase":phase,
+        "task_id":command.task_id, "command_id":command.command_id, "generation":command.generation,
+        "machine_id":machine, "source":"bridget",
+        "message":format!("{action} L’arrêt de cette tâche n’est pas confirmé ; le superviseur est conservé."),
+        "next_action":guidance,
+        "other_work":"Les autres travaux autorisés suivent leur propre état."
+    }))
+}
+
+#[cfg(target_os = "linux")]
+fn record_remote_drain_wait(
+    root: &Path,
+    agent: &str,
+    session: &str,
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+    machine: &str,
+    cause: &str,
+) -> std::io::Result<()> {
+    let payload = remote_drain_wait_payload(command, machine, "draining_descendants", cause)?;
+    let mut journal = bridget_transport::journal::SessionJournal::new(root, agent, session)?;
+    journal.append("error", None, payload)?;
+    Ok(())
 }
 
 /// Déclarée APRÈS le transport : démarre TERM avant son Drop, même sur Err.
@@ -4574,6 +4676,12 @@ fn launch_session_with_status(
     let live_feed = JournalLiveFeed::default();
     crate::environment::validate_existing_tree(&journal_root.join(&my_name))?;
     transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))?;
+    #[cfg(target_os = "linux")]
+    if let Some(guard) = &remote_drain {
+        if let Some((writer, session)) = transport.journal_writer() {
+            guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+        }
+    }
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
     send_wrapper_message(
@@ -5092,6 +5200,12 @@ fn launch_session_with_status(
                         }
                         let feed=JournalLiveFeed::default();
                         if transport.activate_journal(&journal_root,&my_name,Some(feed.clone())).is_ok() {
+                            #[cfg(target_os = "linux")]
+                            if let Some(guard) = &remote_drain {
+                                if let Some((writer, session)) = transport.journal_writer() {
+                                    guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+                                }
+                            }
                             relay.shutdown();
                             let relay_writer=writer.clone();
                             relay=AttachRelayWorker::start(journal_root.join(&my_name),feed,
@@ -5362,6 +5476,13 @@ fn launch_session_with_status(
                         transport.activate_journal(&journal_root, &my_name, Some(live_feed.clone()))
                     {
                         warn!("journal après relance impossible: {error}");
+                    } else {
+                        #[cfg(target_os = "linux")]
+                        if let Some(guard) = &remote_drain {
+                            if let Some((writer, session)) = transport.journal_writer() {
+                                guard.set_journal(&journal_root, &my_name, &session, Some(writer));
+                            }
+                        }
                     }
                     apply_pending_profile_instructions(
                         socket,
@@ -10612,6 +10733,187 @@ mod reconnect_tests {
         std::fs::write(&vide, "   \n").unwrap();
         assert_eq!(resolve_current_name(&vide, "codex-8"), "codex-8");
         let _ = std::fs::remove_file(&vide);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spec221_drain_wait_reports_before_eventual_stop_and_keeps_supervision() {
+        const HELPER: &str = "BRIDGET_SPEC221_DRAIN_WAIT_HELPER";
+        if std::env::var_os(HELPER).is_none() {
+            for mode in ["after", "before"] {
+                let status = Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "wrapper::reconnect_tests::spec221_drain_wait_reports_before_eventual_stop_and_keeps_supervision", "--nocapture", "--test-threads=1"])
+                    .env(HELPER, mode).status().unwrap();
+                assert!(status.success(), "phase de fermeture {mode}");
+            }
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        crate::managed_process::remote_drain::arm().unwrap();
+        let root = relay_root("spec221-owned-survivor");
+        let markers = root.join("markers");
+        std::fs::create_dir_all(&markers).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&markers, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let before_barrier = std::env::var(HELPER).unwrap() == "before";
+        let journal_writer = before_barrier.then(|| JournalWriter::start(
+            root.join("sessions"), "agent-221", "provider-session-221",
+            Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default())),
+        ).unwrap());
+        let mut child = Command::new("/usr/bin/python3")
+            .args(["-c", "import signal,sys; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('READY',flush=True); sys.stdin.readline()"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let pid = child.id();
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+        assert_eq!(ready.trim(), "READY");
+        let mut release = child.stdin.take().unwrap();
+        let mut owner = if before_barrier { Some(child) } else { drop(child); None };
+        let monitor_root = root.clone();
+        let monitor = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut recorded = Vec::new();
+            while Instant::now() < deadline {
+                if let Ok(files) = std::fs::read_dir(monitor_root.join("sessions/agent-221")) {
+                    for file in files.flatten() {
+                        recorded.extend(bridget_transport::journal::valid_events(&file.path()));
+                    }
+                }
+                if !recorded.is_empty() { break; }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let premature_proof = std::fs::read_dir(monitor_root.join("markers")).unwrap()
+                .any(|file| file.unwrap().path().extension().is_some_and(|v|v=="drained"));
+            let alive_before_release = crate::managed_process::process_birth(pid).is_ok();
+            // Toujours libérer le processus privé, même si le diagnostic manque.
+            let _ = release.write_all(b"release
+");
+            drop(release);
+            (recorded, premature_proof, alive_before_release)
+        });
+        let command = bridget_transport::protocol::WorkerCommandIdentity {
+            command_id:"command-221".into(),task_id:"task-221".into(),instance_id:"instance-221".into(),generation:7,
+        };
+        let proof = serde_json::from_value(serde_json::json!({
+            "version":1,"worker_digest":"a".repeat(64),"command_digest":"b".repeat(64),
+            "marker_digest":"c".repeat(64),"pgid":std::process::id(),"birth":1
+        })).unwrap();
+        let guard = RemoteDrainGuard {
+            root:root.clone(),command,proof,machine:"machine-221".into(),
+            journal:Mutex::new(None),
+            signaler:Mutex::new(None),
+        };
+        guard.set_journal(&root.join("sessions"), "old-agent", "instance-221", None);
+        guard.set_journal(&root.join("sessions"), "agent-221", "provider-session-221", journal_writer.clone());
+        if let Some(child) = &mut owner {
+            guard.begin_stop();
+            child.wait().unwrap(); // Le lecteur/propriétaire retient réellement la barrière.
+        }
+        drop(owner);
+        if let Some(writer) = &journal_writer { writer.stop(); }
+        drop(guard); // Vraies phases de production, pas une copie dans le test.
+        let (events, premature_proof, alive) = monitor.join().unwrap();
+        assert!(!root.join("sessions/old-agent").exists(), "le diagnostic suit le journal réellement activé");
+        assert_eq!(events.len(),1,"une seule phase dépasse le délai dans chaque fixture");
+        assert_eq!(events[0]["payload"]["cause"], if before_barrier { "owners_waiting" } else { "descendants_alive" });
+        assert_eq!(events[0]["payload"]["phase"], if before_barrier { "closing_transport" } else { "draining_descendants" });
+        assert_eq!(events[0]["session_id"], "provider-session-221", "le diagnostic garde l'identité du journal fournisseur");
+        assert!(!premature_proof && alive,"le diagnostic n'abandonne ni ne clôt le survivant");
+        assert!(crate::managed_process::process_birth(pid).is_err());
+        assert_eq!(std::fs::read_dir(&markers).unwrap().count(),1,"preuve seulement après récolte complète");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spec221_signaler_creation_refusal_is_explicit_without_retry() {
+        const HELPER: &str = "BRIDGET_SPEC221_DRAIN_SPAWN_REFUSAL";
+        if std::env::var_os(HELPER).is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "wrapper::reconnect_tests::spec221_signaler_creation_refusal_is_explicit_without_retry", "--nocapture", "--test-threads=1"])
+                .env(HELPER, "1").status().unwrap();
+            assert!(status.success());
+            return;
+        }
+        assert_ne!(unsafe { libc::geteuid() }, 0, "recette non privilégiée");
+        crate::managed_process::remote_drain::arm().unwrap();
+        let root = relay_root("spec221-signaler-unavailable");
+        std::fs::create_dir_all(root.join("markers")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        for directory in [&root, &root.join("markers")] {
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let writer = JournalWriter::start(root.join("sessions"), "agent-221", "instance-221",
+            Arc::new(Mutex::new(bridget_transport::AcpEventQueue::default()))).unwrap();
+        let command = bridget_transport::protocol::WorkerCommandIdentity {
+            command_id: "command-221".into(), task_id: "task-221".into(),
+            instance_id: "instance-221".into(), generation: 7,
+        };
+        let proof = serde_json::from_value(serde_json::json!({
+            "version":1,"worker_digest":"a".repeat(64),"command_digest":"b".repeat(64),
+            "marker_digest":"c".repeat(64),"pgid":std::process::id(),"birth":1
+        })).unwrap();
+        let guard = RemoteDrainGuard {
+            root:root.clone(),command,proof,machine:"machine-221".into(),
+            journal:Mutex::new(None),signaler:Mutex::new(None),
+        };
+        guard.set_journal(&root.join("sessions"), "agent-221", "instance-221", Some(writer.clone()));
+        let mut original = libc::rlimit { rlim_cur:0, rlim_max:0 };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut original) }, 0);
+        let limited = libc::rlimit { rlim_cur:0, rlim_max:original.rlim_max };
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &limited) }, 0);
+        let started = Instant::now();
+        guard.begin_stop(); // Vrai refus EAGAIN de création, sans injection de fonction.
+        let elapsed = started.elapsed();
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &original) }, 0);
+        assert!(elapsed < Duration::from_secs(1), "aucune boucle d'allocation");
+        assert!(guard.signaler.lock().unwrap().is_none());
+        writer.stop();
+        let mut entries = Vec::new();
+        for file in std::fs::read_dir(root.join("sessions/agent-221")).unwrap() {
+            entries.extend(bridget_transport::journal::valid_events(&file.unwrap().path()));
+        }
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["payload"]["cause"], "signaler_unavailable");
+        assert_eq!(std::fs::read_dir(root.join("markers")).unwrap().count(), 0, "le refus ne vaut pas preuve d'arrêt");
+        drop(guard); // Aucun enfant : seule la récolte complète autorise la preuve fixture.
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spec221_drain_refusal_is_native_bounded_and_not_a_stop_proof() {
+        let root = relay_root("spec221-drain-refusal");
+        let command = bridget_transport::protocol::WorkerCommandIdentity {
+            command_id: "command-221".into(), task_id: "task-221".into(),
+            instance_id: "instance-221".into(), generation: 7,
+        };
+        for cause in ["signal_refused", "descendants_alive", "reap_unavailable", "proof_store_unavailable", "owners_waiting", "signaler_unavailable"] {
+            record_remote_drain_wait(&root, "agent-221", "instance-221", &command, "machine-221", cause).unwrap();
+        }
+        assert!(record_remote_drain_wait(&root, "agent-221", "instance-221", &command, "machine-221", "PRIVATE_PROVIDER_MESSAGE").is_err());
+        assert!(remote_drain_wait_payload(&command, "machine-221", "PRIVATE_PHASE", "owners_waiting").is_err());
+        let mut entries = Vec::new();
+        for file in std::fs::read_dir(root.join("agent-221")).unwrap() {
+            entries.extend(bridget_transport::journal::valid_events(&file.unwrap().path()));
+        }
+        assert_eq!(entries.len(), 6);
+        for entry in entries {
+            assert_eq!(entry["event"], "error");
+            let payload = &entry["payload"];
+            assert_eq!(payload["code"], "native_drain_stop_unconfirmed");
+            assert_eq!(payload["scope"], "task");
+            assert_eq!(payload["task_id"], "task-221");
+            assert_eq!(payload["generation"], 7);
+            assert!(payload["next_action"].as_str().unwrap().contains("Conservez"));
+            assert!(payload["other_work"].as_str().unwrap().contains("autres travaux"));
+            assert!(payload.get("cleanup_done").is_none());
+            assert!(payload.get("terminal").is_none());
+            assert!(!entry.to_string().contains("PRIVATE_PROVIDER_MESSAGE"));
+            assert!(entry.to_string().len() < 2048);
+        }
+        assert!(!root.join("markers").exists(), "le diagnostic ne publie aucune preuve d'arrêt");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

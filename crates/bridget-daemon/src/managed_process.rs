@@ -96,10 +96,9 @@ pub(crate) mod remote_drain {
             .lines()
             .find_map(|line| line.strip_prefix("PPid:"))
             .and_then(|raw| raw.trim().parse::<u32>().ok());
-        if parent != Some(std::process::id())
-            || process_birth(pid)? != birth
-            || fs::metadata(directory)?.uid() != unsafe { libc::geteuid() }
-        {
+        // La filiation et le pidfd autorisent la récolte de notre enfant,
+        // même s'il a changé d'UID. Le droit de signal reste vérifié séparément.
+        if parent != Some(std::process::id()) || process_birth(pid)? != birth {
             return Err(io::Error::other("remote_drain_identity_changed"));
         }
         Ok(fd)
@@ -119,6 +118,23 @@ pub(crate) mod remote_drain {
                     continue;
                 }
             };
+            // Conserver le plafond historique de signalisation. Un UID
+            // différent interdit le signal, pas la récolte après les Child.
+            match fs::metadata(format!("/proc/{pid}")) {
+                Ok(metadata) if metadata.uid() == unsafe { libc::geteuid() } => {}
+                Ok(_) => {
+                    failure = Some(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "remote_drain_signal_uid_mismatch",
+                    ));
+                    continue;
+                }
+                Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ESRCH)) => continue,
+                Err(error) => {
+                    failure = Some(error);
+                    continue;
+                }
+            }
             let result = unsafe {
                 libc::syscall(
                     libc::SYS_pidfd_send_signal,
@@ -1774,6 +1790,53 @@ while True: time.sleep(.02)
         assert!(process_birth(descendant).is_err());
         assert!(process_birth(late).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "Recette privée explicite root, sans fournisseur ni fichier métier"]
+    fn spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal() {
+        const HELPER: &str = "BRIDGET_SPEC221_DRAIN_HELPER";
+        assert_eq!(unsafe { libc::geteuid() }, 0, "cette recette exige root");
+        if std::env::var_os(HELPER).is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "managed_process::tests::spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal", "--ignored", "--nocapture", "--test-threads=1"])
+                .env(HELPER, "1")
+                .status().unwrap();
+            assert!(status.success(), "recette enfant UID différent refusée");
+            return;
+        }
+        remote_drain::arm().unwrap();
+        assert!(remote_drain::checked_pidfd(std::process::id()).is_err());
+        let child = Command::new("/bin/sh").args(["-c", "exit 0"])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        let pid = child.id();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
+            if status.lines().any(|line| line.starts_with("State:") && line.contains('Z')) { break; }
+            assert!(Instant::now() < deadline, "l'enfant privé doit terminer");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let birth = process_birth(pid).unwrap();
+        drop(child); // Barrière : aucun propriétaire Child ne peut encore wait ce PID.
+        assert_eq!(unsafe { libc::setgroups(0, std::ptr::null()) }, 0);
+        assert_eq!(unsafe { libc::setgid(65534) }, 0);
+        assert_eq!(unsafe { libc::setuid(65534) }, 0);
+        assert_eq!(process_birth(pid).unwrap(), birth);
+        let signal = remote_drain::signal_pass();
+        let drained = remote_drain::reap_pass_after_owners();
+        // Nettoyage même sur l'ancienne garde fautive avant l'assertion RED.
+        if !matches!(drained, Ok(true)) {
+            let mut status = 0;
+            assert_eq!(unsafe { libc::waitpid(pid as i32, &mut status, 0) }, pid as i32);
+        }
+        assert!(signal.is_err(), "le parent non privilégié ne signale pas son enfant root");
+        assert!(matches!(drained, Ok(true)), "le refus de signal ne doit pas interdire la récolte : {drained:?}");
+        assert!(process_birth(pid).is_err(), "aucun zombie privé restant");
+        println!("SPEC221_FOREIGN_UID_REAP_OK");
     }
 
     const BOOTSTRAP_CHILD_ENV: &str = "BRIDGET_T903_BOOTSTRAP_CHILD";
