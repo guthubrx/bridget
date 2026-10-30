@@ -57,3 +57,7 @@ C18 est chargé et ses trois tâches sont closes ;28/179 tâches vérifiées. La
 
 ## Après chargement T179
 29/179 tâches vérifiées. Même fil réinscrit, capabilities et revue native opérationnelles après passage Mac puis Linux. Les deux objections de revue sont traitées par comparaison réelle de5294éléments stables et maintien documenté du refus d'un instantané incohérent. La variante d'ordre PASS ne change aucun comportement de production. Aucun CRITICAL nouveau, aucune tâche de confort ajoutée. La convergence globale reste ouverte.
+
+
+## Reprise C16, choix plateformes conservé
+30/179 tâches vérifiées. Périmètre interfaces web/bureau/iOS/Windows pilotant Mac/Linux inchangé ; aucun moteur Windows. Primitive Analyze projet toujours absente ; rapprochement manuel spec/acceptance/contrat/tests et seconde lecture ciblée. Le constat C16 est maintenant testé ; préférence future additive avant production, sans autorité historique reconstituée. T022/T023 et gateT033 restent ouverts. Aucun CRITICAL nouveau constaté ; aucune clôture globale.

@@ -800,7 +800,7 @@ fn routing_probe_error(plan: &RoutingAdmissionPlan, code: String) -> String {
     format!("{code}:{}", json!(reasons))
 }
 
-/// O(M) sur les mappings de la machine, une fois par machine et par sonde.
+/// O(M log P) sur les mappings et préférences bornés, une fois par machine et par sonde.
 /// Une identité explicite reste stricte ; aucune priorité arbitraire entre racines.
 fn routing_project_mapping(
     registry: &AgentRegistry,
@@ -809,19 +809,7 @@ fn routing_project_mapping(
     origin_host: &str,
     cwd: &Path,
 ) -> Result<(String, crate::registry::ProjectMapping), String> {
-    let provision = registry.machine(machine)?;
-    let resolve = |mapping: &crate::registry::ProjectMapping| {
-        mapping.for_origin(machine, origin_host).filter(|mapping| cwd.starts_with(&mapping.source_root))
-    };
-    if let Some(id) = requested {
-        let mapping = provision.mappings.get(id).ok_or("project_mapping_unknown")?;
-        return resolve(mapping).map(|mapping| (id.to_owned(), mapping))
-            .ok_or_else(|| "project_mapping_mismatch".into());
-    }
-    let mut found = provision.mappings.iter().filter_map(|(id, mapping)| resolve(mapping).map(|mapping| (id, mapping)));
-    let (id, mapping) = found.next().ok_or("project_mapping_unknown")?;
-    if found.next().is_some() { return Err("project_mapping_ambiguous".into()); }
-    Ok((id.clone(), mapping))
+    registry.select_project_mapping(machine, requested, origin_host, cwd)
 }
 
 /// Préparation d'infrastructure depuis le parent attesté, sans dépendance T3.
@@ -881,17 +869,17 @@ fn prepare_routing_projects(
             refused.insert(machine,"project_preparation_timeout".to_owned());
             continue;
         }
-        match routing_project_mapping(&registry, &machine, request.project_id.as_deref(),
+        // Le choix ne réécrit jamais le canon original (project_id peut rester None).
+        // Un ancien helper connaît cette clé explicite sans lire la préférence.
+        let project_id = match routing_project_mapping(&registry, &machine, request.project_id.as_deref(),
             &origin_host, Path::new(&request.cwd)) {
-            Err(code) if code != "project_mapping_unknown" || request.project_id.is_some() => {
-                refused.insert(machine, code);
-                continue;
-            }
-            _ => {}
-        }
+            Ok((id,_)) => Some(id),
+            Err(code) if code == "project_mapping_unknown" && request.project_id.is_none() => None,
+            Err(code) => {refused.insert(machine,code); continue;}
+        };
         if foreign {
             if let Err(code)=super::origin_proof::prepare_project(state,&owner,&parent,
-                routing_source_base(request),&machine,request.project_id.as_deref(),deadline) {
+                routing_source_base(request),&machine,project_id.as_deref(),deadline) {
                 refused.insert(machine,code);
             }
             continue;
@@ -899,7 +887,7 @@ fn prepare_routing_projects(
         let payload = json!({
             "registry":registry.source(), "machine_id":machine, "origin_host":host,
             "source_root":parent.cwd, "cwd":request.cwd, "commit":request.expected_base_commit,
-            "project_id":request.project_id
+            "project_id":project_id
         });
         if let Err(code) = crate::project_preparation::prepare_until(&payload,deadline) {
             refused.insert(machine, code);
@@ -14255,6 +14243,42 @@ mod tests {
             assert_eq!(routing_project_mapping(&st.registry,"cartae",Some("opus2d"),"mac172",Path::new(&request.cwd))
                 .unwrap().0,"opus2d");
         }
+        // Préférence additive : seule la sélection future change.
+        routing168_update(&state, |v| {
+            v["machines"]["cartae"]["mappings"]["duplicate"]["remote_root"]=json!(root.join("future221"));
+            v["project_preferences"]=json!({"version":1,"machines":{"cartae":["duplicate"]}});
+        });
+        {
+            let st=state.lock().unwrap();
+            let selected=routing_project_mapping(&st.registry,"cartae",None,"mac172",Path::new(&request.cwd)).unwrap();
+            assert_eq!(selected.0,"duplicate");
+            assert_eq!(selected.1.remote_root,root.join("future221"));
+            assert_eq!(st.registry.project_mapping("cartae","opus2d").unwrap().remote_root,root.join("remote172"));
+            assert_eq!(routing_project_mapping(&st.registry,"cartae",Some("opus2d"),"mac172",Path::new(&request.cwd)).unwrap().0,"opus2d");
+        }
+        for invalid in [json!([]),json!({"version":2,"machines":{"cartae":["duplicate"]}}),
+            json!({"version":1,"machines":{"cartae":["missing"]}}),
+            json!({"version":1,"machines":{"cartae":["duplicate","duplicate"]}}),
+            json!({"version":1,"machines":{"cartae":["duplicate"]},"extra":"PRIVATE"})] {
+            routing168_update(&state, |v|{v["project_preferences"]=invalid;});
+            let st=state.lock().unwrap();
+            assert_eq!(routing_project_mapping(&st.registry,"cartae",None,"mac172",Path::new(&request.cwd)).unwrap_err(),
+                "project_mapping_preference_invalid");
+            assert!(st.registry.project_mapping("cartae","opus2d").is_ok(),"la lecture exacte reste valide");
+            assert!(routing_project_mapping(&st.registry,"cartae",Some("opus2d"),"mac172",Path::new(&request.cwd)).is_ok());
+        }
+        routing168_update(&state, |v|{
+            v["project_preferences"]=json!({"version":1,"machines":{"cartae":["opus2d","duplicate"]}});
+        });
+        assert_eq!(routing_project_mapping(&state.lock().unwrap().registry,"cartae",None,"mac172",Path::new(&request.cwd))
+            .unwrap_err(),"project_mapping_ambiguous");
+        routing168_update(&state, |v|{
+            v["project_preferences"]=json!({"version":1,"machines":{"cartae":["duplicate"]}});
+            v["machines"]["cartae"]["mappings"]["duplicate"]["source_root"]=json!(Path::new(&request.cwd).parent().unwrap());
+        });
+        assert_eq!(routing_project_mapping(&state.lock().unwrap().registry,"cartae",None,"mac172",Path::new(&request.cwd))
+            .unwrap_err(),"project_mapping_ambiguous","ne pas départager deux sources différentes");
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
         let mut legacy = serde_json::to_value(routing168_observation()).unwrap();
         legacy.as_object_mut().unwrap().remove("project_id");
         assert!(serde_json::from_value::<RoutingCandidateObservation>(legacy).unwrap().project_id.is_none());

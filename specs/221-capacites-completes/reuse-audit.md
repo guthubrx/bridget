@@ -139,3 +139,7 @@ REUTILISER confirmé : project_probe_constraints/failure et les deux ports initi
 
 ## Compléments T177/T178 — recherche avant code
 WorkspaceRequest, les deux parseurs MCP, le schéma partagé, InvalidParams et son mapping -32602 sont réutilisés. Un parseur commun porte la même règle de forme pour deux appels réels ; aucun changement du type ou du protocole. La sélection registry applique déjà activation, politique et cinq filtres : seul son résultat vide reçoit un suffixe fermé dans le builder existant. failure projette ce suffixe sans parser de texte libre. Aucun nouveau module, service, store, dépendance ou effet. Les refus après sonde ne reçoivent pas ce diagnostic local.
+
+
+## Gate C16 — 30octobre, après fixture A/B
+RÉUTILISER les mappings à clés distinctes, AgentRegistryFile racine tolérante, routing_project_mapping, select_mapping et le champ project_id des opérations de préparation existantes. Pas de sidecar, historique de permissions, nouveau store, commande ou endpoint. La section racine opaque optionnelle ne sert qu'à choisir une future admission ; sa validation tardive ne prive pas A de ses droits. Test A+B : A conserve rapport/permission/recheck et réservation, B n'est encore qu'une déclaration. Mutation brute A→B : refus avant Start/Release et nouveau slot. Les propositions de conception sont des hypothèses ; le sidecar fondé sur un registre globalement fermé est rejeté, la racine est tolérante. Publication physique et configuration existantes conservées ; aucune nouvelle autorité humaine inventée.

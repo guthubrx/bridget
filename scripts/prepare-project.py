@@ -136,7 +136,7 @@ def registry_read(path):
 def mapping_matches(mapping, host, cwd):
     return mapping["source_host"] == host and contained(cwd, absolute(mapping["source_root"]))
 
-def select_mapping(selected, request):
+def select_mapping(selected, request, registry=None):
     mappings = selected.get("mappings", {})
     requested = request.get("project_id")
     source = absolute(request["source_root"])
@@ -147,6 +147,27 @@ def select_mapping(selected, request):
     else:
         found = [(key, value) for key, value in mappings.items()
                  if mapping_matches(value, request["origin_host"], cwd)]
+    if not requested:
+        preferred = []
+        section = (registry or {}).get("project_preferences")
+        if section is not None:
+            code = "project_mapping_preference_invalid"
+            require(isinstance(section, dict) and set(section) == {"version", "machines"}
+                    and type(section["version"]) is int and section["version"] == 1
+                    and isinstance(section["machines"], dict)
+                    and len(section["machines"]) <= 16, code)
+            preferred = section["machines"].get(request["machine_id"], [])
+            require(isinstance(preferred, list) and len(preferred) <= 64
+                    and all(isinstance(key, str) and key in mappings for key in preferred), code)
+            require(len(set(preferred)) == len(preferred), code)
+        if len(found) > 1:
+            choices = [(key, value) for key, value in found if key in preferred]
+            require(len(choices) == 1, "project_mapping_ambiguous")
+            chosen = choices[0][1]
+            require(all(all(value.get(field) == chosen.get(field) for field in
+                            ("source_host", "source_root", "additional_root"))
+                        for _, value in found), "project_mapping_ambiguous")
+            found = choices
     require(len(found) <= 1, "project_mapping_ambiguous")
     if found:
         key, value = found[0]
@@ -247,7 +268,7 @@ def remote_inspect(request, registry_path):
                 "expected_base_commit_invalid")
     _, registry = registry_read(registry_path)
     selected = machine(registry, request)
-    key, mapping = select_mapping(selected, request)
+    key, mapping = select_mapping(selected, request, registry)
     proposed = request.get("mapping")
     if proposed is not None:
         require(proposed == mapping and request.get("resolved_project_id") == key,
@@ -456,7 +477,7 @@ def prepare(request):
                                               ("source_root", "source_uid", "source_mode", "access")}
         # Résoudre côté source avant de contacter la destination. Une ancienne
         # correspondance divergente ne peut pas créer un second projet.
-        local_key, local_mapping = select_mapping(selected, request)
+        local_key, local_mapping = select_mapping(selected, request, registry)
         request.pop("linked_checkout", None)
         request.pop("bundle_base", None)
         request.pop("checkout_root", None)

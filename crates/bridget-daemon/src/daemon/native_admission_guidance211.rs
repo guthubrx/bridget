@@ -9,6 +9,14 @@ pub(super) fn refusal(code:&str)->Option<Value>{
             "Utilisez un cwd inclus dans le dossier attesté du parent.",
             "Un worktree voisin ou la racine Git peuvent appartenir au même dépôt tout en restant hors du périmètre de ce parent. Conserver les droits actuels : travailler dans son dossier autorisé, ou demander à l’utilisateur d’ouvrir le travail depuis le parent approprié. Vérifier l’issue de l’ancienne demande avant tout changement de clé ou de paramètres.",
             Some("cwd")),
+        "project_mapping_preference_invalid"=>(
+            "Faites vérifier le choix d’emplacement des prochaines missions sur cette machine.",
+            "La préférence d’emplacement est invalide ou cite une correspondance absente. Demander au responsable de vérifier la section project_preferences et la présence du même mapping sur la source, le maître et le worker. Conserver les anciens mappings utilisés par les tâches vivantes. Ce refus ne déplace ni ne supprime leurs dossiers. Garder la clé et l’enveloppe ; lire detail.admission avant tout rejeu, attendre la fin de tous les appels et ne pas créer de remplacement d’issue inconnue.",
+            None),
+        "project_mapping_ambiguous"=>(
+            "Faites préciser l’emplacement prévu pour les prochaines missions sur cette machine.",
+            "Plusieurs correspondances couvrent cette source. Le responsable doit qualifier le nouvel emplacement puis déclarer une préférence unique entre mappings de même source et mêmes droits additionnels. Un identifiant project_id explicite reste strict ; ne pas le changer dans une admission déjà enregistrée. Ne remplacer ni l’ancien mapping ni un dossier vivant. Garder la clé et lire detail.admission avant un rejeu ; les mêmes paramètres et l’absence d’appel concurrent restent requis.",
+            None),
         "project_mapping_unknown"=>(
             "Faire vérifier le placement natif de ce projet sur la machine choisie.",
             "Aucun mapping applicable n’a été trouvé pour cette demande. Vérifier la machine, project_id s’il est imposé et le dossier source. Demander au responsable Bridget une préparation native du projet autorisée ; ne pas inventer un project_id, déplacer un dossier actif ou copier des clés. L’absence de mapping ne prouve pas une panne du serveur.",
@@ -43,7 +51,7 @@ mod tests {
     #[test]
     fn spec211_refusals_name_action_scope_and_human_decision(){
         for code in ["expected_base_commit_required","cwd_outside_parent_project",
-            "project_mapping_unknown","origin_request_invalid","brief_invalid","envelope_mismatch","task_unavailable"]{
+            "project_mapping_unknown","project_mapping_preference_invalid","project_mapping_ambiguous","origin_request_invalid","brief_invalid","envelope_mismatch","task_unavailable"]{
             let r=refusal(code).unwrap();
             assert_eq!(r["code"],code);
             assert!(r["message"].as_str().unwrap().contains("cette demande"));

@@ -7204,6 +7204,179 @@ while not stop.exists(): time.sleep(.01)
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spec221_mapping_change_keeps_report_but_denies_old_authority() {
+        use bridget_transport::protocol::{WorkspaceRequest, SpawnPosture};
+        use std::os::unix::process::CommandExt;
+        let fixture=Fixture::new();
+        let project_fixture=Fixture::new();
+        let project=project_fixture.0.join("placement-a221");
+        fs::create_dir(&project).unwrap();
+        let git=|cwd:&Path,args:&[&str]| {
+            let out=std::process::Command::new("git").arg("-C").arg(cwd).args(args)
+                .env("GIT_CONFIG_NOSYSTEM","1").env("GIT_CONFIG_GLOBAL","/dev/null")
+                .env("GIT_AUTHOR_NAME","Fixture").env("GIT_COMMITTER_NAME","Fixture")
+                .env("GIT_AUTHOR_EMAIL","fixture@example.invalid")
+                .env("GIT_COMMITTER_EMAIL","fixture@example.invalid").output().unwrap();
+            assert!(out.status.success(),"{args:?}: {}",String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        git(&project,&["init","-q"]);
+        git(&project,&["config","remote.origin.url","fixture:placement221"]);
+        fs::write(project.join(".gitignore"),".worktrees/\n").unwrap();
+        fs::write(project.join("file"),"placement conservé\n").unwrap();
+        git(&project,&["add","."]);git(&project,&["commit","-qm","fixture placement"]);
+        let base=git(&project,&["rev-parse","HEAD"]);
+        let mut runtime=runtime_fixture(&fixture);
+        let registry=serde_json::json!({
+            "agents":{"codex":{"command":"/bin/echo","args":["app-server"],
+                "protocol":"codex_app_server","forbidden_env":[],"capabilities":{"execution_paths":["codex_app_server"],
+                    "models":{"fixture-model":{"efforts":["high"]}}}}},
+            "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":digest_bytes(b"worker162-test-secret"),"allowed_agent_types":["codex"],
+                "mappings":{"placement221":{"source_host":"origin221","source_root":"/origin221",
+                    "remote_root":project,"expected_git_identity":"fixture:placement221","mapping_revision":1}}}}
+        });
+        write_json(&runtime.config.registry_path,&registry).unwrap();
+        runtime.source.clear();
+        runtime.source.insert("HOME".into(),fixture.0.as_os_str().to_owned());
+        runtime.source.insert("PATH".into(),"/usr/bin:/bin".into());
+        let mut identity=command();identity.task_id=uuid::Uuid::new_v4().to_string();
+        let mut prepare_identity=identity.clone();prepare_identity.instance_id.clear();prepare_identity.generation=0;
+        let request=WorkerPrepare {
+            machine_id:"cartae".into(),project_id:"placement221".into(),provisioning_revision:1,mapping_revision:1,
+            origin_host:"origin221".into(),origin_cwd:"/origin221".into(),source_root:"/origin221".into(),
+            remote_root:project.to_string_lossy().into_owned(),source_root_identity:"fixture:placement221".into(),
+            relative_cwd:".".into(),base_commit:Some(base.clone()),agent_type:"codex".into(),
+            model:"fixture-model".into(),effort:Some("high".into()),posture:Some(SpawnPosture::Development),
+            workspace:Some(WorkspaceRequest::Worktree {base_ref:None,branch:None}),
+            parent:ProviderPermissions {version:1,source:"native_wrapper".into(),run_id:"run221".into(),
+                provider_session_id:"session221".into(),provider_instance_id:"parent221".into(),revision:1,
+                driver:"codex_app_server".into(),cwd:"/origin221".into(),runtime_mode:"full-access".into(),
+                interaction_mode:"default".into(),provider_policy:serde_json::json!({"kind":"codex",
+                    "approval_policy":"never","approvals_reviewer":"user",
+                    "sandbox_policy":{"type":"workspaceWrite","writableRoots":["/origin221"],
+                        "networkAccess":false,"excludeTmpdirEnvVar":true,"excludeSlashTmp":true}})}
+        };
+        let prepared=runtime.prepare(&prepare_identity,&request).unwrap();
+        let original:crate::delegation::WorkspaceRecord=serde_json::from_value(prepared.workspace.clone().unwrap()).unwrap();
+        runtime.store.reserve_command(&identity,&"c".repeat(64),&prepared.placement,worker_now()+600,worker_now()).unwrap();
+        runtime.store.bind_preparation(&identity,runtime.prepared.get(&identity.command_id).unwrap()).unwrap();
+        // Le processus privé simule un reçu déjà Released. Aucun fournisseur n'est lancé.
+        let mut child=std::process::Command::new("/bin/cat").stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).process_group(0).spawn().unwrap();
+        let outcome=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut receipt=runtime.store.command(&identity).unwrap();
+            receipt.phase=WorkerCommandPhase::Released;receipt.native_ready=true;
+            receipt.marker=Some(ManagedMarker {pgid:child.id(),birth:crate::managed_process::process_birth(child.id()).unwrap(),
+                command_id:identity.command_id.clone(),instance_id:identity.instance_id.clone(),generation:identity.generation});
+            runtime.store.persist(&runtime.store.command_path(&identity),&receipt).unwrap();
+            let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+                else {panic!("observation attendue")};
+            assert!(observation.permission_digest.is_some());
+            let worktree=Path::new(&original.path);
+            let source_index=fs::read(project.join(".git/index")).unwrap();
+            let worktree_head=git(worktree,&["rev-parse","HEAD"]);
+            // Ajouter B sous une autre clé ne remplace jamais l'autorité A.
+            let mut with_future=registry.clone();
+            let future=project_fixture.0.join("placement-b221");
+            let mut mapping_b=with_future["machines"]["cartae"]["mappings"]["placement221"].clone();
+            mapping_b["remote_root"]=serde_json::json!(future);
+            with_future["machines"]["cartae"]["mappings"]["placement-b221"]=mapping_b;
+            // Une préférence future malformée ne doit pas retirer le permis A.
+            with_future["project_preferences"]=serde_json::json!([]);
+            write_json(&runtime.config.registry_path,&with_future).unwrap();
+            let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+                else {panic!("rapport A attendu avec B déclaré")};
+            assert!(observation.permission_digest.is_some());
+            let retained=runtime.prepared.get(&identity.command_id).unwrap();
+            for before_release in [false,true] {
+                assert!(runtime.read_view().recheck_at_with_repair(retained,before_release,None,
+                    &read::ReadTrace::default()).is_ok(),"A garde son autorité propre");
+            }
+            let mut future_request=request.clone();
+            future_request.project_id="placement-b221".into();
+            future_request.remote_root=future.to_string_lossy().into_owned();
+            assert_eq!(runtime.mapping_authority(&future_request,&runtime.registry().unwrap()).unwrap().remote_root,future);
+            assert!(!future.exists(),"une déclaration ne prépare pas le dossier B");
+            let slot=slot_174(&identity);
+            let frame=WorkerRequest {version:REMOTE_WORKER_VERSION,correlation_id:"slot-a-b221".into(),
+                connection_epoch:"epoch221".into(),worker:runtime.identity.clone(),command:identity.clone(),
+                request:WorkerRequestOperation::ReserveResultSlot {slot:slot.clone()}};
+            let disconnected=AtomicBool::new(false);
+            assert!(matches!(runtime.handle(&frame,"epoch221",&disconnected).unwrap(),
+                WorkerResponseOperation::ResultSlotReserved {..}));
+            let reservation=runtime.store.reserve_result_slot(&slot,worker_now()).unwrap();
+            // Revenir à la configuration nominale avant la contre-épreuve d'édition brute.
+            write_json(&runtime.config.registry_path,&registry).unwrap();
+            let stored=snapshot188(&runtime.config.state_root);
+            let saved_registry=fs::read(&runtime.config.registry_path).unwrap();
+            let future=project_fixture.0.join("placement-b221");
+            let mut changed=registry.clone();
+            changed["machines"]["cartae"]["mappings"]["placement221"]["remote_root"]=serde_json::json!(future);
+            changed["machines"]["cartae"]["mappings"]["placement221"]["mapping_revision"]=serde_json::json!(2);
+            write_json(&runtime.config.registry_path,&changed).unwrap();
+            let WorkerResponseOperation::Observation {observation}=runtime.reconcile_attested(&identity).unwrap()
+                else {panic!("rapport historique attendu")};
+            assert_eq!(observation.workspace.as_ref().unwrap()["path"],original.path);
+            assert!(observation.permission_digest.is_none(),"une édition du registre ne vaut pas autorité historique");
+            let retained=runtime.prepared.get(&identity.command_id).unwrap();
+            for before_release in [false,true] {
+                assert!(matches!(runtime.read_view().recheck_at_with_repair(retained,before_release,None,
+                    &read::ReadTrace::default()),Err(WorkerRefusal::PlacementMismatch)));
+            }
+            let mut frame=WorkerRequest {version:REMOTE_WORKER_VERSION,correlation_id:"slot221".into(),
+                connection_epoch:"epoch221".into(),worker:runtime.identity.clone(),command:identity.clone(),
+                request:WorkerRequestOperation::ReserveResultSlot {slot:slot.clone()}};
+            let disconnected=AtomicBool::new(false);
+            let WorkerResponseOperation::ResultSlotReserved {slot_id,..}=runtime.handle(&frame,"epoch221",&disconnected).unwrap()
+                else {panic!("le reçu déjà réservé reste relisible")};
+            assert_eq!(slot_id,reservation.slot_id);
+            let mut next_slot=slot.clone();next_slot.identity.round=2;next_slot.identity.execution_generation+=1;
+            frame.request=WorkerRequestOperation::ReserveResultSlot {slot:next_slot};
+            assert_eq!(runtime.handle(&frame,"epoch221",&disconnected),Err(WorkerRefusal::PlacementMismatch));
+            assert_eq!(snapshot188(&runtime.config.state_root),stored,"pas de reçu ou slot inventé");
+            let mut future_request=request.clone();
+            future_request.mapping_revision=2;future_request.remote_root=future.to_string_lossy().into_owned();
+            assert_eq!(runtime.mapping_authority(&future_request,&runtime.registry().unwrap()).unwrap().remote_root,future);
+            assert!(!future.exists(),"une déclaration n'a créé aucun dossier");
+            let config=WorkerRuntimeConfig {
+                machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+                provisioning_revision:runtime.config.provisioning_revision,
+                credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+                registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone(),
+            };
+            drop(runtime);
+            let mut reopened=WorkerRuntime::new(config).unwrap();
+            let WorkerResponseOperation::Observation {observation}=reopened.reconcile_attested(&identity).unwrap()
+                else {panic!("rapport après réouverture attendu")};
+            assert!(observation.workspace.is_some() && observation.permission_digest.is_none());
+            assert_eq!(reopened.store.read_slot(&slot.identity).unwrap().unwrap().slot,slot);
+            fs::write(&reopened.config.registry_path,&saved_registry).unwrap();
+            let WorkerResponseOperation::Observation {observation}=reopened.reconcile_attested(&identity).unwrap()
+                else {panic!("retour de la configuration initiale attendu")};
+            assert!(observation.permission_digest.is_some());
+            let mut revoked:serde_json::Value=serde_json::from_slice(&saved_registry).unwrap();
+            revoked["machines"]["cartae"]["enabled"]=serde_json::json!(false);
+            write_json(&reopened.config.registry_path,&revoked).unwrap();
+            // registry() atteste l'identité du worker ; le permis est contrôlé ensuite.
+            let WorkerResponseOperation::Observation {observation}=reopened.reconcile_attested(&identity).unwrap()
+                else {panic!("observation technique attendue après révocation")};
+            assert!(observation.permission_digest.is_none(),
+                "le reçu historique ne doit pas effacer une révocation courante");
+            assert!(observation.workspace.is_some(),"le rapport technique reste accessible sans autoriser une remise");
+            fs::write(&reopened.config.registry_path,&saved_registry).unwrap();
+            assert_eq!(git(&project,&["rev-parse","HEAD"]),base);
+            assert_eq!(git(worktree,&["rev-parse","HEAD"]),worktree_head);
+            assert_eq!(fs::read(project.join(".git/index")).unwrap(),source_index);
+            assert_eq!(fs::read(worktree.join("file")).unwrap(),"placement conservé\n".as_bytes());
+        }));
+        drop(child.stdin.take());assert!(child.wait().unwrap().success());
+        if let Err(error)=outcome {std::panic::resume_unwind(error);}
+        // La fin du processus de fixture n'est pas présentée comme une clôture native.
+    }
+
     #[test]
     fn worker162_prepare_worktree_rejoue_et_rapport_preserve_modifications() {
         use bridget_transport::protocol::{ProviderPermissions, SpawnPosture, WorkspaceRequest};

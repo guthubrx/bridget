@@ -115,6 +115,10 @@ pub struct AgentRegistryFile {
     /// d'admission163 ; le registre ne démarre aucun moteur en la lisant.
     #[serde(default)]
     pub routing_policy: Option<RoutingPolicy>,
+    /// Choix des futures admissions seulement ; validé au moment de la sélection.
+    /// La racine tolérante permet aux anciens lecteurs de l'ignorer.
+    #[serde(default)]
+    pub project_preferences: serde_json::Value,
 }
 
 /// Déclaration opaque d'un environnement déjà authentifié. Les secrets et
@@ -512,6 +516,7 @@ pub struct AgentRegistry {
     decision_services: BTreeMap<String, DecisionService>,
     admission_policy: Option<AdmissionPolicy>,
     routing_policy: Option<RoutingPolicy>,
+    project_preferences: serde_json::Value,
     source: PathBuf,
 }
 
@@ -637,6 +642,7 @@ impl AgentRegistry {
         let mut decision_services = BTreeMap::new();
         let mut admission_policy = None;
         let mut routing_policy = None;
+        let mut project_preferences = serde_json::Value::Null;
         match std::fs::symlink_metadata(&source) {
             Ok(_) => {
                 let content = read_private_registry(&source)?;
@@ -670,6 +676,7 @@ impl AgentRegistry {
                 decision_services = user.decision_services;
                 admission_policy = user.admission_policy;
                 routing_policy = user.routing_policy;
+                project_preferences = user.project_preferences;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -686,6 +693,7 @@ impl AgentRegistry {
             decision_services,
             admission_policy,
             routing_policy,
+            project_preferences,
             source,
         })
     }
@@ -714,6 +722,7 @@ impl AgentRegistry {
             decision_services: user.decision_services,
             admission_policy: user.admission_policy,
             routing_policy: user.routing_policy,
+            project_preferences: user.project_preferences,
             source,
         })
     }
@@ -943,6 +952,54 @@ impl AgentRegistry {
             .ok_or_else(|| "project_mapping_unknown".into())
     }
 
+    /// Résolution d'une admission neuve. Les tâches utilisent project_mapping,
+    /// dont la clé et les révocations ne dépendent jamais de cette préférence.
+    pub(crate) fn select_project_mapping(
+        &self, machine: &str, requested: Option<&str>, origin: &str, cwd: &Path,
+    ) -> Result<(String, ProjectMapping), String> {
+        let provision = self.machine(machine)?;
+        let resolve = |mapping: &ProjectMapping| mapping.for_origin(machine, origin)
+            .filter(|mapping| cwd.starts_with(&mapping.source_root));
+        if let Some(id) = requested {
+            return resolve(provision.mappings.get(id).ok_or("project_mapping_unknown")?)
+                .map(|mapping| (id.to_owned(), mapping))
+                .ok_or_else(|| "project_mapping_mismatch".into());
+        }
+        let mut preferred = std::collections::BTreeSet::new();
+        if !self.project_preferences.is_null() {
+            let invalid = || "project_mapping_preference_invalid".to_owned();
+            let section = self.project_preferences.as_object().ok_or_else(invalid)?;
+            if section.len()!=2 || section.get("version").and_then(|v|v.as_u64())!=Some(1) {
+                return Err(invalid());
+            }
+            let machines = section.get("machines").and_then(|v|v.as_object()).ok_or_else(invalid)?;
+            if machines.len()>MAX_MACHINES {return Err(invalid());}
+            if let Some(value) = machines.get(machine) {
+                let ids = value.as_array().ok_or_else(invalid)?;
+                if ids.len()>MAX_MACHINE_MAPPINGS {return Err(invalid());}
+                for value in ids {
+                    let id = value.as_str().ok_or_else(invalid)?;
+                    if !provision.mappings.contains_key(id) || !preferred.insert(id) {
+                        return Err(invalid());
+                    }
+                }
+            }
+        }
+        let matches = provision.mappings.iter().filter_map(|(id,mapping)|
+            resolve(mapping).map(|mapping|(id.clone(),mapping))).collect::<Vec<_>>();
+        if matches.len()==1 {return Ok(matches.into_iter().next().unwrap());}
+        if matches.is_empty() {return Err("project_mapping_unknown".into());}
+        let choices = matches.iter().filter(|(id,_)|preferred.contains(id.as_str())).collect::<Vec<_>>();
+        if choices.len()==1 {
+            let (id, selected) = choices[0];
+            if matches.iter().all(|(_,mapping)|mapping.source_host==selected.source_host
+                && mapping.source_root==selected.source_root && mapping.additional_root==selected.additional_root) {
+                return Ok((id.clone(),selected.clone()));
+            }
+        }
+        Err("project_mapping_ambiguous".into())
+    }
+
     pub fn get(&self, agent_type: &str) -> Result<&AgentDefinition, String> {
         self.agents.get(agent_type).ok_or_else(|| {
             let available = self.agents.keys().cloned().collect::<Vec<_>>().join(", ");
@@ -1049,6 +1106,7 @@ impl AgentRegistry {
             decision_services: BTreeMap::new(),
             admission_policy: None,
             routing_policy: None,
+            project_preferences: serde_json::Value::Null,
             source: self.source.clone(),
         })
     }
@@ -1102,6 +1160,7 @@ impl AgentRegistry {
             decision_services: BTreeMap::new(),
             admission_policy: None,
             routing_policy: None,
+            project_preferences: serde_json::Value::Null,
             source,
         })
     }
@@ -1174,6 +1233,7 @@ impl AgentRegistry {
             decision_services: BTreeMap::new(),
             admission_policy: None,
             routing_policy: None,
+            project_preferences: serde_json::Value::Null,
             source: self.source.clone(),
         }
         .pin_delegation_model(agent_type, model, effort)

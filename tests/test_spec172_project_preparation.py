@@ -54,6 +54,67 @@ class PreparationTests(unittest.TestCase):
             with self.bundle.open("rb") as bundle:
                 return prep.remote_receive(self.request, self.registry, stream or bundle)
 
+    def test_spec221_future_preference_preserves_explicit_old_mapping(self):
+        import copy
+        selected=self.config["machines"]["test"]
+        a=dict(source_host="source",source_root=str(self.source),
+               remote_root=str(self.home/"a"),expected_git_identity="fixture:a",mapping_revision=1)
+        b=dict(a,remote_root=str(self.home/"b"),expected_git_identity="fixture:b")
+        selected["mappings"]={"a":a,"b":b}
+        def choose(request=None):
+            return prep.select_mapping(selected,request or self.request,registry=self.config)
+        with self.assertRaisesRegex(prep.Refused,"project_mapping_ambiguous"):
+            choose()
+        self.config["project_preferences"]={"version":1,"machines":{"test":["b"]}}
+        self.assertEqual(choose(),("b",b))
+        self.assertEqual(choose(dict(self.request,project_id="a")),("a",a))
+        for invalid in [None,[],{"version":2,"machines":{"test":["b"]}},
+                        {"version":1,"machines":{"test":["a","b"]}},
+                        {"version":1,"machines":{"test":["missing"]}},
+                        {"version":1,"machines":{"test":["b","b"]}},
+                        {"version":1,"machines":{str(i):[] for i in range(17)}},
+                        {"version":1,"machines":{"test":["b"]},"extra":True}]:
+            with self.subTest(preference=invalid):
+                self.config["project_preferences"]=invalid
+                with self.assertRaises(prep.Refused):
+                    choose()
+                self.assertEqual(choose(dict(self.request,project_id="a")),("a",a))
+        self.config["project_preferences"]={"version":1,"machines":{"test":["b"]}}
+        selected["mappings"]["b"]=dict(b,source_root=str(self.source.parent))
+        with self.assertRaisesRegex(prep.Refused,"project_mapping_ambiguous"):
+            choose()
+        selected["mappings"]["b"]=dict(b,additional_root={"source_root":"/extra"})
+        with self.assertRaisesRegex(prep.Refused,"project_mapping_ambiguous"):
+            choose()
+        selected["mappings"]["b"]=b
+        # A n'a pas été remplacé ; aucune configuration physique écrite.
+        self.assertEqual(selected["mappings"]["a"],a)
+        self.assertFalse((self.home/"a").exists())
+        self.assertFalse((self.home/"b").exists())
+
+    def test_spec221_future_destination_is_prepared_without_touching_old_checkout(self):
+        first=self.receive()
+        old_root=Path(first["mapping"]["remote_root"])
+        old_head=prep.git(old_root,"rev-parse","HEAD").stdout
+        old_index=(old_root/".git/index").read_bytes()
+        (old_root/"kept.txt").write_text("ancien travail vivant conservé")
+        self.config=json.loads(self.registry.read_text())
+        mappings=self.config["machines"]["test"]["mappings"]
+        original=dict(mappings[first["project_id"]])
+        future=self.home/".local/share/bridget-projects/future221"
+        mappings["future221"]=dict(original,remote_root=str(future/"repository"),
+                                   expected_git_identity=str(future/"mirror.git"))
+        self.config["project_preferences"]={"version":1,"machines":{"test":["future221"]}}
+        result,local,remote=self.prepare_via_federation()
+        self.assertEqual(result["project_id"],"future221")
+        self.assertEqual(local[first["project_id"]],original)
+        self.assertEqual(remote[first["project_id"]],original)
+        self.assertEqual(local["future221"],remote["future221"])
+        self.assertEqual(prep.git(future/"repository","rev-parse","HEAD").stdout,old_head)
+        self.assertEqual(prep.git(old_root,"rev-parse","HEAD").stdout,old_head)
+        self.assertEqual((old_root/".git/index").read_bytes(),old_index)
+        self.assertEqual((old_root/"kept.txt").read_text(),"ancien travail vivant conservé")
+
     def test_new_unpublished_project_and_replay(self):
         before = sorted(str(p.relative_to(self.source)) for p in self.source.rglob("*"))
         planned = self.inspect()
