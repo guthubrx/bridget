@@ -1,6 +1,6 @@
-# Validation220 — en cours
+# Validation220 — livraison active
 
-Source initiale relue : 06dfbad1bad533e4c6f1e68861d2f64effe48bef. Aucune activation220 attestée à ce stade.
+Source initiale relue : 06dfbad1bad533e4c6f1e68861d2f64effe48bef. État historique avant la recette et la livraison consignées plus bas.
 
 - Compilation daemon : PASS.
 - Sept tests daemon220 : PASS sur le mécanisme bootstrap réel avec fournisseur simulé, refus compte changé/liste excessive, absence de compte, délai RPC, génération, chemins privés, époque/digest/TTL/absence de mutation, autorité de lecture, writer occupé/saturé. Sept tests repassés sur cache sans symboles de debug (0,56Gio au lieu de 20,59Gio avant entretien).
@@ -32,3 +32,62 @@ Décompte : sept tests automatiques initiaux220 et une recette réelle explicite
 Ronde4 cdb165e9-4fc2-411e-a03b-3e4aed6b9583 : deux derniers P2 de portée. La projection publie maintenant la contrainte d’arrêt à côté du statut machine/connexion, même si un statut précoce est prioritaire. Une définition divergente ne remplace plus cette contrainte connue par une cause moins précise. Le test passe par le vrai handler Hello : cache ancien connu, nouvel epoch/cache vide, statut not_observed transitoire, puis republication du worker et contrainte rétablie ; une machine désactivée garde cette contrainte séparée. La documentation nomme cette fenêtre volatile et ne promet plus une visibilité continue. Succès CLI JSON et erreurs JSON sur --json sont distingués. Neuf tests automatiques220 PASS après ce complément.
 
 Retour opérationnel : le programme217 est conservé comme retour. Avant tout retour d’un worker220 vers217, constater la fin de ses sondes de métadonnées et qualifier leurs marqueurs privés. Un ancien worker ne sait pas reprendre leur supervision. Aucune suppression de marqueur ni preuve d’arrêt ne doit être fabriquée. Ce travail n’active aucun retour automatique.
+
+
+## Livraison active — 30 octobre 2026
+
+Source fonctionnelle : f5a4949fe06b258de0683031f019a75ce04a990d. Build220-catalogue-f5a4949f, version commerciale0.6.5. Ronde5 f22a202a-8596-4465-a124-d73e0fd2d058 : les deux P2 précédents sont levés ; aucun nouveau P1/P2 concret dans le complément. Les six tâches de conception/revue sont result_available, cleanup_done=true, guarded=false ; guard_released reste false et n'est pas réinterprété.
+
+Contrôles distincts : 9 tests automatiques220, une recette réelle de métadonnées séparée, 63 régressions, soit73. Les répétitions ne sont pas additionnées. Guides32pages/522liens/13paires et git diff --check PASS. Aucun nouveau build, test ou essai métier n'est nécessaire à la clôture documentaire.
+
+Les exécutables ont passé le contrôle local de compatibilité et le validateur installé217 avant bascule : Cartae2clients, SYS2, KS1, Mac4. Linux exige au maximum GLIBC2.34.
+
+| Composant réellement chargé | PID constaté | Build |
+| --- | --- | --- |
+| Maître Cartae | 1421623 | 220-catalogue-f5a4949f |
+| Mobile Cartae | 1421640 | 220-catalogue-f5a4949f |
+| Worker Cartae | 1425319 | 220-catalogue-f5a4949f |
+| Worker SYS | 498522 | 220-catalogue-f5a4949f |
+| Worker KS | 914244 | 220-catalogue-f5a4949f |
+| Worker Mac | 89015 | 220-catalogue-f5a4949f |
+| Pont T3 Mac | 89882 | 220-catalogue-f5a4949f |
+| Updater Mac | 90107 | 220-catalogue-f5a4949f |
+
+SHA256 Linux : 157ca7d44916e61ff8f502eb26f65036ee2644e2574668594f389d5a9fe5a4b8.
+SHA256 Mac : fa0cccf075f38a6307cba10ec513ed0c46623617b9575ddbc0a70446cfc2186d.
+Installations : /home/moi/.local/lib/bridget-communication/220-catalogue-f5a4949f/bin/bridget et /Users/moi/.local/lib/bridget-communication/220-catalogue-f5a4949f/bin/bridget. Les images chargées et leurs empreintes ont été contrôlées. Reçu privé : /Users/moi/.cache/bridget220/activation-verified.json.
+
+Maintenance native ciblée : sauvegarde cohérente SQLite/configuration, arrêt propre des seules unités Bridget connues, coupure maître2,29s. Les wrappers observés ont été préservés. Aucun service Opus2D/NE02/Roadie, compte, profil ou tâche métier n'a été relancé. Reçus privés : /home/moi/.local/share/bridget-maintenance/220-production-20261030T092005Z/receipt.json et worker-loaded.json sous /home/moi/.cache/bridget220 sur chaque serveur ; /Users/moi/.cache/bridget220/mac-loaded.json sur Mac.
+
+## Preuve native après activation
+
+Une bridget_session et une bridget_capabilities ont réussi. Le catalogue expose45options déclarées et15observations de connexions. Le CLI négocié --observed a rendu les données220. Un seul refresh explicite SYS a rendu requested ; ce retour n'a pas été présenté comme terminé. Une relecture bornée a ensuite constaté de nouvelles dates sur les deux connexions SYS.
+
+- Cartae : codex-cartae-normal et codex-cartae-terra213, reported_models, 3modèles chacune.
+- SYS : codex-sysle2 et codex-sysle2-terra213, reported_models, 8modèles chacune.
+- KS : codex-ksstore reste disabled ; aucune connexion personnelle ni réactivation automatique n'a été effectuée.
+- Claude : unsupported_provider décrit seulement la découverte automatique non implémentée. Ce statut ne refuse pas les lancements Claude déclarés.
+- Mac : Codex not_observed. Le registre origine177 porte la machine local, alors que le worker est monordinateur. Ce contexte local ancien n'est pas modifié dans cette livraison limitée aux serveurs provisionnés ; aucune observation automatique Mac n'est qualifiée.
+
+Les modèles annoncés ne prouvent ni l'accès effectif à chacun, ni la fraîcheur réseau du cache fournisseur. La politique d'admission reste séparée et inchangée. Le renouvellement vise120s par connexion, séquentiellement ; une donnée expire publiquement après180s. Les changements externes non observables restent explicitement inconnus.
+
+Reçus privés sans publication des identifiants de compte : /Users/moi/.cache/bridget220/catalogue-active.json, /Users/moi/.cache/bridget220/refresh-sys.json et /Users/moi/.cache/bridget220/catalogue-refreshed-sys.json.
+
+## Ancien connecteur de ce fil
+
+Le processus MCP58296, parent61494, charge encore /Users/moi/.local/lib/bridget-communication/214-clients-30581503/bin/bridget. Une reprise native ne le remplace pas. Il lit déjà les champs220 de capabilities, mais n'expose pas le nouvel outil bridget_refresh_models. Aucun port de rechargement MCP n'est disponible dans ce fil. Ne pas boucler sur les reprises et ne pas tuer le fournisseur courant.
+
+Geste humain : fermer puis rouvrir complètement l'application T3 Code, reprendre le même fil, puis faire une bridget_session. Après cela, contrôler une fois le processus MCP et capabilities. Les services220 ne nécessitent pas une seconde bascule. Les anciennes missions ne doivent pas être dupliquées.
+
+La comparaison219 et ses autres écarts restent distincts. La prévention du drainage218 reste ouverte. Le retour217 exige toujours une preuve de fin des sondes220 avant bascule ; aucun retour automatique n'est activé.
+
+
+## Preuves, entretien et reprise
+
+Le bilan HTML a été prévisualisé à728px et360px, sans message console ni débordement constaté. Preuves : diaporama vérifié. Fichier : /Users/moi/Nextcloud/10.Scripts/64.bridget/preuves-corrections/2026-10-30-220-catalogue/preuves.html. Il présente des constats natifs, sans capture d'interface fabriquée ni donnée de compte.
+
+La commande installed a terminé sur Mac/Cartae/SYS après vérification des installations : caches restants4,84/0,65/0,98Gio. Trois candidats jamais activés c482 ont été retirés sur Cartae/KS/Mac après contrôle d'usage ; deux copies de transfert finales Mac identiques aux exécutables installés ont été retirées. Actif220 et retour217 conservés. MCP214 et wrapper198 sous usage restent conservés. Le candidat c482 SYS et les six worktrees de revue220 restent conservés : Git propre, aucun fichier ignoré, tâches closes, mais plusieurs processus du même compte ne sont pas inspectables via /proc et sudo sans mot de passe est refusé. L'absence d'usage ne peut pas être attestée complètement ; aucun retrait forcé ni arrêt de processus tiers. Audit privé : /Users/moi/.cache/bridget220/worktree-audit.json ; retraits : /Users/moi/.cache/bridget220/cleanup-receipt.json.
+
+Les quatre responsables concernés ont été informés après activation : monuments, Politique sol, trajets bus et Roadie. Messages natifs mcp-58296-6ae4674a-12, -6ae4674c-13, -6ae4674f-14 et -6ae46751-15 acceptés in_flight. Leur lecture n'est pas déduite. Aucun accusé ni surveillance périodique demandé.
+
+Le commit documentaire final est intégré à main puis poussé. Les références main des miroirs provisionnés SYS/KS sont synchronisées ; leurs HEAD de préparation détachés sont préservés, car ils ne sont pas des checkouts main à déplacer arbitrairement. Les références main sont vérifiées égales au main distant. Le reçu final privé porte les SHA et les contrôles de propreté.

@@ -98,6 +98,10 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session220 — catalogue observé Codex. Source fonctionnelle f5a4949fe06b258de0683031f019a75ce04a990d ; 9tests automatiques220, une recette réelle métadonnées et63régressions distinctes PASS, guides32/522/13 et revue finale f22a202a favorables. Build220-catalogue-f5a4949f/version0.6.5 réellement chargé sur maître/worker/mobileCartae, workersSYS/KS, worker/pontMac, empreintes vérifiées. Coupure maître2,29s ; wrappers observés et services métier préservés. Métadonnées Codex renouvelées par connexion, objectif120s/expiration180s, compte et modèles annoncés séparés de l'admission ; aucun accès à tous les modèles garanti. Cartae3/SYS8modèles par connexion observée ; KS disabled, Claude autodécouverte non implémentée. Une session/capabilities et un refresh SYS suivis de relecture PASS. MCP58296 de ce fil encore214 : données220 lisibles mais nouvel outil absent ; fermer/rouvrir complètement T3 Code puis reprendre ce fil, aucune boucle. Mac origine177 local≠monordinateur non qualifié, aucune modification de ses profils. Retour217 conditionné à la fin des sondes220 ; prévention218 distincte. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/220-catalogue-observe/validation.md.
+
+
+
 Session219 — comparaison des parcours avant actualisation.50parcours recensés, sources et versions datées ; avantage fonctionnel, documentation et essai réel distingués. Revue23e18e7a bornée aux sources Bridget accessibles et cohérence, réserves de formulation/référence corrigées. HTML prévisualisé puis publié, aucun binaire/service/compte changé. Markdown source de référence, JSON de travail privé. Actualisation automatique demandée encore à implémenter ; prévention218 du drainage également ouverte après arrêt réel e3 et cleanup_done attestés. Revue close ; WT conservé sous contrôle d’usage incomplet. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/219-inventaire-parcours/validation.md.
 
 
