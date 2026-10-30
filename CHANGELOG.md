@@ -6,6 +6,12 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.6.5 — 2026-10-30
+
+- Task status explains a provider model rejection and the decision required from the user.
+- The catalogue reads the current configuration and excludes disabled connections.
+- No automatic model substitution, account change or task replay.
+
 ## [0.6.4] - 2026-10-29
 
 - Correct the authenticated native permission ceiling across engines without exporting the origin application's authority.

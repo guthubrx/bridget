@@ -8,6 +8,12 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.6.5 — 30 octobre 2026
+
+- Le statut explique directement un refus fournisseur de modèle et indique la décision à demander à l’utilisateur.
+- Le catalogue relit la configuration actuelle pour ne plus afficher les connexions désactivées.
+- Aucune substitution de modèle, modification de compte ou reprise automatique de tâche.
+
 ## [0.6.4] - 2026-10-29
 
 - Corriger la transmission du plafond natif attesté entre moteurs, sans exporter les droits de l’application d’origine.

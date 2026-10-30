@@ -1003,3 +1003,9 @@ bridget_handoff action=preview validates the format without sending a mission.
 A shape error does not permit changing an existing receipt. Guidance distinguishes
 not_recorded after all calls end with no concurrency, from pending/admitted/refused
 whose canon is retained. Never duplicate an uncertain mission to test formatting.
+
+### Model refusal explained to the owner
+
+A recognized provider model refusal exposes its cause, scope and the user decision directly in task status. The agent preserves the task, request key and files. It does not change the account, plan, model or permissions without consent. A successful login does not establish model access; reinstalling or signing in again is not advised without matching evidence. Unrecognized causes and historical failures remain unknown.
+
+Fleet options are read from the current registry on each catalogue request. An invalid registry makes the catalogue unavailable without reusing cached options. This read creates no task and does not verify provider access.

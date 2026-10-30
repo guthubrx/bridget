@@ -4344,6 +4344,15 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         view["error_human_action"]=json!("Si le modèle reste saturé, demandez à l’utilisateur de choisir entre attendre et autoriser une suite avec une autre contrainte de modèle. Ne changez ni moteur, ni compte, ni droits et ne redémarrez aucun service pour contourner ce refus.");
     }
+    if task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") {
+        view["error_message"]=json!("Le fournisseur refuse le modèle demandé pour cette connexion (HTTP 400, model_not_found). Ce refus concerne cette tâche et cette connexion, pas toute la flotte. Les autres travaux autorisés suivent leur propre état.");
+        view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
+            json!("Expliquez directement ce refus à l’utilisateur. Une connexion réussie ne prouve pas l’accès au modèle. Conservez la tâche, sa clé et ses fichiers ; une tâche failed ne reprend ni par Continue ni par rejeu initial. Après correction de l’accès, confirmation de l’arrêt et vérification du dossier, une nouvelle demande autorisée utilise une nouvelle clé. Ne substituez pas de modèle automatiquement.")
+        } else {
+            json!("Expliquez directement ce refus à l’utilisateur et conservez la tâche, sa clé et ses fichiers. Attendez l’arrêt natif, la fin du nettoyage et un rapport complet du dossier avant toute nouvelle demande. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant ce contrôle.")
+        };
+        view["error_human_action"]=json!("Dites à l’utilisateur : le fournisseur refuse ce modèle avec la connexion utilisée sur ce serveur. Demandez de faire vérifier l’accès au modèle pour ce compte. Un changement de compte, d’offre ou de modèle exige son accord. Ne conseillez pas une réinstallation, un nouveau login ou un changement de droits sur ce seul refus.");
+    }
     if task.projected_error()==Some("api_error") {
         view["error_message"]=json!("Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive.");
         view["error_recovery"]=json!("Conservez cette tâche, sa clé et ses fichiers. Depuis son statut complet, transmettez detail.provider_failure au responsable pour retrouver le dernier diagnostic fournisseur de CE tour dans son journal et son stderr corrélés. Un modèle non pris en charge peut demander une mise à jour du programme fournisseur ; seule la preuve corrélée permet de le conclure. Une tâche failed ne reprend ni par Continue ni par rejeu initial. Vérifiez son arrêt et son dossier avant une suite autorisée ; ne créez pas de remplacement pendant ce contrôle. Les autres travaux autorisés suivent leur propre état.");
@@ -4528,7 +4537,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
-    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error")) {
+    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "terminal Codex: failed:cause=model_not_found")) {
         // Projection après autorisation : aucun contenu de stderr ni chemin privé.
         // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
         let command=task.remote_placement.as_ref().and_then(|_|remote_command_identity(st,task).ok());
@@ -4542,8 +4551,12 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             "command_id":command.as_ref().map(|c|&c.command_id),
             "generation":command.as_ref().map(|c|c.generation),
             "command_identity_confirmed":command.is_some(),
-            "cause":"unobserved",
+            "cause":if task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") { "model_not_found" } else { "unobserved" },
             "verification":"Transmettez cette référence au responsable de la machine : retrouver le reçu natif lié à task_id, vérifier instance et génération, puis lire seulement le stderr de cette identité. Si command_identity_confirmed=false, la référence de commande reste à vérifier ; ne choisissez pas un journal par approximation ni un ancien slot. Ces identifiants n’autorisent aucune reprise et ne prouvent pas un état courant du fournisseur."});
+    }
+    if full && task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") {
+        view["detail"]["provider_failure"]["http_status"]=json!(400);
+        view["detail"]["provider_failure"]["verification"]=json!("Code fournisseur structuré constaté : expliquez le refus et la décision nécessaire à l’utilisateur avec error_human_action. Aucun journal privé n’est requis pour connaître cette cause. Ces identifiants ne permettent aucune reprise automatique.");
     }
     Ok(view)
 }
@@ -4828,7 +4841,7 @@ fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::
     let mut result=catalogue_projection177(entries,held,halted,Some(&parent),permission.as_ref(),Some(Path::new(&parent.cwd)));
     let origin_machine = super::origin_proof::host_for_owner(&st,&owner)?;
     result["verdict_context"]["machine_id"]=json!(origin_machine);
-    catalogue_scope212(&mut result, st.registry.routing_catalogue(unix_timestamp()), &origin_machine);
+    catalogue_scope212(&mut result, fresh_routing_catalogue217(&st.registry, unix_timestamp()), &origin_machine);
     Ok(Some(result))
 }
 
@@ -5118,7 +5131,7 @@ fn routing_catalogue_view(st: &DaemonState, conn: &str) -> Result<Value, String>
     {
         return Err("capability_unavailable".into());
     }
-    serde_json::to_value(st.registry.routing_catalogue(unix_timestamp())?)
+    serde_json::to_value(fresh_routing_catalogue217(&st.registry, unix_timestamp())?)
         .map_err(|_| "routing_catalogue_unavailable".into())
 }
 
@@ -6971,6 +6984,15 @@ fn catalogue_projection177(entries:Vec<Value>,caller_held_queue:bool,halted:bool
 
 // O(P+O), P entrées locales et O options déclarées. Aucun accès fournisseur,
 // aucune sonde distante, aucun changement du verdict local ni des droits.
+fn fresh_routing_catalogue217(registry: &AgentRegistry, observed_at: i64)
+    -> Result<bridget_transport::protocol::RoutingCatalogueV1, String>
+{
+    // Relire les options persistantes sans modifier le registre utilisé par
+    // les tâches. Si la lecture échoue, aucun choix ancien n’est annoncé.
+    AgentRegistry::load_from_path_quiet(registry.source().to_path_buf())?
+        .routing_catalogue(observed_at)
+}
+
 fn catalogue_scope212(
     result: &mut Value,
     declared: Result<bridget_transport::protocol::RoutingCatalogueV1, String>,
@@ -8056,7 +8078,7 @@ fn handle_locked_with_remote_proof(
             let entries=catalogue_entries177(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
                 fact.as_ref(),verdict_cwd.as_deref(),&[])?;
             let mut result = catalogue_projection177(entries,caller_held_queue,halted,fact.as_ref(),permission.as_ref(),verdict_cwd.as_deref());
-            catalogue_scope212(&mut result, st.registry.routing_catalogue(unix_timestamp()), &crate::build_info::local_host());
+            catalogue_scope212(&mut result, fresh_routing_catalogue217(&st.registry, unix_timestamp()), &crate::build_info::local_host());
             Ok(result)
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -32864,6 +32886,57 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert!(view["detail"]["human_action"].as_str().unwrap().contains("propriétaire"));
         }
     }
+    #[test]
+    fn spec217_model_refusal_is_explained_without_private_journal_or_mutation() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        task.state="failed".into();task.error=Some("terminal Codex: failed:cause=model_not_found".into());
+        task.cleanup_done=false;
+        let before=serde_json::to_value(&task).unwrap();
+        let waiting=current_task_view(&st,&task,true).unwrap();
+        assert!(waiting["error_message"].as_str().unwrap().contains("Le fournisseur refuse le modèle"));
+        assert!(waiting["error_message"].as_str().unwrap().contains("Les autres travaux"));
+        assert!(waiting["error_recovery"].as_str().unwrap().contains("Attendez l’arrêt natif"));
+        assert!(waiting["error_human_action"].as_str().unwrap().contains("Dites à l’utilisateur"));
+        assert!(waiting["error_human_action"].as_str().unwrap().contains("exige son accord"));
+        assert_eq!(waiting["detail"]["provider_failure"]["cause"],"model_not_found");
+        assert_eq!(waiting["detail"]["provider_failure"]["http_status"],400);
+        assert!(!waiting["detail"]["provider_failure"]["verification"].as_str().unwrap().contains("responsable"));
+        assert!(current_task_view(&st,&task,false).unwrap()["detail"]["provider_failure"].is_null());
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        task.cleanup_done=true;
+        let stopped=current_task_view(&st,&task,true).unwrap();
+        assert!(stopped["error_recovery"].as_str().unwrap().contains("nouvelle clé"));
+        task.error=Some("terminal Codex: failed".into());
+        let unknown=current_task_view(&st,&task,true).unwrap();
+        assert!(!unknown.to_string().contains("model_not_found"));
+        drop(st);cleanup(&config);
+    }
+
+    #[test]
+    fn spec217_catalogue_reads_current_file_and_never_falls_back_to_memory() {
+        let (state,config,rx,_peer,_request,_cwd)=routing168_fixture(1);
+        let mut st=state.lock().unwrap();
+        let path=st.registry.source().to_path_buf();
+        assert_eq!(st.registry.routing_catalogue(1).unwrap().options.len(),1);
+        let before=st.delegation_store.tasks().unwrap().len();
+        let mut disk:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        disk["routing_policy"]["connections"][0]["enabled"]=json!(false);
+        disk["routing_policy"]["revision"]=json!(2);
+        std::fs::write(&path,disk.to_string()).unwrap();
+        let view=handle_locked("conn-1",NativeDelegationRequest::Catalogue,&mut st).unwrap();
+        assert_eq!(view["fleet"]["status"],"declared");
+        assert_eq!(view["fleet"]["options"],json!([]));
+        assert_eq!(st.registry.routing_catalogue(1).unwrap().options.len(),1,"registre des tâches non muté");
+        std::fs::write(&path,"PRIVATE_INVALID_REGISTRY").unwrap();
+        let invalid=handle_locked("conn-1",NativeDelegationRequest::Catalogue,&mut st).unwrap();
+        assert_eq!(invalid["fleet"]["status"],"unavailable");
+        assert_eq!(invalid["fleet"]["options"],json!([]));
+        assert!(!invalid.to_string().contains("PRIVATE_INVALID"));
+        assert_eq!(st.delegation_store.tasks().unwrap().len(),before);
+        assert!(rx.try_recv().is_err());
+        drop(st);drop(state);cleanup(&config);
+    }
+
     #[test]
     fn spec204_provider_overload_guidance_preserves_state_and_stop_prerequisites() {
         let (st,config,mut task,_)=remote162_capture_fixture();

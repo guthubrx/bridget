@@ -4699,9 +4699,26 @@ fn codex_turn_stop_reason<'a>(value: &Value, status: &'a str) -> &'a str {
     if status == "failed" && value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str)
         == Some("serverOverloaded") {
         "terminal Codex: failed:cause=server_overloaded"
+    } else if status == "failed" && codex_model_not_found217(value) {
+        "terminal Codex: failed:cause=model_not_found"
     } else {
         status
     }
+}
+
+// Le fournisseur peut envelopper un objet HTTP dans message. On ne publie
+// jamais ce texte : seule cette combinaison fermée devient une cause native.
+fn codex_model_not_found217(value: &Value) -> bool {
+    if value.pointer("/params/turn/error/codexErrorInfo").and_then(Value::as_str) != Some("other") {
+        return false;
+    }
+    let Some(message) = value.pointer("/params/turn/error/message").and_then(Value::as_str)
+        .filter(|message| message.len() <= 4096) else { return false; };
+    let Ok(error) = serde_json::from_str::<Value>(message) else { return false; };
+    error.get("type").and_then(Value::as_str) == Some("error")
+        && error.get("status").and_then(Value::as_u64) == Some(400)
+        && error.pointer("/error/type").and_then(Value::as_str) == Some("invalid_request_error")
+        && error.pointer("/error/code").and_then(Value::as_str) == Some("model_not_found")
 }
 
 fn codex_turn_terminal(value: &Value, status: &str) -> ManagedTerminal {
@@ -5971,6 +5988,32 @@ for line in sys.stdin:
     }
 
     #[test]
+    fn spec217_model_refusal_requires_closed_bounded_http_envelope() {
+        let body=json!({"type":"error","status":400,"error":{"type":"invalid_request_error",
+            "code":"model_not_found","message":"PRIVATE_MODEL_ACCOUNT"}});
+        let event=|body:&Value| json!({"params":{"turn":{"error":{"codexErrorInfo":"other","message":body.to_string()}}}});
+        let value=event(&body);
+        assert_eq!(codex_turn_stop_reason(&value,"failed"),"terminal Codex: failed:cause=model_not_found");
+        assert!(matches!(codex_turn_terminal(&value,"failed"),ManagedTerminal::Failed {detail}
+            if detail=="terminal Codex: failed:cause=model_not_found"));
+        for (path,bad) in [("/status",json!(401)),("/status",json!("400")),
+            ("/type",json!("PRIVATE")),("/error/type",json!("other")),
+            ("/error/code",json!("PRIVATE_SECRET"))] {
+            let mut invalid=body.clone();*invalid.pointer_mut(path).unwrap()=bad;
+            assert_eq!(codex_turn_stop_reason(&event(&invalid),"failed"),"failed");
+        }
+        for error in [json!({"codexErrorInfo":"other","message":"model_not_found"}),
+            json!({"codexErrorInfo":"unknown","message":body.to_string()}),
+            json!({"codexErrorInfo":"other","message":" ".repeat(4097)}),
+            json!({"codexErrorInfo":"other","message":body})] {
+            assert_eq!(codex_turn_stop_reason(&json!({"params":{"turn":{"error":error}}}),"failed"),"failed");
+        }
+        assert!(matches!(codex_turn_terminal(&value,"completed"),ManagedTerminal::Completed));
+        assert!(matches!(codex_turn_terminal(&value,"interrupted"),ManagedTerminal::Cancelled));
+        assert_eq!(codex_turn_stop_reason(&value,"completed"),"completed");
+    }
+
+    #[test]
     fn spec204_terminal_cause_requires_attested_code_and_failed_status() {
         let overloaded = json!({"params":{"turn":{"error":{"codexErrorInfo":"serverOverloaded",
             "message":"PRIVATE_PROVIDER_MESSAGE", "additionalDetails":"PRIVATE_DETAIL"}}}});
@@ -6021,6 +6064,43 @@ for line in sys.stdin:
         let events=crate::journal::valid_events(&journal_path);
         assert!(events.iter().any(|event|event["event"]=="turn_end"
             && event["payload"]["stop_reason"]=="terminal Codex: failed:cause=server_overloaded"));
+        assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE_PROVIDER_MESSAGE"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec217_failed_terminal_reaches_real_transport_and_journal() {
+        let root=root("spec217-terminal");
+        let trace=root.join("trace.jsonl");
+        let mut options=fake_options(&trace);
+        let old=r#""id":"turn-native","status":"completed","items":[]"#;
+        let error=json!({"codexErrorInfo":"other","message":json!({"type":"error","status":400,
+            "error":{"type":"invalid_request_error","code":"model_not_found","message":"PRIVATE_PROVIDER_MESSAGE"}}).to_string()});
+        let new=format!(r#""id":"turn-native","status":"failed","items":[],"error":{}"#,error);
+        assert!(options.args[1].contains(old));
+        options.args[1]=options.args[1].replace(old,&new);
+        let mut transport=CodexAppServerTransport::spawn_with_environment(options,
+            &[("BRIDGET_CODEX_TRACE".into(),trace.to_string_lossy().into_owned())],false).unwrap();
+        transport.activate_journal(&root,"codex-native",None).unwrap();
+        transport.deliver(&message("spec217")).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(4);
+        let mut finished=false;
+        while Instant::now()<deadline && !finished {
+            for event in transport.drain_events() {
+                if let ManagedEventKind::TurnFinished {terminal,..}=event.kind {
+                    assert!(matches!(terminal,ManagedTerminal::Failed {detail}
+                        if detail=="terminal Codex: failed:cause=model_not_found"));
+                    finished=true;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(finished);
+        transport.stop();
+        let journal_path=fs::read_dir(root.join("codex-native")).unwrap().next().unwrap().unwrap().path();
+        let events=crate::journal::valid_events(&journal_path);
+        assert!(events.iter().any(|event|event["event"]=="turn_end"
+            && event["payload"]["stop_reason"]=="terminal Codex: failed:cause=model_not_found"));
         assert!(!serde_json::to_string(&events).unwrap().contains("PRIVATE_PROVIDER_MESSAGE"));
         fs::remove_dir_all(root).unwrap();
     }

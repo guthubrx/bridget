@@ -1761,3 +1761,9 @@ Une erreur de forme ne donne pas le droit de modifier un reçu existant.
 Le conseil distingue le cas not_recorded confirmé après fin de tous les appels
 sans concurrence, du cas pending/admitted/refused qui conserve son canon.
 Aucune ancienne mission d'issue inconnue ne doit être dupliquée pour tester un format.
+
+### Refus de modèle expliqué au propriétaire
+
+Un refus fournisseur de modèle reconnu donne directement sa cause, sa portée et la décision à demander à l’utilisateur dans le statut. L’agent conserve la tâche, sa clé et ses fichiers. Il ne change pas de compte, d’offre, de modèle ou de droits sans accord. Une connexion réussie ne prouve pas l’accès au modèle ; une réinstallation ou un nouveau login ne sont pas conseillés sans preuve correspondante. Les causes non reconnues et les anciens échecs restent inconnus.
+
+Les options de flotte sont relues depuis le registre courant à chaque lecture. Un registre invalide rend le catalogue indisponible, sans réutiliser des options mémorisées. Cette lecture ne crée aucune tâche et ne vérifie pas l’accès fournisseur.
