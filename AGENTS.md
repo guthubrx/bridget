@@ -65,6 +65,8 @@ Cette consigne remplace la préférence historique consistant à différer
 l’activation pour préserver à tout prix toutes les sessions. Elle ne demande
 pas de redémarrage pour une modification documentaire sans effet exécutable.
 
+Contrôler aussi le champ `rollback` de l’état privé de l’outil de mise à jour dans le namespace vérifié. Sur cette installation : /home/moi/.cache/bridget-core/update-host-state.json et /Users/moi/.cache/bridget-core/update-host-state.json. Le simple changement du lien actif ne met pas ce pointeur à jour. Avant de le qualifier, vérifier l’image de retour et sa compatibilité avec les formats et marqueurs conservés ; un même numéro de version ne suffit pas. Si un passage de maintenance a laissé un ancien pointeur, employer l’écrivain atomique existant sous le verrou natif, avec sauvegarde et sans activation concurrente, puis redémarrer seulement l’outil de mise à jour. Ne pas lancer un retour ni réécrire des tâches pour tester.
+
 ## Fin de livraison : Git et nettoyage obligatoires
 
 À chaque livraison autorisée, sans nouvelle demande utilisateur :
@@ -97,6 +99,12 @@ Les guides généraux et les bilans présentent les fonctions natives de Bridget
 Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
+
+Session 221 — T180 livré ; programme In Progress, 33/180 tâches vérifiées. Source 342754e6, build 221-stop-guide-342754e6 chargé sur maître/worker/mobile Cartae, workers SYS/KS et worker/pont Mac ; images vérifiées. Coupure maître : 2,32 s. Processus de travail distants observés conservés.
+Neuf tests 220 revérifiés PASS, revue ec4b04a1 APPROVE, audit source 13/13. Nouveau conseil réellement lu dans capabilities. Les pointeurs de retour natifs Cartae/Mac sont corrigés de 181 vers 221-placement-ce08 après qualification, écriture atomique et verrou ; seuls les outils de mise à jour redémarrent pour ce réglage.
+Transferts/archive retirés : 190 992 880 octets. Mac/SYS et worktree de revue conservés sous observation incomplète. MCP 58296 reste 214, T177 ouverte. C19 : prototype de 29 assertions, intégration ouverte.
+Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/c27.md et /Users/moi/Nextcloud/10.Scripts/64.bridget/preuves-corrections/2026-10-30-221-sondes/preuves.html.
+
 
 Session221/C16 — programme In Progress, 32/179 tâches vérifiées.
 Source fonctionnelle ce08e352 intégrée et poussée. Build221-placement-ce08e352 chargé sur le maître/mobile/worker Cartae, les workers SYS/KS et le worker/pont Mac. Cinq images Linux SHA0d586513… et deux images Mac SHAd6b76e43… vérifiées ; coupure du maître :2,06s.
