@@ -69,3 +69,30 @@ Deux écarts dans T022 : portée excessive de la préférence invalide et revali
 
 ## Après chargement C16
 32/179 tâches vérifiées. T022/T023 closes après41tests distincts, revue finaleAPPROVE, audit source13/13PASS et activation des images221-placement-ce08e352. Qualification d'activation séparée du score qualité source63–75. Primitive Analyze projet absente : rapprochement manuel de FR-016/contrats/plan/code/tests et secondelecture, aucunCRITICAL. Converge du lotC16CONVERGED,0tâche ajoutée ; le programmeglobal demeureInProgress. C19/T174 et gateT033 ouverts. T177 reste bloquée par MCP214 du mêmefil, pas par une copie manquante des services. QuatreWTrevuesSYS conservés malgré clôture native et intégration car processus non entièrement observables ; aucune levée de garde. La portée interfaces complètes web/bureau/iOS/Windows versMac/Linux est conservée.
+
+## Reprise C19 — prototype et contrat avant production
+
+Le choix des interfaces reste celui de l'utilisateur : clients complets
+web/bureau/iOS/Windows pilotant Mac/Linux. Aucun port du moteur Windows.
+179 tâches uniques, 32 cochées ; T174 précède T030/T031/T032.
+La checklist requirements est close. Le script projet check-prerequisites.sh,
+le dossier .specify/memory et extensions.yml sont absents dans ce checkout :
+analyse manuelle ciblée du protocole de skill, pas génération implicite.
+
+Le rapprochement FR-019 / acceptance C19 / D1 / code montre l'écart :
+shared_refresh_allowed protège un dossier mutable, WorkspaceRequest ne propose
+pas encore de vue et le rapport existant attend une ancre Git.
+Le prototype privé établit les octets exacts et l'absence de mutation sur une
+fixture, pas l'autorité ni l'intégration. Les exigences de retour ancien,
+de lecture des fichiers omis et de protection des droits ne sont pas retirées.
+La recherche de réutilisation trouve compact207 pour la sélection, le reçu
+de préparation pour la coupure et la projection de droits pour le remapping ;
+WorkerReadView est une lecture interne du runtime, pas un export de commit.
+Aucun service, magasin de tâches ou protocole parallèle n'est créé.
+
+Converge du prototype : les limites ci-dessus restent dans les tâches C19
+déjà ouvertes ; aucune nouvelle catégorie ni tâche de confort ajoutée.
+Le programme demeure In Progress. Le contrat opérationnel n'est pas encore
+validé et aucune version C19 n'est annoncée comme livrée.
+
+Relecture structurelle finale : 179 IDs uniques, 50 FR, 32 cases cochées ; guides32/522/13 PASS. Une assertion privée sur une phrase exacte du choix plateformes a échoué : la lecture de la ligne D11 a confirmé le choix correct, puis le contrôle a été corrigé sans changer la demande. Le prototype passe29assertions ; la contre-revue statique a été traitée, sans activation déduite. Aucun code exécutable modifié dans ce checkpoint documentaire. Les miroirs C16 ont été constatés à37a11ed3, HEAD préparatoires SYS/KS conservés ; les bundles C16 restent gardés sous observation des usages incomplète.

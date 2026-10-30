@@ -73,3 +73,131 @@ Aucun digest historique supplémentaire : le choix est effectué dans le registr
 La création physique de B réutilise prepare-project : destination existante qualifiée ou nouvelle destination dans son espace géré. Ce lot n'élargit pas ce périmètre aux chemins arbitraires et n'ajoute pas une API humaine de configuration depuis un simple même UID. Les opérations de configuration hors de ce périmètre restent opérateur ; aucune promesse de migration automatique de données ou de création de volume.
 
 Une observation déjà choisie conserve sa clé pendant les sondes de revalidation, même si la préférence future change entre-temps. La sonde reçoit séparément la clé précédente lorsque l'enveloppe initiale omettait project_id ; sa demande originale, son canon, son admission_id et le reçu restent inchangés. Le coeur d'observation est unique et n'accepte aucune dérive du mapping, des droits ou de l'époque. Un projet unique ou encore absent n'utilise pas la préférence ; une préférence périmée d'un autre projet ne bloque donc pas sa sélection ou sa préparation neuve.
+
+## C19 — contrat de la vue de source, avant intégration
+
+État : conception éprouvée en prototype, intégration non qualifiée.
+FR-019 reste entier ; T174 puis T030/T031/T032 et le gate T033 restent ouverts.
+
+### Demande et autorité
+
+La vue est demandée explicitement. Posture effective discovery et commit exact
+expected_base_commit obligatoires ; aucune conversion implicite de shared ou
+development. Les pairs doivent négocier une capacité de vue avant toute
+opération correspondante. Un pair ancien refuse cette demande avant écriture.
+La préparation origine doit importer les objets du commit sans créer un
+linked checkout ni déplacer HEAD. Si le port origine ne sait pas le faire,
+refuser avec la capacité manquante ; ne pas retomber sur PrepareProject
+qui créerait un worktree.
+
+La vue est extérieure au dépôt partagé et dérivée de la Task, de la commande
+et du digest canonique. Le mapping source et sa révocation restent relus
+strictement. La projection de droits remplace la racine de travail par la vue,
+elle n'ajoute pas l'ancienne racine comme autorité de travail. Les droits
+additionnels explicitement hérités gardent leur propre contrôle. Les outils
+fournisseur restent réellement en lecture seule. Aucun droit n'est déduit
+de chmod ni du manifeste.
+
+Cette projection ne crée pas une garantie générale d'invisibilité de tous
+les autres fichiers du serveur. Les politiques existantes readOnly et les
+racines d'écriture ne démontrent pas cette garantie. Tester le remplacement
+de la racine et l'absence d'écriture ; ne pas promettre une isolation de lecture
+que le fournisseur ne prouve pas. Le contexte de mission nomme le commit exact,
+le dossier de vue et la portée partielle, pour ne pas confondre A et HEAD B.
+
+### Sélection et lecture
+
+Réutiliser la sélection compacte207, en séparant le choix pur des fichiers
+de la configuration qui protège les worktrees Git. Arbre borné à 8 Mio,
+diagnostic Git à 1 Mio ; des bornes d'octets et d'entrées de vue sont fixées
+et testées avant activation. Lire les blobs exacts avec un seul cat-file batch
+dont les entrées et sorties sont drainées simultanément, en mémoire bornée.
+Aucun filtre, export-ignore, export-subst, hook, remplacement d'objet Git
+ou transport réseau implicite. Aucun processus par fichier.
+Complexité visée O(n+B), n entrées, B octets effectivement lus ; mémoire bornée
+par l'arbre, le manifeste et des tampons de flux, pas par B.
+
+Valider les chemins avant création, les modes et types Git, les collisions
+du système de fichiers cible, les liens internes et les chemins requis.
+Refuser sous-module, nom non représentable, lien sortant ou cyclique.
+Les liens internes pendants sont explicitement signalés ; ils ne prouvent
+pas que leur cible existe. Le rapport et le retrait ne suivent pas les liens.
+
+L'agent reçoit un résumé borné de vue partielle et une carte lisible de tous
+les chemins omis, avec motif et commit. Une copie de carte dans la vue n'est
+jamais l'autorité ; son nom réservé ne peut pas écraser un chemin Git.
+L'ancre d'intégrité privée reste hors de la vue. Le contexte précise que
+cette vue n'est pas un dépôt Git ; git log/show/diff ne sont pas promis
+depuis ce dossier. Les fonctions diff/PR du programme C35 restent distinctes.
+
+Une omission ne devient pas un fichier absent du commit. L'accès à un fichier
+omis doit rester possible par une lecture native bornée liée au manifeste :
+seulement chemin et blob exact de ce commit, jamais un SHA libre ou HEAD.
+Réutiliser le lecteur de blobs et la règle de non-écrasement C18, sans appeler
+checkout-index dans un dossier sans Git. L'opération de matérialisation appartient
+à l'infrastructure et garde les contrôles de Task/instance/commande/droits ;
+elle ne donne pas un outil d'écriture arbitraire à l'agent discovery.
+Un fichier déjà présent avec les octets attendus peut être constaté, mais
+une divergence n'est jamais remplacée. Le manifeste complet permet d'auditer
+un fichier omis devenu présent contre le même blob, sans changer de commit.
+
+Ne pas promettre la présence future des objets Git sans ancre contre GC.
+Le contrat initial ne crée aucune référence dans le dépôt partagé : si un blob
+omis a disparu, rendre son indisponibilité exacte et conserver les fichiers
+déjà exportés. L'agent peut demander la remise à disposition du commit publié
+à son responsable ; aucune substitution de base ou nouvelle mission automatique.
+
+### Reçu, coupure et concurrence
+
+Réutiliser le reçu de préparation et Task.workspace, avec une variante explicite
+de vue. Ne pas sérialiser une vue comme strategy=worktree. Le reçu lie identité
+worker, Task, commande, canon, mapping, base et empreinte du manifeste privé.
+Le manifeste complet ne contient aucun chemin libre vers une autre source.
+La carte publique n'est pas une preuve d'intégrité.
+
+Durcir l'intention avant extraction. Publication seulement après vérification
+complète. Après coupure, le même tuple/digest vise le même chemin. Une vue
+publiée avec preuve privée complète et audit exact est adoptée au rejeu.
+Une vue incomplète, sans preuve ou divergente est conservée et refusée ;
+elle n'est ni supprimée ni recréée automatiquement. Le guidage nomme la
+vérification manquante et la décision ciblée à demander à l'utilisateur.
+Un autre digest sur la même identité reste CommandMismatch.
+
+La vue ne prend pas de garde Shared et ne demande aucun shared_refresh.
+Une préparation Shared ou un descendant actif n'est donc pas une raison
+de refuser sa lecture. L'import d'objets et la lecture doivent conserver les
+gardes Git déjà nécessaires ; ne pas retirer un verrou d'une tâche étrangère.
+Une disparition d'objet pendant la lecture donne un refus explicite, pas B.
+Inspect168 reste sans matérialisation avant la Task durable.
+Start et Release refont l'audit privé et les droits sur la vue ; ils ne cherchent
+pas un HEAD ou une branche Git dans cette vue.
+
+### Rapport, ancien lecteur et retrait
+
+Le rapport est un contrôle de fichiers/types/modes/octets contre les blobs
+du manifeste privé. Les fichiers requis initialement doivent être présents ;
+un fichier omis présent est accepté seulement s'il correspond au blob attendu.
+Toute addition non réservée, suppression requise ou divergence est signalée.
+Aucun dirty=false n'est dérivé d'un git status qui ne s'applique pas.
+
+Une nouvelle variante persistée est illisible aux anciens lecteurs stricts,
+y compris après fin de Task. Le support minimal doit être contrôlé avant
+Prepare de mise à jour ou de retour, sur maître et workers, et dans le parcours
+opérateur. Réutiliser le contrôle de candidat existant, avec une déclaration
+fermée des formats lus et un inventaire exact des formats conservés.
+Un candidat ancien sans déclaration ne prouve pas sa compatibilité.
+La barrière avant libération doit empêcher tout nouveau reçu C19 pendant une
+bascule qui pourrait encore revenir automatiquement. Après premiers reçus,
+aucun retour ancien non compatible ni restauration d'une sauvegarde ancienne
+comme moyen d'effacer les tâches admises. Ce contrôle reste à implémenter
+et à éprouver : aucune activation C19 avant cette preuve.
+
+Capacité absente, format incompatible, source absente et audit incomplet rendent
+un refus guidé : portée cette préparation ou cette vue, cause observée, Task/clé
+conservées, action de vérification précise et décision humaine nécessaire.
+Les autres travaux suivent leur propre état. Aucun arrêt global n'est déduit
+d'un refus local.
+
+Retrait après clôture native et contrôle complet des lecteurs/processus.
+Ne pas suivre un lien, ne pas effacer une vue d'issue inconnue. Réutiliser le
+cycle de vie de préparation, sans nouveau magasin de tâches ou service.
