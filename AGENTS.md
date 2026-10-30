@@ -98,6 +98,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session216 — qualification CodexKS après reconnexion officielle. LoginChatGPT réussi, une seule qualification native e7aa9c3e sur gpt-6.1-sol/worktree/development, source80e06e7b, sans outil ni écriture. Refus fournisseurHTTP400/model_not_found à04:54:56Z : modèle non pris en charge avec la connexion ChatGPT utilisée. Distinct du401 historique ; aucun nouveau login ou changement de modèle/compte. Route ouverte provisoirement pour contrôle puis refermée dans maître/origine/worker, seuls enabled et révision changés, aucun service redémarré. Témoin ACK/cancelled,cleanup_done=true,guarded=false ; aucun chantier métier créé ni ancienne mission rejouée. Monuments informé de ne pas lancerKS avant résolution de l’accès. Aucun nouveau binaire. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/216-codex-ks/validation.md.
+
+
 Session215 — cohérence Node et diagnostic GitSYS. Node26.12.1 officiel installé sous le compte utilisateur SYS/KS, SHA2566170b2d4… vérifié. Liens node/npm/npx basculés, résolution dans le PATH exact des workers contrôlée ; npm11.20.0. Anciennes versions conservées, aucun service/calcul redémarré. Pas de nouveau binaire Bridget. Tâche728861ad cancelled/guardedfalse/cleanupdonetrue ; base66da présente, lectures compact_plan passent avec Gitworker2.56.0 en0,09s, dépassement historique non reproduit et cause inconnue. Aucun délai modifié, aucun rejeu ou essai de mission. Propriétaire informé ; ne pas garantir le déterminisme global depuis la seule égalité Node. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/215-runtime-node/validation.md.
 
 
