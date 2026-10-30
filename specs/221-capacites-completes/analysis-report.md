@@ -40,3 +40,6 @@ Cadrage et choix clients Mac/Linux conservés.176tâches uniques,11closes après
 
 ## Analyze/Converge — T177/T178 source
 178identifiants de tâches uniques,15closes, compléments177/178ouvertsjusqu'àleuractivation. Contratscommon ajoutés avant code, réemploiWorkspaceRequest/failure/sélection ; aucuneexigence ou plateforme supprimée. Les scriptsprojectprimitives ne sont pas présents dans cecheckout ; comparaisonmanuelle spec/plan/tasks/code/tests et secondelecture réalisées. Deuxmessagesopaques reproduits parREDpuisGREEN. Testhistoriquecompteur10→11corrigé aprèslecturecatalogue ; aucunefonctionproduitnouvelle. ZéroCRITICALpersistant ; Converge de cecomplément CONVERGED,0tâcheajoutée. LeprogrammeglobalresteInProgress. Ne pas confondre sourceaudité et MCP214actif.
+
+## Après activation des compléments
+T178 vérifiée par le refus natif sans Task après chargement du maître2905a3e9 ;16/178 tâches vérifiées. T177 reste ouverte : code et services Mac livrés, mais MCP58296 encore214, action de reconnexion complète de l'application documentée. Continuer T015 indépendamment. Aucun manque source nouveau à la convergence ; aucune parité globale ou interface achevée annoncée.
