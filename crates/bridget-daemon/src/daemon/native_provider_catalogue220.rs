@@ -12,7 +12,7 @@ pub(super) struct CachedCatalogue {
 pub(super) fn ingest(
     st: &mut DaemonState,
     conn: &str,
-    update: WorkerCatalogueUpdate,
+    mut update: WorkerCatalogueUpdate,
 ) -> Option<DaemonToWrapper> {
     use bridget_transport::protocol::*;
     let rejected = |reason| Some(DaemonToWrapper::WorkerRejected { reason });
@@ -59,7 +59,12 @@ pub(super) fn ingest(
         .resolved_definition(&connection.agent_type)
         .map_or(true, |d| d.digest != update.catalogue.definition_digest)
     {
-        return None;
+        // Keep only the closed mismatch diagnostic. An old definition must not
+        // leave the reader waiting for an observation that cannot be accepted.
+        update.catalogue.state = CatalogueState::Unavailable;
+        update.catalogue.models.clear();
+        update.catalogue.account_scope = None;
+        update.catalogue.cause = Some(CatalogueCause::DefinitionChanged);
     }
     let key = update.catalogue.connection_id.clone();
     if worker

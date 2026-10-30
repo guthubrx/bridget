@@ -33767,6 +33767,10 @@ mod permission_projection214_tests {
         }
         assert!(catalogue::ingest(&mut st,"worker220",update.clone()).is_none());
         assert_eq!(st.remote_workers["local"].catalogues.len(),1);
+        let mut mismatch=update.clone();mismatch.sequence=2;mismatch.catalogue.definition_digest="f".repeat(64);
+        assert!(catalogue::ingest(&mut st,"worker220",mismatch).is_none());
+        let rejected=catalogue::project(&st,&st.registry);assert_eq!(rejected[0]["status"],"definition_changed");assert_eq!(rejected[0]["models"],json!([]));
+        let mut repaired=update.clone();repaired.sequence=3;assert!(catalogue::ingest(&mut st,"worker220",repaired).is_none());
         let observed=catalogue::project(&st,&st.registry);assert_eq!(observed[0]["status"],"reported_models");assert_eq!(observed[0]["models"][0]["declared_in_policy"],false);
         assert_eq!(observed[0]["entitlement"],"unknown");assert_eq!(observed[0]["provider_cache"],"not_attested");
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at-=181;
@@ -33779,7 +33783,7 @@ mod permission_projection214_tests {
         let blocked=catalogue::project(&st,&st.registry);assert_eq!(blocked[0]["status"],"unavailable");assert!(blocked[0]["next_action"].as_str().unwrap().contains("maintenance"));
         st.remote_workers.get_mut("local").unwrap().catalogue_refresh_id="new-refresh".into();
         let mut late=update.clone();late.sequence=2;assert!(catalogue::ingest(&mut st,"worker220",late).is_none());
-        assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,1);
+        assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,3);
         let (a,_b)=UnixStream::pair().unwrap();st.connections.insert("worker220".into(),Arc::new(Mutex::new(std::io::BufWriter::new(a))));
         let mut controls=Vec::new();let result=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();
         assert_eq!(result["workers"][0]["status"],"requested");assert_eq!(controls.len(),1);assert!(st.remote_workers["local"].catalogues.is_empty());
