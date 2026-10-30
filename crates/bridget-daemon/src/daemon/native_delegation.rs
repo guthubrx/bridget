@@ -919,6 +919,20 @@ fn observe_routing_candidates(
     attested: Option<&bridget_transport::protocol::ProviderPermissions>,
     state: &Arc<Mutex<DaemonState>>,
 ) -> Result<(), String> {
+    observe_routing_candidates_for_project(conn, request, plan, attested, state,
+        request.project_id.as_deref())
+}
+
+/// Même observation et même canon ; seule la clé de mapping déjà observée peut
+/// être épinglée. Aucun nouveau choix, droit ou identifiant d'admission dérivé.
+fn observe_routing_candidates_for_project(
+    conn: &str,
+    request: &AutoDelegateV2,
+    plan: &mut RoutingAdmissionPlan,
+    attested: Option<&bridget_transport::protocol::ProviderPermissions>,
+    state: &Arc<Mutex<DaemonState>>,
+    project_id: Option<&str>,
+) -> Result<(), String> {
     use bridget_transport::protocol::*;
     let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone()))
         .map_err(|error| error.to_string())?;
@@ -1074,7 +1088,7 @@ fn observe_routing_candidates(
             }
             let resolved = mappings.entry(candidate.machine_id.clone()).or_insert_with(||
                 routing_project_mapping(&registry, &candidate.machine_id,
-                    request.project_id.as_deref(), &origin_host, source));
+                    project_id, &origin_host, source));
             let (project_id, mapping) = match resolved {
                 Ok(mapping) => mapping,
                 Err(reason) => { mapping_refusal = Some(reason.clone()); continue; }
@@ -1723,12 +1737,8 @@ fn refresh_routing_selected(
         .observations
         .get(index)
         .ok_or("auto_admission_invalid")?;
-    // Revalider la clé déjà observée, pas la préférence des prochains choix.
-    // Ce clone interne de sonde ne remplace ni la demande ni son canon durable.
-    let mut probe_request = request.clone();
-    if probe_request.project_id.is_none() {
-        probe_request.project_id = previous.project_id.clone();
-    }
+    // La clé déjà observée ne change ni le canon ni admission_id de la sonde.
+    let project_id = request.project_id.as_deref().or(previous.project_id.as_deref());
     let mut single = plan.clone();
     single.candidates = vec![original.clone()];
     single.observations.clear();
@@ -1736,7 +1746,7 @@ fn refresh_routing_selected(
     single.connections.clear();
     single.scores.clear();
     single.decision_notes.clear();
-    observe_routing_candidates(conn, &probe_request, &mut single, attested, state)
+    observe_routing_candidates_for_project(conn, request, &mut single, attested, state, project_id)
         .map_err(|code| routing_probe_error(&single, code))?;
     let observed = single
         .observations
@@ -1761,7 +1771,7 @@ fn refresh_routing_selected(
         single.machines.clear();
         single.connections.clear();
         single.decision_notes.clear();
-        observe_routing_candidates(conn, &probe_request, &mut single, attested, state)
+        observe_routing_candidates_for_project(conn, request, &mut single, attested, state, project_id)
             .map_err(|code| routing_probe_error(&single, code))?;
         let observed_effort = |wanted: Option<&str>| {
             single
@@ -16702,10 +16712,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
             Some(DaemonToWrapper::WorkerAcceptedWithCapabilities {..})));
         let shared=state.clone();
         let responder=std::thread::spawn(move || {
-            let mut probes=0;let mut prepares=0;
+            let mut probes=0;let mut prepares=0;let mut admission_ids=Vec::new();
             while prepares<2 {
                 match super::super::presence_tests::read_control(&mut reader) {
                     DaemonToWrapper::CandidateProbeV2 {probe}=>{
+                        admission_ids.push(probe.admission_id.clone());
                         probes+=1;let now=unix_timestamp();
                         let verdicts=probe.candidates.into_iter().map(|c| {
                             if probes==2 {return CandidateProbeV2Verdict::Ineligible {
@@ -16737,7 +16748,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                     other=>panic!("trame inattendue: {other:?}"),
                 }
             }
-            assert_eq!(probes,6);prepares
+            assert_eq!(probes,6);(prepares,admission_ids)
         });
         let mut plan=routing168_plan(&state,&request);
         observe_routing_candidates("conn-1",&request,&mut plan,None,&state).unwrap();
@@ -16764,7 +16775,12 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(routing168_receipt(&state,&request),chosen,"pas de refus durable ni nouveau décideur");
             assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
         }
-        assert_eq!(responder.join().unwrap(),2);assert!(rx.try_recv().is_err());
+        let (prepares,admission_ids)=responder.join().unwrap();
+        assert_eq!(prepares,2);
+        let expected=auto_admission_id(&receipt.canonical);
+        assert!(admission_ids.iter().all(|id|id==&expected),
+            "toutes les sondes conservent l'identifiant du canon original: {admission_ids:?}");
+        assert!(rx.try_recv().is_err());
         drop(state);cleanup(&config);
     }
 
