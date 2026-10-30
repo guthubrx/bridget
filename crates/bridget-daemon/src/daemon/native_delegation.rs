@@ -13505,6 +13505,101 @@ mod tests {
     }
 
     #[test]
+    fn spec221_c14_two_eligible_exclude_denied_before_frozen_decision() {
+        use bridget_transport::protocol::*;
+        let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
+        {
+            let mut st=state.lock().unwrap();
+            st.host="coordinator171".into();
+            st.presences.get_mut("instance-1").unwrap().host="coordinator171".into();
+        }
+        request.request_id = "c14-mixed221".into();
+        request.project_id = Some("project171".into());
+        request.machine_id = Some("cartae".into());
+        request.engine = Some("codex".into());
+        let host = state.lock().unwrap().host.clone();
+        let fingerprint = format!("{:x}", sha2::Sha256::digest(b"worker171-fixture"));
+        routing168_update(&state, |value| {
+            value["routing_policy"]["connections"][0]["machine_id"] = json!("cartae");
+            value["routing_policy"]["machine_policies"]["cartae"] = json!({"enabled":true});
+            value["machines"] = json!({"cartae":{"enabled":true,"worker_id":"worker171",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project171":{
+                    "source_host":host,"source_root":request.cwd,
+                    "remote_root":root.join("remote171"),"expected_git_identity":"fixture171",
+                    "mapping_revision":1}}}});
+        });
+        let (writer, mut reader) = super::super::presence_tests::control_socket("probe171-refused");
+        {
+            let mut st = state.lock().unwrap();
+            st.connections.insert("worker171".into(), writer);
+            st.peer_uids.insert("worker171".into(), unsafe { libc::geteuid() });
+        }
+        assert!(matches!(handle_worker_message(&state, "worker171",
+            WrapperToDaemon::WorkerHelloWithCapabilities { hello: WorkerHelloWithCapabilities {
+                hello: WorkerHello { version: REMOTE_WORKER_VERSION,
+                    identity: WorkerIdentity { machine_id:"cartae".into(),
+                        worker_id:"worker171".into(),provisioning_revision:1 },
+                    credential: IdentityCredential::new("worker171-fixture".into()),
+                    build:"fixture171".into(),capability:ClientCapability::RemoteWorkerV1 },
+                capabilities:vec![WorkerCapability::CandidateProbeV2] } }),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities { .. })));
+        let responder_state=Arc::clone(&state);
+        let responder=std::thread::spawn(move || {
+            let DaemonToWrapper::CandidateProbeV2 {probe}=
+                super::super::presence_tests::read_control(&mut reader)
+                else {panic!("sonde attendue")};
+            assert_eq!(probe.candidates.len(),3);
+            let now=unix_timestamp();
+            let verdicts=probe.candidates.into_iter().enumerate().map(|(index,c)| {
+                if index==1 { CandidateProbeV2Verdict::Ineligible {
+                    candidate_id:c.candidate_id,reason:CandidateProbeRefusal::PermissionsChanged
+                }} else { CandidateProbeV2Verdict::Eligible {
+                    candidate_id:c.candidate_id,mapping_revision:1,
+                    definition_digest:"a".repeat(64),permission_digest:"b".repeat(64),observed_at:now
+                }}
+            }).collect();
+            let result=CandidateProbeV2Result {
+                version:WORKER_CANDIDATE_PROBE_V2_VERSION,correlation_id:probe.correlation_id,
+                connection_epoch:probe.connection_epoch,worker:probe.worker,
+                admission_id:probe.admission_id,policy_revision:probe.policy_revision,
+                resources:HostResourceSnapshotV1 {source_observed_at:now,received_at:now,
+                    cpu_percent:None,available_memory_percent:None,
+                    normalized_load_percent:None,compilation_slots:None},
+                verdicts,
+            };
+            assert!(handle_worker_message(&responder_state,"worker171",
+                WrapperToDaemon::CandidateProbeResultV2 {result}).is_none());
+        });
+        let canonical=serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap();
+        let mut plan=routing168_plan(&state,&request);
+        observe_routing_candidates("conn-1",&request,&mut plan,None,&state).unwrap();
+        responder.join().unwrap();
+        assert_eq!(plan.candidates.iter().map(|c|c.model.as_str()).collect::<Vec<_>>(),["m000","m002"]);
+        assert_eq!(plan.observations.len(),2);
+        let note:Value=serde_json::from_str(&plan.decision_notes[0]).unwrap();
+        assert_eq!(note["code"],"permissions_changed");
+        let receipt=routing_auto_receipt(OWNER.into(),&request,canonical.clone(),&plan,
+            state.lock().unwrap().coordinator_epoch,unix_timestamp()).unwrap();
+        let decision=routing_decision_request(&request,&receipt,&plan).unwrap();
+        assert_eq!(decision.candidates.len(),2);
+        assert!(decision.candidates.iter().all(|c|c.model!="m001"));
+        assert!(decision.machines.iter().all(|m|m.summary.contains("score(")));
+        assert!(decision.machines.iter().all(|m|m.summary.contains("cpu=unknown")));
+        assert!(validate_routing_choice("c003",None,None,&decision).is_err(),
+            "aucun identifiant hors de la liste admissible");
+        let frozen=serde_json::to_vec(&decision).unwrap();
+        routing168_update(&state,|v|v["routing_policy"]["enabled"]=json!(false));
+        let replay=routing_decision_request(&request,&receipt,&frozen_routing_plan(&receipt).unwrap()).unwrap();
+        assert_eq!(serde_json::to_vec(&replay).unwrap(),frozen,
+            "le snapshot de décision ne rafraîchit pas les faits");
+        assert_eq!(serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),canonical);
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err(),"aucun fournisseur depuis la sélection");
+        drop(state);cleanup(&config);
+    }
+
+    #[test]
     fn spec221_catalogue_no_match_is_local_without_admission_or_probe() {
         let (state, config, rx, _reader, mut request, _root)=routing168_fixture(1);
         request.request_id="catalogue221".into();

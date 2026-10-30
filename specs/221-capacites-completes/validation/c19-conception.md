@@ -1,0 +1,7 @@
+# C19 — proposition indépendante à éprouver
+30 octobre 2026. ClaudeSonnetSYS Task70c5a3fd-2b81-403d-9481-ccf052d438e6, lecture seule ; résultat intégral lu/ACK et clôture demandée. Proposition brute privée : /Users/moi/.cache/bridget221/c19-design-proposal.md. Aucune implémentation ou qualification d'accès fournisseur déduite.
+
+Constats retenus : Shared peut demander un rafraîchissement de HEAD et refuse un descendant actif ; créer un worktreeGit n'est pas le résultat demandé. Les parties de sélection du profil compact peuvent être réutilisées, pas son audit d'index comme attestation absolue d'un dépôt enfant modifiable.
+Option proposée, non adoptée : dépôt indépendant avec objets partagés et HEAD détaché. Elle exige une ancre contre le GC et modifie la racine par cette ref ; ce n'est donc pas un simple export sans métadonnées. L'accès aux objets par SHA dépasse la seule arborescence A ; ses droits doivent être réellement testés, pas supposés. Un .git contrôlé par l'enfant ne doit jamais servir seul de preuve d'intégrité.
+Avant contrat : prototype privé, contrôle des liens, bornes exactes, GC, accès Git nécessaires et droits réels. Nouvelle stratégie et capacité imposent de vérifier les reçus à deny_unknown_fields et le retour vers un ancien lecteur même pour des tâches terminées conservées ; absence de tâche active ne suffit pas.
+T174 puis T030/T031/T032 restent ouvertes. Aucun fallbackWorktree ni service/proxy ajouté ; interfaces complètes et programme global toujours à réaliser.

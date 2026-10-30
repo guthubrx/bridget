@@ -1705,12 +1705,16 @@ liens symboliques suivis dans Git. Les autres fichiers restent dans Git. Aucun
 script du projet n'est exécuté et aucun lien vers des données partagées modifiables
 n'est créé. La sélection et les réglages Git sont propres au nouveau worktree.
 La carte native explique au responsable comment extraire un fichier manquant.
-Depuis la racine de ce worktree, après vérification de l'absence de modification
-locale sur le chemin demandé :
+En lecture seule, consultez le contenu avec git show :chemin/du/fichier.
+Si votre mandat autorise cette écriture, depuis la racine du worktree, rendez
+disponible un fichier à la fois avec son chemin exact, sans motif ni dossier :
 
-    git restore --ignore-skip-worktree-bits -- chemin/du/fichier
+    git checkout-index --ignore-skip-worktree-bits -- chemin/du/fichier
 
-Cette commande écrit une copie privée et peut écraser le chemin demandé.
+Cette commande copie la version de l'index Git et refuse un chemin déjà présent.
+Le refus d'un chemin déjà présent est normal, même si le fichier est identique.
+Vérifiez sa nature et son contenu. N'ajoutez jamais --force. Conservez une modification, un lien ou un dossier
+présent ; ne le supprimez pas pour contourner le refus.
 Ne pas désactiver le profil pour recopier tout le dépôt. Les dépendances absentes
 suivent la préparation habituelle du projet. Le gain dépend des fichiers du SHA
 admis ; il ne garantit pas l'espace libre futur. Un rapport refuse un profil

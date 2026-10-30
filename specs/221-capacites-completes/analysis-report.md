@@ -43,3 +43,9 @@ Cadrage et choix clients Mac/Linux conservés.176tâches uniques,11closes après
 
 ## Après activation des compléments
 T178 vérifiée par le refus natif sans Task après chargement du maître2905a3e9 ;16/178 tâches vérifiées. T177 reste ouverte : code et services Mac livrés, mais MCP58296 encore214, action de reconnexion complète de l'application documentée. Continuer T015 indépendamment. Aucun manque source nouveau à la convergence ; aucune parité globale ou interface achevée annoncée.
+
+## L1c en cours
+25/178 tâches vérifiées après C14 (16tests), C15 (29tests distincts et une recette distante) et C17 (4tests ciblés, pas de nouveau code de production). C16 et C19 : propositions de conception lues et limites retenues, pas encore de contrat activable. C18 : commande native sans force éprouvée ; mesure cinqéchantillons réalisée, revue/activation encore ouvertes. GateT033 ouvert. La limite MCP214 de T177 reste indépendante, pas de faux chargement global.
+
+## Gate source du conseil C18
+Complément autonome validé par6tests finaux (mesure explicitement incluse),54tests distincts sur les recettes C14/C15/C17/C18, revueR2 APPROVE et audit source12/12 PASS. Aucun code d'autorité nouveau. Converge du complément :0tâche ajoutée, aucun CRITICAL persistant. C16/C19 demeurent ouverts ; le gateL1c global n'est pas coché. Livrer ce conseil technique validé avant de poursuivre ces fonctionnalités distinctes ; ne pas présenter un ancien binaire comme corrigé.

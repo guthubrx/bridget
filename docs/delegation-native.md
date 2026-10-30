@@ -951,11 +951,16 @@ The profile checks out files smaller than 128 KiB, common source files and track
 symbolic links. Other files remain in Git. No project script runs and no shared
 mutable data links are created. Selection and Git settings belong to the new
 worktree. Its native context explains how to materialize a missing file.
-From that worktree root, after checking that the requested path has no local edits:
+In read-only mode, inspect content with git show :path/to/file.
+If your mandate permits this write, from the worktree root, make one missing
+file available at a time using its exact path, not a pattern or directory:
 
-    git restore --ignore-skip-worktree-bits -- path/to/file
+    git checkout-index --ignore-skip-worktree-bits -- path/to/file
 
-This writes a private copy and may overwrite that requested path. Do not disable
+This copies the Git index version and refuses an existing path. That refusal
+is expected even for an identical file; inspect its type and content. Never add
+--force. Keep any existing edit, link or directory; do not remove it to bypass
+the refusal. Do not disable
 the profile to copy the entire repository. Missing dependencies use the project's
 usual preparation. Savings depend on files in the admitted commit and do not
 guarantee future free space. Reports reject altered profiles or index flags that

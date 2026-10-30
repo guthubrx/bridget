@@ -1361,7 +1361,7 @@ fn negotiate198(
         .write_all(format!("{}\n", serde_json::to_string(&report).unwrap()).as_bytes())
         .unwrap();
     let caps = client.join().unwrap();
-    assert_eq!(caps.len(), 9);
+    // Ce scénario exige les capacités198/210 ; une extension compatible ne doit pas le casser.
     assert!(caps.contains(&WorkerCapability::StartRecoveryV1));
     assert!(caps.contains(&WorkerCapability::WorkspaceFailureV1));
     let identity = {

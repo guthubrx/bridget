@@ -1044,19 +1044,118 @@ fn spec207_compact_preserves_parent_reports_edits_and_materializes_privately() {
         assert!(child.join("weird [x]* #!.txt").is_file());
         assert!(child.join("linked").is_symlink());
         assert_eq!(report(&ws).unwrap().dirty,Some(false));
-        assert!(compact_notice(child).unwrap().contains("git restore"));
+        assert!(compact_notice(child).unwrap().contains("git checkout-index"));
         fs::write(child.join("sub/tracked"),"private edit").unwrap();
         assert_eq!(report(&ws).unwrap().dirty,Some(true));
         assert_eq!(fs::read(repo.join("sub/tracked")).unwrap(),b"initial\n");
         fixture_git(child,&["restore","--","sub/tracked"]);
         fixture_git(child,&["switch","-c","another-compact"]);
         assert!(!child.join("data/large.json").exists(),"ordinary switch respects sparse profile");
-        fixture_git(child,&["restore","--ignore-skip-worktree-bits","--","data/large.json"]);
+        fixture_git(child,&["checkout-index","--ignore-skip-worktree-bits","--","data/large.json"]);
         fs::write(child.join("data/large.json"),"private large edit").unwrap();
         assert_eq!(report(&ws).unwrap().dirty,Some(true));
         assert_eq!(fs::metadata(repo.join("data/large.json")).unwrap().len(),200_000);
         assert_eq!(fs::read(repo.join(".git/config")).unwrap(),common);
         assert_eq!(fs::read(repo.join(".git/index")).unwrap(),parent_index);
+    });
+}
+#[test]
+fn spec221_compact_materialization_without_force_keeps_local_edits() {
+    with_repo(|repo| {
+        compact207_fixture(repo);
+        let parent_head=resolve_source_commit(repo,None).unwrap();
+        let parent_index=fs::read(repo.join(".git/index")).unwrap();
+        let ws=create(&preflight(repo,None,None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+        let child=Path::new(&ws.path);
+        let relative="data/large.json";
+        let target=child.join(relative);
+        assert!(!target.exists());
+        fixture_git(child,&["checkout-index","--ignore-skip-worktree-bits","--",relative]);
+        assert_eq!(fs::metadata(&target).unwrap().len(),200_000);
+        assert_eq!(report(&ws).unwrap().dirty,Some(false));
+        fs::write(&target,"local edit must survive").unwrap();
+        let inode=fs::metadata(&target).unwrap().ino();
+        let status=std::process::Command::new("git").arg("-C").arg(child)
+            .args(["checkout-index","--ignore-skip-worktree-bits","--",relative])
+            .output().unwrap().status;
+        assert!(!status.success(),"un fichier présent ne doit pas être remplacé");
+        assert_eq!(fs::read(&target).unwrap(),b"local edit must survive");
+        assert_eq!(fs::metadata(&target).unwrap().ino(),inode);
+        let native_status=std::process::Command::new("git").arg("-C").arg(child)
+            .args(["status","--porcelain=v1","--",relative]).output().unwrap();
+        assert!(native_status.status.success());
+        assert!(!native_status.stdout.is_empty(),"Git natif doit voir la modification avant le rapport Bridget");
+        assert_eq!(report(&ws).unwrap().dirty,Some(true));
+        // Chaque objet est privé à cette fixture, jamais un fichier utilisateur.
+        fs::remove_file(&target).unwrap();
+        std::os::unix::fs::symlink(repo.join(relative),&target).unwrap();
+        let source_bytes=fs::read(repo.join(relative)).unwrap();
+        assert!(!std::process::Command::new("git").arg("-C").arg(child)
+            .args(["checkout-index","--ignore-skip-worktree-bits","--",relative])
+            .output().unwrap().status.success());
+        assert!(target.is_symlink());
+        assert_eq!(fs::read(repo.join(relative)).unwrap(),source_bytes);
+        fs::remove_file(&target).unwrap();
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep"),"directory content").unwrap();
+        assert!(!std::process::Command::new("git").arg("-C").arg(child)
+            .args(["checkout-index","--ignore-skip-worktree-bits","--",relative])
+            .output().unwrap().status.success());
+        assert_eq!(fs::read(target.join("keep")).unwrap(),b"directory content");
+        assert_eq!(resolve_source_commit(repo,None).unwrap(),parent_head);
+        assert_eq!(fs::read(repo.join(".git/index")).unwrap(),parent_index);
+        let notice=compact_notice(child).unwrap();
+        assert!(notice.contains("git checkout-index --ignore-skip-worktree-bits --"));
+        assert!(!notice.contains("git restore"));
+        assert!(notice.contains("jamais --force"));
+        assert!(notice.contains("En lecture seule"));
+        assert!(notice.contains("un fichier à la fois"));
+    });
+}
+#[test]
+#[ignore = "mesure manuelle spec221 : cinq extractions privées de 96 Mio"]
+fn spec221_compact_allocated_bytes_are_measured_on_same_commit() {
+    fn footprint(path:&Path)->(u64,u64) {
+        let meta=fs::symlink_metadata(path).unwrap();
+        if meta.is_file() {return (meta.len(),meta.blocks()*512)}
+        if !meta.is_dir() {return (0,0)}
+        fs::read_dir(path).unwrap().map(|entry|entry.unwrap().path())
+            .filter(|p|p.file_name().unwrap()!=".git")
+            .map(|p|footprint(&p)).fold((0,0),|(a,b),(c,d)|(a+c,b+d))
+    }
+    with_repo(|repo| {
+        compact207_fixture(repo);
+        let data=vec![b'x';32*1024*1024];
+        for n in 0..3 {fs::write(repo.join(format!("data/large{n}.json")),&data).unwrap()}
+        fixture_git(repo,&["add","--","data"]);
+        fixture_git(repo,&["commit","-qm","large fixture"]);
+        let base=resolve_source_commit(repo,None).unwrap();
+        let index=fs::read(repo.join(".git/index")).unwrap();
+        let mut samples=Vec::new();
+        for run in 0..5 {
+            fixture_git(repo,&["config","--unset","bridget.worktreeProfile"]);
+            let started=Instant::now();
+            let full=create(&preflight(repo,Some(&base),None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+            let full_ms=started.elapsed().as_millis();
+            let (full_logical,full_bytes)=footprint(Path::new(&full.path));
+            fixture_git(repo,&["config","bridget.worktreeProfile","compact-v1"]);
+            let started=Instant::now();
+            let compact=create(&preflight(repo,Some(&base),None).unwrap(),&uuid::Uuid::new_v4().to_string()).unwrap();
+            let compact_ms=started.elapsed().as_millis();
+            let (compact_logical,compact_bytes)=footprint(Path::new(&compact.path));
+            assert_eq!(report(&full).unwrap().head_commit,Some(base.clone()));
+            assert_eq!(report(&compact).unwrap().head_commit,Some(base.clone()));
+            assert!(!Path::new(&compact.path).join("data/large0.json").exists());
+            assert!(compact_logical<full_logical); // Les blocs physiques dépendent du système de fichiers.
+            samples.push(serde_json::json!({"run":run,"full_allocated":full_bytes,
+                "compact_allocated":compact_bytes,"full_logical":full_logical,
+                "compact_logical":compact_logical,"full_ms":full_ms,"compact_ms":compact_ms}));
+            fixture_git(repo,&["worktree","remove",&full.path]);
+            fixture_git(repo,&["worktree","remove",&compact.path]);
+            assert_eq!(fs::read(repo.join(".git/index")).unwrap(),index);
+            assert_eq!(resolve_source_commit(repo,None).unwrap(),base);
+        }
+        println!("bridget221_compact_measure={}",serde_json::json!(samples));
     });
 }
 #[test]
