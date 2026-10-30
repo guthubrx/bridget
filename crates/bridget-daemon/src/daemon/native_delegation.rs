@@ -1723,6 +1723,12 @@ fn refresh_routing_selected(
         .observations
         .get(index)
         .ok_or("auto_admission_invalid")?;
+    // Revalider la clé déjà observée, pas la préférence des prochains choix.
+    // Ce clone interne de sonde ne remplace ni la demande ni son canon durable.
+    let mut probe_request = request.clone();
+    if probe_request.project_id.is_none() {
+        probe_request.project_id = previous.project_id.clone();
+    }
     let mut single = plan.clone();
     single.candidates = vec![original.clone()];
     single.observations.clear();
@@ -1730,7 +1736,7 @@ fn refresh_routing_selected(
     single.connections.clear();
     single.scores.clear();
     single.decision_notes.clear();
-    observe_routing_candidates(conn, request, &mut single, attested, state)
+    observe_routing_candidates(conn, &probe_request, &mut single, attested, state)
         .map_err(|code| routing_probe_error(&single, code))?;
     let observed = single
         .observations
@@ -1755,7 +1761,7 @@ fn refresh_routing_selected(
         single.machines.clear();
         single.connections.clear();
         single.decision_notes.clear();
-        observe_routing_candidates(conn, request, &mut single, attested, state)
+        observe_routing_candidates(conn, &probe_request, &mut single, attested, state)
             .map_err(|code| routing_probe_error(&single, code))?;
         let observed_effort = |wanted: Option<&str>| {
             single
@@ -14268,6 +14274,16 @@ mod tests {
             assert!(routing_project_mapping(&st.registry,"cartae",Some("opus2d"),"mac172",Path::new(&request.cwd)).is_ok());
         }
         routing168_update(&state, |v|{
+            v["machines"]["cartae"]["mappings"].as_object_mut().unwrap().remove("duplicate");
+        });
+        {
+            let st=state.lock().unwrap();
+            assert_eq!(routing_project_mapping(&st.registry,"cartae",None,"mac172",Path::new(&request.cwd)).unwrap().0,"opus2d");
+            assert_eq!(routing_project_mapping(&st.registry,"cartae",None,"absent",Path::new(&request.cwd)).unwrap_err(),"project_mapping_unknown");
+        }
+        routing168_update(&state, |v|{
+            v["machines"]["cartae"]["mappings"]["duplicate"]=v["machines"]["cartae"]["mappings"]["opus2d"].clone();
+            v["machines"]["cartae"]["mappings"]["duplicate"]["remote_root"]=json!(root.join("future221"));
             v["project_preferences"]=json!({"version":1,"machines":{"cartae":["opus2d","duplicate"]}});
         });
         assert_eq!(routing_project_mapping(&state.lock().unwrap().registry,"cartae",None,"mac172",Path::new(&request.cwd))
@@ -16659,7 +16675,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let mut st=state.lock().unwrap(); st.host="coordinator194".into();
             st.presences.get_mut("instance-1").unwrap().host="coordinator194".into();
         }
-        request.machine_id=Some("cartae".into());request.project_id=Some("project194".into());
+        request.machine_id=Some("cartae".into());request.project_id=None;
         let fingerprint=format!("{:x}",sha2::Sha256::digest(b"worker194-secret"));
         routing168_update(&state, |v| {
             v["routing_policy"]["connections"][0]["machine_id"]=json!("cartae");
@@ -16710,6 +16726,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                         let WorkerRequestOperation::PrepareV2 {prepare,expected_definition_digest,
                             expected_permission_digest,..}=&request.request else {panic!("aucun Start/Release admis")};
                         assert_eq!(prepare.effort.as_deref(),Some("low"));
+                        assert_eq!(prepare.project_id,"project194","la préférence B ne remplace pas le choix A");
                         assert_eq!(expected_definition_digest,&"c".repeat(64));
                         assert_eq!(expected_permission_digest,&"d".repeat(64));prepares+=1;
                         let response=WorkerResponse {version:request.version,correlation_id:request.correlation_id,
@@ -16724,6 +16741,12 @@ for frame in frames: print(json.dumps(frame),flush=True)
         });
         let mut plan=routing168_plan(&state,&request);
         observe_routing_candidates("conn-1",&request,&mut plan,None,&state).unwrap();
+        routing168_update(&state, |v|{
+            let mut future=v["machines"]["cartae"]["mappings"]["project194"].clone();
+            future["remote_root"]=json!(root.join("future221"));
+            v["machines"]["cartae"]["mappings"]["future221"]=future;
+            v["project_preferences"]=json!({"version":1,"machines":{"cartae":["future221"]}});
+        });
         let receipt={let st=state.lock().unwrap();let now=unix_timestamp();
             let r=routing_auto_receipt(OWNER.into(),&request,
                 serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),

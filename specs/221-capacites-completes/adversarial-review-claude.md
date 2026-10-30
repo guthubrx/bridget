@@ -119,3 +119,10 @@ Relecteur ClaudeSonnetKS, Taska531ce4c-69ff-4a15-a2d8-0a9c18e80644. Verdict APPR
 | Codes d'incohérence | contrat d'adaptateur et action de qualification documentés | limite signalée | aucune déduction de compte ou de droit depuis ce refus |
 
 La correction était indisponible à la revue pendant primary_absent. L'avis a été demandé dès retour du lien, sans canal de remplacement. Il ne qualifie pas toutes les plateformes ni un historique de taille arbitraire.
+
+
+## C16 — a9ce09a7, revue2d088b01
+ClaudeSonnet, résultat5770octets intégral lu, ACK et une clôture native demandés. APPROVE_WITH_CHANGES, lecture des fichiers sans shell/diff/exécution ; ne pas transformer cette lecture en test ni activation.
+P2 retenu : préférence invalide vérifiée avant le décompte des mappings, bloquant un projet unique ou nouveau. Témoin Python atteint project_mapping_preference_invalid sur un seul A. Déplacer la validation dans le seul cas ambigu, conserver A exact. Variante responsable : un choix A déjà observé pouvait resélectionner B après changement de préférence ; témoin194 sur vrai canal corrélé a reçu future221 au lieu de project194, puis attente bornée60s de la sonde après assertion du répondant. Le correctif épingle A dans un clone interne de sonde, sans changer canon ou reçu ; la recette conserve ensuite la vérification de A au Prepare et ne panique plus avant la réponse.
+P3 portée : le message commun211 indique déjà que les autres travaux suivent leur état ; le texte de ce refus est renforcé sur les tâches vivantes. Fenêtre préparation→sonde : refus du worker si le dossier choisi ensuite n'est pas préparé, aucune autorité ni migration inventée ; qualification distribuée bornée à l'identifiant explicite transmis et aux contrôles worker existants. Pas d'atomicité distribuée revendiquée.
+Le message complémentaire au relecteur a rendu unknown_recipient car il avait fini ; pas de nouvelle boucle de contact. Une nouvelle ronde portera sur les correctifs et preuves finales.

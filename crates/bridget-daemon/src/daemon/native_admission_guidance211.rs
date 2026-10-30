@@ -11,7 +11,7 @@ pub(super) fn refusal(code:&str)->Option<Value>{
             Some("cwd")),
         "project_mapping_preference_invalid"=>(
             "Faites vérifier le choix d’emplacement des prochaines missions sur cette machine.",
-            "La préférence d’emplacement est invalide ou cite une correspondance absente. Demander au responsable de vérifier la section project_preferences et la présence du même mapping sur la source, le maître et le worker. Conserver les anciens mappings utilisés par les tâches vivantes. Ce refus ne déplace ni ne supprime leurs dossiers. Garder la clé et l’enveloppe ; lire detail.admission avant tout rejeu, attendre la fin de tous les appels et ne pas créer de remplacement d’issue inconnue.",
+            "Plusieurs correspondances couvrent cette source et leur préférence est invalide ou cite une clé absente. Les tâches vivantes et les autres travaux autorisés suivent leur propre état. Demander au responsable de vérifier la section project_preferences et la présence du même mapping sur la source, le maître et le worker. Conserver les anciens mappings utilisés par les tâches vivantes. Ce refus ne déplace ni ne supprime leurs dossiers. Garder la clé et l’enveloppe ; lire detail.admission avant tout rejeu, attendre la fin de tous les appels et ne pas créer de remplacement d’issue inconnue.",
             None),
         "project_mapping_ambiguous"=>(
             "Faites préciser l’emplacement prévu pour les prochaines missions sur cette machine.",

@@ -952,7 +952,7 @@ impl AgentRegistry {
             .ok_or_else(|| "project_mapping_unknown".into())
     }
 
-    /// Résolution d'une admission neuve. Les tâches utilisent project_mapping,
+    /// O(M log P), M/P <=64. Résolution d'une admission neuve. Les tâches utilisent project_mapping,
     /// dont la clé et les révocations ne dépendent jamais de cette préférence.
     pub(crate) fn select_project_mapping(
         &self, machine: &str, requested: Option<&str>, origin: &str, cwd: &Path,
@@ -965,6 +965,10 @@ impl AgentRegistry {
                 .map(|mapping| (id.to_owned(), mapping))
                 .ok_or_else(|| "project_mapping_mismatch".into());
         }
+        let matches = provision.mappings.iter().filter_map(|(id,mapping)|
+            resolve(mapping).map(|mapping|(id.clone(),mapping))).collect::<Vec<_>>();
+        if matches.len()==1 {return Ok(matches.into_iter().next().unwrap());}
+        if matches.is_empty() {return Err("project_mapping_unknown".into());}
         let mut preferred = std::collections::BTreeSet::new();
         if !self.project_preferences.is_null() {
             let invalid = || "project_mapping_preference_invalid".to_owned();
@@ -985,10 +989,6 @@ impl AgentRegistry {
                 }
             }
         }
-        let matches = provision.mappings.iter().filter_map(|(id,mapping)|
-            resolve(mapping).map(|mapping|(id.clone(),mapping))).collect::<Vec<_>>();
-        if matches.len()==1 {return Ok(matches.into_iter().next().unwrap());}
-        if matches.is_empty() {return Err("project_mapping_unknown".into());}
         let choices = matches.iter().filter(|(id,_)|preferred.contains(id.as_str())).collect::<Vec<_>>();
         if choices.len()==1 {
             let (id, selected) = choices[0];

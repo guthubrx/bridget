@@ -61,3 +61,7 @@ C18 est chargé et ses trois tâches sont closes ;28/179 tâches vérifiées. La
 
 ## Reprise C16, choix plateformes conservé
 30/179 tâches vérifiées. Périmètre interfaces web/bureau/iOS/Windows pilotant Mac/Linux inchangé ; aucun moteur Windows. Primitive Analyze projet toujours absente ; rapprochement manuel spec/acceptance/contrat/tests et seconde lecture ciblée. Le constat C16 est maintenant testé ; préférence future additive avant production, sans autorité historique reconstituée. T022/T023 et gateT033 restent ouverts. Aucun CRITICAL nouveau constaté ; aucune clôture globale.
+
+
+## Converge C16 après contre-revue
+Deux écarts dans T022 : portée excessive de la préférence invalide et revalidation d'un choix depuis la préférence future. Témoins atteints avant correction. Aucun nouveau périmètre ou tâche ajouté ; garder T022/T023 ouvertes jusqu'aux preuves finales et au chargement. La préférence ne sert qu'à la sélection implicite ambiguë neuve, jamais à la clé déjà choisie ou à une Task. Le programme reste In Progress ; les autres catégories n'ont pas été supprimées.

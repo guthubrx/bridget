@@ -79,6 +79,12 @@ class PreparationTests(unittest.TestCase):
                 with self.assertRaises(prep.Refused):
                     choose()
                 self.assertEqual(choose(dict(self.request,project_id="a")),("a",a))
+        # La préférence n'intervient pas dans un choix unique ou un projet neuf.
+        selected["mappings"]={"a":a}
+        self.assertEqual(choose(),("a",a))
+        selected["mappings"]={}
+        self.assertTrue(choose()[0].startswith("auto-"))
+        selected["mappings"]={"a":a,"b":b}
         self.config["project_preferences"]={"version":1,"machines":{"test":["b"]}}
         selected["mappings"]["b"]=dict(b,source_root=str(self.source.parent))
         with self.assertRaisesRegex(prep.Refused,"project_mapping_ambiguous"):

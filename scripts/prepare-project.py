@@ -136,6 +136,7 @@ def registry_read(path):
 def mapping_matches(mapping, host, cwd):
     return mapping["source_host"] == host and contained(cwd, absolute(mapping["source_root"]))
 
+# O(M+P) attendu : mappings/préférences bornés à64, aucune I/O dans le choix.
 def select_mapping(selected, request, registry=None):
     mappings = selected.get("mappings", {})
     requested = request.get("project_id")
@@ -147,8 +148,8 @@ def select_mapping(selected, request, registry=None):
     else:
         found = [(key, value) for key, value in mappings.items()
                  if mapping_matches(value, request["origin_host"], cwd)]
-    if not requested:
-        preferred = []
+    if not requested and len(found) > 1:
+        preferred = set()
         section = (registry or {}).get("project_preferences")
         if section is not None:
             code = "project_mapping_preference_invalid"
@@ -159,15 +160,16 @@ def select_mapping(selected, request, registry=None):
             preferred = section["machines"].get(request["machine_id"], [])
             require(isinstance(preferred, list) and len(preferred) <= 64
                     and all(isinstance(key, str) and key in mappings for key in preferred), code)
-            require(len(set(preferred)) == len(preferred), code)
-        if len(found) > 1:
-            choices = [(key, value) for key, value in found if key in preferred]
-            require(len(choices) == 1, "project_mapping_ambiguous")
-            chosen = choices[0][1]
-            require(all(all(value.get(field) == chosen.get(field) for field in
-                            ("source_host", "source_root", "additional_root"))
-                        for _, value in found), "project_mapping_ambiguous")
-            found = choices
+            unique = set(preferred)
+            require(len(unique) == len(preferred), code)
+            preferred = unique
+        choices = [(key, value) for key, value in found if key in preferred]
+        require(len(choices) == 1, "project_mapping_ambiguous")
+        chosen = choices[0][1]
+        require(all(all(value.get(field) == chosen.get(field) for field in
+                        ("source_host", "source_root", "additional_root"))
+                    for _, value in found), "project_mapping_ambiguous")
+        found = choices
     require(len(found) <= 1, "project_mapping_ambiguous")
     if found:
         key, value = found[0]
