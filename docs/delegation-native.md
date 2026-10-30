@@ -1009,3 +1009,17 @@ whose canon is retained. Never duplicate an uncertain mission to test formatting
 A recognized provider model refusal exposes its cause, scope and the user decision directly in task status. The agent preserves the task, request key and files. It does not change the account, plan, model or permissions without consent. A successful login does not establish model access; reinstalling or signing in again is not advised without matching evidence. Unrecognized causes and historical failures remain unknown.
 
 Fleet options are read from the current registry on each catalogue request. An invalid registry makes the catalogue unavailable without reusing cached options. This read creates no task and does not verify provider access.
+
+## Models reported by servers (220)
+
+`bridget_capabilities` keeps the declared policy in `fleet.options`. The separate `fleet.connection_catalogues` list reports what each server’s Codex program returned, with connection, read time, age and state. Models outside the configured profile remain inadmissible. Admission, permissions, human model selection and admitted tasks are unchanged.
+
+The worker owns freshness. A new process uses the worker’s configured program and environment with Bridget’s own identity. It reads `account/read`, paginated `model/list`, then `account/read` again. It creates no thread or turn, runs no task tool and performs no login/logout. Public account scope is a random local nonce; addresses and authentication data are never published. `entitlement` stays `unknown`. The timestamp proves a program response, **not provider-cache freshness or access on the next turn**.
+
+One probe per worker runs outside the mission queue. It is renewed every 120 seconds, at startup, reconnection and after configuration or non-secret authentication-file metadata changes. Public observations expire after 180 seconds. Failures back off for at least 30 seconds. An unconfirmed process stop retains custody and its marker and blocks new probes. Explicit refresh requests are limited to one per worker every 30 seconds. Catalogue reads never start probes.
+
+After an official external login, authentication-file metadata may invalidate the observation. This signal does not prove account identity. If absent, call `bridget_refresh_models` with `machine_id`, then read `bridget_capabilities` once after a few seconds. `requested` means requested, not completed. The human command is `bridget delegate --catalogue --refresh-models --machine ID --json`; `--observed --json` only reads facts. The historical CLI catalogue format is unchanged without these options.
+
+`sign_in_required`, `unverified_peer`, `stale`, `unavailable`, `disabled` and `unsupported_provider` provide specific next actions. Disabled connections are never enabled automatically. Other providers have no qualified discovery adapter in this version; their declared catalogue remains usable without a verified-access claim. API keys without a public identity remain `auth:not_verified`. A changed account during collection rejects the entire observation. Old workers remain unverified.
+
+Older MCP clients can display additive capability data but may need a full connector reconnection to load `bridget_refresh_models`. Reattestation does not reload their executable. This concerns this connection and server; other authorized work follows its own state. Never replay an unknown-outcome mission to test a catalogue.

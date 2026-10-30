@@ -226,6 +226,7 @@ pub enum ClientCapability {
     AutoDelegateV1,
     /// Contrat de lecture168, sans identité d'agent ni mutation.
     RoutingCatalogueV1,
+    ProviderCatalogueV1,
     /// Admission de flotte168 : reste distincte de la forme163.
     AutoDelegateV2,
 }
@@ -2170,6 +2171,7 @@ pub enum NativeDelegationRequest {
     Catalogue,
     /// Inventaire public168 ; le daemon applique sa garde locale dédiée.
     RoutingCatalogueV1 {},
+    ProviderCatalogueV1 { refresh: bool, machine_id: Option<String> },
     /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil.
     CallerScope {},
     /// Admission configurée, séparée du parcours explicite pour que ses
@@ -2882,6 +2884,7 @@ pub enum WorkerCapability {
     OriginProofV1,
     StartRecoveryV1,
     WorkspaceFailureV1,
+    ProviderCatalogueV1,
 }
 
 /// Diagnostic fermé : aucun chemin, stderr ou texte du dépôt ne passe sur le fil.
@@ -5087,6 +5090,7 @@ pub enum WrapperToDaemon {
     WorkerResponse {
         response: WorkerResponse,
     },
+    ProviderCatalogueUpdate { update: crate::provider_catalogue::WorkerCatalogueUpdate },
     OriginProofResponse { response:OriginProofResponse },
     /// Verdicts groupés, lecture seule et liés à l'époque négociée du worker.
     CandidateProbeResult {
@@ -6101,6 +6105,7 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    ProviderCatalogueRefresh { worker: WorkerIdentity, connection_epoch: String, refresh_id: String },
     WorkspaceRepairControl {
         task_id: String,
         status: WorkspaceRepairStatusV1,

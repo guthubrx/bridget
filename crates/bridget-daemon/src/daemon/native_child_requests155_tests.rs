@@ -357,7 +357,7 @@ fn remote162_demande155_recontrole_worker_hors_verrou_et_epoch_avant_reponse() {
             st.connections.insert("worker155".into(), writer);
             st.remote_workers.insert(
                 placement.machine_id.clone(),
-                RemoteWorkerConnection {
+                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                     identity: WorkerIdentity {
                         machine_id: placement.machine_id.clone(),
                         worker_id: placement.worker_id.clone(),
@@ -516,7 +516,7 @@ fn remote162_release_relit_droits_parent_apres_start_et_refuse_preuve_t3_indispo
             st.connections.insert("worker155".into(), writer);
             st.remote_workers.insert(
                 worker.machine_id.clone(),
-                RemoteWorkerConnection {
+                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                     identity: worker,
                     conn_id: "worker155".into(),
                     epoch: "epoch155".into(),
@@ -753,7 +753,7 @@ fn remote162_arret_atteste_avant_connected_cloture_demarrage_apres_reprise() {
             st.connections.insert("worker155".into(), writer);
             st.remote_workers.insert(
                 placement.machine_id.clone(),
-                RemoteWorkerConnection {
+                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                     identity: remote_worker_identity(placement),
                     conn_id: "worker155".into(),
                     epoch: "epoch155".into(),
@@ -2159,7 +2159,7 @@ fn spec184_slow_release_confirmation_keeps_existing_task() {
     {
         let mut st = fixture.state.lock().unwrap();
         st.connections.insert("worker184".into(), writer);
-        st.remote_workers.insert(worker.machine_id.clone(), RemoteWorkerConnection {
+        st.remote_workers.insert(worker.machine_id.clone(), RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
             identity: worker, conn_id: "worker184".into(), epoch: "epoch184".into(),
             capabilities: vec![WorkerCapability::ReleaseLeaseV2],
             last_contact: Instant::now(), last_contact_at: unix_timestamp(),

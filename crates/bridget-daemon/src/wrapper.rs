@@ -5727,7 +5727,7 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 27] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 28] = [
     "bridget_who",
     "bridget_send",
     "bridget_ledger",
@@ -5745,6 +5745,7 @@ const BRIDGET_SAFE_MCP_TOOLS: [&str; 27] = [
     "bridget_status",
     "bridget_control_status",
     "bridget_capabilities",
+    "bridget_refresh_models",
     "bridget_delegate",
     "bridget_auto_delegate",
     "bridget_task_status",

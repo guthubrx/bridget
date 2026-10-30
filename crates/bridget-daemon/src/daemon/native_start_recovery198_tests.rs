@@ -195,7 +195,7 @@ fn fixture_guarded202(guarded: bool, selected_effort: bool) -> (
     };
     st.remote_workers.insert(
         "cartae".into(),
-        super::super::super::RemoteWorkerConnection {
+        super::super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
             identity: remote_worker_identity(task.remote_placement.as_ref().unwrap()),
             conn_id: "worker198".into(),
             epoch: "epoch198".into(),

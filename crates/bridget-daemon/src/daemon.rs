@@ -3,6 +3,7 @@
 
 mod native_child_requests;
 mod native_delegation;
+mod native_provider_catalogue220;
 mod dispatch_diagnostics;
 pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
@@ -1175,6 +1176,9 @@ struct RemoteWorkerConnection {
     /// Négociées à l'ouverture seulement : reconnexion ou remplacement les
     /// efface avec l'ancienne époque, sans déduire une capacité du build.
     capabilities: Vec<bridget_transport::protocol::WorkerCapability>,
+    catalogues: HashMap<String,native_provider_catalogue220::CachedCatalogue>,
+    catalogue_refresh_id:String,
+    catalogue_refresh_at:Option<Instant>,
     last_contact: Instant,
     last_contact_at: i64,
     contact: bridget_transport::protocol::WorkerContactState,
@@ -18705,11 +18709,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 9
+                && capabilities.len() <= 10
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18775,6 +18779,7 @@ fn handle_worker_message(
                 conn_id: conn_id.into(),
                 epoch: epoch.clone(),
                 capabilities: capabilities.clone(),
+                catalogues:HashMap::new(), catalogue_refresh_id:epoch.clone(), catalogue_refresh_at:None,
                 last_contact: Instant::now(),
                 last_contact_at: unix_now_secs(),
                 contact: WorkerContactState::Connected,
@@ -18832,6 +18837,9 @@ fn handle_worker_message(
         return refused(WorkerRefusal::Unauthorized);
     };
     match message {
+        WrapperToDaemon::ProviderCatalogueUpdate { update } => {
+            native_provider_catalogue220::ingest(&mut st,conn_id,update)
+        }
         WrapperToDaemon::Heartbeat => {
             let worker = &st.remote_workers[&machine];
             if worker.contact != WorkerContactState::Connected
@@ -19782,6 +19790,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::WorkerResponse { .. }
                 | WrapperToDaemon::CandidateProbeResult { .. }
                 | WrapperToDaemon::CandidateProbeResultV2 { .. }
+                | WrapperToDaemon::ProviderCatalogueUpdate { .. }
                 | WrapperToDaemon::OriginProofResponse { .. } =>
                     Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::SelectRuntime { .. } | WrapperToDaemon::RuntimeSelectionReported { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
@@ -20066,6 +20075,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::WorkerResponse { .. }
                 | WrapperToDaemon::CandidateProbeResult { .. }
                 | WrapperToDaemon::CandidateProbeResultV2 { .. }
+                | WrapperToDaemon::ProviderCatalogueUpdate { .. }
                 | WrapperToDaemon::OriginProofResponse { .. } =>
                     Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::QueueEditRequest { .. } if !st.client_negotiations.contains_key(conn_id) => Some(ClientRefusal::NegotiationRequired),
@@ -20352,6 +20362,7 @@ fn handle_wrapper_message_with_peer(
         | WrapperToDaemon::WorkerResponse { .. }
         | WrapperToDaemon::CandidateProbeResult { .. }
         | WrapperToDaemon::CandidateProbeResultV2 { .. }
+                | WrapperToDaemon::ProviderCatalogueUpdate { .. }
                 | WrapperToDaemon::OriginProofResponse { .. } => Some(DaemonToWrapper::WorkerRejected {
             reason: bridget_transport::protocol::WorkerRefusal::Unauthorized,
         }),
@@ -21950,6 +21961,7 @@ fn handle_wrapper_message_with_peer(
                             | ClientCapability::ProjectRoundPolicyV1
                             | ClientCapability::ControlStateV1
                             | ClientCapability::RoutingCatalogueV1
+                            | ClientCapability::ProviderCatalogueV1
                     )
                 })
                 .collect();
@@ -23886,6 +23898,7 @@ fn handle_wrapper_message_with_peer(
                     "task_workspace_repair_v1".to_string(),
                     "worker_start_recovery_v1".to_string(),
                     "worker_workspace_failure_v1".to_string(),
+                    "worker_provider_catalogue_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })
@@ -42288,7 +42301,7 @@ mod presence_tests {
             command_id: Uuid::new_v4().to_string(), issued_at: now, deadline_at: now + 300, ownership: None };
         let crate::fleet::SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap() else { panic!("start expected") };
         st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
-            epoch: "epoch".into(), capabilities: vec![], last_contact: Instant::now(), last_contact_at: now,
+            epoch: "epoch".into(), capabilities: vec![], catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(), catalogue_refresh_at:None, last_contact: Instant::now(), last_contact_at: now,
             contact: WorkerContactState::Connected });
         let (writer, mut reader) = control_socket("late184");
         reader.get_ref().set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -42368,7 +42381,7 @@ mod presence_tests {
             command_id: Uuid::new_v4().to_string(), issued_at: now, deadline_at: now + 300, ownership: None };
         let crate::fleet::SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap() else { panic!("start expected") };
         st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
-            epoch: "epoch".into(), capabilities: vec![], last_contact: Instant::now(), last_contact_at: now,
+            epoch: "epoch".into(), capabilities: vec![], catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(), catalogue_refresh_at:None, last_contact: Instant::now(), last_contact_at: now,
             contact: WorkerContactState::Connected });
         let shared = Arc::new(Mutex::new(st));
         let command = WorkerCommandIdentity { command_id: lease.command_id, task_id: order.command_id,

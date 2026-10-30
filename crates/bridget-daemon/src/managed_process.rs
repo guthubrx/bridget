@@ -1863,6 +1863,15 @@ while True: time.sleep(.02)
         spawn_bootstrap_command(command, Stdio::null()).unwrap()
     }
 
+    pub(crate) fn spawn_catalogue_test_bootstrap(launch:&ManagedLaunch)->ManagedChild {
+        let mut command=helper_command("managed_process::tests::bootstrap_child");
+        command.current_dir(&launch.cwd).env_clear().envs(&launch.env)
+            .env(BOOTSTRAP_CHILD_ENV,"1").env(BOOTSTRAP_REQUEST_ENV,serde_json::to_string(&json!({
+                "instance_id":launch.identity.instance_id,"command_id":launch.identity.command_id,
+                "generation":launch.identity.generation,"wrapper_executable":launch.wrapper_executable,"wrapper_args":launch.wrapper_args})).unwrap());
+        spawn_bootstrap_command(command,Stdio::null()).unwrap()
+    }
+
     #[test]
     #[ignore]
     fn bootstrap_child() {

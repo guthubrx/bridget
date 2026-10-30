@@ -8,3 +8,9 @@
 6. Vérifications ciblées, revue, distribution/activation et preuve réelle hors mission métier.
 
 Choix à trancher par l’analyse de conception : signal non secret fiable pour connexion externe ; portée du cache fournisseur partagé ; interaction avec un compte API sans identifiant public ; refus précis d’un modèle hors politique ; visibilité additive pour MCP214.
+
+## Conception relue
+
+Mission native d1c53ad2-1a8e-4ee3-86c2-eaa7c416227b, Sonnet, résultat de 12040 octets lu puis acquitté et clôture demandée. La liste annoncée reste séparée de la politique et ne change pas l’admission. Un processus neuf réduit le risque de cache mais ne prouve pas sa fraîcheur réseau. La sonde réutilise le bootstrap géré et son marqueur écrit avant RELEASE, au lieu d’un second système de propriété des PID. L’identité d’initialisation est Bridget ; aucun identifiant d’un autre client. Le compte public est un nonce local aléatoire, jamais un hash d’adresse.
+
+Une seule sonde par worker, renouvellement 120s, expiration publique 180s, reprise après échec 30s, plancher 5s après signal. Les métadonnées auth/config sont des signaux d’invalidation, sans lecture de leur contenu. Un login externe sans signal observé peut demander `bridget_refresh_models`. Les lectures capabilities ne déclenchent rien. Le choix humain de modèle existant reste inchangé.

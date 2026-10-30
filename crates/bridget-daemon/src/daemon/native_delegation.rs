@@ -3585,6 +3585,14 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code.starts_with("provider_catalogue_") {
+        let (message,action)=match code {
+            "provider_catalogue_machine_invalid"=>("L’identifiant du serveur est invalide.","Recopier machine_id dans le catalogue déclaré ; aucun chemin ni nom libre n’est accepté."),
+            "provider_catalogue_worker_unavailable"=>("Aucun worker ne correspond au serveur demandé.","Vérifier son identifiant dans le catalogue, puis son lien natif. Demander au responsable Bridget de rétablir ce lien si nécessaire."),
+            _=>("L’observation des modèles n’est pas disponible.","Transmettre ce code au responsable Bridget pour vérifier le programme et le lien du serveur ; aucune cause de compte n’est déduite de ce refus."),
+        };
+        return json!({"status":"refused","code":code,"message":message,"detail":{"recovery":action,"human_action":"Si cette vérification exige un accès indisponible, demander au responsable une intervention ciblée sur ce serveur. Ne pas changer de compte ni de droits.","scope":"Ce refus concerne cette demande d’observation. Les autres travaux autorisés suivent leur propre état."}});
+    }
     if let Some(view)=admission_guidance211::refusal(code){return view;}
     if permission_change::recognizes(code) {
         return permission_change::failure(code);
@@ -4841,7 +4849,7 @@ fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::
     let mut result=catalogue_projection177(entries,held,halted,Some(&parent),permission.as_ref(),Some(Path::new(&parent.cwd)));
     let origin_machine = super::origin_proof::host_for_owner(&st,&owner)?;
     result["verdict_context"]["machine_id"]=json!(origin_machine);
-    catalogue_scope212(&mut result, fresh_routing_catalogue217(&st.registry, unix_timestamp()), &origin_machine);
+    super::native_provider_catalogue220::enrich(&st,&mut result,&origin_machine);
     Ok(Some(result))
 }
 
@@ -4865,6 +4873,26 @@ fn handle_with_fact(
             Err(code)=>return DaemonToWrapper::NativeDelegationResult {result:failure(&code)},
             Ok(None)=>{},
         }
+    }
+    if let NativeDelegationRequest::ProviderCatalogueV1 {refresh,machine_id}=&request {
+        let mut controls=Vec::new();
+        let result=(|| {
+            let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+            let human=st.connection_roles.get(conn)==Some(&ConnectionRole::Client)
+                && !st.conn_names.contains_key(conn) && !st.auxiliary_connections.contains(conn)
+                && st.peer_uids.get(conn).copied()==Some(unsafe{libc::geteuid()})
+                && st.client_negotiations.get(conn).is_some_and(|n|n.capabilities.contains(&bridget_transport::protocol::ClientCapability::ProviderCatalogueV1));
+            if !human {
+                recheck_attested_thread(&st,conn,thread)?;
+                let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
+                parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
+                // The ordinary own-state capability gate remains authoritative.
+            }
+            if *refresh {super::native_provider_catalogue220::refresh(&mut st,machine_id.as_deref(),&mut controls)}
+            else {super::native_provider_catalogue220::view(&st)}
+        })().unwrap_or_else(|code:String|failure(&code));
+        execute_controls(controls);
+        return DaemonToWrapper::NativeDelegationResult {result};
     }
     if matches!(&request, NativeDelegationRequest::RoutingCatalogueV1 {}) {
         let result = {
@@ -6994,7 +7022,7 @@ fn fresh_routing_catalogue217(registry: &AgentRegistry, observed_at: i64)
         .routing_catalogue(observed_at)
 }
 
-fn catalogue_scope212(
+pub(super) fn catalogue_scope212(
     result: &mut Value,
     declared: Result<bridget_transport::protocol::RoutingCatalogueV1, String>,
     origin_machine: &str,
@@ -8079,7 +8107,7 @@ fn handle_locked_with_remote_proof(
             let entries=catalogue_entries177(&st.registry,&st.source_env,&st.provider_limits,&owner,&instance,
                 fact.as_ref(),verdict_cwd.as_deref(),&[])?;
             let mut result = catalogue_projection177(entries,caller_held_queue,halted,fact.as_ref(),permission.as_ref(),verdict_cwd.as_deref());
-            catalogue_scope212(&mut result, fresh_routing_catalogue217(&st.registry, unix_timestamp()), &crate::build_info::local_host());
+            super::native_provider_catalogue220::enrich(st,&mut result,&crate::build_info::local_host());
             Ok(result)
         }
         NativeDelegationRequest::Delegate { .. } => {
@@ -8098,7 +8126,7 @@ fn handle_locked_with_remote_proof(
         }
         NativeDelegationRequest::AutoDelegate(_) => Err("auto_admission_configured_only".into()),
         NativeDelegationRequest::AutoDelegateV2(_) => Err("auto_admission_configured_only".into()),
-        NativeDelegationRequest::RoutingCatalogueV1 {} => {
+        NativeDelegationRequest::ProviderCatalogueV1 { .. } | NativeDelegationRequest::RoutingCatalogueV1 {} => {
             Err("routing_catalogue_unavailable".into())
         }
         NativeDelegationRequest::Status { task_id } => {
@@ -25585,7 +25613,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
             st.connections.insert("continuation-worker".into(),
                 Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
-            st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection {
+            st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                 identity: worker, conn_id: "continuation-worker".into(), epoch: "continuation-epoch".into(),
                 capabilities: vec![], last_contact: Instant::now(), last_contact_at: unix_timestamp(),
                 contact: WorkerContactState::Connected,
@@ -25781,7 +25809,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
         peer.set_nonblocking(true).unwrap();
         st.connections.insert("serial-worker".into(), Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
-        st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection {
+        st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
             identity: remote_worker_identity(placement.as_ref().unwrap()),
             conn_id: "serial-worker".into(), epoch: "serial174-epoch".into(), capabilities: vec![],
             last_contact: Instant::now(), last_contact_at: unix_timestamp(), contact: WorkerContactState::Connected,
@@ -25883,7 +25911,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
             peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
             st.connections.insert("slot-worker".into(), Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
-            st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection {
+            st.remote_workers.insert("cartae".into(), super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                 identity: worker, conn_id: "slot-worker".into(), epoch: "slot-epoch".into(),
                 capabilities: if bounded { vec![WorkerCapability::ResultSlotDeadlineV1] } else { vec![] },
                 last_contact: Instant::now(), last_contact_at: unix_timestamp(), contact: WorkerContactState::Connected,
@@ -33033,7 +33061,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
         let (writer,mut reader)=super::super::presence_tests::control_socket("probe205");
         st.connections.insert("worker205".into(),writer);
-        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
             identity:worker,conn_id:"worker205".into(),epoch:"epoch205".into(),capabilities:vec![],
             last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected,
         });
@@ -33143,7 +33171,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             task.child_instance=Some(lease.instance_id);
             st.delegation_store.insert(&task,"sys205",&serde_json::to_vec(&task.request).unwrap()).unwrap();
             st.connections.insert("sys205".into(),writer);
-            st.remote_workers.insert("sysle2".into(),super::super::RemoteWorkerConnection {
+            st.remote_workers.insert("sysle2".into(),super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                 identity:remote_worker_identity(task.remote_placement.as_ref().unwrap()),conn_id:"sys205".into(),
                 epoch:"epoch-sys205".into(),capabilities:vec![],last_contact:Instant::now(),
                 last_contact_at:now,contact:WorkerContactState::Connected});
@@ -33233,7 +33261,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let (socket,peer)=std::os::unix::net::UnixStream::pair().unwrap();
         peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         st.connections.insert("worker192".into(),Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
-        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
             identity:worker,conn_id:"worker192".into(),epoch:"epoch192".into(),capabilities:vec![],
             last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected,
         });
@@ -33704,4 +33732,54 @@ mod permission_projection214_tests {
         let unrelated=failure("routing_candidate_unavailable");
         assert!(unrelated["detail"].get("permission_projection").is_none());
     }
+    #[test]
+    fn spec220_observation_correlation_expiry_definition_and_refresh_preserve_tasks() {
+        use bridget_transport::provider_catalogue::*;
+        use bridget_transport::protocol::{WorkerIdentity,WorkerCapability,WorkerContactState};
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
+        let mut st=shared.lock().unwrap();
+        let worker=WorkerIdentity {machine_id:"local".into(),worker_id:"worker220".into(),provisioning_revision:1};
+        st.remote_workers.insert("local".into(),RemoteWorkerConnection {identity:worker.clone(),conn_id:"worker220".into(),epoch:"epoch220".into(),
+            capabilities:vec![WorkerCapability::ProviderCatalogueV1],catalogues:HashMap::new(),catalogue_refresh_id:"epoch220".into(),catalogue_refresh_at:None,
+            contact:WorkerContactState::Connected,last_contact:Instant::now(),last_contact_at:unix_timestamp()});
+        let digest=st.registry.resolved_definition("native-test").unwrap().digest;
+        let original=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
+        let update=WorkerCatalogueUpdate {version:1,worker,connection_epoch:"epoch220".into(),refresh_id:"epoch220".into(),sequence:1,
+            catalogue:ProviderCatalogue {connection_id:"main".into(),definition_digest:digest,observed_at:unix_timestamp(),state:CatalogueState::Observed,
+                account_scope:Some("b".repeat(32)),cause:None,models:vec![CatalogueModel {model:"announced-outside-policy".into(),supported_efforts:vec![],default_effort:None}]}};
+        let mut wrong=update.clone();wrong.connection_epoch="foreign".into();assert!(catalogue::ingest(&mut st,"worker220",wrong).is_some());
+        assert!(catalogue::ingest(&mut st,"worker220",update.clone()).is_none());
+        let observed=catalogue::project(&st,&st.registry);assert_eq!(observed[0]["status"],"reported_models");assert_eq!(observed[0]["models"][0]["declared_in_policy"],false);
+        assert_eq!(observed[0]["entitlement"],"unknown");assert_eq!(observed[0]["provider_cache"],"not_attested");
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at-=181;
+        let stale=catalogue::project(&st,&st.registry);assert_eq!(stale[0]["status"],"stale");assert!(stale[0]["models"].as_array().unwrap().is_empty());
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.definition_digest="c".repeat(64);
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at=unix_timestamp();
+        assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"definition_changed");
+        st.remote_workers.get_mut("local").unwrap().catalogue_refresh_id="new-refresh".into();
+        let mut late=update.clone();late.sequence=2;assert!(catalogue::ingest(&mut st,"worker220",late).is_none());
+        assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,1);
+        let (a,_b)=UnixStream::pair().unwrap();st.connections.insert("worker220".into(),Arc::new(Mutex::new(std::io::BufWriter::new(a))));
+        let mut controls=Vec::new();let result=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();
+        assert_eq!(result["workers"][0]["status"],"requested");assert_eq!(controls.len(),1);assert!(st.remote_workers["local"].catalogues.is_empty());
+        let token=st.remote_workers["local"].catalogue_refresh_id.clone();
+        let second=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();assert_eq!(second["workers"][0]["status"],"already_requested");assert_eq!(controls.len(),1);assert_eq!(token,st.remote_workers["local"].catalogue_refresh_id);
+        st.remote_workers.get_mut("local").unwrap().capabilities.clear();assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"unverified_peer");
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),original);
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec220_refresh_requires_native_identity_or_negotiated_same_uid_client() {
+        let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
+        let denied=handle("unknown",NativeDelegationRequest::ProviderCatalogueV1 {refresh:true,machine_id:None},&shared);
+        assert!(matches!(denied,DaemonToWrapper::NativeDelegationResult {result} if result["status"]=="refused"));
+        {let mut st=shared.lock().unwrap();st.connection_roles.insert("human220".into(),ConnectionRole::Client);st.peer_uids.insert("human220".into(),unsafe{libc::geteuid()});
+        st.client_negotiations.insert("human220".into(),NegotiatedClient {version:CLIENT_CONTRACT_VERSION,issuer_scope:"test220".into(),capabilities:vec![ClientCapability::ProviderCatalogueV1]});}
+        let read=handle("human220",NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:None},&shared);
+        assert!(matches!(read,DaemonToWrapper::NativeDelegationResult {result} if result["connection_catalogues"].is_array()));
+        drop(shared);super::tests::cleanup(&config);
+    }
+
 }

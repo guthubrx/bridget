@@ -4527,6 +4527,25 @@ fn send_worker_frame(writer: &Mutex<UnixStream>, message: &WrapperToDaemon) -> R
     writer.flush().map_err(|_| "worker_connection_lost".into())
 }
 
+// Metadata may be skipped while a mission response owns the writer. A partial
+// frame closes the channel; it is never retried into a different JSON line.
+fn send_catalogue_frame(writer:&Mutex<UnixStream>,message:&WrapperToDaemon)->Result<bool,String> {
+    use std::os::fd::AsRawFd;
+    let Ok(writer)=writer.try_lock() else {return Ok(false);};
+    let mut bytes=serde_json::to_vec(message).map_err(|_|"worker_frame_invalid")?;bytes.push(b'\n');
+    if bytes.len()>MAX_WORKER_FRAME_BYTES {return Err("worker_frame_too_large".into());}
+    let deadline=Instant::now()+Duration::from_millis(250);let mut offset=0;
+    while offset<bytes.len() {
+        let count=unsafe {libc::send(writer.as_raw_fd(),bytes[offset..].as_ptr().cast(),bytes.len()-offset,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
+        if count>0 {offset+=count as usize;continue;}
+        let error=std::io::Error::last_os_error();
+        if error.kind()==std::io::ErrorKind::Interrupted {continue;}
+        if error.kind()==std::io::ErrorKind::WouldBlock && Instant::now()<deadline {std::thread::sleep(Duration::from_millis(2));continue;}
+        let _=writer.shutdown(std::net::Shutdown::Both);return Err("worker_connection_lost".into());
+    }
+    Ok(true)
+}
+
 /// Deux lectures d’origine au plus, conservées au travers des reconnexions.
 /// Elles ne bloquent ni Release ni la maintenance du worker.
 fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofRequest,
@@ -4561,7 +4580,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
-    start_recovery:bool,workspace_failure:bool,
+    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -4575,17 +4594,18 @@ impl MasterWorkerFeatures {
             WorkerCapability::WorkspaceRepairV1=>self.workspace_repair,
             WorkerCapability::StartRecoveryV1=>self.start_recovery,
             WorkerCapability::WorkspaceFailureV1=>self.workspace_failure,
+            WorkerCapability::ProviderCatalogueV1=>self.provider_catalogue,
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1]
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1]
             .into_iter().filter(|v|self.supports(*v)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=9 && accepted.iter().enumerate().all(|(index,capability)|
+        accepted.len()<=10 && accepted.iter().enumerate().all(|(index,capability)|
             self.supports(*capability) && !accepted[..index].contains(capability))
     }
 }
@@ -4609,6 +4629,7 @@ fn probe_worker_capability(
                 origin_proof:has("worker_origin_proof_v1"),workspace_repair:has("worker_workspace_repair_v1"),
                 start_recovery:has("worker_start_recovery_v1"),
                 workspace_failure:has("worker_workspace_failure_v1"),
+                provider_catalogue:has("worker_provider_catalogue_v1"),
             })
         }
         _=>Err("worker_capability_required".into()),
@@ -4625,6 +4646,8 @@ pub(crate) fn probe_capabilities198_for_test(writer:&Mutex<UnixStream>,reader:&m
 /// ni processus relâché ni reçu ; seuls les permis en mémoire sont abandonnés.
 pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
     let mut runtime = WorkerRuntime::new(config)?;
+    let catalogues=crate::provider_catalogue220::CatalogueService::start(runtime.config.registry_path.clone(),runtime.config.state_root.clone(),runtime.identity.machine_id.clone());
+    let _catalogue_guard=crate::provider_catalogue220::ServiceGuard(catalogues.clone());
     let origin_slots=Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let origin_preparation_slots=Arc::new(std::sync::atomic::AtomicUsize::new(0));
     loop {
@@ -4720,6 +4743,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 }
                 _ => return Err("worker_handshake_invalid".into()),
             };
+        if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {catalogues.activate(&epoch);} else {catalogues.deactivate();}
+        let mut catalogue_sent=BTreeMap::<String,u64>::new();
         let candidate_probe_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV1);
         let candidate_probe_v2_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV2);
         let slot_deadline_negotiated=negotiated.contains(&WorkerCapability::ResultSlotDeadlineV1);
@@ -4727,6 +4752,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let workspace_repair_negotiated=negotiated.contains(&WorkerCapability::WorkspaceRepairV1);
         let start_recovery_negotiated=negotiated.contains(&WorkerCapability::StartRecoveryV1);
         let workspace_failure_negotiated=negotiated.contains(&WorkerCapability::WorkspaceFailureV1);
+        let catalogue_negotiated=negotiated.contains(&WorkerCapability::ProviderCatalogueV1);
+        let read_catalogues=catalogues.clone();
         runtime.host_resources.reset();
         runtime.last_resource_refresh = Instant::now();
         let disconnected = Arc::new(AtomicBool::new(false));
@@ -4753,6 +4780,11 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 );
                 let inbound = match frame {
                     Ok(Some(bytes)) => match serde_json::from_slice::<DaemonToWrapper>(&bytes) {
+                        Ok(DaemonToWrapper::ProviderCatalogueRefresh {worker,connection_epoch,refresh_id})
+                            if catalogue_negotiated && worker==read_worker && connection_epoch==read_epoch
+                                && bridget_transport::provider_catalogue::catalogue_token(&refresh_id) => {
+                            read_catalogues.activate(&refresh_id);continue;
+                        }
                         Ok(DaemonToWrapper::OriginProofRequest { request })
                             if origin_proof_negotiated && request.connection_epoch==read_epoch
                                 && request.worker==read_worker && request.validate_shape().is_ok() => {
@@ -4934,6 +4966,18 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 }
                 last_relay = Instant::now();
             }
+            if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {
+                for (refresh_id,sequence,catalogue) in catalogues.snapshots() {
+                    if catalogue_sent.get(&catalogue.connection_id)==Some(&sequence) {continue;}
+                    let connection=catalogue.connection_id.clone();
+                    let update=bridget_transport::provider_catalogue::WorkerCatalogueUpdate {
+                        version:1,worker:runtime.identity.clone(),connection_epoch:epoch.clone(),refresh_id,sequence,catalogue};
+                    match send_catalogue_frame(&writer,&WrapperToDaemon::ProviderCatalogueUpdate {update}) {
+                        Ok(true)=>{catalogue_sent.insert(connection,sequence);},
+                        Ok(false)=>{},Err(_)=>{disconnected.store(true,Ordering::Release);break;}
+                    }
+                }
+            }
             match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(WorkerInbound::Request(request)) => {
                     let response = match runtime.handle(&request, &epoch, &disconnected) {
@@ -5016,6 +5060,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         if let Ok(socket) = writer.lock() {
             let _ = socket.shutdown(std::net::Shutdown::Both);
         }
+        catalogues.deactivate();
         let _ = reader_thread.join();
         let _ = heartbeat_thread.join();
         runtime.abandon_held();
@@ -8521,4 +8566,22 @@ while not stop.exists(): time.sleep(.01)
         assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
     }
 
+}
+
+#[cfg(test)]
+mod catalogue220_tests {
+    use super::*;
+    #[test]
+    fn spec220_metadata_writer_never_waits_on_a_mission_lock_and_times_out_full_socket() {
+        use std::os::fd::AsRawFd;
+        let (a,_b)=UnixStream::pair().unwrap();let writer=Mutex::new(a);
+        let guard=writer.lock().unwrap();let start=Instant::now();
+        assert!(!send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());assert!(start.elapsed()<Duration::from_millis(100));drop(guard);
+        let bytes=vec![0;65536];
+        for _ in 0..1024 {
+            let n=unsafe{libc::send(writer.lock().unwrap().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
+            if n<0 {break;}
+        }
+        let start=Instant::now();assert!(send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).is_err());assert!(start.elapsed()<Duration::from_secs(1));
+    }
 }

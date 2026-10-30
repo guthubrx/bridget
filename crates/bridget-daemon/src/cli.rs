@@ -3081,7 +3081,7 @@ const DELEGATE_USAGE: &str = "usage: bridget delegate MISSION [--request-id ID] 
   [--posture discovery|development] [--reply-timeout SECONDES] \\
   [--workspace JSON] [--keep-alive-secs SECONDES] [--child-requests deny|forward] \\
   [--brief JSON] [--urgent] [--deliverable TEXTE] [--json] | \\
-bridget delegate --catalogue [--machine ID] [--json]\n\
+bridget delegate --catalogue [--machine ID] [--observed | --refresh-models] [--json]\n\
 La mission est le seul argument métier obligatoire. Le parent est l'agent Bridget \
 authentifié qui exécute la commande. Utilisez --request-id pour un rejeu contrôlé.";
 
@@ -3566,11 +3566,14 @@ fn cmd_delegate(args: &[String]) {
 
 fn cmd_delegate_catalogue(args: &[String]) {
     let mut machine = None;
+    let mut observed=false;let mut refresh=false;
     let mut json_output = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--json" if !json_output => json_output = true,
+            "--observed" if !observed=>observed=true,
+            "--refresh-models" if !refresh=>{refresh=true;observed=true;},
             "--machine" if machine.is_none() => {
                 machine = Some(option_value(args, &mut index, "--machine").unwrap_or_else(
                     |error| {
@@ -3597,7 +3600,7 @@ fn cmd_delegate_catalogue(args: &[String]) {
         index += 1;
     }
     let result =
-        crate::communication::client::routing_catalogue(&DaemonConfig::default().socket_path)
+        if observed {crate::communication::client::routing_catalogue_observed(&DaemonConfig::default().socket_path,true,refresh,machine.clone())} else {crate::communication::client::routing_catalogue(&DaemonConfig::default().socket_path)}
             .unwrap_or_else(|error| {
                 exit_coordination_error(
                     "delegate",
@@ -3608,6 +3611,7 @@ fn cmd_delegate_catalogue(args: &[String]) {
                     1,
                 )
             });
+    if observed {println!("{result}");return;}
     let options = result
         .get("options")
         .and_then(serde_json::Value::as_array)

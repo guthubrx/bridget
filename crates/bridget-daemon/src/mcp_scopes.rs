@@ -20,6 +20,7 @@ pub(crate) struct ToolScope {
 }
 
 pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
+    ToolScope { tool:"bridget_refresh_models",base:Scope::WritesOwnState,read_actions:&[],own_state_actions:&[] },
     ToolScope { tool: "bridget_ask_user", base: Scope::WritesOwnState, read_actions: &["status", "wait"], own_state_actions: &["create", "cancel", "acknowledge"] },
     ToolScope {
         tool: "bridget_cancel",

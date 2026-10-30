@@ -1741,7 +1741,7 @@ mod tests {
             let mut st = f.state.lock().unwrap();
             st.remote_workers.insert(
                 "macbook".into(),
-                RemoteWorkerConnection {
+                RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
                     identity: bridget_transport::protocol::WorkerIdentity {
                         machine_id: "macbook".into(),
                         worker_id: "fixture-worker".into(),

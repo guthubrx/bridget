@@ -42,7 +42,7 @@ impl Observer{
         std::fs::set_permissions(&socket,std::fs::Permissions::from_mode(0o600)).map_err(|_|"permission_source_unavailable")?;
         let quoted=|value:&str|format!("'{}'",value.replace('\'',"'\\''"));
         let command=format!("{} __native-permission-observer {} {}",quoted(&executable.to_string_lossy()),quoted(&socket.to_string_lossy()),quoted(&nonce));
-        let settings=json!({"hooks":{"PreToolUse":[{"matcher":"mcp__bridget__bridget_delegate|mcp__bridget__bridget_auto_delegate|mcp__bridget__bridget_task_continue|mcp__bridget__bridget_task_repair_workspace|mcp__bridget__bridget_capabilities","hooks":[{"type":"command","command":command,"timeout":5,"onFailure":"block"}]}]}});
+        let settings=json!({"hooks":{"PreToolUse":[{"matcher":"mcp__bridget__bridget_delegate|mcp__bridget__bridget_auto_delegate|mcp__bridget__bridget_task_continue|mcp__bridget__bridget_task_repair_workspace|mcp__bridget__bridget_capabilities|mcp__bridget__bridget_refresh_models","hooks":[{"type":"command","command":command,"timeout":5,"onFailure":"block"}]}]}});
         let mut file=match std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&overlay){Ok(f)=>f,Err(_)=>{let _=std::fs::remove_file(&socket);return Err("permission_source_unavailable".into())}};
         let bytes=serde_json::to_vec(&settings).map_err(|_|"permission_source_unavailable")?;
         if file.write_all(&bytes).is_err(){let _=std::fs::remove_file(&socket);let _=std::fs::remove_file(&overlay);return Err("permission_source_unavailable".into())}
@@ -71,7 +71,7 @@ impl Observer{
                     &&prompt.is_some()&&input["cwd"].as_str()==cwd.to_str()
                     &&native_permissions::source_revision(&observed_overlay).is_ok_and(|revision|revision==overlay_revision)
                     &&input["hook_event_name"]=="PreToolUse"&&input.get("agent_id").is_none_or(Value::is_null)
-                    &&matches!(input["tool_name"].as_str(),Some("mcp__bridget__bridget_delegate"|"mcp__bridget__bridget_auto_delegate"|"mcp__bridget__bridget_task_continue"|"mcp__bridget__bridget_task_repair_workspace"|"mcp__bridget__bridget_capabilities"));
+                    &&matches!(input["tool_name"].as_str(),Some("mcp__bridget__bridget_delegate"|"mcp__bridget__bridget_auto_delegate"|"mcp__bridget__bridget_task_continue"|"mcp__bridget__bridget_task_repair_workspace"|"mcp__bridget__bridget_capabilities"|"mcp__bridget__bridget_refresh_models"));
                 let checked=native_permissions::recheck_context_with_env(&context,&launch,&cwd,&env);
                 if !valid||checked.is_err(){
                     let code=checked.err().unwrap_or_else(||"permission_attestation_unavailable".into());
