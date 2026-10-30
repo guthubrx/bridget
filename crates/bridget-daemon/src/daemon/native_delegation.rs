@@ -226,7 +226,7 @@ fn routing_admission_plan(
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
-        return Err("routing_candidate_unavailable".into());
+        return Err("routing_candidate_unavailable:catalogue_no_match".into());
     }
     if candidates.len() > 128 {
         return Err("candidate_limit".into());
@@ -3752,6 +3752,16 @@ fn failure(code: &str) -> Value {
         let human="Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur de décider quels travaux peuvent attendre ou quelle capacité ajouter. Ne terminez pas les tâches d’autrui et ne changez pas de machine sans autorisation.";
         return json!({"status":"refused","code":"resource_saturated","message":message,
             "detail":{"message":message,"recovery":recovery,"human_action":human,"capacity":capacity}});
+    }
+
+    if code == "routing_candidate_unavailable:catalogue_no_match" {
+        let message = "Consultez fleet.options avec les mêmes contraintes : aucune combinaison active déclarée ne correspondait après les filtres de cette admission. Les autres travaux autorisés suivent leur propre état.";
+        return json!({"status":"refused","code":"routing_candidate_unavailable","message":message,
+            "detail":{"message":message,"stage":"catalogue_selection",
+                "cause":"no_active_declared_combination","scope":"this_admission",
+                "verification":"Ce fait local décrit le catalogue, la politique de la machine coordinatrice et les contraintes à cet instant, avant toute sonde de cette tentative. Il ne prouve ni refus du modèle par le fournisseur, ni problème d’abonnement, de compte ou d’installation, ni état actuel.",
+                "recovery":"Lisez bridget_capabilities puis fleet.options en conservant machine_id, engine, connection_id, model et effort demandés. Vérifiez aussi les contraintes de la politique coordinatrice : une option déclarée peut être exclue par ces contraintes. Ne changez aucun axe imposé pour contourner le refus. Consultez detail.admission et suivez toute tâche connue ; une demande en attente ou d’issue inconnue ne permet aucun remplacement. Après correction du catalogue ou de la politique sans changement de l’enveloppe, un rejeu strict exige not_recorded et la fin confirmée de tout appel concurrent. Un reçu déjà conservé garde son canon et son propre parcours.",
+                "human_action":"Si la combinaison autorisée manque, demandez au responsable Bridget de vérifier sa déclaration, son activation et sa qualification sur la machine prévue. Si une contrainte doit changer, demandez à l’utilisateur laquelle ; ne changez pas de compte, de modèle, de droits ou de machine automatiquement. Conservez request_id et tous les paramètres tant que le sort de la demande n’est pas établi."}});
     }
 
     if let Some(encoded) = code.strip_prefix("routing_candidate_unavailable:") {
@@ -13492,6 +13502,47 @@ mod tests {
     ) -> RoutingAdmissionPlan {
         let st = state.lock().unwrap();
         routing_admission_plan(&st.registry, "local", request).unwrap()
+    }
+
+    #[test]
+    fn spec221_catalogue_no_match_is_local_without_admission_or_probe() {
+        let (state, config, rx, _reader, mut request, _root)=routing168_fixture(1);
+        request.request_id="catalogue221".into();
+        request.model=Some("PRIVATE_UNDECLARED_MODEL".into());
+        let original=serde_json::to_vec(&request).unwrap();
+        let mut previous=None;
+        for _ in 0..2 {
+            let DaemonToWrapper::NativeDelegationResult {result}=handle("conn-1",
+                NativeDelegationRequest::AutoDelegateV2(request.clone()),&state)
+                else {panic!("refus natif attendu")};
+            assert_eq!(result["code"],"routing_candidate_unavailable");
+            assert_eq!(result["detail"]["stage"],"catalogue_selection");
+            assert_eq!(result["detail"]["cause"],"no_active_declared_combination");
+            assert_eq!(result["detail"]["scope"],"this_admission");
+            assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
+            assert!(result["task_id"].is_null());
+            assert!(!result.to_string().contains("PRIVATE_UNDECLARED_MODEL"));
+            assert!(result.to_string().len()<8192);
+            assert!(result["detail"]["recovery"].as_str().unwrap().contains("fleet.options"));
+            assert!(result["detail"]["human_action"].as_str().unwrap().contains("utilisateur"));
+            if let Some(previous)=previous.as_ref() {assert_eq!(&result,previous)}
+            previous=Some(result);
+            let st=state.lock().unwrap();
+            assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().is_none());
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+            assert!(rx.try_recv().is_err(),"aucun fournisseur ni sonde");
+        }
+        assert_eq!(serde_json::to_vec(&request).unwrap(),original);
+        for code in ["routing_candidate_unavailable",
+            "routing_candidate_unavailable:catalogue_no_match_PRIVATE",
+            "routing_candidate_unavailable:PRIVATE"] {
+            let result=failure(code);
+            assert_eq!(result["code"],"routing_candidate_unavailable");
+            assert_eq!(result["detail"]["cause"],"unobserved");
+            assert!(result["detail"]["stage"].is_null());
+            assert!(!result.to_string().contains("PRIVATE"));
+        }
+        drop(state); cleanup(&config);
     }
 
     #[test]

@@ -37,3 +37,6 @@ Cadrage et choix clients Mac/Linux conservés.176tâches uniques,11closes après
 
 ## Après chargement L1b
 178tâches uniques,15closes. T014 : sources86e73a8b poussées, build221-guidance réellement chargé sur cinqservicesLinux ; lien/session/capabilities et refusnatifsansTask observés. Convergeaprèsrecette :2tâches ajoutéesT177/T178 pour validationlocaleopaque et étape catalogueperdue ; les exécuter avantT015. Aucun code de ces compléments n'est présenté comme réalisé. Le programme et sa convergence globale restent InProgress.
+
+## Analyze/Converge — T177/T178 source
+178identifiants de tâches uniques,15closes, compléments177/178ouvertsjusqu'àleuractivation. Contratscommon ajoutés avant code, réemploiWorkspaceRequest/failure/sélection ; aucuneexigence ou plateforme supprimée. Les scriptsprojectprimitives ne sont pas présents dans cecheckout ; comparaisonmanuelle spec/plan/tasks/code/tests et secondelecture réalisées. Deuxmessagesopaques reproduits parREDpuisGREEN. Testhistoriquecompteur10→11corrigé aprèslecturecatalogue ; aucunefonctionproduitnouvelle. ZéroCRITICALpersistant ; Converge de cecomplément CONVERGED,0tâcheajoutée. LeprogrammeglobalresteInProgress. Ne pas confondre sourceaudité et MCP214actif.

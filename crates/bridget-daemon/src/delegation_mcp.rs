@@ -14,6 +14,15 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Même schéma fermé pour les deux admissions ; aucune valeur JSON dans le refus.
+fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
+    serde_json::from_value(value.clone()).map_err(|_| {
+        ClientError::InvalidParams(
+            "Corrigez la forme de workspace : un objet avec strategy égal à shared ou worktree est requis. En shared, seul strategy est accepté ; retirez base_ref, branch et tout autre champ. En worktree, seuls strategy, base_ref et branch sont acceptés ; base_ref et branch sont des chaînes si présents, jamais null. Le SHA source complet se place dans expected_base_commit pour l’admission automatique. Ce refus local concerne cet appel : il n’a pas été envoyé au serveur. Il ne prouve pas l’absence d’une demande antérieure de même request_id. Attendez la fin des appels concurrents et vérifiez tout reçu ou tâche déjà connu avant de corriger les paramètres ; un reçu existant conserve son canon. Ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état. Si le client chargé ne décrit pas ces règles, demandez sa reconnexion complète ; une simple reprise de tour peut garder l’ancien programme.".into(),
+        )
+    })
+}
+
 pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
 pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
 
@@ -67,8 +76,8 @@ fn parse_task_ids(args: &Value) -> Result<Vec<String>, ClientError> {
 
 pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     let workspace_schema = json!({"oneOf":[
-        {"type":"object","properties":{"strategy":{"const":"shared"}},"required":["strategy"],"additionalProperties":false},
-        {"type":"object","properties":{"strategy":{"const":"worktree"},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
+        {"type":"object","properties":{"strategy":{"const":"shared","description":"Dossier partagé : strategy est le seul champ autorisé. Le SHA source appartient à expected_base_commit ; ne pas ajouter base_ref ou branch."}},"required":["strategy"],"additionalProperties":false},
+        {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     let mut definitions=vec![
         json!({"name":"bridget_refresh_models","description":"Demande une nouvelle observation des modèles annoncés par Codex sur les serveurs. Aucun login, modèle, profil, droit ou mission modifié. La réponse requested n’atteste pas une lecture terminée : relire ensuite bridget_capabilities et fleet.connection_catalogues. Une demande par serveur au plus toutes les 30 secondes. Un ancien worker reste non vérifié.","inputSchema":{"type":"object","properties":{"machine_id":{"type":"string","minLength":1,"maxLength":256}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false}}),
@@ -266,13 +275,7 @@ fn execute_with_proof(
                 }
                 _ => return Err(ClientError::InvalidParams("child_requests invalide".into())),
             },
-            workspace: args
-                .get("workspace")
-                .map(|value| {
-                    serde_json::from_value::<WorkspaceRequest>(value.clone())
-                        .map_err(|_| ClientError::InvalidParams("workspace invalide".into()))
-                })
-                .transpose()?,
+            workspace: args.get("workspace").map(parse_workspace).transpose()?,
             keep_alive_secs: match args.get("keep_alive_secs") {
                 None => None,
                 Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
@@ -339,13 +342,7 @@ fn execute_with_proof(
                 Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
                 _ => return Err(ClientError::InvalidParams("reply_timeout invalide".into())),
             },
-            workspace: args
-                .get("workspace")
-                .map(|value| {
-                    serde_json::from_value::<WorkspaceRequest>(value.clone())
-                        .map_err(|_| ClientError::InvalidParams("workspace invalide".into()))
-                })
-                .transpose()?,
+            workspace: args.get("workspace").map(parse_workspace).transpose()?,
             keep_alive_secs: match args.get("keep_alive_secs") {
                 None => None,
                 Some(Value::Number(value)) if value.is_u64() => value.as_u64(),
@@ -1155,6 +1152,45 @@ mod tests {
     }
 
     #[test]
+    fn spec221_workspace_invalid_explains_shape_before_any_connection() {
+        use std::os::unix::net::UnixListener;
+        let socket = crate::mcp_identity::mock_socket("workspace221-refusal");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let identity = ResolvedIdentity {
+            name: "owner".into(), instance_id: "instance".into(), delegated_origin: None,
+        };
+        for name in ["bridget_delegate", "bridget_auto_delegate"] {
+            for workspace in [
+                json!({"strategy":"shared","base_ref":"PRIVATE_VALUE"}),
+                json!({"strategy":"shared","branch":"PRIVATE_VALUE"}),
+                json!({"strategy":"shared","PRIVATE_FIELD":true}),
+                json!({"strategy":"worktree","base_ref":null}),
+                json!({"strategy":"worktree","branch":false}),
+                json!({"strategy":"worktree","PRIVATE_FIELD":"PRIVATE_VALUE"}),
+                json!({"strategy":"PRIVATE_VALUE"}), json!({}),
+                json!("PRIVATE_VALUE"), Value::Null,
+            ] {
+                let mut args=json!({"request_id":"stable-key","task":"read","cwd":"/tmp","workspace":workspace});
+                if name == "bridget_delegate" {
+                    args["agent_type"]=json!("codex"); args["model"]=json!("model");
+                }
+                let error=execute(&identity,name,&args,&socket).unwrap_err();
+                let ClientError::InvalidParams(message)=error else {panic!("refus local attendu")};
+                assert!(message.contains("strategy"), "{message}");
+                assert!(message.contains("expected_base_commit"), "{message}");
+                assert!(message.contains("cet appel"), "{message}");
+                assert!(message.contains("antérieure"), "{message}");
+                assert!(!message.contains("PRIVATE"), "{message}");
+                assert!(message.len()<1800);
+                assert!(matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock));
+            }
+        }
+        drop(listener);
+        std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn native154_mcp_workspace_schema_ferme_et_champs_interdits() {
         let delegate = crate::mcp::tools()
             .into_iter()
@@ -1326,7 +1362,9 @@ mod tests {
             .iter()
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
-        assert_eq!(tools(brief_schema).len(), 10);
+        let native_tools = tools(brief_schema);
+        assert_eq!(native_tools.len(), 11);
+        assert!(native_tools.iter().any(|tool| tool["name"] == "bridget_refresh_models"));
     }
 
     #[test]

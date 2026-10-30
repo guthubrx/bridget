@@ -136,3 +136,6 @@ RÉUTILISER project_probe_constraints, failure, routing_probe_failure et routing
 
 ## Clôture source C27
 REUTILISER confirmé : project_probe_constraints/failure et les deux ports initial/relecture.35motifs fermés sans champ libre ; BTreeSetstandard pour déduplication, pas de dépendance ou format de reçu nouveau. Septtests spécifiques et14régressions C27 passent ; deux194 déjà comptés enC26. Aucun item logiciel partagé neuf. Les nouveaux fichiers validation/c26.md et c27.md sont des preuves, pas des composants d'exécution. Audit/source et activation restent distincts ; trois revues contradictoires documentées.
+
+## Compléments T177/T178 — recherche avant code
+WorkspaceRequest, les deux parseurs MCP, le schéma partagé, InvalidParams et son mapping -32602 sont réutilisés. Un parseur commun porte la même règle de forme pour deux appels réels ; aucun changement du type ou du protocole. La sélection registry applique déjà activation, politique et cinq filtres : seul son résultat vide reçoit un suffixe fermé dans le builder existant. failure projette ce suffixe sans parser de texte libre. Aucun nouveau module, service, store, dépendance ou effet. Les refus après sonde ne reçoivent pas ce diagnostic local.
