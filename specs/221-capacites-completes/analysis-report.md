@@ -34,3 +34,6 @@ Cadrage et choix clients Mac/Linux conservés.176tâches uniques,11closes après
 
 ## Rapprochement final source L1b
 176tâches uniques,14closes après92tests C26 et21tests C27 distincts, premièreouverteT014. Les deuxspec194 revérifiés ne sont pas comptés deuxfois. Contrats/acceptance et code/test rapprochés : tripletslegacy stricts,35motifs guidés, aucun effet ni droit ajouté ; la recette ne qualifie pas toutes les erreurs possibles, les interfaces ou une égalitécomparative. DeuxobjectionsR1 levées, recoursuniqueR2 corrigé, taillemaximale28421octets mesurée. Pas de CRITICAL nouveau constaté. Les primitives de génération projet restent absentes ; analyse manuelle documentée et seconde lecture ciblée. Le compte source ne vaut pas un succès de gate runtimeT014.
+
+## Après chargement L1b
+178tâches uniques,15closes. T014 : sources86e73a8b poussées, build221-guidance réellement chargé sur cinqservicesLinux ; lien/session/capabilities et refusnatifsansTask observés. Convergeaprèsrecette :2tâches ajoutéesT177/T178 pour validationlocaleopaque et étape catalogueperdue ; les exécuter avantT015. Aucun code de ces compléments n'est présenté comme réalisé. Le programme et sa convergence globale restent InProgress.

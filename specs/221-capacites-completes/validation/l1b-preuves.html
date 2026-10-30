@@ -1,0 +1,53 @@
+<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bridget — lot de guidage activé</title><style>
+*{box-sizing:border-box}body{margin:0;color:var(--foreground,#182128);font:15px/1.55 var(--font-sans,system-ui)}h1{font-size:26px;line-height:1.2;margin:0 0 12px}h2{font-size:18px;margin:22px 0 10px}p{margin:8px 0}.muted{color:var(--muted-foreground,#617078)}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.box{background:var(--secondary,#f2f4f4);border:1px solid var(--border,#dce2e4);padding:16px;border-radius:var(--radius,12px)}.big{font-size:28px;font-weight:750;line-height:1.1}.label{font-size:12px;margin-top:7px}.tag{display:inline-block;padding:3px 8px;border:1px solid var(--border,#ccd5d8);border-radius:5px;font-size:12px;margin-right:5px}.mono{font-family:var(--font-mono,monospace);font-size:12px;overflow-wrap:anywhere}.bar{height:8px;border-radius:8px;background:var(--secondary,#edf1f2);margin:12px 0 6px}.bar span{display:block;width:8.42697%;height:100%;background:var(--accent,#237b69);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:8px 4px;text-align:left;border-bottom:1px solid var(--border,#dce2e4);vertical-align:top}th{font-weight:600}details{border-top:1px solid var(--border,#dce2e4);padding:14px 0}summary{cursor:pointer;font-weight:650}ul,ol{padding-left:22px}li{margin:7px 0}.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}.small{font-size:13px}footer{margin-top:20px;font-size:12px;color:var(--muted-foreground,#617078)}@media(max-width:480px){h1{font-size:23px}.grid{gap:6px}.box{padding:16px}.big{font-size:23px}.two{grid-template-columns:1fr}td,th{padding:8px 2px}}
+</style><main>
+<p class="muted small">30 octobre 2026 · constat de livraison du lot L1b</p>
+<h1>Le guidage des refus est activé sur les serveurs Linux.</h1>
+<p>Les refus de candidat indiquent quoi vérifier et quelle décision demander. Plusieurs motifs restent visibles ensemble. Une cause inconnue reste indiquée comme inconnue.</p>
+<p><span class="tag">Sources poussées</span><span class="tag">5 images vérifiées</span><span class="tag">Programme en cours</span></p>
+<div class="grid" style="margin-top:18px"><div class="box"><div class="big">113</div><div class="label">tests distincts C26/C27</div></div><div class="box"><div class="big">35</div><div class="label">motifs de sonde guidés</div></div><div class="box"><div class="big">2,33 s</div><div class="label">coupure du maître</div></div></div>
+<h2>Le choix des plateformes est conservé</h2>
+<p><strong>Web, bureau, iOS et Windows piloteront Mac et Linux.</strong> Les interfaces complètes restent à réaliser. Aucun moteur d’exécution Windows n’est prévu.</p>
+<h2>Avancement du programme complet</h2>
+<p><strong>15 tâches vérifiées sur 178.</strong> Cette progression concerne le programme de vérification et de correction. Elle ne mesure pas le pourcentage de fonctions existantes qui marchent.</p>
+<div class="bar" role="progressbar" aria-label="Tâches vérifiées" aria-valuemin="0" aria-valuemax="178" aria-valuenow="15"><span></span></div>
+<p class="small muted">50 catégories conservées · aucune parité globale annoncée · estimation totale révisée : 37–82 h, hors attentes humaines et accès manquants.</p>
+<div class="two"><section><h2>Ce qui est vérifié</h2><ul>
+<li>Rejeux : 92 tests existants réutilisés, sans recréer un moteur d’admission.</li>
+<li>Guidage : 7 tests nouveaux et 14 régressions distinctes. La commande finale passe 23 tests, dont 2 déjà comptés dans les 92.</li>
+<li>Réponse maximale testée : 28 421 octets pour 128 raisons et 35 codes distincts.</li>
+<li>Trois contre-revues indépendantes. Dernier verdict : favorable.</li>
+</ul></section><section><h2>Ce qui reste à faire</h2><ol>
+<li><strong>T177 :</strong> nommer le paramètre <span class="mono">workspace</span> invalide dans le client, avant envoi au serveur.</li>
+<li><strong>T178 :</strong> distinguer une combinaison absente du catalogue d’un refus de sonde ou d’accès au modèle.</li>
+<li>Poursuivre les autres catégories du programme, sans remplacer les missions existantes.</li>
+</ol></section></div>
+<details><summary>Chargement constaté et limites</summary>
+<table><thead><tr><th>Machine</th><th>Composant</th><th>PID</th></tr></thead><tbody>
+<tr><td>Cartae</td><td>Maître</td><td>2137988</td></tr><tr><td>Cartae</td><td>Mobile</td><td>2138143</td></tr><tr><td>Cartae</td><td>Worker</td><td>2142182</td></tr><tr><td>SYS / sysle2</td><td>Worker</td><td>618284</td></tr><tr><td>KS / ksstore</td><td>Worker</td><td>986436</td></tr></tbody></table>
+<p>Les cinq fichiers exécutés ont la même empreinte vérifiée. L’updater est un processus Python séparé ; son code chargé correspond au script courant.</p>
+<p>Les superviseurs déjà vivants sont préservés. Le worker et le pont Mac restent en 220. Le client MCP de ce fil reste en 214 et reçoit déjà les nouveaux messages du maître. Aucun nouveau schéma MCP n’est requis par ce lot.</p>
+<p><strong>45 options déclarées ne prouvent pas l’accès à 45 modèles.</strong> Comptes, modèles et droits sont inchangés.</p>
+</details>
+<details><summary>Contrôle natif, conservation et nettoyage</summary>
+<p>Après retour du lien : session attestée, catalogue lisible et délégations non gelées. Le témoin sans modèle déclaré rend le nouveau refus avec <span class="mono">not_recorded / task_id: null</span>. Aucun agent ni modèle n’a été lancé par ce témoin.</p>
+<p>Son premier appel a été refusé localement : <span class="mono">shared + base_ref</span> est invalide. Après lecture du contrat, le paramètre a été corrigé avant admission. Cette correction n’est pas un rejeu strict. Le message local trop vague est conservé comme travail T177.</p>
+<p>Une copie de transfert a été retirée sur KS après observation complète. Quatre copies ou archives et trois dossiers de revue SYS sont conservés : l’usage système n’a pas pu être entièrement attesté. Leurs tâches sont closes, leurs dossiers propres et leurs fichiers ignorés absents. Aucun retrait forcé, aucun gain physique inventé.</p>
+<p>Actif, retour, images sous usage, preuves et chantier 221 sont conservés. Les caches de compilation observés sont de 1,22 et 0,98 Gio, sous le budget de 10 Gio.</p>
+<p>Quatre responsables ont reçu des messages avant et après. Reçus en vol : leur lecture n’est pas déduite.</p>
+</details>
+<details><summary>Audit source : notes, couverture et réserves</summary>
+<p>Décision calculée : <strong>pass</strong>, sans blocage de livraison du lot. 12/12 contrôles applicables ; 34/42 critères notés. Le compteur global 100 n’est pas une note de qualité de 100/100.</p>
+<table><thead><tr><th>Axe</th><th>Note</th><th>Critères notés/applicables</th></tr></thead><tbody>
+<tr><td>Sécurité</td><td>75</td><td>3/3</td></tr><tr><td>Sécurité des appels</td><td>75</td><td>2/2</td></tr><tr><td>Fiabilité</td><td>75</td><td>1/1</td></tr><tr><td>Tests</td><td>63</td><td>4/4</td></tr><tr><td>Performance</td><td>69</td><td>4/4</td></tr><tr><td>Complexité</td><td>67</td><td>3/3</td></tr><tr><td>Gestion des erreurs</td><td>67</td><td>3/3</td></tr><tr><td>Architecture</td><td>75</td><td>3/3</td></tr><tr><td>Responsabilité</td><td>75</td><td>3/3</td></tr><tr><td>Minimalisme</td><td>67</td><td>3/3</td></tr><tr><td>Métier</td><td>75</td><td>3/3</td></tr><tr><td>Traçabilité</td><td>75</td><td>2/2</td></tr></tbody></table>
+<p>Audit limité au code du lot. Pas de benchmark comparatif global, de qualification de toutes les interfaces ni de courbe de latence en production. La première isolation de test sous audit a été refusée par les protections de chemin ; elle a été corrigée sans modifier le produit. La relance passe 23/23.</p>
+</details>
+<details><summary>Références vérifiables</summary>
+<p>Source fonctionnelle</p><p class="mono">86e73a8b5f7bee80aafd6c024a609ab7475dedbe</p>
+<p>Build actif</p><p class="mono">221-guidance-86e73a8b</p>
+<p>Empreinte du binaire Linux</p><p class="mono">6a319e43b9283ee22e8fac3c084aebd576415e8b62e78d74483da7b69d6a9de8</p>
+<p>Compte rendu</p><p class="mono">/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/l1b-livraison.md</p>
+<p>Tasks</p><p class="mono">/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/tasks.md</p>
+</details>
+<footer>Preuve technique de livraison. Aucune interface de produit simulée. État daté, pas un tableau de supervision en temps réel.</footer>
+</main><script>console.log(JSON.stringify({horizontalOverflow:document.documentElement.scrollWidth>innerWidth,taskCounts:{verified:15,total:178},productInterfaces:"planned",snapshot:"L1b"}));</script></html>
