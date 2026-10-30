@@ -255,3 +255,7 @@ Deux écarts observés après activation, sans incident métier ni nouvelle Task
 
 ## Convergence — rattachement d'un fil long
 - [x] T179 [US2] Corriger le dépassement HTTP du pont sur un fil long : réutiliser la forme compacte officielle, préserver outils/questions et identités, garder les bornes ; prouver le retour du lien actuel sans nouvelle mission ni réinitialisation d'historique.
+
+
+## Convergence — guidage après perte d’observation
+- [ ] T180 [US5] C27 — Conserver dans les conseils unverified_peer/not_observed/stale/refreshing le prérequis de contrôle des marqueurs et processus de sonde avant changement de version. Une absence de cache ne constate aucun arrêt. Étendre les tests réels de projection et Hello dans crates/bridget-daemon/src/daemon/native_delegation.rs, corriger native_provider_catalogue220.rs sans nouveau droit, effet ou état, puis contre-revue, activation et preuve des images chargées. Ne pas rejouer les admissions R55. Précède la reprise de T174 ; aucun critère de C19 n’est supprimé.

@@ -201,3 +201,7 @@ d'un refus local.
 Retrait après clôture native et contrôle complet des lecteurs/processus.
 Ne pas suivre un lien, ne pas effacer une vue d'issue inconnue. Réutiliser le
 cycle de vie de préparation, sans nouveau magasin de tâches ou service.
+
+
+## T180 — absence d’observation et changement de version
+Un cache vide, une donnée périmée ou une capacité non négociée ne prouvent pas l’arrêt d’un processus de sonde antérieur. Le prochain conseil rend explicite le contrôle des marqueurs privés et des processus de cette sonde par le responsable avant tout changement de version. Aucun effacement de marqueur, signal, refresh, retour ou mission n’est déclenché par la projection. Le statut, les contraintes, le TTL et les modèles restent identiques. Le contrôle est limité à cette observation ; les autres travaux autorisés suivent leur propre état. Couvrir la vraie projection périmée et non négociée ainsi que le Hello qui vide le cache, puis la republication de la contrainte. Un état inconnu ne devient jamais StopUnconfirmed sans preuve.

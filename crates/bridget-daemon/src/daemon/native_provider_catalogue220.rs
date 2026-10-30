@@ -221,7 +221,7 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
                 "Le worker de ce serveur n’est pas joignable. Rétablir son lien natif avant de demander une nouvelle observation ; ce constat ne ferme ni ne relance ses missions."
             }
             "unverified_peer" => {
-                "Ce worker ne négocie pas l’observation des modèles. Charger une version compatible de Bridget sur ce serveur ; aucun accès au modèle ne peut être déduit de l’ancien catalogue."
+                "Ce worker ne négocie pas l’observation des modèles. Avant tout changement de version, faire vérifier les marqueurs privés et les processus de sonde sur ce serveur par le responsable Bridget : ce statut ne confirme aucun arrêt. Ne pas effacer un marqueur ni créer une mission pour diagnostiquer. Charger ensuite une version compatible selon le parcours de maintenance. Aucun accès au modèle ne peut être déduit de l’ancien catalogue. Ce contrôle concerne l’observation de cette connexion ; les autres travaux autorisés suivent leur propre état."
             }
             "sign_in_required" => {
                 "Codex ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec le mécanisme officiel et le compte prévu ; aucune copie de secrets. La prochaine observation est automatique."
@@ -230,7 +230,7 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
                 "Le programme a annoncé cette liste lors de la lecture datée. Son cache fournisseur peut rester ancien ; ce n’est pas une garantie d’accès au modèle. Les modèles hors du profil Bridget restent non admissibles. Ne pas changer de compte, modèle ou droits sans décision autorisée."
             }
             "refreshing" | "not_observed" | "stale" => {
-                "Attendre la fin du contrôle ou sa prochaine échéance (objectif de deux minutes par connexion ; les contrôles sont séquentiels et peuvent dépasser cet objectif en charge ou après échec), puis relire une fois le catalogue. Une liste ancienne n’est pas présentée comme actuelle. Si l’observation reste indisponible, faire vérifier ce worker ; ne pas relancer une mission d’issue inconnue."
+                "Attendre la fin du contrôle ou sa prochaine échéance (objectif de deux minutes par connexion ; les contrôles sont séquentiels et peuvent dépasser cet objectif en charge ou après échec), puis relire une fois le catalogue. Une liste ancienne n’est pas présentée comme actuelle. Si l’observation reste indisponible, faire vérifier ce worker ; ne pas relancer une mission d’issue inconnue. Ce statut ne confirme aucun arrêt de sonde. Avant tout changement de version, faire vérifier ses marqueurs privés et processus sur ce serveur par le responsable Bridget ; ne pas effacer un marqueur. Ce contrôle concerne l’observation de cette connexion ; les autres travaux autorisés suivent leur propre état."
             }
             _ if cause == Some(CatalogueCause::StopUnconfirmed) => {
                 "L’arrêt d’une sonde de métadonnées n’est pas confirmé sur ce serveur. Aucune autre sonde n’est lancée. Demander une maintenance ciblée de cette sonde ; ne pas supprimer son marqueur ni affirmer l’arrêt. Les missions existantes restent séparées."

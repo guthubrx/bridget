@@ -96,3 +96,7 @@ Le programme demeure In Progress. Le contrat opérationnel n'est pas encore
 validé et aucune version C19 n'est annoncée comme livrée.
 
 Relecture structurelle finale : 179 IDs uniques, 50 FR, 32 cases cochées ; guides32/522/13 PASS. Une assertion privée sur une phrase exacte du choix plateformes a échoué : la lecture de la ligne D11 a confirmé le choix correct, puis le contrôle a été corrigé sans changer la demande. Le prototype passe29assertions ; la contre-revue statique a été traitée, sans activation déduite. Aucun code exécutable modifié dans ce checkpoint documentaire. Les miroirs C16 ont été constatés à37a11ed3, HEAD préparatoires SYS/KS conservés ; les bundles C16 restent gardés sous observation des usages incomplète.
+
+
+## Analyze — complément T180
+180 tâches uniques, 32 cochées. Ajout ciblé C27 après le rapprochement du signalement ancien avec le code actif. Réemploi project() et tests220/Hello ; aucun modèle, droit, canon ou objet de Task modifié. Contrat ajouté avant le correctif, refus réel reproduit avant correction ; T180 reste ouverte jusqu’à sa livraison. Le script de prérequis projet reste absent : comparaison manuelle spec/plan/tasks/code/tests puis relecture. Le complément corrige le prochain conseil reçu, il ne rouvre aucune admission R55. Aucun CRITICAL nouveau ; C19 et toutes les catégories restent dans le programme.
