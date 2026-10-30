@@ -628,6 +628,14 @@ Use status and the recorded recovery instruction. Preserve worktrees and unknown
 outcomes. Do not manufacture another mission, change provider or widen rights
 to make a refusal disappear.
 
+### Understanding a candidate refusal
+
+Read the request outcome in detail.admission first. The detail.probe_checks view gives a verification and a human decision for each distinct closed refusal code. It applies to the candidates of this admission. Other authorized work follows its own state.
+
+The observed code stays in detail.reasons. underlying_cause=unobserved means that the more specific cause was not recorded. A capability refusal does not prove a missing program or an unsuitable subscription. Compare the declared settings and the capabilities actually negotiated on the same target. A worker ResourceLimit does not identify which limit was reached. Only the candidate resource_limit establishes a full inbound queue at probe time, without proving its current state.
+
+Resolve every reason before considering a replay. A drained queue does not resolve a dirty workspace or an active guard. Preserve the key, envelope and any known task. Replay requires not_recorded, every cause corrected and all concurrent calls finished. A durable refusal stays closed. This guidance performs no cleanup, target change or replacement mission.
+
 ### Worktree count limit
 
 A candidate refusal with `code: workspace_limit` means Bridget reached its limit

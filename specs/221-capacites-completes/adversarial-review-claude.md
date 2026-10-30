@@ -91,3 +91,17 @@ Cette revue indisponible ne devient pas un avis favorable. La compétence permet
 Le P1 de conception demandant un résultat borné a été retenu pour le diagnostic, pas pour une sortie forcée de Drop : abandonner un descendant vivant détruirait la filiation nécessaire à sa récolte. Tests réels avant/après barrière et refus de thread, puis relecture locale. Attente finale toujours non bornée et annoncée.
 
 Convergence L1a passage1 : T176 ajoutée pour identité exacte du writer. Après correction et test RED/GREEN, passage2 : CONVERGED pour C25 seulement, tasks.md inchangé SHA256c8d6631205c9b95d5d6d8994c77d9ac71af7e52065b43ff47c3b5364903b2468. Les49autres catégories et gateT007 restent ouvertes.
+
+## L1b — trois contre-revues d'implémentation
+R1 :8fed5c77-5e4c-487b-993f-ba840debdea3, ClaudeSonnetSYS, APPROVE_WITH_CHANGES. R2 :13777033-07d9-4893-901f-d70ba1e875fc, même moteur, APPROVE_WITH_CHANGES. R3 :22178a6e-0b04-484d-a8c0-fc8c085f4d2f, ClaudeSonnetSYS, APPROVE sansP1/P2nouveau. Trois demandes natives distinctes avec briefs/patchs complets et priorfindings ; aucun changement de contraintes pour contourner un refus. Pas de tests/build dans ces revues statiques. Résultats complets lus/ACK, clôtures natives demandées, dossiers conservés avant contrôle de retrait.
+
+| Objection | Vérification | Décision | Raison |
+| --- | --- | --- | --- |
+| File pleine masque un autre motif | RED puis test de mélange et vraihandler189 | retenue/corrigée | tous les motifs requis avant rejeu |
+| Motif unique perd sa portée | RED et assertions message/scope/admission | retenue/corrigée | aucune attente globale depuis ce seul refus |
+| Recours principal reste générique | code et test unique workspace_dirty | retenue/corrigée | décision précise rendue au premier niveau |
+|128doublons multiplient les conseils | test128raisons/1guide | retenue/améliorée | déduplicationkind/code sans retirer reasons |
+|35motifs dépassent une prétendue borne16Kio de réponse | lecturejsonl.rs et mesure22341puis28421octets au maximum128raisons | mesure retenue ; dépassement réfuté |16Kioestl'entrée, transport16Mio ; pas de suppression de conseils ni de borne relevée |
+| Scope de candidats malgré refus de l'admission entière | codepublic status=refused et scope/phrase candidats cités | champ supplémentaire refusé | aucune admission partielle autorisée par cette vue ; pas d'autorité nouvelle |
+
+La tentative de revue L1a refusée capability_unavailable reste une autre clé, sans Task ni cause rétrospectivement inventée. Les nouveaux avis ne prétendent pas qualifier cette histoire ou le runtime du lotL1b.

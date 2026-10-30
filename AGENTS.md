@@ -98,6 +98,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/L1b — source validée, activation encore ouverte : C26réutilisé sans code après92tests, C27projection de35motifs fermés corrigée avec7tests nouveaux et14régressions distinctes (113tests du lot sans doubler2spec194). Trois revuesClaudeSonnet, dernièreAPPROVE ; audit source12/12PASS, notes63–75/100, aucune parité globale annoncée. Programme50catégories/176tâches,14closes ; premièreouverteT014 pour livraison du lot. Le binaireactif reste221-drain-86a88e3f jusqu'au reçu de chargement suivant ; aucun nouveau guidage actif déduit des tests. Interfaces web/bureau/iOS/Windows à réaliser versMac/Linux, pas de moteurWindows. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/c27.md.
+
+
 Session221 — capacités complètes, In Progress :50catégories/176tâches,8closes. Choix humain : interfaces web/bureau/iOS/Windows versMac/Linux, aucun moteurWindows. LotL1a/C25 : source86a88e3f intégrée/poussée,6tests ciblés et1qualification native PASS, audit source12/12et notes67–75 ; revue d’implémentation indisponible(capability_unavailable), auto-audit déclaré. Build221-drain-86a88e3f/SHAad7933fb… réellement chargé sur maître/mobileCartae et workersCartae/SYS/KS, coupure2,41s. Nouvel essai af2882a8résultat lu/ACK, terminal/cleanup_done et drain corrélés. Trois anciens superviseurs183/217/220préservés ; Mac220et MCP214non misàjour par ce lot Linux. DeuxWT/deuxbranches et sixfichiers de transfert/candidat retirés ; revueSYSconservée faute d’observation complète, workspace221actif pourla suite. Programme global non terminé, pas de parité annoncée. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/l1a-livraison.md.
 
 

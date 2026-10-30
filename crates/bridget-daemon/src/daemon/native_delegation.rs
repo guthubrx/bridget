@@ -601,6 +601,111 @@ fn record_routing_probe_refusal(
 // Les deux appelants construisent ou valident d’abord des motifs fermés.
 // Aucune donnée libre de note ou de worker n’est reprise dans le guidage.
 fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
+    use bridget_transport::protocol::CandidateProbeRefusal;
+    // Réutiliser les motifs validés par les deux appelants. Le reçu conserve
+    // son triplet fermé ; la vue guidée n'est ni persistée ni une nouvelle sonde.
+    let mut seen = std::collections::BTreeSet::new();
+    let checks = reasons.iter().filter(|reason|
+        seen.insert((reason["kind"].as_str(), reason["code"].as_str())))
+        .map(|reason| {
+        let candidate = (reason["kind"] == "candidate").then(||
+            serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone()).ok()).flatten();
+        let (next_action, human_action) = match candidate {
+            Some(CandidateProbeRefusal::InvalidRequest) => (
+                "Vérifiez la forme de la demande et la version du protocole de la cible. Le champ précis refusé n'a pas été conservé ; ne modifiez pas l'enveloppe d'une demande en cours.",
+                "Si le champ invalide reste inconnu, demandez à l'utilisateur de faire examiner la demande et le protocole corrélés ; ne lancez pas de remplacement."),
+            Some(CandidateProbeRefusal::MappingUnavailable) => (
+                "Vérifiez que le même projet et son dossier source ont un placement déclaré sur la machine demandée. Ce motif seul ne distingue pas un placement absent d'un contrôle Git refusé.",
+                "Si le placement manque ou ne peut pas être vérifié, demandez à l'utilisateur de le faire qualifier sur cette machine avant toute modification."),
+            Some(CandidateProbeRefusal::DefinitionUnavailable) => (
+                "Comparez le profil, le moteur, le modèle et l'effort demandés avec leur déclaration actuelle sur la même machine. La cause précise de la définition refusée reste inconnue.",
+                "Si la définition ne peut pas être qualifiée, demandez à l'utilisateur de décider sa correction ; ce code ne justifie pas une réinstallation ou un changement de modèle."),
+            Some(CandidateProbeRefusal::PermissionsChanged) => (
+                "Réattestez le parent, puis vérifiez si ses restrictions peuvent être conservées par le moteur demandé. Ce motif seul ne prouve pas qu'un droit a changé. Consultez detail.permission_projection.",
+                "Si une restriction n'est pas traduisible, demandez à l'utilisateur la décision sur cette restriction ou sur le moteur ; ne retirez aucune protection pour essayer."),
+            Some(CandidateProbeRefusal::WorkspaceUnavailable) => (
+                "Vérifiez l'existence, l'accès et l'état Git du dossier prévu sur cette machine. Ce motif ne prouve ni disque plein ni chemin absent ; le contrôle précis manque.",
+                "Si le dossier ne peut pas être contrôlé dans votre mandat, demandez à l'utilisateur l'accès de diagnostic nécessaire ; ne déplacez pas un dossier vivant."),
+            Some(CandidateProbeRefusal::WorkspaceLimit) => (
+                "Inventoriez les worktrees enregistrés du projet, y compris ceux qui sont conservés ou imbriqués. Vérifiez leurs propriétaires et leurs usages avant tout rangement autorisé.",
+                "Si aucun worktree ne peut être retiré dans votre mandat, demandez à l'utilisateur d'arbitrer leur conservation ; ne retirez pas un travail actif."),
+            Some(CandidateProbeRefusal::WorkspaceDirty) => (
+                "Inspectez les modifications du dossier avec son propriétaire. Préservez les fichiers, les commits et les sorties avant de décider de son utilisation ; aucun reset ni nettoyage automatique.",
+                "Si les modifications ne vous appartiennent pas, demandez à leur propriétaire ou à l'utilisateur quelle conservation et quelle préparation autoriser."),
+            Some(CandidateProbeRefusal::WorkspaceBusy) => (
+                "Identifiez la tâche qui garde le dossier partagé et consultez son état natif. Un résultat disponible ne prouve pas sa clôture ; ne libérez pas sa garde à la main.",
+                "Si la garde persiste après la clôture demandée par son propriétaire, demandez à l'utilisateur une vérification ciblée de l'arrêt ; n'interrompez pas les autres travaux."),
+            Some(CandidateProbeRefusal::WorkspaceDiverged) => (
+                "Comparez la base attendue et le HEAD du dossier sans les modifier. Préservez les commits divergents et vérifiez le dossier réellement choisi ; ne remplacez pas la base imposée.",
+                "Si la divergence exige de modifier un dossier partagé, demandez à son propriétaire ou à l'utilisateur quelle préparation autoriser après conservation du travail."),
+            Some(CandidateProbeRefusal::WorkspaceBaseUnavailable) => (
+                "Vérifiez que le SHA complet demandé est publié et lisible dans le dépôt ou miroir de la même cible. Conservez ce SHA ; une autre base ne remplace pas la source demandée.",
+                "Si le commit n'est pas accessible par la préparation native, demandez à l'utilisateur de faire corriger son accès ou sa publication ; ne créez pas de mission de substitution."),
+            Some(CandidateProbeRefusal::CapabilityUnavailable) => (
+                "Comparez la déclaration du profil, du moteur, du modèle et de l'effort sur la machine demandée, puis les capacités réellement négociées par son worker. Le contrôle précis refusé n'a pas été conservé. Ce code ne prouve ni programme absent ni abonnement incompatible.",
+                "Si la déclaration ou la version chargée ne peut pas être vérifiée, demandez à l'utilisateur une correction ciblée de ce profil ou composant sur cette machine ; aucun changement de droits, compte, modèle ou hôte pour contourner ce refus."),
+            Some(CandidateProbeRefusal::ResourceLimit) => (
+                "Attendez le drainage des demandes natives en cours sur le worker puis vérifiez detail.admission avant un éventuel rejeu strict. La file était pleine lors de la sonde ; son état actuel n'est pas établi.",
+                "Si la file reste saturée, demandez à l'utilisateur un arbitrage de priorité après inspection des demandes ; ne terminez pas les tâches d'autrui et ne redémarrez pas pour vider la file."),
+            None => {
+                use bridget_transport::protocol::WorkerRefusal::*;
+                match serde_json::from_value::<bridget_transport::protocol::WorkerRefusal>(reason["code"].clone()).ok() {
+                    Some(UnsupportedVersion | CapabilityRequired) => (
+                        "Comparez la version chargée et les capacités réellement négociées par le maître et ce worker. Une capacité déclarée dans un catalogue ne prouve pas sa négociation.",
+                        "Si un composant chargé est incompatible, demandez à l'utilisateur sa mise à jour ciblée ; ne changez ni moteur ni modèle pour contourner le contrôle."),
+                    Some(InvalidEnvelope) => (
+                        "Vérifiez l'enveloppe et la version du protocole de cette demande. Le champ invalide précis n'est pas conservé ; ne modifiez pas une demande dont le sort reste inconnu.",
+                        "Si le champ ne peut pas être identifié, demandez à l'utilisateur l'accès au contrôle corrélé de l'enveloppe ; conservez la clé et toute tâche connue."),
+                    Some(Unauthorized) => (
+                        "Vérifiez l'authentification native entre maître et worker sur cette machine. Ce refus ne prouve pas un problème d'abonnement au modèle ; ne copiez aucun secret.",
+                        "Si le rattachement ne peut pas être vérifié, demandez à l'utilisateur de faire rétablir cette authentification native ; aucun changement de compte fournisseur n'est déduit."),
+                    Some(StaleConnection | WorkerUnavailable) => (
+                        "Vérifiez la connexion native courante et son époque pour le même worker. Ce fait ne prouve pas une panne réseau ni l'arrêt physique d'une tâche antérieure.",
+                        "Si la connexion ne revient pas par le parcours natif, demandez à l'utilisateur une intervention ciblée sur ce composant ; ne remplacez pas une mission d'issue inconnue."),
+                    Some(PlacementMismatch | CommandMismatch) => (
+                        "Comparez le placement et l'identité de la commande avec le reçu de la même tâche : machine, worker, instance et génération. Ne réécrivez pas ces identifiants à la main.",
+                        "Si les références divergent, demandez à l'utilisateur une réconciliation ciblée de cette commande ; ne créez pas de remplacement."),
+                    Some(DefinitionChanged | PermissionsChanged) => (
+                        "Comparez la définition admise et la preuve de droits actuelle du parent et de la cible. Ce code seul ne précise pas quel champ a changé ou n'a pas pu être vérifié.",
+                        "Si une modification était volontaire, demandez à l'utilisateur quelle configuration ou restriction doit s'appliquer ; ne retirez aucune protection pour essayer."),
+                    Some(PrepareExpired | ReleaseExpired | ProbeExpired | ResultSlotExpired) => (
+                        "Consultez l'échéance et le reçu de l'opération refusée sur cette même tâche. Ne prolongez pas un bail et ne rejouez pas un Start ou Release d'issue inconnue.",
+                        "Si le parcours natif de cette tâche ne résout pas l'expiration, demandez à l'utilisateur sa réconciliation après vérification de l'arrêt ; aucune nouvelle mission automatique."),
+                    Some(ResourceLimit) => (
+                        "Vérifiez la phase du refus et sa sous-cause dans le diagnostic corrélé du worker. Ce ResourceLimit ne précise pas si la file, le store ou les métadonnées ont atteint une borne.",
+                        "Si la borne atteinte reste inconnue ou ne peut pas être résolue dans votre mandat, demandez à l'utilisateur une inspection ciblée ; ne libérez pas de capacité en arrêtant autrui."),
+                    Some(StoreUnavailable | JournalUnavailable) => (
+                        "Vérifiez le store ou le journal nommé par le code sur cette machine, sans les éditer. La cause d'accès, de lecture ou d'écriture précise n'a pas été conservée.",
+                        "Si les reçus ou le journal ne peuvent pas être lus, demandez à l'utilisateur l'accès au diagnostic de stockage ; ne purgez pas les preuves et ne déduisez aucun arrêt."),
+                    Some(DiskFull) => (
+                        "Contrôlez le stockage, les inodes et les quotas des volumes utilisés par cette opération. Le worker a signalé un stockage épuisé à cet instant ; l'état actuel doit être mesuré.",
+                        "Si aucun rangement n'est autorisé dans votre périmètre, demandez à l'utilisateur quel archivage ou stockage ajouter ; ne déplacez pas une tâche active."),
+                    Some(FilesystemAccessDenied) => (
+                        "Vérifiez l'accès au système de fichiers pour le compte réel du worker sur cette machine. Le chemin et la règle refusés doivent être établis par le diagnostic local autorisé.",
+                        "Si la correction dépasse votre mandat, demandez à l'utilisateur de faire corriger cet accès précis ; ne donnez pas des droits globaux pour contourner le refus."),
+                    Some(WorkspacePrepareFailed | WorkspacePrepareIncomplete) => (
+                        "Consultez le diagnostic de préparation et le dossier conservé de la même tâche. Sans étape et cause conservées, ni Git, ni stockage, ni droits ne peuvent être accusés.",
+                        "Si la préparation ne peut pas être vérifiée, demandez à l'utilisateur l'accès au diagnostic manquant. Préservez le travail avant toute clôture ou préparation nouvelle autorisée."),
+                    Some(ResultConflict) => (
+                        "Comparez le résultat déjà conservé et la référence de résultat refusée pour la même tâche et ronde. Ne remplacez pas un résultat durable et ne relancez pas la mission.",
+                        "Si les références ne concordent pas, demandez à l'utilisateur une vérification du résultat corrélé ; conservez les deux preuves sans réécriture."),
+                    Some(UnknownExecution) => (
+                        "Conservez cette commande d'issue inconnue et vérifiez son reçu, son instance et sa génération. Une exécution inconnue ne prouve pas qu'elle n'a jamais démarré ou qu'elle est arrêtée.",
+                        "Si aucune preuve d'arrêt ne peut être établie nativement, demandez à l'utilisateur une réconciliation ciblée ; ne créez pas de mission de remplacement."),
+                    None => (
+                        "Conservez cette demande ; le contrôle précis refusé n'est pas disponible dans ce reçu. Aucune cause de compte, de droits ou de machine ne peut être déduite.",
+                        "Demandez à l'utilisateur l'accès au diagnostic corrélé avant toute correction ou nouvelle tentative."),
+                }
+            },
+        };
+        json!({"kind":reason["kind"],"code":reason["code"],
+            "scope":"candidate_subset","underlying_cause":"unobserved",
+            "next_action":next_action,"human_action":human_action})
+    }).collect::<Vec<_>>();
+    if !checks.is_empty() {
+        result["detail"]["scope"] = json!("candidate_subset");
+        result["detail"]["probe_checks"] = json!(checks);
+    }
     if reasons.iter().any(|r| r["kind"] == "candidate" && r["code"] == "permissions_changed") {
         result["detail"]["permission_projection"] = json!({
             "cause":"unobserved",
@@ -623,6 +728,28 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
         result["detail"]["human_action"] = json!(
             "Si le drainage normal ne suffit pas, transmettez au responsable du worker le code, la machine demandée, la request_id et l’heure du refus pour inspection des opérations en attente. Ne redémarrez pas le service et n’annulez pas les tâches d’autrui pour vider la file ; une décision d’arbitrage de priorité appartient à leurs propriétaires ou à l’utilisateur."
         );
+    }
+    // La preuve de file pleine reste séparée : elle ne résout pas les autres
+    // refus de cette admission et ne doit pas masquer leurs prérequis.
+    if let Some(checks) = result["detail"]["probe_checks"].as_array()
+        && let Some(first) = checks.first()
+    {
+        let mixed = checks.len() > 1;
+        let human = first["human_action"].clone();
+        let queue_only = first["kind"] == "candidate" && first["code"] == "resource_limit";
+        let action = if mixed { "Consultez chaque vérification dans detail.probe_checks." }
+            else { first["next_action"].as_str().unwrap_or("Vérifiez le motif reçu.") };
+        let message = format!("{action} Ce refus concerne les candidats cités de cette admission. Consultez son état dans detail.admission et les vérifications dans detail.probe_checks. Les autres travaux autorisés suivent leur propre état.");
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        result["detail"]["verification"] = json!("Les motifs reçus sont conservés dans detail.reasons. Leur sous-cause non conservée reste inconnue ; les vérifications à faire figurent dans detail.probe_checks.");
+        if !mixed && !queue_only {
+            result["detail"]["human_action"] = human;
+        }
+        if mixed {
+            result["detail"]["recovery"] = json!("Appliquez les vérifications de detail.probe_checks et corrigez tous les motifs concernés avant tout rejeu. Un drainage ne résout pas un dossier modifié, une garde ou un problème de droits. Conservez la même request_id et la même enveloppe. Consultez detail.admission : suivez toute tâche connue ; une admission pending ou d'issue inconnue interdit un remplacement. Un rejeu strict exige not_recorded, la correction de tous les motifs et la fin confirmée de tout appel concurrent. Un refus durable reste clos et suit son conseil propre avant toute nouvelle clé. Aucun changement de moteur, de machine, de compte ou de droits pour contourner ce refus.");
+            result["detail"]["human_action"] = json!("Si une vérification ou correction dépasse votre mandat, demandez à l'utilisateur la décision décrite pour ce motif dans detail.probe_checks. Conservez les travaux et reçus ; n'arrêtez pas autrui pour résoudre cette admission.");
+        }
     }
 }
 
@@ -3756,10 +3883,12 @@ fn failure(code: &str) -> Value {
                 "human_action":"Si une connexion précise est requise mais n’est pas identifiable dans le catalogue autorisé, demandez au responsable laquelle utiliser ; ne choisissez pas une autre machine ou un autre moteur pour contourner le refus."}});
     }
     if code == "routing_candidate_unavailable" {
-        let message = "Aucun candidat requis n’a pu être confirmé comme éligible lors du contrôle.";
+        let message = "Consultez le sort de cette admission et ses motifs avant tout nouvel essai. Aucun candidat requis n’a pu être confirmé comme éligible lors du contrôle ; les autres travaux autorisés suivent leur propre état.";
         let recovery = "Consultez detail.reasons s’il est présent, puis le catalogue sur la machine demandée avec le même cwd et la même posture. Vérifiez la disponibilité du profil, du modèle, de l’effort, du dossier et des sources de droits selon le motif reçu. Ce code seul ne prouve ni une déconnexion du compte ni l’absence du programme. Corrigez la cause sans changer les contraintes ni les permissions pour contourner le refus. Consultez detail.admission : suivez toute tâche connue ; si la demande reste en attente ou d’issue inconnue, conservez request_id et les paramètres, sans créer de doublon. Si detail.admission indique not_recorded, après correction de la cause sans changement de paramètres, rejouez strictement la même demande avec sa request_id. L’absence de tâche enregistrée à une lecture ne suffit pas à exclure un appel concurrent. Une nouvelle request_id exige un refus durable confirmé sans tâche et sa cause corrigée, ou des paramètres corrigés après confirmation de la clôture de l’ancienne demande.";
         return json!({"status":"refused","code":code,"message":message,
-            "detail":{"message":message,"recovery":recovery}});
+            "detail":{"message":message,"recovery":recovery,"scope":"this_admission","cause":"unobserved",
+                "verification":"Le contrôle précis refusé et sa preuve corrélée ne sont pas disponibles dans ce reçu. Lire le catalogue et les motifs fermés de la même cible sans en déduire un accès garanti.",
+                "human_action":"Si la vérification nécessaire dépasse votre accès, demandez à l'utilisateur l'accès au diagnostic de cette demande, avec request_id, machine et heure. Ce refus seul n'autorise ni réinstallation, ni changement de compte, de modèle, de droits ou de machine, ni arrêt global."}});
     }
     if code.split(':').next() == Some("routing_connection_changed") {
         let (stage, changes) = routing_change_detail(code).unwrap_or(("unobserved", Vec::new()));
@@ -32815,6 +32944,165 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec221_probe_refusal_guidance_covers_closed_candidates_and_replay() {
+        use bridget_transport::protocol::CandidateProbeRefusal::*;
+        let (state, config, _rx, _reader, request, _root) = routing168_fixture(1);
+        for reason in [InvalidRequest, MappingUnavailable, DefinitionUnavailable,
+            PermissionsChanged, WorkspaceUnavailable, WorkspaceLimit, WorkspaceDirty,
+            WorkspaceBusy, WorkspaceDiverged, WorkspaceBaseUnavailable,
+            CapabilityUnavailable, ResourceLimit] {
+            let mut plan = routing168_plan(&state, &request);
+            plan.decision_notes.clear();
+            let code = serde_json::to_value(reason).unwrap();
+            assert!(record_routing_probe_refusal(&mut plan,
+                "00000000-0000-4000-8000-000000000001",
+                "a-00000000000000000000000000000000", "c001",
+                RoutingProbeRefusalCode::Candidate(reason)));
+            let before = plan.decision_notes.clone();
+            let initial = routing_probe_failure(&plan);
+            let encoded = routing_probe_error(&plan, "routing_candidate_unavailable".into());
+            let replay = failure(&encoded);
+            let check = &initial["detail"]["probe_checks"][0];
+            assert_eq!(initial["code"], "routing_candidate_unavailable");
+            assert_eq!(check["code"], code);
+            assert_eq!(check["scope"], "candidate_subset");
+            assert_eq!(check["underlying_cause"], "unobserved");
+            assert!(check["next_action"].as_str().is_some_and(|s| s.len() > 40));
+            assert!(check["human_action"].as_str().is_some_and(|s| s.contains("utilisateur")));
+            assert_eq!(initial["detail"]["probe_checks"], replay["detail"]["probe_checks"]);
+            assert_eq!(plan.decision_notes, before, "projection sans mutation");
+        }
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_probe_refusal_worker_codes_keep_their_specific_verification() {
+        use bridget_transport::protocol::WorkerRefusal::*;
+        for (reason, word) in [
+            (UnsupportedVersion, "version"), (InvalidEnvelope, "enveloppe"),
+            (CapabilityRequired, "négociées"), (Unauthorized, "authentification"),
+            (StaleConnection, "époque"), (PlacementMismatch, "placement"),
+            (CommandMismatch, "commande"), (DefinitionChanged, "définition"),
+            (PermissionsChanged, "droits"), (PrepareExpired, "échéance"),
+            (ReleaseExpired, "échéance"), (ResourceLimit, "sous-cause"),
+            (StoreUnavailable, "store"), (DiskFull, "stockage"),
+            (FilesystemAccessDenied, "accès"), (WorkspacePrepareFailed, "préparation"),
+            (WorkspacePrepareIncomplete, "préparation"), (WorkerUnavailable, "connexion"),
+            (ProbeExpired, "échéance"), (JournalUnavailable, "journal"),
+            (ResultConflict, "résultat"), (ResultSlotExpired, "échéance"),
+            (UnknownExecution, "inconnue")] {
+            let code=serde_json::to_value(reason).unwrap();
+            let reasons=json!([{"kind":"worker","code":code,"candidates":1}]);
+            let result=failure(&format!("routing_candidate_unavailable:{reasons}"));
+            let check=&result["detail"]["probe_checks"][0];
+            assert_eq!(check["code"], code);
+            assert!(check["next_action"].as_str().unwrap().contains(word), "{reason:?}: {word}");
+            assert!(check["human_action"].as_str().unwrap().contains("utilisateur"));
+            assert_eq!(result["detail"]["reasons"],reasons);
+            assert!(result["detail"]["probe_capacity"].is_null());
+        }
+    }
+
+    #[test]
+    fn spec221_probe_refusal_queue_does_not_hide_other_required_checks() {
+        let reasons=json!([
+            {"kind":"candidate","code":"workspace_dirty","candidates":1},
+            {"kind":"candidate","code":"resource_limit","candidates":1}]);
+        let result=failure(&format!("routing_candidate_unavailable:{reasons}"));
+        assert!(result["message"].as_str().unwrap().contains("probe_checks"));
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("tous les motifs"));
+        assert!(result["detail"]["human_action"].as_str().unwrap().contains("probe_checks"));
+        assert_eq!(result["detail"]["reasons"], reasons);
+        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
+        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),2);
+        for reason in reasons.as_array().unwrap() {
+            let single=failure(&format!("routing_candidate_unavailable:{}",json!([reason])));
+            let message=single["message"].as_str().unwrap();
+            assert!(message.contains("candidats") && message.contains("autres travaux")
+                && message.contains("detail.admission"));
+            assert!(message.contains("detail.probe_checks"));
+            if reason["code"] == "workspace_dirty" {
+                assert_eq!(single["detail"]["human_action"],
+                    single["detail"]["probe_checks"][0]["human_action"]);
+            }
+        }
+    }
+
+    #[test]
+    fn spec221_probe_refusal_all_distinct_codes_fit_existing_frame() {
+        let mut reasons=Vec::new();
+        for (kind,codes) in [
+            ("candidate","invalid_request mapping_unavailable definition_unavailable permissions_changed workspace_unavailable workspace_limit workspace_dirty workspace_busy workspace_diverged workspace_base_unavailable capability_unavailable resource_limit"),
+            ("worker","unsupported_version invalid_envelope capability_required unauthorized stale_connection placement_mismatch command_mismatch definition_changed permissions_changed prepare_expired release_expired resource_limit store_unavailable disk_full filesystem_access_denied workspace_prepare_failed workspace_prepare_incomplete worker_unavailable probe_expired journal_unavailable result_conflict result_slot_expired unknown_execution")]
+        {
+            for code in codes.split_whitespace() {
+                reasons.push(json!({"kind":kind,"code":code,"candidates":1}));
+            }
+        }
+        assert_eq!(reasons.len(),35);
+        // Cas le plus large accepté par le parseur historique :35codes
+        // distincts et128raisons, compte maximal sur chaque raison.
+        for reason in &mut reasons { reason["candidates"] = json!(128); }
+        for i in 35..MAX_ROUTING_PROBE_REFUSAL_NOTES { reasons.push(reasons[i%35].clone()); }
+        let encoded=serde_json::to_string(&reasons).unwrap();
+        assert!(encoded.len()<=16384,"borne du suffixe historique en entree");
+        let result=failure(&format!("routing_candidate_unavailable:{encoded}"));
+        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),35);
+        assert_eq!(result["detail"]["reasons"],json!(reasons));
+        let frame=DaemonToWrapper::NativeDelegationResult {result};
+        let bytes=serde_json::to_vec(&frame).unwrap();
+        eprintln!("spec221_probe_distinct35_reasons128_wire_bytes={}",bytes.len());
+        assert!(bytes.len()<64*1024,"garde propre au test, pas une nouvelle borne protocole");
+        assert!(bytes.len()<bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES);
+        let decoded:DaemonToWrapper=serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(),serde_json::to_value(frame).unwrap());
+    }
+
+    #[test]
+    fn spec221_probe_refusal_duplicate_history_keeps_guidance_bounded() {
+        let reason=json!({"kind":"candidate","code":"capability_unavailable","candidates":1});
+        let reasons=json!(vec![reason; MAX_ROUTING_PROBE_REFUSAL_NOTES]);
+        let result=failure(&format!("routing_candidate_unavailable:{reasons}"));
+        assert_eq!(result["detail"]["reasons"], reasons, "aucun motif historique retire");
+        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),1);
+        assert!(result.to_string().len()<16384, "pas de texte guide repete par candidat");
+    }
+
+    #[test]
+    fn spec221_probe_refusal_unknown_and_invalid_history_remain_actionable() {
+        for code in ["routing_candidate_unavailable".to_owned(),
+            format!("routing_candidate_unavailable:{}", json!([
+                {"kind":"candidate","code":"PRIVATE_UNKNOWN","candidates":1}])),
+            format!("routing_candidate_unavailable:{}", json!([
+                {"kind":"candidate","code":"capability_unavailable","candidates":1,
+                 "private":"/PRIVATE_PATH"}]))] {
+            let result = failure(&code);
+            assert_eq!(result["code"], "routing_candidate_unavailable");
+            assert_eq!(result["detail"]["cause"], "unobserved");
+            assert!(result["detail"]["verification"].is_string());
+            assert!(result["detail"]["human_action"].as_str().unwrap().contains("utilisateur"));
+            assert!(result["detail"]["probe_checks"].is_null());
+            assert!(!result.to_string().contains("PRIVATE"));
+            let recovery = result["detail"]["recovery"].as_str().unwrap();
+            assert!(recovery.contains("not_recorded") && recovery.contains("concurrent"));
+        }
+    }
+
+    #[test]
+    fn spec221_probe_refusal_mixed_codes_preserve_scope_and_unknown_worker_cause() {
+        let reasons = json!([
+            {"kind":"candidate","code":"capability_unavailable","candidates":2},
+            {"kind":"worker","code":"resource_limit","candidates":1}]);
+        let result = failure(&format!("routing_candidate_unavailable:{reasons}"));
+        assert_eq!(result["detail"]["reasons"], reasons);
+        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(), 2);
+        assert!(result["detail"]["probe_capacity"].is_null(), "pas de file deduite du code worker");
+        assert!(result["detail"]["probe_checks"][0]["next_action"].as_str().unwrap().contains("effort"));
+        assert_eq!(result["detail"]["probe_checks"][1]["underlying_cause"], "unobserved");
+    }
+
+    #[test]
     fn spec189_candidate_resource_limit_names_queue_and_preserves_reason() {
         let code=format!("routing_candidate_unavailable:{}",json!([{"kind":"candidate","code":"resource_limit","candidates":1}]));
         let result=failure(&code);
@@ -32907,6 +33195,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(result["detail"]["admission"]["task_id"].is_null());
         assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
         assert!(result["detail"]["reasons"].as_array().unwrap().iter().any(|r|r["kind"]=="candidate" && r["code"]=="resource_limit" && r["candidates"]==1));
+        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),2);
+        assert!(result["message"].as_str().unwrap().contains("probe_checks"));
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("tous les motifs"));
         assert!(result["detail"]["recovery"].as_str().unwrap().contains("même request_id"));
         let st=state.lock().unwrap();
         assert!(st.delegation_store.tasks().unwrap().is_empty());

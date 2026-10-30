@@ -127,3 +127,12 @@ Le test réel avant barrière échoue sur le candidatpost-barrière : aucun év�
 - HorsligneC46 : MessageQueue et testsAndroid QueueStore/ProcessRecreation ainsi que mobile180couvrent déjà une partie des cas. Réutiliser, tester puis n’ajouter que le parcourswebmanquant ; pas de second journal natif de remises.
 
 Convergence C25/T176 : session du journal différente de l’instance wrapper. Relecture des activate_journal des adaptateurs et SessionJournal::new : Codex écrit thread_id, Claude écrit connection_id. Réutiliser le getter ajouté pour transporter cette identité avec le writer ; aucun second registre ni règle devinée depuis le nom de fournisseur dans le wrapper. Recette RED effective avec identités distinctes conservée.
+
+## Réemploi C26 après tests
+RÉUTILISER idempotency et DelegationStore : recherches reserve/replay/envelope_mismatch/admit_auto_task/transaction puis lecture des handlers et tests. Les92tests distincts passent, aucun écart justifiant du code neuf. Pas d'AutoAdmissionStore parallèle. Le contrat de perte de réponse est précisé dans contracts/common.md, les preuves dans validation/c26.md.
+
+## Gate C27 — projection des refus de sonde
+RÉUTILISER project_probe_constraints, failure, routing_probe_failure et routing_probe_error dans daemon/native_delegation.rs. Recherches capability_unavailable/probe/reasons/refusal et lecture du parseur fermé existant. guidance.rs porte les interventions interactives156, pas une responsabilité de catalogue d'erreurs. Aucun nouveau framework, store, enum partagé ou protocole prévu pour cette correction de projection. La cause précise d'un CapabilityUnavailable ancien reste inconnue ; les contrôles manquants doivent être explicités, pas déduits du code grossier.
+
+## Clôture source C27
+REUTILISER confirmé : project_probe_constraints/failure et les deux ports initial/relecture.35motifs fermés sans champ libre ; BTreeSetstandard pour déduplication, pas de dépendance ou format de reçu nouveau. Septtests spécifiques et14régressions C27 passent ; deux194 déjà comptés enC26. Aucun item logiciel partagé neuf. Les nouveaux fichiers validation/c26.md et c27.md sont des preuves, pas des composants d'exécution. Audit/source et activation restent distincts ; trois revues contradictoires documentées.

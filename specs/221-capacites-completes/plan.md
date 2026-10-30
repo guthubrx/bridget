@@ -1,10 +1,10 @@
 # Plan221 — capacités complètes
 
-Statut : implémentation en cours ; programme global non terminé, L1a testé avant livraison. Responsable unique : bridge1016.
+Statut : implémentation en cours ; programme global non terminé, L1a livré ; L1b validé en source, gate de livraison encore ouverte. Responsable unique : bridge1016.
 
 ## Contexte technique et invariants
 
-Socle Rust2024, trois crates, SQLite, canaux Unix négociés, workers provisionnés, service HTTP humain axum/tokio et Android Kotlin. Base479f2c00 ; services actifs220. Réutiliser ces autorités. Ne pas introduire un second orchestrateur, store de tâches, moteur d’admission, gestionnaire de permissions, installateur ou transport de fédération. Les clients graphiques ne détiennent pas l’autorité d’exécution.
+Socle Rust2024, trois crates, SQLite, canaux Unix négociés, workers provisionnés, service HTTP humain axum/tokio et Android Kotlin. État initial : base479f2c00 et services220. Après L1a : source86a88e3f, servicesLinux221-drain chargés ; clients et anciens superviseurs sous usage distingués dans son reçu. Réutiliser ces autorités. Ne pas introduire un second orchestrateur, store de tâches, moteur d’admission, gestionnaire de permissions, installateur ou transport de fédération. Les clients graphiques ne détiennent pas l’autorité d’exécution.
 
 Périmètre :11histoires/50critères. Livraison globale jamais déclarée depuis une seule tranche. Chaque lot buildable conserve les cas non terminés dans tasks.md. La présente invocation autorise tous les lots. Aucun GO intermédiaire pour les actions déjà couvertes.
 

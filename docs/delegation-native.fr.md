@@ -1395,6 +1395,14 @@ aucune dépendance l’adaptateur de bureau pour les parents natifs Bridget.
 
 [Détail du contrat de l’adaptateur](adapters/t3.md#note-49).
 
+### Comprendre un refus de candidat
+
+Consultez d'abord le sort de la demande dans detail.admission. La vue detail.probe_checks donne une vérification et une décision humaine pour chaque motif fermé distinct. Elle se limite aux candidats de cette admission. Les autres travaux autorisés suivent leur propre état.
+
+Le motif reçu reste dans detail.reasons ; underlying_cause=unobserved signifie que sa cause plus précise n'a pas été conservée. Un refus de capacité ne prouve pas un programme absent ou un abonnement incorrect. Comparez les déclarations et les capacités réellement négociées sur la même cible. Un refus worker ResourceLimit ne précise pas la borne atteinte ; seul le motif candidat resource_limit établit une file pleine lors de la sonde, sans preuve de son état actuel.
+
+Traitez tous les motifs avant un éventuel rejeu. La file revenue au repos ne résout pas un dossier modifié ou une garde active. Conservez clé, enveloppe et toute tâche connue. Sans état not_recorded, correction de tous les motifs et fin des appels concurrents, ne rejouez pas cette admission. Un refus durable reste clos. Aucun nettoyage, changement de cible ou nouvelle mission n'est lancé par ce guidage.
+
 ### Plafond de worktrees
 
 Un refus candidat `code: workspace_limit` indique que Bridget atteint sa limite
