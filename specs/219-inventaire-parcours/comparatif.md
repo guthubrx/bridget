@@ -15,17 +15,17 @@ T3 a aussi des avantages d’interface et de cycle de travail : connexion guidé
 - Bridget : source0582c6bbce1b7c10b02f4ced54731347fdf79010, services217, MCP appelant214. La source locale est un miroir ; le checkout de travail est /home/moi/10.Scripts/64.bridget sur Cartae.
 - T3 installé :0.1.0-local.20261019.dev. Bundle local SHA25642eeb05baf987f0bfd1329f09955d94968a92bd8b6f6daddb888e78ec0650bc6. Copie de lecture : /Users/moi/.cache/bridget217/t3-comparison/server-source.mjs.
 - Documentation amont figée au commit fa4e4677c0ecc437aece2dcea39f76ef31414152. Elle peut décrire des fonctions plus récentes que l’application locale. Les verdicts documentaires le disent.
--48 parcours inventoriés. Source, documentation et catalogue vivant ont été distingués. Ce n’est pas une certification, une comparaison de performances ni un audit de sécurité complet. Aucune note de qualité artificielle.
+-50 parcours inventoriés. Source, documentation et catalogue vivant ont été distingués. Ce n’est pas une certification, une comparaison de performances ni un audit de sécurité complet. Aucune note de qualité artificielle.
 - Aucun nouveau travail métier, login, changement de compte, modèle, droit ou serveur ; aucun redémarrage pour cette comparaison. Les mutations d’étude sont documentaires.
 - « Non identifié » signifie absent des surfaces CLI/MCP, guides et modules inspectés ; cela n’est pas une preuve absolue d’absence dans tout fichier ou toute extension.
-- Aucun essai de chacun des48 parcours. Aucun verdict général sur la fiabilité de T3 ou sur son absence de bugs.
+- Aucun essai de chacun des50 parcours. Aucun verdict général sur la fiabilité de T3 ou sur son absence de bugs.
 
 ## Corrections de nos affirmations précédentes
 
 1. T3 n’est pas seulement local : ses documents décrivent SSH, environnements liés et équilibrage, avec des limites et une bêta pour les liens.
 2. Son rafraîchissement Codex géré est relié aux événements de connexion. Cela ne prouve pas une actualisation systématique de tous les comptes externes et de tous les serveurs. Le login CLI externe peut demander un rafraîchissement manuel.
 3. Son attente du cache a une limite de trois secondes. Il peut conserver un catalogue en cache avec avertissement. Il accepte aussi des modèles personnalisés. Ni cette liste ni un login réussi ne prouvent l’accès à tous les modèles.
-4. L’identité du client peut influencer le catalogue fournisseur. Bridget doit employer sa propre identité officielle ; aucune imitation de T3 n’est autorisée ou nécessaire.
+4. L’identité du client peut influencer le catalogue fournisseur (T1, commentaire de requestCodexChatGptModels et construction de l’identité au démarrage). Bridget doit employer sa propre identité officielle ; aucune imitation de T3 n’est autorisée ou nécessaire.
 5. Une version compilée, installée ou un serveur redémarré ne prouve pas que chaque composant appelant a changé. Le client MCP214 de ce fil reste une limite réelle et déclarée.
 
 ## Priorités proposées
@@ -36,17 +36,25 @@ P1 : parcours guidé de préparation des machines et comptes ; réglages par pro
 
 P2 : interface de navigateur/appareils, webhooks, nouvelles plateformes, points de reprise et forks. Ce sont des extensions possibles, pas des prérequis de l’actualisation demandée.
 
+## Lecture des verdicts
+
+« Avantage T3 » désigne un écart fonctionnel identifié par lecture, pas un meilleur taux de réussite mesuré. « Parcours T3 documenté » ne prouve pas son fonctionnement sur l’application installée. « Fonction exposée » constate le code et le port, sans recette d’usage. Chaque ligne précise la nature des preuves lues par le parent.
+
+La revue indépendante23e18e7a a vérifié plusieurs symboles Bridget et la cohérence documentaire. Elle n’avait pas accès au bundle Mac et n’a pas lu les documents amont. Elle ne constitue pas une deuxième validation des faits T3. Le rapport final corrige ses objections de portée et de référence ; les deux lignes49–50 sont ajoutées par le parent après cette revue.
+
+Le présent Markdown est la source documentaire de référence. Le JSON de travail reste hors Git. La page HTML est une restitution générée de ce rapport daté ; elle n’est pas une deuxième source à modifier séparément. Réexaminer cette comparaison si la version installée, le commit amont ou les parcours Bridget concernés changent.
+
 ## Inventaire détaillé
 
 ### 01 — Voir le compte utilisé sur la machine
 
 Famille : Comptes et modèles. Verdict : **Avantage T3**. Priorité : P0.
 
-T3 : État connecté, type de compte et offre intégrés au statut de l’instance.
+T3 : Pour Codex : état connecté, type de compte et offre intégrés au statut de l’instance.
 
 Bridget : Le catalogue de flotte expose une déclaration et entitlement=unknown. La connexion réelle a demandé une investigation séparée.
 
-Preuves : T1,T2,B1,R1. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T1,T2,B1,R1,B24. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 02 — Rafraîchir les modèles après une connexion
 
@@ -56,7 +64,7 @@ T3 : Le Codex géré réactualise son snapshot après les événements du contr�
 
 Bridget : Pas de lien automatique entre changement de compte et catalogue de flotte.
 
-Preuves : T1,T2,B1. Limite : Code du Codex géré vérifié. Le login effectué hors de ce contrôleur peut demander un rafraîchissement manuel.
+Preuves : T1,T2,B1. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Code du Codex géré vérifié. Le login effectué hors de ce contrôleur peut demander un rafraîchissement manuel.
 
 ### 03 — Relier modèles, compte et serveur
 
@@ -66,7 +74,7 @@ T3 : Instances configurées séparément ; lecture account/read puis model/list 
 
 Bridget : Connexions et modèles déclarés par serveur ; pas d’observation fraîche corrélée au compte dans fleet.options.
 
-Preuves : T1,T3,B1. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T1,T3,B1. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 04 — Savoir si la liste est fraîche
 
@@ -76,7 +84,7 @@ T3 : Attend un cache plus récent que le démarrage. Après trois secondes, peut
 
 Bridget : observed_at et provenance portent la déclaration. Ils ne prouvent pas la fraîcheur d’une lecture fournisseur.
 
-Preuves : T1,B1. Limite : La date d’un fichier partagé ne prouve pas à elle seule la corrélation au compte ou au client. Aucun catalogue ne garantit l’acceptation du prochain tour.
+Preuves : T1,B1. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : La date d’un fichier partagé ne prouve pas à elle seule la corrélation au compte ou au client. Aucun catalogue ne garantit l’acceptation du prochain tour. Les modèles personnalisés peuvent être ajoutés sans preuve d’accès.
 
 ### 05 — Options propres à chaque modèle
 
@@ -86,7 +94,7 @@ T3 : Le catalogue expose effort, vitesse, contexte et valeurs par défaut selon 
 
 Bridget : Le catalogue de flotte normalise surtout modèle et effort. Des réglages supplémentaires existent dans certains adaptateurs, sans contrat uniforme de flotte.
 
-Preuves : T1,R2,B1,B2. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T1,R2,B1,B2. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 06 — Plusieurs comptes sans écraser le login principal
 
@@ -96,17 +104,17 @@ T3 : Profils et espaces Codex distincts ; connexion gérée et configuration de 
 
 Bridget : Des définitions distinctes sont possibles, mais préparation et connexion restent surtout opérateur/CLI.
 
-Preuves : T2,D1,B3. Limite : Ne pas copier les secrets ni reprendre l’identité d’un autre client pour reproduire ce parcours.
+Preuves : T2,D1,B3. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Ne pas copier les secrets ni reprendre l’identité d’un autre client pour reproduire ce parcours.
 
 ### 07 — Expliquer un modèle refusé
 
-Famille : Comptes et modèles. Verdict : **Commun partiel**. Priorité : P0.
+Famille : Comptes et modèles. Verdict : **Moments différents, pas d’équivalence**. Priorité : P0.
 
 T3 : L’authentification et le catalogue aident avant le lancement ; pas de preuve d’absence de tout refus tardif.
 
 Bridget : 217 explique model_not_found attesté et demande de vérifier compte/offre. Les anciennes erreurs non conservées restent inconnues.
 
-Preuves : T1,B4. Limite : La correction 217 est active. Aucun échec volontaire fournisseur lancé pour cette comparaison.
+Preuves : T1,B4. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : La correction 217 est active. Aucun échec volontaire fournisseur lancé pour cette comparaison. Le catalogue T3 accepte aussi des modèles personnalisés ; pas de garantie préventive d’accès.
 
 ### 08 — Préparer toutes les machines depuis un parcours guidé
 
@@ -116,7 +124,7 @@ T3 : Assistant qui sélectionne les ordinateurs, vérifie les agents et prépare
 
 Bridget : Installateur avec choix des programmes et fédération SSH. Plusieurs gestes opérateur restent séparés.
 
-Preuves : D2,B3,B5. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D2,B3,B5. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 09 — Détecter une version de fournisseur incompatible
 
@@ -126,17 +134,17 @@ T3 : Politique de compatibilité par fournisseur et version de T3, avec version 
 
 Bridget : 209 contrôle l’inventaire et les minima de support avant bascule. Pas de matrice complète modèle/fonction/version.
 
-Preuves : T4,B6. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T4,B6. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 10 — Mettre à jour fournisseurs, serveurs et application ensemble
 
-Famille : Installation et versions. Verdict : **Avantage T3 documenté**. Priorité : P0.
+Famille : Installation et versions. Verdict : **Parcours T3 documenté**. Priorité : P0.
 
 T3 : Parcours global qui nomme machines ignorées/échouées et composants encore anciens, puis réactualise les catalogues.
 
 Bridget : Mise à jour des services et contrôle des images chargées existent. Un ancien MCP peut rester chargé après la bascule et réclamer un geste externe.
 
-Preuves : D3,B6,R3. Limite : Parcours décrit dans les documents amont figés ; pas de mise à jour T3 exécutée pendant cette étude.
+Preuves : D3,B6,R3. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Parcours décrit dans les documents amont figés ; pas de mise à jour T3 exécutée pendant cette étude. Non vérifié en usage sur l’application installée dans cette étude.
 
 ### 11 — Reconnaître le composant encore ancien
 
@@ -146,7 +154,7 @@ T3 : Contrôle de version de protocole et consigne désignant le côté à mettr
 
 Bridget : Négociation et avertissements existent ; services217 et client appelant214 coexistent ici. Le rechargement du composant hôte reste distinct.
 
-Preuves : D3,B6,R3. Limite : Ne pas imposer une égalité de numéro de build si les protocoles sont compatibles.
+Preuves : D3,B6,R3. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Ne pas imposer une égalité de numéro de build si les protocoles sont compatibles.
 
 ### 12 — Reprendre après une mise à jour
 
@@ -156,17 +164,17 @@ T3 : Continuation portable des fils pris en charge ; commandes et travaux de fon
 
 Bridget : Reconnexion des wrappers et conservation des tâches distantes existent. Plusieurs incidents historiques et le défaut218 montrent des limites réelles.
 
-Preuves : T5,D3,B7,R4. Limite : Aucun redémarrage comparatif contrôlé des deux produits. Pas de verdict général de fiabilité.
+Preuves : T5,D3,B7,R4. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Aucun redémarrage comparatif contrôlé des deux produits. Pas de verdict général de fiabilité.
 
 ### 13 — Ajouter un serveur et s’y connecter
 
-Famille : Serveurs et projets. Verdict : **Avantage T3 sur le parcours**. Priorité : P1.
+Famille : Serveurs et projets. Verdict : **Parcours T3 documenté**. Priorité : P1.
 
 T3 : Ajout d’environnement, installation/réutilisation du serveur SSH, tunnel et association intégrés.
 
 Bridget : Fédération SSH et identités de worker existent. Paramétrage du projet et des profils séparé.
 
-Preuves : D4,B5. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D4,B5. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier. Non vérifié en usage sur l’application installée dans cette étude.
 
 ### 14 — Répartir automatiquement un travail
 
@@ -176,7 +184,7 @@ T3 : Équilibrage de nouveaux fils documenté ; choix stabilisé, préférences 
 
 Bridget : Admission native compare ressources, charge, droits et continuité, puis fige son choix.
 
-Preuves : D4,B8. Limite : Le mécanisme T3 documenté ne signifie pas que l’équilibrage est activé dans cette installation.
+Preuves : D4,B8. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Le mécanisme T3 documenté ne signifie pas que l’équilibrage est activé dans cette installation.
 
 ### 15 — Déléguer entre machines
 
@@ -186,17 +194,17 @@ T3 : Environnements liés documentés en bêta, avec plafond d’accès et contr
 
 Bridget : Missions natives distantes, projet source et placement vérifiés, propriétaire et reçus conservés.
 
-Preuves : D4,B7. Limite : Aucun lien T3 distant créé. Ne pas prétendre que T3 est seulement local, ni que sa bêta est qualifiée ici.
+Preuves : D4,B7. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Aucun lien T3 distant créé. Ne pas prétendre que T3 est seulement local, ni que sa bêta est qualifiée ici.
 
 ### 16 — Regrouper le même projet sur plusieurs machines
 
-Famille : Serveurs et projets. Verdict : **Avantage T3 sur le parcours**. Priorité : P1.
+Famille : Serveurs et projets. Verdict : **Parcours T3 documenté**. Priorité : P1.
 
 T3 : Import et regroupement de dépôts par identité ; paramètres par projet et environnement avec origine de valeur visible.
 
 Bridget : Mappings Git contrôlés et préparation distante automatique existent. Leur cohérence a encore demandé des interventions de configuration.
 
-Preuves : D2,D5,B9. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D2,D5,B9,B25. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier. Non vérifié en usage sur l’application installée dans cette étude.
 
 ### 17 — Garantir le commit demandé
 
@@ -206,17 +214,17 @@ T3 : Gestion Git et préparation avant lancement ; contexte du fil attaché au d
 
 Bridget : expected_base_commit, preuve Git source et placement distant font partie du contrat d’admission.
 
-Preuves : T6,B9. Limite : Les exigences sont différentes. Aucune preuve que T3 offre exactement la même garantie de SHA entre machines.
+Preuves : T6,B9. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Les exigences sont différentes. Aucune preuve que T3 offre exactement la même garantie de SHA entre machines.
 
 ### 18 — Extraire un dossier léger
 
-Famille : Serveurs et projets. Verdict : **Point fort Bridget vérifié**. Priorité : P1.
+Famille : Serveurs et projets. Verdict : **Profil Bridget documenté**. Priorité : P1.
 
 T3 : Aucun équivalent au profil compact207 identifié dans les parcours inspectés.
 
 Bridget : Profil compact-v1 par worktree, audit des drapeaux et conservation de l’ancre Git ; mesures historiques documentées.
 
-Preuves : B10. Limite : Absence limitée au périmètre inspecté ; aucun benchmark T3/Bridget à entrées identiques.
+Preuves : B10. Niveau : sources ou reçus Bridget lus par le parent. Limite : Absence limitée au périmètre inspecté ; aucun benchmark T3/Bridget à entrées identiques.
 
 ### 19 — Lire une base sans bloquer sur un autre dossier
 
@@ -226,7 +234,7 @@ T3 : Dossier par fil et worktree possible ; pas de preuve d’un lecteur immuabl
 
 Bridget : Un rafraîchissement shared peut être refusé si un worktree descendant a un reçu actif. Incidents réels constatés.
 
-Preuves : B11,R4. Limite : Ne pas supprimer la protection de travail actif pour imiter un parcours plus permissif.
+Preuves : B11,R5. Niveau : sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Ne pas supprimer la protection de travail actif pour imiter un parcours plus permissif.
 
 ### 20 — Changer de fournisseur en conservant le contexte
 
@@ -236,7 +244,7 @@ T3 : Transfert de messages attribués, budget et références vers l’historiqu
 
 Bridget : Passations et fils existent. Pas de parcours uniforme de transfert de conversation entre moteurs identifié dans les interfaces inspectées.
 
-Preuves : T7,D6,B12. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T7,D6,B12. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 21 — Créer une bifurcation depuis un tour
 
@@ -246,7 +254,7 @@ T3 : Fork et contexte de point de reprise reliés au fil.
 
 Bridget : Pas de bifurcation native de conversation avec état du fournisseur identifiée.
 
-Preuves : T8,B12. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T8,B12. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 22 — Revenir à un point de reprise avec les fichiers
 
@@ -256,17 +264,17 @@ T3 : Capture et restauration ; la restauration des fichiers exige l’isolation 
 
 Bridget : Rapports Git et branches conservées ; pas de restauration conversation+fichiers par point de reprise identifiée.
 
-Preuves : T9,B10. Limite : Fonction potentiellement destructive : aucune restauration exécutée.
+Preuves : T9,B10. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Fonction potentiellement destructive : aucune restauration exécutée.
 
 ### 23 — Importer des conversations existantes
 
-Famille : Conversations et reprise. Verdict : **Avantage T3 documenté**. Priorité : P2.
+Famille : Conversations et reprise. Verdict : **Parcours T3 documenté**. Priorité : P2.
 
 T3 : Import borné de l’historique Claude/Codex avec suivi des éléments déjà importés.
 
 Bridget : Reprise des sessions natives et journaux propres ; pas d’import de projets/historiques équivalent identifié.
 
-Preuves : D2,B12. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D2,B12. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier. Non vérifié en usage sur l’application installée dans cette étude.
 
 ### 24 — Continuer une mission après son résultat
 
@@ -276,7 +284,7 @@ T3 : Fils ordinaires continuables et tâches déléguées rattachées à un pare
 
 Bridget : Rondes natives sur enfant gardé, durée et plafond de huit rondes explicités.
 
-Preuves : T10,B13. Limite : Pas d’équivalence exacte de cycle de vie. Le plafond Bridget n’est pas un bug en soi.
+Preuves : T10,B13. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’équivalence exacte de cycle de vie. Le plafond Bridget n’est pas un bug en soi.
 
 ### 25 — Annuler et savoir si tout est arrêté
 
@@ -286,7 +294,7 @@ T3 : Interruption et reprise de session gérées ; pas de recette physique ident
 
 Bridget : Arrêt attesté et cleanup_done distincts du résultat. L’incident e3 a nécessité une maintenance ciblée après blocage du drainage.
 
-Preuves : T10,B14,R4. Limite : La correction préventive218 n’est PAS livrée. Ne pas annoncer que la présence d’un bouton Stop suffit dans l’un des produits.
+Preuves : T10,B14,R4. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : La correction préventive218 n’est PAS livrée. Ne pas annoncer que la présence d’un bouton Stop suffit dans l’un des produits.
 
 ### 26 — Rejouer sans créer de doublon
 
@@ -296,7 +304,7 @@ T3 : Reçus de commandes et suivi des effets dans l’orchestration inspectée. 
 
 Bridget : Canon durable, clé d’admission, issue inconnue et réconciliation de la même tâche.
 
-Preuves : T11,B15. Limite : Ne pas comparer seulement les mots idempotence ou accepted. Pas de campagne commune de pertes de réponses.
+Preuves : T11,B15. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Ne pas comparer seulement les mots idempotence ou accepted. Pas de campagne commune de pertes de réponses.
 
 ### 27 — Comprendre une erreur sans appeler le mainteneur
 
@@ -304,9 +312,9 @@ Famille : Conversations et reprise. Verdict : **Progrès Bridget, écart produit
 
 T3 : Statuts et actions intégrés aux comptes, environnements, tours et mises à jour.
 
-Bridget : Guidages199–217 améliorés, mais des incidents ont encore exigé la lecture manuelle de plusieurs autorités.
+Bridget : Guidages214 et217 améliorés, mais des incidents ont encore exigé la lecture manuelle de plusieurs autorités.
 
-Preuves : T1,T10,D3,B4,R4. Limite : Les historiques ne prouvent pas que tous les défauts sont encore présents. Cause inconnue reste inconnue.
+Preuves : T1,T10,D3,B4,R4,B22. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Les historiques ne prouvent pas que tous les défauts sont encore présents. Cause inconnue reste inconnue.
 
 ### 28 — Éditer, ordonner et supprimer la file
 
@@ -316,7 +324,7 @@ T3 : Édition du texte et des pièces jointes, ordre et promotion en interventio
 
 Bridget : 159B permet annuler, ordonner, promouvoir sous droits ; pas de remplacement du texte dans ce contrat.
 
-Preuves : T12,B16. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T12,B16. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 29 — Intervenir pendant le travail
 
@@ -326,7 +334,7 @@ T3 : Message de pilotage lié au tour ; règles d’autorité du fil.
 
 Bridget : Steer natif sous droits parent/humain ; not_parent est une protection, pas un défaut à contourner.
 
-Preuves : T12,B16. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T12,B16. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 30 — Répondre aux questions et permissions
 
@@ -336,7 +344,7 @@ T3 : Questions et approbations dans le fil ; leur portée reste distincte.
 
 Bridget : Demandes enfant relayées sous opt-in ; questions propriétaire et approbations humaines séparées.
 
-Preuves : T10,B17. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T10,B17. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 31 — Saisir un secret sans le donner au modèle
 
@@ -346,7 +354,7 @@ T3 : Carte privée ; référence consommable une fois, valeur hors historique du
 
 Bridget : Pas de port natif de demande/consommation de secret équivalent identifié ; recours aux connexions officielles sur la cible.
 
-Preuves : T13,B17. Limite : Ce manque n’autorise jamais à demander une clé dans le chat ou à copier des identifiants.
+Preuves : T13,B17. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Ce manque n’autorise jamais à demander une clé dans le chat ou à copier des identifiants.
 
 ### 32 — Joindre et lire des artefacts
 
@@ -356,37 +364,37 @@ T3 : Pièces jointes au fil, visualisations et lecteurs intégrés.
 
 Bridget : Artefacts versionnés, empreintes, droits et lecture bornée ; présentation mobile disponible.
 
-Preuves : T14,B18. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T14,B18. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 33 — Parcourir le web ensemble sur le serveur
 
-Famille : Interface et outils. Verdict : **Avantage T3, extension de périmètre**. Priorité : P2.
+Famille : Interface et outils. Verdict : **Fonction T3 exposée, usage non comparé**. Priorité : P2.
 
 T3 : Navigateur partagé humain/agent, contrôle, captures et enregistrements, par environnement.
 
 Bridget : Pas de navigateur partagé intégré identifié dans les surfaces inspectées. Les outils externes du fournisseur restent possibles.
 
-Preuves : T14,D4,B19. Limite : Outil T3 exposé dans ce fil ; aucune navigation métier exécutée pour le comparer.
+Preuves : T14,D4,B19. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Outil T3 exposé dans ce fil ; aucune navigation métier exécutée pour le comparer.
 
 ### 34 — Afficher et contrôler simulateurs et émulateurs
 
-Famille : Interface et outils. Verdict : **Avantage T3, extension de périmètre**. Priorité : P2.
+Famille : Interface et outils. Verdict : **Fonction T3 exposée, usage non comparé**. Priorité : P2.
 
 T3 : Panneau d’appareils et hôtes SSH avec commandes bornées.
 
 Bridget : Pas de panneau d’appareils équivalent identifié.
 
-Preuves : T15,B19. Limite : Présence du port et du code vérifiée ; aucun appareil démarré.
+Preuves : T15,B19. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Présence du port et du code vérifiée ; aucun appareil démarré.
 
 ### 35 — Revoir les modifications et gérer les PR
 
-Famille : Interface et outils. Verdict : **Avantage T3**. Priorité : P1.
+Famille : Interface et outils. Verdict : **Fonction T3 exposée, usage non comparé**. Priorité : P1.
 
 T3 : Diffs, commentaires, guides et demandes de fusion reliés aux conversations.
 
 Bridget : Passage par Git, CLI/outils tiers et comptes rendus ; pas de parcours de revue graphique équivalent identifié.
 
-Preuves : T16,D7,B19. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T16,D7,B19. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 36 — Être réveillé par un changement de PR
 
@@ -396,17 +404,17 @@ T3 : Suivi des contrôles et commentaires avec réveil du fil.
 
 Bridget : Réveils génériques présents, pas de suivi natif spécialisé des PR identifié.
 
-Preuves : T16,B20. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T16,B20. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 37 — Utiliser un terminal lié au projet
 
-Famille : Interface et outils. Verdict : **Avantage T3 sur l’interface**. Priorité : P2.
+Famille : Interface et outils. Verdict : **Fonction T3 exposée, usage non comparé**. Priorité : P2.
 
 T3 : Terminal du projet accessible sur l’environnement.
 
 Bridget : Attach dialogue avec l’agent, pas un shell de projet intégré. Le terminal externe reste disponible.
 
-Preuves : D8,B12. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D8,B12. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 38 — Retrouver et organiser le travail
 
@@ -416,7 +424,7 @@ T3 : Recherche, épinglage, classement, mise en sommeil et métadonnées de fil.
 
 Bridget : Annuaire paginé, fils partagés, registre et journaux ; expérience moins unifiée.
 
-Preuves : T17,D9,B12. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T17,D9,B12. Niveau : code installé ou outils exposés lus par le parent ; documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 39 — Planifier un réveil
 
@@ -426,7 +434,7 @@ T3 : Tâches récurrentes liées ou non au fil.
 
 Bridget : Réveils périodiques ou calendaires durables ; ce ne sont pas tous des créations automatiques de mission.
 
-Preuves : T18,B20. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T18,B20. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 40 — Déclencher une tâche par webhook
 
@@ -436,7 +444,7 @@ T3 : Déclencheur HTTP, template de corps et signature selon le contrat.
 
 Bridget : WakeCadence ne contient que Interval et At ; pas de webhook natif identifié.
 
-Preuves : T18,B20. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T18,B20. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 41 — Reprendre après une limite d’usage
 
@@ -446,47 +454,47 @@ T3 : Réglages de mise en sommeil et reprise à la date de retour.
 
 Bridget : resume_on_limit opt-in, durée et nombre de reprises bornés, même fournisseur et droits.
 
-Preuves : T19,B21. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : T19,B21. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 42 — Suivre tokens, coûts et offre du compte
 
-Famille : Automatisation et mesure. Verdict : **Avantage T3 sur la présentation**. Priorité : P1.
+Famille : Automatisation et mesure. Verdict : **Présentation T3 documentée**. Priorité : P1.
 
 T3 : Usage par modèle/fournisseur, limites d’abonnement et prix réglables.
 
 Bridget : Quotas et crédits observés dans les instances ; pas de tableau de coût homogène comparable identifié.
 
-Preuves : T1,D10,B21. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D10,B21. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’essai de ce parcours dans cette étude ; aucune garantie de fiabilité comparative.
 
 ### 43 — Observer la présence d’agents de plusieurs projets
 
-Famille : Automatisation et mesure. Verdict : **Point fort Bridget**. Priorité : P1.
+Famille : Automatisation et mesure. Verdict : **Comparaison non établie**. Priorité : P1.
 
 T3 : Gestion de fils et environnements. Pas de contre-preuve d’une équivalence exacte à l’annuaire interagents Bridget.
 
 Bridget : Annuaire, messages interprojets justifiés, reçus de remise et registre de coordination.
 
-Preuves : T17,B15. Limite : Ne pas qualifier ce point de supériorité globale de fiabilité.
+Preuves : T17,B15. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Ne pas qualifier ce point de supériorité globale de fiabilité.
 
 ### 44 — Lancer un nouveau chantier depuis le téléphone
 
-Famille : Mobile et accès. Verdict : **Avantage T3 documenté**. Priorité : P1.
+Famille : Mobile et accès. Verdict : **Parcours T3 documenté**. Priorité : P1.
 
 T3 : Création et pilotage de fils dans les applications mobiles.
 
 Bridget : Application Android de suivi/pilotage d’agents existants ; pas de création directe de nouvel agent dans le contrat courant.
 
-Preuves : D4,D11,B19. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier.
+Preuves : D4,D11,B19. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Lecture des sources et/ou documentation ; pas de nouvel essai métier. Non vérifié en usage sur l’application installée dans cette étude.
 
 ### 45 — Proposer une même interface sur web, bureau et iOS
 
-Famille : Mobile et accès. Verdict : **Avantage T3 documenté**. Priorité : P2.
+Famille : Mobile et accès. Verdict : **Parcours T3 documenté**. Priorité : P2.
 
 T3 : Interfaces web, bureau, iOS et Android annoncées et décrites.
 
 Bridget : CLI/MCP et Android ; pas d’interface produit web/bureau/iOS équivalente identifiée.
 
-Preuves : D11,B19. Limite : Pas d’audit d’accessibilité ni d’essai des quatre plateformes pendant cette comparaison.
+Preuves : D11,B19. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas d’audit d’accessibilité ni d’essai des quatre plateformes pendant cette comparaison. Non vérifié en usage sur l’application installée dans cette étude.
 
 ### 46 — Notifications et messages pendant une coupure
 
@@ -496,7 +504,7 @@ T3 : Messages hors ligne, notification et reprise documentés.
 
 Bridget : Brouillons/reçus chiffrés, notifications bornées et relecture après reconnexion.
 
-Preuves : D12,B19. Limite : Pas de mesure comparative de délai ou de taux de remise.
+Preuves : D12,B19. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Pas de mesure comparative de délai ou de taux de remise.
 
 ### 47 — Conserver les restrictions entre fournisseurs
 
@@ -504,9 +512,9 @@ Famille : Droits et exploitation. Verdict : **Non départagé**. Priorité : P0.
 
 T3 : Modes et capacités du fil/instance ; les refus restent possibles.
 
-Bridget : Projection de droits et contrôles avant remise ; conversion T3→Codex214 volontairement fermée.
+Bridget : Projection de droits et contrôles avant remise ; conversion Claude→Codex214 volontairement fermée.
 
-Preuves : T20,B22. Limite : Aucune analyse de sécurité comparative exhaustive. Ne pas obtenir la parité en supprimant un contrôle.
+Preuves : T20,B22. Niveau : code installé ou outils exposés lus par le parent ; sources ou reçus Bridget lus par le parent. Limite : Aucune analyse de sécurité comparative exhaustive. Ne pas obtenir la parité en supprimant un contrôle.
 
 ### 48 — Mesurer les prérequis du projet sur chaque serveur
 
@@ -516,20 +524,41 @@ T3 : Scripts de préparation et réglages d’environnement ; pas de preuve d’
 
 Bridget : Contrôles Git, ressources et programmes ; égalité Node215 obtenue par intervention ciblée, pas par un contrat projet complet.
 
-Preuves : D5,B10,B23. Limite : Même version de Node ne prouve pas le déterminisme des octets. Rien ne permet de déclarer l’un des produits complet ici.
+Preuves : D5,B10,B23. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Même version de Node ne prouve pas le déterminisme des octets. Rien ne permet de déclarer l’un des produits complet ici.
+
+### 49 — Prendre en charge d’autres moteurs
+
+Famille : Installation et versions. Verdict : **Parcours T3 documenté**. Priorité : P2.
+
+T3 : La documentation officielle couvre aussi OpenCode, Grok Build et Antigravity. Les instances locales correspondantes peuvent être désactivées.
+
+Bridget : Les parcours publiés sont centrés sur Codex, Claude Code, Cursor et Gemini ; des fournisseurs compatibles peuvent utiliser ces adaptateurs.
+
+Preuves : D11,R2,B3. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent ; lecture native ou constat d’incident du parent. Limite : Plus d’adaptateurs ne signifie pas que tous leurs modèles sont accessibles ou qualifiés. Aucun fournisseur supplémentaire activé pour cette étude. Non vérifié en usage sur l’application installée dans cette étude.
+
+### 50 — Installer le programme sur Windows
+
+Famille : Mobile et accès. Verdict : **Parcours T3 documenté**. Priorité : P2.
+
+T3 : Installations Windows officielles et application de bureau annoncées.
+
+Bridget : Les distributions natives publiées et inspectées visent macOS et Linux ; Android reste un client distinct.
+
+Preuves : D11,B3. Niveau : documentation amont figée lue par le parent ; sources ou reçus Bridget lus par le parent. Limite : Documentation seulement ; aucun hôte Windows testé. Ce point n’est pas un prérequis pour la flotte actuelle. Non vérifié en usage sur l’application installée dans cette étude.
 
 ## Exigences pour l’actualisation autorisée
 
-1. Observer sur le serveur cible et dans la configuration exacte de la connexion ; aucun compte d’une autre machine transposé.
+1. Observer sur le serveur cible et dans la configuration exacte de la connexion ; aucun compte d’une autre machine transposé. Le worker porte l’observation locale ; le maître corrèle et publie l’état. Le client MCP affiche cet état, sans devenir autorité de fraîcheur.
 2. Séparer programme installé, authentification observée, modèles annoncés, droits du parent et succès d’une vraie mission.
 3. Corréler la preuve à une identité de compte opaque, au programme, à la connexion et à l’époque du worker. Ne pas exposer adresse, jeton ou secret dans le catalogue.
-4. Actualiser après un changement de connexion reconnu, au démarrage/reconnexion pertinent et sur action explicite. Détecter aussi un login officiel réalisé hors de Bridget sans lire ni copier ses secrets.
+4. Actualiser après un changement de connexion reconnu, au démarrage/reconnexion pertinent et sur action explicite. Pour un login officiel externe, qualifier un signal non secret observable. Sans signal fiable, afficher que ce changement n’est pas détecté et demander une actualisation explicite ; ne pas promettre une détection automatique non démontrée.
 5. Invalider l’observation de l’ancien compte avant de proposer les options du nouveau. Un échec reste inconnu ; aucun ancien choix présenté comme frais.
 6. Borner les processus, le temps, la sortie, la pagination et la concurrence. Aucun tour de modèle ni mission de qualification pour simplement découvrir les modèles.
-7. Garder droits, choix humains et tâches admises intacts. Aucun changement silencieux de fournisseur/modèle/compte, aucune reprise de mission d’issue inconnue.
+7. Garder droits, choix humains et tâches admises intacts. Aucun changement silencieux de fournisseur/modèle/compte, aucune reprise de mission d’issue inconnue. Le choix humain existant select_runtime conserve son contrat ; mutualiser le décodage seulement si cela ne change pas ses effets.
 8. Pour les fournisseurs sans découverte fiable, nommer la limite au lieu d’inventer un accès. Ne pas annoncer le support de tous les fournisseurs depuis le seul support Codex.
 9. Donner à l’agent une prochaine action précise, sa portée et la décision humaine requise si elle sort de ses droits.
 10. Qualifier compte changé, compte absent, programme ancien, cache périmé, pagination, coupure et simultanéité ; puis distribuer et vérifier les images chargées sur les hôtes concernés.
+11. Les anciens clients qui transmettent la projection JSON doivent voir les nouveaux faits additifs. Si un ancien formatteur les supprime, nommer sa version et le geste de reconnexion requis. Ne pas annoncer tous les composants actualisés depuis le seul état du maître.
 
 ## Sources
 
@@ -647,6 +676,12 @@ Preuves : D5,B10,B23. Limite : Même version de Node ne prouve pas le détermini
 
 - **D10** : https://github.com/pingdotgg/t3code/blob/fa4e4677c0ecc437aece2dcea39f76ef31414152/docs/user/usage.md
 
-- **D11** : https://github.com/pingdotgg/t3code ; outils et documentation mobile amont, pas de test de toutes les plateformes.
+- **D11** : https://github.com/pingdotgg/t3code/blob/fa4e4677c0ecc437aece2dcea39f76ef31414152/README.md ; documentation amont, pas de test de toutes les plateformes.
 
 - **D12** : https://github.com/pingdotgg/t3code/blob/fa4e4677c0ecc437aece2dcea39f76ef31414152/docs/user/composer.md
+
+- **B24** : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/216-codex-ks/validation.md : login attesté puis qualification native refusée HTTP400/model_not_found. Le compte connecté ne prouvait pas l’accès au modèle.
+
+- **B25** : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/203-placement-sys/validation.md : correction native du mapping SYS vers le grand volume après clôture des commandes concernées.
+
+- **R5** : Message propriétaire mcp-62628-6ae428c7-12 : revue SYS discovery/shared refusée workspace_busy, admissionnot_recorded/tasknull. Diagnostic de source shared_refresh_allowed et lectures Git du rootSYS : HEAD3868a7d5, base501cf023 présente, avancement bloqué par reçus Released de worktrees descendants. Résolution des deux anciennes clôtures distincte en218.
