@@ -4345,13 +4345,13 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         view["error_human_action"]=json!("Si le modèle reste saturé, demandez à l’utilisateur de choisir entre attendre et autoriser une suite avec une autre contrainte de modèle. Ne changez ni moteur, ni compte, ni droits et ne redémarrez aucun service pour contourner ce refus.");
     }
     if task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") {
-        view["error_message"]=json!("Le fournisseur refuse le modèle demandé pour cette connexion (HTTP 400, model_not_found). Ce refus concerne cette tâche et cette connexion, pas toute la flotte. Les autres travaux autorisés suivent leur propre état.");
+        view["error_message"]=json!("Cette connexion ne permet pas d’utiliser le modèle demandé : le fournisseur le refuse (HTTP 400, model_not_found). Ce refus concerne cette tâche et cette connexion, pas toute la flotte. Les autres travaux autorisés suivent leur propre état.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
             json!("Expliquez directement ce refus à l’utilisateur. Une connexion réussie ne prouve pas l’accès au modèle. Conservez la tâche, sa clé et ses fichiers ; une tâche failed ne reprend ni par Continue ni par rejeu initial. Après correction de l’accès, confirmation de l’arrêt et vérification du dossier, une nouvelle demande autorisée utilise une nouvelle clé. Ne substituez pas de modèle automatiquement.")
         } else {
             json!("Expliquez directement ce refus à l’utilisateur et conservez la tâche, sa clé et ses fichiers. Attendez l’arrêt natif, la fin du nettoyage et un rapport complet du dossier avant toute nouvelle demande. Ne rejouez pas la clé initiale et ne créez pas de remplacement pendant ce contrôle.")
         };
-        view["error_human_action"]=json!("Dites à l’utilisateur : le fournisseur refuse ce modèle avec la connexion utilisée sur ce serveur. Demandez de faire vérifier l’accès au modèle pour ce compte. Un changement de compte, d’offre ou de modèle exige son accord. Ne conseillez pas une réinstallation, un nouveau login ou un changement de droits sur ce seul refus.");
+        view["error_human_action"]=json!("Dites à l’utilisateur : cette connexion ne permet pas d’utiliser le modèle demandé sur ce serveur. Vérifiez avec lui que le compte et l’abonnement sont ceux prévus, puis l’accès au modèle. Un changement de compte, d’offre ou de modèle exige son accord. Ne conseillez pas une réinstallation, un nouveau login ou un changement de droits sur ce seul refus.");
     }
     if task.projected_error()==Some("api_error") {
         view["error_message"]=json!("Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive.");
@@ -6989,7 +6989,8 @@ fn fresh_routing_catalogue217(registry: &AgentRegistry, observed_at: i64)
 {
     // Relire les options persistantes sans modifier le registre utilisé par
     // les tâches. Si la lecture échoue, aucun choix ancien n’est annoncé.
-    AgentRegistry::load_from_path_quiet(registry.source().to_path_buf())?
+    AgentRegistry::load_from_path_quiet(registry.source().to_path_buf())
+        .map_err(|_| "routing_catalogue_unavailable".to_owned())?
         .routing_catalogue(observed_at)
 }
 
@@ -32893,7 +32894,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         task.cleanup_done=false;
         let before=serde_json::to_value(&task).unwrap();
         let waiting=current_task_view(&st,&task,true).unwrap();
-        assert!(waiting["error_message"].as_str().unwrap().contains("Le fournisseur refuse le modèle"));
+        assert!(waiting["error_message"].as_str().unwrap().contains("Cette connexion ne permet pas d’utiliser le modèle demandé"));
         assert!(waiting["error_message"].as_str().unwrap().contains("Les autres travaux"));
         assert!(waiting["error_recovery"].as_str().unwrap().contains("Attendez l’arrêt natif"));
         assert!(waiting["error_human_action"].as_str().unwrap().contains("Dites à l’utilisateur"));
@@ -32927,7 +32928,20 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(view["fleet"]["status"],"declared");
         assert_eq!(view["fleet"]["options"],json!([]));
         assert_eq!(st.registry.routing_catalogue(1).unwrap().options.len(),1,"registre des tâches non muté");
+        st.connection_roles.insert("client217".into(),ConnectionRole::Client);
+        st.peer_uids.insert("client217".into(),unsafe {libc::geteuid()});
+        st.client_negotiations.insert("client217".into(),NegotiatedClient {
+            version:CLIENT_CONTRACT_VERSION,issuer_scope:"catalogue217".into(),
+            capabilities:vec![ClientCapability::RoutingCatalogueV1],
+        });
+        assert_eq!(routing_catalogue_view(&st,"client217").unwrap()["options"],json!([]));
         std::fs::write(&path,"PRIVATE_INVALID_REGISTRY").unwrap();
+        let code=fresh_routing_catalogue217(&st.registry,2).unwrap_err();
+        assert_eq!(code,"routing_catalogue_unavailable");
+        assert_eq!(failure(&code)["code"],"routing_catalogue_unavailable");
+        let client_error=routing_catalogue_view(&st,"client217").unwrap_err();
+        assert_eq!(client_error,"routing_catalogue_unavailable");
+        assert!(!failure(&client_error).to_string().contains(&path.to_string_lossy().to_string()));
         let invalid=handle_locked("conn-1",NativeDelegationRequest::Catalogue,&mut st).unwrap();
         assert_eq!(invalid["fleet"]["status"],"unavailable");
         assert_eq!(invalid["fleet"]["options"],json!([]));
