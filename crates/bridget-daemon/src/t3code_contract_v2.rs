@@ -846,11 +846,12 @@ pub(crate) mod tests {
         let mut plain = detail();
         let root=json!({"id":"compact221","type":"compaction","threadId":"t","runId":"r","nodeId":"root","status":"running"});
         let child=json!({"id":"child221","type":"compaction","threadId":"t","runId":"r","nodeId":"child","status":"running"});
-        plain["projection"]["turnItems"]=json!([root.clone(),child.clone()]);
+        let tail=json!({"id":"tail221","type":"compaction","threadId":"t","runId":"r","nodeId":"root","status":"completed"});
+        plain["projection"]["turnItems"]=json!([root.clone(),child.clone(),tail.clone()]);
         let expected=parse_detail(&plain.to_string(),"t").unwrap();
         let mut compact=plain.clone();
         compact["turnItemsOmitLocalVisible"]=json!(true);
-        compact["projection"]["turnItems"]=json!([]);
+        compact["projection"]["turnItems"]=json!([tail]);
         compact["projection"]["visibleTurnItems"]=json!([
             {"visibility":"local","sourceThreadId":"t","item":root.clone()},
             {"visibility":"local","sourceThreadId":"t","item":child},

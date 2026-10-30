@@ -105,3 +105,17 @@ R1 :8fed5c77-5e4c-487b-993f-ba840debdea3, ClaudeSonnetSYS, APPROVE_WITH_CHANGES.
 | Scope de candidats malgré refus de l'admission entière | codepublic status=refused et scope/phrase candidats cités | champ supplémentaire refusé | aucune admission partielle autorisée par cette vue ; pas d'autorité nouvelle |
 
 La tentative de revue L1a refusée capability_unavailable reste une autre clé, sans Task ni cause rétrospectivement inventée. Les nouveaux avis ne prétendent pas qualifier cette histoire ou le runtime du lotL1b.
+
+
+## T179 — liaison compacte, 30 octobre 2026
+Relecteur ClaudeSonnetKS, Taska531ce4c-69ff-4a15-a2d8-0a9c18e80644. Verdict APPROVE_WITH_CHANGES, aucun P1. Lecture des sources f128 sans shell/diff ni test du relecteur ; résultat intégral lu et acquitté, clôture native confirmée guarded=false/cleanup_done=true. Brief borné10min, lecture seule, aucun effet métier demandé. Détail et preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/t179.md.
+
+| Objection | Vérification | Décision | Raison |
+| --- | --- | --- | --- |
+| Les éléments réels pourraient être réduits | trois lectures en mémoire ;5294valeurs stables identiques et ordre stable identique | vérification retenue, hypothèse non constatée | pas de champ retiré dans l'échantillon réel ; une question native comprise |
+| Un doublon coupe le fil | contrat serveur retire exactement le préfixe local ; test de refus et documentation explicite | refus conservé | incohérence à qualifier, aucune copie choisie silencieusement |
+| Ordre d'une queue restante | variante ajoutée au test existant, PASS | retenue/couverte | préfixe local puis queue, selon le contrat officiel |
+| Relire automatiquement la forme normale | mesure réelle23,8Mo au-delà des16Mio | non retenu | ne résout pas ce fil et répète un coût connu |
+| Codes d'incohérence | contrat d'adaptateur et action de qualification documentés | limite signalée | aucune déduction de compte ou de droit depuis ce refus |
+
+La correction était indisponible à la revue pendant primary_absent. L'avis a été demandé dès retour du lien, sans canal de remplacement. Il ne qualifie pas toutes les plateformes ni un historique de taille arbitraire.

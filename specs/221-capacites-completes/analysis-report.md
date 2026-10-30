@@ -53,3 +53,7 @@ Complément autonome validé par6tests finaux (mesure explicitement incluse),54t
 
 ## Convergence C18 et défaut de liaison T179
 C18 est chargé et ses trois tâches sont closes ;28/179 tâches vérifiées. La nouvelle T179 conserve le défaut observé pendant le passage : le même fil ne se réinscrit pas car son détail HTTP dépasse la borne. La mesure établit une duplication évitable, traitée dans l'adaptateur existant. Aucune tâche de confort ni restriction de périmètre ajoutée. C16/C19 et le programme complet restent ouverts.
+
+
+## Après chargement T179
+29/179 tâches vérifiées. Même fil réinscrit, capabilities et revue native opérationnelles après passage Mac puis Linux. Les deux objections de revue sont traitées par comparaison réelle de5294éléments stables et maintien documenté du refus d'un instantané incohérent. La variante d'ordre PASS ne change aucun comportement de production. Aucun CRITICAL nouveau, aucune tâche de confort ajoutée. La convergence globale reste ouverte.

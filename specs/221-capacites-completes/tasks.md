@@ -254,4 +254,4 @@ Deux écarts observés après activation, sans incident métier ni nouvelle Task
 
 
 ## Convergence — rattachement d'un fil long
-- [ ] T179 [US2] Corriger le dépassement HTTP du pont sur un fil long : réutiliser la forme compacte officielle, préserver outils/questions et identités, garder les bornes ; prouver le retour du lien actuel sans nouvelle mission ni réinitialisation d'historique.
+- [x] T179 [US2] Corriger le dépassement HTTP du pont sur un fil long : réutiliser la forme compacte officielle, préserver outils/questions et identités, garder les bornes ; prouver le retour du lien actuel sans nouvelle mission ni réinitialisation d'historique.
