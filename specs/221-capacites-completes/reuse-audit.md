@@ -441,3 +441,23 @@ AgentRegistry::from_json, machine_scope et require_interactive_terminal.
 Pas de sidecar d'autorité ou de store de secrets : les comptes sont les mêmes
 connexions du registre. La nouvelle CLI porte aperçu, CAS, sauvegarde privée,
 création isolée désactivée et retrait conservateur ; ce n'est pas un wrapper.
+
+### C08 — reprendre l'activation d'une liaison préparée
+REUTILISER federation_validate_install, federation_status et les chemins du reçu.
+La création écrit le reçu avant l'activation ; une interruption après ce reçu
+laisse une installation attestée sans processus. Le rejeu actuel annonce déjà
+installée sans finir l'activation. Étendre la façade existante avec resume :
+elle ne recopie ni sources, ni configuration, ni unité et ne change pas la
+persistance choisie. Ce n'est pas un second store ou orchestrateur.
+Un status reste en lecture seule. Un resume explicite ne vise que le label
+possédé et attesté. Aucune mission, connexion fournisseur ou autre service touché.
+
+### Incident result-slot — dix admissions, 31octobre
+REUTILISER WorkerStore::inventory/admit, budgets protocol et task_view.
+Cause concrète :16Mio partagés, chaque résultat actif réserve2Mio plus métadonnées.
+Le test162 figeait explicitement sept slots. Relever le seul budget partagé à
+256Mio ; les enveloppes2Mio/corps256Kio/4096entrées et les droits restent identiques.
+Ne pas purger d'historique ni inventer un nombre garanti de missions.
+La même comptabilité des orphelins et vues reste appliquée. Le plancher existant
+de compatibilité reçoit worker.store.capacity.v2 : un retour16Mio ne peut pas
+reprendre un store qui a légalement dépassé son ancien plafond.

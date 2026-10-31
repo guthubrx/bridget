@@ -2779,7 +2779,10 @@ pub const REMOTE_WORKER_VERSION: u16 = 1;
 pub const MAX_WORKER_FRAME_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_WORKER_RESULT_ENVELOPE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_WORKER_RESULT_BODY_BYTES: usize = 262_144;
-pub const MAX_WORKER_STORE_BYTES: usize = 16 * 1024 * 1024;
+// Budget de métadonnées et réservations, pas de RAM ni taille d'une réponse.
+// 16 Mio plafonnaient un worker vide à sept résultats réservés. Le budget
+// partagé reste borné et compte aussi l'historique, les vues et les orphelins.
+pub const MAX_WORKER_STORE_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_WORKER_STORE_ENTRIES: usize = 4096;
 pub const WORKER_PREPARE_TTL_SECS: i64 = 30;
 pub const WORKER_RELEASE_TTL_SECS: i64 = 5;

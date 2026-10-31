@@ -20,7 +20,8 @@ const COMMIT_VIEW_ORIGIN_ROOT:&str="workspace.commit_view.origin_root.v2";
 /// Accepter le JSON sans appliquer ce choix n'est pas un lecteur compatible.
 const MODEL_OPTIONS:&str="delegation.model_options.v1";
 const PROVIDER_ACCOUNTS: &str = "launch.provider_account.v1";
-const FORMATS: &[&str] = &[WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
+const WORKER_CAPACITY: &str = "worker.store.capacity.v2";
+const FORMATS: &[&str] = &[WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +152,15 @@ mod tests {
     fn spec221_c19_origin_root_floor_refuses_reader_a_despite_unchanged_json_schema() {
         let mut old=fixture();
         old["reads"]=serde_json::json!([WORKTREE,COMMIT_VIEW]);
+        old["writes"]=old["reads"].clone();
+        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+    }
+
+    #[test]
+    fn spec221_result_capacity_floor_refuses_legacy_16mib_reader() {
+        let mut old=fixture();
+        old["reads"].as_array_mut().unwrap().retain(|v|v!=WORKER_CAPACITY);
         old["writes"]=old["reads"].clone();
         assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
         assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));

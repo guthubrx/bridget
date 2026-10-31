@@ -9417,7 +9417,11 @@ while not stop.exists(): time.sleep(.01)
         let fixture=Fixture::new();
         let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
         let seed=c19_plan(&intent);
-        assert!(seed.reserved_bytes()*2>MAX_WORKER_STORE_BYTES as u64);
+        // Saturer le même budget partagé sans dépendre de son ancien plafond16Mio.
+        let filler=runtime.store.root.join("retained-history");
+        write_private_file_atomic(&filler,b"").unwrap();
+        fs::OpenOptions::new().write(true).open(&filler).unwrap()
+            .set_len((MAX_WORKER_STORE_BYTES as u64).saturating_sub(seed.reserved_bytes()*2)+1).unwrap();
         runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
         let mut other=command.clone();other.command_id=uuid::Uuid::new_v4().to_string();other.task_id=uuid::Uuid::new_v4().to_string();
         let binding=commit_view_preparation_binding(&runtime.identity,&other,&request).unwrap();
@@ -11469,10 +11473,11 @@ while not stop.exists(): time.sleep(.01)
         ));
         // Les résultats vivants continuent de réserver leur enveloppe complète.
         reserve(&store);
-        for index in 0..7 {
+        for index in 0..64 {
             store.reserve_result_slot(&slot(index), 101).unwrap();
         }
-        assert!(matches!(store.reserve_result_slot(&slot(7), 101), Err(WorkerStoreError::Quota)));
+        let (_,_,used,_)=store.inventory().unwrap();
+        assert!(used<MAX_WORKER_STORE_BYTES as u64);
     }
 
     #[test]
@@ -11484,25 +11489,35 @@ while not stop.exists(): time.sleep(.01)
     }
 
     #[test]
-    fn worker162_budget_reserve_sept_slots_et_compte_orphelins() {
+    fn spec221_result_capacity_reserves_64_parallel_results_and_preserves_orphan_accounting() {
         let fixture = Fixture::new();
         let store = fixture.open();
         reserve(&store);
-        for index in 0..7 {
-            store.reserve_result_slot(&slot(index), 101).unwrap();
+        // Un reçu de commande par mission, comme le vrai parcours d'admission.
+        let mut first=None;
+        for index in 0..64 {
+            let mut slot=slot(index);
+            slot.identity.command.command_id=format!("parallel-{index}");
+            slot.identity.command.task_id=format!("parallel-task-{index}");
+            if index==0 { first=Some(slot.clone()); }
+            store.reserve_command(&slot.identity.command,&"d".repeat(64),&placement(),1000,100).unwrap();
+            store.reserve_result_slot(&slot,101).unwrap();
         }
-        assert!(matches!(
-            store.reserve_result_slot(&slot(7), 101),
-            Err(WorkerStoreError::Quota)
-        ));
-        // Un fichier temporaire compte même hors d'une entrée métier.
-        write_private_file_atomic(&store.root.join(".orphan.tmp"), &vec![0; 2 * 1024 * 1024])
-            .unwrap();
-        assert!(matches!(
-            store.reserve_result_slot(&slot(8), 101),
-            Err(WorkerStoreError::Quota)
-        ));
-        assert!(store.root.join(".orphan.tmp").exists());
+        let (_,slots,used,count)=store.inventory().unwrap();
+        assert_eq!(slots.len(),64);
+        assert!(count>=128 && used<MAX_WORKER_STORE_BYTES as u64);
+        // Le prochain slot réutilise une commande déjà réservée : seule
+        // sa capacité de retour doit provoquer le refus après remplissage.
+        let next=slot(65);
+        let before=used;
+        let orphan=store.root.join(".orphan.tmp");
+        write_private_file_atomic(&orphan,b"").unwrap();
+        fs::OpenOptions::new().write(true).open(&orphan).unwrap()
+            .set_len(MAX_WORKER_STORE_BYTES as u64-before).unwrap();
+        assert_eq!(store.inventory().unwrap().2,MAX_WORKER_STORE_BYTES as u64);
+        assert!(matches!(store.reserve_result_slot(&next,101),Err(WorkerStoreError::Quota)));
+        assert!(orphan.exists());
+        assert!(store.read_slot(&first.unwrap().identity).unwrap().is_some());
     }
 
     #[test]

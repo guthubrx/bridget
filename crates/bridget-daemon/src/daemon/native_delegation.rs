@@ -4498,7 +4498,7 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
     if let Some(reason) = remote_result_slot_error_reason(error) {
         return Some(match reason {
             "WorkerUnavailable" | "StaleConnection" => "Le service Bridget distant n’a pas confirmé la réservation du résultat. Le travail métier n’a pas été remis à l’agent.",
-            "ResourceLimit" => "La capacité réservée par Bridget ne permet pas de réserver le retour du résultat. Le travail métier n’a pas été remis à l’agent.",
+            "ResourceLimit" => "Faire vérifier le budget partagé des résultats et reçus sur le worker de cette tâche. La capacité réservée par Bridget était insuffisante lors de cette tentative ; ce code seul ne prouve ni un disque plein ni un quota fournisseur. Les workers anciens partageaient 16 Mio, soit au plus sept retours de 2 Mio sur un store vide. Le correctif porte ce budget à 256 Mio ; son chargement sur le worker doit être confirmé. Le travail métier n’a pas été remis à l’agent. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.",
             "ResultSlotExpired" => "Le délai de réservation du résultat distant est dépassé. Le travail métier n’a pas été remis à l’agent.",
             "Unauthorized" | "PermissionsChanged" => "Le service distant a refusé les droits de cette demande. La réservation du résultat n’est pas confirmée.",
             "PlacementMismatch" | "DefinitionChanged" | "CommandMismatch" => "L’identité ou la configuration de la demande distante ne correspond plus. La réservation du résultat n’est pas confirmée.",
@@ -4623,6 +4623,23 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     } else if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
+            if remote_result_slot_error_reason(task.error.as_deref().unwrap_or(""))==Some("ResourceLimit") {
+                if !view["detail"].is_object(){view["detail"]=json!({});}
+                view["detail"]["result_capacity"]=json!({
+                    "scope":"this_task_on_its_worker",
+                    "cause":"worker_store_budget_exceeded",
+                    "worker_budget_at_failure":"not_recorded",
+                    "current_occupancy":"not_observed",
+                    "budget_after_worker_upgrade_bytes":bridget_transport::protocol::MAX_WORKER_STORE_BYTES,
+                    "result_envelope_max_bytes":bridget_transport::protocol::MAX_WORKER_RESULT_ENVELOPE_BYTES,
+                    "store_entries_max":bridget_transport::protocol::MAX_WORKER_STORE_ENTRIES,
+                    "parallel_results_regression_covered":64,
+                    "guaranteed_parallel_admissions":null,
+                    "limiting_facts":["retained_results","active_reservations","metadata","commit_views","store_entries","disk","execution_capacity"],
+                    "next_action":"Confirmer le chargement du worker corrigé et lire ses réservations/reçus avant une nouvelle admission. Ne pas purger de résultat ou modifier une mission vivante pour faire de la place."
+                });
+                view["error_human_action"]=json!("Si le budget reste occupé après mise à jour, demander au propriétaire quel historique terminé archiver ou quelle capacité augmenter. Conserver la tâche et sa clé ; une nouvelle demande exige arrêt, nettoyage et rapport du dossier confirmés. Ne pas rejouer ni remplacer une mission d'issue inconnue.");
+            }
             view["error_recovery"] = if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
                 json!("L’arrêt du démarrage est terminé. Après correction de la cause, une nouvelle demande peut être créée. Rejouer la même demande ne la redémarre pas.")
             } else if task.terminal() && task.cleanup_done {
@@ -27222,6 +27239,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(result["task_id"], task_id);
         assert_eq!(result["status"], "starting");
         assert_eq!(result["error"], "remote_start_failed:remote_result_slot:ResourceLimit");
+        assert_eq!(result["detail"]["result_capacity"]["budget_after_worker_upgrade_bytes"],256*1024*1024);
+        assert_eq!(result["detail"]["result_capacity"]["current_occupancy"],"not_observed");
+        assert!(result["detail"]["result_capacity"]["guaranteed_parallel_admissions"].is_null());
+        assert!(result["error_human_action"].as_str().unwrap().contains("propriétaire"));
+        assert!(result["error_message"].as_str().unwrap().contains("autres travaux"));
         let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
         assert_eq!(replay, result, "le rejeu rend le reçu durable, sans nouveau lancement");
         let mut divergent = request.clone();

@@ -1913,3 +1913,26 @@ non vérifié. Une annonce ne garantit pas l'acceptation d'une mission. Une omis
 ne prouve pas une interdiction d'abonnement. model_check_guidance donne le geste
 utile, sans changement automatique de compte, de modèle ou de droits.
 Les autres travaux autorisés suivent leur propre état.
+
+
+## Capacité de réservation des résultats distants
+
+Chaque worker corrigé dispose d'un budget partagé de256Mio pour reçus,
+résultats réservés et vues. Une réponse réserve2Mio au maximum ; son corps reste
+borné à256Kio. Les fichiers conservés, métadonnées, préparations et orphelins
+comptent aussi ;4096entrées maximum. Le contrôle couvre64retours simultanés
+sur un store de test. Ce chiffre ne garantit pas64admissions en production :
+les autres limites du worker, du disque et des fournisseurs restent applicables.
+
+Les anciens workers partageaient16Mio, soit au plus sept réservations sur
+un store vide. remote_result_slot:ResourceLimit indique un budget de stockage
+Bridget insuffisant à cet instant, pas un quota fournisseur ni un disque plein.
+Le statut donne les bornes du correctif mais ne prétend pas connaître le pic
+historique ou l'occupation actuelle. Confirmer la version chargée du worker.
+Conserver la tâche et sa clé. Une demande échouée ne repart pas au rejeu ;
+une nouvelle demande exige arrêt, nettoyage et rapport du dossier confirmés.
+Les autres travaux autorisés suivent leur propre état. Ne pas purger un reçu
+ou résultat vivant pour faire de la place.
+
+
+La commande humaine explicite bridget federate resume --label NOM demande le démarrage de cette liaison enregistrée. Elle peut redémarrer une liaison arrêtée, y compris une unité systemd disabled, sans changer sa persistance. Aucun status ou parcours automatique ne l'appelle. Les empreintes du reçu sont revalidées ; aucun fichier n'est réinstallé. Le succès confirme seulement le processus local, pas le tunnel ni un compte fournisseur.

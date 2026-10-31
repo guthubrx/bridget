@@ -1154,3 +1154,25 @@ unverified models. Advertisement does not guarantee mission acceptance. Omission
 is not proof of a subscription restriction. model_check_guidance gives the next
 action without switching the account, model or permissions.
 Other authorized work follows its own state.
+
+
+## Remote result reservation capacity
+
+Updated workers share a256MiB budget across receipts, reserved results and views.
+A result reserves up to2MiB; its body remains limited to256KiB. Retained files,
+metadata, workspace reservations and orphan files also count. The entry limit
+remains4096. A focused regression covers64simultaneous result reservations.
+This does not guarantee64production admissions: worker, disk and provider
+limits still apply.
+
+Older workers shared16MiB, at most seven reservations on an empty store.
+remote_result_slot:ResourceLimit names insufficient Bridget store capacity
+at that instant, not a provider quota or a full disk. Status exposes the updated
+bounds without inventing historical peak or current occupancy. Confirm that
+the worker loaded the update. Preserve the task and request key. A failed
+request is not restarted by replay; a new request requires confirmed stop,
+cleanup and workspace report. Other authorized work follows its own state.
+Never delete a live receipt or result to free capacity.
+
+
+The explicit operator command bridget federate resume --label NAME requests activation of that saved link. It can start a stopped link, including a disabled systemd unit, without changing its persistence setting. Status and automatic workflows never call it. Receipt hashes are revalidated; no file is reinstalled. Success confirms only the local process, not tunnel connectivity or provider authentication.

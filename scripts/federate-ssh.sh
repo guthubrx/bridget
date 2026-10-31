@@ -659,6 +659,43 @@ federation_status() {
   printf 'processus actif [%s] (%s) ; connectivité du tunnel non attestée\n' "$label" "$backend"
 }
 
+# Reprise explicite d'une activation interrompue. Le reçu existant est
+# l'autorité ; aucun fichier n'est réinstallé et status ne démarre rien.
+federation_resume() {
+  federation_set_install_paths
+  [[ -d "$install_dir" && ! -L "$install_dir" && -f "$service_path" && ! -L "$service_path" ]] ||
+    federation_fail "Cette liaison n'est pas entièrement préparée : $label. Conserver ses fichiers et faire vérifier le reçu manquant avant reprise. Les autres liaisons suivent leur propre état."
+  federation_validate_install
+  if federation_status; then
+    printf 'Reprise [%s] : processus déjà actif ; aucun démarrage répété.\n' "$label"
+    return 0
+  fi
+  # Recontrôler les empreintes après l'observation, avant l'action locale.
+  federation_validate_install
+  case "$backend" in
+    launchd)
+      if launchctl print "gui/$(id -u)/$service_label" >/dev/null 2>&1; then
+        launchctl kickstart "gui/$(id -u)/$service_label" ||
+          federation_fail "Reprise refusée pour cette liaison : $label. L'unité est chargée mais son démarrage reste à vérifier ; aucun fichier n'a été remplacé. Les autres liaisons suivent leur propre état."
+      else
+        launchctl bootstrap "gui/$(id -u)" "$service_path" ||
+          federation_fail "Reprise non confirmée pour cette liaison : $label. Vérifier son état launchd avant toute autre action ; ne pas réinstaller ni retirer le dossier. Les autres liaisons suivent leur propre état."
+      fi
+      ;;
+    systemd)
+      systemctl --user daemon-reload ||
+        federation_fail "Reprise arrêtée pour cette liaison : $label. Le gestionnaire utilisateur n'a pas relu son unité ; aucun fichier n'a été remplacé. Les autres liaisons suivent leur propre état."
+      # start seul : ne pas modifier un choix enable/disable déjà enregistré.
+      systemctl --user start "$service_label" ||
+        federation_fail "Reprise non confirmée pour cette liaison : $label. Lire son état systemd avant toute suite ; ne pas réinstaller ni créer une autre liaison. Les autres liaisons suivent leur propre état."
+      ;;
+  esac
+  if ! federation_status; then
+    federation_fail "Le démarrage de cette liaison n'est pas confirmé : $label. Conserver le reçu et les fichiers ; faire vérifier son état et ses journaux par son responsable. Les autres liaisons suivent leur propre état."
+  fi
+  printf 'Reprise [%s] : activation locale confirmée, configuration conservée ; connectivité du tunnel et accès fournisseur non attestés.\n' "$label"
+}
+
 federation_deactivate() {
   case "$backend" in
     launchd)
@@ -1032,12 +1069,22 @@ federation_cli_remove() {
   federation_remove
 }
 
+federation_cli_resume() {
+  [[ -n "$cli_label" && -z "$cli_destination" ]] ||
+    federation_fail "resume exige --label NOM, sans nouvelle destination"
+  [[ -z "$cli_user$cli_port$cli_identity$cli_known_hosts$cli_root$cli_socket$cli_remote_root$cli_remote_socket$cli_direction" ]] ||
+    federation_fail "resume accepte seulement --label ; les paramètres attestés restent conservés"
+  label=$cli_label
+  federation_resume
+}
+
 federation_cli() {
   local operation=connect
   cli_destination=
   [[ ${1:-} != --help && ${1:-} != -h ]] || { federation_cli_usage; return; }
   case ${1:-} in
     status) operation=status; shift ;;
+    resume) operation=resume; shift ;;
     remove) operation=remove; shift ;;
   esac
   if [[ "$operation" != status && -n ${1:-} && ${1:-} != -* ]]; then cli_destination=$1; shift; fi
@@ -1052,6 +1099,7 @@ federation_cli() {
   case "$operation" in
     connect) [[ -n "$cli_destination" ]] || federation_fail "destination attendue : ssh://[utilisateur@]hôte"; federation_cli_connect ;;
     remove) federation_cli_remove ;;
+    resume) federation_cli_resume ;;
   esac
 }
 
