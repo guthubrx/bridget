@@ -377,6 +377,7 @@ protocole, nonce ou fichier d'identité supplémentaire.
 Recherche start/collect/config_stamp et tests220 : le protocole de sonde et les gardes étaient couverts, pas le collecteur qui observe un signal puis renouvelle sa génération. Réutiliser le faux programme, CatalogueService::start, ServiceGuard et config_stamp. Deux tests seulement, aucun helper ni code produit nouveau. Le compte simulé est inscrit dans une fixture locale ; aucune variable globale modifiée ni connexion réelle utilisée. Le remplacement atomique du fichier de login est vérifié avec un fichier factice illisible, à partir de ses seules métadonnées. Le test du collecteur emploie le signal de programme et une reconnexion ; il ne prétend pas être un login humain officiel.
 
 
+
 ### C19 — synchronisation durable bornée après refus réel
 La qualification native bfb2db6c a exporté2658/4671fichiers,38,4Mo, puis a
 atteint son délai. Reçu : source_stopped=true, source_failure=timed_out,
@@ -393,3 +394,50 @@ finale inchangées. Le test nominal couvre65sources et l'audit intégral ; le
 négatif couvre délai expiré, échec de barrière, fermeture et borne de8.
 Mesure synthétique sur le même volume :100fichiers4Kio,2,457s séquentiels contre
 0,650s avec8barrières simultanées. Pas encore une preuve de la recette du projet.
+
+
+
+### C05 — choix par modèle, préparation non activée
+
+REUTILISER CatalogueModel/model_page, ModelCapabilities et RoutingModel ;
+select_routing_candidates borne le choix explicite sans adopter de défaut.
+REUTILISER AutoV2, Task, WorkerPrepare, CandidateProbeV2, les snapshots168 et
+le cycle de lecture/projection220. Le catalogue fermé V1 reste inchangé.
+REUTILISER native_launch_registry, recheck_remote_dispatch, readiness_at,
+recheck_at_with_view_report et remote_workspace_repair : aucun second chemin
+de lancement, store, compte, moteur de règles ou dépendance.
+
+CREER pin_delegation_service_tier après recherche pin_delegation_model et
+affectations service_tier : le pin existant ne maîtrise que modèle/effort.
+Cette règle partagée porte l'injection unique et le refus d'un lanceur ambigu.
+Trois parcours réels : sonde/Prepare, relecture Release et réparation.
+CREER model_option_account/recheck_task_model_option : gardes de continuité
+du nonce local et du reçu figé, sans appel fournisseur ni lecture de secrets.
+Elles réutilisent le projecteur existant, limité à une seule connexion pour
+borner le coût. Les horloges/états ne sont pas recopiés dans une nouvelle autorité.
+Le plancher de lecture réutilise storage_compatibility et l'updater existants.
+Les nouveaux champs absents sont omis : aucune transformation de canon ancien.
+
+Tests préparatoires Linux R8 :6daemon/4transport PASS. R9 ajoute le passage
+worker réel de relecture Release, résultat à consigner après exécution.
+Aucune case C05 cochée sur cette préparation ; aucune activation, qualification
+de modèle ou recette Claude revendiquée.
+
+
+### C06 — dossier Codex explicite
+REUTILISER AgentDefinition/ResolvedAgentDefinition, leurs digests et lifecycle.
+AgentProfileStore inspecté : identité visuelle et instructions, pas comptes.
+La définition Claude expose déjà claude_config_dir ; Codex ne dispose que de
+CODEX_HOME hérité depuis le lanceur. Ajouter le champ codex_home homologue,
+sans nouveau store ou service. Réutiliser le validateur de répertoire privé
+et les environnements de lifecycle/wrapper/sonde. Le choix est figé et ne
+modifie jamais HOME. La validation CAS du registre et le login humain seront
+raccordés au même périmètre, sans recopier les authentifications.
+
+C06 contrôle humain : CREER provider_accounts comme règle de préparation/CAS
+et de révocation, après recherche des writers du registre. REUTILISER le verrou
+project-preparation.lock de scripts/prepare-project.py, read_private_registry,
+AgentRegistry::from_json, machine_scope et require_interactive_terminal.
+Pas de sidecar d'autorité ou de store de secrets : les comptes sont les mêmes
+connexions du registre. La nouvelle CLI porte aperçu, CAS, sauvegarde privée,
+création isolée désactivée et retrait conservateur ; ce n'est pas un wrapper.

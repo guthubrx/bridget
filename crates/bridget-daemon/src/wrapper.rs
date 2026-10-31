@@ -2603,6 +2603,11 @@ pub fn launch(
     );
 
     let mut command = Command::new(agent_binary);
+    if definition.capabilities.account_profiles {
+        let isolated=crate::lifecycle::build_environment(&definition,&crate::lifecycle::source_environment())
+            .map_err(|error|format!("{error:?}"))?;
+        command.env_clear().envs(isolated);
+    }
     command
         .args(&final_args)
         .env("BRIDGET_AGENT_ID", &my_name)
@@ -2611,6 +2616,11 @@ pub fn launch(
         .env("BRIDGET_AGENT_INSTANCE_ID", &instance_id);
     if let Some(profile) = &definition.claude_config_dir {
         command.env("CLAUDE_CONFIG_DIR", profile);
+    }
+    if let Some(profile) = &definition.codex_home {
+        crate::lifecycle::validate_provider_profile_directory(profile, "Codex")
+            .map_err(|error| format!("{error:?}"))?;
+        command.env("CODEX_HOME", profile);
     }
     let spawned = if agent_type == "claude" {
         crate::claude_interactive::PtySession::spawn(command).map(InteractiveChild::Pty)
@@ -10140,12 +10150,14 @@ mod reconnect_tests {
             forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
             pass_env: Vec::new(),
             claude_config_dir: None,
+            codex_home: None,
             permissions: "allow".to_string(),
             queue_capacity: 32,
             held_queue: false,
             notify_timeout_secs: 600,
             mcp: crate::registry::McpDefinition::default(),
             capabilities: bridget_transport::AdapterCapabilities {
+                account_profiles: false,
                 execution_paths: vec!["acp".to_string()],
                 models: std::collections::BTreeMap::new(),
                 observed: None,
@@ -10170,6 +10182,7 @@ mod reconnect_tests {
             forbidden_env: Vec::new(),
             pass_env: Vec::new(),
             claude_config_dir: None,
+            codex_home: None,
             permissions: "allow".to_string(),
             queue_capacity: 1,
             held_queue: false,

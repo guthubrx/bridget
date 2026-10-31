@@ -19,6 +19,7 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
         forbidden_env: vec!["API_KEY".into()],
         pass_env: Vec::new(),
         claude_config_dir: None,
+        codex_home: None,
         permissions: "allow".into(),
         queue_capacity: 32,
         notify_timeout_secs: 600,
@@ -63,7 +64,7 @@ pub(crate) fn task(
     state: &str,
     created_at: i64,
 ) -> Task {
-    Task {
+    Task { service_tier: None,
         substitution: None,
         remote_placement: None,
         remote_prepared: false,

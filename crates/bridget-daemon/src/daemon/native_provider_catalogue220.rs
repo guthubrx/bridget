@@ -33,6 +33,12 @@ pub(super) fn ingest(
     if !update.valid() {
         return rejected(WorkerRefusal::InvalidEnvelope);
     }
+    if update.catalogue.models.iter().any(|model|
+        model.service_tiers_unavailable || !model.service_tiers.is_empty() || model.default_service_tier.is_some())
+        && !worker.capabilities.contains(&WorkerCapability::ModelOptionsV1)
+    {
+        return rejected(WorkerRefusal::CapabilityRequired);
+    }
     if update.refresh_id != worker.catalogue_refresh_id {
         return None;
     }
@@ -98,6 +104,44 @@ pub(super) fn ingest(
     None
 }
 
+/// Réutilise la projection courante et ses gardes de fraîcheur. Cette lecture
+/// n'appelle jamais le fournisseur et n'accorde aucun accès payant.
+/// O(C*M), C connexions et M modèles bornés par le protocole.
+pub(super) fn model_option_account(
+    st:&DaemonState, registry:&AgentRegistry, candidate:&crate::registry::RoutingCandidate,
+    service_tier:Option<&str>,
+)->Result<Option<String>,String> {
+    let Some(tier)=service_tier else{return Ok(None);};
+    if !registry.routing_candidates().ok_or("model_options_not_permitted")?.iter().any(|current|
+        current.enabled && current.machine_id==candidate.machine_id
+            && current.connection_id==candidate.connection_id && current.agent_type==candidate.agent_type
+            && current.model==candidate.model && current.engine==candidate.engine
+            && current.service_tiers.iter().any(|value|value==tier)) {
+        return Err("model_options_not_permitted".into());
+    }
+    let observation=project_connection_at(st,registry,unix_timestamp(),Instant::now(),
+        Some(&candidate.connection_id)).into_iter().find(|value|
+        value["machine_id"].as_str()==Some(candidate.machine_id.as_str())
+            && value["connection_id"].as_str()==Some(candidate.connection_id.as_str()))
+        .ok_or("model_options_observation_unavailable")?;
+    if observation["status"]!="reported_models" || observation["model_options_status"]!="reported" {
+        return Err("model_options_observation_unavailable".into());
+    }
+    if observation["models"].as_array().is_some_and(|models|models.iter().any(|model|
+        model["model"].as_str()==Some(candidate.model.as_str()) && model["model_options_status"]=="not_observed")) {
+        return Err("model_options_observation_unavailable".into());
+    }
+    let account=observation["account_scope"].as_str()
+        .ok_or("model_options_account_unidentified")?.to_owned();
+    if !observation["models"].as_array().is_some_and(|models|models.iter().any(|model|
+        model["model"].as_str()==Some(candidate.model.as_str())
+            && model["service_tiers"].as_array().is_some_and(|tiers|
+                tiers.iter().any(|value|value.as_str()==Some(tier))))) {
+        return Err("model_options_not_announced".into());
+    }
+    Ok(Some(account))
+}
+
 pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> {
     project_at(st, registry, unix_timestamp(), Instant::now())
 }
@@ -110,6 +154,14 @@ pub(super) fn project_at(
     now: i64,
     instant: Instant,
 ) -> Vec<Value> {
+    project_connection_at(st,registry,now,instant,None)
+}
+
+/// Même projection pour une seule connexion à l'admission : ne pas allouer
+/// les catalogues des autres serveurs pour chacun des candidats.
+fn project_connection_at(
+    st:&DaemonState,registry:&AgentRegistry,now:i64,instant:Instant,only:Option<&str>,
+)->Vec<Value> {
     use bridget_transport::protocol::{WorkerCapability, WorkerContactState};
     let Some(policy) = registry.routing_policy().filter(|p| p.enabled) else {
         return Vec::new();
@@ -122,6 +174,7 @@ pub(super) fn project_at(
     }
     let mut result = Vec::new();
     for connection in &policy.connections {
+        if only.is_some_and(|id|id!=connection.connection_id){continue;}
         let worker = st.remote_workers.get(&connection.machine_id);
         let cached = worker.and_then(|w| w.catalogues.get(&connection.connection_id));
         let valid_definition = registry.resolved_definition(&connection.agent_type).ok();
@@ -225,6 +278,12 @@ pub(super) fn project_at(
             .flatten()
             .map(|model| (model.model.as_str(), model))
             .collect::<std::collections::BTreeMap<_, _>>();
+        let options_negotiated = worker.is_some_and(|w|
+            w.capabilities.contains(&WorkerCapability::ModelOptionsV1));
+        let options_status = if connection.engine != "codex" { "unsupported_provider" }
+            else if worker.is_some() && !options_negotiated { "unverified_peer" }
+            else if status == "reported_models" { "reported" }
+            else { "not_observed" };
         let models=observation.filter(|o|o.state==CatalogueState::Observed).map(|o|o.models.iter().map(|m| {
             let policy_model=declared.get(m.model.as_str());
             let supported=m.supported_efforts.iter().collect::<std::collections::BTreeSet<_>>();
@@ -238,11 +297,42 @@ pub(super) fn project_at(
                 Some(_) if !missing.is_empty() || default_announced==Some(false)=>"not_announced",
                 Some(_)=>"announced",
             };
-            json!({"model":m.model,"supported_efforts":m.supported_efforts,"default_effort":m.default_effort,
+            let mut projected=json!({"model":m.model,"supported_efforts":m.supported_efforts,"default_effort":m.default_effort,
                 "declared_in_policy":policy_model.is_some(),
                 "policy_effort_status":effort_status,"declared_efforts_not_announced":missing,
-                "declared_default_effort_announced":default_announced})
+                "declared_default_effort_announced":default_announced});
+            if options_negotiated {
+                projected["model_options_status"]=json!(if m.service_tiers_unavailable {"not_observed"} else {"reported"});
+                projected["service_tiers"]=json!(m.service_tiers);
+                if let Some(policy)=policy_model {
+                    projected["authorized_service_tiers"]=json!(m.service_tiers.iter()
+                        .filter(|tier|policy.service_tiers.contains(tier)).collect::<Vec<_>>());
+                    projected["policy_service_tiers_not_announced_count"]=json!(
+                        policy.service_tiers.iter().filter(|tier|!m.service_tiers.contains(tier)).count());
+                }
+                projected["default_service_tier"]=json!(m.default_service_tier);
+                projected["default_service_tier_announced"]=json!(
+                    m.default_service_tier.as_ref().map(|v|m.service_tiers.contains(v)));
+            }
+            projected
         }).collect::<Vec<_>>()).unwrap_or_default();
+        // Lecture par modèle C07 : ne jamais transformer une omission de liste
+        // ou un contrôle manquant en refus d'abonnement ou en autorité d'admission.
+        let announced = observation.filter(|o| o.state == CatalogueState::Observed)
+            .map(|o| o.models.iter().map(|m| m.model.as_str()).collect::<std::collections::BTreeSet<_>>());
+        let model_checks = declared.keys().map(|model| {
+            let state = match status {
+                "disabled" => "connection_disabled",
+                "machine_disabled" => "machine_disabled",
+                "sign_in_required" => "sign_in_required",
+                "reported_models" if announced.as_ref().is_some_and(|models| models.contains(model)) => "announced_access_unverified",
+                "reported_models" => "not_announced",
+                _ if cause == Some(CatalogueCause::ProgramUnavailable) => "program_unavailable",
+                _ if cause == Some(CatalogueCause::ProtocolUnavailable) => "observation_protocol_unavailable",
+                _ => "unverified",
+            };
+            json!({"model":model,"status":state,"entitlement":"unknown"})
+        }).collect::<Vec<_>>();
         let source_age = cached.map(|v| now.saturating_sub(v.value.observed_at).max(0) as u64);
         let received_age = cached.map(|v| instant.saturating_duration_since(v.received).as_secs());
         let remaining = age.map(|age| CATALOGUE_TTL_SECS.saturating_sub(age));
@@ -334,6 +424,19 @@ pub(super) fn project_at(
         result.push(json!({"machine_id":connection.machine_id,"engine":connection.engine,"connection_id":connection.connection_id,
             "status":status,"cause":cause,"scope":"advertised_by_program","entitlement":"unknown","provider_cache":"not_attested",
             "auth":match status {"sign_in_required"=>"reported_absent","reported_models" if observation.and_then(|o|o.account_scope.as_ref()).is_some()=>"reported_present",_=>"not_verified"},
+            "model_checks":model_checks,
+            "model_check_guidance":{
+                "announced_access_unverified":"Le programme annonce ce modèle pour cette connexion ; cela ne prouve pas l'accès du compte. L'admission garde ses contrôles habituels.",
+                "not_announced":"Ce modèle déclaré n'apparaît pas dans la liste actuelle. Vérifier sa disponibilité auprès du fournisseur avec l'utilisateur avant de modifier le choix. Une omission ne prouve pas une interdiction d'abonnement ; aucune suppression ni substitution automatique.",
+                "sign_in_required":"Le programme rapporte une connexion absente sur cette connexion de ce serveur. L'utilisateur doit choisir puis connecter le compte prévu par le mécanisme officiel ; aucune copie de secrets ni relance de mission incertaine.",
+                "program_unavailable":"Le programme n'a pas pu être utilisé pour ce contrôle. Faire vérifier son chemin, son exécution et sa version sur ce serveur ; ce constat ne prouve pas un défaut de compte.",
+                "observation_protocol_unavailable":"Le programme n'a pas fourni le protocole attendu pour ce contrôle. Faire qualifier cette opération et sa version avant de proposer une mise à jour ; aucune réinstallation déduite du seul numéro.",
+                "unverified":"Aucune observation actuelle ne permet de conclure pour ce modèle. Lire le statut de la connexion et son prochain geste ; ne pas annoncer un refus du compte ni rejouer une mission.",
+                "connection_disabled":"La connexion est désactivée. Faire vérifier la décision d'activation par son responsable, sans changer de compte ou de modèle pour contourner ce réglage.",
+                "machine_disabled":"Le serveur est désactivé. Demander la décision d'activation à son responsable ; les autres travaux suivent leur état propre."
+            },
+            "model_options_status":options_status,
+            "model_options_selection":if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {"explicit_only"} else {"not_activated"},
             "account_scope":observation.and_then(|o|o.account_scope.as_ref()),"observed_at":observation.map(|o|o.observed_at),"age_secs":age,"ttl_secs":CATALOGUE_TTL_SECS,"refresh_target_secs":120,"scheduling":"sequential_per_connection",
             "last_observed_at":cached.map(|v|v.value.observed_at),"received_at":cached.map(|v|v.received_at),
             "source_age_secs":source_age,"received_age_secs":received_age,"expires_at":expires_at,

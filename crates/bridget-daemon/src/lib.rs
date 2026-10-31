@@ -82,5 +82,6 @@ pub(crate) mod origin_proof;
 
 mod updates;
 mod client_compatibility;
+mod provider_accounts;
 
 pub(crate) mod user_input;

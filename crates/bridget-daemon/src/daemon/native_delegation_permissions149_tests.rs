@@ -138,6 +138,7 @@ fn claude_definition(config_dir: &Path) -> crate::registry::AgentDefinition {
         forbidden_env: vec![],
         pass_env: vec![],
         claude_config_dir: Some(config_dir.to_string_lossy().into_owned()),
+        codex_home: None,
         permissions: "deny".into(),
         queue_capacity: 4,
         held_queue: false,
@@ -1080,7 +1081,7 @@ fn native149_un_fait_d_autre_demande_ne_donne_aucun_droit() {
 fn tache_enregistree(
     definition: bridget_transport::protocol::ResolvedAgentDefinition,
 ) -> crate::delegation::Task {
-    crate::delegation::Task {
+    crate::delegation::Task { service_tier: None,
         remote_placement: None,
         remote_prepared: false,
         commit_view_prepare:None,

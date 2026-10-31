@@ -1877,3 +1877,39 @@ commande nouvelle. Cette lecture ne donne pas la capacité de créer une vue.
 Un lecteur seul ne permet pas l'admission : la création exige aussi les capacités décrites ci-dessus.
 
 Le détail d’un refus de lecture peut porter cause_kind : worker pour un code du worker, ou commit_view pour une cause de la vue. Ce champ est absent sans cause observée. Il ne change pas la portée de la tâche ni les droits.
+
+
+## Comptes séparés et options de modèle
+
+Un compte géré est une connexion distincte sur sa machine. Pour voir les
+connexions locales : bridget accounts list --json. Pour préparer un second
+compte : bridget accounts prepare --from CONNEXION --id travail.
+Le résultat est un aperçu avec son SHA ; aucun fichier ou login n'est créé.
+L'utilisateur applique l'aperçu dans son terminal avec les mêmes arguments,
+--expected SHA --apply. --registry CHEMIN_ABSOLU choisit un registre privé local.
+
+Le résultat donne le programme officiel, ses arguments, le dossier privé et
+les variables à retirer avant connexion. Aucune clé ou session du compte
+principal n'est copiée. Le nouveau parcours Claude fixe CLAUDE_CONFIG_DIR
+et ANTHROPIC_CONFIG_DIR : le second dossier isole aussi les profils Console
+sans clé. Les connexions déjà configurées gardent leur fonctionnement.
+
+Après la connexion officielle, prévisualiser bridget accounts enable --id travail,
+puis appliquer avec son SHA et --apply. Ce réglage ne prouve pas l'accès à un
+modèle. disable suspend les futures admissions. remove retire connexion, liste
+et alias courant ; il conserve le dossier et les tâches admises. Un alias partagé
+refuse le retrait. applied_local n'atteste pas une publication de flotte.
+
+Pour Codex natif, bridget_auto_delegate accepte service_tier sur choix explicite.
+La valeur doit être annoncée pour cette connexion et ce modèle, autorisée par
+le profil et actuelle au départ. Aucun défaut n'est appliqué. Un choix invalide
+ou non vérifiable refuse avant départ, sans changer une ancienne mission.
+Un ancien client sans ce champ doit charger le client livré. Les efforts restent
+séparés ; aucun contexte ou coût n'est déduit du nom du modèle et aucune option
+Claude n'est traduite en niveau Codex.
+
+connection_catalogues[].model_checks distingue modèle annoncé, non annoncé et
+non vérifié. Une annonce ne garantit pas l'acceptation d'une mission. Une omission
+ne prouve pas une interdiction d'abonnement. model_check_guidance donne le geste
+utile, sans changement automatique de compte, de modèle ou de droits.
+Les autres travaux autorisés suivent leur propre état.

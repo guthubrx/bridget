@@ -308,6 +308,7 @@ fn run_with_args(args: Vec<String>) {
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
+        "accounts" => crate::provider_accounts::run(&args[2..]),
         "formats" => crate::storage_compatibility::run(&args[2..]),
         "t3" => crate::t3code::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
@@ -838,6 +839,7 @@ fn print_usage() {
          Daemon & client :\n  \
            worker <OPTIONS>       Lance le worker distant provisionné ; diagnose : lecture locale sans runtime\n  \
            daemon                 Lance le daemon\n  \
+           accounts <OP>          Prépare et retire un compte isolé (list|prepare|enable|disable|remove)\n  \
            federate <OP>          Gère les liaisons SSH persistantes (--help)\n  \
            t3 <OP>                Expose les fils t3code comme agents (install|status|uninstall|serve)\n  \
            mcp                    Lance le serveur MCP sur stdio\n  \
@@ -7163,7 +7165,7 @@ fn send_control_request_within(
         .map_err(|e| e.to_string())
 }
 
-fn require_interactive_terminal(command: &str) -> bool {
+pub(crate) fn require_interactive_terminal(command: &str) -> bool {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         return true;
@@ -10124,6 +10126,7 @@ mod hook_tests {
                             forbidden_env: vec!["OPENAI_API_KEY".to_string()],
                             pass_env: Vec::new(),
                             claude_config_dir: None,
+                            codex_home: None,
                             permissions: "allow".to_string(),
                             queue_capacity: 32,
                             notify_timeout_secs: 600,

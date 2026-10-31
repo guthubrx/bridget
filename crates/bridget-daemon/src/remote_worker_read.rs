@@ -315,6 +315,7 @@ impl WorkerReadView<'_> {
                 && entry.engine == routing.engine
                 && entry.agent_type == request.agent_type
                 && entry.model == request.model
+                && request.service_tier.as_ref().is_none_or(|tier|entry.service_tiers.contains(tier))
                 && request
                     .effort
                     .as_ref()
@@ -390,7 +391,10 @@ impl WorkerReadView<'_> {
         *workspace_report = None;
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
         trace.at("registry");
-        let registry = self.registry()?;
+        let registry = self.registry()?.pin_delegation_service_tier(
+            &prepared.request.agent_type,&prepared.request.model,
+            prepared.request.service_tier.as_deref())
+            .map_err(|_|WorkerRefusal::DefinitionChanged)?;
         if let Some(routing) = &prepared.routing {
             trace.at("routing");
             self.check_routing_connection(&registry, &prepared.request, routing)?;

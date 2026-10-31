@@ -670,7 +670,7 @@ fn remote162_prepare_posture_omise_conserve_heritage_et_refuse_null() {
     let fixture = RequestFixture155::with_remote_start("r155-posture", true, false);
     let task = &fixture.task;
     let placement = task.remote_placement.as_ref().unwrap();
-    let prepare = WorkerPrepare {
+    let prepare = WorkerPrepare { service_tier: None,
         machine_id: placement.machine_id.clone(),
         project_id: placement.project_id.clone(),
         provisioning_revision: 1,

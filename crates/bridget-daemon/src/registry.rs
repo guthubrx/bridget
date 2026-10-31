@@ -46,7 +46,7 @@ const MAX_DECISION_HEALTH_SECONDS: u64 = 300;
 /// durable lisible dans la flotte sans permettre de confondre les deux rôles.
 const PROJECT_DISCOVERY_AGENT_PREFIX: &str = "project-discovery-";
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct McpDefinition {
     #[serde(default = "default_interactive_mcp")]
     pub interactive: String,
@@ -63,7 +63,7 @@ impl Default for McpDefinition {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AgentDefinition {
     pub command: String,
     #[serde(default)]
@@ -80,6 +80,9 @@ pub struct AgentDefinition {
     /// Les secrets restent dans settings.json avec droits stricts hors du registre.
     #[serde(default)]
     pub claude_config_dir: Option<String>,
+    /// Dossier Codex isolé, non secret ; aucun repli vers le compte principal.
+    #[serde(default)]
+    pub codex_home: Option<String>,
     #[serde(default = "default_permissions")]
     pub permissions: String,
     #[serde(default = "default_queue_capacity")]
@@ -152,6 +155,8 @@ pub struct RoutingModel {
     pub model: String,
     #[serde(default)]
     pub supported_efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<String>,
     pub default_effort: Option<String>,
     pub provenance: RoutingModelProvenance,
     #[serde(default)]
@@ -334,6 +339,8 @@ pub struct RoutingCandidate {
     pub enabled: bool,
     pub model: String,
     pub supported_efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<String>,
     pub default_effort: Option<String>,
     pub provenance: RoutingModelProvenance,
     pub observed_at: Option<i64>,
@@ -348,6 +355,7 @@ pub struct RoutingCandidateFilters {
     pub machine_id: Option<String>,
     pub connection_id: Option<String>,
     pub effort: Option<String>,
+    pub service_tier: Option<String>,
 }
 
 /// Candidat après application des contraintes de demande et des axes fixes.
@@ -589,7 +597,7 @@ fn effective_routing_filters(
     requested: &RoutingCandidateFilters,
     policy: &RoutingMachinePolicy,
 ) -> Result<RoutingCandidateFilters, String> {
-    Ok(RoutingCandidateFilters {
+    Ok(RoutingCandidateFilters { service_tier: requested.service_tier.clone(),
         engine: requested_or_fixed(
             &requested.engine,
             policy.automatic_axes.engine,
@@ -801,6 +809,7 @@ impl AgentRegistry {
                             enabled: connection.enabled,
                             model: model.model.clone(),
                             supported_efforts: model.supported_efforts.clone(),
+                            service_tiers: model.service_tiers.clone(),
                             default_effort: model.default_effort.clone(),
                             provenance: model.provenance,
                             observed_at: model.observed_at,
@@ -910,6 +919,8 @@ impl AgentRegistry {
                             .iter()
                             .any(|effort| effort == value)
                     })
+                    && effective.service_tier.as_deref().is_none_or(|value|
+                        candidate.service_tiers.iter().any(|tier|tier==value))
             })
             .map(|candidate| RoutingCandidateSelection {
                 candidate,
@@ -1125,6 +1136,7 @@ impl AgentRegistry {
             forbidden_env: resolved.forbidden_env.clone(),
             pass_env: resolved.pass_env.clone(),
             claude_config_dir: resolved.claude_config_dir.clone(),
+            codex_home: resolved.codex_home.clone(),
             permissions: resolved.permissions.clone(),
             queue_capacity: resolved.queue_capacity,
             held_queue: false,
@@ -1136,10 +1148,10 @@ impl AgentRegistry {
             capabilities: resolved.capabilities.clone(),
         };
         let expected = resolved_definition(&definition)?;
-        let digest_before_profile = definition.claude_config_dir.is_none()
+        let digest_before_profile = definition.claude_config_dir.is_none() && definition.codex_home.is_none()
             && expected.digest != resolved.digest
             && pre_profile_resolved_digest(&definition)? == resolved.digest;
-        let digest_before_capabilities = definition.claude_config_dir.is_none()
+        let digest_before_capabilities = definition.claude_config_dir.is_none() && definition.codex_home.is_none()
             && expected.digest != resolved.digest
             && legacy_resolved_digest(&definition)? == resolved.digest;
         if expected.digest != resolved.digest
@@ -1329,6 +1341,54 @@ impl AgentRegistry {
         Ok(self)
     }
 
+    /// Choix explicite uniquement : aucune valeur fournisseur n'est appliquée
+    /// par défaut. Cette règle est partagée par probe, Prepare et le lancement local.
+    /// O(B+C), arguments B et niveaux déclarés C ; aucune lecture de compte.
+    pub(crate) fn pin_delegation_service_tier(
+        mut self, agent_type: &str, model: &str, service_tier: Option<&str>,
+    ) -> Result<Self, String> {
+        let Some(tier)=service_tier else { return Ok(self); };
+        if !bridget_transport::provider_catalogue::catalogue_token(tier) {
+            return Err("model_options_invalid".into());
+        }
+        let definition=self.agents.get_mut(agent_type).ok_or("provider_unavailable")?;
+        if definition.protocol!="codex_app_server"
+            || definition.capabilities.models.get(model)
+                .is_none_or(|caps|!caps.service_tiers.iter().any(|value|value==tier)) {
+            return Err("model_options_not_permitted".into());
+        }
+        let encoded=format!("service_tier={}",serde_json::to_string(tier).map_err(|_|"model_options_invalid")?);
+        let mut matches=0usize;
+        let mut canonical=false;
+        let mut args=Vec::with_capacity(definition.args.len()+2);
+        let mut index=0;
+        while index<definition.args.len() {
+            let arg=&definition.args[index];
+            // Une fin d'options empêcherait de garantir l'injection. Refus fermé.
+            if arg=="--" { return Err("model_options_launcher_ambiguous".into()); }
+            let assignment=if matches!(arg.as_str(),"-c"|"--config") {
+                Some(definition.args.get(index+1).ok_or("model_options_launcher_ambiguous")?.as_str())
+            } else {
+                arg.strip_prefix("--config=").or_else(||arg.strip_prefix("-c"))
+            };
+            if assignment.and_then(|value|value.split_once('='))
+                .is_some_and(|(key,_)|key.trim().trim_matches('"')=="service_tier") {
+                matches+=1;
+                canonical|=arg=="-c" && assignment==Some(encoded.as_str());
+                index+=if matches!(arg.as_str(),"-c"|"--config"){2}else{1};
+                continue;
+            }
+            args.push(arg.clone());
+            index+=1;
+        }
+        if matches!=1 || !canonical {
+            args.extend(["-c".into(),encoded]);
+            definition.args=args;
+        }
+        validate_launch_capabilities(agent_type,definition).map_err(|error|format!("{error:?}"))?;
+        Ok(self)
+    }
+
     /// Instantané ordonné des types effectivement chargés par le daemon.
     pub fn known_types(&self) -> Vec<String> {
         self.agents.keys().cloned().collect()
@@ -1394,7 +1454,7 @@ fn legacy_capabilities_for(definition: &AgentDefinition) -> AdapterCapabilities 
     if let Some((model, effort)) = runtime_model_and_effort(&definition.args) {
         capabilities.models.insert(
             model,
-            ModelCapabilities {
+            ModelCapabilities { service_tiers: Vec::new(),
                 efforts: effort.into_iter().collect(),
             },
         );
@@ -1612,6 +1672,7 @@ fn registry_warnings(
         "forbidden_env",
         "pass_env",
         "claude_config_dir",
+        "codex_home",
         "permissions",
         "queue_capacity",
         "held_queue",
@@ -1653,7 +1714,7 @@ fn registry_warnings(
     warnings
 }
 
-fn read_private_registry(source: &Path) -> Result<String, String> {
+pub(crate) fn read_private_registry(source: &Path) -> Result<String, String> {
     let link_metadata = std::fs::symlink_metadata(source)
         .map_err(|err| format!("impossible d'inspecter {}: {err}", source.display()))?;
     if link_metadata.file_type().is_symlink() {
@@ -1711,6 +1772,8 @@ struct CanonicalResolvedDefinition<'a> {
     forbidden_env: &'a [String],
     pass_env: &'a [String],
     claude_config_dir: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codex_home: Option<&'a str>,
     permissions: &'a str,
     queue_capacity: usize,
     notify_timeout_secs: u64,
@@ -1806,6 +1869,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
         forbidden_env: &definition.forbidden_env,
         pass_env: &definition.pass_env,
         claude_config_dir: definition.claude_config_dir.as_deref(),
+        codex_home: definition.codex_home.as_deref(),
         permissions: &definition.permissions,
         queue_capacity: definition.queue_capacity,
         notify_timeout_secs: definition.notify_timeout_secs,
@@ -1825,6 +1889,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
         forbidden_env: definition.forbidden_env.clone(),
         pass_env: definition.pass_env.clone(),
         claude_config_dir: definition.claude_config_dir.clone(),
+        codex_home: definition.codex_home.clone(),
         permissions: definition.permissions.clone(),
         queue_capacity: definition.queue_capacity,
         notify_timeout_secs: definition.notify_timeout_secs,
@@ -1837,7 +1902,7 @@ fn resolved_definition(definition: &AgentDefinition) -> Result<ResolvedAgentDefi
     })
 }
 
-fn config_path() -> Result<PathBuf, String> {
+pub(crate) fn config_path() -> Result<PathBuf, String> {
     crate::environment::Namespace::from_environment()
         .map(|namespace| namespace.root.join("agents.json"))
 }
@@ -2062,6 +2127,16 @@ fn validate_routing_policy(
         }
         let mut names = std::collections::BTreeSet::new();
         for model in models {
+            if model.service_tiers.len()>16
+                || model.service_tiers.iter().any(|tier|
+                    !bridget_transport::provider_catalogue::catalogue_token(tier))
+                || model.service_tiers.iter().collect::<std::collections::BTreeSet<_>>().len()!=model.service_tiers.len()
+                || (!model.service_tiers.is_empty() && (connection.engine!="codex"
+                    || definition.capabilities.models.get(&model.model).is_none_or(|caps|
+                        model.service_tiers.iter().any(|tier|!caps.service_tiers.contains(tier)))))
+            {
+                return Err("routing_model_options_invalid".into());
+            }
             if !profile_value(&model.model)
                 || !names.insert(&model.model)
                 || model
@@ -2296,6 +2371,25 @@ fn validate_registry(
                 source.display()
             ));
         }
+        if let Some(profile) = definition.codex_home.as_deref() {
+            let path = Path::new(profile);
+            if definition.protocol != "codex_app_server" || !path.is_absolute()
+                || path.components().any(|part| matches!(part, std::path::Component::ParentDir))
+                || profile.chars().any(char::is_control) || definition.claude_config_dir.is_some() {
+                return Err(format!("registre invalide {}: codex_home exige Codex natif et un dossier absolu sans '..' pour '{name}'", source.display()));
+            }
+            if definition.pass_env.iter().any(|key| key == "CODEX_HOME") {
+                return Err(format!("registre invalide {}: CODEX_HOME ne peut pas être hérité avec codex_home pour '{name}'", source.display()));
+            }
+        }
+        if definition.codex_home.is_some() && !definition.capabilities.account_profiles {
+            return Err("provider_account_reader_guard_required".into());
+        }
+        if definition.capabilities.account_profiles
+            && !((definition.protocol=="codex_app_server" && definition.codex_home.is_some())
+                || (definition.protocol=="claude_stream_json" && definition.claude_config_dir.is_some())) {
+            return Err("provider_account_profile_required".into());
+        }
         if definition.pass_env.len() > MAX_PASS_ENV_ENTRIES {
             return Err(format!(
                 "registre invalide {}: pass_env dépasse {MAX_PASS_ENV_ENTRIES} entrées pour '{name}'",
@@ -2359,6 +2453,15 @@ fn validate_capabilities(
         }
     }
     for (model, model_capabilities) in &capabilities.models {
+        if model_capabilities.service_tiers.len()>16
+            || model_capabilities.service_tiers.iter().any(|tier|
+                !bridget_transport::provider_catalogue::catalogue_token(tier))
+            || model_capabilities.service_tiers.iter().collect::<std::collections::BTreeSet<_>>().len()!=model_capabilities.service_tiers.len()
+            || (!model_capabilities.service_tiers.is_empty()
+                && !capabilities.execution_paths.iter().any(|path|path=="codex_app_server"))
+        {
+            return Err("model_options_capabilities_invalid".into());
+        }
         if !valid_capability_value(model) {
             return Err(format!(
                 "registre invalide {}: modèle de capacité invalide pour '{name}'",
@@ -2428,6 +2531,7 @@ fn definition(
         forbidden_env: forbidden_env.iter().map(ToString::to_string).collect(),
         pass_env: pass_env.iter().map(ToString::to_string).collect(),
         claude_config_dir: None,
+        codex_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2470,6 +2574,7 @@ fn native_claude_definition() -> Result<AgentDefinition, String> {
         .map(str::to_string)
         .collect(),
         claude_config_dir: None,
+        codex_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2479,6 +2584,7 @@ fn native_claude_definition() -> Result<AgentDefinition, String> {
             acp_session: false,
         },
         capabilities: AdapterCapabilities {
+            account_profiles: false,
             execution_paths: vec!["claude_stream_json".to_string()],
             models: BTreeMap::from([("claude-opus-5".to_string(), ModelCapabilities::default())]),
             observed: None,
@@ -2536,6 +2642,7 @@ fn native_codex_definition() -> AgentDefinition {
         .map(str::to_string)
         .collect(),
         claude_config_dir: None,
+        codex_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2545,6 +2652,7 @@ fn native_codex_definition() -> AgentDefinition {
             acp_session: false,
         },
         capabilities: AdapterCapabilities {
+            account_profiles: false,
             execution_paths: vec!["codex_app_server".to_string()],
             observed: None,
             models: BTreeMap::from([("gpt-5.6-terra".to_string(), ModelCapabilities::default())]),
@@ -2566,6 +2674,7 @@ fn native_cursor_definition() -> AgentDefinition {
         ],
         pass_env: Vec::new(),
         claude_config_dir: None,
+        codex_home: None,
         permissions: "allow".to_string(),
         queue_capacity: DEFAULT_QUEUE_CAPACITY,
         held_queue: false,
@@ -2575,6 +2684,7 @@ fn native_cursor_definition() -> AgentDefinition {
             acp_session: true,
         },
         capabilities: AdapterCapabilities {
+            account_profiles: false,
             observed: None,
             execution_paths: vec!["acp".to_string()],
             models: BTreeMap::from([("auto".to_string(), ModelCapabilities::default())]),
@@ -2982,6 +3092,34 @@ mod tests {
                 && option.model == "claude-sonnet-4-5"
                 && option.entitlement == RoutingEntitlement::Unknown
         }));
+    }
+
+    #[test]
+    fn spec221_c05_explicit_tier_replaces_every_override_and_preserves_legacy_launch() {
+        let mut registry=AgentRegistry::from_json(&routing168_registry_value().to_string(),"/tmp/options.json").unwrap();
+        let definition=registry.agents.get_mut("codex-work").unwrap();
+        definition.capabilities.models.entry("gpt-6.1-sol".into()).or_default()
+            .service_tiers=vec!["priority".into(),"default".into()];
+        definition.capabilities.execution_paths=vec!["codex_app_server".into()];
+        definition.args=vec!["app-server".into(),"-c".into(),"service_tier = \"fast\"".into(),
+            "--config=service_tier=\"flex\"".into(),"-cservice_tier=\"default\"".into(),
+            "--config".into(),"\"service_tier\" = \"old\"".into(),
+            "-c".into(),"other=\"kept\"".into(),"-c".into(),"model=\"gpt-6.1-sol\"".into()];
+        let before=registry.resolved_definition("codex-work").unwrap();
+        let legacy=registry.clone().pin_delegation_service_tier("codex-work","gpt-6.1-sol",None).unwrap();
+        assert_eq!(legacy.resolved_definition("codex-work").unwrap(),before);
+        let pinned=registry.clone().pin_delegation_service_tier("codex-work","gpt-6.1-sol",Some("priority")).unwrap();
+        assert_eq!(pinned.get("codex-work").unwrap().args,
+            vec!["app-server","-c","other=\"kept\"","-c","model=\"gpt-6.1-sol\"","-c","service_tier=\"priority\""]);
+        assert_eq!(registry.resolved_definition("codex-work").unwrap(),before);
+        let mixed=pinned.pin_delegation_model("codex-work","gpt-6.1-sol",None).unwrap();
+        let definition=mixed.resolved_definition("codex-work").unwrap();
+        assert_eq!(mixed.pin_delegation_service_tier("codex-work","gpt-6.1-sol",Some("priority"))
+            .unwrap().resolved_definition("codex-work").unwrap(),definition);
+        assert_eq!(registry.clone().pin_delegation_service_tier("codex-work","gpt-6.1-sol",Some("unknown")).unwrap_err(),"model_options_not_permitted");
+        assert_eq!(registry.clone().pin_delegation_service_tier("claude","claude-sonnet-4-5",Some("priority")).unwrap_err(),"model_options_not_permitted");
+        registry.agents.get_mut("codex-work").unwrap().args.push("--".into());
+        assert_eq!(registry.pin_delegation_service_tier("codex-work","gpt-6.1-sol",Some("priority")).unwrap_err(),"model_options_launcher_ambiguous");
     }
 
     #[test]
@@ -3699,7 +3837,7 @@ mod tests {
         let mut changed = baseline.clone();
         changed.capabilities.models.insert(
             "gpt-5.6-terra".to_string(),
-            ModelCapabilities {
+            ModelCapabilities { service_tiers: Vec::new(),
                 efforts: vec!["high".to_string()],
             },
         );

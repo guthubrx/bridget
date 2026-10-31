@@ -357,7 +357,8 @@ fn frozen_start_routing(
         ("profile", *agent_type != candidate.agent_type
             || decision.candidate_id != receipt.candidate_id.as_deref().unwrap_or_default()
             || decision.connection_id != candidate.connection_id || decision.engine != candidate.engine),
-        ("model", *model != candidate.model || decision.model != candidate.model),
+        ("model", *model != candidate.model || decision.model != candidate.model
+            || task.service_tier!=auto.service_tier),
         ("effort", *effort != decision.effort),
         ("canonical", *cwd != auto.cwd),
         ("base", auto.expected_base_commit != placement.base_commit),
@@ -652,7 +653,7 @@ fn rebuild_prepare(
     } else {
         offset.to_string_lossy().into_owned()
     };
-    Ok(WorkerPrepare {
+    Ok(WorkerPrepare { service_tier: task.service_tier.clone(),
         machine_id: machine.clone(),
         project_id: project_id.clone(),
         provisioning_revision: provision.provisioning_revision,

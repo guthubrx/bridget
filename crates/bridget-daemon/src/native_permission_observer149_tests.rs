@@ -67,6 +67,7 @@ fn definition(root: &Path) -> AgentDefinition {
         forbidden_env: vec![],
         pass_env: vec![],
         claude_config_dir: Some(root.to_string_lossy().into_owned()),
+        codex_home: None,
         permissions: "allow".into(),
         queue_capacity: 4,
         held_queue: false,

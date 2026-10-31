@@ -2357,6 +2357,8 @@ pub struct AutoDelegateV2 {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    pub service_tier: Option<String>,
     #[serde(default)]
     pub workload: AutoDelegateWorkload,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2894,6 +2896,8 @@ pub enum WorkerCapability {
     StartRecoveryV1,
     WorkspaceFailureV1,
     ProviderCatalogueV1,
+    ModelOptionsV1,
+    ProviderAccountsV1,
     WorkspaceViewV1,
     WorkspaceViewCreateV1,
 }
@@ -3241,6 +3245,8 @@ pub struct CandidateProbeV2Candidate {
     pub agent_type: String,
     pub model: String,
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    pub service_tier: Option<String>,
     #[serde(default)]
     pub workload: AutoDelegateWorkload,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3349,6 +3355,7 @@ impl CandidateProbeV2 {
         let mut ids = std::collections::BTreeSet::new();
         if self.candidates.iter().any(|candidate| {
             !is_routing_candidate_id(&candidate.candidate_id)
+                || candidate.service_tier.as_deref().is_some_and(|tier|!crate::provider_catalogue::catalogue_token(tier))
                 || !ids.insert(&candidate.candidate_id)
         }) {
             return Err(WorkerRefusal::InvalidEnvelope);
@@ -3434,6 +3441,8 @@ pub struct WorkerPrepare {
     pub agent_type: String,
     pub model: String,
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    pub service_tier: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -4081,6 +4090,7 @@ impl WorkerResultDisposition {
 
 impl WorkerPrepare {
     pub fn validate(&self) -> Result<(), WorkerRefusal> {
+        worker_require(self.service_tier.as_deref().is_none_or(crate::provider_catalogue::catalogue_token))?;
         worker_require(
             [
                 &self.machine_id,
@@ -4306,6 +4316,21 @@ impl WorkerRequest {
 }
 
 impl WorkerRequestOperation {
+    pub fn requires_provider_accounts(&self) -> bool {
+        match self {
+            Self::Start{start} | Self::StartDetailed{start} => start.definition.codex_home.is_some() || start.definition.capabilities.account_profiles,
+            _ => false,
+        }
+    }
+    pub fn requires_model_options(&self)->bool {
+        match self {
+            Self::Prepare{prepare}|Self::PrepareV2{prepare,..}|Self::PrepareFenced{prepare,..}
+                =>prepare.service_tier.is_some(),
+            Self::PrepareDiagnosed{prepare}=>prepare.requires_model_options(),
+            _=>false,
+        }
+    }
+
     pub fn requires_commit_view_reader(&self)->bool {
         matches!(self,Self::ConserveCommitView{..}|Self::ReadCommitViewFile{..})
             || matches!(self,Self::PrepareFenced{prepare,..}
@@ -6110,6 +6135,10 @@ pub struct ResolvedMcpDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AdapterCapabilities {
+    /// Un lecteur antérieur refuse ce champ dans la matrice fermée au lieu
+    /// d'ignorer un dossier de compte et de lancer sous le compte principal.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub account_profiles: bool,
     #[serde(default)]
     pub execution_paths: Vec<String>,
     #[serde(default)]
@@ -6126,6 +6155,7 @@ impl Default for AdapterCapabilities {
         // chemin reste la valeur de migration ; un modèle explicite demeure
         // absent tant qu'il n'est pas réellement déclaré.
         Self {
+            account_profiles: false,
             execution_paths: vec!["acp".to_string()],
             models: BTreeMap::new(),
             observed: None,
@@ -6182,6 +6212,8 @@ pub struct ProviderUiProjection {
 pub struct ModelCapabilities {
     #[serde(default)]
     pub efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -6197,6 +6229,9 @@ pub struct ResolvedAgentDefinition {
     /// Non-secret profile directory passed to the spawn without serializing its secrets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_config_dir: Option<String>,
+    /// Dossier non secret du compte Codex figé avec la définition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_home: Option<String>,
     pub queue_capacity: usize,
     pub notify_timeout_secs: u64,
     pub mcp: ResolvedMcpDefinition,
@@ -7777,13 +7812,29 @@ mod tests {
         assert_eq!(response.validate(), Err(WorkerRefusal::InvalidEnvelope));
     }
 
+
+    #[test]
+    fn spec221_c05_auto_selection_preserves_the_legacy_canon_and_rejects_null() {
+        let input=serde_json::json!({"request_id":"canonical-options","task":"Lire","cwd":"/tmp"});
+        let request:AutoDelegateV2=serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_string(&request).unwrap(),
+            r#"{"request_id":"canonical-options","workload":"general","task":"Lire","cwd":"/tmp"}"#);
+        assert!(request.service_tier.is_none());
+        let mut explicit=input.clone();explicit["service_tier"]=serde_json::json!("priority");
+        let selected:AutoDelegateV2=serde_json::from_value(explicit).unwrap();
+        assert_eq!(selected.service_tier.as_deref(),Some("priority"));
+        assert_eq!(serde_json::to_value(selected).unwrap()["service_tier"],"priority");
+        let mut invalid=input;invalid["service_tier"]=serde_json::Value::Null;
+        assert!(serde_json::from_value::<AutoDelegateV2>(invalid).is_err());
+    }
+
     #[test]
     fn spec168_prepare_v2_contrat_ferme_et_prepare_v1_inchange() {
         let worker = worker162_identity();
         let mut command = worker162_command();
         command.instance_id.clear();
         command.generation = 0;
-        let prepare = WorkerPrepare {
+        let prepare = WorkerPrepare { service_tier: None,
             machine_id: worker.machine_id.clone(),
             project_id: "project168".into(),
             provisioning_revision: 1,
@@ -9836,6 +9887,7 @@ mod tests {
                 forbidden_env: vec!["API_KEY".to_string()],
                 pass_env: vec!["HOME".to_string()],
                 claude_config_dir: None,
+                codex_home: None,
                 permissions: "allow".to_string(),
                 queue_capacity: 32,
                 notify_timeout_secs: 600,
@@ -9844,10 +9896,11 @@ mod tests {
                     acp_session: true,
                 },
                 capabilities: AdapterCapabilities {
+                    account_profiles: false,
                     execution_paths: vec!["acp".to_string()],
                     models: BTreeMap::from([(
                         "gpt-5.6-terra".to_string(),
-                        ModelCapabilities {
+                        ModelCapabilities { service_tiers: Vec::new(),
                             efforts: vec!["high".to_string()],
                         },
                     )]),
@@ -11788,7 +11841,7 @@ mod routing168_protocol_tests {
                 provider_policy: serde_json::json!({}),
             },
             candidates: (1..=128)
-                .map(|n| CandidateProbeV2Candidate {
+                .map(|n| CandidateProbeV2Candidate { service_tier: None,
                     candidate_id: format!("c{n:03}"),
                     project_id: "p".into(),
                     origin_host: "o".into(),
@@ -11873,7 +11926,7 @@ mod commit_view_reader221_tests {
     use super::*;
     #[test]
     fn spec221_c19_origin_root_is_a_narrow_view_only_envelope_not_a_parent_permission() {
-        let request=WorkerPrepare {
+        let request=WorkerPrepare { service_tier: None,
             machine_id:"cartae".into(),project_id:"project".into(),provisioning_revision:1,mapping_revision:1,
             origin_host:"origin".into(),origin_cwd:"/source".into(),source_root:"/source".into(),
             remote_root:"/mirror".into(),source_root_identity:"git:source".into(),relative_cwd:".".into(),

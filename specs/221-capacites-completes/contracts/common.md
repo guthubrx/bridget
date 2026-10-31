@@ -997,3 +997,18 @@ Un changement de compte sur une connexion remplace toute sa liste à séquence
 croissante ; un ancien résultat ne restaure pas A et ne modifie pas l'autre serveur.
 Réutiliser project_at, ingest et les fixtures220/221 ; aucun nouveau champ,
 lecteur de secrets, processus, magasin ou mécanisme d'admission.
+
+## C07 — disponibilité annoncée par modèle
+Réutiliser la projection ouverte connection_catalogues. model_checks associe
+chaque modèle déclaré à un état dérivé de la seule observation actuelle sur
+sa connexion et son serveur. announced_access_unverified ne prouve aucun accès
+payant ; not_announced ne devient pas une interdiction d'abonnement. Les causes
+program_unavailable et observation_protocol_unavailable restent des constats
+du contrôle, pas une déduction de version ancienne ou de quota.
+Les conseils sont fermés et partagés par état, sans recopier un texte fournisseur
+par modèle. Aucun changement du catalogue ferméV1, des profils, de l'admission,
+du compte ou d'une mission. La projection périmée donne unverified ; aucun
+ancien catalogue n'est recyclé pour annoncer une disponibilité actuelle.
+Le refus fournisseur structuré model_not_found continue d'utiliser le transport
+et le statut217 déjà livrés ; réutiliser leur preuve au lieu de refaire un refus
+payant. La matrice ne généralise pas une absence à toute une machine.

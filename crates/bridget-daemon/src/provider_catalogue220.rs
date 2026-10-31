@@ -17,6 +17,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) const MODEL_OPTIONS_LAUNCH_ENABLED: bool = true;
+
 const REFRESH: Duration = Duration::from_secs(120);
 const RETRY: Duration = Duration::from_secs(30);
 const MIN_REFRESH: Duration = Duration::from_secs(5);
@@ -83,10 +85,10 @@ fn config_stamp(
     digest: &str,
     source: &crate::lifecycle::SourceEnvironment,
 ) -> String {
-    let home = source
+    let home = def.codex_home.as_ref().map(PathBuf::from).or_else(|| source
         .get("CODEX_HOME")
         .filter(|_| def.pass_env.iter().any(|v| v == "CODEX_HOME"))
-        .map(PathBuf::from)
+        .map(PathBuf::from))
         .unwrap_or_else(|| {
             PathBuf::from(source.get("HOME").cloned().unwrap_or_default()).join(".codex")
         });
@@ -114,7 +116,7 @@ fn observation(
     }
 }
 impl CatalogueService {
-    pub fn start(registry_path: PathBuf, state_root: PathBuf, machine: String) -> Self {
+    pub fn start(registry_path: PathBuf, state_root: PathBuf, machine: String, source: crate::lifecycle::SourceEnvironment) -> Self {
         let service = Self {
             generation: Arc::new(AtomicU64::new(0)),
             enabled: Arc::new(AtomicBool::new(false)),
@@ -123,7 +125,7 @@ impl CatalogueService {
             latest: Arc::new(Mutex::new(BTreeMap::new())),
         };
         let task = service.clone();
-        std::thread::spawn(move || task.collect(registry_path, state_root, machine));
+        std::thread::spawn(move || task.collect(registry_path, state_root, machine, source));
         service
     }
     pub fn activate(&self, token: &str) {
@@ -199,8 +201,11 @@ impl CatalogueService {
                 || value.cause == Some(CatalogueCause::StopUnconfirmed));
     }
 
-    fn collect(&self, registry_path: PathBuf, state_root: PathBuf, machine: String) {
-        let source = crate::lifecycle::source_environment();
+    fn collect(&self, registry_path: PathBuf, state_root: PathBuf, machine: String,
+        source: crate::lifecycle::SourceEnvironment) {
+        // Même source figée que les missions du worker, jamais un HOME global
+        // relu plus tard depuis un thread indépendant.
+
         let salt = uuid::Uuid::new_v4().as_bytes().to_vec();
         let directory = state_root.join("catalogue");
         let markers = ManagedMarkerStore::at_directory(directory.join("markers"));
@@ -902,6 +907,31 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
         (def, source)
     }
     #[test]
+    fn spec221_c06_profile_signal_ignores_primary_auth_metadata() {
+        let root = root();
+        let (mut def,mut source) = fixture(&root,"present");
+        let primary = root.join("primary");
+        let isolated = root.join("isolated");
+        std::fs::create_dir(&primary).unwrap();std::fs::create_dir(&isolated).unwrap();
+        std::fs::write(primary.join("auth.json"),b"first").unwrap();
+        std::fs::write(isolated.join("auth.json"),b"private").unwrap();
+        std::fs::set_permissions(isolated.join("auth.json"),std::fs::Permissions::from_mode(0o000)).unwrap();
+        source.insert("CODEX_HOME".into(),primary.as_os_str().to_owned());
+        def.pass_env.push("CODEX_HOME".into());
+        def.codex_home=Some(isolated.to_string_lossy().into_owned());
+        let first = config_stamp(&def,"definition",&source);
+        std::fs::write(primary.join("auth.json"),b"primary-changed").unwrap();
+        assert_eq!(first,config_stamp(&def,"definition",&source));
+        // Le propriétaire modifie sa fixture, puis rétablit l'interdiction de
+        // lecture. Seules ses métadonnées alimentent config_stamp.
+        std::fs::set_permissions(isolated.join("auth.json"),std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(isolated.join("auth.json"),b"isolated-changed").unwrap();
+        std::fs::set_permissions(isolated.join("auth.json"),std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_ne!(first,config_stamp(&def,"definition",&source));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn spec220_probe_real_bootstrap_reads_account_models_and_stops_without_turn() {
         let root = root();
         let directory = root.join("catalogue");
@@ -1082,7 +1112,7 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
     #[test]
     fn spec221_c02_collector_reloads_changed_program_and_reconnection_without_turn() {
         let root = root();
-        let (def, _) = fixture(&root, "present");
+        let (def, source) = fixture(&root, "present");
         let program = PathBuf::from(&def.command);
         let state = root.join("account-state");
         std::fs::write(&state, "first").unwrap();
@@ -1115,7 +1145,7 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
         std::fs::write(&registry, raw.to_string()).unwrap();
         std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600)).unwrap();
         AgentRegistry::load_from_path_quiet(registry.clone()).unwrap();
-        let service = CatalogueService::start(registry, root.clone(), "local".into());
+        let service = CatalogueService::start(registry, root.clone(), "local".into(), source);
         let _guard = ServiceGuard(service.clone());
         service.activate("first-epoch");
         let deadline = Instant::now() + Duration::from_secs(30);

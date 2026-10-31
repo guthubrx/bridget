@@ -1118,3 +1118,39 @@ before sending the new command. Reading grants no view creation capability.
 A reader alone does not permit admission: creation also requires the capabilities described above.
 
 A file-read refusal may include detail.cause_kind: worker for a worker code, or commit_view for a view cause. This field is absent without an observed cause. It changes neither task scope nor permissions.
+
+
+## Separate accounts and model options
+
+A managed account is a separate connection on its machine. Read local connections
+with bridget accounts list --json. Prepare a second account with
+bridget accounts prepare --from CONNECTION --id work.
+The result is a preview with a SHA: no file or sign-in is created.
+The user applies the same arguments in their terminal with --expected SHA --apply.
+--registry ABSOLUTE_PATH selects a private local registry.
+
+The result identifies the official program, its arguments, the private directory
+and environment variables to remove before sign-in. It copies no credential or
+session from the main account. Managed Claude accounts set both CLAUDE_CONFIG_DIR
+and ANTHROPIC_CONFIG_DIR. The second directory also isolates keyless Console
+profiles. Existing connections are unchanged.
+
+After official sign-in, preview bridget accounts enable --id work, then apply
+with its SHA and --apply. This does not prove model access. disable stops future
+admissions. remove removes the connection, list and current alias, preserving
+the directory and admitted tasks. A shared alias prevents removal.
+applied_local does not attest fleet publication.
+
+Native Codex requests accept an explicit service_tier through bridget_auto_delegate.
+The program must currently advertise the value for this connection and model,
+and the profile must allow it. No default tier is applied. An invalid or
+unverifiable choice refuses before launch without changing admitted tasks.
+Older clients without the field must load the delivered client. Existing efforts
+remain separate. Names never imply context or cost. Claude options are never
+translated into Codex tiers.
+
+connection_catalogues[].model_checks distinguishes advertised, not advertised and
+unverified models. Advertisement does not guarantee mission acceptance. Omission
+is not proof of a subscription restriction. model_check_guidance gives the next
+action without switching the account, model or permissions.
+Other authorized work follows its own state.

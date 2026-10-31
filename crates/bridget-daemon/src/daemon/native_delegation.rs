@@ -68,6 +68,8 @@ struct AutoAdmissionSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RoutingCandidateObservation {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    model_option_account:Option<String>,
     definition_digest: String,
     permission_digest: String,
     mapping_revision: Option<u64>,
@@ -204,7 +206,7 @@ fn routing_admission_plan(
         .filter(|policy| policy.enabled)
         .cloned()
         .ok_or("routing_policy_unavailable")?;
-    let filters = RoutingCandidateFilters {
+    let filters = RoutingCandidateFilters { service_tier: request.service_tier.clone(),
         engine: request.engine.clone(),
         model: request.model.clone(),
         machine_id: request.machine_id.clone(),
@@ -942,6 +944,8 @@ fn observe_routing_candidates_for_project(
     let admission_id = auto_admission_id(&canonical);
     let now = unix_timestamp();
     let mut mapping_refusal = None;
+    let mut option_accounts=HashMap::new();
+    let mut option_refusals=Vec::new();
     let (parent, mut observations, batches, host) = {
         let mut st = state.lock().unwrap_or_else(|error| error.into_inner());
         let (owner, instance) =
@@ -996,6 +1000,12 @@ fn observe_routing_candidates_for_project(
             .collect::<HashSet<_>>();
         for (index, candidate) in plan.candidates.iter().enumerate() {
             let candidate_id = routing_candidate_id(index);
+            let option_account=match super::native_provider_catalogue220::model_option_account(
+                &st,&registry,candidate,request.service_tier.as_deref()) {
+                Ok(account)=>account,
+                Err(code)=>{option_refusals.push(code);continue;},
+            };
+            option_accounts.insert(candidate_id.clone(),option_account.clone());
             // Une vue appartient au WorkerRuntime provisionné, même sur l'hôte du maître.
             // Le chemin local historique ne porte ni reçu de vue ni lecteur durable.
             if origin_host==host && routing_is_local(&candidate.machine_id, &host)
@@ -1040,8 +1050,10 @@ fn observe_routing_candidates_for_project(
                 if blocked {
                     continue;
                 }
+                let pinned=registry.clone().pin_delegation_service_tier(
+                    &candidate.agent_type,&candidate.model,request.service_tier.as_deref())?;
                 let Ok((_, snapshot, _)) = resolve_target(
-                    &registry,
+                    &pinned,
                     &st.source_env,
                     &unknown_limits,
                     &owner,
@@ -1063,6 +1075,7 @@ fn observe_routing_candidates_for_project(
                 observations.insert(
                     candidate_id,
                     RoutingCandidateObservation {
+                        model_option_account:option_account,
                         definition_digest: definition.digest,
                         permission_digest: format!(
                             "{:x}",
@@ -1102,7 +1115,7 @@ fn observe_routing_candidates_for_project(
             let Ok(relative) = source.strip_prefix(&mapping.source_root) else {
                 continue;
             };
-            let probe_candidate = CandidateProbeV2Candidate {
+            let probe_candidate = CandidateProbeV2Candidate { service_tier: request.service_tier.clone(),
                 candidate_id,
                 project_id: project_id.clone(),
                 origin_host: mapping.source_host.clone(),
@@ -1250,6 +1263,7 @@ fn observe_routing_candidates_for_project(
                     observations.insert(
                         candidate_id.clone(),
                         RoutingCandidateObservation {
+                            model_option_account:option_accounts.get(&candidate_id).cloned().flatten(),
                             definition_digest,
                             permission_digest,
                             mapping_revision: Some(mapping_revision),
@@ -1288,7 +1302,11 @@ fn observe_routing_candidates_for_project(
         }
     }
     if plan.candidates.is_empty() {
-        return Err(if unsupported_worker {
+        return Err(if !option_refusals.is_empty() {
+            if option_refusals.iter().all(|code|code=="model_options_not_announced") {
+                "model_options_not_announced".into()
+            } else {"model_options_observation_unavailable".into()}
+        } else if unsupported_worker {
             if matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
                 "worker_commit_view_capabilities_unsupported".into()
             } else {"worker_candidate_probe_v2_unsupported".into()}
@@ -1765,6 +1783,11 @@ fn refresh_routing_selected(
         .first()
         .cloned()
         .ok_or("routing_candidate_unavailable")?;
+    if observed.model_option_account!=previous.model_option_account {
+        return Err(if observed.connection_epoch!=previous.connection_epoch {
+            "model_options_account_unverified"
+        } else {"model_options_account_changed"}.into());
+    }
     if let Some(code) = routing_change_error("selected_probe", &[
         ("definition", observed.definition_digest != previous.definition_digest),
         ("permissions", observed.permission_digest != previous.permission_digest),
@@ -1798,6 +1821,10 @@ fn refresh_routing_selected(
             .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
         let selected = observed_effort(effort)
             .map_err(|code| routing_probe_error(&single, code.to_owned()))?;
+        if control.model_option_account!=observed.model_option_account
+            || selected.model_option_account!=observed.model_option_account {
+            return Err("model_options_account_changed".into());
+        }
         // La variation d'effort n'autorise aucune dérive du profil initial.
         // Les droits du choix restent attestés, puis revalidés à Prepare.
         if let Some(code) = routing_change_error("effort_probe", &[
@@ -2302,6 +2329,14 @@ fn admit_auto_routing(
                 .by_agent_request(&owner, &request.request_id, &canonical)?
         {
             return current_task_view(&st, &task, true);
+        }
+        if request.service_tier.as_deref().is_some_and(|tier|
+            !bridget_transport::provider_catalogue::catalogue_token(tier)) {
+            return Err("model_options_invalid".into());
+        }
+        if request.service_tier.is_some()
+            && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+            return Err("model_options_not_activated".into());
         }
         let registry = AgentRegistry::load_from_path(st.registry.source().to_path_buf())
             .map_err(|_| "routing_policy_unavailable")?;
@@ -3736,6 +3771,58 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if matches!(code,"model_options_invalid"|"model_options_not_activated"
+        |"model_options_not_permitted"|"model_options_launcher_ambiguous"
+        |"model_options_observation_unavailable"|"model_options_account_unidentified"
+        |"model_options_not_announced"|"model_options_account_changed"|"model_options_account_unverified"
+        |"model_options_launch_mismatch") {
+        let (cause,action,human)=if code=="model_options_invalid" {
+            ("invalid_service_tier",
+             "Corriger service_tier : fournir un identifiant non vide, de256octets au plus, composé de lettres, chiffres ou ._:/-.",
+             "Si le niveau voulu n'est pas connu, demander à l'utilisateur lequel choisir parmi les niveaux réellement annoncés et autorisés. Aucun remplacement automatique.")
+        } else if code=="model_options_not_permitted" {
+            ("option_not_authorized_by_profile",
+             "Faire qualifier le niveau voulu dans le profil de cette connexion et les capacités de son adaptateur. Ce contrôle ne prouve pas un refus de votre abonnement.",
+             "Si ce choix dépasse le profil autorisé, demander à l'utilisateur s'il veut faire qualifier et autoriser ce niveau. Ne pas élargir les droits ou changer de connexion silencieusement.")
+        } else if code=="model_options_launch_mismatch" {
+            ("saved_option_definition_mismatch",
+             "Conserver cette tâche et sa clé : sa définition enregistrée ne reconstruit pas exactement le niveau choisi. Aucun lancement n'est autorisé sur un défaut différent.",
+             "Demander au responsable Bridget une vérification du reçu et du lecteur compatible, sans réécrire la tâche ni changer son compte, son modèle ou ses droits.")
+        } else if code=="model_options_launcher_ambiguous" {
+            ("option_launcher_ambiguous",
+             "Faire vérifier les arguments du lanceur configuré : ils ne permettent pas de garantir l'application du niveau demandé.",
+             "Demander au responsable Bridget une correction ciblée du lanceur avant toute admission ; conserver le compte, le modèle et les droits.")
+        } else if code=="model_options_not_announced" {
+            ("option_not_announced",
+             "Faire actualiser puis relire les options annoncées pour ce modèle sur cette connexion de ce serveur. Le niveau demandé n'y figure pas ; cela ne prouve pas une interdiction de l'abonnement.",
+             "Si la liste actuelle reste différente, demander à l'utilisateur quel choix annoncé et autorisé il souhaite. Aucun remplacement ni achat automatique.")
+        } else if code=="model_options_account_unverified" {
+            ("observed_account_continuity_unverified",
+             "Conserver cette tâche et sa clé : le worker a changé d'époque, donc son nonce local ne permet plus de vérifier la continuité du compte choisi. Cela ne prouve pas un changement de compte.",
+             "Demander au responsable Bridget de vérifier l'ancienne tâche, son arrêt et le compte prévu avant toute décision de nouvelle admission. Aucun rejeu, achat ou remplacement automatique.")
+        } else if code=="model_options_account_changed" {
+            ("observed_account_changed",
+             "Conserver cette tâche et sa clé : le compte observé n'est plus celui figé pendant sa décision. Vérifier son état et l'arrêt avant toute nouvelle admission.",
+             "Demander à l'utilisateur quel compte était prévu. Ne pas reconnecter, changer de compte ou relancer cette mission automatiquement.")
+        } else if code=="model_options_account_unidentified" {
+            ("observed_account_unidentified",
+             "Faire qualifier l'identité non secrète fournie par le programme pour cette connexion. Le compte n'est pas identifiable ; la continuité de ce choix ne peut pas être attestée.",
+             "Demander au responsable Bridget le diagnostic de l'adaptateur. Ce constat ne demande ni réinstallation ni nouvelle connexion.")
+        } else if code=="model_options_observation_unavailable" {
+            ("current_option_observation_missing",
+             "Attendre le contrôle des modèles ou demander une actualisation native, puis relire une fois l'observation de cette connexion sur ce serveur. Aucune observation actuelle compatible n'a confirmé ce choix.",
+             "Si l'observation reste indisponible, demander au responsable Bridget de qualifier le worker et l'adaptateur nommés. Ne pas déduire un défaut de compte ou d'abonnement.")
+        } else {
+            ("model_option_selection_not_active",
+             "Conserver cette demande et faire terminer l'activation de ce choix par le responsable Bridget. La lecture des niveaux annoncés ne permet pas encore leur sélection pour une mission.",
+             "Si l'activation dépasse votre accès, demander à l'utilisateur de faire charger une version Bridget qui admet ce choix. Ne pas changer le compte, le modèle, le niveau ou les droits pour contourner ce contrôle.")
+        };
+        return json!({"status":"refused","code":code,
+            "message":format!("{action} Ce refus concerne cette demande ; les autres travaux autorisés suivent leur propre état."),
+            "detail":{"scope":"this_admission","cause":cause,"task_id":null,
+                "recovery":"Conserver la clé et l'enveloppe, puis vérifier detail.admission. Pour une demande non admise seulement, corriger la cause avant un nouvel essai autorisé. Ne pas dupliquer ni relancer une mission d'issue inconnue.",
+                "human_action":human}});
+    }
     if matches!(code, "routing_policy_disabled" | "routing_policy_unavailable" | "routing_catalogue_unavailable") {
         let fact = match code {
             "routing_policy_disabled" => "La politique du catalogue est désactivée.",
@@ -4399,6 +4486,12 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    if matches!(error.strip_prefix("remote_start_failed:").unwrap_or(error),
+        "model_options_account_changed"|"model_options_observation_unavailable"
+        |"model_options_not_announced"|"model_options_not_permitted"|"model_options_account_unidentified"
+        |"model_options_account_unverified") {
+        return Some("Conserver cette tâche et sa clé, puis vérifier le compte prévu, le profil autorisé et l'observation actuelle de cette connexion sur ce serveur. Le choix demandé n'est plus confirmé ; un nouveau nonce ne prouve pas à lui seul un changement de compte. Demander au responsable Bridget le contrôle manquant avant toute nouvelle admission ; aucune reconnexion, substitution ou relance automatique. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
+    }
     if let Some(cause) = start_recovery::capacity_refusal(error) {
         return Some(start_recovery::capacity_message(cause));
     }
@@ -5877,7 +5970,12 @@ fn delegate_remote_with_routing(
                 return Err("routing_connection_changed:worker_prepare:worker_epoch".into());
             }
         }
-        let prepare = WorkerPrepare {
+        if let Some((auto,candidate,observed))=&routing {
+            let current=super::native_provider_catalogue220::model_option_account(
+                &st,&st.registry,candidate,auto.service_tier.as_deref())?;
+            if current!=observed.model_option_account {return Err("model_options_account_changed".into());}
+        }
+        let prepare = WorkerPrepare { service_tier: routing.as_ref().and_then(|(auto,_,_)|auto.service_tier.clone()),
             machine_id: machine.clone(),
             project_id: project_id.clone(),
             provisioning_revision: provision.provisioning_revision,
@@ -6687,6 +6785,7 @@ fn start_remote_task_with(
         {
             return Err("remote_task_changed".into());
         }
+        recheck_task_model_option(&st,&task)?;
         if let Some(plan) = recovery {
             // La préparation distante a libéré le mutex. Revalider avant de
             // réserver une nouvelle commande, y compris Cancel qui peut garder starting.
@@ -6937,6 +7036,7 @@ fn start_remote_task_with(
             return Err("remote_release_changed".into());
         }
         recheck_remote_dispatch(&st, &task, &task)?;
+        recheck_task_model_option(&st,&task)?;
         let control = crate::referent_control::read(st.store.connection())
             .map_err(|_| "control_state_unavailable")?;
         let halt = st
@@ -8071,6 +8171,10 @@ fn admit_delegate(
                 )
             }
             WorkspacePass::Shared | WorkspacePass::Probe => {
+                let service_tier=auto_receipt.filter(|receipt|receipt.metadata_version==2)
+                    .map(recovered_routing_request).transpose()?.and_then(|auto|auto.service_tier);
+                let registry=st.registry.clone().pin_delegation_service_tier(
+                    agent_type,model,service_tier.as_deref())?;
                 let mut selected = None;
                 let mut tried = Vec::new();
                 let mut requested_error = None;
@@ -8079,7 +8183,7 @@ fn admit_delegate(
                     .enumerate()
                 {
                     match resolve_target(
-                        &st.registry,
+                        &registry,
                         &st.source_env,
                         limits,
                         &owner,
@@ -8095,7 +8199,7 @@ fn admit_delegate(
                     ) {
                         Ok((scoped, snapshot, effective)) => {
                             let definition =
-                                st.registry.resolved_definition(&candidate.agent_type)?;
+                                registry.resolved_definition(&candidate.agent_type)?;
                             selected =
                                 Some((candidate.clone(), definition, scoped, snapshot, effective));
                             break;
@@ -8357,7 +8461,9 @@ fn admit_delegate(
             }
             None => (owner.clone(), None),
         };
-        let record = Task {
+        let service_tier=auto_receipt.filter(|receipt|receipt.metadata_version==2)
+            .map(recovered_routing_request).transpose()?.and_then(|auto|auto.service_tier);
+        let record = Task { service_tier,
             remote_prepared: false,
             commit_view_prepare:None,
             start_recovery: None,
@@ -9017,6 +9123,34 @@ fn handle_locked_with_remote_proof(
     }
 }
 
+/// Le choix explicite garde le compte observé pendant la décision. Le reçu
+/// historique, le modèle, les droits et la tâche ne sont jamais réécrits.
+/// Sans option, le chemin historique n'effectue aucune nouvelle lecture.
+pub(super) fn recheck_task_model_option(st:&DaemonState,task:&Task)->Result<(),String> {
+    if task.service_tier.is_none(){return Ok(());}
+    let NativeDelegationRequest::Delegate{request_id,..}=&task.request else {
+        return Err("invalid_record".into());
+    };
+    let receipt=st.delegation_store.auto_admission_receipt(&task.owner,request_id)?
+        .ok_or("auto_admission_invalid")?;
+    let auto=recovered_routing_request(&receipt)?;
+    if auto.service_tier!=task.service_tier {return Err("auto_admission_invalid".into());}
+    let plan=frozen_routing_plan(&receipt)?;
+    let index=routing_choice_index(&plan,receipt.candidate_id.as_deref().ok_or("auto_admission_invalid")?)?;
+    let registry=AgentRegistry::load_from_path(st.registry.source().to_path_buf())
+        .map_err(|_|"model_options_observation_unavailable")?;
+    let candidate=&plan.candidates[index];
+    // La fraîcheur, l'identité courante, le profil et la capacité sont relus
+    // par model_option_account. Une nouvelle époque n'est pas un nouveau
+    // compte : le nonce du même service observateur reste la continuité.
+    let current=super::native_provider_catalogue220::model_option_account(
+        st,&registry,candidate,task.service_tier.as_deref())?;
+    if current.is_none() || current!=plan.observations[index].model_option_account {
+        return Err("model_options_account_changed".into());
+    }
+    Ok(())
+}
+
 /// Relecture des droits et des sources avant tout lancement ou reprise.
 /// O(v + b + log r), hors latences système : v octets de définition, contexte
 /// et environnement inspectés, b octets relus/hachés, r révocations durables.
@@ -9032,7 +9166,7 @@ pub(super) fn native_launch_registry(
     {
         return Err("permission_not_inherited".into());
     }
-    let NativeDelegationRequest::Delegate { agent_type, .. } = &task.request else {
+    let NativeDelegationRequest::Delegate { agent_type,model,.. } = &task.request else {
         return Err("invalid_record".into());
     };
     if std::fs::canonicalize(&task.cwd).map_err(|_| "cwd_unavailable")?
@@ -9040,7 +9174,11 @@ pub(super) fn native_launch_registry(
     {
         return Err("cwd_changed".into());
     }
-    let registry = AgentRegistry::from_resolved(agent_type, &task.definition)?;
+    let registry = AgentRegistry::from_resolved(agent_type, &task.definition)?
+        .pin_delegation_service_tier(agent_type,model,task.service_tier.as_deref())?;
+    if task.service_tier.is_some() && registry.resolved_definition(agent_type)?!=task.definition {
+        return Err("model_options_launch_mismatch".into());
+    }
     if let Some(snapshot) = &task.permission_snapshot {
         for context in crate::native_permissions::snapshot_contexts(snapshot) {
             bridget_transport::protocol::recheck_permission_context_sources(&context)?;
@@ -9197,6 +9335,7 @@ fn spawn_task(st: &mut DaemonState, task: &mut Task) -> Result<(), String> {
         return Ok(());
     }
     let known = st.fleet.knows_command(&task.task_id);
+    if !known {recheck_task_model_option(st,task)?;}
     let checked_registry = if known { None } else { Some(native_launch_registry(st, task)?) };
     let NativeDelegationRequest::Delegate {
         agent_type,
@@ -14288,7 +14427,7 @@ mod tests {
         });
         let mut plan = routing168_plan(&state, &request);
         let mut selected_plan = plan.clone();
-        selected_plan.observations = vec![RoutingCandidateObservation {
+        selected_plan.observations = vec![RoutingCandidateObservation { model_option_account:None,
             definition_digest:"a".repeat(64), permission_digest:"b".repeat(64),
             mapping_revision:Some(1), project_id:Some("project171".into()),
             connection_epoch:"fixture".into(), observed_at:unix_timestamp(), received_at:unix_timestamp(),
@@ -14818,7 +14957,7 @@ mod tests {
     }
 
     pub(super) fn routing168_observation() -> RoutingCandidateObservation {
-        RoutingCandidateObservation {
+        RoutingCandidateObservation { model_option_account:None,
             definition_digest: "a".repeat(64),
             permission_digest: "b".repeat(64),
             mapping_revision: None,
@@ -34824,7 +34963,7 @@ mod permission_projection214_tests {
         let original=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
         let update=WorkerCatalogueUpdate {version:1,worker,connection_epoch:"epoch220".into(),refresh_id:"epoch220".into(),sequence:1,
             catalogue:ProviderCatalogue {connection_id:"main".into(),definition_digest:digest,observed_at:unix_timestamp(),state:CatalogueState::Observed,
-                account_scope:Some("b".repeat(32)),cause:None,models:vec![CatalogueModel {model:"announced-outside-policy".into(),supported_efforts:vec![],default_effort:None}]}};
+                account_scope:Some("b".repeat(32)),cause:None,models:vec![CatalogueModel {service_tiers_unavailable:false,model:"announced-outside-policy".into(),supported_efforts:vec![],default_effort:None,service_tiers:vec![],default_service_tier:None}]}};
         let mut wrong=update.clone();wrong.connection_epoch="foreign".into();assert!(catalogue::ingest(&mut st,"worker220",wrong).is_some());
         for n in 0..32 {
             st.remote_workers.get_mut("local").unwrap().catalogues.insert(format!("obsolete-{n}"),catalogue::CachedCatalogue {sequence:1,received:Instant::now(),received_at:unix_timestamp(),value:update.catalogue.clone()});
@@ -34905,13 +35044,232 @@ mod permission_projection214_tests {
             let value=ProviderCatalogue {connection_id:"main".into(),
                 definition_digest:st.registry.resolved_definition("native-test").unwrap().digest,
                 observed_at:now-10,state:CatalogueState::Observed,account_scope:Some("a".repeat(32)),cause:None,
-                models:vec![CatalogueModel {model:"m000".into(),supported_efforts:vec!["low".into()],default_effort:Some("low".into())},
-                    CatalogueModel {model:"outside-policy".into(),supported_efforts:vec![],default_effort:None}]};
+                models:vec![CatalogueModel {service_tiers_unavailable:false,model:"m000".into(),supported_efforts:vec!["low".into()],default_effort:Some("low".into()),service_tiers:vec![],default_service_tier:None},
+                    CatalogueModel {service_tiers_unavailable:false,model:"outside-policy".into(),supported_efforts:vec![],default_effort:None,service_tiers:vec![],default_service_tier:None}]};
             let update=WorkerCatalogueUpdate {version:1,worker,connection_epoch:"epoch221-models".into(),
                 refresh_id:"epoch221-models".into(),sequence:1,catalogue:value};
             assert!(catalogue::ingest(&mut st,"worker221-models",update).is_none());
             st.remote_workers["local"].catalogues["main"].received};
         (shared,config,now,clock)
+    }
+
+
+
+    #[test]
+    fn spec221_c07_model_checks_distinguish_announcement_absence_and_expired_observation() {
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let tasks=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
+        let current=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(current[0]["model_checks"][0]["model"],"m000");
+        assert_eq!(current[0]["model_checks"][0]["status"],"announced_access_unverified");
+        assert_eq!(current[0]["model_checks"][0]["entitlement"],"unknown");
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap()
+            .value.models.retain(|m|m.model!="m000");
+        let missing=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(missing[0]["model_checks"][0]["status"],"not_announced");
+        assert!(missing[0]["model_check_guidance"]["not_announced"].as_str().unwrap().contains("ne prouve pas"));
+        let expired=catalogue::project_at(&st,&st.registry,now+181,clock+Duration::from_secs(181));
+        assert_eq!(expired[0]["model_checks"][0]["status"],"unverified");
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),tasks);
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c05_unsupported_selection_is_guided_and_consumes_no_admission() {
+        let (shared,config,_rx,_reader,mut request,_root)=super::tests::routing168_fixture(1);
+        let before=serde_json::to_vec(&shared.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
+        request.service_tier=Some("priority".into());
+        assert!(crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED);
+        let error=admit_auto_routing("conn-1",&request,None,None,None,None,&shared).unwrap_err();
+        assert_eq!(error,"routing_candidate_unavailable:catalogue_no_match");
+        let view=routing_failure_admission("conn-1",&request,None,failure(&error),&shared);
+        assert_eq!(view["detail"]["admission"]["state"],"not_recorded");
+        assert!(view["detail"]["admission"]["task_id"].is_null());
+        assert_eq!(view["detail"]["scope"],"this_admission");
+        assert!(view["message"].as_str().unwrap().contains("autres travaux autorisés"));
+        assert!(view["detail"]["human_action"].as_str().unwrap().contains("utilisateur"));
+        request.service_tier=Some("bad\nlevel".into());
+        assert_eq!(admit_auto_routing("conn-1",&request,None,None,None,None,&shared).unwrap_err(),
+            "model_options_invalid");
+        let invalid=failure("model_options_invalid");
+        assert_eq!(invalid["detail"]["cause"],"invalid_service_tier");
+        assert!(invalid["message"].as_str().unwrap().contains("service_tier"));
+        assert_eq!(serde_json::to_vec(&shared.lock().unwrap().delegation_store.tasks().unwrap()).unwrap(),before);
+        drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c05_catalogue_options_require_negotiation_and_keep_the_account_context() {
+        use bridget_transport::protocol::*;
+        use bridget_transport::provider_catalogue::*;
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let tasks=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
+        let mut value=st.remote_workers["local"].catalogues["main"].value.clone();
+        value.models[0].service_tiers=vec!["default".into(),"priority".into()];
+        value.models[0].default_service_tier=Some("default".into());
+        let update=WorkerCatalogueUpdate {version:1,worker:st.remote_workers["local"].identity.clone(),
+            connection_epoch:"epoch221-models".into(),refresh_id:"epoch221-models".into(),
+            sequence:2,catalogue:value};
+        assert!(update.valid());
+        assert!(matches!(catalogue::ingest(&mut st,"worker221-models",update.clone()),
+            Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CapabilityRequired})));
+        let old=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(old[0]["model_options_status"],"unverified_peer");
+        assert!(old[0]["models"][0].get("service_tiers").is_none());
+        st.remote_workers.get_mut("local").unwrap().capabilities.push(WorkerCapability::ModelOptionsV1);
+        assert!(catalogue::ingest(&mut st,"worker221-models",update.clone()).is_none());
+        let fresh=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(fresh[0]["model_options_status"],"reported");
+        assert_eq!(fresh[0]["model_options_selection"],"explicit_only");
+        assert_eq!(fresh[0]["models"][0]["service_tiers"],json!(["default","priority"]));
+        assert_eq!(fresh[0]["models"][0]["default_service_tier"],"default");
+        assert_eq!(fresh[0]["account_scope"],old[0]["account_scope"]);
+        assert_eq!(fresh[0]["entitlement"],"unknown");
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),tasks);
+        let mut legacy=update;legacy.sequence=3;
+        legacy.catalogue=legacy.catalogue.legacy_projection();
+        st.remote_workers.get_mut("local").unwrap().capabilities.retain(|c|*c!=WorkerCapability::ModelOptionsV1);
+        assert!(catalogue::ingest(&mut st,"worker221-models",legacy).is_none());
+        let unavailable=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(unavailable[0]["model_options_status"],"unverified_peer");
+        assert!(unavailable[0]["models"][0].get("service_tiers").is_none());
+        assert_eq!(unavailable[0]["account_scope"],fresh[0]["account_scope"]);
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c05_local_admission_keeps_the_option_in_probe_and_saved_launch() {
+        let (shared,config,rx,_reader,mut auto,_root)=super::tests::routing168_fixture(1);
+        auto.service_tier=Some("priority".into());
+        let mut st=shared.lock().unwrap();
+        let path=st.registry.source().to_path_buf();
+        let mut raw:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["agents"]["native-test"]["capabilities"]["models"]["m000"]["service_tiers"]=json!(["priority"]);
+        raw["routing_policy"]["model_catalog"]["main"][0]["service_tiers"]=json!(["priority"]);
+        std::fs::write(&path,serde_json::to_vec(&raw).unwrap()).unwrap();
+        st.registry=AgentRegistry::load_from_path(path).unwrap();
+        let mut plan=routing_admission_plan(&st.registry,"local",&auto).unwrap();
+        let mut observed=super::tests::routing168_observation();
+        observed.model_option_account=Some("a".repeat(32));
+        observed.definition_digest=st.registry.resolved_definition("native-test").unwrap().digest;
+        plan.observations=vec![observed];plan.scores=vec![0];
+        let delegated=routing_delegate(&auto,&plan.candidates[0],Some("high".into()),"local",None);
+        let owner=live_connection_identity(&st,"conn-1").unwrap().0;
+        let mut receipt=routing_auto_receipt(owner,&auto,
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(auto.clone())).unwrap(),
+            &plan,st.coordinator_epoch,unix_timestamp()).unwrap();
+        receipt.state=AutoAdmissionState::Chosen;
+        receipt.candidate_id=Some("c001".into());
+        receipt.delegate_canonical=Some(serde_json::to_vec(&delegated).unwrap());
+        receipt.mode=Some(crate::delegation::AutoAdmissionMode::Automatic);
+        assert!(st.delegation_store.insert_auto_admission_receipt(&receipt).unwrap());
+        let probe=admit_delegate("conn-1",&delegated,None,None,&mut st,WorkspacePass::Probe,Some(&receipt)).unwrap();
+        let WorkspaceAdmission::Probe(_,_,definition,_)=probe else {panic!("local probe");};
+        assert!(definition.args.iter().any(|arg|arg=="service_tier=\"priority\""),
+            "Probe must preserve the choice passed to worktree Reserve/Commit");
+        let shared_view=admit_delegate("conn-1",&delegated,None,None,&mut st,WorkspacePass::Shared,Some(&receipt)).unwrap();
+        let WorkspaceAdmission::View(view)=shared_view else {panic!("local shared");};
+        let task=st.delegation_store.get(view["task_id"].as_str().unwrap()).unwrap().unwrap();
+        assert_eq!(task.service_tier,auto.service_tier);
+        assert!(task.definition.args.iter().any(|arg|arg=="service_tier=\"priority\""));
+        let registry=native_launch_registry(&st,&task).unwrap();
+        assert_eq!(registry.resolved_definition("native-test").unwrap(),task.definition);
+        assert!(rx.try_recv().is_err(),"no model or supervisor is started by this test");
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c05_option_requires_current_model_connection_account_and_profile() {
+        use bridget_transport::protocol::WorkerCapability;
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,_clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let path=st.registry.source().to_path_buf();
+        let mut policy:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        policy["agents"]["native-test"]["capabilities"]["models"]["m000"]["service_tiers"]=json!(["priority","default"]);
+        policy["routing_policy"]["model_catalog"]["main"][0]["service_tiers"]=json!(["priority","default"]);
+        std::fs::write(&path,serde_json::to_vec(&policy).unwrap()).unwrap();
+        st.registry=AgentRegistry::load_from_path(path).unwrap();
+        let candidate=st.registry.routing_candidates().unwrap().into_iter()
+            .find(|c|c.connection_id=="main" && c.model=="m000").unwrap();
+        let tasks=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
+        let digest=st.registry.resolved_definition("native-test").unwrap().digest;
+        let worker=st.remote_workers.get_mut("local").unwrap();
+        worker.capabilities.push(WorkerCapability::ModelOptionsV1);
+        let cached=worker.catalogues.get_mut("main").unwrap();
+        cached.value.definition_digest=digest;
+        cached.value.models[0].service_tiers=vec!["priority".into()];
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("priority")).unwrap(),Some("a".repeat(32)));
+        {let m=&mut st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.models[0];
+            m.service_tiers.clear();m.service_tiers_unavailable=true;}
+        let partial=catalogue::project(&st,&st.registry);
+        assert_eq!(partial[0]["status"],"reported_models");
+        assert_eq!(partial[0]["models"][0]["model_options_status"],"not_observed");
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("priority")).unwrap_err(),
+            "model_options_observation_unavailable");
+        {let m=&mut st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.models[0];
+            m.service_tiers=vec!["priority".into()];m.service_tiers_unavailable=false;}
+
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,None).unwrap(),None);
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("default")).unwrap_err(),"model_options_not_announced");
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("invented")).unwrap_err(),"model_options_not_permitted");
+        let mut other=candidate.clone();other.connection_id="other".into();
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&other,Some("priority")).unwrap_err(),"model_options_not_permitted");
+        let (other,other_config,mut task,_)=super::tests::remote162_capture_fixture();
+        let auto:AutoDelegateV2=serde_json::from_value(json!({"request_id":"frozen-options",
+            "task":"Lecture","cwd":task.cwd,"service_tier":"priority"})).unwrap();
+        let mut plan=routing_admission_plan(&st.registry,"local",&auto).unwrap();
+        let mut fact=super::tests::routing168_observation();
+        fact.model_option_account=Some("a".repeat(32));
+        fact.connection_epoch="epoch221-models".into();
+        plan.observations=vec![fact];
+        plan.scores=vec![0];
+        let mut receipt=routing_auto_receipt(task.owner.clone(),&auto,
+            serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(auto.clone())).unwrap(),
+            &plan,st.coordinator_epoch,now).unwrap();
+        receipt.candidate_id=Some("c001".into());
+        task.request=routing_delegate(&auto,&plan.candidates[0],None,"local",None);
+        task.service_tier=Some("priority".into());
+        assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt,now).unwrap());
+        assert_eq!(recheck_task_model_option(&st,&task),Ok(()));
+        let roundtrip:Task=serde_json::from_slice(&serde_json::to_vec(&task).unwrap()).unwrap();
+        assert_eq!(roundtrip.service_tier,task.service_tier);
+        task.service_tier=Some("default".into());
+        assert_eq!(recheck_task_model_option(&st,&task).unwrap_err(),"auto_admission_invalid");
+        task.service_tier=Some("priority".into());
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.account_scope=Some("b".repeat(32));
+        assert_eq!(recheck_task_model_option(&st,&task).unwrap_err(),"model_options_account_changed");
+        st.remote_workers.get_mut("local").unwrap().epoch="reconnected".into();
+        assert_eq!(recheck_task_model_option(&st,&task).unwrap_err(),"model_options_account_changed");
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.account_scope=Some("a".repeat(32));
+        assert_eq!(recheck_task_model_option(&st,&task),Ok(()));
+        st.remote_workers.get_mut("local").unwrap().epoch="epoch221-models".into();
+        let saved=st.delegation_store.auto_admission_receipt(&task.owner,&auto.request_id).unwrap().unwrap();
+        assert_eq!(saved.metadata,receipt.metadata);assert_eq!(saved.canonical,receipt.canonical);
+        drop(other);super::tests::cleanup(&other_config);
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.account_scope=None;
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("priority")).unwrap_err(),"model_options_account_unidentified");
+        {let cached=&mut st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value;
+            cached.account_scope=Some("b".repeat(32));cached.observed_at=now-181;}
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("priority")).unwrap_err(),"model_options_observation_unavailable");
+        st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at=now;
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("priority")).unwrap(),Some("b".repeat(32)));
+        st.remote_workers.get_mut("local").unwrap().capabilities.retain(|c|*c!=WorkerCapability::ModelOptionsV1);
+        assert_eq!(catalogue::model_option_account(&st,&st.registry,&candidate,Some("priority")).unwrap_err(),"model_options_observation_unavailable");
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),tasks);
+        for code in ["model_options_not_permitted","model_options_launcher_ambiguous",
+            "model_options_not_announced","model_options_account_changed",
+            "model_options_account_unidentified","model_options_observation_unavailable"] {
+            let refusal=failure(code);
+            assert_eq!(refusal["detail"]["scope"],"this_admission");
+            assert!(refusal["message"].as_str().unwrap().contains("autres travaux"));
+            assert!(refusal["detail"]["human_action"].is_string());
+        }
+        drop(st);drop(shared);super::tests::cleanup(&config);
     }
 
     #[test]
@@ -35016,7 +35374,8 @@ mod permission_projection214_tests {
         let mut switched=st.remote_workers["local"].catalogues["main"].value.clone();
         switched.account_scope=Some("c".repeat(32));switched.observed_at=now;
         switched.models=vec![bridget_transport::provider_catalogue::CatalogueModel {
-            model:"account-new-model".into(),supported_efforts:vec!["low".into()],default_effort:Some("low".into())}];
+            service_tiers_unavailable:false,
+            model:"account-new-model".into(),supported_efforts:vec!["low".into()],default_effort:Some("low".into()),service_tiers:vec![],default_service_tier:None}];
         let update=bridget_transport::provider_catalogue::WorkerCatalogueUpdate {version:1,worker:st.remote_workers["local"].identity.clone(),
             connection_epoch:"epoch221-models".into(),refresh_id:"epoch221-models".into(),sequence:2,catalogue:switched};
         assert!(catalogue::ingest(&mut st,"worker221-models",update.clone()).is_none());
@@ -35084,7 +35443,8 @@ mod permission_projection214_tests {
                 let value=ProviderCatalogue {connection_id:connection_id.clone(),definition_digest:digest.clone(),
                     observed_at:now,state:CatalogueState::Observed,account_scope:Some("b".repeat(32)),cause:None,
                     models:(0..MAX_CATALOGUE_MODELS).map(|n|CatalogueModel {
-                        model:format!("m{n:03}-{}","n".repeat(180)),supported_efforts:vec![],default_effort:None}).collect()};
+                        service_tiers_unavailable:false,
+                        model:format!("m{n:03}-{}","n".repeat(180)),supported_efforts:vec![],default_effort:None,service_tiers:vec![],default_service_tier:None}).collect()};
                 let update=WorkerCatalogueUpdate {version:1,worker:worker.clone(),connection_epoch:"epoch221".into(),
                     refresh_id:"epoch221".into(),sequence:1,catalogue:value.clone()};
                 assert!(update.valid(),"only valid source envelopes count");
@@ -35109,6 +35469,24 @@ mod permission_projection214_tests {
         let decoded:DaemonToWrapper=serde_json::from_slice(&frame[..frame.len()-1]).unwrap();
         let DaemonToWrapper::NativeDelegationResult {result}=decoded else{panic!("native result");};
         assert_eq!(result["connection_catalogues"].as_array().unwrap().len(),128);
+        for worker in st.remote_workers.values_mut() {
+            worker.capabilities.push(WorkerCapability::ModelOptionsV1);
+            for cached in worker.catalogues.values_mut() {
+                for (n,model) in cached.value.models.iter_mut().enumerate() {
+                    model.model=format!("m{n:03}-{}","n".repeat(100));
+                    model.service_tiers=vec!["default".into(),"priority".into(),"flex".into()];
+                    model.default_service_tier=Some("default".into());
+                }
+                assert!(cached.value.valid(),"le maximum reste un catalogue source valide");
+            }
+        }
+        let result=catalogue::view(&st).unwrap();
+        assert_eq!(result["connection_catalogues"][0]["model_options_status"],"reported");
+        let mut options_frame=serde_json::to_vec(&DaemonToWrapper::NativeDelegationResult {result}).unwrap();
+        options_frame.push(b'\n');
+        eprintln!("catalogue221 maximum model options frame {} bytes",options_frame.len());
+        assert!(options_frame.len()<=bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES);
+        assert!(serde_json::from_slice::<DaemonToWrapper>(&options_frame[..options_frame.len()-1]).is_ok());
         drop(st);drop(shared);super::tests::cleanup(&config);
     }
 

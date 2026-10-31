@@ -1,3 +1,12 @@
+## Avancement : développement par lots, vérification utile
+
+Consigne utilisateur du31octobre2026 : privilégier les développements utiles,
+regrouper les changements cohérents et les livrer. Réutiliser les preuves encore
+valides. Ne répéter test, qualification ou revue que si un changement, un échec
+ou un risque non résolu le justifie. Une campagne générale ne précède pas chaque
+raccord. Les vérifications nécessaires ciblent le lot ; aucune réduction du
+périmètre demandé ni déclaration de fin sans activation.
+
 ## Incidents : corriger et livrer le guidage
 
 Pour chaque incident remonté, vérifier la cause réelle. Tout défaut confirmé de

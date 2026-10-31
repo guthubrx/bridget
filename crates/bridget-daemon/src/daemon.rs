@@ -6122,6 +6122,10 @@ fn reserve_managed_recoveries(
         if let Some(mut task) = state.delegation_store.for_child(&recovery.lease.name)? {
             // Refaire les contrôles juste avant le lancement. L'environnement
             // natif porte le bail de ce chemin, jamais celui de la génération perdue.
+            // Cette reprise conserve la définition/option déjà admise.
+            // Un cache volatil vide après redémarrage ne doit pas transformer
+            // cette mission en échec. Les gardes de définition, droits et
+            // identité restent appliquées ; l'admission neuve vérifie le nonce.
             let authorized = native_delegation::native_launch_registry(state, &task)
                 .and_then(|_| native_delegation::native_child_env(&task, &mut recovery));
             if let Err(reason) = authorized {
@@ -18709,13 +18713,15 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 12
+                && capabilities.len() <= 14
+                && (!capabilities.contains(&WorkerCapability::ModelOptionsV1)
+                    || capabilities.contains(&WorkerCapability::ProviderCatalogueV1))
                 && (!capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
                     || capabilities.contains(&WorkerCapability::WorkspaceViewV1))
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::WorkspaceViewV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1
                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
                         && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
                 })
@@ -19246,6 +19252,14 @@ fn remote_worker_roundtrip_with_send_deadline(
         {
             return Err(WorkerRefusal::CapabilityRequired);
         }
+        if operation.requires_provider_accounts()
+            && !session.capabilities.contains(&WorkerCapability::ProviderAccountsV1) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if operation.requires_model_options()
+            && !session.capabilities.contains(&WorkerCapability::ModelOptionsV1) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
         if operation.requires_commit_view_creation()
             && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
                 || !session.capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)) {
@@ -19495,6 +19509,15 @@ fn remote_candidate_probe_v2(
             .capabilities
             .contains(&WorkerCapability::CandidateProbeV2)
         {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if probe.candidates.iter().any(|candidate|
+            st.registry.get(&candidate.agent_type).is_ok_and(|definition|definition.capabilities.account_profiles))
+            && !session.capabilities.contains(&WorkerCapability::ProviderAccountsV1) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if probe.candidates.iter().any(|candidate|candidate.service_tier.is_some())
+            && !session.capabilities.contains(&WorkerCapability::ModelOptionsV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if probe.candidates.iter().any(|candidate|matches!(candidate.workspace,
@@ -23958,12 +23981,17 @@ fn handle_wrapper_message_with_peer(
                     "worker_start_recovery_v1".to_string(),
                     "worker_workspace_failure_v1".to_string(),
                     "worker_provider_catalogue_v1".to_string(),
+                    "worker_model_options_v1".to_string(),
+                    "worker_provider_accounts_v1".to_string(),
                     "worker_workspace_view_v1".to_string(),
                     "commit_view_files_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                     ];
                     if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                         features.push("worker_workspace_view_create_v1".to_string());
+                    }
+                    if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+                        features.push("model_options_v1".to_string());
                     }
                     features
                 },
@@ -48959,6 +48987,7 @@ mod presence_tests {
                 forbidden_env: Vec::new(),
                 pass_env: Vec::new(),
                 claude_config_dir: None,
+                codex_home: None,
                 permissions: "allow".to_string(),
                 queue_capacity: 32,
                 notify_timeout_secs: 600,

@@ -1057,6 +1057,9 @@ pub(crate) struct Task {
     #[serde(default)]
     pub parent_execution_id: Option<String>,
     pub request: NativeDelegationRequest,
+    /// Choix explicite figé par AutoV2 ; aucun défaut déduit du catalogue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     #[serde(default)]
     pub substitution: Option<Substitution>,
     #[serde(default)]

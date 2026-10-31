@@ -614,21 +614,30 @@ pub fn build_environment(
         }
     }
     if let Some(profile) = definition.claude_config_dir.as_deref() {
-        validate_claude_profile_directory(profile)?;
+        validate_provider_profile_directory(profile, "Claude")?;
         env.insert("CLAUDE_CONFIG_DIR".to_string(), OsString::from(profile));
+        if definition.capabilities.account_profiles {
+            let anthropic=Path::new(profile).join("anthropic");
+            validate_provider_profile_directory(&anthropic.to_string_lossy(), "Anthropic")?;
+            env.insert("ANTHROPIC_CONFIG_DIR".into(), anthropic.into_os_string());
+        }
+    }
+    if let Some(profile) = definition.codex_home.as_deref() {
+        validate_provider_profile_directory(profile, "Codex")?;
+        env.insert("CODEX_HOME".to_string(), OsString::from(profile));
     }
     Ok(env)
 }
 
-fn validate_claude_profile_directory(profile: &str) -> Result<(), SpawnRefusal> {
+pub(crate) fn validate_provider_profile_directory(profile: &str, provider: &str) -> Result<(), SpawnRefusal> {
     let path = Path::new(profile);
     let metadata = fs::symlink_metadata(path).map_err(|err| SpawnRefusal::EnvUnfit {
-        detail: format!("profil Claude indisponible {}: {err}", path.display()),
+        detail: format!("profil {provider} indisponible {}: {err}", path.display()),
     })?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(SpawnRefusal::EnvUnfit {
             detail: format!(
-                "profil Claude invalide {}: répertoire réel requis",
+                "profil {provider} invalide {}: répertoire réel requis",
                 path.display()
             ),
         });
@@ -636,7 +645,7 @@ fn validate_claude_profile_directory(profile: &str) -> Result<(), SpawnRefusal> 
     if metadata.uid() != unsafe { libc::geteuid() } {
         return Err(SpawnRefusal::EnvUnfit {
             detail: format!(
-                "profil Claude invalide {}: propriétaire inattendu",
+                "profil {provider} invalide {}: propriétaire inattendu",
                 path.display()
             ),
         });
@@ -645,7 +654,7 @@ fn validate_claude_profile_directory(profile: &str) -> Result<(), SpawnRefusal> 
     if mode & 0o077 != 0 {
         return Err(SpawnRefusal::EnvUnfit {
             detail: format!(
-                "profil Claude invalide {}: permissions {mode:04o}, attendu 0700 ou plus restrictif",
+                "profil {provider} invalide {}: permissions {mode:04o}, attendu 0700 ou plus restrictif",
                 path.display()
             ),
         });

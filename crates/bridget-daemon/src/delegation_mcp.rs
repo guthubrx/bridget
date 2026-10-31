@@ -102,6 +102,11 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     ];
     for tool in &mut definitions {
         if tool["name"]=="bridget_auto_delegate" {
+            if crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+                tool["inputSchema"]["properties"]["service_tier"]=json!({
+                    "type":"string","minLength":1,"maxLength":256,
+                    "description":"Niveau de service explicite du modèle, annoncé sur cette connexion et autorisé par son profil. Aucun défaut ni remplacement automatique ; peut consommer davantage de quota ou de crédits."});
+            }
             let mut sha_workspaces=vec!["worktree"];
             if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
                 tool["inputSchema"]["properties"]["workspace"]["oneOf"].as_array_mut().unwrap().push(json!({
@@ -153,6 +158,11 @@ fn execute_with_proof(
         return Err(ClientError::InvalidParams(
             "agent_type est interdit dans bridget_auto_delegate. Omettez ce champ ; utilisez engine pour le moteur (par exemple codex), et connection_id seulement pour une connexion précise du catalogue. La machine reste machine_id. Refus de forme avant connexion : cet appel n’a pas été envoyé. Si une demande antérieure a pu être enregistrée avec cette request_id, vérifiez son sort avant de corriger ses paramètres.".into()));
     }
+    if name=="bridget_auto_delegate" && object.contains_key("service_tier")
+        && !crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED {
+        return Err(ClientError::InvalidParams(
+            "service_tier : le choix d'un niveau de service n'est pas encore activé. Faire terminer son activation par le responsable Bridget avant de le demander pour une mission. Cet appel n'a pas été envoyé ; conserver la clé et vérifier toute demande antérieure avant un nouvel essai. Les autres travaux autorisés suivent leur propre état.".into()));
+    }
     let allowed: &[&str] = match name {
         "bridget_capabilities" => &[],
         "bridget_delegate" => &[
@@ -181,6 +191,7 @@ fn execute_with_proof(
             "connection_id",
             "model",
             "effort",
+            "service_tier",
             "workload",
             "expected_base_commit",
             "task",
@@ -329,6 +340,7 @@ fn execute_with_proof(
             brief: args.get("brief").cloned(),
         },
         "bridget_auto_delegate" => NativeDelegationRequest::AutoDelegateV2(AutoDelegateV2 {
+            service_tier: args.get("service_tier").map(|_|string("service_tier")).transpose()?,
             request_id: string("request_id")?,
             machine_id: args
                 .get("machine_id")
@@ -533,6 +545,8 @@ fn execute_with_proof(
         NativeDelegationRequest::AutoDelegate(_) => {
             Some(("auto_delegate_v1", "auto_delegate_unsupported"))
         }
+        NativeDelegationRequest::AutoDelegateV2(auto) if auto.service_tier.is_some() =>
+            Some(("auto_delegate_v2","model_options_master_upgrade_required")),
         NativeDelegationRequest::AutoDelegateV2(auto)
             if matches!(auto.workspace,Some(WorkspaceRequest::CommitView {})) =>
             Some(("auto_delegate_v2","commit_view_master_upgrade_required")),
@@ -545,8 +559,11 @@ fn execute_with_proof(
         let supported = match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
             DaemonToWrapper::DaemonIdentityReport { features, .. } =>
                 features.iter().any(|candidate| candidate == feature)
-                    && (refusal!="commit_view_master_upgrade_required"
-                        || features.iter().any(|candidate|candidate=="worker_workspace_view_create_v1")),
+                    && (!matches!(&request,NativeDelegationRequest::AutoDelegateV2(auto)
+                            if matches!(auto.workspace,Some(WorkspaceRequest::CommitView {})))
+                        || features.iter().any(|candidate|candidate=="worker_workspace_view_create_v1"))
+                    && (!matches!(&request,NativeDelegationRequest::AutoDelegateV2(auto) if auto.service_tier.is_some())
+                        || features.iter().any(|candidate|candidate=="model_options_v1")),
             other => return unexpected_response(other),
         };
         if !supported {
@@ -554,6 +571,8 @@ fn execute_with_proof(
                 code: "native_delegation_refused",
                 message: if refusal=="commit_view_master_upgrade_required" {
                     "commit_view_master_upgrade_required : Le maître ne déclare pas le parcours de création des vues. Demandez au responsable Bridget de charger et qualifier ce parcours et son retour compatible. Cette demande n'a pas été transmise pour admission ; conservez la clé et toute tâche ou reçu antérieur avant un rejeu strict après résolution. Ne créez pas de worktree pour contourner ce refus. Les autres travaux autorisés suivent leur propre état.".into()
+                } else if refusal=="model_options_master_upgrade_required" {
+                    "model_options_master_upgrade_required : Le maître n'a pas confirmé les capacités d'admission et de choix d'options requises pour cette demande. Faire charger et qualifier ce parcours par le responsable Bridget. Cet appel n'a pas été transmis pour admission ; conserver la clé et tout reçu antérieur. Ne pas changer le modèle, le compte, le niveau ou les droits. Les autres travaux autorisés suivent leur propre état.".into()
                 } else {refusal.into()},
             });
         }
@@ -710,6 +729,28 @@ fn recover_admission_with_budget171<T>(
 #[cfg(test)]
 mod admission_recovery171_tests {
     use super::*;
+
+
+    #[test]
+    fn spec221_c05_client_exposes_only_the_explicit_typed_option() {
+        use std::os::unix::net::UnixListener;
+        assert!(crate::provider_catalogue220::MODEL_OPTIONS_LAUNCH_ENABLED);
+        let definitions=tools(&json!({}));
+        let auto=definitions.iter().find(|t|t["name"]=="bridget_auto_delegate").unwrap();
+        let schema=auto.pointer("/inputSchema/properties/service_tier").unwrap();
+        assert_eq!(schema["type"],"string");
+        assert!(schema.get("default").is_none());
+        let identity=ResolvedIdentity{name:"owner".into(),instance_id:"instance".into(),delegated_origin:None};
+        let socket=crate::mcp_identity::mock_socket("c05-option-local-reject");
+        let listener=UnixListener::bind(&socket).unwrap();listener.set_nonblocking(true).unwrap();
+        let args=json!({"request_id":"keep-option-key","task":"read","cwd":"/source",
+            "service_tier":42});
+        let error=execute_with_proof(&identity,"bridget_auto_delegate",&args,&socket,None).unwrap_err();
+        assert!(matches!(error,ClientError::InvalidParams(_)));
+        assert!(error.to_string().contains("service_tier"));
+        assert!(matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock));
+        drop(listener);std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn spec221_c19_auto_view_requires_explicit_scope_and_keeps_closed_schema_before_connection() {
