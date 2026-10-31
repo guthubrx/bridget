@@ -100,6 +100,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221 complément catalogue — source66a3ba74 intégrée/poussée ;38testsdistincts et guides32/522/13PASS, audit sourceV15final12/12PASS. Dates source/réception/expiration et écarts d'effort projetés sans changer admission ou droits ; StopUnconfirmed libérée seulement sur preuve de groupe/marqueur, garde et cache32 conservés. Build221-catalogue-66a3ba74 chargé maître/worker/mobileCartae,workersSYS/KS et worker/pontMac, images/SHA vérifiés ; coupure2,34s et wrapper2500061 conservé. Port natif vérifié ; clientMCP21458296 ancien, credential_mismatch après une réattestation, pas de boucle ; T177/rechargement completT3resteouvert. CodexKSreste désactivé selon décision existante. T181vérifiée, programme34/181InProgress ; C19privé et touslotsrestants à poursuivre. Aucun service métier ou mission rejoué. Preuves : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/221-capacites-completes/validation/l2a-dates-efforts.md.
+
+
 Session 221 — T180 livré ; programme In Progress, 33/180 tâches vérifiées. Source 342754e6, build 221-stop-guide-342754e6 chargé sur maître/worker/mobile Cartae, workers SYS/KS et worker/pont Mac ; images vérifiées. Coupure maître : 2,32 s. Processus de travail distants observés conservés.
 Neuf tests 220 revérifiés PASS, revue ec4b04a1 APPROVE, audit source 13/13. Nouveau conseil réellement lu dans capabilities. Les pointeurs de retour natifs Cartae/Mac sont corrigés de 181 vers 221-placement-ce08 après qualification, écriture atomique et verrou ; seuls les outils de mise à jour redémarrent pour ce réglage.
 Transferts/archive retirés : 190 992 880 octets. Mac/SYS et worktree de revue conservés sous observation incomplète. MCP 58296 reste 214, T177 ouverte. C19 : prototype de 29 assertions, intégration ouverte.

@@ -111,3 +111,5 @@ Analyse manuelle spec/plan/tasks/code/tests exécutée sur le complément, puis 
 T181 ajoutée pour livrer ce complément sans attendre C19. Les 50 catégories, C19, T177 et T055 restent ouvertes ; programme In Progress. Aucun verdict de disponibilité avant activation, aucune parité globale déduite de ces tests.
 
 Convergence source T181 après R3 : aucune observation ne clôt une garde, seule la preuve de groupe ou de marqueur ; cache32ycompris anciennes contraintes ; refus global ne confirme pas arrêt.38testsdistinctsPASS,3privésignorés, audit sourceV15final12/12PASS et validationtrue. Aucune tâche globale close sur ce seul résultat. T181 reste ouverte pour la livraison.
+
+Après activation du complémentT181 :38testsdistinctsPASS, audit source12/12validé, build221-catalogue-66a3ba74 chargé sur les services des4machines et port natif lu avec les nouveaux champs. ConvergeT181 CONVERGED, zéro tâche nouvelle.34/181vérifiées, toutes50catégories conservées. ClientMCP214dufil non rechargé et credential_mismatch après une réattestation : T177 demeure ouverte, aucun lien appelant rétabli revendiqué ; poursuite des tâches indépendantes.
