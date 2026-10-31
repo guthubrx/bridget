@@ -1859,8 +1859,7 @@ fn spec221_c19_real_corpus_native_export() {
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let private = root.join("proofs");
-    let data = root.join("views");
-    for path in [&private, &data] {
+    for path in [&private] {
         fs::create_dir(path).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }
@@ -1886,9 +1885,9 @@ fn spec221_c19_real_corpus_native_export() {
         },
         prepare_digest: "a".repeat(64),
     };
-    let identity = run_git(&source, &["config", "--get", "remote.origin.url"], READ_TIMEOUT)
+    let identity = run_git(&source, &["config", "--local", "--no-includes", "--get", "remote.origin.url"], READ_TIMEOUT)
         .unwrap().complete().unwrap();
-    let seed = ViewPlan::new(binding, &source, &data, &base, &source, identity.trim()).unwrap();
+    let seed = ViewPlan::new_native(binding, &source, &base, &source, identity.trim()).unwrap();
     let proofs = ViewProofs::open(&private).unwrap();
     proofs.write_plan(&seed).unwrap();
     let started = Instant::now();

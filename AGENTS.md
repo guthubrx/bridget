@@ -100,6 +100,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/C19 synchronisation — source0259ce31 intégrée/poussée,134daemon/5transport Linux etMacPASS ; export réel4778entrées/4671fichiers/63,6Mo surSYS en48,116s, source intacte et groupe arrêté. Revue812957bfAPPROVE, audit source13/13pass/notes63–75. Build221-view-sync-r1 chargé sur7services, SHA vérifiés, coupure2,16s ; retoursB et rollback natifs vérifiés, wrappers observés préservés, lien revenu. QualificationsR2 NONenvoyées selon nouvelle consigne utilisateur : arrêter les campagnes répétées, reprendre le développement par lots cohérents, validation ciblée par lot. Originales cancelled, conservationCodex non confirmée ; aucun rejeu. Programme46/182InProgress, C19 non clôturée. C05 stashf79fddc6 à restaurer. installedSYS/Mac refuse le propriétaire des caches ; conserver sans forcer. Preuves : specs/221-capacites-completes/validation/c19-synchronisation.md.
+
+
 Session221/C02 — collecteur réutilisé, deux tests LinuxPASS21,22s : démarrage réel du service, signal de programme, remplacement compte/liste, reconnexion, arrêt du thread/groupe ; signal auth atomique et CODEX_HOME explicite contrôlés séparément avec fichiers synthétiques illisibles. Aucun code produit ni nouvelle activation. T037/T038 vérifiées, T039/loginhumain et cadence réelle restent ouverts ; programme46/182InProgress, première ouverteT030/C19 bloquée par clientMCP ancien. Revue c727397a failed/WorkerUnavailable surSYS, résultatnul ; ACK/cancel unefois, aucun remplacement/rejeu, arrêtphysique final noninventé. Auto-audit déclaré, pas de revue indépendante réussie. Preuves et limites : specs/221-capacites-completes/validation/c02.md.
 
 
