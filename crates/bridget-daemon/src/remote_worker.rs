@@ -7079,18 +7079,22 @@ fn send_catalogue_frame(writer:&Mutex<UnixStream>,message:&WrapperToDaemon)->Res
     result
 }
 
-/// Deux lectures d’origine au plus, conservées au travers des reconnexions.
+/// Lectures d’origine bornées comme les attentes du maître, conservées au travers des reconnexions.
 /// Elles ne bloquent ni Release ni la maintenance du worker.
 fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofRequest,
     writer:Arc<Mutex<UnixStream>>,disconnected:Arc<AtomicBool>,slots:Arc<std::sync::atomic::AtomicUsize>,registry:PathBuf) {
     use bridget_transport::protocol::{OriginProofResult,OriginProofResponse};
-    let limit=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {1} else {2};
+    let limit=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {1} else {crate::origin_proof::MAX_ORIGIN_PROOFS};
     let busy=slots.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n| (n<limit).then_some(n+1)).is_err();
     let envelope=request.clone();
     let response=move |result| WrapperToDaemon::OriginProofResponse {response:OriginProofResponse {
         version:envelope.version,correlation_id:envelope.correlation_id.clone(),connection_epoch:envelope.connection_epoch.clone(),
         worker:envelope.worker.clone(),response:result}};
-    if busy {let _=send_worker_frame(&writer,&response(OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));return;}
+    if busy {
+        eprintln!("bridget_origin_proof refused=capacity limit={limit}");
+        let _=send_worker_frame(&writer,&response(OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));
+        return;
+    }
     struct Permit(Arc<std::sync::atomic::AtomicUsize>);
     impl Drop for Permit {fn drop(&mut self){self.0.fetch_sub(1,Ordering::AcqRel);}}
     let permit=Permit(slots);
@@ -7686,6 +7690,61 @@ mod tests {
 
 
 
+
+    #[test]
+    fn spec221_origin_four_parallel_reads_survive_two_inflight_and_remain_bounded() {
+        use bridget_transport::protocol::{OriginProofRequest,OriginProofOperation,OriginProofResult,
+            CommunicationProjectSource};
+        let fixture=Fixture::new();
+        let (reader,writer)=UnixStream::pair().unwrap();
+        let mut reader=std::io::BufReader::new(reader);
+        let writer=Arc::new(Mutex::new(writer));
+        let disconnected=Arc::new(AtomicBool::new(false));
+        // Deux contrôles déjà en cours : l'ancien dispatcher refusait les quatre suivants.
+        let slots=Arc::new(std::sync::atomic::AtomicUsize::new(2));
+        let request=|id:&str|OriginProofRequest {
+            version:1,correlation_id:id.into(),connection_epoch:"epoch221".into(),
+            worker:WorkerIdentity {machine_id:"origin221".into(),worker_id:"worker221".into(),provisioning_revision:1},
+            expires_at_ms:crate::origin_proof::now_ms()+10_000,
+            request:OriginProofOperation::CommunicationProject {
+                root:fixture.0.join("absent").to_string_lossy().into_owned(),
+                source:CommunicationProjectSource::Git,worktree:None
+            }
+        };
+        let read=|reader:&mut std::io::BufReader<UnixStream>|{
+            let bytes=bridget_transport::jsonl::read_unix_line(reader,MAX_WORKER_FRAME_BYTES,
+                bridget_transport::jsonl::LineDeadline::Absolute(Instant::now()+Duration::from_secs(5)))
+                .unwrap().unwrap();
+            let frame:WrapperToDaemon=serde_json::from_slice(&bytes).unwrap();
+            let WrapperToDaemon::OriginProofResponse {response}=frame else {panic!("origin response")};
+            response
+        };
+        for i in 0..4 {
+            dispatch_origin_proof(request(&format!("read-{i}")),writer.clone(),disconnected.clone(),
+                slots.clone(),fixture.0.join("unused-registry"));
+        }
+        let mut correlations=std::collections::BTreeSet::new();
+        for _ in 0..4 {
+            let response=read(&mut reader);
+            assert_eq!(response.connection_epoch,"epoch221");
+            assert_eq!(response.worker.machine_id,"origin221");
+            assert!(matches!(response.response,OriginProofResult::CommunicationProject {..}),
+                "chaque contrôle est exécuté, sans preuve partagée ni refus de capacité");
+            correlations.insert(response.correlation_id);
+        }
+        assert_eq!(correlations.len(),4);
+        let until=Instant::now()+Duration::from_secs(1);
+        while slots.load(Ordering::Acquire)!=2 && Instant::now()<until {std::thread::yield_now();}
+        assert_eq!(slots.load(Ordering::Acquire),2);
+        let full=Arc::new(std::sync::atomic::AtomicUsize::new(crate::origin_proof::MAX_ORIGIN_PROOFS));
+        dispatch_origin_proof(request("full"),writer.clone(),disconnected.clone(),full.clone(),fixture.0.join("unused"));
+        assert!(matches!(read(&mut reader).response,
+            OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));
+        assert_eq!(full.load(Ordering::Acquire),crate::origin_proof::MAX_ORIGIN_PROOFS);
+        full.fetch_sub(1,Ordering::AcqRel);
+        dispatch_origin_proof(request("after-release"),writer,disconnected,full.clone(),fixture.0.join("unused"));
+        assert!(matches!(read(&mut reader).response,OriginProofResult::CommunicationProject {..}));
+    }
 
     #[test]
     fn spec188_diagnostic_refusal_preserves_identity_and_actionable_unknown() {

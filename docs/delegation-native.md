@@ -1176,3 +1176,17 @@ Never delete a live receipt or result to free capacity.
 
 
 The explicit operator command bridget federate resume --label NAME requests activation of that saved link. It can start a stopped link, including a disabled systemd unit, without changing its persistence setting. Status and automatic workflows never call it. Receipt hashes are revalidated; no file is reinstalled. Success confirms only the local process, not tunnel connectivity or provider authentication.
+
+
+### Concurrent origin checks
+Workers accept up to 32 origin reads in flight; the coordinator retains at most
+32 pending origin checks overall. Each call verifies its own proof. A nearby
+successful call never substitutes for it. Git project preparation retains its
+separate single slot. These bounds do not guarantee mission concurrency.
+
+An observed capacity rejection exposes origin_proof_busy in the
+permission_attestation_unavailable refusal details. Wait for current checks to
+finish, then read the same task_id values. Before strictly replaying a mutation,
+check its durable admission first. Do not create a replacement task or change
+accounts or permissions. The refusal concerns this call; other authorized work
+follows its own state. Without an observed cause, the cause remains unknown.

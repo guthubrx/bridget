@@ -634,6 +634,13 @@ fn caller_scope_refusal_message(result: &Value) -> String {
         Some("current_session_binding") => "current_session_binding",
         _ => "unknown",
     };
+    if result["detail"]["cause"]=="origin_proof_busy" {
+        return json!({"status":"refused","code":code,"stage":"caller_scope",
+            "verification":verification,"cause":"origin_proof_busy","scope":"this_call",
+            "message":"Attendez la fin des contrôles d’origine en cours, puis relisez les mêmes task_id. La capacité de contrôle est occupée ; ce refus concerne cet appel, pas un changement de droits. Les autres travaux autorisés suivent leur propre état.",
+            "recovery":"Conserver task_id, request_id et enveloppe. Pour une lecture, reprendre les mêmes task_id après la fin des contrôles. Pour une opération mutante, vérifier son admission durable avant tout rejeu strict ; ne créer aucune mission ou clé de remplacement.",
+            "human_action":"Si la capacité reste occupée après la fin des contrôles, demander au responsable de vérifier les contrôles d’origine en cours et leurs délais. Ne modifier ni compte, ni droits, ni rattachement pour contourner la saturation."}).to_string();
+    }
     json!({"status":"refused","code":code,"stage":"caller_scope","verification":verification,
         "message":"Le contrôle préalable des droits de l’appelant n’a pas été attesté. L’opération demandée n’a pas été envoyée par cet appel.",
         "recovery":"Vérifiez le rattachement natif et la preuve de la session appelante. Une attestation antérieure ou le succès d’un autre appel ne prouve pas celui-ci. Pour une lecture, conservez le même task_id ; ne recréez aucune mission. Si la cause reste inconnue après un contrôle natif, transmettez ce code, cette étape et la vérification manquante au responsable sans répéter les essais.",
@@ -9445,6 +9452,20 @@ mod capacity189_mcp_tests {
     use super::*;
     use super::tests::{test_socket,reply_caller_scope};
     use std::{thread,os::{fd::AsRawFd,unix::net::UnixListener}};
+    #[test]
+    fn spec221_origin_busy_mcp_projection_is_closed() {
+        let busy=json!({"code":"permission_attestation_unavailable","detail":{
+            "verification":"origin_session_reattest","cause":"origin_proof_busy","secret":"PRIVATE"}});
+        let text=caller_scope_refusal_message(&busy);
+        let view:Value=serde_json::from_str(&text).unwrap();
+        assert_eq!(view["cause"],"origin_proof_busy");
+        assert_eq!(view["scope"],"this_call");
+        assert!(view["recovery"].as_str().unwrap().contains("mêmes task_id"));
+        assert!(!text.contains("PRIVATE"));
+        let mut unknown=busy;unknown["detail"]["cause"]=json!("PRIVATE");
+        assert!(!caller_scope_refusal_message(&unknown).contains("PRIVATE"));
+    }
+
     #[test]
     fn spec189_caller_scope_attestation_refusal_is_explicit_and_stops_dispatch() {
         for verification in ["origin_session_reattest","current_session_binding","private189"] {

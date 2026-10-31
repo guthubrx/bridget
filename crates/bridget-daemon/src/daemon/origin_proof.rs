@@ -2,7 +2,7 @@
 use super::*;
 use bridget_transport::protocol::{
     OriginProofOperation, OriginProofRequest, OriginProofResponse, OriginProofResult,
-    WORKER_STALE_SECS, WorkerCapability, WorkerContactState, WorkerIdentity,
+    WORKER_STALE_SECS, WorkerCapability, WorkerContactState, WorkerIdentity, WorkerRefusal,
 };
 pub(super) struct Pending {
     pub conn_id: String,
@@ -86,7 +86,7 @@ fn exchange(
             .get(&connection)
             .cloned()
             .ok_or("origin_worker_unavailable")?;
-        if st.pending_origin_proofs.len() >= 32 {
+        if st.pending_origin_proofs.len() >= crate::origin_proof::MAX_ORIGIN_PROOFS {
             return Err("origin_proof_busy".into());
         }
         st.pending_origin_proofs.insert(
@@ -127,9 +127,32 @@ fn exchange(
     {
         return Err("origin_proof_unavailable".into());
     }
+    checked_response(response)
+}
+fn checked_response(response: Option<OriginProofResult>) -> Result<OriginProofResult, String> {
     match response {
+        Some(OriginProofResult::Rejected { reason: WorkerRefusal::ResourceLimit }) => {
+            Err("origin_proof_busy".into())
+        }
         Some(OriginProofResult::Rejected { .. }) | None => Err("origin_proof_unavailable".into()),
         Some(result) => Ok(result),
+    }
+}
+#[cfg(test)]
+mod capacity221_tests {
+    use super::*;
+    #[test]
+    fn spec221_origin_busy_is_capacity_not_a_permission_change() {
+        assert_eq!(checked_response(Some(OriginProofResult::Rejected {
+            reason: WorkerRefusal::ResourceLimit
+        })), Err("origin_proof_busy".into()));
+        for response in [None, Some(OriginProofResult::Rejected {
+            reason: WorkerRefusal::PermissionsChanged
+        })] {
+            assert_eq!(checked_response(response), Err("origin_proof_unavailable".into()));
+        }
+        let ok=OriginProofResult::CommunicationProject { project: None };
+        assert_eq!(checked_response(Some(ok.clone())), Ok(ok));
     }
 }
 pub(super) fn communication_project(state:&Arc<Mutex<DaemonState>>,host:&str,root:&str,

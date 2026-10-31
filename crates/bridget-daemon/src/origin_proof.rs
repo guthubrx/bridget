@@ -1,6 +1,11 @@
 //! Contrôle d'origine fermé : mêmes lecteurs locaux, aucun shell ni nouvel acteur.
 use bridget_transport::protocol::*;
 
+/// Même borne que les attentes du maître. Une preuve reste indépendante par
+/// appel ; aucune réutilisation de droits ou session HTTP partagée.
+pub(crate) const MAX_ORIGIN_PROOFS: usize = 32;
+
+
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

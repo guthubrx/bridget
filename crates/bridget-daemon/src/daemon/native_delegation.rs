@@ -3771,6 +3771,7 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code=="origin_proof_busy" { return origin_attestation_refusal(code); }
     if matches!(code,"model_options_invalid"|"model_options_not_activated"
         |"model_options_not_permitted"|"model_options_launcher_ambiguous"
         |"model_options_observation_unavailable"|"model_options_account_unidentified"
@@ -5112,6 +5113,20 @@ pub(super) fn handle_with_peer(
     handle_with_fact(conn, request, None, None, None, state, peer)
 }
 
+fn origin_attestation_refusal(code: &str) -> Value {
+    let mut result=failure("permission_attestation_unavailable");
+    result["detail"]["verification"]=json!("origin_session_reattest");
+    if code=="origin_proof_busy" {
+        let message="Attendez la fin des contrôles d’origine en cours, puis relisez les mêmes identifiants de tâches. La capacité de contrôle est occupée ; ce refus concerne cet appel, pas un changement de droits. Les autres travaux autorisés suivent leur propre état.";
+        result["message"]=json!(message);
+        result["detail"]["message"]=json!(message);
+        result["detail"]["cause"]=json!("origin_proof_busy");
+        result["detail"]["recovery"]=json!("Conserver chaque task_id, request_id et enveloppe. Pour une lecture, reprendre les mêmes task_id après la fin des contrôles ; ne créer ni mission ni clé de remplacement. Pour une opération mutante, vérifier d’abord son admission durable avant tout rejeu strict. Une attestation précédente ne remplace pas celle de cet appel.");
+        result["detail"]["human_action"]=json!("Si la capacité reste occupée après la fin des contrôles, demander au responsable de vérifier les contrôles d’origine encore en cours et leur délai. Ne changer ni droits, ni compte, ni rattachement pour contourner cette saturation.");
+    }
+    result
+}
+
 pub(super) fn handle_attested(
     conn: &str,
     request: NativeDelegationRequest,
@@ -5127,10 +5142,10 @@ pub(super) fn handle_attested(
     };
     let proof = match attested {
         Ok(p) => p,
-        Err(_) => {
-            let mut result = failure("permission_attestation_unavailable");
-            result["detail"]["verification"] = json!("origin_session_reattest");
-            return DaemonToWrapper::NativeDelegationResult { result };
+        Err(code) => {
+            return DaemonToWrapper::NativeDelegationResult {
+                result: origin_attestation_refusal(&code)
+            };
         }
     };
     let valid = {
@@ -14524,6 +14539,22 @@ mod tests {
         assert_eq!(last["code"], "worker_unavailable");
         drop(state);
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_origin_busy_refusal_keeps_scope_and_never_projects_private_cause() {
+        let busy=origin_attestation_refusal("origin_proof_busy");
+        assert_eq!(failure("origin_proof_busy"),busy);
+        assert_eq!(busy["code"],"permission_attestation_unavailable");
+        assert_eq!(busy["detail"]["cause"],"origin_proof_busy");
+        assert!(busy["message"].as_str().unwrap().contains("cet appel"));
+        assert!(busy["message"].as_str().unwrap().contains("autres travaux"));
+        assert!(busy["detail"]["recovery"].as_str().unwrap().contains("admission durable"));
+        assert!(busy["detail"]["human_action"].as_str().unwrap().contains("responsable"));
+        let unknown=origin_attestation_refusal("PRIVATE /path");
+        assert!(!unknown.to_string().contains("PRIVATE"));
+        assert_ne!(unknown["detail"]["cause"],"origin_proof_busy");
+        assert!(unknown.get("task_id").is_none());
     }
 
     #[test]
