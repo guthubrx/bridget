@@ -1078,6 +1078,132 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
         service.shutdown();
     }
 
+
+    #[test]
+    fn spec221_c02_collector_reloads_changed_program_and_reconnection_without_turn() {
+        let root = root();
+        let (def, _) = fixture(&root, "present");
+        let program = PathBuf::from(&def.command);
+        let state = root.join("account-state");
+        std::fs::write(&state, "first").unwrap();
+        // Le faux programme ne lit aucune connexion réelle ni variable secrète.
+        // Les chemins de ses deux seules données sont inscrits dans sa fixture.
+        let trace = serde_json::to_string(&root.join("trace").to_string_lossy()).unwrap();
+        let account = serde_json::to_string(&state.to_string_lossy()).unwrap();
+        let script = std::fs::read_to_string(&program).unwrap()
+            .replace("hold=os.environ.get('BRIDGET220_SCENARIO')=='hold_stop'", "hold=False")
+            .replace("os.environ['BRIDGET220_LOG']", &trace)
+            .replace("scenario=os.environ['BRIDGET220_SCENARIO']",
+                &format!("scenario=open({account}).read().strip()"))
+            .replace("email='fake-before@example.invalid' if reads==1 or scenario!='changed' else 'fake-after@example.invalid'",
+                "email='fake-'+scenario+'@example.invalid'")
+            .replace("'model-'+str(n)", "scenario+'-model-'+str(n)");
+        std::fs::write(&program, &script).unwrap();
+        let registry = root.join("agents.json");
+        let raw = json!({
+            "agents":{"catalogue-test":{"command":program,"args":["app-server"],
+                "protocol":"codex_app_server","forbidden_env":[],"pass_env":[],
+                "capabilities":{"execution_paths":["codex_app_server"],
+                    "models":{"model-0":{"efforts":["high"]}}}}},
+            "routing_policy":{"version":2,"revision":1,"enabled":true,
+                "connections":[{"connection_id":"main","machine_id":"local",
+                    "engine":"codex","agent_type":"catalogue-test","enabled":true}],
+                "model_catalog":{"main":[{"model":"model-0","supported_efforts":["high"],
+                    "default_effort":"high","provenance":"operator_observation"}]},
+                "machine_policies":{"local":{"enabled":true}}}
+        });
+        std::fs::write(&registry, raw.to_string()).unwrap();
+        std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o600)).unwrap();
+        AgentRegistry::load_from_path_quiet(registry.clone()).unwrap();
+        let service = CatalogueService::start(registry, root.clone(), "local".into());
+        let _guard = ServiceGuard(service.clone());
+        service.activate("first-epoch");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let first = loop {
+            if let Some(row) = service.snapshots().into_iter().find(|(_, _, v)|
+                v.state == CatalogueState::Observed) { break row; }
+            assert!(Instant::now() < deadline, "première observation absente");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(first.0, "first-epoch");
+        assert_eq!(first.2.models[0].model, "first-model-0");
+        let first_nonce = first.2.account_scope.clone().unwrap();
+
+        // Un signal reconnu change : les métadonnées du programme configuré.
+        // Il n'est pas nécessaire d'attendre le TTL de120s ni d'appeler un modèle.
+        std::fs::write(&state, "second").unwrap();
+        std::fs::write(&program, format!("{script}\n# metadata-change\n")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let second = loop {
+            if let Some(row) = service.snapshots().into_iter().find(|(_, _, v)|
+                v.state == CatalogueState::Observed
+                    && v.models[0].model == "second-model-0") { break row; }
+            assert!(Instant::now() < deadline, "signal de programme non renouvelé");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(second.1 > first.1);
+        assert_ne!(second.2.account_scope.as_ref().unwrap(), &first_nonce);
+        assert_eq!(second.2.models.len(), 1);
+        assert!(second.2.observed_at >= first.2.observed_at);
+
+        service.deactivate();
+        assert!(service.snapshots().is_empty());
+        service.activate("reconnected-epoch");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let reconnected = loop {
+            if let Some(row) = service.snapshots().into_iter().find(|(token, _, v)|
+                token == "reconnected-epoch" && v.state == CatalogueState::Observed) { break row; }
+            assert!(Instant::now() < deadline, "génération reconnectée non renouvelée");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(reconnected.1 > second.1);
+        assert_eq!(reconnected.2.account_scope, second.2.account_scope);
+        assert_eq!(reconnected.2.models, second.2.models);
+        service.shutdown();
+        drop(_guard);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Arc::strong_count(&service.generation) != 1 {
+            assert!(Instant::now() < deadline, "collecteur non arrêté");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(recover_probe(&ManagedMarkerStore::at_directory(root.join("catalogue/markers")), false));
+        let trace = std::fs::read_to_string(root.join("trace")).unwrap();
+        assert_eq!(trace.lines().filter(|m| *m == "initialize").count(), 3);
+        assert!(trace.lines().all(|m| matches!(m,
+            "initialize" | "initialized" | "account/read" | "model/list")));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec221_c02_auth_metadata_tracks_the_configured_home_without_reading_secrets() {
+        let root = root();
+        let (mut def, mut source) = fixture(&root, "present");
+        let default_home = root.join(".codex");
+        let other_home = root.join("other-codex-home");
+        std::fs::create_dir(&default_home).unwrap();
+        std::fs::create_dir(&other_home).unwrap();
+        let auth = default_home.join("auth.json");
+        std::fs::write(&auth, "fixture-only").unwrap();
+        std::fs::set_permissions(&auth, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let initial = config_stamp(&def, &"a".repeat(64), &source);
+        let replacement = default_home.join("auth.new");
+        std::fs::write(&replacement, "fixture-next").unwrap();
+        std::fs::set_permissions(&replacement, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::rename(&replacement, &auth).unwrap();
+        let changed = config_stamp(&def, &"a".repeat(64), &source);
+        assert_ne!(initial, changed, "un remplacement atomique du login doit invalider");
+        def.pass_env.push("CODEX_HOME".into());
+        source.insert("CODEX_HOME".into(), other_home.as_os_str().to_owned());
+        let alternate = config_stamp(&def, &"a".repeat(64), &source);
+        std::fs::remove_file(&auth).unwrap();
+        assert_eq!(alternate, config_stamp(&def, &"a".repeat(64), &source),
+            "le compte principal ne doit plus fournir le signal du profil explicite");
+        std::fs::write(other_home.join("auth.json"), "another-fixture-only").unwrap();
+        assert_ne!(alternate, config_stamp(&def, &"a".repeat(64), &source));
+        assert_eq!(source["HOME"], root.as_os_str());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn spec220_rpc_timeout_and_unknown_method_are_bounded() {
         let (a, _b) = UnixStream::pair().unwrap();

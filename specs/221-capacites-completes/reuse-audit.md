@@ -371,3 +371,7 @@ local, sources origine, préparation origine, preuve source enfant). Contrainte
 de sécurité : l'export de A ne doit pas révéler un ancêtre Git hors du parent.
 Réutiliser storage_compatibility pour le plancher origin_root.v2 ; aucun store,
 protocole, nonce ou fichier d'identité supplémentaire.
+
+
+## C02 — contrôle du collecteur complet
+Recherche start/collect/config_stamp et tests220 : le protocole de sonde et les gardes étaient couverts, pas le collecteur qui observe un signal puis renouvelle sa génération. Réutiliser le faux programme, CatalogueService::start, ServiceGuard et config_stamp. Deux tests seulement, aucun helper ni code produit nouveau. Le compte simulé est inscrit dans une fixture locale ; aucune variable globale modifiée ni connexion réelle utilisée. Le remplacement atomique du fichier de login est vérifié avec un fichier factice illisible, à partir de ses seules métadonnées. Le test du collecteur emploie le signal de programme et une reconnexion ; il ne prétend pas être un login humain officiel.
