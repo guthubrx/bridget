@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221 — lectures d’origine simultanées : source357b3586 intégrée/poussée,
+quatre tests ciblés distinctsPASS et revue534fce05 sans objection bloquante.
+Worker2→32 contrôles, aligné sur le maître ; préparationGit séparée1,
+chaque preuve reste indépendante, saturation nommée sans changer les droits.
+Build221-origin-parallel-r2 chargé sur7services, SHA Linuxd2645eda…/Macd08217f7…
+vérifiés, coupure2,13s, processus métier observés conservés. Quatre lectures
+réelles parallèlesPASS après workerMac, puis lien revenu après passage maître.
+Retourscapacity256 vérifiés et rollbackCartae/Mac atomiques sous verrou.
+MCPouverts encoreview-sync-r1 : capacité active côtéservices, nouveau guidage
+client non chargé ; fermeture complète de l’application hôte puis mêmefil,
+pas de boucle ni relais alternatif. Archives/transferts464661005octets retirés
+sur4hôtes ; caches/refusinstalled etWTrevue conservés sous observationincomplète.
+Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/origin-parallel.md.
+
+
 Session221/comptes-modèles et capacité — sources618888c1 puis5eaeae07 intégrées/poussées.
 Profils isolésCodex/Claude avec deux dossiers, gardeancienlecteur fermée, options explicites,
 modèle absent distinct d'accès inconnu ; six tâches source closes, programme52/182InProgress.
