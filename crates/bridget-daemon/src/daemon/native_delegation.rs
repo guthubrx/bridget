@@ -3716,6 +3716,13 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code=="workspace_commit_view_not_enabled" {
+        return json!({"status":"refused","code":code,
+            "message":"La vue de lecture n'est pas encore admise. Faire qualifier son parcours natif et son retour compatible avant une demande de vue. Les autres travaux autorisés suivent leur propre état.",
+            "detail":{"scope":"this_admission","cause":"reader_transition_incomplete","task_id":null,
+                "recovery":"Conserver la même clé et toute tâche connue. Ne pas créer de worktree ni changer la base pour contourner ce refus. Ce contrôle n'a créé aucune tâche.",
+                "human_action":"Demander au responsable Bridget de terminer et charger la vue, puis de vérifier le binaire de retour. Aucun changement de droits, compte ou modèle n'est requis par ce refus."}});
+    }
     if code.starts_with("provider_catalogue_") {
         let (message,action)=match code {
             "provider_catalogue_machine_invalid"=>("L’identifiant du serveur est invalide.","Recopier machine_id dans le catalogue déclaré ; aucun chemin ni nom libre n’est accepté."),
@@ -4573,25 +4580,37 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     }
     view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
+        let is_view = matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView);
         let (code, message, recovery) = if !task.terminal()
             || task.continuable()
             || (task.state == "result_available" && !task.result_sent)
         {
             ("task_active", "La tâche utilise encore cet espace ou peut reprendre.",
-             "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait.")
+             if is_view { "Conservez la vue. Terminez ou clôturez cette tâche avant tout examen de retrait ; les autres travaux autorisés suivent leur propre état." }
+             else { "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait." })
         } else if !task.cleanup_done {
             ("stop_unconfirmed", "L’arrêt de l’exécution n’est pas confirmé.",
-             "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche.")
+             if is_view { "Conservez la vue et ses preuves ; attendez la confirmation d’arrêt de cette tâche. Les autres travaux autorisés suivent leur propre état." }
+             else { "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche." })
         } else if !workspace_report_ready(task)
             || workspace.dirty.is_none()
-            || workspace.head_on_branch.is_none()
-            || workspace.commit_count.is_none()
+            || (!is_view && (workspace.head_on_branch.is_none() || workspace.commit_count.is_none()))
+            || (is_view && (workspace.commit_view.is_none() || !workspace.branch.is_empty()
+                || workspace.head_commit.is_some() || workspace.branch_commit.is_some()
+                || workspace.head_on_branch.is_some() || workspace.commit_count.is_some()
+                || !workspace.commits.is_empty() || workspace.truncated))
         {
-            ("report_unavailable", "Le dernier rapport Git est absent ou incomplet.",
+            ("report_unavailable", if is_view { "Le dernier contrôle de la vue est absent ou incomplet." }
+                else { "Le dernier rapport Git est absent ou incomplet." },
              "Inspectez le dossier et ses usages avant toute décision. Un état inconnu ne permet pas le retrait.")
         } else if workspace.dirty == Some(true) {
-            ("changes_present", "Le dernier rapport signale des modifications non commitées.",
-             "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier.")
+            ("changes_present", if is_view { "Le dernier contrôle de la vue signale une divergence de fichiers." }
+                else { "Le dernier rapport signale des modifications non commitées." },
+             if is_view { "Conservez les fichiers et la preuve privée de cette tâche. Demandez au propriétaire quelles données préserver avant son nettoyage natif ; ne régénérez pas la vue. Les autres travaux autorisés suivent leur propre état." }
+                else { "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier." })
+        } else if is_view {
+            ("review_required", "Le dernier contrôle n’a pas signalé de divergence. La vue reste conservée.",
+             "Vérifiez les processus, les usages et les preuves de cette tâche avant son retrait natif. Ce statut n’autorise pas un retrait ; les autres travaux autorisés suivent leur propre état.")
         } else if workspace.head_on_branch == Some(false) {
             ("branch_changed", "Le dernier rapport ne place plus HEAD sur la branche attendue.",
              "Examinez les commits et la branche réelle. Préservez le travail avant toute décision de retrait.")
@@ -5005,6 +5024,15 @@ fn handle_with_fact(
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
+    let workspace = match &request {
+        NativeDelegationRequest::Delegate {workspace,..}=>workspace.as_ref(),
+        NativeDelegationRequest::AutoDelegate(request)=>request.workspace.as_ref(),
+        NativeDelegationRequest::AutoDelegateV2(request)=>request.workspace.as_ref(),
+        _=>None,
+    };
+    if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
+        return DaemonToWrapper::NativeDelegationResult {result:failure("workspace_commit_view_not_enabled")};
+    }
     if let NativeDelegationRequest::RepairWorkspace {task_id,repair}=&request {
         return DaemonToWrapper::NativeDelegationResult {result:
             workspace_repair::repair(conn,task_id,repair,fact.as_ref(),thread,state)
@@ -10655,7 +10683,7 @@ fn report_text(value: &str) -> String {
         .collect()
 }
 
-/// O(B+L), résultat borné à 256 Kio, L ligne de faits Git. Aucun fait du texte enfant.
+/// O(B+L), résultat borné à 256 Kio, L ligne de faits contrôlés. Aucun fait du texte enfant.
 fn append_workspace_result(task: &mut Task) {
     let Some(workspace) = &task.workspace else {
         return;
@@ -10665,19 +10693,33 @@ fn append_workspace_result(task: &mut Task) {
         Some(false) => "non",
         None => "indisponible",
     };
-    let commits = workspace
-        .commit_count
-        .map(|n| format!("{n} commit(s)"))
-        .unwrap_or_else(|| "nombre de commits indisponible".into());
-    let line = format!(
-        "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}. Consultez le statut de la tâche avant tout retrait. Clôturez la tâche, préservez le travail et vérifiez les autres usages du dossier.",
-        report_text(&workspace.branch),
-        &workspace.base_commit[..workspace.base_commit.len().min(7)],
-        commits,
-        yes_no(workspace.dirty),
-        yes_no(workspace.head_on_branch),
-        report_text(&workspace.path)
-    );
+    let line = if matches!(workspace.strategy,crate::delegation::WorkspaceStrategy::CommitView) {
+        let complete=workspace.commit_view.is_some() && workspace.branch.is_empty()
+            && workspace.head_commit.is_none() && workspace.branch_commit.is_none()
+            && workspace.head_on_branch.is_none() && workspace.commit_count.is_none()
+            && workspace.commits.is_empty() && !workspace.truncated;
+        let checked=match (complete,workspace.dirty) {
+            (true,Some(false))=>"conforme",
+            (true,Some(true))=>"divergence constatée",
+            _=>"indisponible",
+        };
+        format!("[Bridget] espace de travail : vue de lecture du commit {}, dernier contrôle des fichiers : {}, dossier conservé : {}. Cette vue ne contient pas de dépôt Git. Consultez le statut de cette tâche, préservez ses fichiers et vérifiez son arrêt et les autres usages avant tout retrait. Les autres travaux autorisés suivent leur propre état.",
+            report_text(&workspace.base_commit),checked,report_text(&workspace.path))
+    } else {
+        let commits = workspace
+            .commit_count
+            .map(|n| format!("{n} commit(s)"))
+            .unwrap_or_else(|| "nombre de commits indisponible".into());
+        format!(
+            "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}. Consultez le statut de la tâche avant tout retrait. Clôturez la tâche, préservez le travail et vérifiez les autres usages du dossier.",
+            report_text(&workspace.branch),
+            &workspace.base_commit[..workspace.base_commit.len().min(7)],
+            commits,
+            yes_no(workspace.dirty),
+            yes_no(workspace.head_on_branch),
+            report_text(&workspace.path)
+        )
+    };
     let Some(body) = &task.result else {
         return;
     };
@@ -10715,6 +10757,8 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
             if record.path == job.workspace.path
                 && record.branch == job.workspace.branch
                 && record.base_commit == job.workspace.base_commit
+                && (!matches!(job.workspace.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+                    || crate::remote_worker::same_workspace_anchor(&job.workspace,&json!(record)))
             {
                 Ok(record)
             } else {
@@ -26468,7 +26512,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(done["status"],"failed");
             // Un rapport achevé peut être indisponible ; ne jamais le dire confirmé.
             task.workspace=Some(crate::delegation::WorkspaceRecord {
-                strategy:crate::delegation::WorkspaceStrategy::Worktree, state:crate::delegation::WorkspaceState::Kept, toplevel:"/private".into(), path:"/private".into(),
+                strategy:crate::delegation::WorkspaceStrategy::Worktree, commit_view:None, state:crate::delegation::WorkspaceState::Kept, toplevel:"/private".into(), path:"/private".into(),
                 branch:"review".into(), base_commit:"a".repeat(40), branch_commit:None,
                 head_commit:None, head_on_branch:None, commit_count:None,
                 commits:Vec::new(), truncated:false, dirty:None,
@@ -34365,4 +34409,84 @@ mod permission_projection214_tests {
         drop(shared);super::tests::cleanup(&config);
     }
 
+}
+
+
+#[cfg(test)]
+mod commit_view_reader221_tests {
+    use super::*;
+    #[test]
+    fn spec221_c19_view_retention_distinguishes_file_report_from_git_without_mutation() {
+        use crate::delegation::{WorkspaceRecord,WorkspaceStrategy,WorkspaceState,ViewBinding,CommitViewRecord};
+        let (state,config,mut task,_)=super::tests::remote162_capture_fixture();
+        task.state="failed".into();task.error=None;task.cleanup_done=true;
+        task.workspace_report_mission=Some(task.mission.clone());
+        let reference=CommitViewRecord { proof_root:"/private/c19-proof".into(),intent_digest:"d".repeat(64),
+            binding:ViewBinding {
+                worker:bridget_transport::protocol::WorkerIdentity {machine_id:"fixture".into(),worker_id:"worker".into(),provisioning_revision:1},
+                command:bridget_transport::protocol::WorkerCommandIdentity {task_id:task.task_id.clone(),command_id:"prepare".into(),instance_id:String::new(),generation:0},
+                prepare_digest:"a".repeat(64),
+            },
+        };
+        task.workspace=Some(WorkspaceRecord { strategy:WorkspaceStrategy::CommitView,
+            commit_view:Some(reference),state:WorkspaceState::Kept,toplevel:"/private/source".into(),
+            path:"/private/view".into(),branch:String::new(),base_commit:"a".repeat(40),
+            head_commit:None,branch_commit:None,head_on_branch:None,commit_count:None,
+            commits:vec![],truncated:false,dirty:Some(false) });
+        for (dirty,expected) in [(Some(false),"conforme"),(Some(true),"divergence constatée"),(None,"indisponible")] {
+            let mut result=task.clone();
+            result.workspace.as_mut().unwrap().dirty=dirty;
+            result.result=Some("Résultat conservé".into());
+            append_workspace_result(&mut result);
+            let body=result.result.as_ref().unwrap();
+            assert!(body.contains(&format!("vue de lecture du commit {}","a".repeat(40))));
+            assert!(body.contains(&format!("dernier contrôle des fichiers : {expected}")));
+            assert!(body.contains("dossier conservé : /private/view"));
+            assert!(body.contains("Les autres travaux autorisés suivent leur propre état"));
+            for invented in ["branche ","commit(s)","worktree conservé","tête sur la branche"] {
+                assert!(!body.contains(invented));
+            }
+            let mut contradictory=result.clone();
+            contradictory.workspace.as_mut().unwrap().head_on_branch=Some(true);
+            contradictory.result=Some("Résultat".into());
+            append_workspace_result(&mut contradictory);
+            assert!(contradictory.result.unwrap().contains("dernier contrôle des fichiers : indisponible"));
+        }
+        let before=serde_json::to_value(&task).unwrap();
+        let view=task_view(&task,None,true);
+        assert_eq!(view["workspace"]["retention"]["code"],"review_required");
+        assert!(view["workspace"]["retention"]["recovery"].as_str().unwrap().contains("retrait natif"));
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        task.workspace.as_mut().unwrap().dirty=Some(true);
+        let view=task_view(&task,None,true);
+        assert_eq!(view["workspace"]["retention"]["code"],"changes_present");
+        assert!(view["workspace"]["retention"]["recovery"].as_str().unwrap().contains("ne régénérez pas"));
+        task.workspace.as_mut().unwrap().dirty=Some(false);
+        task.workspace.as_mut().unwrap().head_on_branch=Some(true);
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"report_unavailable");
+        task.workspace.as_mut().unwrap().head_on_branch=None;
+        task.workspace.as_mut().unwrap().commit_view=None;
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"report_unavailable");
+        task.cleanup_done=false;
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"stop_unconfirmed");
+        drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_reader_refuses_new_admission_before_task_or_source_effects() {
+        let (state,_config,_commands,_reader)=super::tests::fixture("c19");
+        let state=Arc::new(Mutex::new(state));
+        let request:NativeDelegationRequest=serde_json::from_value(json!({
+            "operation":"delegate","request_id":"c19-not-enabled","agent_type":"native-test",
+            "model":"fixture","task":"Read only","cwd":"/unavailable-source",
+            "posture":"discovery","workspace":{"strategy":"commit_view"}
+        })).unwrap();
+        let before=serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
+        let result=handle("conn-1",request,&state);
+        let DaemonToWrapper::NativeDelegationResult{result}=result else{panic!("native result");};
+        assert_eq!(result["code"],"workspace_commit_view_not_enabled");
+        assert!(result["message"].as_str().unwrap().contains("autres travaux"));
+        assert_eq!(result["detail"]["task_id"],Value::Null);
+        assert_eq!(serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap(),before);
+    }
 }

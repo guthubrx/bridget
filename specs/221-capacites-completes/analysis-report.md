@@ -104,3 +104,103 @@ Relecture structurelle finale : 179 IDs uniques, 50 FR, 32 cases cochées ; guid
 
 ## Après chargement T180
 33/180 tâches vérifiées. Neuf tests220 revérifiés, source342754e6, revue indépendante APPROVE et audit source13/13. Nouveau conseil lu par le chemin natif après chargement des images ; C19 et T177 restent ouverts. Le contrôle de fin a corrigé le pointeur de retour privé Cartae/Mac181 versCE08, via le writer natif sous verrou, sans nouveau binaire ni seconde coupure du maître. Converge T180 CONVERGED, zéro tâche nouvelle ; aucune catégorie supprimée. Le programme global reste In Progress.
+
+
+## Analyze — noyau C19 en cours
+Primitive projet toujours indisponible (check-prerequisites.sh absent) ; comparaison manuelle spec/plan/tasks/contrat/code/tests puis relecture. Sélection207 et constructeur Git réutilisés ; export et audit portent les règles binaires, de chemins et de flux qui manquaient, sans nouveau service ou store. Checklist qualité fermée relue, gate reuse-audit conservé. Huit tests noyau PASS, revue statique traitée ; aucun nouveau format de tâche, admission, activation ou mission métier. Les limites de coupure, format de retour et contrôle fournisseur restent dans les tâches existantes. 33/180 cochées, programme In Progress.
+
+## Analyze/Converge intermédiaire C19 — 31 octobre
+La primitive de projet reste absente, constat de présence refait. Rapprochement
+manuel FR-019/acceptance/common/code/tests, puis relecture du refus et des
+contrats. 180 IDs uniques, 33 cochés, 147 ouverts ; aucun statut Implemented.
+Les limites de reprise, de format de retour et de qualification fournisseur
+restent dans T174/T030/T031/T032/T033. Pas de tâche de confort ajoutée.
+
+Le noyau réutilise sélection207, exécuteur Git fermé, budget et reçu worker,
+ManagedLaunch et canal géré. Une vue publiée est liée à sa preuve privée ;
+WorkspaceRecord connaît sa référence sans inventer de HEAD ou de branche.
+Le rapport de fichiers et la projection de rétention sont distincts de Git.
+Aucune route ou admission nouvelle n'est active. Le premier plancher de formats
+reste worktree.v1 : lecture/cancel/reprise de tous les processus C19 conservés
+et contrôle avant Prepare/retour ne sont pas encore qualifiés.
+
+Converge intermédiaire : aucun écart de périmètre, zéro tâche ajoutée. Le
+raccordement du processus au worker et à son annulation reste requis ; une
+suppression de marqueur ne doit pas remplacer une preuve durable de clôture.
+La contre-revue du dernier ensemble n'est pas acquise : la tentative native
+0d178c83 a échoué WorkerUnavailable, résultat absent, annulation demandée une
+fois. Pas de remplacement ni de verdict inventé. Le programme reste In Progress.
+
+
+## Analyze/Converge intermédiaire — propriétaire et lecteur C19
+Vérification manuelle refaite ce tour : primitive check-prerequisites.sh
+absente, 180 IDs uniques /33 cochés /147 ouverts, aucune checklist ouverte.
+FR-019, acceptance C19, common et code/tests rapprochés, puis relus.
+Le propriétaire runtime, la preuve d'arrêt durable et la relecture des
+droits sont maintenant raccordés en interne. Export et rapport exacts ne
+prouvent ni admission de mission ni retour complet. Les gates de création
+restent fermées ; T174/T030/T031/T032/T033 restent ouvertes.
+Converge intermédiaire : zéro tâche ajoutée ; les écarts restants sont
+toujours couverts par ces tâches. Aucun statut global CONVERGED ou Livré.
+Contre-revue 2c1777b3 non démarrée (WorkerUnavailable), aucun verdict.
+Sources non commitées conservées ; aucune bascule ou service métier.
+
+## Analyze intermédiaire — matérialisation et contre-épreuve du verrou
+
+Rapprochement manuel spec/acceptance/common/code/tests refait, puis relu :
+primitive check-prerequisites.sh toujours absente ; 180 IDs uniques,
+33 cochés,147 ouverts ; zéro checklist ouverte. T174 puis T030–T033
+portent encore tous les écarts C19. Zéro tâche ajoutée à la convergence
+intermédiaire ; aucun statut CONVERGED global ni livraison du lot.
+
+Les preuves finales internes sont 53 daemon C19 +1 transport PASS sur Linux
+et macOS ; la suite worker80 PASS les recoupe. Le test de duplication de FD
+démontre le verrou conservé et la garde le corrige sans libérer de marqueur
+d'arrêt incertain. Un résultat de helper n'est toujours pas une admission
+fournisseur. Les ports publics et le plancher de formats C19 restent fermés.
+
+Écarts restants : retrait sûr et libération de la réservation, port de fichier
+non bloquant, reprise fencée, préparation native, lecteurs de retour et gates
+de bascule, preuve d'usage MCP. Le client appelant214 et les deux revues
+WorkerUnavailable sans avis restent des limites distinctes ; pas de troisième
+remplacement ni de contournement. Sources non commitées et preuves préservées.
+
+## Analyze/Converge ciblé — choix de conservation sans privilège
+Rapprochement manuel puis relecture spec/plan/FR-019/acceptance/common/code/tests.
+Le script check-prerequisites et extensions.yml sont absents, présence vérifiée.
+180IDs uniques,33cochés,147ouverts ;50FR et zéro checklist ouverte.
+La décision du31octobre impose la conservation sur contrôle incomplet et
+interdit l'ajout d'un contrôle administratif au worker.
+
+Le nouveau code réutilise la carte de données, les preuves SHA256/dev/inode,
+le lease, le reçu workspace et son budget. Closed est une décision monotone,
+pas un état dérivé du processus ; il interdit la recréation après collecte.
+La petite référence évite de garder le grand manifeste en double dans le store.
+Lecture de la carte non fiable -> hash privé et audit exact, jamais autorité
+de chemin/commande. Aucune dépendance, table, autorité ou accès nouveau.
+Complexité O(n*d*log(n*d)), mêmes bornes, sans boucle quadratique ajoutée.
+Potentiel minimalisme :0ligne de règle supprimable à comportement constant ;
+les types et transitions portent l'intégrité, la coupure ou la non-recréation.
+
+66tests C19 daemon +1transport passent sur Linux et Mac ;89tests worker passent
+et se recoupent. Les premières erreurs et la limite de fixture sont consignées
+dans validation/c19-conception.md. Cette preuve reste interne, sans plateforme
+fournisseur ni verdict d'activation.
+Converge intermédiaire :0tâche nouvelle ; les écarts restent dans
+T174/T030/T031/T032/T033. Aucun nouveau CRITICAL observé sur ce complément.
+Retrait physique conservateur, alias fencés, source asynchrone, lecteur de retour,
+revue et usage natif requis avant livraison. Programme In Progress33/180 ;
+aucune clôture globale ni CONVERGED global. Les50catégories restent couvertes.
+
+## Reprise explicite du programme —31octobre, source asynchrone et reprise198
+Cadrage50catégories conservé. ETA restante40–90h, hors accès/attentes humaines.
+Begin/poll réutilisent ViewJob et les mêmes reçus ; source_failure est un fait
+fermé de fin, pas une autorité neuve. BindProof198réutilisé pour l'ancreA et
+l'exécutionB, sans deuxième réservation. Contrôles privés du helper gardent la
+preuve d'opération complète. Créations publiques et formatC19toujours fermés.
+75daemon C19+1protocole PASS Linux ; Mac et raccord complet restent à qualifier.
+Analyze manuel ciblé : script projet toujours absent ; contrats/tests/code
+rapprochés puis relus. Aucun nouveauCRITICALétabli. Convergence intermédiaire :
+0tâche ajoutée ; T174/T030–T033restent ouverts.33/180, pas de succès global.
+La revue distincte du lotcomptes/modèles est revenue ; ses hypothèses doivent
+être vérifiées, sans refus arbitraire des homes déjà partagées par des profils.

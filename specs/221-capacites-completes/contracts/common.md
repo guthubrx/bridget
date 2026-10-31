@@ -205,3 +205,368 @@ cycle de vie de préparation, sans nouveau magasin de tâches ou service.
 
 ## T180 — absence d’observation et changement de version
 Un cache vide, une donnée périmée ou une capacité non négociée ne prouvent pas l’arrêt d’un processus de sonde antérieur. Le prochain conseil rend explicite le contrôle des marqueurs privés et des processus de cette sonde par le responsable avant tout changement de version. Aucun effacement de marqueur, signal, refresh, retour ou mission n’est déclenché par la projection. Le statut, les contraintes, le TTL et les modèles restent identiques. Le contrôle est limité à cette observation ; les autres travaux autorisés suivent leur propre état. Couvrir la vraie projection périmée et non négociée ainsi que le Hello qui vide le cache, puis la republication de la contrainte. Un état inconnu ne devient jamais StopUnconfirmed sans preuve.
+
+
+### Plancher conservateur de formats — décision de raccordement
+
+Un inventaire absent ne sera pas remplacé par un inventaire vide.
+Le contrôle séparé formats impose, au minimum, tous les formats que le
+contrôleur installé peut produire. Ce plancher s'applique même à un store
+custom non découvert ; il ne dépend pas d'un scan de répertoires.
+C'est plus conservateur qu'un inventaire exact et évite une nouvelle autorité
+de découverte des racines. Le rapport209 reste inchangé.
+
+Le rapport de candidat est lié à un nonce et à l'empreinte du fichier exécuté.
+Le contrôleur installé valide sa forme, ses limites et la couverture de son
+plancher. Des identifiants de lecture additifs ne donnent aucun droit de mission.
+Absence de déclaration ou de vérification : refus avant Prepare et bascule,
+avec conservation des données. Vérifier séparément le binaire de retour.
+
+La transition C19 nécessite une étape lecteur avant toute nouvelle écriture :
+capacité de relire, rapporter et fermer les données de vue, sans admission
+de vue activée. Une image de retour compatible doit être qualifiée avant
+que le parcours complet puisse produire ses premiers reçus. Le seul numéro
+0.6.5, la présence d'un fichier ou une sauvegarde CE08 ne le prouvent pas.
+Aucune restauration ancienne ne sert à faire disparaître ces reçus.
+Ce raccordement et cette transition restent à tester ; aucun gate levé.
+
+### C19 : intention et publication privées
+La clé de stockage est SHA256 du tuple worker, commande et empreinte du canon de
+préparation. L'intention lie ce tuple, la source admise, le dossier de données
+privé déterministe et le manifeste complet. Elle est créée exclusivement,
+synchronisée avant l'export et ne peut pas être remplacée au rejeu.
+La publication privée est séparée. Elle lie l'empreinte des octets de l'intention,
+le périphérique et l'inode de la vue auditée. Elle est écrite seulement après
+synchronisation et audit. Au rejeu, intention, publication, tuple et racines
+attendues sont comparés avant un nouvel audit. Sans publication complète,
+une vue existante reste conservée et refusée ; aucune suppression/recréation.
+Les plans et publications appartiennent au budget existant de WorkerStore.
+Le nombre exact d'octets réservés est calculé avant écriture, sous son verrou.
+La vue reste sur le volume du projet ; les preuves sont hors de la vue et de
+toutes les racines de travail exposées. Ces règles n'établissent pas une
+interdiction de lecture au niveau du système pour deux processus du même UID.
+
+### C19 : possession du processus de préparation
+L'export de fichiers et ses appels système s'exécutent dans un helper du même
+binaire, sous managed-bootstrap. Le marqueur est durable avant RELEASE.
+Les sous-processus Git héritent de son groupe. Aucun lancement fournisseur,
+aucune donnée d'authentification et aucun shell. L'environnement ne garde que
+PATH, HOME et TMPDIR de la connexion, puis LC_ALL=C.
+Le verrou par tuple et tout marqueur existant empêchent un deuxième lancement.
+La fin du leader ne prouve pas la fin des descendants. Une preuve de groupe
+absent est requise avant retrait du marqueur ; un leader absent avec groupe
+encore présent garde un arrêt non confirmé, sans signal à une identité inconnue.
+Le sous-mode interne exige son canal géré et l'identité du reçu. Sans ce canal,
+il refuse avant lecture des chemins de preuve. Une fin sans publication privée
+ne devient jamais un export réussi. Le budget et le reçu de WorkerStore
+doivent compter les fichiers privés avant le premier lancement.
+
+### C19 : réservation dans le reçu existant
+WorkspacePreparationReceipt reçoit un champ optionnel fermé commit_view,
+omis à None dans les reçus historiques : key, intent_digest et reserved_bytes.
+La clé est recalculée depuis worker/commande/digest du reçu. L'empreinte
+d'intention empêche de changer les chemins ou le manifeste sous le même canon.
+Le budget réserve avant écriture les octets de l'intention, de la publication
+et du marqueur, temporaire atomique compris. L'inventaire ajoute la différence
+entre réservation et fichiers compagnons déjà présents, sans les compter deux
+fois. Les orphelins restent comptés par l'inventaire privé existant.
+Ces fichiers sont des compagnons d'un reçu, pas une seconde tâche ou un second
+store. Un groupe orphelin de fichiers de preuve sans reçu compte une entrée
+conservée ; les noms non reconnus comptent chacun une entrée.
+Un reçu incomplet conserve sa réservation après redémarrage. Aucun ancien
+reçu n'est réécrit pour lui ajouter le champ. L'écriture de ce format n'est
+pas encore activée dans le parcours d'admission ; le plancher de lecture doit
+être qualifié avant sa première utilisation réelle.
+
+### C19 : ancre de WorkspaceRecord et rapport
+Le champ optionnel commit_view du WorkspaceRecord contient seulement le
+répertoire privé de preuves, la liaison worker/commande/canon et le digest
+d'intention. Il est omis dans les worktrees historiques. La vue n'emprunte
+ni branche ni HEAD : les champs de faits Git restent absents.
+Pour une vue, toplevel désigne le cwd source admis, pas un HEAD à examiner.
+Le rapport retrouve l'intention depuis le store privé, compare base, chemins,
+liaison et digest, confirme l'arrêt du groupe d'export puis refait l'audit.
+Il fonctionne sans source Git disponible. Une divergence ou une preuve
+incomplète refuse le rapport et conserve la vue ; aucun état propre déduit
+d'une erreur de lecture. Le statut doit distinguer ce rapport de fichiers
+d'un rapport Git avant l'admission publique.
+La comparaison d'ancre inclut ces champs privés ; changer la preuve sous le
+même path/base ne permet aucune adoption. La création et l'écriture de ces
+champs demeurent fermées au parcours public pendant l'implémentation du lecteur.
+
+### C19 : preuve d'arrêt du processus source pour l'annulation
+Le reçu de préparation conserve aussi source_marker (ManagedMarker existant)
+et source_stopped. Le marqueur complet est enregistré dans ce reçu avant
+RELEASE par un rappel d'autorisation ; un échec abandonne le bootstrap et
+conserve son Child, sans RELEASE. Le marqueur fichier du superviseur peut être
+retiré après récolte, mais son absence ne remplace jamais la preuve du reçu.
+
+La clôture C201 examine les préparations source de la même Task avant de
+publier StartFenced. Un marker dans le reçu impose de constater le groupe
+absent, puis de durcir source_stopped. Tant qu'il est vivant ou indécidable,
+refuser la clôture sans signal à un PID déclaré. Sans marqueur de reçu, vérifier
+aussi tout marqueur fichier d'un bootstrap avant libération. Après la preuve
+de clôture, aucune nouvelle autorisation RELEASE de ce reçu n'est possible.
+Un reçu Fence déjà durable empêche une nouvelle réservation source de cette
+Task. Ces phases réutilisent le même reçu et son budget de croissance de64Kio,
+sans tâche technique fictive ni second registre de processus.
+
+### C19 : propriétaire en mémoire du worker
+WorkerRuntime conserve les helpers source dans une collection distincte des
+wrappers fournisseurs, liée au reçu de préparation. Elle ne crée ni Fleet ni
+Task supplémentaire. Un même tuple reprend le contrôle existant ; un autre
+digest refuse. Une sortie de groupe constatée est durcie dans le reçu avant
+de libérer ce propriétaire. Un arrêt incertain conserve le Child et ses preuves.
+Le tick existant peut récolter ces seuls helpers, sans relancer un export.
+Une demande native de clôture de la même Task peut arrêter son helper détenu ;
+un PID seulement déclaré par le réseau n'est jamais signalé.
+Le raccordement public et la récupération du contrôle après perte du worker
+restent des gates séparées : la collection en mémoire seule ne suffit pas.
+
+### C19 : contrôle d'un groupe retrouvé après redémarrage
+La clôture retrouve les seuls marqueurs de la Task dans les reçus privés
+validés. Elle n'envoie TERM qu'après comparaison fraîche de la naissance du
+leader avec celle du reçu. Si cette identité n'est plus vérifiable alors que
+le groupe existe, refuser et conserver les preuves, sans signal à un autre PID.
+Le contrôle reprend le signal unique déjà utilisé par le worker ; la fin
+n'est confirmée qu'après disparition du groupe. Une reprise de préparation
+ne relance jamais un helper dont le reçu contient déjà un marqueur.
+
+Le signal source vise aussi la commande de préparation de la demande de
+clôture, pas le seul identifiant Task. Une autre tentative de la même Task
+ne signale pas ce groupe ; le reçu de groupe encore vivant empêche néanmoins
+de publier une clôture qui prétendrait que toutes les sources sont arrêtées.
+
+
+### C19 : relecture des droits et du dossier d'exécution
+La relecture d'une vue conservée repart du mapping vivant et du reçu de
+préparation du store de ce worker. Elle exige la même commande, le même
+canon, une source d'export arrêtée, la même base et une posture discovery.
+La référence privée ne peut désigner qu'un manifeste du répertoire de ce
+store ; un chemin reçu dans WorkspaceRecord ne donne aucune autorité de
+lecture ailleurs. Une réparation de worktree ne s'applique pas à une vue.
+
+La racine et le cwd d'exécution sont déduits du décalage Git du manifeste,
+en retirant le décalage du cwd source par rapport au mapping. Le nouveau
+mapping remplace sa racine distante, sans ajouter l'ancienne ni modifier
+un additional_root explicitement hérité. Une incohérence de sous-dossier
+refuse avant lancement. La vérification des droits et de la définition
+fournisseur reste celle du worker, sur cette vue ; aucune lecture de HEAD
+n'est faite dans l'export sans .git.
+
+
+### C19 : compte rendu propriétaire
+Le résultat natif nomme une vue de lecture, le SHA complet et le dossier
+conservé. Il rend le dernier contrôle de fichiers, jamais une branche, un
+nombre de commits ou un worktree inventés. Un rapport absent ou des faits
+Git contradictoires restent indisponibles. Le format historique des comptes
+rendus Worktree reste inchangé. Le texte n'autorise pas le retrait du dossier.
+
+
+### C19 : processus de lecture d'un fichier omis
+Réutiliser le propriétaire ViewJob, son bootstrap, son verrou par intention et
+son marqueur avant RELEASE. Une requête fermée de matérialisation lie la
+commande complète de l'instance utilisatrice, un numéro d'opération positif
+et un seul chemin du manifeste. L'identité de processus est dérivée de ce
+tuple ; aucun SHA, commande Git ou chemin source libre n'est admis.
+Le helper exige son canal géré, compare cette identité, retrouve la publication
+privée puis matérialise le blob exact sans écrasement. Toutes ses E/S et son
+Git restent dans le groupe possédé et sous la même échéance que l'export.
+
+Le raccordement au contrôleur de mission doit encore durcir cette requête
+et son marqueur dans le reçu avant RELEASE, revalider l'instance/mission et
+fermer l'opération lors d'un Cancel ou d'une reprise. Une identité dérivée
+seule ne remplace pas ces gardes : aucune API de matérialisation publique ni
+aucun nouveau plancher lecteur ne sera activé depuis le seul helper.
+
+
+### C19 : autorisation durable d'une matérialisation
+Le même WorkspacePreparationReceipt conserve au plus une matérialisation
+courante : identité complète de résultat (mission/ronde/exécution/instance),
+requête fermée, marqueur possédé, arrêt et disponibilité constatés.
+Une nouvelle opération exige une commande Released/NativeReady non expirée
+et son slot de résultat encore ouvert, non terminal et sans disposition.
+Elle conserve le binding et le manifeste de la vue ; pas de seconde Task.
+
+Le numéro d'opération croît dans ce reçu. Tant que le processus précédent
+n'est pas arrêté, seule la même opération peut être retrouvée ; un autre
+chemin reste occupé. Le marqueur est durci avant RELEASE après relecture de
+la même exécution active. Un Cancel ou un StartFenced ne peut pas ignorer ce
+groupe, même si le sidecar a disparu. La disponibilité true exige un contrôle
+exact après disparition du groupe ; false n'est pas une preuve d'absence.
+Un résultat non retrouvé reste inconnu. Aucun parcours public n'est ouvert
+par cette préparation du contrôleur.
+
+
+Le budget garde une croissance de métadonnées réservée tant que l'arrêt ou
+le constat de disponibilité ne sont pas durcis. La maintenance conserve
+les identifiants de signal déjà émis pour ces opérations. Le Reconcile
+terminal, le rapport de repli et la collecte des commandes ne peuvent pas
+masquer une matérialisation encore détenue. Les contrôles par commande sont
+indexés par la clé de préparation ; la maintenance fait un seul parcours
+borné des reçus, sans parcours global pour chaque commande terminale.
+
+
+Le propriétaire runtime conserve aussi l'exécution et la requête du fichier
+jusqu'au constat durable. Avant réservation puis avant RELEASE, il relit
+mapping, définition et droits projetés sur la vue, sans retirer la garde
+d'admission de inspect_candidate. Une réponse perdue avec marqueur ne relance
+pas de helper ; un résultat de fichier exact peut être retrouvé après arrêt.
+Le tick finalise le même reçu. Le signal natif Cancel reçu dans le canal
+existant interrompt le helper possédé, sans attendre une nouvelle mission.
+L'annulation du fichier est distincte d'un dépassement de délai.
+
+
+Une lecture de fichier déjà terminée donne un nouveau contrôle borné lors
+d'un prochain appel ; la disponibilité mémorisée n'est pas annoncée comme
+preuve actuelle. Une même opération encore en cours reste retrouvée sous le
+même numéro. Les données exactes déjà présentes ne sont jamais réécrites.
+
+
+Un bootstrap abandonné peut laisser un marqueur alors que son arrêt est
+déjà durci dans le reçu. Avant une opération distincte, le contrôleur peut
+retirer ce seul marqueur privé, après comparaison complète et contrôle du
+groupe. Un groupe vivant de même naissance, une identité inconnue ou un
+marqueur divergent refuse le retrait. Aucun signal ni retrait de données
+n'est déclenché par ce rangement. Le reçu arrêté est conservé ; la nouvelle
+séquence n'est durcie qu'après rangement, sans perdre l'identité précédente.
+Un PID réutilisé avec une autre naissance n'est jamais signalé.
+
+### C19 : activité de mission et annulation d'un fichier
+
+Le délai de commande borne le bootstrap avant Release, pas la mission déjà
+Released/NativeReady. Une lecture de fichier exige le slot de résultat exact,
+non terminal, ouvert et sans disposition, puis les droits, le mapping et la
+définition courants. Le délai initial reste inchangé ; aucune prolongation
+de mission n'est déduite de cette correction.
+
+Avant réservation et juste avant l'autorisation durable du helper, relire le
+signal d'annulation natif de la commande complète. Une annulation déjà reçue
+avant la demande refuse sans nouveau reçu ni processus. Un mutex d'annulation
+illisible donne StoreUnavailable, jamais une annulation supposée. Si ce constat
+arrive avec un helper déjà détenu, tenter son arrêt sans oublier le Child ni
+son marqueur si l'arrêt reste incertain. Cette borne de lecture reste distincte
+de la décision d'annulation du fournisseur et de sa preuve finale d'arrêt.
+
+### C19 : verrou du contrôleur et marqueur durable distincts
+
+Le verrou flock sérialise les opérations d'un tuple. Sa garde exécute LOCK_UN
+au départ du propriétaire, au lieu de dépendre de la dernière fermeture d'une
+description héritée par un fork concurrent avant exec. CLOEXEC reste posé.
+Ce retrait local ne confirme aucun arrêt. Un marqueur privé présent, même
+sans propriétaire en mémoire ou sans verrou, interdit encore tout nouveau
+helper tant que le reçu d'arrêt durable n'a pas été établi puis rangé.
+
+### C19 : retour à la boucle worker pendant une omission
+
+Le démarrage rend un jeton interne lié à la liaison privée, à l'exécution et à
+la requête de fichier. Il ne copie pas le manifeste et n'est pas un RPC ni une
+preuve d'autorité. Le futur port conserve ce jeton et revient à chaque tick ;
+aucun parcours de production n'attend en boucle la fin du helper.
+Un poll en cours ne recharge pas le manifeste et ne refait pas l'audit de la
+vue. Un autre contrôle de commande peut être traité pendant ce temps.
+La collecte existante surveille aussi le slot et le signal d'annulation,
+même après disparition du lecteur. Slot fermé ou preuve illisible : demander
+l'arrêt du helper, conserver son propriétaire jusqu'au constat d'arrêt, sans
+prétendre qu'une annulation utilisateur a été reçue. Un poll périmé ou étranger
+ne rend pas le résultat d'une nouvelle requête et ne signale pas son helper.
+Une complétion déjà enregistrée par la collecte n'est pas réinterprétée comme
+un succès par le poll. La relecture des droits avant remise et les audits de
+complétion restent requis ; ces audits sont synchrones et leur coût doit être
+qualifié avant le raccordement public. Le démarrage reste borné par le
+bootstrap géré existant, sans file ni ordonnanceur supplémentaire.
+
+### C19 : avant READY, absence de marqueur et clôture native
+
+Le reçu enregistre source_attempted, ou attempted pour une matérialisation,
+avant tout spawn. Le constructeur de production start_registered exige ce
+callback ; le raccourci sans enregistrement est cfg(test) seulement.
+Une réservation jamais tentée et un lancement tenté sans READY/marqueur ne
+sont donc plus confondus. Au redémarrage, attempted avec arrêt non durci et
+sans marqueur reste StopUnconfirmed ; aucun nouveau helper n'est lancé.
+
+L'arrêt observé du Child possédé, ou un échec de spawn sans Child rendu,
+permet au contrôleur courant de durcir l'arrêt. Ce chemin n'est pas utilisé
+par un lecteur qui retrouve seulement un reçu ou une absence de sidecar.
+Le résultat inconnu d'une matérialisation tentée sans marqueur ne se complète
+pas depuis cette seule absence. Marqueur présent avec attempted faux :
+refus de reçu incohérent. Les worktrees historiques gardent leurs octets.
+
+check_view_native_closure contrôle sous la transition existante les commandes
+de la Task, leurs preuves d'arrêt ou le fence de non-naissance, et la disposition
+finale des résultats. « Terminal » seul n'est pas une preuve d'arrêt.
+Annuler un slot contenant un résultat ne vaut pas acquittement de ce résultat.
+Les commandes et compacts de slot restent conservés pendant qu'une vue existe,
+même après sept jours ; un tombstone de retrait devra ensuite lever ce pin.
+La garde ne lit pas les fichiers de la vue, ne vérifie pas ses lecteurs externes
+et n'autorise aucune suppression à elle seule.
+
+Une preuve d'arrêt déjà durcie n'est pas annulée parce que le numéro de groupe
+a été réutilisé par un processus étranger. La reprise d'une publication close
+ne lui envoie aucun signal et continue de vérifier l'intégrité de la vue.
+
+### C19 — conservation sans privilège, clôture et petite référence
+Choix utilisateur confirmé le31octobre : contrôle sous les droits du worker ;
+inventaire incomplet ou usage trouvé => conserver les fichiers. Aucun contrôle
+administratif ajouté. Cette décision ne déduit aucun arrêt depuis un inventaire
+incomplet.
+
+Le reçu existant porte closed, monotone et omis si false. Seule la clôture native
+prouvée sous le verrou permet true ; le record passe Kept avant la réduction.
+Aucun export, matérialisation, Release ou fin tardive ne réouvre cette vue.
+Le port propriétaire qui autorise cette transition reste à raccorder/qualifier.
+
+La carte de données inclut le manifeste entier. L'intention privée peut ensuite
+devenir closed_ref_v1 : binding/source/data_root et hash SHA256 de l'intention
+canonique originale. La publication privée atteste encore hash/dev/inode.
+La carte reste non fiable : aucune racine ou commande n'en est tirée. Le lecteur
+reconstruit puis exige le hash, les formes fermées, les bornes et l'audit exact.
+Carte absente/altérée ou répertoire substitué : refus, jamais recréation.
+
+L'ordre durable est closed avec réservation pleine -> petite preuve atomique
+sous lease -> réservation réduite. Les temporaires privés et orphelins restent
+comptés. La réservation initiale couvre aussi le cas où la référence d'un tout
+petit manifeste serait plus longue. L'histoire de commandes/slots n'est plus
+épinglée après la clôture prouvée ; le reçu workspace sans expiration conserve
+l'interdit de recréation et le rapport sans Git source.
+
+Aucune écriture ou déplacement de fichier de vue pendant la réduction. Avant
+un éventuel retrait physique, durcir à nouveau le plan complet privé requis
+par sa reprise. Retrait physique, lecteur de retour, ancien pair et usage natif
+restent à qualifier ; aucune admission C19 ni format de stockage activé ici.
+
+### C19 — préparation source en plusieurs pas
+La préparation conserve un jeton interne ViewSourceRead portant seulement la
+liaison privée. Begin réserve avant spawn, refuse une annulation déjà observée,
+puis rend le jeton après READY/RELEASE bornés. Poll lit les petits reçus, observe
+l'annulation et revient sans attendre le helper ; il ne recharge ni manifeste
+ni fichiers tant que le helper travaille. Le constructeur synchrone est limité
+aux fixtures de test. Le raccordement public devra garder le jeton jusqu'au
+prochain tick et refaire les droits avant remise de Prepared.
+
+Le reçu existant garde source_failure facultatif, code fermé après arrêt
+confirmé. Le collecteur peut donc fermer son Child sans perdre un échec quand
+le lecteur revient plus tard. Une réussite exige encore publication et audit ;
+aucun processus ne repart depuis un reçu attempted d'issue inconnue.
+La clôture close interdit cette préparation et ses résultats tardifs.
+Pas de thread/store/capacité supplémentaire, aucun Start fournisseur.
+
+### C19 — ancre originale et reprise fencée
+Une commande de reprise B ne crée pas une seconde vue ni réservation. Réutiliser
+BindProof198 et original_workspace_at : le reçu B sans record/réservation garde
+son lien durable vers A, après fence exact. La requête B doit correspondre au
+canon198 et à la même Task, base, source, droits et placement. La preuve privée
+de données reste liée à A ; une vue close ne peut être réouverte par B.
+
+Le port de fichier authentifie l'exécution/slot B et remonte cette chaîne avant
+de charger le manifeste A. La requête de helper porte l'identité complète B,
+séquence et chemin ; ce tuple n'est pas à lui seul une autorité de reprise.
+Begin/Release contrôlent la liaison durable et les droits effectifs.
+Fin de helper peut remonter la même ancre après fin de la mission, sans relance.
+Cancel B ne cible que son helper B, avec déduplication par identité d'opération,
+pas le vieux numéro de commande A ni une opération suivante.
+
+Les reçus et formats198restent inchangés. L'ancre A porte seule les métadonnées,
+la publication et le budget des données. Gardes négatives requises : B sans
+preuve, mauvais canon/base/Task/worker/slot, ancre close, ancien Cancel A,
+répétition de Cancel B et autre opération. Créations publiques restent fermées.

@@ -2064,6 +2064,9 @@ pub struct SpawnOwnership {
 #[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkspaceRequest {
     Shared {},
+    /// Lecteur C19 en préparation. Non négocié et non admissible tant que
+    /// le parcours complet et son retour compatible ne sont pas qualifiés.
+    CommitView {},
     Worktree {
         #[serde(
             default,
@@ -11761,4 +11764,26 @@ mod workspace_repair185_tests {
         assert!(response.validate().is_err());
     }
 
+}
+
+
+#[cfg(test)]
+mod commit_view_reader221_tests {
+    use super::*;
+    #[test]
+    fn spec221_c19_reader_preserves_closed_workspace_shape_without_advertising_a_launch() {
+        let value=serde_json::json!({"strategy":"commit_view"});
+        let workspace=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&workspace).unwrap(),value);
+        for extra in ["branch","base_ref","private"] {
+            let mut invalid=value.clone();invalid[extra]=serde_json::json!("untrusted");
+            assert!(serde_json::from_value::<WorkspaceRequest>(invalid).is_err());
+        }
+        // Aucun champ optionnel n'a été ajouté aux formes historiques.
+        for value in [serde_json::json!({"strategy":"shared"}),
+            serde_json::json!({"strategy":"worktree","base_ref":"a".repeat(40)})] {
+            let decoded=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(),value);
+        }
+    }
 }

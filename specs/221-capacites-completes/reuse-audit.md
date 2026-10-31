@@ -146,3 +146,122 @@ RÉUTILISER les mappings à clés distinctes, AgentRegistryFile racine tolérant
 
 
 Gate C16 complément corrélation : recherche observe_routing_candidates et auto_admission_id avant écriture. La variante avec clone changeait l'identifiant technique de sonde malgré le reçu inchangé (RED194atteint). Réutiliser la même implémentation d'observation avec une clé de projet séparée du canon. Une façade interne conserve les appelants initiaux ; le coeur est unique, sans store/type/protocole neuf. Cette séparation est nécessaire pour maintenir la corrélation du canon et épingler le mapping déjà observé ; pas un helper décoratif.
+
+
+## C19 — contrôle des lecteurs
+RÉUTILISER les ports candidats, le validateur installé et la borne de commande de209. Ne pas étendre son Report à deny_unknown_fields. Le module storage_compatibility porte uniquement le contrat de formats, lié à un nonce et au SHA du candidat, et le plancher du lecteur installé. Aucun store ni scan global. Le plancher conservateur couvre les formats écrivables, y compris en racine custom ; aucun inventaire absent déduit vide. Le passage initial requiert un lecteur de vue et un retour qualifiés avant activation des écritures. Aucune nouvelle garantie de lecteur avant les types et tests correspondants.
+
+### C19 : preuves privées de l'export (poursuite du noyau)
+Les helpers privés du worker écrivent des reçus de 64 Kio ; ils ne peuvent pas
+porter le manifeste complet borné à 8 Mio. Le même inventaire de WorkerStore
+compte déjà tous les fichiers privés, y compris orphelins. Réutiliser ce budget
+et son verrou de transition ; ne pas créer un second quota ou un second store.
+Le module workspace_commit_view conserve seulement les règles de l'export :
+intention privée fermée, publication exclusive, lecture bornée et audit exact.
+Ses descripteurs openat/nofollow sont réutilisés pour les fichiers de preuve.
+Le raccordement futur doit réserver les octets avant toute écriture et rattacher
+ces fichiers à WorkspacePreparationReceipt. Aucun appelant natif à ce stade.
+
+### C19 : processus d'export
+Réemploi de ManagedLaunch, ManagedStatusReporter, du bootstrap et du marqueur
+durci avant RELEASE. Les enfants Git restent dans le groupe du helper ; aucun
+nouveau service, ordonnanceur ou transport. workspace_commit_view_job sépare
+seulement la possession du sous-processus et le protocole privé de fin de
+l'algorithme d'export. Le canal de statut existant porte un code fermé.
+Un verrou de fichier privé par tuple empêche deux lancements concurrents.
+Le raccordement au budget, à Cancel et à la reprise du worker reste requis.
+
+
+### C19 : relecture d'une vue conservée
+REUTILISER WorkerReadView::recheck_at_with_workspace, le reçu existant et
+WorkspaceRecord.commit_view ; étendre leur branche de rapport, sans second
+contrôleur de droits. La fonction remap_prepared_worktree suppose un dossier
+sous l'ancienne racine Git et ne peut servir telle quelle pour un export
+extérieur sans .git. CREER la dérivation pure ViewIntent::execution_paths :
+elle impose la cohérence des décalages source/mapping/manifeste avant de
+remplacer la racine, une règle de sécurité spécifique. La relecture native
+et ses contre-exemples de sous-dossiers utilisent la même dérivation.
+Aucun nouveau store, outil public ou autorité de lancement.
+
+
+### C19 : fichier omis sous processus possédé
+REUTILISER ViewJob et materialize, après recherche des lecteurs de blobs,
+ManagedLaunch, stop_group et des marqueurs. Étendre le même contrôleur avec
+une requête fermée Export/Materialize ; pas de second gestionnaire de
+sous-processus ni d'exécuteur de commandes. Le tuple commande complète,
+séquence, chemin et binding impose la corrélation avant RELEASE.
+Les deux entrées CLI internes séparent leurs formes admises et exigent le
+canal géré avant toute lecture de chemin. Pas de nouvel outil MCP à ce stade.
+
+
+### C19 : propriétaire runtime de la matérialisation
+REUTILISER la collection ViewSourceProcess et le même ViewJob pour l'export
+et les fichiers omis. Ajouter l'identité de résultat/requête au propriétaire,
+pas une collection ou Fleet de plus. RÉUTILISER le corps existant de
+inspect_candidate comme lecture de définition/droits, après sa garde
+d'admission inchangée : le rappel avant RELEASE doit relire ces faits pour
+l'opération enregistrée. Le corps partagé n'admet rien et ne crée aucun token.
+Les compteurs de signal, la récolte et Cancel gardent les groupes de fichiers.
+
+### C19 — libération du verrou local de vue
+Constat réel : export_busy au démarrage de la matérialisation après un export
+terminé, reproduit pendant la suite Mac r14 ; test ciblé Linux avec dup rouge.
+Recherche : lease C19 est le seul flock de ce tuple ; ManagedMarkerStore garde
+séparément le processus non arrêté. Réutiliser ce même fichier/verrou, sans
+second créneau, attente, retry ou serveur. ViewLease ajoute seulement LOCK_UN
+au Drop du propriétaire : la fermeture d'un FD seul ne libère pas flock tant
+qu'une description dupliquée subsiste (cas fork avant exec). CLOEXEC conservé.
+Le marqueur non soldé reste bloquant, même après libération du verrou local.
+Pas de nouvelle dépendance. Garde minimale justifiée par ce cas de possession.
+
+### C19 — lecture en cours sans attente dans le worker
+Recherche ciblée : runtime.materialize_view_file attendait en boucle la fin
+du helper pendant jusqu'à son échéance. Réutiliser la même collection de
+processus et le même reçu de matérialisation, sans thread, queue, ordonnanceur
+ni store neufs. begin_view_file rend un jeton privé sans manifeste ;
+poll_view_file fait un seul pas. Seul l'adaptateur de test attend en boucle.
+Le collecteur existant observe l'annulation et le slot de mission même si le
+lecteur ne revient pas. Abort garde une cause de preuve indisponible distincte
+de Cancel et n'envoie pas un nouveau signal à chaque tick. Les audits finaux
+restent bornés et synchrones : le raccordement devra encore mesurer leur coût.
+
+### C19 — lancement avant READY et preuves pour le retrait
+RED réel : c19-unready-bootstrap-red.log, Child possédé encore vivant,
+confirm_view_sources_stopped=Ok(true) sans marqueur. Réutiliser le même reçu :
+un bit de tentative durable avant fork, puis le marqueur et l'arrêt existants.
+Pas de PID supplémentaire, moniteur, retry ou table. Le contrôleur courant
+durcit un arrêt après observation de son Child ; un lecteur retrouvé reste
+conservateur. Nouveau raccourci de spawn seulement en cfg(test).
+check_view_native_closure réutilise inventory, drainage_proven, le fence198 et
+les dispositions162. Le pin de collecte protège ces preuves jusqu'au futur
+tombstone ; ne pas produire une réussite à partir de leur disparition.
+Autre RED réel : c19-settled-pid-reuse-red.log. Une source déjà arrêtée ne doit
+pas reprendre le groupe numérique d'un autre processus pour sa propre activité.
+La reprise conserve le stop durci ; aucun signal au processus de fixture.
+Ces éléments restent privés et sans admission C19 activée.
+
+### C19 — conservation sans privilège et référence de manifeste
+Choix utilisateur confirmé : conserver sur inventaire incomplet, pas de contrôle
+administratif du worker. Réutiliser la carte exportée, la publication privée,
+SHA256 et le reçu existants. Le grand manifeste est un document de données ;
+la petite référence privée en garde l'autorité par son empreinte canonique.
+Figer les écritures avant réduction ; pas d'archive opaque, second store,
+compression/dépendance nouvelle, élargissement de quota ou droit ajouté.
+Le compteur conserve les compagnons et orphelins réellement présents.
+La référence ne donne jamais autorité au contenu modifiable de la carte.
+L'implémentation et les tests de tous les états restent requis.
+
+### C19 — boucle source non bloquante
+Réutiliser begin/poll du port de fichiers, le même ViewJob, le même BTreeMap
+view_sources et le reçu de préparation. ViewSourceRead conserve l'identité
+minimale ; source_failure préserve uniquement la cause fermée de fin du helper.
+Pas de second exécutant, file ou état de réussite fictif. Les états de mission
+restent ceux du runtime. Préparation publique toujours fermée avant ses gates.
+
+### C19 — reprise native198
+Réutiliser original_workspace_at, BindProof198 et le reçu Released/slot exact.
+Aucun registre d'alias ajouté. Le contrôle d'ancre est partagé par début/fin de
+matérialisation ; il porte une règle d'autorité, pas un passthrough. Le helper
+n'accepte pas une Task différente. La chaîne privée, pas la valeur command_id
+seule, autorise une autre commande. Cancel doit garder l'identité de cette
+opération afin qu'une reprise ne soit pas protégée par l'ancien stop_once.
