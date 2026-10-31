@@ -109,6 +109,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/comptes-modèles et capacité — sources618888c1 puis5eaeae07 intégrées/poussées.
+Profils isolésCodex/Claude avec deux dossiers, gardeancienlecteur fermée, options explicites,
+modèle absent distinct d'accès inconnu ; six tâches source closes, programme52/182InProgress.
+Incident ba4ae9e3 : ancien budget16Mio incompatible avec10réservations2Mio ; budget256Mio,
+réponses et4096entrées inchangées, cinq contrôles ciblésPASS dont64commandes/64slots.
+Revues226e87a1 et6edffb00 lues/ACK/clôtureunefois ; décision explicite de resume documentée.
+Build221-capacity-accounts-r1 chargé7services, empreintes vérifiées ; coupure2,20s,
+superviseurCartae2500061 préservé. Retours au même lecteur nouveau distincts et rollback
+natifsCartae/Mac vérifiés ; ancien retour16Mio incompatible. Lien revenu45options/gel=false,
+MCPactuel146 nouveau ; anciens MCP d'autres usages conservés. Aucune mission Opus rejouée.
+Résultat envoyé monuments, remisein_flight sans lecture attestée. installedMac/SYS refuse
+propriétairestaging, caches conservés. NettoyageMac précédent : gainobservé7,66Go,
+43dossiers/51archives redondantes compactés avec conservation,26binaires/3WT retirés.
+C08 resume explicite livré ; parcours guidé complet et autreslots restent ouverts.
+Preuves : specs/221-capacites-completes/validation/result-capacity.md.
+
+
+
 Session221/C19 synchronisation — source0259ce31 intégrée/poussée,134daemon/5transport Linux etMacPASS ; export réel4778entrées/4671fichiers/63,6Mo surSYS en48,116s, source intacte et groupe arrêté. Revue812957bfAPPROVE, audit source13/13pass/notes63–75. Build221-view-sync-r1 chargé sur7services, SHA vérifiés, coupure2,16s ; retoursB et rollback natifs vérifiés, wrappers observés préservés, lien revenu. QualificationsR2 NONenvoyées selon nouvelle consigne utilisateur : arrêter les campagnes répétées, reprendre le développement par lots cohérents, validation ciblée par lot. Originales cancelled, conservationCodex non confirmée ; aucun rejeu. Programme46/182InProgress, C19 non clôturée. C05 stashf79fddc6 à restaurer. installedSYS/Mac refuse le propriétaire des caches ; conserver sans forcer. Preuves : specs/221-capacites-completes/validation/c19-synchronisation.md.
 
 
