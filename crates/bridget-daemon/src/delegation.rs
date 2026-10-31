@@ -854,6 +854,7 @@ pub(crate) struct RoundRecord {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum WorkspaceStrategy {
     Worktree,
+    CommitView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -870,10 +871,29 @@ pub(crate) struct WorkspaceCommit {
     pub subject: String,
 }
 
+/// Liaison conservée du reçu de préparation : aucune autorité déduite de la notice.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ViewBinding {
+    pub worker: bridget_transport::protocol::WorkerIdentity,
+    pub command: bridget_transport::protocol::WorkerCommandIdentity,
+    pub prepare_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CommitViewRecord {
+    pub proof_root: String,
+    pub binding: ViewBinding,
+    pub intent_digest: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkspaceRecord {
     pub strategy: WorkspaceStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_view: Option<CommitViewRecord>,
     pub state: WorkspaceState,
     pub toplevel: String,
     pub path: String,
@@ -2734,6 +2754,41 @@ WHERE state='refused' AND task_id IS NULL;
 mod tests {
     use super::*;
 
+
+
+    #[test]
+    fn spec221_c19_reader_reopens_task_and_workspace_without_quarantine() {
+        let root=std::env::temp_dir().join(format!("bridget-c19-reader-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let path=root.join("state.db");
+        let store=DelegationStore::open(&path).unwrap();
+        let mut task=legacy_task151();
+        let NativeDelegationRequest::Delegate {workspace,..}=&mut task.request else{panic!("delegate fixture");};
+        *workspace=Some(bridget_transport::protocol::WorkspaceRequest::CommitView{});
+        task.workspace=Some(WorkspaceRecord {
+            strategy:WorkspaceStrategy::CommitView, commit_view:None,state:WorkspaceState::Kept,
+            toplevel:"/private/c19-manifests".into(),path:"/private/source-views/fixture".into(),
+            branch:"c19-manifest-digest".into(),base_commit:"a".repeat(40),
+            head_commit:None,branch_commit:None,head_on_branch:None,commit_count:None,
+            commits:Vec::new(),truncated:false,dirty:None,
+        });
+        let canonical=serde_json::to_vec(&task.request).unwrap();
+        store.insert(&task,"future-c19",&canonical).unwrap();
+        // L'insertion normalise les champs historiques (date/propriétaire).
+        // La reprise doit comparer la matière réellement durcie, pas la fixture.
+        let expected=serde_json::to_value(store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        drop(store);
+        let reopened=DelegationStore::open(&path).unwrap();
+        let read=reopened.get(&task.task_id).unwrap().unwrap();
+        assert!(matches!(read.workspace.as_ref().unwrap().strategy,WorkspaceStrategy::CommitView));
+        assert_eq!(serde_json::to_value(&read).unwrap(),expected);
+        assert_eq!(read.request,task.request);
+        assert_eq!(serde_json::to_value(&read.workspace).unwrap(),serde_json::to_value(&task.workspace).unwrap());
+        let error=crate::workspace_git::report(read.workspace.as_ref().unwrap()).unwrap_err();
+        assert!(error.starts_with("workspace_commit_view_audit_required"));
+        drop(reopened);std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn remote162_receipt_fixture() -> (
         DelegationStore,
         Task,
@@ -3428,7 +3483,7 @@ mod tests {
         let receiver = store.change_receiver().unwrap();
         receiver.try_recv().unwrap();
         task.workspace = Some(WorkspaceRecord {
-            strategy: WorkspaceStrategy::Worktree,
+            strategy: WorkspaceStrategy::Worktree, commit_view:None,
             state: WorkspaceState::Active,
             toplevel: "/tmp/repository".into(),
             path: "/tmp/repository/.worktrees/task".into(),

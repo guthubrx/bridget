@@ -478,6 +478,17 @@ impl ManagedChild {
 }
 
 impl ReadyManagedChild {
+    /// Le canal est privé, mais sa déclaration ne suffit pas à posséder un PID.
+    /// C19 vérifie aussi le Child réel, sa naissance et son groupe avant RELEASE.
+    pub(crate) fn belongs_to(&self, expected: &ManagedIdentity) -> bool {
+        let pid = self.inner.child.id();
+        self.ready.pid == pid && self.ready.pgid == pid && self.ready.birth > 0
+            && self.ready.instance_id == expected.instance_id
+            && self.ready.command_id == expected.command_id
+            && self.ready.generation == expected.generation
+            && process_birth(pid).ok() == Some(self.ready.birth)
+            && unsafe { libc::getpgid(pid as i32) } == pid as i32
+    }
     pub fn ready(&self) -> &BootstrapReady {
         &self.ready
     }
@@ -1228,6 +1239,10 @@ impl ManagedStatusReporter {
         &self.identity.instance_id
     }
 
+    pub(crate) fn identity(&self) -> &ManagedIdentity {
+        &self.identity
+    }
+
     pub fn startup_failed(
         &mut self,
         kind: impl Into<String>,
@@ -1862,6 +1877,25 @@ while True: time.sleep(.02)
         }
     }
 
+    #[test]
+    fn spec221_c19_bootstrap_checks_owned_child_identity_birth_and_group_before_release() {
+        let mut ready = spawn_test_bootstrap().wait_ready().unwrap();
+        let original = ready.ready.clone();
+        let expected = ManagedIdentity { instance_id:original.instance_id.clone(),
+            command_id:original.command_id.clone(),generation:original.generation };
+        assert!(ready.belongs_to(&expected));
+        ready.ready.command_id = "foreign".into(); assert!(!ready.belongs_to(&expected));
+        ready.ready = original.clone();
+        ready.ready.pid = std::process::id(); assert!(!ready.belongs_to(&expected));
+        ready.ready = original.clone();
+        ready.ready.pgid = unsafe {libc::getpgrp()} as u32; assert!(!ready.belongs_to(&expected));
+        ready.ready = original.clone();
+        ready.ready.birth += 1; assert!(!ready.belongs_to(&expected));
+        ready.ready = original;
+        assert!(ready.belongs_to(&expected));
+        assert_eq!(ready.abandon().wait().unwrap().code(), Some(ABANDONED_EXIT_CODE));
+    }
+
     fn current_test_executable() -> PathBuf {
         let executable = std::env::current_exe().unwrap();
         assert_ne!(
@@ -1940,6 +1974,18 @@ while True: time.sleep(.02)
     fn bootstrap_child() {
         if std::env::var(BOOTSTRAP_CHILD_ENV).ok().as_deref() != Some("1") {
             return;
+        }
+        if std::env::var_os("B221_VIEW_TEST_NO_READY").is_some() {
+            use std::os::unix::fs::OpenOptionsExt;
+            let root=PathBuf::from(std::env::var_os("B221_VIEW_PROOFS").unwrap());
+            unsafe {libc::signal(libc::SIGTERM,libc::SIG_IGN);}
+            std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+                .open(root.join("unready-started")).unwrap();
+            let until=std::time::Instant::now()+std::time::Duration::from_secs(10);
+            while !root.join("allow-bootstrap-exit").exists() && std::time::Instant::now()<until {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            std::process::exit(0);
         }
         let value: serde_json::Value =
             serde_json::from_str(&std::env::var(BOOTSTRAP_REQUEST_ENV).unwrap()).unwrap();

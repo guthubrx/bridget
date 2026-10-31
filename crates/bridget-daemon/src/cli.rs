@@ -308,9 +308,18 @@ fn run_with_args(args: Vec<String>) {
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
+        "formats" => crate::storage_compatibility::run(&args[2..]),
         "t3" => crate::t3code::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
+        "workspace-view-export" => {
+            let code = if crate::workspace_git::run_commit_view_export(&args[2..]).is_ok() { 0 } else { 1 };
+            std::process::exit(code);
+        }
+        "workspace-view-materialize" => {
+            let code=if crate::workspace_git::run_commit_view_materialize(&args[2..]).is_ok(){0}else{1};
+            std::process::exit(code);
+        }
         "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
         "journal" => cmd_journal(&args[2..]),

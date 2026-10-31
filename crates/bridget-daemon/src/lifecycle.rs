@@ -433,6 +433,9 @@ pub(crate) fn prepare_spawn_parts(
 }
 
 pub(crate) fn validate_source_base(request: &bridget_transport::protocol::WorkerSourceBase) -> Result<(), String> {
+    if matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})) {
+        return Err("workspace_commit_view_not_enabled".into());
+    }
     use bridget_transport::protocol::AutoDelegateWorkload;
     // La branche demandée est la source d'un worktree. Le checkout du parent
     // reste intact et peut être sur une autre branche. Les contraintes de

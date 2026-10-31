@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 
 /// Même schéma fermé pour les deux admissions ; aucune valeur JSON dans le refus.
 fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
+    if value.get("strategy").and_then(Value::as_str)==Some("commit_view") {
+        return Err(ClientError::InvalidParams("La lecture de commit est en préparation sur ce client. Cet appel n'a pas été envoyé. Conserver toute clé ou tâche connue ; ne pas changer de mode pour forcer le passage. Faire qualifier et charger le parcours de vue et son retour compatible par le responsable Bridget. Les autres travaux autorisés suivent leur propre état.".into()));
+    }
     serde_json::from_value(value.clone()).map_err(|_| {
         ClientError::InvalidParams(
             "Corrigez la forme de workspace : un objet avec strategy égal à shared ou worktree est requis. En shared, seul strategy est accepté ; retirez base_ref, branch et tout autre champ. En worktree, seuls strategy, base_ref et branch sont acceptés ; base_ref et branch sont des chaînes si présents, jamais null. Le SHA source complet se place dans expected_base_commit pour l’admission automatique. Ce refus local concerne cet appel : il n’a pas été envoyé au serveur. Il ne prouve pas l’absence d’une demande antérieure de même request_id. Attendez la fin des appels concurrents et vérifiez tout reçu ou tâche déjà connu avant de corriger les paramètres ; un reçu existant conserve son canon. Ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état. Si le client chargé ne décrit pas ces règles, demandez sa reconnexion complète ; une simple reprise de tour peut garder l’ancien programme.".into(),

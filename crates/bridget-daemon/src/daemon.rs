@@ -18709,11 +18709,11 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 10
+                && capabilities.len() <= 11
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::WorkspaceViewV1
                     )
                 })
                 && capabilities.iter().enumerate().all(|(index, value)| !capabilities[..index].contains(value)))
@@ -18968,6 +18968,10 @@ fn handle_worker_message(
                     complete_remote_registration(&mut st, &response.command.command_id);
                 }
             }
+            if matches!(response.response, WorkerResponseOperation::CommitViewConserved {..})
+                && !st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceViewV1) {
+                return refused(WorkerRefusal::CapabilityRequired);
+            }
             if matches!(response.response, WorkerResponseOperation::WorkspaceRejected {..})
                 && !st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceFailureV1) {
                 return refused(WorkerRefusal::CapabilityRequired);
@@ -18982,6 +18986,13 @@ fn handle_worker_message(
                     && st.delegation_store.get(&response.command.task_id).ok().flatten()
                         .is_some_and(|task| task.task_id == response.command.command_id
                             && task.remote_placement.as_ref().is_some_and(|p| p.matches_worker(&response.worker))) {
+                    return None;
+                }
+                // ACK tardif de conservation : pas d'effet de Task ni preuve
+                // nouvelle. Seule une liaison connue exactement est tolérée.
+                if let WorkerResponseOperation::CommitViewConserved {prepare_digest}=&response.response
+                    && st.delegation_store.get(&response.command.task_id).ok().flatten()
+                        .is_some_and(|task|commit_view_conservation_matches(&task,&response.worker,&response.command,prepare_digest)) {
                     return None;
                 }
                 // Une sonde sans attente ou une réponse tardive ne ferme pas le canal de sa commande connue.
@@ -19122,6 +19133,27 @@ pub(crate) fn take_local_roundtrip_limit() -> Option<&'static str> {
     LOCAL_ROUNDTRIP_LIMIT.with(|cell| cell.take())
 }
 
+/// Une conservation d'espace ne découle ni d'un résultat lu ni d'une commande
+/// inconnue. Arrêts/gardes et rapport sont déjà clos, sans suite possible ; le
+/// dernier bit cleanup_done attend encore l'accusé de conservation du worker.
+fn commit_view_conservation_matches(
+    task: &crate::delegation::Task,
+    worker: &bridget_transport::protocol::WorkerIdentity,
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+    prepare_digest: &str,
+) -> bool {
+    task.terminal() && !task.continuable()
+        && task.workspace_report_mission.as_deref()==Some(task.mission.as_str())
+        && (!task.guarded || task.guard_released)
+        && task.task_id==command.task_id
+        && task.remote_placement.as_ref().is_some_and(|p|p.matches_worker(worker))
+        && task.workspace.as_ref().is_some_and(|record|
+            matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+                && record.commit_view.as_ref().is_some_and(|reference|
+                    reference.binding.worker==*worker && reference.binding.command==*command
+                        && reference.binding.prepare_digest==prepare_digest))
+}
+
 fn remote_worker_roundtrip(
     state: &Arc<Mutex<DaemonState>>,
     worker: &bridget_transport::protocol::WorkerIdentity,
@@ -19158,6 +19190,12 @@ fn remote_worker_roundtrip_with_send_deadline(
             .machines()
             .get(&worker.machine_id)
             .ok_or(WorkerRefusal::Unauthorized)?;
+        let conserving = if let WorkerRequestOperation::ConserveCommitView {prepare_digest}=&operation {
+            let known=st.delegation_store.get(&command.task_id).ok().flatten()
+                .is_some_and(|task|commit_view_conservation_matches(&task,worker,command,prepare_digest));
+            if !known {return Err(WorkerRefusal::Unauthorized);}
+            true
+        } else {false};
         if !provision.enabled
             && matches!(
                 &operation,
@@ -19172,7 +19210,7 @@ fn remote_worker_roundtrip_with_send_deadline(
         {
             return Err(WorkerRefusal::Unauthorized);
         }
-        if !provision.enabled && !remote_worker_has_command(&st, worker, Some(command)) {
+        if !provision.enabled && !conserving && !remote_worker_has_command(&st, worker, Some(command)) {
             return Err(WorkerRefusal::CommandMismatch);
         }
         if provision.worker_id != worker.worker_id
@@ -19202,6 +19240,10 @@ fn remote_worker_roundtrip_with_send_deadline(
                 .capabilities
                 .contains(&WorkerCapability::CandidateProbeV2)
         {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if matches!(&operation, WorkerRequestOperation::ConserveCommitView { .. })
+            && !session.capabilities.contains(&WorkerCapability::WorkspaceViewV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if matches!(&operation, WorkerRequestOperation::RepairWorkspace { .. })
@@ -23899,6 +23941,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_start_recovery_v1".to_string(),
                     "worker_workspace_failure_v1".to_string(),
                     "worker_provider_catalogue_v1".to_string(),
+                    "worker_workspace_view_v1".to_string(),
                     "routing_catalogue_v1".to_string(),
                 ],
             })

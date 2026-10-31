@@ -382,7 +382,9 @@ impl WorkerReadView<'_> {
             &registry,
             prepared.routing.as_ref().map(|routing| routing.workload),
         )?;
-        if matches!(
+        let is_view=matches!(prepared.request.workspace,
+            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}));
+        if is_view || matches!(
             &prepared.request.workspace,
             Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
         ) {
@@ -402,6 +404,22 @@ impl WorkerReadView<'_> {
             {
                 return Err(WorkerRefusal::CommandMismatch);
             }
+            let mut view_anchor=None;
+            if is_view {
+                if repair.is_some()
+                    || prepared.prepared.effective_posture!=SpawnPosture::Discovery {
+                    return Err(WorkerRefusal::PlacementMismatch);
+                }
+                let anchor=view_anchor_receipt_at(&self.config.state_root.join("store"),self.identity,
+                    &prepared.command,Some(&prepared.request)).map_err(refuse)?;
+                let view=anchor.commit_view.as_ref().ok_or(WorkerRefusal::CommandMismatch)?;
+                if view.closed {return Err(WorkerRefusal::InvalidEnvelope);}
+                if !view.source_stopped || view.source_marker.is_none()
+                    || view.materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+                    return Err(WorkerRefusal::UnknownExecution);
+                }
+                view_anchor=Some(anchor);
+            }
             trace.at("workspace_report");
             let original = match (receipt.record, receipt.fenced_previous) {
                 (Some(record), None) => record,
@@ -417,6 +435,33 @@ impl WorkerReadView<'_> {
                 repair.is_some() || same_workspace_anchor(&original, value)) {
                 return Err(WorkerRefusal::CommandMismatch);
             }
+            let mut view_intent=None;
+            if is_view {
+                let reference=original.commit_view.as_ref().ok_or(WorkerRefusal::CommandMismatch)?;
+                let root=self.config.state_root.join("store").join("view-manifests")
+                    .canonicalize().map_err(|_|WorkerRefusal::PlacementMismatch)?;
+                if !matches!(original.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+                    || reference.binding.worker!=*self.identity
+                    || reference.binding.command!=view_anchor.as_ref().unwrap().command
+                    || reference.binding.prepare_digest!=view_anchor.as_ref().unwrap().prepare_digest
+                    || Path::new(&reference.proof_root)!=root
+                    || Path::new(&original.toplevel)!=cwd
+                    || prepared.request.base_commit.as_deref()!=Some(original.base_commit.as_str()) {
+                    return Err(WorkerRefusal::CommandMismatch);
+                }
+                let proofs=crate::workspace_git::ViewProofs::open(&root)
+                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+                let intent=proofs.load(&reference.binding.key()
+                    .map_err(|_|WorkerRefusal::CommandMismatch)?)
+                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+                if intent.proof_digest().map_err(|_|WorkerRefusal::PlacementMismatch)?!=reference.intent_digest {
+                    return Err(WorkerRefusal::CommandMismatch);
+                }
+                view_intent=Some(intent);
+            } else if !matches!(original.strategy,crate::delegation::WorkspaceStrategy::Worktree)
+                || original.commit_view.is_some() {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
             let report = if let Some(anchor) = repair {
                 crate::workspace_git::report_repaired_workspace(&original, anchor)
             } else {
@@ -427,14 +472,25 @@ impl WorkerReadView<'_> {
             *workspace_report = Some(report.clone());
             let report = report?;
             let record = if repair.is_some() { &report } else { &original };
-            if before_release
-                && (report.head_commit.as_ref() != Some(&record.base_commit)
-                    || report.head_on_branch != Some(true))
-            {
+            if before_release && if is_view {report.dirty!=Some(false)} else {
+                report.head_commit.as_ref()!=Some(&record.base_commit)
+                    || report.head_on_branch!=Some(true)
+            } {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
             trace.at("workspace_mapping");
-            cwd = self.remap_prepared_worktree(&mut mapping, &cwd, record)?;
+            if let Some(intent)=view_intent {
+                let (root,next)=intent.execution_paths(&mapping.remote_root)
+                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+                let protected=self.protected();
+                mapping.remote_root=crate::registry::validate_unprotected_local_path(&root,&protected)
+                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+                cwd=crate::registry::validate_unprotected_local_path(&next,&protected)
+                    .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+                if !cwd.starts_with(&mapping.remote_root){return Err(WorkerRefusal::PlacementMismatch);}
+            } else {
+                cwd = self.remap_prepared_worktree(&mut mapping, &cwd, record)?;
+            }
         } else if before_release
             && let Some(base) = prepared.prepared.placement.base_commit.as_deref()
         {
