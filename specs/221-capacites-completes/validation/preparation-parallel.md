@@ -1,5 +1,5 @@
 # Préparations concurrentes du projet
-Statut : correction ciblée, activation non encore constatée.
+Statut : correction active sur les sept services ; schéma de délégation inchangé.
 
 ## Incident et limites de preuve
 Message opus201-origin-proof-busy-parallele-20261031-01, clé
@@ -67,3 +67,54 @@ Le plafond global32 du maître reste commun aux opérations d'origine.
 Les compteurs32lectures/16préparations du worker sont séparés ; leur somme
 n'est pas une garantie de48 opérations relayées. CPU et débit ne sont pas
 mesurés par ces tests. Aucun nombre de missions simultanées n'est garanti.
+
+
+## Vérifications finales et chargement
+Sept contrôles distincts PASS : quatre Rust de dispatcher/projection, deux
+Python de verrou avec de vrais processus, et le transport MCP existant étendu
+aux deux codes helper. Les passages intermédiaires recouvrent ces mêmes tests ;
+ils ne sont pas additionnés. Aucune campagne générale ni mission métier d'essai.
+
+Source exécutable238223b518d02598cfcc035dca624c98dcaf4bb3, build
+221-preparation-queue-r1. Les 291fichiers Rust et le helper Python ont été
+comparés entre source et snapshots de compilation. Cache de compilation réutilisé.
+Linux commun construit sur SYS, GLIBC2.34 :
+SHA256ae2105f99aec8675663e19fe7d82adb3cb4ae81f35093a8fa7d0f0a98941a378.
+MacARM64 : SHA256cc35d1a9cf73abd687a699c0f55ba919278f1422b6b9e7fe33ae254df537e77e.
+
+Chargement réellement observé et haché : maîtreCartae3217377, mobile3217486,
+workerCartae3217852, workerSYS1130851, workerKS1494304 ;
+workerMac9216, pont9297. Coupure maître2,81s. Processus Cartae2500061
+(birth270585460) et3149928 (birth300090634) observés conservés ;
+aucun processus métier actif observé sur SYS au passage. Aucun service métier
+modifié et aucune admission inconnue rejouée.
+
+Retour : précédente image active221-origin-parallel-r2, compatible avec les
+formats conservés dans les deux sens. Pointeurs rollback Cartae/Mac relus
+après écriture atomique native sous verrou ; activation=false, updaters repris.
+Authentification native réussie après le passage, puis lecture de la revue
+68fbe3e2 réussie/result_available sans erreur. Aucun restart supplémentaire.
+
+Le lot5 garde une seule tâche46b3a813-c8ca-45a5-b46d-252eb5c49544 ; lecture
+postérieure au passage : result_available, error=null. Le propriétaire garde
+la lecture et l'acquittement de son résultat métier. Aucun doublon créé.
+
+Les processus MCP déjà ouverts ne sont pas déclarés rechargés. La correction
+de préparation s'exécute dans les services et son refus de délégation utilise
+le transport de détail historique vérifié ; aucun nouveau schéma n'est requis.
+La limite de rechargement des clients signalée dans origin-parallel.md reste
+distincte. Les verdicts de droits ne sont ni partagés ni assouplis.
+
+## Notifications et rangement
+Résultat adressé au propriétaire par
+bridget221-preparation-parallele-resultat-20261031-01,
+deliveryfa6b2e70-ac33-41bf-8523-512a0788d6df, in_flight sans preuve de lecture.
+Les deux autres destinataires prévenus ont reçu l'avis de reprise.
+
+Copies de transfert retirées : Mac44512215octets, Cartae44499280,
+SYS3218055, KS41307095. Actif, retour, preuves, snapshots de compilation
+réutilisés et worktree de revue conservés. installedMac refuse ce staging
+non enregistré pour la copie du dépôt ; installedSYS garde les caches faute
+d'observation complète des processus. Aucune purge ou réécriture forcée.
+Revue lue/ACK, clôture demandée une fois ; son usage global n'est pas établi.
+Programme52/182 InProgress, aucune catégorie supplémentaire clôturée.

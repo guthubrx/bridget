@@ -109,6 +109,23 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session 221 — préparations parallèles : source 238223b5 intégrée et poussée.
+Sept contrôles ciblés distincts PASS, dont trois processus réels pour le verrou,
+et revue 68fbe3e2 sans défaut bloquant du verrou/capacité ; réserve MCP réfutée
+par le chemin réel et le test de transport des deux codes. Worker : 16
+préparations reçues, verrou source exclusif avec attente maximale de 30 s ;
+verrou distant non bloquant, contrôles de droits séparés. Causes et étapes
+distinctes, aucune extension des délais ou des droits. Build
+221-preparation-queue-r1 chargé sur sept services, images vérifiées ;
+coupure maître 2,81 s, processus métier observés conservés. Lien natif et statut
+revenus. Lot 5 : même tâche 46b3a813, résultat disponible sans erreur, aucun
+rejeu par ce fil. Retours précédents vérifiés et pointeurs natifs atomiques.
+133536645 octets de transferts retirés sur quatre hôtes ; caches et worktree
+de revue conservés sous gardes. MCP ouverts anciens non déclarés rechargés,
+schéma de délégation inchangé. Programme 52/182 InProgress.
+Preuves : specs/221-capacites-completes/validation/preparation-parallel.md.
+
+
 Session221 — lectures d’origine simultanées : source357b3586 intégrée/poussée,
 quatre tests ciblés distinctsPASS et revue534fce05 sans objection bloquante.
 Worker2→32 contrôles, aligné sur le maître ; préparationGit séparée1,
