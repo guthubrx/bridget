@@ -81,6 +81,10 @@ impl Drop for Fixture {
 #[test]
 fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() {
     let f = Fixture::new();
+    for index in 0..65 {
+        fs::write(f.repo.join(format!("batch-{index:03}.rs")),format!("source-{index}\n")).unwrap();
+    }
+    f.git(&["add","."]);f.git(&["commit","-qm","many source files"]);
     let base = f.git(&["rev-parse", "HEAD"]);
     fs::write(f.repo.join("sub/tracked"), b"next").unwrap();
     f.git(&["add", "."]);
@@ -121,6 +125,12 @@ fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() 
             .is_symlink()
     );
     assert!(!destination.join(".git").exists());
+    for index in 0..65 {
+        let path=destination.join(format!("batch-{index:03}.rs"));
+        assert_eq!(fs::read_to_string(&path).unwrap(),format!("source-{index}\n"));
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode()&0o777,0o400);
+    }
+    audit(&manifest,&destination).unwrap();
     let public = fs::read_to_string(destination.join(NOTICE)).unwrap();
     assert!(public.contains("large.bin") && public.contains(&base));
     assert_eq!(f.snapshot(), before);
@@ -141,6 +151,33 @@ fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() 
             .contains("view_integrity_failed")
     );
 }
+#[test]
+fn spec221_c19_sync_batch_keeps_errors_and_expiry_without_publication() {
+    use std::os::fd::{FromRawFd,IntoRawFd};
+    let f=Fixture::new();
+    let path=f.root.join("written");
+    fs::write(&path,b"conserved").unwrap();
+    let mut files=vec![fs::File::open(&path).unwrap()];
+    assert!(sync_written_files(&mut files,Instant::now()-Duration::from_millis(1))
+        .unwrap_err().contains("view_sync_timeout"));
+    assert!(files.is_empty());
+    assert_eq!(fs::read(&path).unwrap(),b"conserved");
+    // fsync sur une socket doit échouer. Tous les autres jobs sont joints
+    // avant le retour, même quand l'un d'eux refuse la barrière.
+    let (socket,mut peer)=std::os::unix::net::UnixStream::pair().unwrap();
+    let socket_file=unsafe {fs::File::from_raw_fd(socket.into_raw_fd())};
+    let mut files=vec![fs::File::open(&path).unwrap(),socket_file];
+    assert!(sync_written_files(&mut files,Instant::now()+DEADLINE).is_err());
+    assert!(files.is_empty());
+    assert_eq!(peer.read(&mut [0u8;1]).unwrap(),0);
+    assert!(!f.root.join(NOTICE).exists());
+    assert_eq!(fs::read(&path).unwrap(),b"conserved");
+    let mut files=(0..9).map(|_|fs::File::open(&path).unwrap()).collect();
+    assert!(sync_written_files(&mut files,Instant::now()+DEADLINE)
+        .unwrap_err().contains("view_sync_limit"));
+    assert_eq!(files.len(),9);
+}
+
 #[test]
 fn spec221_c19_literal_objects_ignore_replace_and_source_is_not_needed_to_audit() {
     let f = Fixture::new();
@@ -1801,4 +1838,89 @@ fn spec221_c19_native_placement_resolves_submapping_outside_git_without_changing
     assert!(seed.matches(&wrong).is_err(),"un ancêtre du sous-mapping situé dans Git n'est jamais une destination");
     assert!(!wrong.data_root.exists());
     assert_eq!(f.snapshot(),before);
+}
+
+
+// Recette privée du corpus qui a dépassé le délai sur SYS. Aucun fournisseur,
+// aucune Task, aucun import ni modification du dépôt ; conserver en cas d'échec.
+#[test]
+#[ignore = "Recette privée : binaire, source, commit et dossier neuf explicites requis."]
+fn spec221_c19_real_corpus_native_export() {
+    use super::job::{JobPoll, ViewJob};
+    let configured = |name| PathBuf::from(std::env::var_os(name).expect(name));
+    let binary = configured("BRIDGET_C19_BINARY");
+    let source = configured("BRIDGET_C19_REAL_SOURCE").canonicalize().unwrap();
+    let root = configured("BRIDGET_C19_REAL_OUTPUT");
+    let base = std::env::var("BRIDGET_C19_REAL_BASE").unwrap();
+    assert!(binary.is_absolute() && binary.is_file());
+    assert!(root.is_absolute() && !root.exists());
+    assert_eq!(fs::metadata(root.parent().unwrap()).unwrap().dev(),
+               fs::metadata(&source).unwrap().dev());
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let private = root.join("proofs");
+    let data = root.join("views");
+    for path in [&private, &data] {
+        fs::create_dir(path).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let snapshot = || {
+        [
+            vec!["rev-parse", "HEAD"],
+            vec!["status", "--porcelain=v1", "--untracked-files=all"],
+            vec!["worktree", "list", "--porcelain"],
+        ].into_iter().map(|args| {
+            let output = Command::new("git").arg("-C").arg(&source).args(args).output().unwrap();
+            assert!(output.status.success());
+            output.stdout
+        }).collect::<Vec<_>>()
+    };
+    let before = snapshot();
+    let binding = ViewBinding {
+        worker: bridget_transport::protocol::WorkerIdentity {
+            machine_id: "qualification".into(), worker_id: "private".into(), provisioning_revision: 1,
+        },
+        command: bridget_transport::protocol::WorkerCommandIdentity {
+            command_id: uuid::Uuid::new_v4().to_string(), task_id: uuid::Uuid::new_v4().to_string(),
+            instance_id: String::new(), generation: 0,
+        },
+        prepare_digest: "a".repeat(64),
+    };
+    let identity = run_git(&source, &["config", "--get", "remote.origin.url"], READ_TIMEOUT)
+        .unwrap().complete().unwrap();
+    let seed = ViewPlan::new(binding, &source, &data, &base, &source, identity.trim()).unwrap();
+    let proofs = ViewProofs::open(&private).unwrap();
+    proofs.write_plan(&seed).unwrap();
+    let started = Instant::now();
+    let mut env = view_environment();
+    env.insert("B221_VIEW_NATIVE_BINARY".into(), "1".into());
+    let mut job = ViewJob::start_plan_registered(&proofs, &seed, &binary, &env,
+        || Ok(()), |_| Ok(())).unwrap_or_else(|(cause, _)| panic!("{cause:?}"));
+    let result = loop {
+        let result = job.poll().unwrap();
+        if result != JobPoll::Running { break result; }
+        if started.elapsed() > Duration::from_secs(130) {
+            let stopped = job.stop(Duration::from_secs(2)).unwrap();
+            panic!("helper hors délai ; arrêt confirmé={stopped}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(result, JobPoll::Stopped(Ok(())));
+    let intent = proofs.load(&seed.binding.key().unwrap()).unwrap();
+    let record = proofs.workspace(&intent).unwrap();
+    assert_eq!(record.base_commit, base);
+    assert_eq!(record.dirty, Some(false));
+    assert_eq!(snapshot(), before);
+    assert!(!intent.destination().unwrap().join(".git").exists());
+    let receipt = serde_json::json!({
+        "version":1, "base":base, "binary":binary, "source":source,
+        "output":intent.destination().unwrap(), "elapsed_seconds":started.elapsed().as_secs_f64(),
+        "entries":intent.manifest.entries.len(),
+        "selected":intent.manifest.entries.iter().filter(|entry| entry.selected).count(),
+        "selected_bytes":intent.manifest.entries.iter().filter(|entry| entry.selected).map(|entry| entry.bytes).sum::<u64>(),
+        "source_unchanged":true, "group_stopped":true, "dirty":false,
+        "provider_started":false, "git_workspace_created":false
+    });
+    fs::write(root.join("receipt.json"), serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
+    println!("{receipt}");
 }

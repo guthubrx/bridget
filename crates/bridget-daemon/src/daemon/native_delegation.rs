@@ -35678,6 +35678,11 @@ mod commit_view_reader221_tests {
             assert!(view["error_message"].as_str().unwrap().contains("autres travaux"));
             assert!(view["error_recovery"].as_str().unwrap().contains("clôture native"));
             assert!(view["error_human_action"].as_str().unwrap().contains("utilisateur"));
+            if cause==V::MetadataCapacity {
+                let message=view["error_message"].as_str().unwrap();
+                assert!(message.contains("réservations de résultats") && message.contains("mission active"));
+                assert!(message.contains("Laisser ces travaux finir"));
+            }
             assert_eq!(serde_json::to_value(&task).unwrap(),before);
         }
         drop(state);super::tests::cleanup(&config);

@@ -375,3 +375,21 @@ protocole, nonce ou fichier d'identité supplémentaire.
 
 ## C02 — contrôle du collecteur complet
 Recherche start/collect/config_stamp et tests220 : le protocole de sonde et les gardes étaient couverts, pas le collecteur qui observe un signal puis renouvelle sa génération. Réutiliser le faux programme, CatalogueService::start, ServiceGuard et config_stamp. Deux tests seulement, aucun helper ni code produit nouveau. Le compte simulé est inscrit dans une fixture locale ; aucune variable globale modifiée ni connexion réelle utilisée. Le remplacement atomique du fichier de login est vérifié avec un fichier factice illisible, à partir de ses seules métadonnées. Le test du collecteur emploie le signal de programme et une reconnexion ; il ne prétend pas être un login humain officiel.
+
+
+### C19 — synchronisation durable bornée après refus réel
+La qualification native bfb2db6c a exporté2658/4671fichiers,38,4Mo, puis a
+atteint son délai. Reçu : source_stopped=true, source_failure=timed_out,
+closed=true, publication absente. Conserver cette matière partielle.
+REUTILISER export, Objects, sync_to_device et le helper géré avec son groupe.
+Aucun changement de sélection, de manifeste, de délai, de privilège ou de quota.
+Recherche sync/batch/thread::scope : aucun synchroniseur de fichiers groupés
+existant. CREER sync_written_files, limité à8descripteurs et8threads joints,
+pour amortir les barrières sur le volume SYS sans supprimer un seul fsync.
+Contrainte d'architecture : travail borné dans le processus déjà possédé ;
+pas de pool global, de tâche détachée, de sync du volume ou de dépendance.
+Les dossiers restent synchronisés après leurs fichiers, puis notice/barrière
+finale inchangées. Le test nominal couvre65sources et l'audit intégral ; le
+négatif couvre délai expiré, échec de barrière, fermeture et borne de8.
+Mesure synthétique sur le même volume :100fichiers4Kio,2,457s séquentiels contre
+0,650s avec8barrières simultanées. Pas encore une preuve de la recette du projet.

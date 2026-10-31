@@ -777,6 +777,36 @@ fn sync_to_device(file: &fs::File, deadline: Instant) -> Result<(), String> {
     }
 }
 
+/// Huit fichiers au plus, tous écrits et fermés avant publication.
+/// Les barrières restent individuelles, sans sync du volume. Les threads sont
+/// joints dans le helper géré ; son groupe garde le délai et la preuve d'arrêt.
+fn sync_written_files(files: &mut Vec<fs::File>, deadline: Instant) -> Result<(), String> {
+    if files.len() > 8 {
+        return Err(refusal("view_sync_limit"));
+    }
+    std::thread::scope(|scope| {
+        let mut jobs = Vec::with_capacity(files.len());
+        for file in files.drain(..) {
+            jobs.push(
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || sync_to_device(&file, deadline))
+                    .map_err(|_| refusal("view_sync_unavailable"))?,
+            );
+        }
+        let mut failure = None;
+        for job in jobs {
+            let result = job
+                .join()
+                .map_err(|_| refusal("view_sync_unavailable"))
+                .and_then(|value| value);
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    })
+}
+
 /// destination exclusivement neuve. Un échec conserve sa matière partielle pour
 /// le reçu natif ; il ne la publie pas et ne supprime rien pour tenter à nouveau.
 pub(super) fn export(source: &Path, manifest: &Manifest, destination: &Path) -> Result<(), String> {
@@ -864,6 +894,7 @@ pub(super) fn export(source: &Path, manifest: &Manifest, destination: &Path) -> 
             &mut created,
         )?;
     }
+    let mut pending_sync = Vec::with_capacity(8);
     for entry in manifest
         .entries
         .iter()
@@ -883,8 +914,12 @@ pub(super) fn export(source: &Path, manifest: &Manifest, destination: &Path) -> 
         {
             return Err(refusal("view_device_changed"));
         }
-        sync_to_device(&file, objects.deadline)?;
+        pending_sync.push(file);
+        if pending_sync.len() == 8 {
+            sync_written_files(&mut pending_sync, objects.deadline)?;
+        }
     }
+    sync_written_files(&mut pending_sync, objects.deadline)?;
     // Aucun lien ne participe à la création d'un fichier ou dossier.
     for (path, target) in &links {
         let (parent, name) = root.parent(&path, true, &mut created)?;
