@@ -38,7 +38,7 @@ fn definition() -> bridget_transport::protocol::ResolvedAgentDefinition {
 /// Tâche native : racine portée par le propriétaire, enfant UUID stable pour
 /// que journal_directory accepte de résoudre sessions/<child>.
 fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::Task {
-    crate::delegation::Task {
+    crate::delegation::Task { service_tier: None,
         substitution: None,
         remote_placement: None,
         remote_prepared: false,

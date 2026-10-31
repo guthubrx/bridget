@@ -375,3 +375,30 @@ protocole, nonce ou fichier d'identité supplémentaire.
 
 ## C02 — contrôle du collecteur complet
 Recherche start/collect/config_stamp et tests220 : le protocole de sonde et les gardes étaient couverts, pas le collecteur qui observe un signal puis renouvelle sa génération. Réutiliser le faux programme, CatalogueService::start, ServiceGuard et config_stamp. Deux tests seulement, aucun helper ni code produit nouveau. Le compte simulé est inscrit dans une fixture locale ; aucune variable globale modifiée ni connexion réelle utilisée. Le remplacement atomique du fichier de login est vérifié avec un fichier factice illisible, à partir de ses seules métadonnées. Le test du collecteur emploie le signal de programme et une reconnexion ; il ne prétend pas être un login humain officiel.
+
+
+### C05 — choix par modèle, préparation non activée
+
+REUTILISER CatalogueModel/model_page, ModelCapabilities et RoutingModel ;
+select_routing_candidates borne le choix explicite sans adopter de défaut.
+REUTILISER AutoV2, Task, WorkerPrepare, CandidateProbeV2, les snapshots168 et
+le cycle de lecture/projection220. Le catalogue fermé V1 reste inchangé.
+REUTILISER native_launch_registry, recheck_remote_dispatch, readiness_at,
+recheck_at_with_view_report et remote_workspace_repair : aucun second chemin
+de lancement, store, compte, moteur de règles ou dépendance.
+
+CREER pin_delegation_service_tier après recherche pin_delegation_model et
+affectations service_tier : le pin existant ne maîtrise que modèle/effort.
+Cette règle partagée porte l'injection unique et le refus d'un lanceur ambigu.
+Trois parcours réels : sonde/Prepare, relecture Release et réparation.
+CREER model_option_account/recheck_task_model_option : gardes de continuité
+du nonce local et du reçu figé, sans appel fournisseur ni lecture de secrets.
+Elles réutilisent le projecteur existant, limité à une seule connexion pour
+borner le coût. Les horloges/états ne sont pas recopiés dans une nouvelle autorité.
+Le plancher de lecture réutilise storage_compatibility et l'updater existants.
+Les nouveaux champs absents sont omis : aucune transformation de canon ancien.
+
+Tests préparatoires Linux R8 :6daemon/4transport PASS. R9 ajoute le passage
+worker réel de relecture Release, résultat à consigner après exécution.
+Aucune case C05 cochée sur cette préparation ; aucune activation, qualification
+de modèle ou recette Claude revendiquée.

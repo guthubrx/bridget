@@ -63,7 +63,7 @@ pub(crate) fn task(
     state: &str,
     created_at: i64,
 ) -> Task {
-    Task {
+    Task { service_tier: None,
         substitution: None,
         remote_placement: None,
         remote_prepared: false,

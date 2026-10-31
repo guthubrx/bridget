@@ -17,6 +17,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) const MODEL_OPTIONS_LAUNCH_ENABLED: bool = false;
+
 const REFRESH: Duration = Duration::from_secs(120);
 const RETRY: Duration = Duration::from_secs(30);
 const MIN_REFRESH: Duration = Duration::from_secs(5);

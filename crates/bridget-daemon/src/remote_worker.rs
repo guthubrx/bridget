@@ -4941,6 +4941,8 @@ impl WorkerRuntime {
                 &request.model,
                 request.effort.as_deref(),
             )
+            .and_then(|registry|registry.pin_delegation_service_tier(
+                &request.agent_type,&request.model,request.service_tier.as_deref()))
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         crate::lifecycle::launch_preflight(&pinned, &request.agent_type, &self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
@@ -5007,7 +5009,7 @@ impl WorkerRuntime {
         candidate: &CandidateProbeCandidate,
         mapping_revision: u64,
     ) -> WorkerPrepare {
-        WorkerPrepare {
+        WorkerPrepare { service_tier: None,
             machine_id: self.identity.machine_id.clone(),
             project_id: candidate.project_id.clone(),
             provisioning_revision: self.identity.provisioning_revision,
@@ -5139,7 +5141,7 @@ impl WorkerRuntime {
         registry: &AgentRegistry,
     ) -> CandidateProbeVerdict {
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
-        let verdict = self.probe_one_candidate_for(probe, candidate, registry, None, None, &mut operation, None);
+        let verdict = self.probe_one_candidate_for(probe, candidate, registry, None, None, None, &mut operation, None);
         if operation.finish().is_err() {
             return CandidateProbeVerdict::Ineligible { candidate_id: candidate.candidate_id.clone(), reason: CandidateProbeRefusal::PermissionsChanged };
         }
@@ -5151,6 +5153,7 @@ impl WorkerRuntime {
         candidate: &CandidateProbeCandidate,
         registry: &AgentRegistry,
         workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
+        service_tier: Option<&str>,
         git_facts: Option<&mut ProbeGitFacts>,
         operation: &mut crate::native_permissions::PermissionReadOperation,
         diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
@@ -5165,7 +5168,8 @@ impl WorkerRuntime {
                     };
                 }
             };
-        let request = self.candidate_prepare(probe, candidate, mapping_revision);
+        let mut request = self.candidate_prepare(probe, candidate, mapping_revision);
+        request.service_tier=service_tier.map(str::to_owned);
         if request.validate().is_err() {
             return CandidateProbeVerdict::Ineligible {
                 candidate_id: candidate.candidate_id.clone(),
@@ -5284,7 +5288,7 @@ impl WorkerRuntime {
             .candidates
             .iter()
             .map(|candidate| match &registry {
-                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, &mut operation, None),
+                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, None, &mut operation, None),
                 Err(_) => CandidateProbeVerdict::Ineligible {
                     candidate_id: candidate.candidate_id.clone(),
                     reason: CandidateProbeRefusal::CapabilityUnavailable,
@@ -5368,6 +5372,7 @@ impl WorkerRuntime {
                         ))
                         .is_some_and(|entry| {
                             entry.enabled
+                                && candidate.service_tier.as_ref().is_none_or(|tier|entry.service_tiers.contains(tier))
                                 && candidate
                                     .effort
                                     .as_ref()
@@ -5412,6 +5417,7 @@ impl WorkerRuntime {
                     &legacy_probe.candidates[0],
                     &registry,
                     Some(candidate.workload),
+                    candidate.service_tier.as_deref(),
                     Some(&mut git_facts), &mut operation,
                     Some((&diagnostics, candidate.candidate_id.as_str())),
                 ) {
@@ -7092,7 +7098,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
-    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,workspace_view:bool,workspace_view_create:bool,
+    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,workspace_view:bool,workspace_view_create:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -7107,6 +7113,7 @@ impl MasterWorkerFeatures {
             WorkerCapability::StartRecoveryV1=>self.start_recovery,
             WorkerCapability::WorkspaceFailureV1=>self.workspace_failure,
             WorkerCapability::ProviderCatalogueV1=>self.provider_catalogue,
+            WorkerCapability::ModelOptionsV1=>self.model_options,
             WorkerCapability::WorkspaceViewV1=>self.workspace_view,
             WorkerCapability::WorkspaceViewCreateV1=>self.workspace_view_create,
         }
@@ -7115,12 +7122,15 @@ impl MasterWorkerFeatures {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]
             .into_iter().filter(|v|self.supports(*v)
+                && (*v!=WorkerCapability::ModelOptionsV1 || self.provider_catalogue)
                 && (*v!=WorkerCapability::WorkspaceViewCreateV1 || crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=12
+        accepted.len()<=13
+            && (!accepted.contains(&WorkerCapability::ModelOptionsV1)
+                || accepted.contains(&WorkerCapability::ProviderCatalogueV1))
             && (!accepted.contains(&WorkerCapability::WorkspaceViewCreateV1)
                 || accepted.contains(&WorkerCapability::WorkspaceViewV1))
             && accepted.iter().enumerate().all(|(index,capability)|
@@ -7148,6 +7158,7 @@ fn probe_worker_capability(
                 start_recovery:has("worker_start_recovery_v1"),
                 workspace_failure:has("worker_workspace_failure_v1"),
                 provider_catalogue:has("worker_provider_catalogue_v1"),
+                model_options:has("worker_model_options_v1"),
                 workspace_view:has("worker_workspace_view_v1"),
                 workspace_view_create:has("worker_workspace_view_create_v1"),
             })
@@ -7491,6 +7502,9 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
             if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {
                 for (refresh_id,sequence,catalogue) in catalogues.snapshots() {
                     if catalogue_sent.get(&catalogue.connection_id)==Some(&(refresh_id.clone(),sequence)) {continue;}
+                    let catalogue=if negotiated.contains(&WorkerCapability::ModelOptionsV1) {
+                        catalogue
+                    } else { catalogue.legacy_projection() };
                     let connection=catalogue.connection_id.clone();
                     let update=bridget_transport::provider_catalogue::WorkerCatalogueUpdate {
                         version:1,worker:runtime.identity.clone(),connection_epoch:epoch.clone(),refresh_id:refresh_id.clone(),sequence,catalogue};
@@ -7861,7 +7875,7 @@ while not stop.exists(): time.sleep(.01)
             cwd:"/origin".into(),runtime_mode:"full-access".into(),interaction_mode:"default".into(),
             provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never","sandbox_policy":{"type":"readOnly","networkAccess":false}}),
         };
-        let request = WorkerPrepare {
+        let request = WorkerPrepare { service_tier: None,
             machine_id:"cartae".into(),project_id:"project".into(),provisioning_revision:1,mapping_revision:1,
             origin_host:"origin".into(),origin_cwd:"/origin".into(),source_root:"/origin".into(),remote_root:"/remote".into(),
             source_root_identity:"git:held".into(),relative_cwd:".".into(),base_commit:None,agent_type:"codex".into(),
@@ -8169,7 +8183,7 @@ while not stop.exists(): time.sleep(.01)
             version: WORKER_CANDIDATE_PROBE_V2_VERSION, correlation_id: "probe-v2".into(),
             connection_epoch: "epoch".into(), worker: worker(), admission_id: "admission".into(),
             policy_revision: 1, parent,
-            candidates: vec![CandidateProbeV2Candidate {
+            candidates: vec![CandidateProbeV2Candidate { service_tier: None,
                 candidate_id: "c001".into(), project_id: candidate.project_id, origin_host: candidate.origin_host,
                 origin_cwd: candidate.origin_cwd, source_root: candidate.source_root, remote_root: candidate.remote_root,
                 source_root_identity: candidate.source_root_identity, relative_cwd: candidate.relative_cwd,
@@ -8503,7 +8517,7 @@ while not stop.exists(): time.sleep(.01)
         drop(reopened);
         let mut runtime=runtime_fixture(&fixture);
         let before=runtime.store.inventory().unwrap();
-        let request=WorkerPrepare {
+        let request=WorkerPrepare { service_tier: None,
             machine_id:"cartae".into(),project_id:"c19".into(),provisioning_revision:1,mapping_revision:1,
             origin_host:"origin".into(),origin_cwd:"/origin/project".into(),source_root:"/origin/project".into(),
             remote_root:"/unavailable/project".into(),source_root_identity:"fixture:c19".into(),relative_cwd:".".into(),
@@ -8556,7 +8570,7 @@ while not stop.exists(): time.sleep(.01)
         create_private_dir(&data).unwrap();
         let data = data.canonicalize().unwrap();
         let mut command = command(); command.instance_id.clear(); command.generation=0;
-        let request=WorkerPrepare {
+        let request=WorkerPrepare { service_tier: None,
             machine_id:"cartae".into(),project_id:"c19".into(),provisioning_revision:1,mapping_revision:1,
             origin_host:"origin".into(),origin_cwd:"/origin/project".into(),source_root:"/origin/project".into(),
             remote_root:source.to_string_lossy().into(),source_root_identity:"fixture:c19".into(),relative_cwd:".".into(),
@@ -8940,6 +8954,52 @@ while not stop.exists(): time.sleep(.01)
                     "expected_git_identity":"fixture:c19","mapping_revision":1}}}}
         })).unwrap();
         (runtime,prep,request,intent)
+    }
+
+    #[test]
+    fn spec221_c05_worker_keeps_the_choice_through_readiness_and_release_recheck() {
+        let fixture=Fixture::new();
+        let (runtime,command,mut request,_intent)=c19_preparation_fixture(&fixture);
+        request.workspace=None;
+        request.service_tier=Some("priority".into());
+        let parent=request.parent.clone();
+        let mut value:serde_json::Value=serde_json::from_slice(&fs::read(&runtime.config.registry_path).unwrap()).unwrap();
+        value["agents"]["codex"]["capabilities"]["models"]["fixture"]["service_tiers"]=serde_json::json!(["priority","default"]);
+        write_json(&runtime.config.registry_path,&value).unwrap();
+        let registry=runtime.registry().unwrap();
+        let mapping=registry.project_mapping("cartae","c19").unwrap();
+        let cwd=Path::new(&request.remote_root).canonicalize().unwrap();
+        let mut operation=crate::native_permissions::PermissionReadOperation::default();
+        let readiness=runtime.readiness_at(&registry,&request,mapping,&cwd,&mut operation,None).unwrap();
+        operation.finish().unwrap();
+        assert!(readiness.definition.args.iter().any(|arg|arg=="service_tier=\"priority\""));
+        assert_eq!(request.parent,parent);
+        let placement=RemotePlacement {
+            machine_id:request.machine_id.clone(),worker_id:runtime.identity.worker_id.clone(),
+            provisioning_revision:request.provisioning_revision,project_id:request.project_id.clone(),
+            mapping_revision:request.mapping_revision,origin_host:request.origin_host.clone(),
+            origin_cwd:request.origin_cwd.clone(),source_root_identity:request.source_root_identity.clone(),
+            relative_cwd:request.relative_cwd.clone(),execution_cwd:cwd.to_string_lossy().into_owned(),
+            base_commit:request.base_commit.clone(),definition_digest:readiness.definition.digest.clone(),
+            permission_digest:json_digest(&readiness.child_policy).unwrap(),
+        };
+        let prepared=PreparedRuntime {
+            command,request:request.clone(),routing:None,expires:Instant::now()+Duration::from_secs(30),
+            prepared:WorkerPrepared {placement,workspace:None,token:"options-test".into(),
+                definition:readiness.definition.clone(),child_policy:readiness.child_policy,
+                effective_posture:readiness.effective_posture,prepared_at:worker_now()},
+        };
+        assert_eq!(runtime.recheck_at(&prepared,true).unwrap()
+            .resolved_definition("codex").unwrap(),readiness.definition);
+        // A future restart reads the same choice from Prepare; no new selection.
+        let persisted:WorkerPrepare=serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert_eq!(persisted.service_tier.as_deref(),Some("priority"));
+        assert!(runtime.store.commands().unwrap().is_empty());
+        value["agents"]["codex"]["capabilities"]["models"]["fixture"]["service_tiers"]=serde_json::json!(["default"]);
+        write_json(&runtime.config.registry_path,&value).unwrap();
+        assert_eq!(runtime.recheck_at(&prepared,true).unwrap_err(),WorkerRefusal::DefinitionChanged);
+        assert_eq!(request.parent,parent);
+        assert!(runtime.store.commands().unwrap().is_empty());
     }
 
     fn c19_plan(intent:&crate::workspace_git::ViewIntent)->crate::workspace_git::ViewPlan {
@@ -12225,7 +12285,7 @@ while not stop.exists(): time.sleep(.01)
             identity.task_id = uuid::Uuid::new_v4().to_string();
             identity.instance_id.clear();
             identity.generation = 0;
-            let request = WorkerPrepare {
+            let request = WorkerPrepare { service_tier: None,
                 machine_id:"cartae".into(),project_id:"linked172".into(),provisioning_revision:1,mapping_revision:1,
                 origin_host:"origin172".into(),origin_cwd:"/origin172/.worktrees/linked172".into(),
                 source_root:"/origin172".into(),remote_root:project.to_string_lossy().into_owned(),
@@ -12321,7 +12381,7 @@ while not stop.exists(): time.sleep(.01)
         runtime.source.insert("PATH".into(),"/usr/bin:/bin".into());
         let mut identity=command();identity.task_id=uuid::Uuid::new_v4().to_string();
         let mut prepare_identity=identity.clone();prepare_identity.instance_id.clear();prepare_identity.generation=0;
-        let request=WorkerPrepare {
+        let request=WorkerPrepare { service_tier: None,
             machine_id:"cartae".into(),project_id:"placement221".into(),provisioning_revision:1,mapping_revision:1,
             origin_host:"origin221".into(),origin_cwd:"/origin221".into(),source_root:"/origin221".into(),
             remote_root:project.to_string_lossy().into_owned(),source_root_identity:"fixture:placement221".into(),
@@ -12519,7 +12579,7 @@ while not stop.exists(): time.sleep(.01)
         identity.task_id = uuid::Uuid::new_v4().to_string();
         identity.instance_id.clear();
         identity.generation = 0;
-        let mut request = WorkerPrepare {
+        let mut request = WorkerPrepare { service_tier: None,
             machine_id: "cartae".into(),
             project_id: "project162".into(),
             provisioning_revision: 1,
@@ -13241,7 +13301,7 @@ while not stop.exists(): time.sleep(.01)
         runtime.source.insert("PATH".into(),"/usr/bin:/bin".into());
         let mut identity=command();identity.task_id=uuid::Uuid::new_v4().to_string();
         let mut prepare_identity=identity.clone();prepare_identity.instance_id.clear();prepare_identity.generation=0;
-        let prepare=WorkerPrepare {
+        let prepare=WorkerPrepare { service_tier: None,
             machine_id:"cartae".into(),project_id:"repair185".into(),provisioning_revision:1,mapping_revision:1,
             origin_host:"origin185".into(),origin_cwd:"/origin185".into(),source_root:"/origin185".into(),
             remote_root:project.to_string_lossy().into_owned(),source_root_identity:"fixture:repair185".into(),
@@ -13516,7 +13576,7 @@ while not stop.exists(): time.sleep(.01)
             runtime_mode: "full-access".into(), interaction_mode: "default".into(),
             provider_policy: serde_json::json!({"kind":"codex","approval_policy":"never"}),
         };
-        let a = WorkerPrepare {
+        let a = WorkerPrepare { service_tier: None,
             machine_id: "cartae".into(), project_id: "project".into(), provisioning_revision: 1,
             mapping_revision: 1, origin_host: "origin".into(), origin_cwd: "/origin".into(),
             source_root: "/origin".into(), remote_root: "/remote".into(),

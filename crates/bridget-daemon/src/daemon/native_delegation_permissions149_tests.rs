@@ -1080,7 +1080,7 @@ fn native149_un_fait_d_autre_demande_ne_donne_aucun_droit() {
 fn tache_enregistree(
     definition: bridget_transport::protocol::ResolvedAgentDefinition,
 ) -> crate::delegation::Task {
-    crate::delegation::Task {
+    crate::delegation::Task { service_tier: None,
         remote_placement: None,
         remote_prepared: false,
         commit_view_prepare:None,

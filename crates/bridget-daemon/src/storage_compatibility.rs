@@ -16,7 +16,10 @@ const COMMIT_VIEW_ORIGIN_ROOT:&str="workspace.commit_view.origin_root.v2";
 // Le reçu garde son schéma, mais le lecteur doit aussi savoir re-projeter
 // un parent en checkout lié vers la racine de A lors d'une lecture omise.
 // Le lecteur A accepte le JSON V1 mais ne sait pas effectuer cette relecture.
-const FORMATS: &[&str] = &[WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT];
+// Le choix figure dans AutoV2, Task et Prepare et doit survivre aux reprises.
+/// Accepter le JSON sans appliquer ce choix n'est pas un lecteur compatible.
+const MODEL_OPTIONS:&str="delegation.model_options.v1";
+const FORMATS: &[&str] = &[WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -153,6 +156,15 @@ mod tests {
     }
 
     #[test]
+    fn spec221_c05_storage_floor_refuses_a_reader_that_would_ignore_the_choice() {
+        let mut old=fixture();
+        old["reads"]=serde_json::json!([WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT]);
+        old["writes"]=old["reads"].clone();
+        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+    }
+
+    #[test]
     fn spec221_storage_reader_report_is_bound_to_nonce_image_and_exact_shape() {
         let original = fixture();
         let nonce = "a".repeat(32);
@@ -183,7 +195,7 @@ mod tests {
         // Une déclaration additive ne doit pas casser un ancien validateur
         // si elle conserve les formats qu'il exige.
         let mut future = original.clone();
-        future["reads"] = serde_json::json!([WORKTREE, COMMIT_VIEW, COMMIT_VIEW_ORIGIN_ROOT, "future.format"]);
+        future["reads"].as_array_mut().unwrap().push(serde_json::json!("future.format"));
         assert!(validate(
             &serde_json::to_vec(&future).unwrap(),
             &nonce,
@@ -211,6 +223,6 @@ mod tests {
         );
         let value = execute(&["policy".into(), "--json".into()]).unwrap();
         assert_eq!(value["inventory_scanned"], false);
-        assert_eq!(value["required_reads"], serde_json::json!([WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT]));
+        assert_eq!(value["required_reads"], serde_json::json!([WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS]));
     }
 }

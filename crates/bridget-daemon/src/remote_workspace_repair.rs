@@ -355,7 +355,10 @@ impl WorkerRuntime {
             };
             // Reconstituer l'ancienne définition admise avant de vérifier la
             // nouvelle projection. Ni modèle ni effort ne viennent du caller.
-            let registry = self.registry()?;
+            let registry = self.registry()?.pin_delegation_service_tier(
+                &retained.request.agent_type,&retained.request.model,
+                retained.request.service_tier.as_deref())
+                .map_err(|_|WorkerRefusal::DefinitionChanged)?;
             let original_scoped = registry
                 .for_inherited_delegation(
                     &retained.request.agent_type,
@@ -448,7 +451,9 @@ impl WorkerRuntime {
             Ok(value) => value,
             Err(code) => return Ok(refused(&code)),
         };
-        let registry = self.registry()?;
+        let registry = self.registry()?.pin_delegation_service_tier(
+            &prepare.agent_type,&prepare.model,prepare.service_tier.as_deref())
+            .map_err(|_|WorkerRefusal::DefinitionChanged)?;
         if let Some(routing) = &receipt.routing {
             self.check_routing_connection(&registry, &prepare, routing)?;
         }
