@@ -1054,3 +1054,13 @@ Publish preferences and mappings through a controlled registry update, checking 
 
 
 A missing or stale observation, or a peer without the negotiated capability, does not prove that an earlier probe stopped. Before changing this server’s version, have the Bridget owner check its private markers and probe processes. Do not erase a marker or create a mission to diagnose it. This check concerns this observation; other authorized work follows its own state.
+
+### Catalogue dates and differences (221)
+
+Each connection retains its server context and opaque account nonce. Model entries do not repeat these identifiers. `last_observed_at` dates the program read on the server; `received_at` dates its receipt by the coordinator. `source_age_secs` and `received_age_secs` distinguish both ages. Receipt age uses a monotonic clock. `expires_at` is a local estimate of the remaining budget, never a provider promise. An old source, expired receipt or excessive future timestamp removes models from the current list and provides a closed `freshness_cause`.
+
+For each model, `policy_effort_status` distinguishes `outside_policy`, `not_configured`, `not_announced` and `announced`. `declared_efforts_not_announced` and `declared_default_effort_announced` expose profile differences. Not announced does not prove an account restriction. No model, effort, permission or admitted task is changed.
+
+`account_change_detection` names the signals actually used by Codex: authentication, program and configuration metadata, definition digest and worker reconnection. Without a file signal, only periodic or explicit checks can observe a change. The 120-second target is not a guarantee. Discovery for other providers remains `unsupported`.
+
+The 32-connection limit per worker includes disabled connections. A larger inventory reports `connection_limit`; ask the responsible operator to qualify it. An explicit request then sends no check. Removing a connection, an unreadable registry or a disabled policy does not release custody of a probe whose stop is unconfirmed. Its retained diagnostic returns with the connection; an unavailable global cache proves no stop. Before any version switch, the operator must check private markers. Other work follows its own state.

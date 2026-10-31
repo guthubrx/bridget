@@ -104,3 +104,10 @@ Relecture structurelle finale : 179 IDs uniques, 50 FR, 32 cases cochées ; guid
 
 ## Après chargement T180
 33/180 tâches vérifiées. Neuf tests220 revérifiés, source342754e6, revue indépendante APPROVE et audit source13/13. Nouveau conseil lu par le chemin natif après chargement des images ; C19 et T177 restent ouverts. Le contrôle de fin a corrigé le pointeur de retour privé Cartae/Mac181 versCE08, via le writer natif sous verrou, sans nouveau binaire ni seconde coupure du maître. Converge T180 CONVERGED, zéro tâche nouvelle ; aucune catégorie supprimée. Le programme global reste In Progress.
+
+
+## Analyze — complément L2a dates/efforts
+Analyse manuelle spec/plan/tasks/code/tests exécutée sur le complément, puis relecture. Le script projet de prérequis reste absent. Aucun CRITICAL observé dans ce périmètre. Réemploi de project/ingest et du service 220, sans store, autorité ou sonde supplémentaire. L'identité serveur/connexion/compte existe sur l'objet parent des modèles : pas de répétition coûteuse par ligne. Les 128 candidats déclarés sont une borne globale de politique, distincte des 256 modèles annoncés par connexion. Le budget de lecture fournisseur de 1 Mio appartient à une instance Rpc/MetadataSocket d'une sonde, pas au cycle entier du worker. La disparition d'un arrêt non confirmé lors d'une modification du registre était un écart réel ; conservation corrigée côté maître et worker. Le conseil definition_changed nomme la divergence et la qualification requise. Les voies d'admission et les tâches sont inchangées.
+T181 ajoutée pour livrer ce complément sans attendre C19. Les 50 catégories, C19, T177 et T055 restent ouvertes ; programme In Progress. Aucun verdict de disponibilité avant activation, aucune parité globale déduite de ces tests.
+
+Convergence source T181 après R3 : aucune observation ne clôt une garde, seule la preuve de groupe ou de marqueur ; cache32ycompris anciennes contraintes ; refus global ne confirme pas arrêt.38testsdistinctsPASS,3privésignorés, audit sourceV15final12/12PASS et validationtrue. Aucune tâche globale close sur ce seul résultat. T181 reste ouverte pour la livraison.

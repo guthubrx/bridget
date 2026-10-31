@@ -205,3 +205,35 @@ cycle de vie de préparation, sans nouveau magasin de tâches ou service.
 
 ## T180 — absence d’observation et changement de version
 Un cache vide, une donnée périmée ou une capacité non négociée ne prouvent pas l’arrêt d’un processus de sonde antérieur. Le prochain conseil rend explicite le contrôle des marqueurs privés et des processus de cette sonde par le responsable avant tout changement de version. Aucun effacement de marqueur, signal, refresh, retour ou mission n’est déclenché par la projection. Le statut, les contraintes, le TTL et les modèles restent identiques. Le contrôle est limité à cette observation ; les autres travaux autorisés suivent leur propre état. Couvrir la vraie projection périmée et non négociée ainsi que le Hello qui vide le cache, puis la republication de la contrainte. Un état inconnu ne devient jamais StopUnconfirmed sans preuve.
+
+### C02–C05 — faits de catalogue lisibles et datés
+Le cache maître conserve la date UTC réelle de réception avec son Instant
+monotone existant. La projection calcule une fois son heure murale et son
+Instant pour toute la vue ; l'expiration conserve ses deux contrôles existants.
+Publier séparément date/âge de la source et date/âge de réception. expires_at
+est une estimation locale, seulement pour reported_models, à partir du budget
+restant le plus court ; le statut reste l'autorité de fraîcheur, pas le cache
+réseau fournisseur qui demeure non attesté.
+
+Chaque liste de modèles reste contenue dans sa connexion, qui porte déjà
+machine/moteur/nonce opaque/date. Ne pas détacher les lignes de ce contexte
+dans un client. Répéter ces champs par ligne n'ajoute aucune autorité et peut
+faire dépasser la borne de réponse ; le test C03 doit prouver le lien existant
+avec le même nom de modèle sur deux serveurs.
+Aucun nouveau fait de compte, secret ou époque d'exécution exposé. Les efforts déclarés sont comparés aux efforts annoncés :
+announced/not_announced/not_configured/outside_policy, jamais accès autorisé.
+La liste annoncée et les candidats admis ne sont pas réécrits.
+
+Décrire les signaux réellement observés par220 : métadonnées auth/config/
+programme, révision de définition et reconnexion worker ; sans signal de fichier
+du login externe, seule la lecture périodique peut constater le changement.
+Objectif120s, pas un délai garanti pour toutes les connexions séquentielles.
+Aucun nouveau processus, signal, compte, sonde ou format de trame.
+
+Des profils peuvent partager le même compte/home intentionnellement. Ne pas
+ajouter un refus d'unicité de home : plusieurs connexions ne promettent pas
+plusieurs comptes. L'ajout d'un compte isolé reste explicite et officiel ; aucun
+identifiant principal copié/écrasé. C06 et découverte Claude restent à qualifier.
+
+
+Complément de garde : aucune nouvelle observation, même Observed, ne libère StopUnconfirmed. Le worker retire cette contrainte uniquement après récolte confirmée du groupe détenu ou récupération complète des marqueurs. Les erreurs ultérieures de configuration ne remplacent pas le premier fait d'arrêt incertain. Le cache worker reste borné à32 clés, anciennes gardes comprises ; remplacer une clé existante ne consomme pas de créneau. Une politique indisponible ou désactivée ferme le catalogue avec un conseil de contrôle des marqueurs ; l'absence de projection ne constate aucun arrêt.

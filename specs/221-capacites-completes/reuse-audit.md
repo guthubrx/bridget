@@ -146,3 +146,19 @@ RÉUTILISER les mappings à clés distinctes, AgentRegistryFile racine tolérant
 
 
 Gate C16 complément corrélation : recherche observe_routing_candidates et auto_admission_id avant écriture. La variante avec clone changeait l'identifiant technique de sonde malgré le reçu inchangé (RED194atteint). Réutiliser la même implémentation d'observation avec une clé de projet séparée du canon. Une façade interne conserve les appelants initiaux ; le coeur est unique, sans store/type/protocole neuf. Cette séparation est nécessaire pour maintenir la corrélation du canon et épingler le mapping déjà observé ; pas un helper décoratif.
+
+### C02–C05 — complément de présentation des faits220
+Revue2ceacc8c lue. Réutiliser CachedCatalogue, project/ingest220 et les trois
+ports de lecture actuels. received_at est le fait de réception manquant ; le
+reste est dérivé au moment de lire. Aucun modèle ni compte n'est ajouté ou
+réactivé. Un index de modèles déclarés par connexion remplace le parcours
+répété ; complexité O(d log d + m log d), d/m bornés256. Aucun magasin nouveau.
+C06 : refuser les homes partagées casserait les profils normal/Terra existants
+sans besoin prouvé ; décision retenue : ne pas introduire ce refus.
+La découverte Claude n'est pas déclarée couverte par l'observation Codex.
+
+Relecture C03 : l'hypothèse d'un manque vient de la lecture d'une ligne détachée
+de son objet connexion. La forme existante relie déjà modèle/compte/serveur.
+Dupliquer machine_id/connection_id par modèle pourrait amplifier128connexions
+x256modèles au-delà de la trame16Mio. Ne pas le faire ; tester les deux contextes
+complets. La projection gardera le lien existant et son ancien format imbriqué.

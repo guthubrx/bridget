@@ -259,3 +259,6 @@ Deux écarts observés après activation, sans incident métier ni nouvelle Task
 
 ## Convergence — guidage après perte d’observation
 - [x] T180 [US5] C27 — Conserver dans les conseils unverified_peer/not_observed/stale/refreshing le prérequis de contrôle des marqueurs et processus de sonde avant changement de version. Une absence de cache ne constate aucun arrêt. Étendre les tests réels de projection et Hello dans crates/bridget-daemon/src/daemon/native_delegation.rs, corriger native_provider_catalogue220.rs sans nouveau droit, effet ou état, puis contre-revue, activation et preuve des images chargées. Ne pas rejouer les admissions R55. Précède la reprise de T174 ; aucun critère de C19 n’est supprimé.
+
+## Convergence — dates, efforts et garde d'observation
+- [ ] T181 [US1] Complément livrable indépendant C03/C04/C05 : réutiliser les projections et reçus 220 pour distinguer date source/réception/expiration, exposer les efforts déclarés non annoncés et préserver StopUnconfirmed après une configuration indisponible ou un retrait/rétablissement. Vérifier les deux horloges, deux serveurs, borne maximale, aucune mutation d'admission et reprise de garde ; contre-revue, audit ciblé, intégration/push, activation et lecture native des nouveaux champs. Ne clôt ni T055 ni les catégories C01–C07 entières. Preuves dans validation/l2a-dates-efforts.md.

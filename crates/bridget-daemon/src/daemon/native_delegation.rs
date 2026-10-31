@@ -3716,6 +3716,18 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if matches!(code, "routing_policy_disabled" | "routing_policy_unavailable" | "routing_catalogue_unavailable") {
+        let fact = match code {
+            "routing_policy_disabled" => "La politique du catalogue est désactivée.",
+            "routing_policy_unavailable" => "La politique du catalogue est indisponible.",
+            _ => "Le registre du catalogue n'a pas pu être lu ou validé ; la cause précise reste inconnue.",
+        };
+        return json!({"status":"refused","code":code,
+            "message":format!("Faire vérifier ce catalogue par le responsable Bridget. {fact} Son indisponibilité ne confirme aucun arrêt de sonde. Les autres travaux autorisés suivent leur propre état."),
+            "detail":{"cause":code,"probe_stop":"not_verified","scope":"this_catalogue",
+                "recovery":"Conserver les tâches et leurs clés. Avant tout changement de version, faire vérifier les marqueurs privés et les processus de sonde sur les serveurs concernés ; ne pas effacer de marqueur. Requalifier le registre ou la décision d'activation puis relire le catalogue, sans relancer de mission.",
+                "human_action":"Si la correction dépasse votre accès, demander au responsable Bridget l'intervention ciblée sur le registre ou la décision d'activation. Ne pas changer de compte ni de droits pour contourner ce refus."}});
+    }
     if code.starts_with("provider_catalogue_") {
         let (message,action)=match code {
             "provider_catalogue_machine_invalid"=>("L’identifiant du serveur est invalide.","Recopier machine_id dans le catalogue déclaré ; aucun chemin ni nom libre n’est accepté."),
@@ -7213,7 +7225,7 @@ pub(super) fn catalogue_scope212(
             },
             "eligibility":"not_checked",
             "options":[],
-            "next_action":"Faire vérifier le catalogue de flotte par le responsable Bridget. Ce constat ne modifie aucune mission existante."
+            "next_action":"Faire vérifier le catalogue de flotte par le responsable Bridget. Cette vue indisponible ne confirme aucun arrêt de sonde : avant un changement de version, vérifier les marqueurs privés et processus sur les serveurs concernés. Conserver les tâches et leurs clés ; les autres travaux autorisés suivent leur propre état."
         }),
     };
     if result["fleet"]["status"] == "unavailable" {
@@ -34263,7 +34275,7 @@ mod permission_projection214_tests {
                 account_scope:Some("b".repeat(32)),cause:None,models:vec![CatalogueModel {model:"announced-outside-policy".into(),supported_efforts:vec![],default_effort:None}]}};
         let mut wrong=update.clone();wrong.connection_epoch="foreign".into();assert!(catalogue::ingest(&mut st,"worker220",wrong).is_some());
         for n in 0..32 {
-            st.remote_workers.get_mut("local").unwrap().catalogues.insert(format!("obsolete-{n}"),catalogue::CachedCatalogue {sequence:1,received:Instant::now(),value:update.catalogue.clone()});
+            st.remote_workers.get_mut("local").unwrap().catalogues.insert(format!("obsolete-{n}"),catalogue::CachedCatalogue {sequence:1,received:Instant::now(),received_at:unix_timestamp(),value:update.catalogue.clone()});
         }
         assert!(catalogue::ingest(&mut st,"worker220",update.clone()).is_none());
         assert_eq!(st.remote_workers["local"].catalogues.len(),1);
@@ -34307,6 +34319,292 @@ mod permission_projection214_tests {
         drop(st);drop(shared);super::tests::cleanup(&config);
     }
 
+
+    fn observed221_fixture()->(Arc<Mutex<DaemonState>>,DaemonConfig,i64,Instant) {
+        use bridget_transport::provider_catalogue::*;
+        use bridget_transport::protocol::{WorkerIdentity,WorkerCapability,WorkerContactState};
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
+        let now=unix_timestamp();
+        let clock={let mut st=shared.lock().unwrap();
+            let worker=WorkerIdentity {machine_id:"local".into(),worker_id:"worker221-models".into(),provisioning_revision:1};
+            st.remote_workers.insert("local".into(),RemoteWorkerConnection {identity:worker.clone(),
+                conn_id:"worker221-models".into(),epoch:"epoch221-models".into(),capabilities:vec![WorkerCapability::ProviderCatalogueV1],
+                catalogues:HashMap::new(),catalogue_refresh_id:"epoch221-models".into(),catalogue_refresh_at:None,
+                contact:WorkerContactState::Connected,last_contact:Instant::now(),last_contact_at:now});
+            let value=ProviderCatalogue {connection_id:"main".into(),
+                definition_digest:st.registry.resolved_definition("native-test").unwrap().digest,
+                observed_at:now-10,state:CatalogueState::Observed,account_scope:Some("a".repeat(32)),cause:None,
+                models:vec![CatalogueModel {model:"m000".into(),supported_efforts:vec!["low".into()],default_effort:Some("low".into())},
+                    CatalogueModel {model:"outside-policy".into(),supported_efforts:vec![],default_effort:None}]};
+            let update=WorkerCatalogueUpdate {version:1,worker,connection_epoch:"epoch221-models".into(),
+                refresh_id:"epoch221-models".into(),sequence:1,catalogue:value};
+            assert!(catalogue::ingest(&mut st,"worker221-models",update).is_none());
+            st.remote_workers["local"].catalogues["main"].received};
+        (shared,config,now,clock)
+    }
+
+    #[test]
+    fn spec221_l2a_dates_distinguish_source_receipt_and_expire_on_either_clock() {
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let at=clock+Duration::from_secs(30);
+        st.remote_workers.get_mut("local").unwrap().last_contact=at;
+        let value=catalogue::project_at(&st,&st.registry,now,at);
+        assert_eq!(value[0]["status"],"reported_models");
+        assert_eq!(value[0]["last_observed_at"],now-10);
+        assert!(value[0]["received_at"].as_i64().unwrap()>=now);
+        assert_eq!(value[0]["source_age_secs"],10);
+        assert_eq!(value[0]["received_age_secs"],30);
+        assert_eq!(value[0]["age_secs"],30);
+        assert_eq!(value[0]["expires_at"],now+150);
+        assert_eq!(value[0]["provider_cache"],"not_attested");
+        assert_eq!(value[0]["account_change_detection"]["external_login_without_file_change"],"periodic_check_only");
+        assert_eq!(value[0]["account_change_detection"]["refresh_target_is_guarantee"],false);
+        // Recul de l'horloge locale : l'instant monotone interdit de rajeunir le reçu.
+        let old=clock+Duration::from_secs(181);
+        st.remote_workers.get_mut("local").unwrap().last_contact=old;
+        let expired=catalogue::project_at(&st,&st.registry,now,old);
+        assert_eq!(expired[0]["status"],"stale");assert_eq!(expired[0]["models"],json!([]));
+        assert_eq!(expired[0]["freshness_cause"],"receipt_expired");
+        assert!(expired[0]["expires_at"].is_null());
+        // Source trop ancienne et source trop future ne redeviennent pas actuelles.
+        let source_old=catalogue::project_at(&st,&st.registry,now+200,old);
+        assert_eq!(source_old[0]["status"],"stale");
+        assert_eq!(source_old[0]["freshness_cause"],"source_and_receipt_expired");
+        st.remote_workers.get_mut("local").unwrap().last_contact=clock;
+        let source_future=catalogue::project_at(&st,&st.registry,now-100,clock);
+        assert_eq!(source_future[0]["status"],"stale");
+        assert_eq!(source_future[0]["freshness_cause"],"source_clock_ahead");
+        assert!(source_future[0]["next_action"].as_str().unwrap().contains("horloges"));
+        assert!(source_future[0]["models"].as_array().unwrap().is_empty());
+        let received_old=catalogue::project_at(&st,&st.registry,now+200,clock);
+        assert_eq!(received_old[0]["freshness_cause"],"source_expired");
+        let guidance=received_old[0]["next_action"].as_str().unwrap();
+        assert!(guidance.contains("horloges") && guidance.contains("remise différée"));
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_l2a_effort_mismatch_is_an_observation_without_mutating_admission() {
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let st=shared.lock().unwrap();
+        let before=serde_json::to_vec(&st.registry.routing_catalogue(now).unwrap()).unwrap();
+        let tasks=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
+        let value=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(value[0]["models"][0]["policy_effort_status"],"not_announced");
+        assert_eq!(value[0]["models"][0]["declared_efforts_not_announced"],json!(["high"]));
+        assert_eq!(value[0]["models"][0]["declared_default_effort_announced"],false);
+        assert_eq!(value[0]["models"][1]["policy_effort_status"],"outside_policy");
+        assert_eq!(value[0]["models"][1]["declared_in_policy"],false);
+        assert_eq!(value[0]["entitlement"],"unknown");
+        assert_eq!(serde_json::to_vec(&st.registry.routing_catalogue(now).unwrap()).unwrap(),before);
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),tasks);
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_l2a_same_model_on_two_servers_keeps_its_account_and_connection_context() {
+        use bridget_transport::protocol::*;
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(st.registry.source()).unwrap()).unwrap();
+        if raw["machines"].is_null(){raw["machines"]=json!({});}
+        raw["machines"]["other"]=json!({"enabled":true,"worker_id":"worker-other","provisioning_revision":1,
+            "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}});
+        let connection=json!({"connection_id":"other","machine_id":"other","engine":"codex","agent_type":"native-test","enabled":true});
+        raw["routing_policy"]["connections"].as_array_mut().unwrap().push(connection);
+        raw["routing_policy"]["model_catalog"]["other"]=raw["routing_policy"]["model_catalog"]["main"].clone();
+        raw["routing_policy"]["machine_policies"]["other"]=raw["routing_policy"]["machine_policies"]["local"].clone();
+        std::fs::write(st.registry.source(),raw.to_string()).unwrap();
+        st.registry=AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf()).unwrap();
+        let mut value=st.remote_workers["local"].catalogues["main"].value.clone();
+        value.connection_id="other".into();value.account_scope=Some("b".repeat(32));value.observed_at=now-20;
+        value.models[0].supported_efforts.push("high".into());
+        let mut cache=HashMap::new();cache.insert("other".into(),catalogue::CachedCatalogue {
+            sequence:1,received:clock,received_at:now,value});
+        st.remote_workers.insert("other".into(),RemoteWorkerConnection {
+            identity:WorkerIdentity {machine_id:"other".into(),worker_id:"worker-other".into(),provisioning_revision:1},
+            conn_id:"worker-other".into(),epoch:"epoch-other".into(),capabilities:vec![WorkerCapability::ProviderCatalogueV1],
+            catalogues:cache,catalogue_refresh_id:"epoch-other".into(),catalogue_refresh_at:None,
+            contact:WorkerContactState::Connected,last_contact:clock,last_contact_at:now});
+        let projected=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(projected.len(),2);
+        assert_eq!(projected[0]["models"][0]["model"],projected[1]["models"][0]["model"]);
+        assert_eq!(projected[0]["machine_id"],"local");assert_eq!(projected[0]["connection_id"],"main");
+        assert_eq!(projected[0]["account_scope"],"a".repeat(32));assert_eq!(projected[0]["models"][0]["policy_effort_status"],"not_announced");
+        assert_eq!(projected[1]["machine_id"],"other");assert_eq!(projected[1]["connection_id"],"other");
+        assert_eq!(projected[1]["account_scope"],"b".repeat(32));assert_eq!(projected[1]["models"][0]["policy_effort_status"],"announced");
+        assert_eq!(projected[0]["last_observed_at"],now-10);assert_eq!(projected[1]["last_observed_at"],now-20);
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+
+    #[test]
+    fn spec221_l2a_maximum_declared_connections_and_observed_models_fit_one_daemon_frame() {
+        use bridget_transport::protocol::*;
+        use bridget_transport::provider_catalogue::*;
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
+        let mut st=shared.lock().unwrap();
+        let now=unix_timestamp();let clock=Instant::now();
+        let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(st.registry.source()).unwrap()).unwrap();
+        let model=raw["routing_policy"]["model_catalog"]["main"][0].clone();
+        let machine_policy=raw["routing_policy"]["machine_policies"]["local"].clone();
+        raw["routing_policy"]["connections"]=json!([]);
+        raw["routing_policy"]["model_catalog"]=json!({});
+        raw["routing_policy"]["machine_policies"]=json!({});
+        raw["machines"]=json!({});
+        let digest=st.registry.resolved_definition("native-test").unwrap().digest;
+        for machine in 0..4 {
+            let id=format!("m{machine}-{}", "s".repeat(240));
+            let worker=WorkerIdentity {machine_id:id.clone(),worker_id:format!("worker-{machine}"),provisioning_revision:1};
+            raw["machines"][&id]=json!({"enabled":true,"worker_id":worker.worker_id,"provisioning_revision":1,
+                "credential_fingerprint":"a".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}});
+            raw["routing_policy"]["machine_policies"][&id]=machine_policy.clone();
+            let mut cache=HashMap::new();
+            for connection in 0..32 {
+                let connection_id=format!("c{machine}-{connection:02}-{}","c".repeat(240));
+                raw["routing_policy"]["connections"].as_array_mut().unwrap().push(json!({
+                    "connection_id":connection_id,"machine_id":id,"engine":"codex","agent_type":"native-test","enabled":true}));
+                raw["routing_policy"]["model_catalog"][&connection_id]=json!([model.clone()]);
+                let value=ProviderCatalogue {connection_id:connection_id.clone(),definition_digest:digest.clone(),
+                    observed_at:now,state:CatalogueState::Observed,account_scope:Some("b".repeat(32)),cause:None,
+                    models:(0..MAX_CATALOGUE_MODELS).map(|n|CatalogueModel {
+                        model:format!("m{n:03}-{}","n".repeat(180)),supported_efforts:vec![],default_effort:None}).collect()};
+                let update=WorkerCatalogueUpdate {version:1,worker:worker.clone(),connection_epoch:"epoch221".into(),
+                    refresh_id:"epoch221".into(),sequence:1,catalogue:value.clone()};
+                assert!(update.valid(),"only valid source envelopes count");
+                cache.insert(connection_id,catalogue::CachedCatalogue {sequence:1,received:clock,received_at:now,value});
+            }
+            st.remote_workers.insert(id,RemoteWorkerConnection {identity:worker,conn_id:format!("conn-{machine}"),
+                epoch:"epoch221".into(),capabilities:vec![WorkerCapability::ProviderCatalogueV1],
+                catalogues:cache,catalogue_refresh_id:"epoch221".into(),catalogue_refresh_at:None,
+                contact:WorkerContactState::Connected,last_contact:clock,last_contact_at:now});
+        }
+        std::fs::write(st.registry.source(),raw.to_string()).unwrap();
+        st.registry=AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf()).unwrap();
+        let value=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(value.len(),128);
+        assert_eq!(value.iter().map(|v|v["models"].as_array().unwrap().len()).sum::<usize>(),128*MAX_CATALOGUE_MODELS);
+        let result=catalogue::view(&st).unwrap();
+        let mut frame=serde_json::to_vec(&DaemonToWrapper::NativeDelegationResult {result}).unwrap();
+        frame.push(b'\n');
+        let bytes=frame.len();
+        eprintln!("catalogue221 maximum valid full frame {bytes} bytes");
+        assert!(bytes<=bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES);
+        let decoded:DaemonToWrapper=serde_json::from_slice(&frame[..frame.len()-1]).unwrap();
+        let DaemonToWrapper::NativeDelegationResult {result}=decoded else{panic!("native result");};
+        assert_eq!(result["connection_catalogues"].as_array().unwrap().len(),128);
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+
+    #[test]
+    fn spec221_l2a_stop_constraint_is_kept_on_registry_failure_and_policy_disable() {
+        use bridget_transport::provider_catalogue::*;
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let path=st.registry.source().to_path_buf();
+        let original=std::fs::read_to_string(&path).unwrap();
+        let value=st.remote_workers["local"].catalogues["main"].value.clone();
+        let worker=st.remote_workers["local"].identity.clone();
+        let update=WorkerCatalogueUpdate {version:1,worker,connection_epoch:"epoch221-models".into(),
+            refresh_id:"epoch221-models".into(),sequence:2,catalogue:value};
+        {let cache=st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap();
+            cache.value.state=CatalogueState::Unavailable;cache.value.models.clear();
+            cache.value.account_scope=None;cache.value.cause=Some(CatalogueCause::StopUnconfirmed);}
+        std::fs::write(&path,b"PRIVATE_INVALID_REGISTRY").unwrap();
+        assert!(catalogue::ingest(&mut st,"worker221-models",update.clone()).is_none());
+        assert_eq!(st.remote_workers["local"].catalogues["main"].value.cause,Some(CatalogueCause::StopUnconfirmed));
+        assert_eq!(catalogue::view(&st).unwrap_err(),"routing_catalogue_unavailable");
+        let mut raw:Value=serde_json::from_str(&original).unwrap();
+        raw["routing_policy"]["enabled"]=false.into();std::fs::write(&path,raw.to_string()).unwrap();
+        assert!(catalogue::ingest(&mut st,"worker221-models",update.clone()).is_none());
+        assert_eq!(st.remote_workers["local"].catalogues["main"].value.cause,Some(CatalogueCause::StopUnconfirmed));
+        raw["routing_policy"]["enabled"]=true.into();
+        // La politique provisoire retire main mais doit rester valide.
+        let saved=raw["routing_policy"]["connections"][0].clone();
+        let models=raw["routing_policy"]["model_catalog"]["main"].clone();
+        raw["routing_policy"]["connections"][0]["connection_id"]="temporary".into();
+        raw["routing_policy"]["model_catalog"].as_object_mut().unwrap().remove("main");
+        raw["routing_policy"]["model_catalog"]["temporary"]=models.clone();
+        std::fs::write(&path,raw.to_string()).unwrap();
+        let mut absent=update.clone();absent.catalogue.connection_id="temporary".into();
+        assert!(catalogue::ingest(&mut st,"worker221-models",absent).is_none());
+        assert_eq!(st.remote_workers["local"].catalogues["main"].value.cause,Some(CatalogueCause::StopUnconfirmed));
+        raw["routing_policy"]["connections"][0]=saved;
+        raw["routing_policy"]["model_catalog"].as_object_mut().unwrap().remove("temporary");
+        raw["routing_policy"]["model_catalog"]["main"]=models;
+        raw["agents"]["native-test"]["args"]=json!(["app-server","--changed-fixture"]);
+        std::fs::write(&path,raw.to_string()).unwrap();
+        st.registry=AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+        let changed=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(changed[0]["status"],"definition_changed");
+        let next=changed[0]["next_action"].as_str().unwrap();
+        assert!(next.contains("définition") && next.contains("qualifier") && next.contains("nouvelle observation"));
+        assert_eq!(changed[0]["probe_constraint"]["state"],"stop_unconfirmed");
+        assert!(changed[0]["next_action"].as_str().unwrap().contains("marqueur privé"));
+        raw["routing_policy"]["connections"][0]["enabled"]=false.into();
+        std::fs::write(&path,raw.to_string()).unwrap();
+        st.registry=AgentRegistry::load_from_path_quiet(path).unwrap();
+        let disabled=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(disabled[0]["status"],"disabled");
+        assert_eq!(disabled[0]["models"],json!([]));
+        assert_eq!(disabled[0]["probe_constraint"]["state"],"stop_unconfirmed");
+        assert!(disabled[0]["next_action"].as_str().unwrap().contains("arrêt de sonde reste non confirmé"));
+        drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_l2a_unavailable_global_catalogue_never_implies_probe_stopped() {
+        for code in ["routing_policy_disabled","routing_policy_unavailable","routing_catalogue_unavailable"] {
+            let refusal=failure(code);
+            assert_eq!(refusal["code"],code);
+            assert_eq!(refusal["detail"]["probe_stop"],"not_verified");
+            assert!(refusal["message"].as_str().unwrap().contains("ne confirme aucun arrêt"));
+            assert!(refusal["detail"]["recovery"].as_str().unwrap().contains("marqueurs privés"));
+            let mut result=json!({});
+            catalogue_scope212(&mut result,Err(code.to_owned()),"local");
+            assert!(result["fleet"]["next_action"].as_str().unwrap().contains("marqueurs privés"));
+            assert_eq!(result["fleet"]["options"],json!([]));
+        }
+    }
+
+    #[test]
+    fn spec221_l2a_refresh_over_connection_bound_sends_no_control_or_probe() {
+        use super::super::native_provider_catalogue220 as catalogue;
+        let (shared,config,now,clock)=observed221_fixture();
+        let mut st=shared.lock().unwrap();
+        let mut raw:Value=serde_json::from_str(&std::fs::read_to_string(st.registry.source()).unwrap()).unwrap();
+        let model=raw["routing_policy"]["model_catalog"]["main"].clone();
+        for n in 0..32 {
+            let id=format!("inactive-{n}");
+            raw["routing_policy"]["connections"].as_array_mut().unwrap().push(json!({
+                "connection_id":id,"machine_id":"local","engine":"codex","agent_type":"native-test","enabled":false}));
+            raw["routing_policy"]["model_catalog"][&id]=model.clone();
+        }
+        std::fs::write(st.registry.source(),raw.to_string()).unwrap();
+        st.registry=AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf()).unwrap();
+        let (a,b)=UnixStream::pair().unwrap();
+        st.connections.insert("worker221-models".into(),Arc::new(Mutex::new(std::io::BufWriter::new(a))));
+        let before=st.remote_workers["local"].catalogue_refresh_id.clone();
+        let mut controls=Vec::new();
+        let value=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();
+        assert_eq!(value["workers"][0]["status"],"connection_limit");
+        assert!(value["workers"][0]["next_action"].as_str().unwrap().contains("désactivées comprises"));
+        assert!(controls.is_empty());
+        assert_eq!(st.remote_workers["local"].catalogue_refresh_id,before);
+        let rows=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(rows.iter().find(|row|row["connection_id"]=="main").unwrap()["status"],"connection_limit");
+        assert_eq!(rows.iter().filter(|row|row["status"]=="disabled").count(),32);
+        drop(b);drop(st);drop(shared);super::tests::cleanup(&config);
+    }
+
     #[test]
     fn spec220_refresh_requires_native_identity_or_negotiated_same_uid_client() {
         let (shared,config,_rx,_reader,_request,_root)=super::tests::routing168_fixture(1);
@@ -34345,7 +34643,7 @@ mod permission_projection214_tests {
             raw["machines"]=json!({"local":{"enabled":true,"worker_id":"worker220","provisioning_revision":1,"credential_fingerprint":format!("{:x}",Sha256::digest(b"worker220-credential")),"allowed_agent_types":["native-test"],"mappings":{}}});
             std::fs::write(&path,raw.to_string()).unwrap();st.registry=AgentRegistry::load_from_path_quiet(path).unwrap();
             let value=ProviderCatalogue {connection_id:"main".into(),definition_digest:st.registry.resolved_definition("native-test").unwrap().digest,observed_at:unix_timestamp(),state:CatalogueState::Unavailable,account_scope:None,models:vec![],cause:Some(CatalogueCause::StopUnconfirmed)};
-            let mut cache=HashMap::new();cache.insert("main".into(),catalogue::CachedCatalogue {sequence:9,received:Instant::now(),value:value.clone()});
+            let mut cache=HashMap::new();cache.insert("main".into(),catalogue::CachedCatalogue {sequence:9,received:Instant::now(),received_at:unix_timestamp(),value:value.clone()});
             st.remote_workers.insert("local".into(),RemoteWorkerConnection {identity:worker.clone(),conn_id:"old-worker".into(),epoch:"old-epoch".into(),capabilities:vec![WorkerCapability::ProviderCatalogueV1],catalogues:cache,catalogue_refresh_id:"old-epoch".into(),catalogue_refresh_at:None,last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected});
             st.peer_uids.insert("new-worker".into(),unsafe{libc::geteuid()});value};
         let accepted=super::super::handle_worker_message(&shared,"new-worker",WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {hello:WorkerHello {version:REMOTE_WORKER_VERSION,identity:worker.clone(),credential,build:"220".into(),capability:ClientCapability::RemoteWorkerV1},capabilities:vec![WorkerCapability::ProviderCatalogueV1]}});

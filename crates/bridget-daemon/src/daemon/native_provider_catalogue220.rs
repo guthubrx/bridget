@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 pub(super) struct CachedCatalogue {
     pub sequence: u64,
     pub received: Instant,
+    pub received_at: i64,
     pub value: ProviderCatalogue,
 }
 
@@ -37,15 +38,19 @@ pub(super) fn ingest(
     }
     let registry = AgentRegistry::load_from_path_quiet(registry_path);
     let Ok(registry) = registry else {
-        worker.catalogues.clear();
+        worker
+            .catalogues
+            .retain(|_, value| value.value.cause == Some(CatalogueCause::StopUnconfirmed));
         return None;
     };
     let Some(policy) = registry.routing_policy().filter(|p| p.enabled) else {
-        worker.catalogues.clear();
+        worker
+            .catalogues
+            .retain(|_, value| value.value.cause == Some(CatalogueCause::StopUnconfirmed));
         return None;
     };
-    worker.catalogues.retain(|id, _| {
-        policy
+    worker.catalogues.retain(|id, cached| {
+        cached.value.cause == Some(CatalogueCause::StopUnconfirmed) || policy
             .connections
             .iter()
             .any(|c| c.machine_id == worker.identity.machine_id && c.connection_id == *id)
@@ -86,6 +91,7 @@ pub(super) fn ingest(
         CachedCatalogue {
             sequence: update.sequence,
             received: Instant::now(),
+            received_at: unix_timestamp(),
             value: update.catalogue,
         },
     );
@@ -93,10 +99,27 @@ pub(super) fn ingest(
 }
 
 pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> {
+    project_at(st, registry, unix_timestamp(), Instant::now())
+}
+
+/// Horloges capturées une seule fois ; le point d'entrée et les tests partagent
+/// exactement les mêmes bornes, sans sommeil ni horloge globale de test.
+pub(super) fn project_at(
+    st: &DaemonState,
+    registry: &AgentRegistry,
+    now: i64,
+    instant: Instant,
+) -> Vec<Value> {
     use bridget_transport::protocol::{WorkerCapability, WorkerContactState};
     let Some(policy) = registry.routing_policy().filter(|p| p.enabled) else {
         return Vec::new();
     };
+    let mut connection_counts = std::collections::BTreeMap::<&str, usize>::new();
+    for connection in &policy.connections {
+        *connection_counts
+            .entry(connection.machine_id.as_str())
+            .or_default() += 1;
+    }
     let mut result = Vec::new();
     for connection in &policy.connections {
         let worker = st.remote_workers.get(&connection.machine_id);
@@ -110,11 +133,10 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
             .is_some_and(|m| !m.enabled)
         {
             ("machine_disabled", None, None, None)
-        } else if policy
-            .connections
-            .iter()
-            .filter(|c| c.machine_id == connection.machine_id)
-            .count()
+        } else if connection_counts
+            .get(connection.machine_id.as_str())
+            .copied()
+            .unwrap_or(0)
             > MAX_CATALOGUE_CONNECTIONS
         {
             (
@@ -134,7 +156,7 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
             ("observation_source_unavailable", None, None, None)
         } else if worker.is_none_or(|w| {
             w.contact != WorkerContactState::Connected
-                || w.last_contact.elapsed()
+                || instant.saturating_duration_since(w.last_contact)
                     >= Duration::from_secs(bridget_transport::protocol::WORKER_STALE_SECS as u64)
         }) {
             ("worker_unavailable", None, None, None)
@@ -145,10 +167,10 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
         {
             ("unverified_peer", None, None, None)
         } else if let Some(cached) = cached {
-            if (cached.received.elapsed() > Duration::from_secs(CATALOGUE_TTL_SECS)
-                || unix_timestamp().saturating_sub(cached.value.observed_at)
-                    > CATALOGUE_TTL_SECS as i64
-                || cached.value.observed_at > unix_timestamp() + 30)
+            if (instant.saturating_duration_since(cached.received)
+                > Duration::from_secs(CATALOGUE_TTL_SECS)
+                || now.saturating_sub(cached.value.observed_at) > CATALOGUE_TTL_SECS as i64
+                || cached.value.observed_at > now + 30)
                 && cached.value.cause != Some(CatalogueCause::StopUnconfirmed)
             {
                 (
@@ -156,11 +178,10 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
                     None,
                     None,
                     Some(
-                        cached.received.elapsed().as_secs().max(
-                            unix_timestamp()
-                                .saturating_sub(cached.value.observed_at)
-                                .max(0) as u64,
-                        ),
+                        instant
+                            .saturating_duration_since(cached.received)
+                            .as_secs()
+                            .max(now.saturating_sub(cached.value.observed_at).max(0) as u64),
                     ),
                 )
             } else if valid_definition
@@ -186,21 +207,70 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
                     value.cause,
                     Some(value),
                     Some(
-                        cached.received.elapsed().as_secs().max(
-                            unix_timestamp()
-                                .saturating_sub(cached.value.observed_at)
-                                .max(0) as u64,
-                        ),
+                        instant
+                            .saturating_duration_since(cached.received)
+                            .as_secs()
+                            .max(now.saturating_sub(cached.value.observed_at).max(0) as u64),
                     ),
                 )
             }
         } else {
             ("not_observed", None, None, None)
         };
+        // O(d log d + m log d), d/m<=256 : une seule indexation par connexion.
+        let declared = policy
+            .model_catalog
+            .get(&connection.connection_id)
+            .into_iter()
+            .flatten()
+            .map(|model| (model.model.as_str(), model))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let models=observation.filter(|o|o.state==CatalogueState::Observed).map(|o|o.models.iter().map(|m| {
-            let declared=policy.model_catalog.get(&connection.connection_id).is_some_and(|v|v.iter().any(|v|v.model==m.model));
-            json!({"model":m.model,"supported_efforts":m.supported_efforts,"default_effort":m.default_effort,"declared_in_policy":declared})
+            let policy_model=declared.get(m.model.as_str());
+            let supported=m.supported_efforts.iter().collect::<std::collections::BTreeSet<_>>();
+            let missing=policy_model.into_iter().flat_map(|p|p.supported_efforts.iter())
+                .filter(|effort|!supported.contains(effort)).collect::<Vec<_>>();
+            let default_announced=policy_model.and_then(|p|p.default_effort.as_ref())
+                .map(|effort|supported.contains(effort));
+            let effort_status=match policy_model {
+                None=>"outside_policy",
+                Some(p) if p.supported_efforts.is_empty() && p.default_effort.is_none()=>"not_configured",
+                Some(_) if !missing.is_empty() || default_announced==Some(false)=>"not_announced",
+                Some(_)=>"announced",
+            };
+            json!({"model":m.model,"supported_efforts":m.supported_efforts,"default_effort":m.default_effort,
+                "declared_in_policy":policy_model.is_some(),
+                "policy_effort_status":effort_status,"declared_efforts_not_announced":missing,
+                "declared_default_effort_announced":default_announced})
         }).collect::<Vec<_>>()).unwrap_or_default();
+        let source_age = cached.map(|v| now.saturating_sub(v.value.observed_at).max(0) as u64);
+        let received_age = cached.map(|v| instant.saturating_duration_since(v.received).as_secs());
+        let remaining = age.map(|age| CATALOGUE_TTL_SECS.saturating_sub(age));
+        let freshness_cause = if status == "stale" {
+            cached.map(|v| {
+                if v.value.observed_at > now.saturating_add(30) {
+                    "source_clock_ahead"
+                } else if source_age.unwrap_or(0) > CATALOGUE_TTL_SECS
+                    && instant.saturating_duration_since(v.received)
+                        > Duration::from_secs(CATALOGUE_TTL_SECS)
+                {
+                    "source_and_receipt_expired"
+                } else if instant.saturating_duration_since(v.received)
+                    > Duration::from_secs(CATALOGUE_TTL_SECS)
+                {
+                    "receipt_expired"
+                } else {
+                    "source_expired"
+                }
+            })
+        } else {
+            None
+        };
+        let expires_at = if status == "reported_models" {
+            remaining.map(|left| now.saturating_add(left as i64))
+        } else {
+            None
+        };
         let guidance = match status {
             "connection_limit" => {
                 "Ce serveur dépasse la borne de 32 connexions observées. Aucune sonde ne part sur ce worker. Faire qualifier la configuration par le responsable Bridget ; ne pas interpréter cette limite comme un refus du compte."
@@ -226,8 +296,20 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
             "sign_in_required" => {
                 "Codex ne rapporte aucun compte connecté sur ce serveur. Demander à l’utilisateur de s’y connecter avec le mécanisme officiel et le compte prévu ; aucune copie de secrets. La prochaine observation est automatique."
             }
+            "definition_changed" => {
+                "La définition configurée pour cette connexion diffère de celle de la dernière observation. Faire qualifier la définition prévue par le responsable Bridget, puis demander une nouvelle observation sur ce serveur. Ne pas changer de compte ou de droits ni rejouer une mission pour résoudre cet écart. Les autres travaux autorisés suivent leur propre état."
+            }
             "reported_models" => {
                 "Le programme a annoncé cette liste lors de la lecture datée. Son cache fournisseur peut rester ancien ; ce n’est pas une garantie d’accès au modèle. Les modèles hors du profil Bridget restent non admissibles. Ne pas changer de compte, modèle ou droits sans décision autorisée."
+            }
+            "stale" if freshness_cause == Some("source_clock_ahead") => {
+                "La date annoncée est trop en avance sur l’horloge du coordinateur. Faire vérifier les horloges de ce serveur et du coordinateur, puis obtenir une nouvelle observation ; ne pas déduire un défaut du compte ou du réseau. Aucun arrêt de sonde n’est confirmé par ce refus : vérifier ses marqueurs privés avant un changement de version. Ce constat concerne cette observation ; les autres travaux autorisés suivent leur propre état."
+            }
+            "stale"
+                if freshness_cause == Some("source_expired")
+                    && received_age.is_some_and(|age| age < 30) =>
+            {
+                "Cette observation vient d’être reçue mais porte déjà une date ancienne. Faire vérifier la date de lecture, les horloges du serveur et du coordinateur, puis le prochain contrôle. Ce seul écart ne distingue pas une horloge en retard d’une remise différée ; ne pas inventer une panne de compte ou de réseau. L’arrêt d’une sonde n’est pas confirmé : vérifier ses marqueurs privés avant tout changement de version. Les autres travaux autorisés suivent leur propre état."
             }
             "refreshing" | "not_observed" | "stale" => {
                 "Attendre la fin du contrôle ou sa prochaine échéance (objectif de deux minutes par connexion ; les contrôles sont séquentiels et peuvent dépasser cet objectif en charge ou après échec), puis relire une fois le catalogue. Une liste ancienne n’est pas présentée comme actuelle. Si l’observation reste indisponible, faire vérifier ce worker ; ne pas relancer une mission d’issue inconnue. Ce statut ne confirme aucun arrêt de sonde. Avant tout changement de version, faire vérifier ses marqueurs privés et processus sur ce serveur par le responsable Bridget ; ne pas effacer un marqueur. Ce contrôle concerne l’observation de cette connexion ; les autres travaux autorisés suivent leur propre état."
@@ -239,10 +321,29 @@ pub(super) fn project(st: &DaemonState, registry: &AgentRegistry) -> Vec<Value> 
                 "L’observation native est indisponible pour cette connexion. Faire vérifier le programme et sa configuration sur le serveur nommé, avec ce code. La cause de compte ou d’abonnement n’est pas déduite de ce seul échec. Aucun rejeu de mission ni changement de droits."
             }
         };
+        let guidance = if cached
+            .is_some_and(|value| value.value.cause == Some(CatalogueCause::StopUnconfirmed))
+            && cause != Some(CatalogueCause::StopUnconfirmed)
+        {
+            format!(
+                "{guidance} Un arrêt de sonde reste non confirmé : faire vérifier son marqueur privé et son groupe avant toute activation ou modification de version ; ce statut ne le clôt pas."
+            )
+        } else {
+            guidance.to_owned()
+        };
         result.push(json!({"machine_id":connection.machine_id,"engine":connection.engine,"connection_id":connection.connection_id,
             "status":status,"cause":cause,"scope":"advertised_by_program","entitlement":"unknown","provider_cache":"not_attested",
             "auth":match status {"sign_in_required"=>"reported_absent","reported_models" if observation.and_then(|o|o.account_scope.as_ref()).is_some()=>"reported_present",_=>"not_verified"},
             "account_scope":observation.and_then(|o|o.account_scope.as_ref()),"observed_at":observation.map(|o|o.observed_at),"age_secs":age,"ttl_secs":CATALOGUE_TTL_SECS,"refresh_target_secs":120,"scheduling":"sequential_per_connection",
+            "last_observed_at":cached.map(|v|v.value.observed_at),"received_at":cached.map(|v|v.received_at),
+            "source_age_secs":source_age,"received_age_secs":received_age,"expires_at":expires_at,
+            "expiry_basis":"local_estimate_from_remaining_source_and_receipt_budget",
+            "freshness_cause":freshness_cause,
+            "policy_effort_guidance":"not_announced signale un écart entre profil et liste annoncée ; ce n’est pas une preuve d’interdiction du fournisseur. Faire qualifier le programme et le profil avant toute modification autorisée. Aucun droit, compte, modèle ou effort de mission déjà admise n’est changé ; ne pas relancer automatiquement.",
+            "account_change_detection":if connection.engine=="codex" {json!({
+                "signals":["auth_file_metadata","config_file_metadata","program_metadata","definition_digest","worker_reconnection"],
+                "external_login_without_file_change":"periodic_check_only","refresh_target_secs":120,
+                "refresh_target_is_guarantee":false})} else {json!({"signals":[],"status":"unsupported_provider"})},
             "probe_constraint":cached.filter(|v|v.value.cause==Some(CatalogueCause::StopUnconfirmed)).map(|v|json!({"state":"stop_unconfirmed","observed_at":v.value.observed_at,"next_action":"Faire vérifier le marqueur privé probe de ce worker et son groupe de processus par le responsable Bridget. Le statut de connexion ou de serveur ne constate pas leur arrêt. Ne pas effacer le marqueur ni relancer de mission pour diagnostiquer."})),
             "models":models,"next_action":guidance,"other_work":"Ce constat porte sur cette connexion de ce serveur. Les autres travaux autorisés suivent leur propre état."}));
     }
@@ -291,6 +392,18 @@ pub(super) fn refresh(
     if machine.is_some_and(|m| !catalogue_token(m)) {
         return Err("provider_catalogue_machine_invalid".into());
     }
+    let registry = AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf())
+        .map_err(|_| "routing_catalogue_unavailable".to_owned())?;
+    let policy = registry
+        .routing_policy()
+        .filter(|policy| policy.enabled)
+        .ok_or_else(|| "routing_policy_unavailable".to_owned())?;
+    let mut connection_counts = std::collections::BTreeMap::<&str, usize>::new();
+    for connection in &policy.connections {
+        *connection_counts
+            .entry(connection.machine_id.as_str())
+            .or_default() += 1;
+    }
     let mut selected = Vec::new();
     for (id, worker) in &st.remote_workers {
         if machine.is_some_and(|m| m != id) {
@@ -305,6 +418,10 @@ pub(super) fn refresh(
             .contains(&WorkerCapability::ProviderCatalogueV1)
         {
             "unverified_peer"
+        } else if connection_counts.get(id.as_str()).copied().unwrap_or(0)
+            > MAX_CATALOGUE_CONNECTIONS
+        {
+            "connection_limit"
         } else if worker
             .catalogue_refresh_at
             .is_some_and(|t| t.elapsed() < Duration::from_secs(30))
@@ -337,7 +454,10 @@ pub(super) fn refresh(
         defer_control(st, &conn, message, controls);
     }
     Ok(
-        json!({"version":1,"status":"requested","workers":selected.into_iter().map(|(machine,status)|json!({"machine_id":machine,"status":status})).collect::<Vec<_>>(),
+        json!({"version":1,"status":"requested","workers":selected.into_iter().map(|(machine,status)|json!({"machine_id":machine,"status":status,
+            "next_action":if status=="connection_limit" {
+                "Ce serveur dépasse la borne de 32 connexions configurées, désactivées comprises. Aucun contrôle demandé. Faire qualifier cet inventaire par le responsable Bridget ; ne pas changer de compte ou de droits. Les missions existantes suivent leur propre état."
+            } else {"Lire ce statut puis le catalogue du serveur ; une demande n'est pas une lecture terminée."}})).collect::<Vec<_>>(),
         "next_action":"La demande ne prouve pas que la lecture est terminée. Relire une fois le catalogue après quelques secondes. Aucun compte, profil ni mission n’est modifié.",
         "other_work":"Les autres travaux autorisés suivent leur propre état."}),
     )

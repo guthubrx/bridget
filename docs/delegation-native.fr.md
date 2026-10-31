@@ -1813,3 +1813,13 @@ Conserver la préférence et les mappings dans une publication contrôlée du re
 
 
 Une absence d’observation, une donnée périmée ou un pair non négocié ne prouve pas la fin d’une sonde antérieure. Avant tout changement de version de ce serveur, faire contrôler ses marqueurs privés et ses processus par le responsable Bridget. Ne pas effacer un marqueur ni créer une mission pour diagnostiquer. Ce contrôle concerne cette observation ; les autres travaux autorisés suivent leur propre état.
+
+### Dates et écarts du catalogue (221)
+
+Chaque connexion conserve son contexte de serveur et son nonce de compte. Les modèles ne répètent pas ces identifiants. `last_observed_at` date la lecture du programme sur le serveur ; `received_at` date sa réception par le coordinateur. `source_age_secs` et `received_age_secs` distinguent les deux âges. L'âge de réception utilise une horloge monotone. `expires_at` est une estimation locale du budget restant, jamais une promesse du fournisseur. Une source trop ancienne, un reçu expiré ou une date trop future retire les modèles de la liste actuelle et rend une cause fermée dans `freshness_cause`.
+
+Pour chaque modèle, `policy_effort_status` distingue `outside_policy`, `not_configured`, `not_announced` et `announced`. `declared_efforts_not_announced` et `declared_default_effort_announced` exposent les écarts du profil. « Non annoncé » ne prouve aucune interdiction du compte. Aucun modèle, effort, droit ou tâche admise n'est changé.
+
+`account_change_detection` nomme les signaux réellement utilisés par Codex : métadonnées de connexion, de programme et de configuration, empreinte de définition et reconnexion du worker. Sans signal de fichier, seul le contrôle périodique ou explicite peut observer un changement. La cible de 120 secondes n'est pas une garantie. Les autres fournisseurs restent `unsupported` pour cette découverte.
+
+La borne de 32 connexions par worker inclut les connexions désactivées. Un inventaire plus grand rend `connection_limit` ; demander au responsable de qualifier l'inventaire. Une demande explicite ne lance alors aucun contrôle. La suppression d'une connexion, un registre illisible ou une politique désactivée ne libèrent pas la garde d'une sonde dont l'arrêt reste incertain. Le diagnostic retenu revient avec la connexion ; un cache global indisponible ne confirme aucun arrêt. Avant toute bascule, le responsable vérifie toujours les marqueurs privés. Les autres travaux suivent leur propre état.

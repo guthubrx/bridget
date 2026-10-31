@@ -169,12 +169,36 @@ impl CatalogueService {
         {
             return;
         }
+        let mut latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+        // Seule la récolte du groupe ou la récupération du marqueur constate
+        // l'arrêt ; aucune nouvelle observation ne libère cette garde.
+        if latest.get(&value.connection_id).is_some_and(|(_, _, old)|
+            old.cause == Some(CatalogueCause::StopUnconfirmed))
+            && value.cause != Some(CatalogueCause::StopUnconfirmed) {
+            return;
+        }
+        // Les contraintes d'anciennes connexions consomment encore leur créneau.
+        // Une nouvelle configuration ne peut pas augmenter ce cache sans borne.
+        if !latest.contains_key(&value.connection_id) && latest.len() >= MAX_CATALOGUE_CONNECTIONS {
+            return;
+        }
         *sequence = sequence.saturating_add(1);
-        self.latest
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(value.connection_id.clone(), (generation, *sequence, value));
+        latest.insert(value.connection_id.clone(), (generation, *sequence, value));
     }
+    fn confirm_probe_stopped(&self) {
+        self.latest.lock().unwrap_or_else(|e| e.into_inner())
+            .retain(|_, (_, _, value)| value.cause != Some(CatalogueCause::StopUnconfirmed));
+    }
+
+    // Une suppression de configuration n'atteste jamais l'arrêt d'une sonde.
+    // Le plafond historique reste applicable : la maintenance doit résoudre les
+    // contraintes retenues avant de récupérer leurs créneaux.
+    fn retain_connections(&self, keep: &BTreeSet<&str>) {
+        self.latest.lock().unwrap_or_else(|e| e.into_inner())
+            .retain(|id, (_, _, value)| keep.contains(id.as_str())
+                || value.cause == Some(CatalogueCause::StopUnconfirmed));
+    }
+
     fn collect(&self, registry_path: PathBuf, state_root: PathBuf, machine: String) {
         let source = crate::lifecycle::source_environment();
         let salt = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -192,6 +216,7 @@ impl CatalogueService {
             if let Some(child) = retained.as_mut() {
                 if child.reap_terminated_group().unwrap_or(false) {
                     retained = None;
+                    self.confirm_probe_stopped();
                 } else {
                     continue;
                 }
@@ -214,7 +239,8 @@ impl CatalogueService {
                         .map(|(_, _, v)| v.clone())
                         .collect::<Vec<_>>();
                     for value in previous {
-                        if value.cause != Some(CatalogueCause::SourceUnavailable) {
+                        if value.cause != Some(CatalogueCause::SourceUnavailable)
+                            && value.cause != Some(CatalogueCause::StopUnconfirmed) {
                             self.publish(
                                 generation,
                                 &mut sequence,
@@ -242,20 +268,14 @@ impl CatalogueService {
                 .filter(|c| c.machine_id == machine)
                 .collect::<Vec<_>>();
             if connections.len() > MAX_CATALOGUE_CONNECTIONS {
-                self.latest
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clear();
+                self.retain_connections(&BTreeSet::new());
                 continue;
             }
             let keep = connections
                 .iter()
                 .map(|c| c.connection_id.as_str())
                 .collect::<BTreeSet<_>>();
-            self.latest
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .retain(|id, _| keep.contains(id.as_str()));
+            self.retain_connections(&keep);
             if !recovered {
                 let private = private_dir(&directory)
                     .and_then(|_| private_dir(&directory.join("markers")))
@@ -268,6 +288,7 @@ impl CatalogueService {
                 if private {
                     recovered = recover_probe(&markers, !recovery_attempted);
                     recovery_attempted = true;
+                    if recovered { self.confirm_probe_stopped(); }
                 }
             }
             for connection in connections {
@@ -389,7 +410,8 @@ impl CatalogueService {
                 }
                 // Ni un changement de fichier pendant la sonde, ni un résultat
                 // d'une ancienne connexion ne deviennent une observation neuve.
-                if config_stamp(def, &resolved.digest, &source) != stamp {
+                if config_stamp(def, &resolved.digest, &source) != stamp
+                    && value.cause != Some(CatalogueCause::StopUnconfirmed) {
                     value = observation(
                         &connection.connection_id,
                         &resolved.digest,
@@ -992,6 +1014,11 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
                 Some(cause),
             ),
         );
+        // Retrait puis réintégration : même processus vivant, même contrainte.
+        service.retain_connections(&BTreeSet::new());
+        assert_eq!(service.snapshots()[0].2.cause, Some(CatalogueCause::StopUnconfirmed));
+        service.retain_connections(&BTreeSet::from(["main"]));
+        assert_eq!(service.snapshots().len(), 1);
         for token in ["refresh-token", "reconnected-epoch"] {
             service.activate(token);
             let snapshots = service.snapshots();
@@ -1008,8 +1035,47 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(recover_probe(&markers, false));
+        service.confirm_probe_stopped();
+        assert!(service.snapshots().is_empty());
         service.shutdown();
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn spec221_l2a_pruning_keeps_stop_constraints_without_growing_slots() {
+        let service = CatalogueService {
+            generation: Arc::new(AtomicU64::new(0)), token: Arc::new(Mutex::new(String::new())),
+            enabled: Arc::new(AtomicBool::new(false)), stopping: Arc::new(AtomicBool::new(false)),
+            latest: Arc::new(Mutex::new(BTreeMap::new())),
+        };
+        service.activate("epoch221");
+        let generation=service.generation.load(Ordering::Acquire);
+        let mut sequence=0;
+        for n in 0..MAX_CATALOGUE_CONNECTIONS {
+            service.publish(generation, &mut sequence, observation(&format!("held-{n}"), &"a".repeat(64),
+                CatalogueState::Unavailable, Some(CatalogueCause::StopUnconfirmed)));
+        }
+        service.retain_connections(&BTreeSet::new());
+        assert_eq!(service.snapshots().len(),MAX_CATALOGUE_CONNECTIONS);
+        let before=sequence;
+        service.publish(generation, &mut sequence, observation("new", &"a".repeat(64),
+            CatalogueState::Unavailable, Some(CatalogueCause::SourceUnavailable)));
+        assert_eq!(sequence,before);
+        assert_eq!(service.snapshots().len(),MAX_CATALOGUE_CONNECTIONS);
+        // Ni échec, ni succès de métadonnées ne prouvent l'arrêt.
+        for (state,cause) in [(CatalogueState::Unavailable,Some(CatalogueCause::SourceUnavailable)),
+            (CatalogueState::Observed,None)] {
+            service.publish(generation, &mut sequence, observation("held-0", &"a".repeat(64),state,cause));
+            assert_eq!(sequence,before);
+            assert!(service.snapshots().iter().all(|v|v.2.cause==Some(CatalogueCause::StopUnconfirmed)));
+        }
+        // La preuve d'arrêt est explicite, exercée avec le vrai Child dans220.
+        service.confirm_probe_stopped();
+        assert!(service.snapshots().is_empty());
+        service.publish(generation, &mut sequence, observation("new", &"a".repeat(64),
+            CatalogueState::Unavailable, Some(CatalogueCause::SourceUnavailable)));
+        assert_eq!(service.snapshots().len(),1);
+        service.shutdown();
     }
 
     #[test]
