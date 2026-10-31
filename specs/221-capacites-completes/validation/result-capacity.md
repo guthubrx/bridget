@@ -1,7 +1,7 @@
 # Incident — réservation du résultat
 Tâche ba4ae9e3-375f-44d8-866d-0655f0efe53e, clé
 opus201-dix-paralleles-03-20261031-01, SYS.
-État source : correction en cours, aucune activation revendiquée.
+État : correctif chargé et vérifié sur les cibles ; preuve de chargement ci-dessous.
 
 ## Fait établi
 MAX_WORKER_STORE_BYTES=16Mio ; chaque retour actif réserve2Mio + métadonnées.
@@ -68,3 +68,36 @@ installedMac/SYS a refusé le propriétaire du staging enregistré ; caches
 conservés, aucune réécriture de marqueur ni purge forcée. Budget/observabilité
 ne sont pas contournés pour le rangement. Programme52/182InProgress ;
 pas de clôtureC19 ou de parité globale. Pas de campagne de tests générale.
+
+
+## Quatre admissions dont la réponse appelante était inconnue
+
+Lecture seule du 31 octobre 2026, après le signalement
+opus201-incident-budget-admissions-20261031-01. Le registre maître corrèle les
+quatre clés au propriétaire af5ff0db-b846-45a2-8158-c4ab53a89b84, sur SYS.
+Aucune demande n'a été rejouée, remplacée, annulée ou modifiée par ce diagnostic.
+
+| Clé | Tâche | Admission | État lu |
+| --- | --- | --- | --- |
+| opus201-vague2-lot1-20261031-01 | 27e74872-5620-4ced-8faf-c0658ca1e037 | admitted | result_available |
+| opus201-vague2-lot2-20261031-01 | 3f9424df-6982-45ae-97d1-a9439100eec8 | admitted | result_available |
+| opus201-vague2-lot3-20261031-01 | 250ae0a9-089e-4aba-b79f-89fed227e664 | admitted | result_available |
+| opus201-vague2-lot4-20261031-01 | ac7e2cb9-9a50-4ba0-a055-eafc60c7407c | admitted | result_available |
+
+Toutes portent error=null et cleanup_done=true. Chaque reçu worker est corrélé
+à la même tâche, mission, génération et exécution. Les quatre reçus portent
+producer_terminal=true, une disposition accepted, finalized_at renseigné et
+closed=cancelled. La réserve de résultat actif est donc libérée. Le reçu
+historique garde ses octets réels dans le budget partagé. Le libellé cancelled
+du slot ne transforme pas le résultat disponible en échec de la tâche.
+
+La cause de la réponse MCP initiale absente reste inconnue. Le registre prouve
+l'admission, pas le retour de l'appelant. Le propriétaire peut lire les quatre
+résultats existants par leur identifiant ; aucun nouveau lancement n'est utile.
+Le plafond provisoire de six n'est plus imposé par l'ancien budget de 16 Mio ;
+la correction ne garantit toutefois aucun nombre fixe d'admissions simultanées.
+
+Résultat transmis par Bridget : bridget221-vague2-admissions-resultat-20261031-01,
+delivery c61dcd9f-fd69-4e5e-8d0b-c0dcf14e7e4f, in_flight. Ce reçu ne prouve
+pas la lecture par le destinataire. Les autres travaux suivent leur propre état.
+Aucun test, build, accès fournisseur ou redémarrage supplémentaire.
