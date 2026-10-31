@@ -935,3 +935,53 @@ Le lecteur comprend tous les reçus de vue avant que le créateur public ne soit
 
 ### Reprise du constat de fichier arrêté
 Le résultat de l'audit reste possédé jusqu'au CAS. Après redémarrage du worker, seuls les reçus de matérialisation déjà stopped et sans available autorisent la reprise du lecteur de données. Ce lecteur ne démarre ni processus de copie ni mission et ne change aucun droit. Toute opération d'arrêt inconnu est exclue. La garde de quarantaine du store demeure ; un échec de vraie écriture exige toujours le parcours de maintenance autorisé.
+
+### C19 — preuve de source avant ouverture du créateur B
+Réutiliser validate_source_base et resolve_source_commit pour lire le SHA expliciteA de commit_view, indépendamment du HEADB partagé et de sa propreté. Ce fait ne donne aucune admission ni capacité de création. Les portes MCP, maître et worker du lecteurA restent fermées tant que le parcours complet n’est pas qualifié. Une absence de SHA refuse avant Git ; un objet absent garde la cause de base indisponible. Shared et Worktree conservent leurs règles exactes. Aucun export, fetch, Task ou worktree de mission n’est créé par cette vérification.
+
+
+Raccord créateur B (non activé) : la sélection d'une vue utilise le worker
+provisionné de la machine choisie, y compris si elle héberge le maître.
+Le mapping exact et l'époque du worker font partie de l'observation figée.
+Le chemin local historique reste inchangé pour shared et worktree.
+Une posture effective différente de discovery refuse la vue ; aucun plafond
+n'est élevé. Le lecteur A actif garde ses portes fermées. Le candidat B ouvre seulement autoV2 avec SHA et posture discovery explicites, après négociation du créateur ; il n'est pas encore qualifié en fonctionnement.
+
+
+La préparation source des vues réutilise PrepareProject et son import Git,
+avec un mode interne objects_only strictement booléen. Elle exige un mapping
+déjà déclaré et un dépôt cible existant. Elle ne crée ni linked checkout,
+ni dépôt, ni racine additionnelle ; HEAD, index et worktrees restent inchangés.
+Le worker source doit négocier WorkspaceViewV1 et WorkspaceViewCreateV1 avant
+toute émission de Sources ou PrepareProject contenant une vue. Le maître
+refuse un pair lecteur seul avant cette trame ; aucun repli d'extraction.
+Le nom de capacité de création couvre aussi ce parcours source et ses tests.
+
+
+Raccord source liée : le canon de la demande conserve le cwd original. Les
+constructeurs sonde/Prepare V2 d'une vue désignent la racine mappée (origin_cwd
+= source_root, relative_cwd = "."). Le parent attesté reste entier et inchangé.
+Avant cette réduction, la machine source vérifie que la racine Git du commit
+est incluse dans le cwd du parent : une sous-racine parent n'autorise pas
+l'export de son ancêtre Git. Shared et Worktree conservent leur chemin.
+
+Le projecteur des droits reçoit explicitement le mode vue, uniquement en
+discovery. Il traduit les chemins sous le cwd du parent vers la racine de A ;
+les chemins additionnels autorisés gardent leur mapping ordinaire. Il vérifie
+encore existence, protections et sources. Ni règle explicite ni parent ne sont
+modifiés. Le mapping attesté reste celui qui lie le profil et le reçu.
+
+Plancher de lecture ajouté : workspace.commit_view.origin_root.v2. Le schéma
+JSON du reçu reste V1, mais un lecteur doit savoir re-projeter un parent lié
+lors de la lecture d'un fichier omis. ReaderA220fef1d ne le sait pas ; sa simple
+capacité de désérialisation ne suffit pas. Avant installation et activation B,
+installer et qualifier hors staging un retour B qui déclare et exerce ce plancher.
+L'écrivain de mise à jour actif B refuse ensuite ReaderA, même créateur fermé.
+
+
+Séquence de livraison du créateur : qualifier et installer hors staging une
+image B de retour qui lit origin_root.v2 avant de basculer l'image active.
+Employer le validateur natif, puis l'écrivain atomique sous verrou pour rollback.
+Ne pas conditionner ce plancher à la disponibilité actuelle du créateur :
+une désactivation ne supprime aucun reçu. L'annonce du vocabulaire ne crée
+aucune tâche ni autorité ; la négociation et la preuve du parent restent requises.

@@ -264,6 +264,12 @@ def prepare_linked_checkout(root, mapping, request, registry_path):
     atomic_json(receipt, dict(identity=identity, ready=True), previous)
 
 def remote_inspect(request, registry_path):
+    require(type(request.get("objects_only", False)) is bool,
+            "project_preparation_operation")
+    objects_only = request.get("objects_only", False)
+    require(not objects_only or (request.get("commit") is not None
+            and request.get("linked_checkout") is None),
+            "project_preparation_operation")
     commit = request.get("commit")
     if commit is not None:
         require(isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit),
@@ -271,11 +277,15 @@ def remote_inspect(request, registry_path):
     _, registry = registry_read(registry_path)
     selected = machine(registry, request)
     key, mapping = select_mapping(selected, request, registry)
+    require(not objects_only or key in selected.get("mappings", {}),
+            "project_mapping_unknown")
     proposed = request.get("mapping")
     if proposed is not None:
         require(proposed == mapping and request.get("resolved_project_id") == key,
                 "project_preparation_mapping_changed")
     root = no_links(mapping["remote_root"])
+    require(not objects_only or root.is_dir(),
+            "project_preparation_destination_missing")
     target = linked_checkout_target(mapping, request)
     if target is not None and target.exists():
         check_linked_checkout(root, target)
@@ -328,6 +338,10 @@ def remote_receive(request, registry_path, bundle_stream):
                     git(root, "fetch", "--no-tags", "--no-write-fetch-head",
                         "--no-recurse-submodules", str(bundle), "refs/heads/source", phase="bundle_import")
                 else:
+                    # Une disparition après inspect ne convertit jamais une lecture
+                    # en création de dépôt ou de checkout.
+                    require(not request.get("objects_only", False),
+                            "project_preparation_destination_missing")
                     base = no_links(root.parent)
                     # Les nouvelles destinations sont dans le seul espace géré.
                     managed = Path.home() / ".local/share/bridget-projects" / result["project_id"]
@@ -357,8 +371,9 @@ def remote_receive(request, registry_path, bundle_stream):
                         require(not root.exists(), "project_preparation_destination_occupied")
                         os.rename(checkout, root)
                 require(commit_present(root, commit), "project_preparation_commit_missing")
-        prepare_linked_checkout(root, mapping, request, registry_path)
-        if mapping.get("additional_root"):
+        if not request.get("objects_only", False):
+            prepare_linked_checkout(root, mapping, request, registry_path)
+        if mapping.get("additional_root") and not request.get("objects_only", False):
             extra = mapping["additional_root"]
             private_dir(extra["remote_root"])
         publish_mapping(registry_path, request, result["project_id"], mapping)
@@ -440,6 +455,11 @@ def export_bundle(source, commit, destination, have_commit=None):
     git(scratch, "bundle", "create", str(destination), "refs/heads/source", *exclude, phase="bundle_export")
 
 def prepare(request):
+    require(type(request.get("objects_only", False)) is bool,
+            "project_preparation_operation")
+    objects_only = request.get("objects_only", False)
+    require(not objects_only or request.get("commit") is not None,
+            "expected_base_commit_required")
     registry_path = absolute(request["registry"])
     source = absolute(request["source_root"])
     cwd = absolute(request["cwd"])
@@ -480,6 +500,8 @@ def prepare(request):
         # Résoudre côté source avant de contacter la destination. Une ancienne
         # correspondance divergente ne peut pas créer un second projet.
         local_key, local_mapping = select_mapping(selected, request, registry)
+        require(not objects_only or local_key in selected.get("mappings", {}),
+                "project_mapping_unknown")
         request.pop("linked_checkout", None)
         request.pop("bundle_base", None)
         request.pop("checkout_root", None)
@@ -493,9 +515,25 @@ def prepare(request):
                     and no_links(source / ".git").is_file()
                     and git_common_dir(source) == git_common_dir(mapped_source),
                     "project_preparation_git_identity_mismatch")
-            request["linked_checkout"] = str(source.relative_to(mapped_source))
+            if not objects_only:
+                request["linked_checkout"] = str(source.relative_to(mapped_source))
         if local_key in selected.get("mappings", {}):
             request["project_id"] = local_key
+        if objects_only and request["machine_id"] == request["origin_host"]:
+            # Même machine attestée : réutiliser le registre du worker natif,
+            # sans exiger un tunnel SSH vers soi-même ni créer un checkout.
+            target_registry = remote_registry(request)
+            result = remote_inspect(request, target_registry)
+            if result["needs_bundle"]:
+                root = no_links(result["mapping"]["remote_root"])
+                require(root.is_dir(), "project_preparation_destination_missing")
+                git(root, "fetch", "--no-tags", "--no-write-fetch-head",
+                    "--no-recurse-submodules", str(source), commit, phase="bundle_import")
+                require(commit_present(root, commit), "project_preparation_commit_missing")
+                result = remote_inspect(request, target_registry)
+            require(not result["needs_bundle"], "project_preparation_commit_missing")
+            publish_mapping(registry_path, request, result["project_id"], result["mapping"])
+            return result
         matches = []
         for link in installed_links(registry_path.parent):
             try:

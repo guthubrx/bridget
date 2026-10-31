@@ -1825,6 +1825,33 @@ Pour chaque modèle, `policy_effort_status` distingue `outside_policy`, `not_con
 La borne de 32 connexions par worker inclut les connexions désactivées. Un inventaire plus grand rend `connection_limit` ; demander au responsable de qualifier l'inventaire. Une demande explicite ne lance alors aucun contrôle. La suppression d'une connexion, un registre illisible ou une politique désactivée ne libèrent pas la garde d'une sonde dont l'arrêt reste incertain. Le diagnostic retenu revient avec la connexion ; un cache global indisponible ne confirme aucun arrêt. Avant toute bascule, le responsable vérifie toujours les marqueurs privés. Les autres travaux suivent leur propre état.
 
 
+### Revoir un commit exact sans déplacer un dossier actif
+
+Pour une revue en lecture seule, utiliser `bridget_auto_delegate` avec
+`workspace: {"strategy":"commit_view"}`, `posture:"discovery"` et
+`expected_base_commit` égal au SHA source complet. Ne pas ajouter
+`base_ref` ou `branch`. Le commit doit exister dans le dépôt source.
+Le dossier partagé peut avoir avancé ou contenir du travail en cours :
+la vue lit le commit demandé sans déplacer HEAD, l'index ou les worktrees.
+
+Bridget transfère les objets nécessaires vers un dépôt déjà mappé, puis crée
+une vue privée partielle. Cette vue n'est pas un dépôt Git et ne crée aucun
+worktree Git. Lire les fichiers présents ; pour une omission, utiliser la carte
+et `bridget_read_commit_file`. La CLI automatique accepte le même objet
+via `--workspace` ; `bridget_delegate` ne propose pas cette stratégie.
+
+Le client exige `auto_delegate_v2` et
+`worker_workspace_view_create_v1` du maître. La source et la destination
+doivent négocier le lecteur et le créateur de vues. Un composant ancien refuse
+avant sa nouvelle opération ; conserver la clé et faire charger le parcours
+compatible. Aucun repli vers shared ou worktree n'est effectué.
+
+La tâche conserve sa base, son propriétaire et ses droits. Les gardes sont
+relues avant publication et lancement. À la clôture, Bridget conserve la vue
+si l'arrêt, l'intégrité ou l'absence d'usage ne peuvent pas être prouvés.
+Aucun privilège supplémentaire n'est demandé pour nettoyer. Les autres travaux
+autorisés suivent leur propre état.
+
 ### Lire un fichier omis d'une vue de commit
 
 La vue contient les fichiers du commit demandé et une carte des omissions. Elle
@@ -1847,6 +1874,6 @@ Conserver la tâche et la vue ; ne pas lancer de mission de remplacement.
 Le client exige `commit_view_files_v1` du maître ; le maître exige le lecteur
 `WorkspaceViewV1` du worker. Sans ces capacités, le refus précède l'envoi de la
 commande nouvelle. Cette lecture ne donne pas la capacité de créer une vue.
-Pendant le déploiement du lecteur, les admissions de vues restent fermées.
+Un lecteur seul ne permet pas l'admission : la création exige aussi les capacités décrites ci-dessus.
 
 Le détail d’un refus de lecture peut porter cause_kind : worker pour un code du worker, ou commit_view pour une cause de la vue. Ce champ est absent sans cause observée. Il ne change pas la portée de la tâche ni les droits.

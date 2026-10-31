@@ -42,6 +42,35 @@ fn remote162_fixture(
 }
 
 #[test]
+fn spec221_c19_view_projects_linked_parent_without_creating_its_checkout_or_gaining_rights() {
+    let (_root,env,mapping,protected)=remote162_fixture("c19-linked-permissions");
+    let linked="/origin162/project/.worktrees/source";
+    let mut parent=codex_fact(linked,json!({"type":"workspaceWrite","networkAccess":false,
+        "writableRoots":[linked,"/origin162/project/src"],
+        "excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),"never");
+    let before=serde_json::to_vec(&parent).unwrap();
+    let project=|parent:&ProviderPermissions,view:bool,posture:SpawnPosture| {
+        let mut operation=PermissionReadOperation::default();
+        project_remote_permissions_in_operation(parent,&codex_definition(),&mapping,
+            &mapping.remote_root,&env,Some(posture),&protected,&mut operation,view)
+    };
+    assert!(project(&parent,false,SpawnPosture::Discovery).is_err(),
+        "le mapping historique exige le dossier lié absent");
+    let (policy,posture)=project(&parent,true,SpawnPosture::Discovery).unwrap();
+    assert_eq!(posture,SpawnPosture::Discovery);
+    assert_eq!(policy["sandbox_policy"],json!({"type":"readOnly","networkAccess":false}));
+    assert_eq!(policy["approval_policy"],"never");
+    assert!(!mapping.remote_root.join(".worktrees/source").exists());
+    assert_eq!(serde_json::to_vec(&parent).unwrap(),before);
+    assert!(project(&parent,true,SpawnPosture::Development).is_err());
+    parent.provider_policy["sandbox_policy"]["writableRoots"]=json!(["/origin162/project-evil"]);
+    assert!(project(&parent,true,SpawnPosture::Discovery).is_err());
+    parent.provider_policy["sandbox_policy"]["writableRoots"]=json!([format!("{linked}/blocked")]);
+    std::os::unix::fs::symlink(&protected[0],mapping.remote_root.join("blocked")).unwrap();
+    assert!(project(&parent,true,SpawnPosture::Discovery).is_err());
+}
+
+#[test]
 fn remote162_codex_roots_projected_by_components_without_origin_io() {
     let (_root, env, mapping, protected) = remote162_fixture("roots");
     let parent = codex_fact(
@@ -1915,7 +1944,7 @@ fn native171_real_captured_profile_closed_origin_target() {
     let nominal_started = std::time::Instant::now();
     let mut operation = PermissionReadOperation::default();
     let (mut policy, posture) = project_remote_permissions_in_operation(&parent, &definition, &mapping, &cwd, &source,
-        Some(SpawnPosture::Development), &protected, &mut operation).expect("complete real profile projection");
+        Some(SpawnPosture::Development), &protected, &mut operation, false).expect("complete real profile projection");
     assert_eq!(posture, SpawnPosture::Development);
     assert_eq!(policy["launch_context"]["hook_execution"], "native_remote_guarded");
     assert_eq!(policy["launch_context"]["source_equivalence"]["profile"], descriptor);
@@ -2172,7 +2201,7 @@ fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() 
     ]);
     let mut operation = PermissionReadOperation::default();
     let (actual_policy, actual_posture) = project_remote_permissions_in_operation(&parent,&definition,&mapping,
-        &mapping.remote_root,&source,Some(SpawnPosture::Development),&protected,&mut operation).unwrap();
+        &mapping.remote_root,&source,Some(SpawnPosture::Development),&protected,&mut operation,false).unwrap();
     assert_eq!(actual_posture,SpawnPosture::Development);
     assert_eq!(actual_policy["additional_directories"],json!([
         "/home/moi/10.Scripts/69.opus2D","/home/moi/.local/share/bridget-attachments/opus2d"]));
@@ -2186,7 +2215,7 @@ fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() 
         Some(&mapping),Some(&parent),&mut operation).unwrap();
     operation.finish().unwrap();
     let mut projected = parent.provider_policy.clone();
-    project_policy_directories171(&mut projected,&mapping,&protected).unwrap();
+    project_policy_directories171(&mut projected,&mapping,&protected,None).unwrap();
     assert_eq!(projected["additional_directories"],json!([
         "/home/moi/10.Scripts/69.opus2D","/home/moi/.local/share/bridget-attachments/opus2d"]));
     let mut expected = parent.provider_policy.clone();
@@ -2198,7 +2227,7 @@ fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() 
     }
     let mut absent = mapping.clone(); absent.additional_root=None;
     let mut refused=parent.provider_policy.clone();
-    assert_eq!(project_policy_directories171(&mut refused,&absent,&protected),Err("permission_mapping_unavailable".into()));
+    assert_eq!(project_policy_directories171(&mut refused,&absent,&protected,None),Err("permission_mapping_unavailable".into()));
     assert_eq!(refused,parent.provider_policy); // No partially translated parent on error.
     let mut overlapping=mapping.clone();overlapping.additional_root.as_mut().unwrap().source_root=mapping.source_root.join("sub");
     assert!(crate::registry::validate_additional_mapping171(&overlapping).is_err());

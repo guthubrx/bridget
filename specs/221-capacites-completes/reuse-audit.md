@@ -352,3 +352,22 @@ REUTILISER formats report et formats validate-report : l'installateur ne maintie
 CREER seulement ViewFileAuditState, état privé du propriétaire déjà existant ViewFileAudit : Reading conserve son JoinHandle, Ready conserve le résultat et l'intention jusqu'au CAS. La recherche de ViewFileAudit/view_file_audits/collect_view_file_audits n'a trouvé qu'un JoinHandle sans état de résultat retenu. Une réinsertion du JoinHandle après join est impossible. Réemploi du collecteur runtime, mêmes bornes128, réessai d'écriture au plus une fois par seconde ; aucun nouveau lecteur, helper ou store, aucune nouvelle échéance de mission. Une clôture exacte rend le constat obsolète sans affirmer sa disponibilité.
 
 La reprise après arrêt du worker réutilise begin_view_file_audit depuis les seuls reçus materialization.stopped && available=None, au démarrage. Aucun nouveau helper, appel fournisseur ou requête client. Une panne de publication n'est pas un motif de recopie. Reprise bornée par l'inventaire existant et sa validation ; un arrêt non attesté reste exclu. Une panne de vraie écriture peut garder la quarantaine du store, jamais levée automatiquement.
+
+C19 créateurB/source : REUTILISER lifecycle::validate_source_base et workspace_git::resolve_source_commit. Le fait de commitA se sépare de la porte d’admission existante ; aucun module, store, option, helper ou dépendance ajouté. Test du HEADB sale et d’un worktree descendant préexistant ; aucune source réécrite pour satisfaire la preuve.
+
+
+Créateur B : RÉUTILISER prepare-project.py, OriginProofOperation::PrepareProject
+et la capacité WorkspaceViewCreateV1 existante pour importer les seuls objets
+d'une vue depuis un checkout source lié. Aucun nouveau transport ou registre.
+Le booléen interne empêche prepare_linked_checkout ; mapping/dépôt préexistants
+obligatoires, refus avant trame vers un worker source lecteur seul.
+
+
+Raccord parent lié : RÉUTILISER le projecteur de permissions et son lecteur de
+répertoires avec un alias de cwd explicite réservé aux vues discovery. Le
+lecteur garde le mapping authentifié pour les profils et les droits ajoutés.
+CRÉER validate_parent_source_base dans lifecycle : 4 appels réels (maître
+local, sources origine, préparation origine, preuve source enfant). Contrainte
+de sécurité : l'export de A ne doit pas révéler un ancêtre Git hors du parent.
+Réutiliser storage_compatibility pour le plancher origin_root.v2 ; aucun store,
+protocole, nonce ou fichier d'identité supplémentaire.

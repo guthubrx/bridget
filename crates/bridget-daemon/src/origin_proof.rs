@@ -79,7 +79,7 @@ fn execute_with_context(
                     if root.to_string_lossy()!=parent.cwd || cwd.to_string_lossy()!=source.cwd || !cwd.starts_with(&root) {
                         return Err("cwd_outside_parent_project".to_owned());
                     }
-                    crate::lifecycle::validate_source_base(source).map_err(closed_source_error)?;
+                    crate::lifecycle::validate_parent_source_base(parent,source).map_err(closed_source_error)?;
                     if registry.parent().is_none_or(|root| !crate::project_preparation::has_link(root)) {
                         return Err("project_preparation_link_missing".into());
                     }
@@ -87,7 +87,8 @@ fn execute_with_context(
                     if budget<=0 {return Err("project_preparation_timeout".into());}
                     let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,
                         "origin_host":request.worker.machine_id,"source_root":parent.cwd,
-                        "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id});
+                        "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
+                        "objects_only":matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))});
                     crate::project_preparation::prepare_until(&payload,
                         std::time::Instant::now()+std::time::Duration::from_millis(budget as u64))
                 })().err();
@@ -111,7 +112,7 @@ fn execute_with_context(
                         }
                         let mut source = source.clone();
                         source.cwd = cwd.to_string_lossy().into_owned();
-                        crate::lifecycle::validate_source_base(&source).map_err(closed_source_error)
+                        crate::lifecycle::validate_parent_source_base(parent,&source).map_err(closed_source_error)
                     })()
                     .err()
                 });

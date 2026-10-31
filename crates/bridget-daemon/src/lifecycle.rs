@@ -432,9 +432,40 @@ pub(crate) fn prepare_spawn_parts(
     })
 }
 
+/// Une vue exporte la racine de A, pas un sous-arbre hérité d'un cwd.
+/// La racine Git doit donc appartenir au périmètre du parent attesté.
+/// Git est lu sur la machine source et hors mutex du maître.
+pub(crate) fn validate_parent_source_base(
+    parent:&bridget_transport::protocol::ProviderPermissions,
+    request:&bridget_transport::protocol::WorkerSourceBase,
+)->Result<(),String> {
+    if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})) {
+        let allowed=std::fs::canonicalize(&parent.cwd)
+            .map_err(|_|"workspace_preflight_technical")?;
+        let cwd=std::fs::canonicalize(&request.cwd)
+            .map_err(|_|"workspace_preflight_technical")?;
+        if !cwd.starts_with(&allowed) {return Err("cwd_outside_parent_project".into());}
+        let out=crate::workspace_git::run_git(&cwd,&["rev-parse","--show-toplevel"],
+            crate::workspace_git::READ_TIMEOUT)?;
+        if !out.success() || out.truncated {return Err("workspace_git_required".into());}
+        let top=std::fs::canonicalize(out.stdout.trim_end_matches(['\r','\n']))
+            .map_err(|_|"workspace_preflight_technical")?;
+        if !top.starts_with(&allowed) {return Err("cwd_outside_parent_project".into());}
+    }
+    validate_source_base(request)
+}
+
 pub(crate) fn validate_source_base(request: &bridget_transport::protocol::WorkerSourceBase) -> Result<(), String> {
     if matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})) {
-        return Err("workspace_commit_view_not_enabled".into());
+        // Fait de source seulement : les portes d'admission, de client et de
+        // création worker restent indépendantes. Lire A ne qualifie pas HEAD B.
+        let expected=request.expected_base_commit.as_ref()
+            .ok_or("expected_base_commit_required")?;
+        let actual=crate::workspace_git::resolve_source_commit(
+            Path::new(&request.cwd),Some(expected),
+        ).map_err(|error|error.into_admission(true))?;
+        if &actual!=expected {return Err("expected_base_commit_mismatch".into());}
+        return Ok(());
     }
     use bridget_transport::protocol::AutoDelegateWorkload;
     // La branche demandée est la source d'un worktree. Le checkout du parent

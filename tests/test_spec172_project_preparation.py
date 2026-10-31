@@ -426,6 +426,100 @@ class PreparationTests(unittest.TestCase):
             with self.assertRaisesRegex(prep.Refused, "cwd_outside_parent_project"):
                 self.prepare_via_federation()
 
+    def test_spec221_commit_objects_import_never_creates_linked_checkout(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        expected = self.request["commit"]
+        (remote / "code.txt").write_text("travail distant non commis")
+        def state(root):
+            return (prep.git(root, "rev-parse", "HEAD").stdout,
+                    prep.git(root, "status", "--porcelain").stdout,
+                    prep.git(root, "worktree", "list", "--porcelain").stdout,
+                    (root / ".git/index").read_bytes())
+        before_source = state(self.source)
+        before_remote = state(remote)
+        self.request["objects_only"] = True
+        result, local, distant = self.prepare_via_federation()
+        self.assertEqual(result["project_id"], "known")
+        self.assertEqual(local, distant)
+        self.assertTrue(prep.commit_present(remote, expected))
+        self.assertEqual(prep.git(remote, "show", expected + ":code.txt").stdout,
+                         b"commit du worktree\n")
+        self.assertFalse(target.exists(), "aucun worktree créé pour la lecture")
+        self.assertEqual(state(self.source), before_source)
+        self.assertEqual(state(remote), before_remote)
+        self.assertEqual((remote / "code.txt").read_text(), "travail distant non commis")
+        self.assertEqual(prep.git(checkout, "rev-parse", "HEAD").stdout.decode().strip(), expected)
+        self.assertFalse((self.home / "namespace/linked-checkouts").exists())
+
+    def test_spec221_commit_objects_local_worker_imports_without_loopback_ssh(self):
+        checkout, remote, target = self.mapped_linked_worktree()
+        expected = self.request["commit"]
+        # A reste demandé alors que la pointe de la source a avancé vers B.
+        (checkout / "code.txt").write_text("descendant B\n")
+        prep.git(checkout, "add", "code.txt")
+        prep.git(checkout, "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                 "commit", "-qm", "Descendant B")
+        self.assertNotEqual(prep.git(checkout, "rev-parse", "HEAD").stdout.decode().strip(), expected)
+        self.request["origin_host"]="test"
+        self.request["objects_only"]=True
+        self.config["machines"]["test"]["mappings"]["known"]["source_host"]="test"
+        old_head=prep.git(remote,"rev-parse","HEAD").stdout
+        old_index=(remote/".git/index").read_bytes()
+        prep.atomic_json(self.registry, self.config)
+        old_registry = self.registry.read_bytes()
+        with patch.object(prep,"remote_registry",return_value=self.home/"namespace/agents.json"):
+            with patch.object(prep,"ssh",side_effect=AssertionError("pas de tunnel local")):
+                result,local,distant=self.prepare_via_federation()
+        self.assertEqual(local,distant)
+        self.assertEqual(result["project_id"],"known")
+        self.assertTrue(prep.commit_present(remote,self.request["commit"]))
+        self.assertFalse(target.exists())
+        self.assertEqual(prep.git(remote,"rev-parse","HEAD").stdout,old_head)
+        self.assertEqual((remote/".git/index").read_bytes(),old_index)
+        self.assertEqual(self.registry.read_bytes(), old_registry)
+        self.assertEqual(prep.git(remote, "show", expected + ":code.txt").stdout,
+                         b"commit du worktree\n")
+
+    def test_spec221_commit_objects_root_disappears_after_inspect_without_creation(self):
+        _, remote, _ = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry,self.config)
+        self.request["objects_only"]=True
+        planned=self.inspect()
+        self.assertTrue(planned["needs_bundle"])
+        held=remote.with_name("held-project")
+        def disappear(*_):
+            remote.rename(held)
+            return planned
+        before=self.registry.read_bytes()
+        with patch.object(prep,"remote_inspect",side_effect=disappear):
+            with self.assertRaisesRegex(prep.Refused,"project_preparation_destination_missing"):
+                self.receive()
+        self.assertFalse(remote.exists())
+        self.assertTrue((held/"code.txt").is_file())
+        self.assertEqual(self.registry.read_bytes(),before)
+
+    def test_spec221_commit_objects_refuses_new_project_missing_root_and_bad_mode(self):
+        self.request["objects_only"] = True
+        before = self.registry.read_bytes()
+        with self.assertRaisesRegex(prep.Refused, "project_mapping_unknown"):
+            self.inspect()
+        self.assertEqual(self.registry.read_bytes(), before)
+        _, remote, _ = self.mapped_linked_worktree()
+        prep.atomic_json(self.registry, self.config)
+        self.request["objects_only"] = "true"
+        with self.assertRaisesRegex(prep.Refused, "project_preparation_operation"):
+            self.inspect()
+        self.request["objects_only"] = True
+        self.request["linked_checkout"] = ".worktrees/forbidden"
+        with self.assertRaisesRegex(prep.Refused, "project_preparation_operation"):
+            self.inspect()
+        self.request.pop("linked_checkout")
+        self.config["machines"]["test"]["mappings"]["known"]["remote_root"] = str(remote / "absent")
+        prep.atomic_json(self.registry, self.config)
+        with self.assertRaisesRegex(prep.Refused, "project_preparation_destination_missing"):
+            self.inspect()
+        self.assertFalse((remote / "absent").exists())
+
     def test_linked_worktree_preparation_preserves_main_and_replays(self):
         checkout, remote, target = self.mapped_linked_worktree()
         (remote / "local.txt").write_text("travail principal conserve")

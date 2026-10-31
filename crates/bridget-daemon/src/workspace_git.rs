@@ -18,9 +18,9 @@ mod repair;
 mod compact;
 #[path = "workspace_commit_view.rs"]
 mod commit_view;
-/// Reader A : tous les lecteurs sont présents, les créateurs restent fermés.
-/// Activer seulement après qualification du chemin complet et du retour.
-pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED:bool=false;
+/// Parcours de vue négocié : lecteur durable et créateur discovery.
+/// Toute livraison exige la qualification du chemin complet et du retour.
+pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED:bool=true;
 
 pub(crate) use commit_view::{run_commit_view_plan, run_commit_view_export, run_commit_view_materialize, ViewPlan, ViewBinding, ViewIntent, ViewProofs, ViewJob, ViewJobRequest, JobPoll, ExportFailure, view_export_failure};
 

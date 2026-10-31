@@ -54,6 +54,21 @@ fn exchange(
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if !worker_is_current(&st,host) {return Err("origin_worker_unavailable".into());}
         let worker=st.remote_workers.get(host).ok_or("origin_worker_unavailable")?;
+        let view_source=match &operation {
+            OriginProofOperation::Sources {source,..}=>source.as_ref(),
+            OriginProofOperation::PrepareProject {source,..}=>Some(source),
+            _=>None,
+        }.is_some_and(|source|matches!(source.workspace,
+            Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})));
+        // La même capacité couvre la préparation source sans checkout et le créateur.
+        // Un ancien lecteur ne reçoit jamais cette demande qu'il pourrait mal préparer.
+        if view_source && !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+            return Err("workspace_commit_view_not_enabled".into());
+        }
+        if view_source && (!worker.capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
+            || !worker.capabilities.contains(&WorkerCapability::WorkspaceViewV1)) {
+            return Err("origin_commit_view_unsupported".into());
+        }
         let request = OriginProofRequest {
             version: 1,
             correlation_id: Uuid::new_v4().to_string(),
@@ -381,6 +396,42 @@ mod tests {
         ));
         (shared, root, identity)
     }
+    #[test]
+    fn spec221_c19_origin_reader_never_receives_creation_source_or_prepare() {
+        let (shared,root,_identity)=fixture();
+        let (writer,peer)=UnixStream::pair().unwrap();
+        shared.lock().unwrap().connections.insert("worker177".into(),
+            Arc::new(Mutex::new(BufWriter::new(writer))));
+        let parent=ProviderPermissions {
+            version:1,source:"provider_turn".into(),run_id:"run".into(),
+            provider_session_id:"session".into(),provider_instance_id:"instance".into(),
+            revision:1,driver:"codex_app_server".into(),cwd:root.to_string_lossy().into_owned(),
+            runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+            provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never",
+                "sandbox_policy":{"type":"dangerFullAccess"}}),
+        };
+        let source=WorkerSourceBase {cwd:parent.cwd.clone(),
+            expected_base_commit:Some("a".repeat(40)),workspace:Some(WorkspaceRequest::CommitView {}),
+            workload:AutoDelegateWorkload::General};
+        for operation in [
+            OriginProofOperation::Sources {parent:parent.clone(),source:Some(source.clone())},
+            OriginProofOperation::PrepareProject {parent:parent.clone(),source,
+                target_machine:"target".into(),project_id:Some("project".into())},
+        ] {
+            assert_eq!(exchange(&shared,"origin177",operation,Duration::from_secs(1)),
+                Err(if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+                    "origin_commit_view_unsupported"
+                } else {"workspace_commit_view_not_enabled"}.into()));
+        }
+        peer.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let mut reader=std::io::BufReader::new(peer);
+        let err=std::io::Read::read(&mut reader,&mut [0]).unwrap_err();
+        assert!(matches!(err.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut));
+        assert!(shared.lock().unwrap().pending_origin_proofs.is_empty());
+        assert!(shared.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        drop(shared);std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn mobile177_foreign_project_requires_worker_proof_and_matching_primary_host() {
         use std::io::BufRead;

@@ -4103,7 +4103,14 @@ impl WorkerPrepare {
                     .all(|s| worker_absolute_path(s))
                 && worker_relative_path(&self.relative_cwd)
                 && worker_base_commit(self.base_commit.as_deref())
-                && std::path::Path::new(&self.origin_cwd).starts_with(&self.parent.cwd),
+                && (std::path::Path::new(&self.origin_cwd).starts_with(&self.parent.cwd)
+                    || (matches!(self.workspace,Some(WorkspaceRequest::CommitView {}))
+                        && self.posture==Some(SpawnPosture::Discovery)
+                        && self.base_commit.is_some()
+                        && self.relative_cwd=="."
+                        && self.origin_cwd==self.source_root
+                        && worker_absolute_path(&self.parent.cwd)
+                        && std::path::Path::new(&self.parent.cwd).starts_with(&self.source_root))),
         )?;
         if let Some(WorkspaceRequest::Worktree { base_ref, branch }) = &self.workspace {
             worker_require([base_ref, branch].iter().all(|value| {
@@ -11864,6 +11871,45 @@ mod workspace_repair185_tests {
 #[cfg(test)]
 mod commit_view_reader221_tests {
     use super::*;
+    #[test]
+    fn spec221_c19_origin_root_is_a_narrow_view_only_envelope_not_a_parent_permission() {
+        let request=WorkerPrepare {
+            machine_id:"cartae".into(),project_id:"project".into(),provisioning_revision:1,mapping_revision:1,
+            origin_host:"origin".into(),origin_cwd:"/source".into(),source_root:"/source".into(),
+            remote_root:"/mirror".into(),source_root_identity:"git:source".into(),relative_cwd:".".into(),
+            base_commit:Some("a".repeat(40)),agent_type:"codex".into(),model:"fixture".into(),effort:None,
+            posture:Some(SpawnPosture::Discovery),workspace:Some(WorkspaceRequest::CommitView {}),
+            parent:ProviderPermissions {version:1,source:"provider_turn".into(),run_id:"run".into(),
+                provider_session_id:"session".into(),provider_instance_id:"instance".into(),revision:1,
+                cwd:"/source/.worktrees/parent".into(),driver:"codex_app_server".into(),
+                runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+                provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never",
+                    "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})},
+        };
+        request.validate().unwrap();
+        let serialized=serde_json::to_vec(&request).unwrap();
+        let decoded:WorkerPrepare=serde_json::from_slice(&serialized).unwrap();
+        decoded.validate().unwrap();
+        for workspace in [None,Some(WorkspaceRequest::Shared {}),
+            Some(WorkspaceRequest::Worktree {base_ref:None,branch:None})] {
+            let mut wrong=request.clone();wrong.workspace=workspace;
+            assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        }
+        let mut wrong=request.clone();wrong.posture=Some(SpawnPosture::Development);
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=request.clone();wrong.relative_cwd=".worktrees/other".into();
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=request.clone();wrong.base_commit=None;
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=request.clone();wrong.origin_cwd="/source/other".into();
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=request.clone();wrong.parent.cwd="/source-elsewhere/parent".into();
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=request.clone();wrong.parent.cwd="/source/.worktrees/../parent".into();
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        assert_eq!(serde_json::to_vec(&request).unwrap(),serialized);
+    }
+
     #[test]
     fn spec221_c19_conservation_wire_is_closed_and_bound_to_a_preparation_identity() {
         let request=WorkerRequest {

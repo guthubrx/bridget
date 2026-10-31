@@ -4955,6 +4955,7 @@ impl WorkerRuntime {
                 &self.source,
                 request.posture,
                 &self.protected(), operation,
+                matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})),
             ));
         let (mut policy, effective_posture) = projection.map_err(|code|
             map_probe_projection_failure171(&code, diagnostics, projection_guard, &request.parent.provider_policy,
@@ -6886,7 +6887,7 @@ impl WorkerRuntime {
                     if !cwd.starts_with(&root) { return Err("cwd_outside_parent_project".to_owned()); }
                     let mut canonical_source = source.clone();
                     canonical_source.cwd = cwd.to_string_lossy().into_owned();
-                    crate::lifecycle::validate_source_base(&canonical_source)
+                    crate::lifecycle::validate_parent_source_base(parent,&canonical_source)
                 })().err().map(|mut code| { code.truncate(code.floor_char_boundary(1024)); code });
                 let after = crate::native_permissions::prove_parent_permissions(parent, parent.revision)
                     .map_err(|_| WorkerRefusal::PermissionsChanged)?;
@@ -8964,7 +8965,7 @@ while not stop.exists(): time.sleep(.01)
             request.effort.as_deref()).unwrap();
         let (child_policy,effective_posture)=crate::native_permissions::project_remote_permissions_in_operation(
             &request.parent,pinned.get(&request.agent_type).unwrap(),&mapping,&cwd,
-            &runtime.source,request.posture,&runtime.protected(),&mut operation).unwrap();
+            &runtime.source,request.posture,&runtime.protected(),&mut operation,true).unwrap();
         let scoped=pinned.for_inherited_delegation_in_operation(&request.agent_type,
             &request.model,request.effort.as_deref(),&child_policy,&mut operation).unwrap();
         let inspected=CandidateReadiness {
@@ -8991,6 +8992,83 @@ while not stop.exists(): time.sleep(.01)
             expires:Instant::now()+Duration::from_secs(30),
         };
         (runtime,intent,prepared)
+    }
+
+    #[test]
+    fn spec221_c19_inherited_directory_only_in_live_b_never_enters_prepared_view_a() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,mut request,previous)=c19_preparation_fixture(&fixture);
+        request.parent.cwd="/origin/project/.worktrees/source-parent".into();
+        request.parent.provider_policy["sandbox_policy"]=serde_json::json!({
+            "type":"workspaceWrite","networkAccess":false,
+            "writableRoots":["/origin/project/.worktrees/source-parent/notes"],
+            "excludeSlashTmp":true,"excludeTmpdirEnvVar":true});
+        let source=Path::new(&request.remote_root);
+        fs::create_dir(source.join("notes")).unwrap();
+        fs::write(source.join("notes/untracked"),b"live-B-only").unwrap();
+        let binding=commit_view_preparation_binding(&runtime.identity,&command,&request).unwrap();
+        let seed=crate::workspace_git::ViewPlan::new(binding,&previous.source,&previous.data_root,
+            request.base_commit.as_deref().unwrap(),&previous.source,"fixture:c19").unwrap();
+        let read=runtime.begin_prepared_view(&command,&request,None,seed).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(10);
+        loop {
+            match runtime.poll_prepared_view(&read) {
+                Err((WorkerRefusal::PermissionsChanged,None))=>break,
+                Ok(None)=>{},
+                other=>panic!("aucune publication avec le dossier vivant B : {other:?}"),
+            }
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(runtime.prepared.is_empty() && runtime.running.is_empty() && runtime.held.is_empty());
+        let receipt=runtime.store.view_receipt_for_binding(&read.source.binding).unwrap();
+        assert!(receipt.commit_view.as_ref().unwrap().source_stopped);
+        let record=receipt.record.unwrap();
+        assert!(!Path::new(&record.path).join("notes").exists());
+        assert_eq!(fs::read(source.join("notes/untracked")).unwrap(),b"live-B-only");
+    }
+
+    #[test]
+    fn spec221_c19_linked_parent_prepares_from_mirror_root_without_linked_destination() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,mut request,previous)=c19_preparation_fixture(&fixture);
+        request.parent.cwd="/origin/project/.worktrees/source-parent".into();
+        request.parent.provider_policy["sandbox_policy"]=serde_json::json!({"type":"readOnly","networkAccess":false});
+        assert_eq!(request.origin_cwd,request.source_root);
+        assert_eq!(request.relative_cwd,".");
+        let source=Path::new(&request.remote_root);
+        assert!(!source.join(".worktrees/source-parent").exists());
+        let before=(fs::read(source.join(".git/HEAD")).unwrap(),
+            fs::read(source.join(".git/index")).unwrap(),
+            crate::workspace_git::run_git(source,&["worktree","list","--porcelain"],
+                Duration::from_secs(3)).unwrap().stdout);
+        let parent_before=serde_json::to_vec(&request.parent).unwrap();
+        let binding=commit_view_preparation_binding(&runtime.identity,&command,&request).unwrap();
+        let seed=crate::workspace_git::ViewPlan::new(binding,&previous.source,&previous.data_root,
+            request.base_commit.as_deref().unwrap(),&previous.source,"fixture:c19").unwrap();
+        let read=runtime.begin_prepared_view(&command,&request,None,seed).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(10);
+        let prepared=loop {
+            if let Some(prepared)=runtime.poll_prepared_view(&read).unwrap(){break prepared;}
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(prepared.effective_posture,SpawnPosture::Discovery);
+        assert_eq!(prepared.child_policy["sandbox_policy"],serde_json::json!({"type":"readOnly","networkAccess":false}));
+        assert_eq!(fs::read(Path::new(&prepared.placement.execution_cwd).join("tracked")).unwrap(),b"committed");
+        let kept=runtime.prepared.get(&command.command_id).unwrap();
+        for release in [false,true] {
+            let mut report=None;
+            runtime.read_view().recheck_at_with_workspace(kept,release,None,
+                &read::ReadTrace::default(),&mut report).unwrap();
+            assert_eq!(report.unwrap().unwrap().dirty,Some(false));
+        }
+        assert_eq!(serde_json::to_vec(&request.parent).unwrap(),parent_before);
+        assert!(!source.join(".worktrees/source-parent").exists());
+        assert_eq!((fs::read(source.join(".git/HEAD")).unwrap(),
+            fs::read(source.join(".git/index")).unwrap(),
+            crate::workspace_git::run_git(source,&["worktree","list","--porcelain"],
+                Duration::from_secs(3)).unwrap().stdout),before);
+        assert!(runtime.held.is_empty() && runtime.running.is_empty());
+        assert!(runtime.view_sources.is_empty());
     }
 
     #[test]
@@ -9527,13 +9605,15 @@ while not stop.exists(): time.sleep(.01)
     }
 
     #[test]
-    fn spec221_c19_reader_does_not_offer_or_accept_creation_even_when_peer_declares_it() {
-        let peer=MasterWorkerFeatures{workspace_view:true,workspace_view_create:true,..MasterWorkerFeatures::default()};
-        assert!(peer.supports(WorkerCapability::WorkspaceViewCreateV1));
-        assert_eq!(peer.capabilities(),vec![WorkerCapability::WorkspaceViewV1]);
-        assert!(!peer.admits(&[WorkerCapability::WorkspaceViewCreateV1]));
-        assert!(!peer.admits(&[WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]));
-        assert!(peer.admits(&[WorkerCapability::WorkspaceViewV1]));
+    fn spec221_c19_negotiation_keeps_reader_and_creator_distinct() {
+        let reader=MasterWorkerFeatures{workspace_view:true,..MasterWorkerFeatures::default()};
+        assert_eq!(reader.capabilities(),vec![WorkerCapability::WorkspaceViewV1]);
+        assert!(!reader.admits(&[WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]));
+        assert!(reader.admits(&[WorkerCapability::WorkspaceViewV1]));
+        let creator=MasterWorkerFeatures{workspace_view:true,workspace_view_create:true,..MasterWorkerFeatures::default()};
+        assert!(creator.supports(WorkerCapability::WorkspaceViewCreateV1));
+        assert!(!creator.admits(&[WorkerCapability::WorkspaceViewCreateV1]));
+        assert!(creator.admits(&[WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]));
     }
 
     #[test]
@@ -10540,7 +10620,8 @@ while not stop.exists(): time.sleep(.01)
         request.validate().unwrap();
         assert!(request.request.requires_commit_view_reader());
         assert!(!request.request.requires_commit_view_creation());
-        assert!(!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED,"le lecteur ne devient pas créateur");
+        // La relecture clôture la préparation existante ; elle ne produit
+        // aucune nouvelle extraction, même si ce binaire sait aussi créer.
         assert!(runtime.defer_view_control(&request).unwrap());
         let until=Instant::now()+Duration::from_secs(5);
         let mut observed=Vec::new();

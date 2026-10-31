@@ -1066,6 +1066,33 @@ For each model, `policy_effort_status` distinguishes `outside_policy`, `not_conf
 The 32-connection limit per worker includes disabled connections. A larger inventory reports `connection_limit`; ask the responsible operator to qualify it. An explicit request then sends no check. Removing a connection, an unreadable registry or a disabled policy does not release custody of a probe whose stop is unconfirmed. Its retained diagnostic returns with the connection; an unavailable global cache proves no stop. Before any version switch, the operator must check private markers. Other work follows its own state.
 
 
+### Review an exact commit without moving an active checkout
+
+For a read-only review, use `bridget_auto_delegate` with
+`workspace: {"strategy":"commit_view"}`, `posture:"discovery"`, and
+`expected_base_commit` set to the full source SHA. Do not add
+`base_ref` or `branch`. The commit must exist in the source repository.
+The shared checkout may have advanced or contain ongoing work: the view reads
+the requested commit without moving HEAD, the index, or existing worktrees.
+
+Bridget transfers the required objects to an existing mapped repository, then
+creates a private partial view. The view is not a Git repository and creates
+no Git worktree. Read the available files; use the omission map and
+`bridget_read_commit_file` for omitted files. The automatic CLI accepts
+the same object through `--workspace`; `bridget_delegate` does not offer
+this strategy.
+
+The client requires the master's `auto_delegate_v2` and
+`worker_workspace_view_create_v1` features. Source and destination must
+negotiate both the view reader and creator. An old component refuses before
+its new operation; keep the request key and have the compatible path loaded.
+There is no fallback to shared or worktree.
+
+The task retains its base, owner, and permissions. Guards are rechecked before
+publication and launch. On closure, Bridget keeps the view when it cannot
+prove termination, integrity, or absence of use. Cleanup adds no privilege.
+Other authorized work follows its own state.
+
 ### Read an omitted file from a commit view
 
 A view contains files from the requested commit and a map of omissions. It is
@@ -1088,6 +1115,6 @@ and view; do not create a replacement mission.
 The client requires the master's `commit_view_files_v1` feature; the master
 requires the worker's `WorkspaceViewV1` reader. Without them, the refusal occurs
 before sending the new command. Reading grants no view creation capability.
-View admissions remain closed during the reader deployment.
+A reader alone does not permit admission: creation also requires the capabilities described above.
 
 A file-read refusal may include detail.cause_kind: worker for a worker code, or commit_view for a view cause. This field is absent without an observed cause. It changes neither task scope nor permissions.

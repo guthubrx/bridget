@@ -451,6 +451,7 @@ fn routing_auto_receipt(
 
 /// Git168 reste en lecture. Le SHA de l'appelant est une contrainte exacte,
 /// jamais une invitation à prendre le HEAD de la machine choisie.
+#[cfg(test)]
 fn validate_routing_source(request: &AutoDelegateV2) -> Result<(), String> {
     crate::lifecycle::validate_source_base(&routing_source_base(request))
 }
@@ -499,7 +500,7 @@ fn validate_routing_parent_source(
         if let Some((_,error))=super::origin_proof::sources(state,&owner,&parent,Some(routing_source_base(request)))? {
             return error.map_or(Ok(()),Err);
         }
-        return validate_routing_source(request);
+        return crate::lifecycle::validate_parent_source_base(&parent,&routing_source_base(request));
     };
     let response = remote_worker_roundtrip(state, &worker, &command,
         WorkerRequestOperation::ParentSourceProof { parent: parent.clone(), source: routing_source_base(request) },
@@ -852,10 +853,11 @@ fn prepare_routing_projects(
     };
     let has_link = registry.source().parent().is_some_and(crate::project_preparation::has_link);
     let foreign=origin_host!=host;
-    if !has_link && !foreign { return Ok(()); }
+    let is_view=matches!(request.workspace,Some(WorkspaceRequest::CommitView {}));
+    if !has_link && !foreign && !is_view { return Ok(()); }
     let mut machines = std::collections::BTreeSet::new();
     for candidate in &plan.candidates {
-        if candidate.machine_id!=origin_host && (foreign || !routing_is_local(&candidate.machine_id, &host)) {
+        if is_view || (candidate.machine_id!=origin_host && (foreign || !routing_is_local(&candidate.machine_id, &host))) {
             machines.insert(candidate.machine_id.clone());
         }
     }
@@ -887,7 +889,8 @@ fn prepare_routing_projects(
         let payload = json!({
             "registry":registry.source(), "machine_id":machine, "origin_host":host,
             "source_root":parent.cwd, "cwd":request.cwd, "commit":request.expected_base_commit,
-            "project_id":project_id
+            "project_id":project_id,
+            "objects_only":matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
         });
         if let Err(code) = crate::project_preparation::prepare_until(&payload,deadline) {
             refused.insert(machine, code);
@@ -993,7 +996,10 @@ fn observe_routing_candidates_for_project(
             .collect::<HashSet<_>>();
         for (index, candidate) in plan.candidates.iter().enumerate() {
             let candidate_id = routing_candidate_id(index);
-            if origin_host==host && routing_is_local(&candidate.machine_id, &host) {
+            // Une vue appartient au WorkerRuntime provisionné, même sur l'hôte du maître.
+            // Le chemin local historique ne porte ni reçu de vue ni lecteur durable.
+            if origin_host==host && routing_is_local(&candidate.machine_id, &host)
+                && !matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
                 if !declared_candidates.contains(&(
                     candidate.machine_id.clone(),
                     candidate.connection_id.clone(),
@@ -1100,11 +1106,14 @@ fn observe_routing_candidates_for_project(
                 candidate_id,
                 project_id: project_id.clone(),
                 origin_host: mapping.source_host.clone(),
-                origin_cwd: request.cwd.clone(),
+                origin_cwd: if matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
+                    mapping.source_root.to_string_lossy().into_owned()
+                } else {request.cwd.clone()},
                 source_root: mapping.source_root.to_string_lossy().into_owned(),
                 remote_root: mapping.remote_root.to_string_lossy().into_owned(),
                 source_root_identity: mapping.expected_git_identity.clone(),
-                relative_cwd: if relative.as_os_str().is_empty() {
+                relative_cwd: if matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
+                    || relative.as_os_str().is_empty() {
                     ".".into()
                 } else {
                     relative.to_string_lossy().into_owned()
@@ -1280,7 +1289,9 @@ fn observe_routing_candidates_for_project(
     }
     if plan.candidates.is_empty() {
         return Err(if unsupported_worker {
-            "worker_candidate_probe_v2_unsupported".into()
+            if matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
+                "worker_commit_view_capabilities_unsupported".into()
+            } else {"worker_candidate_probe_v2_unsupported".into()}
         } else if let Some(reason) = mapping_refusal {
             reason
         } else if let Some(quota) = plan.connections.iter()
@@ -1660,7 +1671,8 @@ fn routing_delegate(
     host: &str,
     mapped_project: Option<&str>,
 ) -> NativeDelegationRequest {
-    let local = mapped_project.is_none() && routing_is_local(&candidate.machine_id, host);
+    let local = mapped_project.is_none() && routing_is_local(&candidate.machine_id, host)
+        && !matches!(request.workspace,Some(WorkspaceRequest::CommitView {}));
     let workspace = request.workspace.as_ref().map(|workspace| match workspace {
         WorkspaceRequest::Worktree { branch, .. } => WorkspaceRequest::Worktree {
             base_ref: request.expected_base_commit.clone(),
@@ -2006,6 +2018,10 @@ fn route_selected_admission(
             state,
             recovering,
         )?;
+        if matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
+            && observed.project_id.is_none() {
+            return Err("project_mapping_unknown".into());
+        }
         let delegate = routing_delegate(
             request,
             candidate,
@@ -2157,6 +2173,10 @@ fn choose_routing_admission(
             recheck_attested_thread(&st, conn, thread)?;
             if !recovering && st.coordinator_epoch != receipt.coordinator_epoch {
                 return Err("admission_pending".into());
+            }
+            if matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
+                && plan.observations[index].project_id.is_none() {
+                return Err("project_mapping_unknown".into());
             }
             let delegate = routing_delegate(request, candidate, choice.effort.clone(), &st.host,
                 plan.observations[index].project_id.as_deref());
@@ -3729,6 +3749,28 @@ fn failure(code: &str) -> Value {
                 "human_action":"Si la correction dépasse votre accès, demander au responsable Bridget l'intervention ciblée sur le registre ou la décision d'activation. Ne pas changer de compte ni de droits pour contourner ce refus."}});
     }
 
+    if code=="worker_commit_view_capabilities_unsupported" {
+        return json!({"status":"refused","code":code,
+            "message":"Faire vérifier et charger les capacités de sonde, de lecture et de création des vues sur les workers candidats. Au moins un worker n'a pas confirmé ce parcours complet. Ce refus concerne les candidats cités de cette admission ; les autres travaux autorisés suivent leur propre état.",
+            "detail":{"scope":"candidate_subset","cause":"worker_view_capabilities_unconfirmed",
+                "required_capabilities":["CandidateProbeV2","WorkspaceViewV1","WorkspaceViewCreateV1"],
+                "recovery":"Conserver la clé, l'enveloppe et toute tâche connue. Attendre la fin des appels concurrents et vérifier leur issue avant un rejeu strict après qualification des capacités. Aucun repli vers shared, worktree ou une autre base.",
+                "human_action":"Si le chargement dépasse votre accès, demander au responsable Bridget de qualifier ces capacités sur les workers indiqués. Ne pas modifier les comptes, modèles ou droits."}});
+    }
+    if matches!(code,"origin_commit_view_unsupported"|"workspace_commit_view_requires_discovery") {
+        let (cause,action)=if code=="origin_commit_view_unsupported" {
+            ("origin_view_capabilities_missing",
+             "Faire charger et qualifier les capacités de lecture et de création des vues sur le worker de la machine source. Les deux sont requises pour préparer les objets du commit.")
+        } else {
+            ("effective_posture_not_discovery",
+             "Une vue exige des droits effectifs de lecture seule (discovery). Faire vérifier la posture de cette demande ; ne pas retirer une restriction du parent.")
+        };
+        return json!({"status":"refused","code":code,
+            "message":format!("{action} Ce refus concerne cette admission de vue ; les autres travaux autorisés suivent leur propre état."),
+            "detail":{"scope":"this_admission","cause":cause,
+                "recovery":"Conserver la clé, l'enveloppe et toute tâche connue. Attendre la fin des appels concurrents et vérifier leur issue avant un rejeu strict après résolution. Aucun repli vers shared, worktree ou une autre base.",
+                "human_action":"Si la vérification dépasse votre accès, demander au responsable Bridget le chargement ciblé du support ou à l'utilisateur de confirmer la posture de lecture seule. Ne pas changer de compte, modèle ou droits."}});
+    }
     if code=="workspace_commit_view_not_enabled" {
         return json!({"status":"refused","code":code,
             "message":"La vue de lecture n'est pas encore admise. Faire qualifier son parcours natif et son retour compatible avant une demande de vue. Les autres travaux autorisés suivent leur propre état.",
@@ -5217,7 +5259,17 @@ fn handle_with_fact(
         _=>None,
     };
     if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
-        return DaemonToWrapper::NativeDelegationResult {result:failure("workspace_commit_view_not_enabled")};
+        let refusal=if !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+            Some("workspace_commit_view_not_enabled")
+        } else if !matches!(&request,NativeDelegationRequest::AutoDelegateV2(_)) {
+            Some("expected_base_commit_required")
+        } else if !matches!(&request,NativeDelegationRequest::AutoDelegateV2(auto)
+            if auto.posture==Some(SpawnPosture::Discovery)) {
+            Some("workspace_commit_view_requires_discovery")
+        } else {None};
+        if let Some(code)=refusal {
+            return DaemonToWrapper::NativeDelegationResult {result:failure(code)};
+        }
     }
     if let NativeDelegationRequest::ReadCommitFile{task_id,path}=&request {
         return DaemonToWrapper::NativeDelegationResult{result:read_commit_file(conn,task_id.as_deref(),path,thread,state)};
@@ -5752,6 +5804,9 @@ fn delegate_remote_with_routing(
             Ok::<_, String>((auto, candidate, observation))
         })
         .transpose()?;
+    if matches!(workspace,Some(WorkspaceRequest::CommitView {})) && routing.is_none() {
+        return Err("expected_base_commit_required".into());
+    }
     // Le premier contrôle168 Worktree atteste la base et les droits, sans
     // matérialisation Git avant que la Task ne soit durcie.
     let inspect_only =
@@ -5828,11 +5883,15 @@ fn delegate_remote_with_routing(
             provisioning_revision: provision.provisioning_revision,
             mapping_revision: mapping.mapping_revision,
             origin_host: mapping.source_host.clone(),
-            origin_cwd: cwd.clone(),
+            origin_cwd: if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
+                mapping.source_root.to_string_lossy().into_owned()
+            } else {cwd.clone()},
             source_root: mapping.source_root.to_string_lossy().into_owned(),
             remote_root: mapping.remote_root.to_string_lossy().into_owned(),
             source_root_identity: mapping.expected_git_identity.clone(),
-            relative_cwd: relative,
+            relative_cwd: if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
+                ".".into()
+            } else {relative},
             base_commit: routing
                 .as_ref()
                 .and_then(|(auto, _, _)| auto.expected_base_commit.clone()),
@@ -5906,6 +5965,8 @@ fn delegate_remote_with_routing(
             _ => return Err("remote_admission_invalid".into()),
         }
     }
+    // Garder les deux valeurs d'origine figées après transfert de Prepare.
+    let expected_source=(prepare.origin_cwd.clone(),prepare.relative_cwd.clone());
     let outcome = (|| -> Result<(), String> {
         if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
             prepare.workspace=workspace.clone();
@@ -5978,7 +6039,9 @@ fn delegate_remote_with_routing(
             let mapping = st.registry.project_mapping(machine, project_id)?;
             if mapping.mapping_revision != prepared.placement.mapping_revision
                 || !prepared.placement.matches_worker(&worker)
-                || prepared.placement.origin_cwd != *cwd
+                || prepared.placement.origin_cwd != expected_source.0
+                || (matches!(workspace,Some(WorkspaceRequest::CommitView {}))
+                    && prepared.placement.relative_cwd != expected_source.1)
                 || prepared.placement.project_id != *project_id
             {
                 return Err("remote_placement_changed".into());
@@ -7641,6 +7704,10 @@ fn target_resolver_in_catalogue171<'a>(
                 return Err("workspace_inheritance_unavailable".into());
             }
         }
+        if matches!(workspace,Some(WorkspaceRequest::CommitView {}))
+            && effective != SpawnPosture::Discovery {
+            return Err("workspace_commit_view_requires_discovery".into());
+        }
         if child_requests == Some("forward") && target.protocol != "codex_app_server" {
             return Err("child_requests_unsupported".into());
         }
@@ -7863,7 +7930,21 @@ fn admit_delegate(
         }
         let frozen_cwd = if let WorkspacePass::Remote { prepared, .. } = pass {
             let parent = fact.as_ref().ok_or("permission_attestation_unavailable")?;
-            if prepared.placement.origin_cwd != *cwd
+            let expected_origin=if matches!(workspace,Some(WorkspaceRequest::CommitView {})) {
+                if !auto_receipt.is_some_and(|receipt|receipt.metadata_version==2) {
+                    return Err("expected_base_commit_required".into());
+                }
+                let machine=machine_id.as_ref().ok_or("remote_placement_invalid")?;
+                let origin=super::origin_proof::host_for_owner(st,&owner)?;
+                let mapping=st.registry.project_mapping(machine,
+                    project_id.as_ref().ok_or("remote_placement_invalid")?)?
+                    .for_origin(machine,&origin).ok_or("remote_origin_host_mismatch")?;
+                if prepared.placement.relative_cwd!="." || prepared.placement.origin_host!=origin {
+                    return Err("remote_placement_invalid".into());
+                }
+                mapping.source_root.to_string_lossy().into_owned()
+            } else {cwd.clone()};
+            if prepared.placement.origin_cwd != expected_origin
                 || !Path::new(cwd).starts_with(&parent.cwd)
                 || prepared.placement.machine_id
                     != *machine_id.as_ref().ok_or("remote_placement_invalid")?
@@ -14438,6 +14519,102 @@ mod tests {
     }
 
     #[test]
+    fn spec221_c19_source_and_posture_refusals_keep_scope_and_original_key() {
+        for code in ["origin_commit_view_unsupported","workspace_commit_view_requires_discovery"] {
+            let view=failure(code);
+            assert_eq!(view["code"],code);
+            assert_eq!(view["detail"]["scope"],"this_admission");
+            assert!(view["message"].as_str().unwrap().contains("autres travaux"));
+            assert!(view["detail"]["recovery"].as_str().unwrap().contains("rejeu strict"));
+            assert!(view["detail"]["human_action"].as_str().unwrap().contains("responsable"));
+            assert!(view.get("task_id").is_none());
+        }
+    }
+
+    #[test]
+    fn spec221_c19_same_host_keeps_worker_gate_and_never_falls_back_local() {
+        use bridget_transport::protocol::*;
+        let (state,config,rx,_reader,mut request,root)=routing168_fixture(1);
+        {
+            let mut st=state.lock().unwrap();
+            st.host="cartae".into();
+            st.presences.get_mut("instance-1").unwrap().host="cartae".into();
+        }
+        request.request_id="c19-local-worker".into();
+        request.workspace=Some(WorkspaceRequest::CommitView {});
+        request.posture=Some(SpawnPosture::Discovery);
+        request.expected_base_commit=Some("a".repeat(40));
+        request.engine=Some("codex".into());
+        request.machine_id=Some("cartae".into());
+        let fingerprint=format!("{:x}",sha2::Sha256::digest(b"worker-c19-local"));
+        routing168_update(&state,|value| {
+            value["routing_policy"]["connections"][0]["machine_id"]=json!("cartae");
+            value["routing_policy"]["machine_policies"]["cartae"]=json!({"enabled":true});
+            value["machines"]=json!({"cartae":{"enabled":true,"worker_id":"worker-c19",
+                "provisioning_revision":1,"credential_fingerprint":fingerprint,
+                "allowed_agent_types":["native-test"],"mappings":{"project-c19":{
+                    "source_host":"cartae","source_root":request.cwd,
+                    "remote_root":root.join("remote-c19"),"expected_git_identity":"fixture-c19",
+                    "mapping_revision":1}}}});
+        });
+        let (writer,mut reader)=super::super::presence_tests::control_socket("c19-local-worker");
+        {
+            let mut st=state.lock().unwrap();
+            st.connections.insert("worker-c19".into(),writer);
+            st.peer_uids.insert("worker-c19".into(),unsafe{libc::geteuid()});
+        }
+        assert!(matches!(handle_worker_message(&state,"worker-c19",
+            WrapperToDaemon::WorkerHelloWithCapabilities {hello:WorkerHelloWithCapabilities {
+                hello:WorkerHello {version:REMOTE_WORKER_VERSION,
+                    identity:WorkerIdentity {machine_id:"cartae".into(),
+                        worker_id:"worker-c19".into(),provisioning_revision:1},
+                    credential:IdentityCredential::new("worker-c19-local".into()),
+                    build:"reader-only".into(),capability:ClientCapability::RemoteWorkerV1},
+                capabilities:vec![WorkerCapability::CandidateProbeV2,WorkerCapability::WorkspaceViewV1]}}),
+            Some(DaemonToWrapper::WorkerAcceptedWithCapabilities {..})));
+        let canonical=serde_json::to_vec(&request).unwrap();
+        let mut plan=routing168_plan(&state,&request);
+        assert_eq!(plan.candidates.len(),1);
+        let candidate=plan.candidates[0].clone();
+        for mapped in [None,Some("project-c19")] {
+            let delegated=routing_delegate(&request,&candidate,None,"cartae",mapped);
+            assert!(matches!(delegated,NativeDelegationRequest::Delegate {
+                machine_id:Some(machine),workspace:Some(WorkspaceRequest::CommitView {}),..
+            } if machine=="cartae"));
+        }
+        let explicit=routing_delegate(&request,&candidate,None,"cartae",Some("project-c19"));
+        assert_eq!(delegate_remote_with_routing("conn-1",&explicit,None,None,None,None,
+            None,None,&state).unwrap_err(),"expected_base_commit_required",
+            "Delegate explicite ne peut pas fabriquer un SHA depuis HEAD");
+        assert_eq!(observe_routing_candidates("conn-1",&request,&mut plan,None,&state)
+            .unwrap_err(),"worker_commit_view_capabilities_unsupported");
+        let refusal=failure("worker_commit_view_capabilities_unsupported");
+        assert_eq!(refusal["detail"]["cause"],"worker_view_capabilities_unconfirmed");
+        assert_eq!(refusal["detail"]["required_capabilities"],
+            json!(["CandidateProbeV2","WorkspaceViewV1","WorkspaceViewCreateV1"]));
+        assert!(refusal["message"].as_str().unwrap().contains("autres travaux"));
+        assert!(plan.candidates.is_empty());
+        assert!(plan.decision_notes.iter().any(|note|note.contains("capability_required")));
+        reader.get_ref().set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let mut byte=[0];
+        let err=std::io::Read::read(&mut reader,&mut byte).unwrap_err();
+        assert!(matches!(err.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut),
+            "aucune nouvelle variante émise vers un lecteur sans capacité de création");
+        request.workspace=Some(WorkspaceRequest::Shared {});
+        assert!(matches!(routing_delegate(&request,&candidate,None,"cartae",None),
+            NativeDelegationRequest::Delegate {machine_id:None,project_id:None,..}));
+        request.workspace=Some(WorkspaceRequest::CommitView {});
+        assert_eq!(serde_json::to_vec(&request).unwrap(),canonical);
+        let st=state.lock().unwrap();
+        assert!(st.pending_candidate_probes_v2.is_empty());
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().is_none());
+        drop(st);
+        assert!(rx.try_recv().is_err());
+        drop(state);cleanup(&config);
+    }
+
+    #[test]
     fn spec172_implicit_project_reaches_remote_probe_and_frozen_delegate() {
         use bridget_transport::protocol::*;
         let (state, config, rx, _reader, mut request, root) = routing168_fixture(3);
@@ -15634,6 +15811,64 @@ mod tests {
         let refused = "workspace_repo_unsupported: filtre, inclusion, clone partiel ou worktreeConfig";
         assert_eq!(auto_terminal_refusal_code(refused), Some(refused));
         drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_source_proves_explicit_commit_without_shared_head_or_dirty_guard() {
+        let (state,config,rx,_reader,mut request,_root)=routing168_fixture(1);
+        let cwd=PathBuf::from(&request.cwd);
+        let git=|args:&[&str]| {
+            let out=std::process::Command::new("git").arg("-C").arg(&cwd)
+                .args(["-c","user.name=Fixture","-c","user.email=fixture@example.invalid",
+                    "-c","commit.gpgSign=false","-c","core.hooksPath=/dev/null"])
+                .args(args).output().unwrap();
+            assert!(out.status.success(),"{out:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        git(&["init","-q","--initial-branch=main"]);
+        std::fs::write(cwd.join("file"),"base-A").unwrap();
+        git(&["add","."]);git(&["commit","-qm","Base A"]);
+        let a=git(&["rev-parse","HEAD"]);
+        std::fs::write(cwd.join("file"),"descendant-B").unwrap();
+        git(&["commit","-qam","Descendant B"]);
+        let b=git(&["rev-parse","HEAD"]);
+        let linked=cwd.parent().unwrap().join("source-c19-descendant");
+        git(&["worktree","add","--detach",linked.to_str().unwrap(),&b]);
+        std::fs::write(cwd.join("file"),"local-uncommitted").unwrap();
+        let before=(git(&["rev-parse","HEAD"]),git(&["status","--porcelain"]),
+            git(&["worktree","list","--porcelain"]),std::fs::read(cwd.join("file")).unwrap());
+        request.workspace=Some(WorkspaceRequest::CommitView {});
+        request.expected_base_commit=Some(a.clone());
+        validate_routing_source(&request).unwrap();
+        let mut parent=bridget_transport::protocol::ProviderPermissions {
+            version:1,source:"provider_turn".into(),run_id:"run".into(),
+            provider_session_id:"session".into(),provider_instance_id:"instance".into(),
+            revision:1,driver:"codex_app_server".into(),cwd:request.cwd.clone(),
+            runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+            provider_policy:json!({"kind":"codex"})};
+        crate::lifecycle::validate_parent_source_base(&parent,&routing_source_base(&request)).unwrap();
+        let sub=cwd.join("sub");std::fs::create_dir(&sub).unwrap();
+        let mut sub_source=routing_source_base(&request);
+        sub_source.cwd=sub.to_string_lossy().into_owned();
+        parent.cwd=sub_source.cwd.clone();
+        assert_eq!(crate::lifecycle::validate_parent_source_base(&parent,&sub_source)
+            .unwrap_err(),"cwd_outside_parent_project","pas d'export de l'ancêtre Git du parent");
+        sub_source.cwd=linked.to_string_lossy().into_owned();
+        parent.cwd=sub_source.cwd.clone();
+        crate::lifecycle::validate_parent_source_base(&parent,&sub_source).unwrap();
+        request.expected_base_commit=None;
+        assert_eq!(validate_routing_source(&request).unwrap_err(),"expected_base_commit_required");
+        request.expected_base_commit=Some("f".repeat(40));
+        assert!(validate_routing_source(&request).unwrap_err().starts_with("workspace_base_unavailable"));
+        request.expected_base_commit=Some(a);
+        request.workspace=Some(WorkspaceRequest::Shared {});
+        assert_eq!(validate_routing_source(&request).unwrap_err(),"expected_base_commit_mismatch");
+        assert_eq!((git(&["rev-parse","HEAD"]),git(&["status","--porcelain"]),
+            git(&["worktree","list","--porcelain"]),std::fs::read(cwd.join("file")).unwrap()),before);
+        assert_eq!(git(&["rev-parse","HEAD"]),b);
+        assert!(rx.try_recv().is_err(),"aucun fournisseur ou ordre depuis le fait de source");
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        drop(state);cleanup(&config);
     }
 
     #[test]
@@ -35419,7 +35654,7 @@ mod commit_view_reader221_tests {
     }
 
     #[test]
-    fn spec221_c19_reader_refuses_new_admission_before_task_or_source_effects() {
+    fn spec221_c19_direct_delegate_requires_auto_sha_before_task_or_source_effects() {
         let (state,_config,_commands,_reader)=super::tests::fixture("c19");
         let state=Arc::new(Mutex::new(state));
         let request:NativeDelegationRequest=serde_json::from_value(json!({
@@ -35430,7 +35665,7 @@ mod commit_view_reader221_tests {
         let before=serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
         let result=handle("conn-1",request,&state);
         let DaemonToWrapper::NativeDelegationResult{result}=result else{panic!("native result");};
-        assert_eq!(result["code"],"workspace_commit_view_not_enabled");
+        assert_eq!(result["code"],"expected_base_commit_required");
         assert!(result["message"].as_str().unwrap().contains("autres travaux"));
         assert_eq!(result["detail"]["task_id"],Value::Null);
         assert_eq!(serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap(),before);

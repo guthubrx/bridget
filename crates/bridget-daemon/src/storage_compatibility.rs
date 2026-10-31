@@ -8,11 +8,15 @@ use std::io::Read;
 
 const WORKTREE: &str = "workspace.worktree.v1";
 const COMMIT_VIEW:&str="workspace.commit_view.v1";
+const COMMIT_VIEW_ORIGIN_ROOT:&str="workspace.commit_view.origin_root.v2";
 // Le lecteur comprend préparation partielle, fichier en cours, alias198 et
 // conservation compacte, même lorsque la création publique reste fermée.
 // Les contre-épreuves opérationnelles sont dans remote_worker::tests et
 // workspace_commit_view::tests ; ce plancher ne dépend pas du drapeau créateur.
-const FORMATS: &[&str] = &[WORKTREE,COMMIT_VIEW];
+// Le reçu garde son schéma, mais le lecteur doit aussi savoir re-projeter
+// un parent en checkout lié vers la racine de A lors d'une lecture omise.
+// Le lecteur A accepte le JSON V1 mais ne sait pas effectuer cette relecture.
+const FORMATS: &[&str] = &[WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -140,6 +144,15 @@ mod tests {
             "reads":FORMATS,"writes":FORMATS})
     }
     #[test]
+    fn spec221_c19_origin_root_floor_refuses_reader_a_despite_unchanged_json_schema() {
+        let mut old=fixture();
+        old["reads"]=serde_json::json!([WORKTREE,COMMIT_VIEW]);
+        old["writes"]=old["reads"].clone();
+        assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+    }
+
+    #[test]
     fn spec221_storage_reader_report_is_bound_to_nonce_image_and_exact_shape() {
         let original = fixture();
         let nonce = "a".repeat(32);
@@ -170,7 +183,7 @@ mod tests {
         // Une déclaration additive ne doit pas casser un ancien validateur
         // si elle conserve les formats qu'il exige.
         let mut future = original.clone();
-        future["reads"] = serde_json::json!([WORKTREE, COMMIT_VIEW, "future.format"]);
+        future["reads"] = serde_json::json!([WORKTREE, COMMIT_VIEW, COMMIT_VIEW_ORIGIN_ROOT, "future.format"]);
         assert!(validate(
             &serde_json::to_vec(&future).unwrap(),
             &nonce,
@@ -185,7 +198,8 @@ mod tests {
                 .is_ok()
         );
         assert!(FORMATS.contains(&COMMIT_VIEW));
-        assert!(!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED);
+        // Le plancher ne dépend pas du créateur : le jalon lecteur seul a
+        // exercé ce même contrat avant l'ouverture du candidat de création.
         let old=serde_json::json!({"version":1,"nonce":"a".repeat(32),"image_sha256":"b".repeat(64),
             "reads":[WORKTREE],"writes":[WORKTREE]});
         assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
@@ -197,6 +211,6 @@ mod tests {
         );
         let value = execute(&["policy".into(), "--json".into()]).unwrap();
         assert_eq!(value["inventory_scanned"], false);
-        assert_eq!(value["required_reads"], serde_json::json!([WORKTREE,COMMIT_VIEW]));
+        assert_eq!(value["required_reads"], serde_json::json!([WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT]));
     }
 }

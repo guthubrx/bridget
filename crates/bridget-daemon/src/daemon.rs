@@ -25057,7 +25057,7 @@ mod matrice_roles_tests {
     /// de refus de l'un OU l'autre role -> le rejet apparait et l'assertion
     /// meurt en nommant le role fautif.
     #[test]
-    fn spec221_c19_daemon_announces_file_reader_without_view_creation() {
+    fn spec221_c19_daemon_announces_reader_and_creator_without_creating_a_task() {
         let (shared,config)=etat_nu("c19-reader-feature");
         assert!(matches!(handle_wrapper_message("reader-feature",
             WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client},&shared),
@@ -25067,7 +25067,8 @@ mod matrice_roles_tests {
             else{panic!("identité attendue");};
         assert!(features.iter().any(|feature|feature=="commit_view_files_v1"));
         assert!(features.iter().any(|feature|feature=="worker_workspace_view_v1"));
-        assert!(!features.iter().any(|feature|feature=="worker_workspace_view_create_v1"));
+        assert!(features.iter().any(|feature|feature=="worker_workspace_view_create_v1"));
+        assert!(shared.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
         drop(shared);let _=std::fs::remove_file(&config.db_path);
     }
 

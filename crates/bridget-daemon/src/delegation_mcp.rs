@@ -16,12 +16,13 @@ use std::time::{Duration, Instant};
 
 /// Même schéma fermé pour les deux admissions ; aucune valeur JSON dans le refus.
 fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
-    if value.get("strategy").and_then(Value::as_str)==Some("commit_view") {
+    if value.get("strategy").and_then(Value::as_str)==Some("commit_view")
+        && !crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
         return Err(ClientError::InvalidParams("La lecture de commit est en préparation sur ce client. Cet appel n'a pas été envoyé. Conserver toute clé ou tâche connue ; ne pas changer de mode pour forcer le passage. Faire qualifier et charger le parcours de vue et son retour compatible par le responsable Bridget. Les autres travaux autorisés suivent leur propre état.".into()));
     }
     serde_json::from_value(value.clone()).map_err(|_| {
         ClientError::InvalidParams(
-            "Corrigez la forme de workspace : un objet avec strategy égal à shared ou worktree est requis. En shared, seul strategy est accepté ; retirez base_ref, branch et tout autre champ. En worktree, seuls strategy, base_ref et branch sont acceptés ; base_ref et branch sont des chaînes si présents, jamais null. Le SHA source complet se place dans expected_base_commit pour l’admission automatique. Ce refus local concerne cet appel : il n’a pas été envoyé au serveur. Il ne prouve pas l’absence d’une demande antérieure de même request_id. Attendez la fin des appels concurrents et vérifiez tout reçu ou tâche déjà connu avant de corriger les paramètres ; un reçu existant conserve son canon. Ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état. Si le client chargé ne décrit pas ces règles, demandez sa reconnexion complète ; une simple reprise de tour peut garder l’ancien programme.".into(),
+            "Corrigez la forme fermée de workspace : shared ou worktree, et commit_view lorsque le parcours de vue est chargé. En commit_view, seul strategy est accepté ; expected_base_commit et posture=discovery appartiennent à bridget_auto_delegate. En shared, seul strategy est accepté ; retirez base_ref, branch et tout autre champ. En worktree, seuls strategy, base_ref et branch sont acceptés ; base_ref et branch sont des chaînes si présents, jamais null. Le SHA source complet se place dans expected_base_commit pour l’admission automatique. Ce refus local concerne cet appel : il n’a pas été envoyé au serveur. Il ne prouve pas l’absence d’une demande antérieure de même request_id. Attendez la fin des appels concurrents et vérifiez tout reçu ou tâche déjà connu avant de corriger les paramètres ; un reçu existant conserve son canon. Ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état. Si le client chargé ne décrit pas ces règles, demandez sa reconnexion complète ; une simple reprise de tour peut garder l’ancien programme.".into(),
         )
     })
 }
@@ -101,13 +102,29 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
     ];
     for tool in &mut definitions {
         if tool["name"]=="bridget_auto_delegate" {
+            let mut sha_workspaces=vec!["worktree"];
+            if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+                tool["inputSchema"]["properties"]["workspace"]["oneOf"].as_array_mut().unwrap().push(json!({
+                    "type":"object","properties":{"strategy":{"const":"commit_view",
+                        "description":"Vue partielle du commit exact, en lecture seule. Seul strategy est autorisé. Fournir posture=discovery et expected_base_commit. Aucun dépôt Git dans la vue ; les fichiers omis se lisent par bridget_read_commit_file."}},
+                    "required":["strategy"],"additionalProperties":false}));
+                sha_workspaces.push("commit_view");
+                tool["inputSchema"]["properties"]["expected_base_commit"]["description"]=json!(
+                    "SHA source complet de 40 caractères hexadécimaux. Obligatoire en Git, worktree, commit_view ou compilation. En commit_view, lire ce commit exact même si HEAD a avancé ; ne pas fournir base_ref ou branch.");
+            }
             tool["inputSchema"]["allOf"]=json!([{
                 "if":{"anyOf":[
                     {"required":["workload"],"properties":{"workload":{"const":"compilation"}}},
-                    {"required":["workspace"],"properties":{"workspace":{"required":["strategy"],"properties":{"strategy":{"const":"worktree"}}}}}
+                    {"required":["workspace"],"properties":{"workspace":{"required":["strategy"],"properties":{"strategy":{"enum":sha_workspaces}}}}}
                 ]},
                 "then":{"required":["expected_base_commit"]}
             }]);
+            if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
+                tool["inputSchema"]["allOf"].as_array_mut().unwrap().push(json!({
+                    "if":{"required":["workspace"],"properties":{"workspace":{
+                        "required":["strategy"],"properties":{"strategy":{"const":"commit_view"}}}}},
+                    "then":{"required":["posture"],"properties":{"posture":{"const":"discovery"}}}}));
+            }
         }
     }
     definitions
@@ -199,6 +216,14 @@ fn execute_with_proof(
                 ClientError::InvalidParams(format!("{key} doit être une chaîne non vide"))
             })
     };
+    if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
+        && args.pointer("/workspace/strategy").and_then(Value::as_str)==Some("commit_view")
+        && (name!="bridget_auto_delegate"
+            || args.get("expected_base_commit").is_none()
+            || args.get("posture").and_then(Value::as_str)!=Some("discovery")) {
+        return Err(ClientError::InvalidParams(
+            "Une vue de commit exige bridget_auto_delegate, posture=discovery et expected_base_commit avec le SHA exact. Cet appel n'a pas été envoyé. Conservez la clé et vérifiez toute tâche ou reçu antérieur avant de modifier les paramètres ; aucun remplacement d'issue inconnue.".into()));
+    }
     let request = match name {
         "bridget_read_commit_file"=>{
             let path=string("path")?;
@@ -508,6 +533,9 @@ fn execute_with_proof(
         NativeDelegationRequest::AutoDelegate(_) => {
             Some(("auto_delegate_v1", "auto_delegate_unsupported"))
         }
+        NativeDelegationRequest::AutoDelegateV2(auto)
+            if matches!(auto.workspace,Some(WorkspaceRequest::CommitView {})) =>
+            Some(("auto_delegate_v2","commit_view_master_upgrade_required")),
         NativeDelegationRequest::AutoDelegateV2(_) => {
             Some(("auto_delegate_v2", "auto_delegate_v2_unsupported"))
         }
@@ -516,13 +544,17 @@ fn execute_with_proof(
     if let Some((feature, refusal)) = required_feature {
         let supported = match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
             DaemonToWrapper::DaemonIdentityReport { features, .. } =>
-                features.iter().any(|candidate| candidate == feature),
+                features.iter().any(|candidate| candidate == feature)
+                    && (refusal!="commit_view_master_upgrade_required"
+                        || features.iter().any(|candidate|candidate=="worker_workspace_view_create_v1")),
             other => return unexpected_response(other),
         };
         if !supported {
             return Err(ClientError::Technical {
                 code: "native_delegation_refused",
-                message: refusal.into(),
+                message: if refusal=="commit_view_master_upgrade_required" {
+                    "commit_view_master_upgrade_required : Le maître ne déclare pas le parcours de création des vues. Demandez au responsable Bridget de charger et qualifier ce parcours et son retour compatible. Cette demande n'a pas été transmise pour admission ; conservez la clé et toute tâche ou reçu antérieur avant un rejeu strict après résolution. Ne créez pas de worktree pour contourner ce refus. Les autres travaux autorisés suivent leur propre état.".into()
+                } else {refusal.into()},
             });
         }
     }
@@ -678,6 +710,94 @@ fn recover_admission_with_budget171<T>(
 #[cfg(test)]
 mod admission_recovery171_tests {
     use super::*;
+
+    #[test]
+    fn spec221_c19_auto_view_requires_explicit_scope_and_keeps_closed_schema_before_connection() {
+        use std::os::unix::net::UnixListener;
+        assert!(crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED);
+        let definitions=tools(&json!({}));
+        let auto=definitions.iter().find(|t|t["name"]=="bridget_auto_delegate").unwrap();
+        let direct=definitions.iter().find(|t|t["name"]=="bridget_delegate").unwrap();
+        let variants=auto.pointer("/inputSchema/properties/workspace/oneOf").unwrap().as_array().unwrap();
+        assert!(variants.iter().any(|v|v.pointer("/properties/strategy/const")==Some(&json!("commit_view"))
+            && v["additionalProperties"]==false));
+        assert!(!direct.pointer("/inputSchema/properties/workspace/oneOf").unwrap().as_array().unwrap()
+            .iter().any(|v|v.pointer("/properties/strategy/const")==Some(&json!("commit_view"))));
+        assert_eq!(auto["inputSchema"]["allOf"][1]["then"]["required"],json!(["posture"]));
+        let identity=ResolvedIdentity{name:"owner".into(),instance_id:"instance".into(),delegated_origin:None};
+        let socket=crate::mcp_identity::mock_socket("c19-view-local-reject");
+        let listener=UnixListener::bind(&socket).unwrap();listener.set_nonblocking(true).unwrap();
+        let original=json!({"request_id":"same-key","task":"read","cwd":"/source/.worktrees/X",
+            "workspace":{"strategy":"commit_view"},"expected_base_commit":"a".repeat(40),"posture":"discovery"});
+        let mut missing=original.clone();missing.as_object_mut().unwrap().remove("expected_base_commit");
+        let mut writing=original.clone();writing["posture"]=json!("development");
+        let mut absent=original.clone();absent.as_object_mut().unwrap().remove("posture");
+        let mut extra=original.clone();extra["workspace"]["branch"]=json!("PRIVATE-VALUE");
+        for (tool,args) in [("bridget_auto_delegate",missing),("bridget_auto_delegate",writing),
+            ("bridget_auto_delegate",absent),("bridget_auto_delegate",extra),
+            ("bridget_delegate",json!({"request_id":"same-key","task":"read","cwd":"/source",
+                "agent_type":"codex","model":"fixture","posture":"discovery","workspace":{"strategy":"commit_view"}}))] {
+            let err=execute_with_proof(&identity,tool,&args,&socket,None).unwrap_err();
+            assert!(matches!(err,ClientError::InvalidParams(_)));
+            assert!(!err.to_string().contains("PRIVATE-VALUE"));
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==std::io::ErrorKind::WouldBlock));
+        }
+        drop(listener);std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn spec221_c19_auto_view_negotiates_creation_before_sending_original_envelope() {
+        use std::io::{BufRead,BufReader,Write};
+        use std::os::unix::net::UnixListener;
+        assert!(crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED);
+        for features in [vec!["auto_delegate_v2"],
+            vec!["worker_workspace_view_create_v1"],
+            vec!["auto_delegate_v2","worker_workspace_view_create_v1"]] {
+            let ready=features.len()==2;
+            let socket=crate::mcp_identity::mock_socket("c19-view-master");
+            let listener=UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket,"owner","instance");
+            let backend=std::thread::spawn(move|| {
+                let (mut stream,_)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=BufReader::new(stream.try_clone().unwrap());
+                let mut line=String::new();reader.read_line(&mut line).unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"],"RegisterAuxiliary");
+                writeln!(stream,"{}",json!({"type":"Registered","agent_id":"owner","credential":null})).unwrap();
+                line.clear();reader.read_line(&mut line).unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"],"DaemonIdentityRequest");
+                writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture",
+                    "db_path":"fixture","instance_id":"fixture","features":features})).unwrap();
+                line.clear();
+                let count=reader.read_line(&mut line).unwrap();
+                if !ready {assert_eq!(count,0,"pas d'admission vers un maître sans les deux capacités");return None;}
+                assert!(count>0);
+                let request:Value=serde_json::from_str(&line).unwrap();
+                writeln!(stream,"{}",json!({"type":"NativeDelegationResult","result":{"status":"accepted","task_id":"fixture-view"}})).unwrap();
+                Some(request)
+            });
+            let identity=ResolvedIdentity{name:"owner".into(),instance_id:"instance".into(),delegated_origin:None};
+            let args=json!({"request_id":"exact-key","task":"read","cwd":"/source/.worktrees/X",
+                "workspace":{"strategy":"commit_view"},"expected_base_commit":"a".repeat(40),
+                "posture":"discovery","child_requests":"deny"});
+            let canonical=serde_json::to_vec(&args).unwrap();
+            let result=execute_with_proof(&identity,"bridget_auto_delegate",&args,&socket,None);
+            let sent=backend.join().unwrap();
+            if ready {
+                assert_eq!(result.unwrap()["task_id"],"fixture-view");
+                let sent=sent.unwrap();
+                assert_eq!(sent["request"]["operation"],"auto_delegate_v2");
+                for key in ["request_id","cwd","workspace","expected_base_commit","posture","child_requests"] {
+                    assert_eq!(sent["request"][key],args[key]);
+                }
+            } else {
+                assert!(matches!(result,Err(ClientError::Technical {message,..})
+                    if message.starts_with("commit_view_master_upgrade_required")));
+            }
+            assert_eq!(serde_json::to_vec(&args).unwrap(),canonical);
+            std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+        }
+    }
 
     #[test]
     fn spec221_c19_file_tool_parses_only_task_and_exact_relative_path() {
@@ -1442,8 +1562,9 @@ mod tests {
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
         let native_tools = tools(brief_schema);
-        assert_eq!(native_tools.len(), 11);
+        assert_eq!(native_tools.len(), 12);
         assert!(native_tools.iter().any(|tool| tool["name"] == "bridget_refresh_models"));
+        assert!(native_tools.iter().any(|tool| tool["name"] == "bridget_read_commit_file"));
     }
 
     #[test]

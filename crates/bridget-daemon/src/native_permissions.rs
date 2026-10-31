@@ -257,9 +257,14 @@ fn mapped_permission_directory171(mapping: &crate::registry::ProjectMapping, ori
 }
 
 fn mapped_existing_permission_directory171(mapping: &crate::registry::ProjectMapping,
-    original: &Path, protected: &[PathBuf]) -> Result<PathBuf, String> {
+    original: &Path, protected: &[PathBuf], working_alias:Option<&Path>) -> Result<PathBuf, String> {
     let root = crate::registry::validate_unprotected_local_path(&mapping.remote_root, protected)?;
-    let selected = mapped_permission_directory171(mapping, original)?;
+    // Une vue remplace le checkout du parent par la racine de A. Les chemins
+    // explicitement hérités hors de ce checkout gardent le mapping ordinaire.
+    let selected = if let Some(suffix)=working_alias.and_then(|base|
+        mapped_permission_suffix171(original,base).ok()) {
+        mapping.remote_root.join(suffix)
+    } else {mapped_permission_directory171(mapping, original)?};
     let translated = crate::registry::validate_unprotected_local_path(&selected, protected)?;
     let permitted = translated.starts_with(&root) || mapping.additional_root.as_ref()
         .is_some_and(|extra| translated.starts_with(&extra.remote_root));
@@ -268,13 +273,13 @@ fn mapped_existing_permission_directory171(mapping: &crate::registry::ProjectMap
 }
 
 fn project_policy_directories171(policy: &mut Value, mapping: &crate::registry::ProjectMapping,
-    protected: &[PathBuf]) -> Result<(), String> {
+    protected: &[PathBuf], working_alias:Option<&Path>) -> Result<(), String> {
     let mut projected = policy.clone();
     for pointer in ["/sandbox_policy/writableRoots", "/additional_directories"] {
         if let Some(paths) = projected.pointer_mut(pointer) {
             let mapped = paths.as_array().ok_or("permission_mapping_unavailable")?.iter()
                 .map(|path| mapped_existing_permission_directory171(mapping,
-                    Path::new(path.as_str().ok_or("permission_mapping_unavailable")?), protected))
+                    Path::new(path.as_str().ok_or("permission_mapping_unavailable")?), protected, working_alias))
                 .collect::<Result<Vec<_>, String>>()?;
             *paths = serde_json::to_value(mapped).map_err(|_| unavailable())?;
         }
@@ -375,7 +380,7 @@ pub(crate) fn project_remote_permissions(
     protected: &[PathBuf],
 ) -> Result<(Value, SpawnPosture), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = project_remote_permissions_in_operation(parent, definition, mapping, execution_cwd, source, posture, protected, &mut operation)?;
+    let result = project_remote_permissions_in_operation(parent, definition, mapping, execution_cwd, source, posture, protected, &mut operation, false)?;
     operation.finish()?;
     Ok(result)
 }
@@ -389,6 +394,7 @@ pub(crate) fn project_remote_permissions_in_operation(
     posture: Option<SpawnPosture>,
     protected: &[PathBuf],
     operation: &mut PermissionReadOperation,
+    commit_view:bool,
 ) -> Result<(Value, SpawnPosture), String> {
     bridget_transport::protocol::validate_permissions(parent, parent.source == "provider_turn")?;
     let root = crate::registry::validate_unprotected_local_path(&mapping.remote_root, protected)?;
@@ -402,7 +408,14 @@ pub(crate) fn project_remote_permissions_in_operation(
         return Err("permission_mapping_unavailable".into());
     }
     // strip_prefix agit sur les composants et ne confond pas project/project-x.
-    let project_path = |origin: &str| mapped_existing_permission_directory171(mapping, Path::new(origin), protected);
+    // commit_view est fourni seulement par une demande worker authentifiée,
+    // après preuve de la racine Git dans le périmètre du parent sur l'origine.
+    // Il ne change ni le parent, ni le mapping attesté, ni les règles explicites.
+    if commit_view && posture!=Some(SpawnPosture::Discovery) {
+        return Err("permission_not_inherited".into());
+    }
+    let working_alias=commit_view.then(||Path::new(&parent.cwd));
+    let project_path = |origin: &str| mapped_existing_permission_directory171(mapping, Path::new(origin), protected, working_alias);
     mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;
     if let Some(extra) = &mapping.additional_root {
         crate::registry::validate_additional_mapping171(mapping)?;
@@ -426,7 +439,7 @@ pub(crate) fn project_remote_permissions_in_operation(
             require_isolated_claude_mount171(definition)?;
         }
     }
-    project_policy_directories171(&mut translated.provider_policy, mapping, protected)?;
+    project_policy_directories171(&mut translated.provider_policy, mapping, protected, working_alias)?;
     let prepared = if definition.protocol == "claude_stream_json" {
         Some(capture_native_target_context(definition, &cwd, source)?)
     } else { None };
