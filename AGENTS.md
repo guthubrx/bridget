@@ -109,6 +109,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/Shared occupé — sourcee1e5e857 intégrée/poussée, build221-workspace-busy-r1 chargé sur7services/SHA vérifiés, coupure2,28s. Refus workspace_busy joint jusqu’à8pistes de tâches de la même identité native, SQL129métadonnées maximum sans résultats/briefs ; projet/machine/racine filtrés, aucune attribution de garde worker depuis le seul maître. Deux testsdaemonPASS ; revue01ee6048 partielle et deltaSQL auto-audité, limites consignées. WrappersCartae3149928/2500061 etSYS1137782 préservés ; rollback221-claude-terminal natif vérifié, lien revenu, aucun rejeu ni garde libérée.124003632octets de transferts retirés ; caches et WTrevue propres conservés sous observationprocessusincomplète. Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/workspace-busy.md.
+
+
 Session221/résultatClaude — source8f89c1ef intégrée/poussée, build221-claude-terminal-r1 chargé sur7services et SHA vérifiés. terminal_reason facultatif reconnu par subtype success/is_errorfalse, raisons présentes inconnues refusées, droits/annulations conservés ; métadonnées fermées provider_result et guidage propriétaire.42tests distinctsPASS, revue7e52f8b3 sans blocage après correction null ciblée. Coupure2,20s ; wrappersCartae2500061/3149928 préservés, rollback221-preparation-queue-r1 natif vérifié. Lien revenu après primary_absent transitoire ; MCP221-view-sync conservés sans nouveau schéma. Tâchef7ab1d73/ronde3 strictement inchangée, brut historique absent donc cause précise inconnue, aucun rejeu ni service métier.123276528octets de transferts retirés ; stagingMac/observationSYS incomplets, caches et revue propres conservés sans forcer. Programme52/182InProgress, aucune parité globale. Preuves : specs/221-capacites-completes/validation/claude-result.md.
 
 

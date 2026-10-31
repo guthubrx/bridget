@@ -274,3 +274,11 @@ provider_result et guidage propriétaire livrés sur les sept services.
 42contrôles distincts, revue native7e52f8b3 et correction null ciblée.
 Aucun résultat historique reclassé, aucune mission métier rejouée.
 Preuve : validation/claude-result.md. Programme52/182, In Progress.
+
+
+Convergence incident Shared (C27, sans clôture supplémentaire) :
+références bornées de tâches de la même identité native après workspace_busy,
+sans attribuer une garde worker depuis le seul état maître. Deux contrôles
+daemon distinctsPASS, revue initiale partielle et audit du delta SQL final.
+Sourcee1e5e857 chargée sur les sept services. Aucune garde ni mission changée.
+Preuve : validation/workspace-busy.md. Programme52/182, In Progress.

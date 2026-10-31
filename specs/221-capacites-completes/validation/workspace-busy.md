@@ -1,6 +1,6 @@
 # Références de tâches après refus Shared
 
-Statut : correction vérifiée, chargement en cours. Incident
+Statut : correction intégrée, poussée et chargée sur les sept services. Incident
 opus201-rattacher1439-sites-nommes-20261101-01 ; refus not_recorded/sansTask,
 workspace_busy sur11candidats Cartae. Aucun reçu durable de cette clé à la
 lecture initiale, sans rejeu ni mission de remplacement.
@@ -62,3 +62,46 @@ pas de chemin projeté, garde/cause/admission inchangées, aucun nouveau lanceme
 Résultat de revue lu/ACK et clôture demandée une fois.
 Changement technique de diagnostic : pas de diaporama d’interface requis.
 Le programme global reste52/182, In Progress ; aucune catégorie close.
+
+
+## Chargement, retour et nettoyage
+Source exécutablee1e5e857f752826d994213a92627ee27e0ebe965 ; build
+221-workspace-busy-r1/version0.6.5. Comparaison des267sources Rust :
+code de production identique entre main et snapshot de compilation ; seul
+le corps cfg(test) de la fixture d’identifiants diffère après sa correction.
+Cela n’exige pas de nouvelle compilation release. Cette différence est
+explicitement conservée dans source-proof.json ; aucune identité octet pour
+octet de tout le fichier de test n’est prétendue.
+Mac et SYS ont reçu les mêmes deux fichiers de production avant compilation.
+
+Image Linux commune construite sur SYS, GLIBCmax2.34, 41334544octets :
+SHA2562515a855e045d1d33982a2f2d0203991d3806895a04a108eac49e781dc0e595f.
+MacARM64, 34140240octets :
+SHA256b1a9c324015dcf136d230b90ec8793957f145e72997f7c0e1293c9727b072d4b.
+Processus réellement chargés et hachés : maîtreCartae3340078,
+mobile3340164, workerCartae3341763, workerSYS1140488, workerKS1506085,
+workerMac6349 et pontMac6781. Coupure maître2,28s.
+Wrappers Cartae3149928/birth300090634 et2500061/birth270585460 préservés ;
+wrapper SYS1137782/birth65945242 également observé conservé. Aucun service
+métier modifié, aucune garde libérée ou mission rejouée.
+
+Retour221-claude-terminal-r1 compatible avec les formats conservés dans
+les deux sens ; pointeurs natifs rollback Cartae/Mac mis à jour par écrivain
+atomique sous verrou, activation=false, updaters repris. Session native
+révision10 réussie puis task_status de la même revue réussi. Aucun nouveau
+schéma MCP requis ; clients ouverts et sessions fournisseur existantes
+conservés, pas de rechargement ni de nouveau comportement prétendu sur ces
+anciennes images en cours de travail.
+Pas de nouvelle admission, de rejeu du refus ou de mission d’essai : les
+nouveaux champs sont éprouvés par les tests et leur code est chargé ; aucun
+nouveau refus réel n’a été provoqué pour les observer.
+
+Copies binaires de transfert vérifiées retirées sur Mac/Cartae/KS :
+124003632octets. installed appelé sur Mac/SYS : staging non enregistré côté
+Mac et observation processus incomplète SYS ; caches conservés sans forcer.
+Revue01ee6048 arrêtée, lue/ACK, clôture demandée et Git propre y compris
+ignorés ; worktree/branche conservés faute de preuve d’absence globale
+d’usage des processus. Workspace221 actif, actif/retour, anciens binaires
+encore utilisés et preuves conservés. main intégré/poussé ; refs main des
+miroirs SYS/KS synchronisées en gardant leurs HEAD détachés.
+Preuves privées dans les caches bridget221-workspace-busy des quatre hôtes.
