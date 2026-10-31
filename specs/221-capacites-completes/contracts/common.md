@@ -985,3 +985,15 @@ Employer le validateur natif, puis l'écrivain atomique sous verrou pour rollbac
 Ne pas conditionner ce plancher à la disponibilité actuelle du créateur :
 une désactivation ne supprime aucun reçu. L'annonce du vocabulaire ne crée
 aucune tâche ni autorité ; la négociation et la preuve du parent restent requises.
+
+### C01/C03/C04 — compte courant et observation historique
+La projection existante publie auth=reported_present seulement pour une liste
+actuelle accompagnée d'un nonce opaque. Une observation expirée, une définition
+divergente ou un pair non vérifié ne publient plus de nonce de compte courant.
+Les dates historiques restent disponibles, sans transformer ce contexte en login.
+SignInRequired publié par le programme donne reported_absent ; un compte non
+identifiable reste not_verified. L'absence de nonce n'est pas une preuve de logout.
+Un changement de compte sur une connexion remplace toute sa liste à séquence
+croissante ; un ancien résultat ne restaure pas A et ne modifie pas l'autre serveur.
+Réutiliser project_at, ingest et les fixtures220/221 ; aucun nouveau champ,
+lecteur de secrets, processus, magasin ou mécanisme d'admission.

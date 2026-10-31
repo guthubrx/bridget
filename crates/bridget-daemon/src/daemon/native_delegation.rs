@@ -34837,21 +34837,37 @@ mod permission_projection214_tests {
         let mut repaired=update.clone();repaired.sequence=3;assert!(catalogue::ingest(&mut st,"worker220",repaired).is_none());
         let observed=catalogue::project(&st,&st.registry);assert_eq!(observed[0]["status"],"reported_models");assert_eq!(observed[0]["models"][0]["declared_in_policy"],false);
         assert_eq!(observed[0]["entitlement"],"unknown");assert_eq!(observed[0]["provider_cache"],"not_attested");
+        assert_eq!(observed[0]["auth"],"reported_present");
+        assert_eq!(observed[0]["account_scope"],"b".repeat(32));
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at-=181;
         let stale=catalogue::project(&st,&st.registry);assert_eq!(stale[0]["status"],"stale");assert!(stale[0]["age_secs"].as_u64().unwrap()>=181);assert!(stale[0]["models"].as_array().unwrap().is_empty());
+        assert_eq!(stale[0]["auth"],"not_verified");
+        assert!(stale[0]["account_scope"].is_null());
         let advice=stale[0]["next_action"].as_str().unwrap();
         assert!(advice.contains("marqueurs privés"),"une donnée périmée ne prouve pas l'arrêt de la sonde");
         assert!(advice.contains("changement de version"));
         assert!(advice.contains("autres travaux autorisés"));
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.definition_digest="c".repeat(64);
         st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value.observed_at=unix_timestamp();
-        assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"definition_changed");
+        let changed=catalogue::project(&st,&st.registry);
+        assert_eq!(changed[0]["status"],"definition_changed");
+        assert_eq!(changed[0]["auth"],"not_verified");
+        assert!(changed[0]["account_scope"].is_null());
+        let mut signed_out=update.clone();signed_out.sequence=4;
+        signed_out.catalogue.state=CatalogueState::SignInRequired;
+        signed_out.catalogue.account_scope=None;signed_out.catalogue.models.clear();
+        assert!(catalogue::ingest(&mut st,"worker220",signed_out).is_none());
+        let absent=catalogue::project(&st,&st.registry);
+        assert_eq!(absent[0]["status"],"sign_in_required");
+        assert_eq!(absent[0]["auth"],"reported_absent");
+        assert!(absent[0]["account_scope"].is_null());
+        assert_eq!(absent[0]["models"],json!([]));
         {let cached=&mut st.remote_workers.get_mut("local").unwrap().catalogues.get_mut("main").unwrap().value;
         *cached=update.catalogue.clone();cached.state=CatalogueState::Unavailable;cached.models.clear();cached.account_scope=None;cached.cause=Some(CatalogueCause::StopUnconfirmed);cached.observed_at-=181;}
         let blocked=catalogue::project(&st,&st.registry);assert_eq!(blocked[0]["status"],"unavailable");assert!(blocked[0]["next_action"].as_str().unwrap().contains("maintenance"));
         st.remote_workers.get_mut("local").unwrap().catalogue_refresh_id="new-refresh".into();
         let mut late=update.clone();late.sequence=2;assert!(catalogue::ingest(&mut st,"worker220",late).is_none());
-        assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,3);
+        assert_eq!(st.remote_workers["local"].catalogues["main"].sequence,4);
         let (a,_b)=UnixStream::pair().unwrap();st.connections.insert("worker220".into(),Arc::new(Mutex::new(std::io::BufWriter::new(a))));
         let mut controls=Vec::new();let result=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();
         assert_eq!(result["workers"][0]["status"],"requested");assert_eq!(controls.len(),1);assert_eq!(st.remote_workers["local"].catalogues["main"].value.cause,Some(CatalogueCause::StopUnconfirmed));
@@ -34859,6 +34875,8 @@ mod permission_projection214_tests {
         let second=catalogue::refresh(&mut st,Some("local"),&mut controls).unwrap();assert_eq!(second["workers"][0]["status"],"already_requested");assert_eq!(controls.len(),1);assert_eq!(token,st.remote_workers["local"].catalogue_refresh_id);
         st.remote_workers.get_mut("local").unwrap().capabilities.clear();assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"unverified_peer");assert_eq!(catalogue::project(&st,&st.registry)[0]["probe_constraint"]["state"],"stop_unconfirmed");
         let unverified=catalogue::project(&st,&st.registry);
+        assert_eq!(unverified[0]["auth"],"not_verified");
+        assert!(unverified[0]["account_scope"].is_null());
         assert!(unverified[0]["next_action"].as_str().unwrap().contains("marqueurs privés"));
         assert!(unverified[0]["next_action"].as_str().unwrap().contains("ne confirme aucun arrêt"));
         st.remote_workers.remove("local");assert_eq!(catalogue::project(&st,&st.registry)[0]["status"],"observation_source_unavailable");
@@ -34921,6 +34939,8 @@ mod permission_projection214_tests {
         assert_eq!(expired[0]["status"],"stale");assert_eq!(expired[0]["models"],json!([]));
         assert_eq!(expired[0]["freshness_cause"],"receipt_expired");
         assert!(expired[0]["expires_at"].is_null());
+        assert_eq!(expired[0]["auth"],"not_verified");
+        assert!(expired[0]["account_scope"].is_null());
         // Source trop ancienne et source trop future ne redeviennent pas actuelles.
         let source_old=catalogue::project_at(&st,&st.registry,now+200,old);
         assert_eq!(source_old[0]["status"],"stale");
@@ -34991,6 +35011,44 @@ mod permission_projection214_tests {
         assert_eq!(projected[1]["machine_id"],"other");assert_eq!(projected[1]["connection_id"],"other");
         assert_eq!(projected[1]["account_scope"],"b".repeat(32));assert_eq!(projected[1]["models"][0]["policy_effort_status"],"announced");
         assert_eq!(projected[0]["last_observed_at"],now-10);assert_eq!(projected[1]["last_observed_at"],now-20);
+        let untouched=serde_json::to_vec(&projected[1]).unwrap();
+        let tasks=serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap();
+        let mut switched=st.remote_workers["local"].catalogues["main"].value.clone();
+        switched.account_scope=Some("c".repeat(32));switched.observed_at=now;
+        switched.models=vec![bridget_transport::provider_catalogue::CatalogueModel {
+            model:"account-new-model".into(),supported_efforts:vec!["low".into()],default_effort:Some("low".into())}];
+        let update=bridget_transport::provider_catalogue::WorkerCatalogueUpdate {version:1,worker:st.remote_workers["local"].identity.clone(),
+            connection_epoch:"epoch221-models".into(),refresh_id:"epoch221-models".into(),sequence:2,catalogue:switched};
+        assert!(catalogue::ingest(&mut st,"worker221-models",update.clone()).is_none());
+        let changed=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(changed[0]["account_scope"],"c".repeat(32));
+        assert_eq!(changed[0]["models"].as_array().unwrap().len(),1);
+        assert_eq!(changed[0]["models"][0]["model"],"account-new-model");
+        assert_eq!(serde_json::to_vec(&changed[1]).unwrap(),untouched);
+        let mut late=update;late.sequence=1;late.catalogue.account_scope=Some("a".repeat(32));
+        // Garder une enveloppe Observed valide : seul son numéro de séquence est ancien.
+        late.catalogue.models[0].model="account-old-model".into();
+        assert!(late.valid());
+        assert!(catalogue::ingest(&mut st,"worker221-models",late).is_none());
+        assert_eq!(serde_json::to_vec(&catalogue::project_at(&st,&st.registry,now,clock)).unwrap(),
+            serde_json::to_vec(&changed).unwrap());
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),tasks);
+        let mut unidentified=st.remote_workers["local"].catalogues["main"].value.clone();
+        unidentified.account_scope=None;
+        unidentified.cause=Some(bridget_transport::provider_catalogue::CatalogueCause::AccountUnidentified);
+        let update=bridget_transport::provider_catalogue::WorkerCatalogueUpdate {
+            version:1,worker:st.remote_workers["local"].identity.clone(),
+            connection_epoch:"epoch221-models".into(),refresh_id:"epoch221-models".into(),
+            sequence:3,catalogue:unidentified};
+        assert!(update.valid());
+        assert!(catalogue::ingest(&mut st,"worker221-models",update).is_none());
+        let unknown=catalogue::project_at(&st,&st.registry,now,clock);
+        assert_eq!(unknown[0]["status"],"reported_models");
+        assert_eq!(unknown[0]["auth"],"not_verified");
+        assert!(unknown[0]["account_scope"].is_null());
+        assert_eq!(unknown[0]["models"],changed[0]["models"]);
+        assert_eq!(serde_json::to_vec(&unknown[1]).unwrap(),untouched);
+        assert_eq!(serde_json::to_vec(&st.delegation_store.tasks().unwrap()).unwrap(),tasks);
         drop(st);drop(shared);super::tests::cleanup(&config);
     }
 
