@@ -636,7 +636,7 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Inspectez les modifications du dossier avec son propriétaire. Préservez les fichiers, les commits et les sorties avant de décider de son utilisation ; aucun reset ni nettoyage automatique.",
                 "Si les modifications ne vous appartiennent pas, demandez à leur propriétaire ou à l'utilisateur quelle conservation et quelle préparation autoriser."),
             Some(CandidateProbeRefusal::WorkspaceBusy) => (
-                "Identifiez la tâche qui garde le dossier partagé et consultez son état natif. Un résultat disponible ne prouve pas sa clôture ; ne libérez pas sa garde à la main.",
+                "Consultez detail.workspace_tasks si présent, puis bridget_task_status avec les identifiants indiqués. Shared peut devoir changer le HEAD de la racine ; une tâche dans un worktree descendant peut aussi l’interdire. Les références du maître sont des pistes, pas une preuve de réservation worker. Si elles manquent, demandez au responsable une corrélation ciblée des préparations et reçus du worker sur cette machine. Ne libérez aucune garde à la main.",
                 "Si la garde persiste après la clôture demandée par son propriétaire, demandez à l'utilisateur une vérification ciblée de l'arrêt ; n'interrompez pas les autres travaux."),
             Some(CandidateProbeRefusal::WorkspaceDiverged) => (
                 "Comparez la base attendue et le HEAD du dossier sans les modifier. Préservez les commits divergents et vérifiez le dossier réellement choisi ; ne remplacez pas la base imposée.",
@@ -3704,6 +3704,55 @@ impl ParentPermission {
     }
 }
 
+// Pistes du maître, jamais une preuve des réservations du worker.
+// Les chemins servent au filtrage mais ne quittent pas cette projection.
+fn owned_workspace_task_hints(
+    tasks: &[Value], owner: &str, roots: &[(String, String, std::path::PathBuf)],
+) -> Value {
+    let mut rows = Vec::new();
+    for task in tasks {
+        if task["owner"] != owner { continue; }
+        let (Some(machine),Some(project),Some(cwd)) = (task["machine_id"].as_str(),
+            task["project_id"].as_str(),task["execution_cwd"].as_str()) else {continue;};
+        let cwd=Path::new(cwd);
+        if !roots.iter().any(|(m,p,root)|m==machine && p==project
+            && (cwd.starts_with(root) || root.starts_with(cwd))) {continue;}
+        rows.push(json!({"task_id":task["task_id"],"owner":owner,"state":task["state"],
+            "machine_id":machine,"project_id":project,"guarded":task["guarded"].as_i64()==Some(1),
+            "cleanup_done":task["cleanup_done"].as_i64()==Some(1)}));
+    }
+    rows.sort_by(|a,b|a["task_id"].as_str().cmp(&b["task_id"].as_str()));
+    let truncated=rows.len()>8 || tasks.len()==129;rows.truncate(8);
+    json!({"scope":"owned_current_instance_tasks","basis":"coordinator_task_state",
+        "blocker_identity_attested":false,"tasks":rows,"truncated":truncated,
+        "next_action":"Lire bridget_task_status pour les task_id indiqués. Ces tâches de votre instance native recoupent le dépôt ciblé ; leur état maître ne prouve pas quelle réservation worker a causé le refus. Une liste vide ne prouve pas le dossier libre : préparations worker, autres instances et tâches d’autrui ne sont pas exposées. Si l’identifiant reste inconnu, demander au responsable de cette machine de corréler le refus avec les préparations et reçus de commande du worker. Ne libérer aucune garde, ne pas interrompre autrui ; les autres travaux suivent leur propre état."})
+}
+
+fn project_owned_workspace_tasks(
+    st: &DaemonState, conn: &str, request: &AutoDelegateV2, result: &mut Value,
+) -> Result<(), String> {
+    if !matches!(request.workspace, None | Some(WorkspaceRequest::Shared {}))
+        || !result["detail"]["reasons"].as_array().is_some_and(|reasons|reasons.iter().any(|r|
+            r["kind"]=="candidate" && r["code"]=="workspace_busy")) { return Ok(()); }
+    let (owner,instance)=live_connection_identity(st,conn).ok_or("identity_unavailable")?;
+    let host=super::origin_proof::host_for_owner(st,&owner)?;
+    let tasks=st.delegation_store.workspace_task_hints(&owner,&instance)?;
+    let mut roots=Vec::new();
+    for machine in st.registry.machines().keys() {
+        if request.machine_id.as_ref().is_some_and(|m|m!=machine) {continue;}
+        if let Ok((project,mapping))=routing_project_mapping(&st.registry,machine,
+            request.project_id.as_deref(),&host,Path::new(&request.cwd)) {
+            roots.push((machine.clone(),project,mapping.remote_root));
+        }
+    }
+    result["detail"]["workspace_tasks"]=owned_workspace_task_hints(&tasks,&owner,&roots);
+    if let Some(message)=result["message"].as_str() {
+        let message=format!("{message} Consultez detail.workspace_tasks puis bridget_task_status sur les identifiants propres au demandeur.");
+        result["message"]=json!(message);result["detail"]["message"]=json!(message);
+    }
+    Ok(())
+}
+
 // Observation scoped au propriétaire, sous le verrou du daemon. Elle n'acquiert
 // aucune réservation et ne promet rien pour un nouvel appel concurrent.
 fn routing_failure_admission(
@@ -3767,6 +3816,11 @@ fn routing_failure_admission(
         "request_id": request.request_id, "state": admission, "task_id": task_id,
         "observed_at": unix_timestamp(), "recovery": recovery,
     });
+    if matches!(admission,"not_recorded"|"pending"|"admitted"|"refused")
+        && project_owned_workspace_tasks(&st,conn,request,&mut result).is_err() {
+        result["detail"]["workspace_tasks"]=json!({"status":"unavailable",
+            "next_action":"Faire vérifier la projection des tâches par le responsable Bridget ; une absence de diagnostic ne prouve pas le dossier libre. Conserver demande, clé et autres travaux sans libérer de garde."});
+    }
     result
 }
 
@@ -34955,6 +35009,66 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert!(view["future_mission_duration"].as_str().unwrap().contains("14400"));
             assert_eq!(before,serde_json::to_vec(&task).unwrap());
         }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_workspace_busy_projection_requires_current_owner_and_shared() {
+        let (state,config,rx,_reader,mut request,_root)=routing168_fixture(1);
+        request.workspace=Some(WorkspaceRequest::Shared {});
+        let error="routing_candidate_unavailable:[{\"kind\":\"candidate\",\"code\":\"workspace_busy\",\"candidates\":11}]";
+        let result=routing_failure_admission("conn-1",&request,None,failure(error),&state);
+        assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
+        assert_eq!(result["detail"]["workspace_tasks"]["scope"],"owned_current_instance_tasks","{result}");
+        assert!(result["detail"]["workspace_tasks"]["tasks"].as_array().unwrap().is_empty());
+        let unknown=routing_failure_admission("unknown",&request,None,failure(error),&state);
+        assert!(unknown["detail"]["workspace_tasks"].is_null());
+        let other=routing_failure_admission("conn-1",&request,None,failure("routing_candidate_unavailable"),&state);
+        assert!(other["detail"]["workspace_tasks"].is_null());
+        request.workspace=Some(WorkspaceRequest::Worktree {base_ref:None,branch:None});
+        let other=routing_failure_admission("conn-1",&request,None,failure(error),&state);
+        assert!(other["detail"]["workspace_tasks"].is_null());
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());drop(state);cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_workspace_busy_hints_are_owned_bounded_and_not_worker_proof() {
+        let (st,config,mut task,_)=remote162_capture_fixture();
+        let owner=task.owner.clone();let instance=task.owner_instance.clone();
+        task.state="working".into();task.cleanup_done=false;
+        let p=task.remote_placement.as_mut().unwrap();
+        p.machine_id="cartae".into();p.project_id="project".into();
+        p.execution_cwd="/PRIVATE/root/.worktrees/child".into();
+        let roots=vec![("cartae".into(),"project".into(),std::path::PathBuf::from("/PRIVATE/root"))];
+        let before=serde_json::to_vec(&task).unwrap();
+        for i in 0..12 {let mut t=task.clone();t.task_id=format!("task-{i:02}");t.child=t.task_id.clone();t.mission=t.task_id.clone();st.delegation_store.insert(&t,&t.task_id,b"hint-fixture").unwrap();}
+        let mut foreign=task.clone();foreign.owner="FOREIGN_OWNER".into();foreign.task_id="FOREIGN_TASK".into();
+        foreign.child=foreign.task_id.clone();foreign.mission=foreign.task_id.clone();st.delegation_store.insert(&foreign,&foreign.task_id,b"hint-fixture").unwrap();
+        let mut foreign=task.clone();foreign.owner_instance="FOREIGN_INSTANCE".into();foreign.task_id="OTHER_INSTANCE".into();
+        foreign.child=foreign.task_id.clone();foreign.mission=foreign.task_id.clone();st.delegation_store.insert(&foreign,&foreign.task_id,b"hint-fixture").unwrap();
+        let mut other=task.clone();other.remote_placement.as_mut().unwrap().project_id="other".into();
+        other.task_id="OTHER_PROJECT".into();other.child=other.task_id.clone();other.mission=other.task_id.clone();st.delegation_store.insert(&other,&other.task_id,b"hint-fixture").unwrap();
+        let mut other=task.clone();other.remote_placement.as_mut().unwrap().machine_id="other".into();
+        other.task_id="OTHER_MACHINE".into();other.child=other.task_id.clone();other.mission=other.task_id.clone();st.delegation_store.insert(&other,&other.task_id,b"hint-fixture").unwrap();
+        let mut done=task.clone();done.state="result_available".into();done.cleanup_done=true;
+        done.task_id="CLOSED".into();done.child=done.task_id.clone();done.mission=done.task_id.clone();st.delegation_store.insert(&done,&done.task_id,b"hint-fixture").unwrap();
+        let tasks=st.delegation_store.workspace_task_hints(&owner,&instance).unwrap();
+        let view=owned_workspace_task_hints(&tasks,&owner,&roots);
+        assert_eq!(view["tasks"].as_array().unwrap().len(),8);
+        assert_eq!(view["truncated"],true);assert_eq!(view["blocker_identity_attested"],false);
+        assert_eq!(view["tasks"][0]["task_id"],"task-00");
+        assert!(view["tasks"][0]["guarded"].is_boolean());
+        let text=serde_json::to_string(&view).unwrap();
+        for private in ["PRIVATE","FOREIGN","OTHER_PROJECT","OTHER_MACHINE","OTHER_INSTANCE","CLOSED"] {
+            assert!(!text.contains(private),"{text}");
+        }
+        assert!(text.len()<4096);
+        assert!(tasks.iter().all(|t|t.get("result").is_none() && t.get("request").is_none()));
+        let empty=owned_workspace_task_hints(&tasks,"different",&roots);
+        assert!(empty["tasks"].as_array().unwrap().is_empty());
+        assert!(empty["next_action"].as_str().unwrap().contains("ne prouve pas"));
+        assert_eq!(before,serde_json::to_vec(&task).unwrap());
         cleanup(&config);
     }
 

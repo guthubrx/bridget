@@ -2557,6 +2557,27 @@ WHERE state='refused' AND task_id IS NULL;
             .transpose()
     }
 
+    /// Pistes de lecture seulement, bornées à129 métadonnées de la même
+    /// identité native. Ne charge ni résultat, ni brief, ni historique de tours.
+    pub(crate) fn workspace_task_hints(&self, owner: &str, instance: &str) -> Result<Vec<serde_json::Value>, String> {
+        let sql=format!("SELECT json_object(
+            'task_id',task_id,'owner',json_extract(payload,'$.owner'),
+            'state',json_extract(payload,'$.state'),
+            'guarded',coalesce(json_extract(payload,'$.guarded'),0),
+            'cleanup_done',coalesce(json_extract(payload,'$.cleanup_done'),0),
+            'machine_id',json_extract(payload,'$.remote_placement.machine_id'),
+            'project_id',json_extract(payload,'$.remote_placement.project_id'),
+            'execution_cwd',json_extract(payload,'$.remote_placement.execution_cwd'))
+            FROM native_delegations WHERE json_extract(payload,'$.owner')=?1
+            AND owner_instance=?2 AND ({NATIVE_HOLDS_SLOT_SQL})
+            ORDER BY task_id LIMIT 129");
+        let mut query=self.conn.prepare(&sql).map_err(|error|error.to_string())?;
+        query.query_map(params![owner,instance],|row|row.get::<_,String>(0))
+            .map_err(|error|error.to_string())?.map(|row|
+                row.map_err(|error|error.to_string()).and_then(|raw|
+                    serde_json::from_str(&raw).map_err(|error|error.to_string()))).collect()
+    }
+
     pub fn tasks(&self) -> Result<Vec<Task>, String> {
         let mut statement = self
             .conn
