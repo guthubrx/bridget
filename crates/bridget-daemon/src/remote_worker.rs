@@ -4534,17 +4534,36 @@ fn send_catalogue_frame(writer:&Mutex<UnixStream>,message:&WrapperToDaemon)->Res
     let Ok(writer)=writer.try_lock() else {return Ok(false);};
     let mut bytes=serde_json::to_vec(message).map_err(|_|"worker_frame_invalid")?;bytes.push(b'\n');
     if bytes.len()>MAX_WORKER_FRAME_BYTES {return Err("worker_frame_too_large".into());}
-    let deadline=Instant::now()+Duration::from_millis(250);let mut offset=0;
-    while offset<bytes.len() {
-        let count=unsafe {libc::send(writer.as_raw_fd(),bytes[offset..].as_ptr().cast(),bytes.len()-offset,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
-        if count>0 {offset+=count as usize;continue;}
-        let error=std::io::Error::last_os_error();
-        if error.kind()==std::io::ErrorKind::WouldBlock && offset==0 {return Ok(false);}
-        if error.kind()==std::io::ErrorKind::Interrupted {continue;}
-        if error.kind()==std::io::ErrorKind::WouldBlock && Instant::now()<deadline {std::thread::sleep(Duration::from_millis(2));continue;}
-        let _=writer.shutdown(std::net::Shutdown::Both);return Err("worker_connection_lost".into());
+    // Darwin does not make every send-buffer wait nonblocking with MSG_DONTWAIT.
+    // SO_SNDTIMEO bounds those waits without changing the reader's O_NONBLOCK.
+    // Every writer uses this mutex, so its previous timeout can be restored.
+    #[cfg(target_os="macos")]
+    let previous_timeout=writer.write_timeout().map_err(|_|"worker_connection_lost")?;
+    #[cfg(target_os="macos")]
+    writer.set_write_timeout(Some(Duration::from_millis(1))).map_err(|_|"worker_connection_lost")?;
+    let result=(|| {
+        let deadline=Instant::now()+Duration::from_millis(250);let mut offset=0;
+        while offset<bytes.len() {
+            if Instant::now()>=deadline {
+                return Err("worker_connection_lost".into());
+            }
+            let count=unsafe {libc::send(writer.as_raw_fd(),bytes[offset..].as_ptr().cast(),bytes.len()-offset,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
+            if count>0 {offset+=count as usize;continue;}
+            let error=std::io::Error::last_os_error();
+            if error.kind()==std::io::ErrorKind::WouldBlock && offset==0 {return Ok(false);}
+            if error.kind()==std::io::ErrorKind::Interrupted {continue;}
+            if error.kind()==std::io::ErrorKind::WouldBlock {std::thread::sleep(Duration::from_millis(2));continue;}
+            return Err("worker_connection_lost".into());
+        }
+        Ok(true)
+    })();
+    #[cfg(target_os="macos")]
+    if writer.set_write_timeout(previous_timeout).is_err() {
+        let _=writer.shutdown(std::net::Shutdown::Both);
+        return Err("worker_connection_lost".into());
     }
-    Ok(true)
+    if result.is_err() {let _=writer.shutdown(std::net::Shutdown::Both);}
+    result
 }
 
 /// Deux lectures d’origine au plus, conservées au travers des reconnexions.
@@ -8751,15 +8770,30 @@ mod catalogue220_tests {
         let (a,_b)=UnixStream::pair().unwrap();let writer=Mutex::new(a);
         let guard=writer.lock().unwrap();let start=Instant::now();
         assert!(!send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());assert!(start.elapsed()<Duration::from_millis(100));drop(guard);
+        writer.lock().unwrap().set_nonblocking(true).unwrap();
         let bytes=vec![0;65536];
         for _ in 0..1024 {
             let n=unsafe{libc::send(writer.lock().unwrap().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
             if n<0 {break;}
         }
+        writer.lock().unwrap().set_nonblocking(false).unwrap();
+        let original_timeout=Some(Duration::from_secs(3));
+        writer.lock().unwrap().set_write_timeout(original_timeout).unwrap();
         let start=Instant::now();assert!(!send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());assert!(start.elapsed()<Duration::from_millis(100));
+        assert_eq!(writer.lock().unwrap().write_timeout().unwrap(),original_timeout);
         let (a,_peer)=UnixStream::pair().unwrap();let size:libc::c_int=4096;
         assert_eq!(unsafe{libc::setsockopt(a.as_raw_fd(),libc::SOL_SOCKET,libc::SO_SNDBUF,(&size as *const libc::c_int).cast(),std::mem::size_of_val(&size) as libc::socklen_t)},0);
         let writer=Mutex::new(a);let large=WrapperToDaemon::NativeDelegation {request:bridget_transport::protocol::NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:Some("x".repeat(128*1024))}};
+        let reader=writer.lock().unwrap().try_clone().unwrap();
+        assert_eq!(unsafe{libc::fcntl(reader.as_raw_fd(),libc::F_GETFL)}&libc::O_NONBLOCK,0);
         let start=Instant::now();assert!(send_catalogue_frame(&writer,&large).is_err());assert!(start.elapsed()<Duration::from_secs(1));
+        assert_eq!(writer.lock().unwrap().write_timeout().unwrap(),None);
+        assert_eq!(unsafe{libc::fcntl(reader.as_raw_fd(),libc::F_GETFL)}&libc::O_NONBLOCK,0);
+        let (a,mut peer)=UnixStream::pair().unwrap();let writer=Mutex::new(a);
+        assert!(send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());
+        use std::io::BufRead;
+        let mut line=String::new();std::io::BufReader::new(&mut peer).read_line(&mut line).unwrap();
+        assert!(matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::DaemonIdentityRequest));
+        assert_eq!(writer.lock().unwrap().write_timeout().unwrap(),None);
     }
 }

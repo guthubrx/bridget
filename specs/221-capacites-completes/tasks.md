@@ -262,3 +262,5 @@ Deux écarts observés après activation, sans incident métier ni nouvelle Task
 
 ## Convergence — dates, efforts et garde d'observation
 - [x] T181 [US1] Complément livrable indépendant C03/C04/C05 : réutiliser les projections et reçus 220 pour distinguer date source/réception/expiration, exposer les efforts déclarés non annoncés et préserver StopUnconfirmed après une configuration indisponible ou un retrait/rétablissement. Vérifier les deux horloges, deux serveurs, borne maximale, aucune mutation d'admission et reprise de garde ; contre-revue, audit ciblé, intégration/push, activation et lecture native des nouveaux champs. Ne clôt ni T055 ni les catégories C01–C07 entières. Preuves dans validation/l2a-dates-efforts.md.
+
+- [ ] T182 [US1] Correction indépendante : borner les attentes Darwin de send_catalogue_frame sans changer O_NONBLOCK du lecteur partagé. Éprouver tampon plein, écriture partielle, restauration du délai et circuit nominal sur Mac/Linux ; conserver le reproducer SIGALRM, la pile du test initial et les régressions. Revue/audit puis livraison active, sans admission ni reprise métier. Ne clôt aucune catégorie entière.

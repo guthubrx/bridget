@@ -33721,7 +33721,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 remote_command_identity(&st,&task).unwrap())
         };
         {
-            let locked=writer.lock().unwrap();let bytes=[b'x';4096];let mut sent=0;
+            let locked=writer.lock().unwrap();locked.get_ref().set_nonblocking(true).unwrap();let bytes=[b'x';4096];let mut sent=0;
             loop {
                 let n=unsafe {libc::send(locked.get_ref().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),
                     libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
@@ -33729,6 +33729,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 assert!(n>0);sent+=n as usize;assert!(sent<16*1024*1024);
             }
             assert!(sent>0);
+            locked.get_ref().set_nonblocking(false).unwrap();
         }
         let started=Instant::now();
         let result=remote_worker_roundtrip_with_send_deadline(&state,&worker,&command,WorkerRequestOperation::Reconcile {},
