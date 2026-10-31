@@ -61,3 +61,23 @@ La politique de support est versionnée et porte la provenance de chaque minimum
 Transition : le paquet public historique0.6.3 ne possède pas ce port. Son installation manuelle conserve son comportement historique avec un avertissement explicite, sans affirmer la compatibilité des clients ; --source installe la source actuelle avec le contrôle. Ce passage ne s’applique jamais à un refus du nouveau contrôle ni à une version future dépourvue du port. L’updater209 refuse les candidats non vérifiables avant toute activation.
 
 L’hôte système et machine_id restent distincts. Un registre worker dédié portant une unique identité provisionnée utilise cette identité pour son inventaire, même si le nom système diffère ; aucune équivalence DNS n’est devinée. Un périmètre impossible à établir reste non vérifié.
+
+
+### Formats conservés et installation manuelle
+
+Avant de remplacer le programme, l'installateur récent demande au candidat son
+rapport de formats. Le lecteur installé valide ce rapport avec un nonce neuf
+et l'empreinte exacte de l'image. Une commande absente, un rapport trop grand,
+un format illisible ou une image modifiée refuse l'installation avant les
+programmes fournisseurs, profils et services. Conserver les tâches et reçus.
+Le responsable doit qualifier puis charger un lecteur compatible ; effacer des
+données pour forcer la bascule n'est pas une résolution.
+
+Le lecteur de vues comprend les préparations incomplètes, fichiers en cours,
+reprises clôturées et références conservées. Il exige ce format même quand sa
+propre création de vues est fermée. Un retour doit donc comprendre ces mêmes
+états. Le paquet historique0.6.3 sans ce contrôle garde seulement son parcours
+de première installation ; il ne peut pas remplacer un contrôleur récent.
+Ce contrôle ne vérifie ni les comptes fournisseurs ni l'accès aux modèles.
+
+Un lecteur installé sans le port de validation bloque cette installation manuelle. Employer la mise à jour native pour qualifier le lecteur initial ; ne pas remplacer le programme à la main. Le cache de sources de l’installateur peut déjà avoir été téléchargé ; aucun fournisseur, profil ou réglage de service n’a encore changé au refus de formats.

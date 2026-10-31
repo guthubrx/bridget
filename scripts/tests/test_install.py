@@ -16,6 +16,19 @@ BINARY = b'''#!/bin/sh
 case "$1" in
 --version) printf 'bridget 9.8.7 (fixture)\\n';;
 clients) [ ! -f "$FIXTURE/client-incompatible" ] || { echo 'Claude Code 2.1.251 < 2.1.280: user approval required'; exit 1; };;
+formats) case "$2" in
+report)
+    [ ! -f "$FIXTURE/storage-report-missing" ] || exit 2
+    if [ -f "$FIXTURE/storage-report-large" ]; then
+        i=0; while [ "$i" -lt 9000 ]; do printf x; i=$((i+1)); done; exit 0
+    fi
+    image=$(sha256sum "$0" | cut -d ' ' -f 1)
+    printf '{"version":1,"nonce":"%s","image_sha256":"%s","reads":["workspace.worktree.v1"],"writes":["workspace.worktree.v1"]}\\n' "$4" "$image";;
+validate-report)
+    [ ! -f "$FIXTURE/storage-validator-missing" ] || exit 2
+    [ ! -f "$FIXTURE/storage-incompatible" ] || { printf '{"status":"refused","code":"storage_reader_incompatible"}\\n'; exit 1; }
+    python3 -c 'import json,sys; r=json.load(sys.stdin); assert r["version"]==1 and r["nonce"]==sys.argv[1] and r["image_sha256"]==sys.argv[2]; print(json.dumps(dict(valid=True)))' "$4" "$6";;
+*) exit 2;; esac;;
 agents) [ -f "$FIXTURE/service-active" ] && [ ! -f "$FIXTURE/health-failure" ] || exit 1; printf '[]\\n';;
 *) exit 1;;
 esac
@@ -126,7 +139,7 @@ else:
         # Only fixture programs are visible; a host Gemini must not hide this case.
         for name in ("sh", "bash", "python3", "tar", "gzip", "sha256sum", "cut", "awk", "grep",
                      "tr", "sed", "mkdir", "chmod", "cat", "mktemp", "touch", "cp",
-                     "mv", "rm", "rmdir", "wc"):
+                     "mv", "rm", "rmdir", "wc", "od"):
             if not (self.bin / name).exists():
                 (self.bin / name).symlink_to(shutil.which(name))
         self.env["PATH"] = str(self.bin)
@@ -145,6 +158,47 @@ else:
                   'mkdir -p "$HOME/.local/bin"\n'
                   'cp "$FIXTURE/provider-client" "$HOME/.local/bin/gemini"\n'
                   'printf "gemini\\n" >> "$FIXTURE/provider-installs"\n')
+
+    def test221_storage_refusal_precedes_provider_and_service_changes(self):
+        self.provider_fixtures214()
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_bytes(BINARY)
+        self.installed.chmod(0o755)
+        before = self.installed.read_bytes()
+        self.stub("loginctl", '#!/bin/sh\ncase "$1" in show-user) echo no;; *) touch "$FIXTURE/linger-changed";; esac\n')
+        (self.root / "storage-incompatible").touch()
+        result = self.run_install("--providers", "all", ok=False)
+        self.assertIn("storage_reader_incompatible", result.stderr)
+        self.assertFalse((self.root / "linger-changed").exists())
+        self.assertIn("Only this candidate installation is refused", result.stderr)
+        self.assertIn("Other authorized work follows its own state", result.stderr)
+        self.assertEqual(self.installed.read_bytes(), before)
+        self.assertFalse((self.root / "provider-installs").exists())
+        self.assertFalse((self.root / "service-active").exists())
+
+    def test221_missing_storage_validator_is_not_reported_as_incompatible(self):
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_bytes(BINARY)
+        self.installed.chmod(0o755)
+        (self.root / "storage-validator-missing").touch()
+        result = self.run_install(ok=False)
+        self.assertIn("storage_validation_unavailable", result.stderr)
+        self.assertNotIn("storage_reader_incompatible", result.stderr)
+        self.assertEqual(self.installed.read_bytes(), BINARY)
+        self.assertFalse((self.root / "service-active").exists())
+
+    def test221_storage_missing_or_oversized_report_keeps_existing_program(self):
+        for marker in ("storage-report-missing", "storage-report-large"):
+            with self.subTest(marker=marker):
+                self.installed.parent.mkdir(parents=True, exist_ok=True)
+                self.installed.write_bytes(BINARY)
+                self.installed.chmod(0o755)
+                before = self.installed.read_bytes()
+                (self.root / marker).touch()
+                self.run_install(ok=False)
+                self.assertEqual(self.installed.read_bytes(), before)
+                self.assertFalse((self.root / "service-active").exists())
+                (self.root / marker).unlink()
 
     def test214_explicit_selection_installs_four_without_login_or_model(self):
         self.provider_fixtures214()
@@ -298,11 +352,25 @@ else:
     def test209_published_legacy_package_warns_without_claiming_compatibility(self):
         legacy=BINARY.replace(b"bridget 9.8.7 (fixture)",b"bridget 0.6.3 (fixture)")
         start=legacy.index(b"clients)");end=legacy.index(b"agents)",start)
-        legacy=legacy[:start]+b"clients) exit 2;;\n"+legacy[end:]
+        legacy=legacy[:start]+b"clients) exit 2;;\nformats) exit 2;;\n"+legacy[end:]
         self.archive(binary=legacy, release="0.6.3")
         result=self.run_install("--version","v0.6.3")
         self.assertIn("compatibility is NOT verified",result.stderr)
         self.assertEqual(self.installed.read_bytes(),legacy)
+
+    def test221_legacy_package_cannot_replace_a_current_format_controller(self):
+        self.installed.parent.mkdir(parents=True)
+        self.installed.write_bytes(BINARY)
+        self.installed.chmod(0o755)
+        before = self.installed.read_bytes()
+        legacy = BINARY.replace(b"bridget 9.8.7 (fixture)", b"bridget 0.6.3 (fixture)")
+        start = legacy.index(b"clients)"); end = legacy.index(b"agents)", start)
+        legacy = legacy[:start] + b"clients) exit 2;;\nformats) exit 2;;\n" + legacy[end:]
+        self.archive(binary=legacy, release="0.6.3")
+        result = self.run_install("--version", "v0.6.3", ok=False)
+        self.assertIn("storage format report is unavailable", result.stderr)
+        self.assertEqual(self.installed.read_bytes(), before)
+        self.assertFalse((self.root / "service-active").exists())
 
     def test209_future_package_without_check_preserves_existing_installation(self):
         self.existing()

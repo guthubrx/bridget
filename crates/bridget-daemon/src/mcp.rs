@@ -822,6 +822,7 @@ fn execute_tool_at_with_identity_once(
     match name {
         "bridget_capabilities"
         | "bridget_refresh_models"
+        | "bridget_read_commit_file"
         | "bridget_delegate"
         | "bridget_auto_delegate"
         | "bridget_task_continue"
@@ -5120,6 +5121,7 @@ mod tests {
         let expected = [
             "bridget_capabilities",
             "bridget_refresh_models",
+            "bridget_read_commit_file",
             "bridget_ask_user",
             "bridget_task_repair_workspace",
             "bridget_delegate",

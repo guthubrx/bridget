@@ -210,6 +210,38 @@ def client_check(binary, validator):
         raise Refused("update_client_check_unavailable")
 
 
+def storage_check(binary, validator):
+    """The current controller chooses the minimum reader, never the candidate."""
+    try:
+        nonce = uuid.uuid4().hex
+        image = file_digest(binary)
+        code, raw = bounded_client_command(
+            [str(binary), "formats", "report", "--nonce", nonce])
+        if code or len(raw) > 8192:
+            raise ValueError("report")
+        valid_code, valid_raw = bounded_client_command(
+            [str(validator), "formats", "validate-report", "--nonce", nonce,
+             "--sha256", image], raw)
+        if valid_code:
+            try:
+                refusal = json.loads(valid_raw)
+            except ValueError:
+                refusal = {}
+            if isinstance(refusal, dict) and refusal.get("code") == "storage_reader_incompatible":
+                raise Refused("update_storage_reader_incompatible")
+            raise ValueError("validator")
+        if json.loads(valid_raw) != {"valid": True} or file_digest(binary) != image:
+            raise ValueError("image")
+        return {"version": 1, "status": "compatible", "image_sha256": image,
+                "scope": "installed_controller_required_formats"}
+    except Refused as error:
+        if str(error) == "update_storage_reader_incompatible":
+            raise
+        raise Refused("update_storage_reader_unverified")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        raise Refused("update_storage_reader_unverified")
+
+
 def extract_binary(archive, member, destination):
     # Equivalent to install.sh: extract exactly the known regular member, no extractall.
     found = False
@@ -495,6 +527,17 @@ class Updater:
         if clients["verdict"] != "compatible":
             self.report(clients["verdict"], v)
             return
+        try:
+            storage = storage_check(executable, self.binary)
+        except Refused as error:
+            self.save(storage_compatibility={
+                "version": 1, "status": "unverified", "code": str(error),
+                "message": "Conserver le binaire actif, les tâches et les reçus. La lecture des données conservées n'est pas attestée pour ce candidat ; aucun service n'a été arrêté.",
+                "recovery": "Faire vérifier le rapport formats du candidat par le contrôleur installé. Si le port manque, qualifier et charger d'abord le lecteur compatible. Demander au responsable Bridget une image compatible avant une nouvelle bascule ; ne pas effacer de données pour forcer le passage. Ce refus concerne ce candidat. Les autres travaux autorisés suivent leur propre état."
+            }, error=str(error))
+            self.report("storage_reader_unverified", v)
+            return
+        self.save(storage_compatibility=storage)
         old = self.link.resolve()
         if old == executable and self.state.get("rollback"):
             previous = Path(self.state["rollback"])
@@ -530,6 +573,9 @@ class Updater:
             rpc(self.binary, "finish", token)
         except Exception:
             if switched:
+                # The candidate may already have written data that the old reader
+                # cannot handle. Keep the durable activation if proof is missing.
+                storage_check(old, executable)
                 switch_link(self.link, old)
                 restart(self.system, self.services, time.monotonic() + 35)
                 if not healthy(self.system, self.services, self.link, binary_version(old), time.monotonic() + 15):
@@ -579,6 +625,12 @@ class Updater:
         old = Path(action["old"])
         if not old.is_relative_to(self.install_root) or not old.is_file():
             raise Refused("update_rollback_unavailable")
+        new = Path(action["new"])
+        if not new.is_relative_to(self.install_root) or not new.is_file():
+            raise Refused("update_rollback_unavailable")
+        # The new controller supplies the floor even if the link still points
+        # at the old image after an interrupted activation.
+        storage_check(old, new)
         # Recovery needs the same durable lease; no restart after it expired.
         rpc(self.binary, "prepare", action["token"])
         switch_link(self.link, old)

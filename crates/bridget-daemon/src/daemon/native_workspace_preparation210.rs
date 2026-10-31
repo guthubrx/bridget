@@ -27,8 +27,71 @@ fn parse(error: &str) -> Option<F> {
     failure.validate(reason).ok()?;
     Some(failure)
 }
+pub(super) fn view_error_code(reason:WorkerRefusal,failure:bridget_transport::protocol::CommitViewFailure)->String {
+    if failure.validate(reason).is_err() {return "remote_commit_view_prepare:workspace_prepare_failed:cause=unknown".into();}
+    format!("remote_commit_view_prepare:{}:cause={}",serde_json::to_value(reason).unwrap().as_str().unwrap(),
+        serde_json::to_value(failure).unwrap().as_str().unwrap())
+}
+
+fn parse_view(error:&str)->Option<(WorkerRefusal,bridget_transport::protocol::CommitViewFailure)> {
+    let suffix=error.strip_prefix("remote_start_failed:remote_commit_view_prepare:")?;
+    if suffix.len()>160 {return None;}
+    let (reason,cause)=suffix.split_once(":cause=")?;
+    let reason:WorkerRefusal=serde_json::from_value(json!(reason)).ok()?;
+    let failure:bridget_transport::protocol::CommitViewFailure=serde_json::from_value(json!(cause)).ok()?;
+    failure.validate(reason).ok()?;Some((reason,failure))
+}
+
+pub(super) fn view_failure_action(cause:bridget_transport::protocol::CommitViewFailure)->&'static str {
+    use bridget_transport::protocol::CommitViewFailure as V;
+    match cause {
+        V::ObjectUnavailable=>"Faire publier ou rétablir le commit exact et ses objets dans le dépôt cible ou son miroir configuré. Ne pas substituer HEAD ou une autre base.",
+        V::DiskFull=>"Faire vérifier l'espace et le quota du volume choisi pour la vue, puis ranger seulement les données dont la clôture et les usages sont établis.",
+        V::AccessDenied=>"Faire vérifier l'accès du compte worker au volume choisi. Ne pas élargir les droits pour forcer la préparation.",
+        V::OperationCapacity=>"Une capacité de préparation ou de lecture de vue est déjà occupée sur ce worker. Attendre la fin attestée de l'opération déjà en cours, puis relire l'état de la même tâche. Si l'arrêt reste inconnu ou l'attente persiste, faire inventorier les opérations et marqueurs de ce worker par le responsable ; demander à l'utilisateur l'accès de diagnostic manquant. Ne pas interrompre un autre travail ni changer de machine pour contourner sa garde.",
+        V::MetadataCapacity=>"Faire inventorier les reçus et vues conservés de ce worker. Clôturer seulement les préparations dont les preuves le permettent ; ne pas augmenter le quota pour masquer une conservation inconnue.",
+        V::DestinationInsideRepository=>"Faire corriger le placement de la vue hors du dépôt source. Le checkout partagé et ses fichiers restent à préserver.",
+        V::DestinationVolumeMismatch=>"Faire préparer un emplacement privé hors du dépôt, sur son volume autorisé. Ne pas déplacer une tâche active.",
+        V::DestinationUnavailable=>"Faire préparer par le responsable un parent privé appartenant au compte worker, hors du dépôt et sur le même volume.",
+        V::DestinationUnsafe=>"Faire inspecter le parent et la réserve de vues : propriétaire, accès et liens doivent respecter le placement privé. Ne pas remplacer ni modifier un dossier existant à l'aveugle.",
+        V::StorageSpaceUnknown=>"Faire vérifier pourquoi l'espace libre du volume n'a pas pu être observé. Ce constat ne prouve pas un disque plein.",
+        V::StopUnconfirmed=>"Faire vérifier le marqueur privé, l'identité et le groupe du helper de cette préparation. Conserver les fichiers et la preuve tant que son arrêt reste inconnu.",
+        V::Cancelled=>"Cette opération a reçu une annulation. Vérifier sa clôture native et conserver ses fichiers ; ne pas la remettre en marche.",
+        V::PreparationExpired|V::TimedOut=>"Faire vérifier la durée de l'export ou de la lecture et de son audit, puis constater l'arrêt du helper avant toute autre admission de ce travail.",
+        V::ByteLimit=>"Faire qualifier le nombre et le volume des fichiers sélectionnés pour cette vue. Ne pas relever les bornes ou créer un worktree pour contourner le refus.",
+        V::LinkOutsideView|V::LinkCycle|V::UnsupportedPath=>"Faire examiner les chemins et liens du commit demandé. Préserver le dépôt ; corriger la source ou décider avec son propriétaire d'un parcours compatible.",
+        V::IntegrityFailed=>"Conserver la vue et ses preuves. Faire examiner les fichiers divergents avant toute décision de rangement ; aucun retrait automatique n'est autorisé.",
+        V::SourceIdentityChanged=>"Faire vérifier la correspondance du projet et l'identité Git de la source. Ne pas accepter une autre source sous la même clé.",
+        V::StartupUnavailable=>"Faire vérifier le binaire Bridget et le bootstrap géré du worker. Ne pas en déduire une panne du fournisseur ou un défaut de compte.",
+        V::SourceUnavailable=>"Faire vérifier la disponibilité du dépôt source et des objets du commit exact. Aucun changement de base n'est autorisé.",
+        V::ProofUnavailable=>"Conserver les fichiers et demander une inspection corrélée du reçu, de la graine et des preuves privées de cette préparation.",
+        V::Unknown=>"La cause précise reste inconnue. Transmettre au responsable Bridget la tâche, sa clé et sa machine pour lire le reçu corrélé ; ne pas déduire un problème de compte, de réseau ou de stockage.",
+    }
+}
+
+fn project_view(task:&Task,view:&mut Value,error:&str) {
+    use bridget_transport::protocol::CommitViewFailure as V;
+    let known=parse_view(error);
+    let cause=known.map(|(_,cause)|cause).unwrap_or(V::Unknown);
+    let action=view_failure_action(cause);
+    view["error_message"]=json!(format!("{action} Portée : la préparation de cette tâche. Ce refus ne qualifie ni toute la machine ni un arrêt global. Les autres travaux autorisés suivent leur propre état."));
+    view["error_recovery"]=json!(if task.cleanup_done && task.terminal() {
+        "La conservation native est confirmée. Inspecter et préserver les fichiers éventuels, puis corriger la cause avant une nouvelle admission autorisée avec une nouvelle clé. Le rejeu de cette clé ne relance pas la préparation."
+    } else {
+        "Conserver cette tâche, sa clé et les fichiers éventuels. Son propriétaire doit demander l'annulation puis attendre la clôture native et inspecter les preuves avant une nouvelle admission autorisée après correction. Une absence de dossier ne prouve pas l'arrêt. Le rejeu de cette clé ne relance pas la préparation."
+    });
+    view["error_human_action"]=json!(format!("Si cette action dépasse vos droits, demander à l'utilisateur de l'autoriser uniquement pour cette tâche et cette machine : {action} Ne pas créer une mission de remplacement tant que l'issue et la conservation restent inconnues."));
+    if !view["detail"].is_object(){view["detail"]=json!({});}
+    view["detail"]["commit_view_failure"]=json!({"cause":cause,"diagnostic_available":known.is_some(),
+        "task_id":task.task_id,"request_id":match &task.request {NativeDelegationRequest::Delegate{request_id,..}=>Some(request_id),_=>None},
+        "machine_id":task.remote_placement.as_ref().map(|placement|&placement.machine_id)});
+}
+
 pub(super) fn project(task: &Task, view: &mut Value) {
     let Some(error) = task.projected_error() else { return; };
+    if error.starts_with("remote_start_failed:remote_commit_view_prepare:") {
+        project_view(task,view,error);return;
+    }
     if !error.starts_with("remote_start_failed:remote_workspace_prepare:") { return; }
     let suffix=error.strip_prefix("remote_start_failed:remote_workspace_prepare:").unwrap();
     let recognized = matches!(suffix, "WorkspacePrepareFailed" | "WorkspacePrepareIncomplete"
@@ -69,6 +132,18 @@ pub(super) fn project(task: &Task, view: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec221_c19_failure_code_is_closed_and_never_imports_private_text() {
+        use bridget_transport::protocol::CommitViewFailure as V;
+        for cause in [V::ObjectUnavailable,V::DiskFull,V::StopUnconfirmed,V::DestinationUnavailable,V::Unknown] {
+            let code=format!("remote_start_failed:{}",view_error_code(WorkerRefusal::WorkspacePrepareFailed,cause));
+            assert_eq!(parse_view(&code),Some((WorkerRefusal::WorkspacePrepareFailed,cause)));
+            assert!(parse_view(&(code+":PRIVATE/path")).is_none());
+        }
+        assert!(parse_view("remote_start_failed:remote_commit_view_prepare:workspace_prepare_failed:cause=PRIVATE").is_none());
+        assert!(parse_view("remote_start_failed:remote_commit_view_prepare:unauthorized:cause=disk_full").is_none());
+    }
+
     #[test]
     fn spec210_closed_diagnostic_roundtrip_and_unknown_legacy() {
         let f=F{stage:S::CompactPlan,cause:C::GitTimeout};

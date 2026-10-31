@@ -692,10 +692,10 @@ fn prepare_same_worktree(
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let prepare = rebuild_prepare(&st, &task, &ctx.owner, &ctx.parent)?;
         let workspace = match (&prepare.workspace, &task.workspace) {
-            (Some(WorkspaceRequest::Worktree { .. }), Some(record)) => {
+            (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), Some(record)) => {
                 Some(serde_json::to_value(record).map_err(|_| "remote_workspace_invalid")?)
             }
-            (Some(WorkspaceRequest::Worktree { .. }), None) => {
+            (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), None) => {
                 return Err("remote_workspace_missing".into());
             }
             _ => None,

@@ -308,9 +308,22 @@ fn run_with_args(args: Vec<String>) {
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
+        "formats" => crate::storage_compatibility::run(&args[2..]),
         "t3" => crate::t3code::run(&args[2..]),
         "managed-bootstrap" => cmd_managed_bootstrap(&args[2..]),
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
+        "workspace-view-plan" => {
+            let code=if crate::workspace_git::run_commit_view_plan(&args[2..]).is_ok(){0}else{1};
+            std::process::exit(code);
+        }
+        "workspace-view-export" => {
+            let code = if crate::workspace_git::run_commit_view_export(&args[2..]).is_ok() { 0 } else { 1 };
+            std::process::exit(code);
+        }
+        "workspace-view-materialize" => {
+            let code=if crate::workspace_git::run_commit_view_materialize(&args[2..]).is_ok(){0}else{1};
+            std::process::exit(code);
+        }
         "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
         "journal" => cmd_journal(&args[2..]),
@@ -3312,6 +3325,15 @@ fn parse_task_args(
                     "expected_head":values[4],"request_id":values[6]}),
                 json,displayed_request_id:Some(values[6].clone()),
             }
+        }
+        Some("read-file") if values.len()==2 || values.len()==3=>{
+            let (task_id,path)=if values.len()==3 {(Some(&values[1]),&values[2])}else{(None,&values[1])};
+            if !bridget_transport::protocol::commit_view_file_path(path) {
+                return Err("task read-file : chemin relatif exact de la carte requis, sans ../ ni préfixe absolu".into());
+            }
+            let mut arguments=serde_json::json!({"path":path});
+            if let Some(task_id)=task_id {arguments["task_id"]=serde_json::json!(task_id);}
+            ParsedNativeCli{tool:"bridget_read_commit_file",payload:arguments,json,displayed_request_id:None}
         }
         Some("continue") if values.len() >= 3 => {
             let mut request_id = None;
@@ -9016,6 +9038,10 @@ mod hook_tests {
     #[test]
     fn spec167_task_traduit_le_cycle_de_vie_vers_les_outils_natifs() {
         let cases = [
+            (argv(&["read-file","task-1","sub/file.rs"]),"bridget_read_commit_file",
+                serde_json::json!({"task_id":"task-1","path":"sub/file.rs"}),false),
+            (argv(&["read-file","sub/file.rs"]),"bridget_read_commit_file",
+                serde_json::json!({"path":"sub/file.rs"}),false),
             (
                 argv(&["repair-workspace","task-1","/srv/projet/task-1","--expected-head",
                     "1111111111111111111111111111111111111111","--request-id","repair-1"]),

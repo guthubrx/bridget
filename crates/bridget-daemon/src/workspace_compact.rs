@@ -45,6 +45,10 @@ fn source(path: &str) -> bool {
         )
     )
 }
+// Choix partagé avec la vue exportée ; aucune configuration Git n'est changée.
+pub(super) fn selected(path: &str, bytes: u64, symlink: bool) -> bool {
+    bytes < 131072 || source(path) || symlink
+}
 fn patterns(paths: &[String]) -> Result<String, String> {
     let mut text = String::new();
     for path in paths {
@@ -146,7 +150,7 @@ pub(super) fn plan(preflight: &WorkspacePreflight) -> Result<Option<Plan>, Strin
         total_bytes = total_bytes
             .checked_add(bytes)
             .ok_or("workspace_repo_unsupported: tailles Git excessives")?;
-        if bytes < 131072 || source(path) || fields[0] == "120000" {
+        if self::selected(path, bytes, fields[0] == "120000") {
             selected_bytes = selected_bytes
                 .checked_add(bytes)
                 .ok_or("workspace_repo_unsupported: tailles Git excessives")?;

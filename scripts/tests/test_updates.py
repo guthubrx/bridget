@@ -101,7 +101,7 @@ class Updates179Tests(unittest.TestCase):
         install = home / ".local/lib/bridget-communication"
         old = install / "old/bin/bridget"
         old.parent.mkdir(parents=True)
-        old.write_text("#!/bin/sh\nif [ \"$1\" = clients ]; then cat >/dev/null; echo '{\"valid\":true}'; else echo 'bridget 0.5.0'; fi\n")
+        old.write_text('#!/bin/sh\nif [ "$1" = formats ]; then\n  cat >/dev/null; echo \'{"valid":true}\'\nelif [ "$1" = clients ]; then\n  cat >/dev/null; echo \'{"valid":true}\'\nelse echo \'bridget 0.5.0\'; fi\n')
         old.chmod(0o700)
         link = home / ".local/bin/bridget"
         link.parent.mkdir(parents=True)
@@ -112,7 +112,7 @@ class Updates179Tests(unittest.TestCase):
         c = update.candidate(self.metadata(), "0.5.0", "linux-x86_64")
         new = install / "v0.6.0-auto/bin/bridget"
         new.parent.mkdir(parents=True)
-        new.write_text("#!/bin/sh\nif [ \"$1:$2\" = clients:validate-report ]; then cat >/dev/null; echo '{\"valid\":true}'; elif [ \"$1\" = clients ]; then echo '{\"version\":1,\"verdict\":\"compatible\"}'; else echo 'bridget 0.6.0'; fi\n")
+        new.write_text('#!/bin/sh\nif [ "$1:$2" = formats:report ]; then echo \'{}\'\nelif [ "$1:$2" = formats:validate-report ]; then cat >/dev/null; echo \'{"valid":true}\'\nelif [ "$1:$2" = clients:validate-report ]; then cat >/dev/null; echo \'{"valid":true}\'\nelif [ "$1" = clients ]; then echo \'{"version":1,"verdict":"compatible"}\'\nelse echo \'bridget 0.6.0\'; fi\n')
         new.chmod(0o700)
         digest = update.hashlib.sha256(new.read_bytes()).hexdigest()
         update.atomic_json(new.parent.parent / "receipt.json", {"version": "0.6.0", "sha256": digest})
@@ -176,6 +176,80 @@ class Updates179Tests(unittest.TestCase):
                 else:
                     code, raw=update.bounded_client_command([str(p)])
                     self.assertEqual((code,raw),(0,b""))
+
+    def test221_storage_report_uses_fresh_nonce_candidate_hash_and_installed_validator(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, new = self.fixture(Path(temp))
+            raw = b'{"version":1}'
+            def command(args, input_bytes=None):
+                if args[2] == "report":
+                    self.assertEqual(Path(args[0]), new)
+                    self.assertEqual(len(args[4]), 32)
+                    return 0, raw
+                self.assertEqual(Path(args[0]), old)
+                self.assertEqual(args[2], "validate-report")
+                self.assertEqual(input_bytes, raw)
+                self.assertEqual(args[-1], update.file_digest(new))
+                return 0, b'{"valid":true}'
+            with patch.object(update, "bounded_client_command", side_effect=command) as run:
+                result = update.storage_check(new, old)
+            self.assertEqual(result["status"], "compatible")
+            self.assertEqual(run.call_args_list[0].args[0][4], run.call_args_list[1].args[0][4])
+            self.assertEqual(updater.link.resolve(), old)
+
+    def test221_storage_report_unknown_oversized_or_incompatible_stays_closed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            _, old, new = self.fixture(Path(temp))
+            for responses, code in [
+                ([(2,b"PRIVATE")], "update_storage_reader_unverified"),
+                ([(0,b"x"*8193)], "update_storage_reader_unverified"),
+                ([(0,b"{}"),(0,b'{"valid":true,"PRIVATE":1}')], "update_storage_reader_unverified"),
+                ([(0,b"{}"),(1,b'{"code":"storage_reader_incompatible"}')], "update_storage_reader_incompatible"),
+                ([(0,b"{}"),(2,b"PRIVATE")], "update_storage_reader_unverified"),
+            ]:
+                with self.subTest(responses=code), patch.object(update, "bounded_client_command", side_effect=responses):
+                    with self.assertRaisesRegex(update.Refused, "^"+code+"$"):
+                        update.storage_check(new, old)
+            with patch.object(update, "bounded_client_command", side_effect=[(0,b"{}"),(0,b'{"valid":true}')]), patch.object(update,"file_digest",side_effect=["a"*64,"b"*64]):
+                with self.assertRaisesRegex(update.Refused,"update_storage_reader_unverified"):
+                    update.storage_check(new, old)
+
+    def test221_storage_refusal_precedes_prepare_link_and_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, new = self.fixture(Path(temp))
+            with patch.object(update,"storage_check",side_effect=update.Refused("update_storage_reader_incompatible")), patch.object(update,"rpc",return_value={"status":"ok","automatic":True}) as rpc, patch.object(update,"restart") as restart:
+                updater.step()
+            restart.assert_not_called()
+            self.assertFalse(any(call.args[1]=="prepare" for call in rpc.call_args_list))
+            self.assertEqual(updater.link.resolve(),old)
+            self.assertEqual(updater.state["storage_compatibility"]["code"],"update_storage_reader_incompatible")
+            self.assertNotIn("PRIVATE",json.dumps(updater.state))
+
+    def test221_rollback_uses_new_reader_floor_and_preserves_failed_activation_when_unknown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, new = self.fixture(Path(temp))
+            policy={"status":"ok","automatic":True,"expires_at":update.time.time()+180}
+            with patch.object(update,"storage_check",side_effect=[{"status":"compatible"},update.Refused("update_storage_reader_unverified")]) as check, patch.object(update,"rpc",return_value=policy), patch.object(update,"restart") as restart, patch.object(update,"healthy",return_value=False):
+                with self.assertRaisesRegex(update.Refused,"update_storage_reader_unverified"):
+                    updater.step()
+            self.assertEqual(check.call_args_list[-1].args,(old,new))
+            self.assertEqual(updater.link.resolve(),new)
+            self.assertIsNotNone(updater.state["activation"])
+            restart.assert_called_once()
+
+    def test221_recovery_checks_new_floor_before_prepare_even_when_link_is_old(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, new = self.fixture(Path(temp))
+            action={"old":str(old),"new":str(new),"token":"token","version":"0.6.0"}
+            updater.save(activation=action)
+            with patch.object(update,"storage_check",side_effect=update.Refused("update_storage_reader_incompatible")) as check, patch.object(update,"rpc") as rpc, patch.object(update,"restart") as restart:
+                with self.assertRaisesRegex(update.Refused,"update_storage_reader_incompatible"):
+                    updater.recover()
+            check.assert_called_once_with(old,new)
+            rpc.assert_not_called()
+            restart.assert_not_called()
+            self.assertEqual(updater.link.resolve(),old)
+            self.assertEqual(updater.state["activation"],action)
 
     def test_disabled_never_downloads_or_prepares(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -108,6 +108,43 @@ check_clients() {
     fi
 }
 
+# The installed reader owns the format floor. First installation uses the
+# candidate's closed validator; no provider, task or service is started here.
+check_storage() {
+    storage_refusal_scope='Only this candidate installation is refused. Other authorized work follows its own state.'
+    need od
+    storage_nonce=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
+    [ "${#storage_nonce}" = 32 ] || fail "Cannot create a storage-check nonce. Existing installation was kept. $storage_refusal_scope"
+    case "$storage_nonce" in *[!0-9a-f]*) fail "Invalid storage-check nonce. $storage_refusal_scope" ;; esac
+    storage_image=$(digest "$candidate")
+    storage_reader=$candidate
+    if [ -x "$bindir/bridget" ]; then storage_reader=$bindir/bridget; fi
+    # POSIX file blocks are 512 bytes; shells using 1024-byte blocks allow at
+    # most 16 KiB. Both remain bounded, then the exact 8 KiB limit is checked.
+    if (ulimit -f 16; "$candidate" formats report --nonce "$storage_nonce" </dev/null >"$work/storage-report" 2>/dev/null); then
+        storage_size=$(wc -c <"$work/storage-report" | tr -d ' ')
+        [ "$storage_size" -le 8192 ] || fail "Storage format report is too large. Existing programs and services were kept. $storage_refusal_scope"
+        if ! (ulimit -f 16; "$storage_reader" formats validate-report --nonce "$storage_nonce" --sha256 "$storage_image" <"$work/storage-report" >"$work/storage-validation" 2>/dev/null); then
+            if grep -Eq '"code"[[:space:]]*:[[:space:]]*"storage_reader_incompatible"' "$work/storage-validation"; then
+                fail "storage_reader_incompatible: The installed reader refused this candidate format report. Keep tasks and receipts. Ask the Bridget maintainer to qualify a reader that supports the saved formats before this installation. Do not erase data to force installation. No provider or service was changed. $storage_refusal_scope"
+            fi
+            fail "storage_validation_unavailable: The installed reader could not complete format validation; a missing validation command or a failed check remains to be verified. Keep tasks, receipts and the active program. Use the native update procedure, or ask the Bridget maintainer to qualify and load a compatible reader first. No provider or service was changed. $storage_refusal_scope"
+        fi
+    else
+        storage_status=$?
+        # Only a first install of the exact historical package may lack this
+        # port. A current installed controller never grants this exception.
+        if [ "$storage_reader" = "$candidate" ] && [ "$mode" = release ] &&
+           [ "$version" = v0.6.3 ] && [ "$storage_status" = 2 ] &&
+           grep -Eq '^bridget 0[.]6[.]3([[:space:]]|$)' "$work/version"; then
+            say 'Legacy release 0.6.3: saved-data compatibility is NOT verified. Only its historical first installation is preserved; no current reader or saved tasks were qualified.'
+        else
+            fail "Candidate storage format report is unavailable. Keep the installed program, tasks and receipts. Ask the Bridget maintainer to qualify a compatible reader before this installation. This refusal does not prove a provider account problem. No provider or service was changed. $storage_refusal_scope"
+        fi
+    fi
+    [ "$(digest "$candidate")" = "$storage_image" ] || fail "Candidate changed during the storage check. Existing installation was kept. $storage_refusal_scope"
+}
+
 prepare_service() {
     service_created=false
     daemon_root=${BRIDGET_HOME:-$HOME/.cache/bridget-core}
@@ -423,6 +460,7 @@ main() {
     "$candidate" --version > "$work/version" || fail 'Candidate cannot run. Installed Bridget was not changed.'
     grep -qi 'bridget' "$work/version" || fail 'Unexpected candidate version response.'
     check_clients
+    check_storage
     prepare_service
     prepare_providers
     if $providers_installed; then check_clients; fi

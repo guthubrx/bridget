@@ -66,3 +66,22 @@ The versioned support policy records each floor’s provenance. Before reserving
 Migration: the historical public0.6.3 package lacks this port. Manual installation preserves its historical behavior with an explicit warning, without claiming provider-client compatibility; --source installs current sources with the check. This path never overrides a refusal from the new check or a future package missing the port. Updater209 refuses unverifiable candidates before activation.
 
 The OS host and machine_id remain distinct. A dedicated worker registry with one provisioned identity uses that identity for its inventory even when the OS host differs; no DNS-name equivalence is guessed. An unavailable scope stays unverified.
+
+
+### Retained formats and manual installation
+
+Before replacing the program, the current installer requests the candidate's
+format report. The installed reader validates it with a fresh nonce and the
+exact image digest. A missing command, oversized report, unreadable format or
+changed image refuses installation before provider programs, profiles and
+services. Keep tasks and receipts. The maintainer must qualify and load a
+compatible reader; deleting data to force activation is not a recovery path.
+
+The view reader supports incomplete preparations, pending files, fenced
+recovery and retained references. It requires this format even while its own
+view creation remains disabled. A rollback image must support those same
+states. The historical0.6.3 package without this check retains only its first
+installation path; it cannot replace a current controller. This check verifies
+neither provider accounts nor model access.
+
+An installed reader without the validation command blocks this manual installation. Use the native updater to qualify the initial reader; do not replace the program by hand. The installer source cache may already have been downloaded; no provider, profile or service setting has changed when formats are refused.

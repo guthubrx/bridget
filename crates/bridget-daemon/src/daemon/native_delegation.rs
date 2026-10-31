@@ -3728,6 +3728,14 @@ fn failure(code: &str) -> Value {
                 "recovery":"Conserver les tâches et leurs clés. Avant tout changement de version, faire vérifier les marqueurs privés et les processus de sonde sur les serveurs concernés ; ne pas effacer de marqueur. Requalifier le registre ou la décision d'activation puis relire le catalogue, sans relancer de mission.",
                 "human_action":"Si la correction dépasse votre accès, demander au responsable Bridget l'intervention ciblée sur le registre ou la décision d'activation. Ne pas changer de compte ni de droits pour contourner ce refus."}});
     }
+
+    if code=="workspace_commit_view_not_enabled" {
+        return json!({"status":"refused","code":code,
+            "message":"La vue de lecture n'est pas encore admise. Faire qualifier son parcours natif et son retour compatible avant une demande de vue. Les autres travaux autorisés suivent leur propre état.",
+            "detail":{"scope":"this_admission","cause":"reader_transition_incomplete","task_id":null,
+                "recovery":"Conserver la même clé et toute tâche connue. Ne pas créer de worktree ni changer la base pour contourner ce refus. Ce contrôle n'a créé aucune tâche.",
+                "human_action":"Demander au responsable Bridget de terminer et charger la vue, puis de vérifier le binaire de retour. Aucun changement de droits, compte ou modèle n'est requis par ce refus."}});
+    }
     if code.starts_with("provider_catalogue_") {
         let (message,action)=match code {
             "provider_catalogue_machine_invalid"=>("L’identifiant du serveur est invalide.","Recopier machine_id dans le catalogue déclaré ; aucun chemin ni nom libre n’est accepté."),
@@ -4585,25 +4593,44 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     }
     view["substitution"] = json!(task.substitution);
     if let Some(workspace) = &task.workspace {
+        let is_view = matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView);
         let (code, message, recovery) = if !task.terminal()
             || task.continuable()
-            || (task.state == "result_available" && !task.result_sent)
+            || (!is_view && task.state == "result_available" && !task.result_sent)
         {
             ("task_active", "La tâche utilise encore cet espace ou peut reprendre.",
-             "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait.")
+             if is_view { "Conservez la vue. Terminez ou clôturez cette tâche avant tout examen de retrait ; les autres travaux autorisés suivent leur propre état." }
+             else { "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait." })
+        } else if is_view && task.state=="result_available" && !task.result_sent {
+            ("result_delivery_pending", "Le résultat n'a pas encore été remis ; les fichiers de la vue restent conservés.",
+             "Lire le résultat de cette même tâche et suivre son accusé natif. Ce constat ne prouve ni une exécution active ni un arrêt ; la conservation ne remplace pas ces preuves. Ne pas créer de mission de remplacement. Les autres travaux autorisés suivent leur propre état.")
+        } else if is_view && !task.cleanup_done && workspace.commit_view.is_some()
+            && (!task.guarded || task.guard_released) && workspace_report_ready(task) {
+            ("view_conservation_unconfirmed", "La clôture de conservation de cette vue n'est pas confirmée.",
+             "Conserver la tâche, sa clé et tous les fichiers. Faire vérifier la capacité WorkspaceViewV1 et le reçu de conservation de la même liaison par le responsable Bridget ; la cause précise de l'absence d'accusé reste inconnue. Ne pas effacer un marqueur, déduire l'arrêt ou relancer une mission. Si cet accès manque, demander une intervention ciblée du responsable. Les autres travaux autorisés suivent leur propre état.")
         } else if !task.cleanup_done {
             ("stop_unconfirmed", "L’arrêt de l’exécution n’est pas confirmé.",
-             "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche.")
+             if is_view { "Conservez la vue et ses preuves ; attendez la confirmation d’arrêt de cette tâche. Les autres travaux autorisés suivent leur propre état." }
+             else { "Conservez le worktree et attendez la confirmation d’arrêt de cette tâche." })
         } else if !workspace_report_ready(task)
             || workspace.dirty.is_none()
-            || workspace.head_on_branch.is_none()
-            || workspace.commit_count.is_none()
+            || (!is_view && (workspace.head_on_branch.is_none() || workspace.commit_count.is_none()))
+            || (is_view && (workspace.commit_view.is_none() || !workspace.branch.is_empty()
+                || workspace.head_commit.is_some() || workspace.branch_commit.is_some()
+                || workspace.head_on_branch.is_some() || workspace.commit_count.is_some()
+                || !workspace.commits.is_empty() || workspace.truncated))
         {
-            ("report_unavailable", "Le dernier rapport Git est absent ou incomplet.",
+            ("report_unavailable", if is_view { "Le dernier contrôle de la vue est absent ou incomplet." }
+                else { "Le dernier rapport Git est absent ou incomplet." },
              "Inspectez le dossier et ses usages avant toute décision. Un état inconnu ne permet pas le retrait.")
         } else if workspace.dirty == Some(true) {
-            ("changes_present", "Le dernier rapport signale des modifications non commitées.",
-             "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier.")
+            ("changes_present", if is_view { "Le dernier contrôle de la vue signale une divergence de fichiers." }
+                else { "Le dernier rapport signale des modifications non commitées." },
+             if is_view { "Conservez les fichiers et la preuve privée de cette tâche. Demandez au propriétaire quelles données préserver avant son nettoyage natif ; ne régénérez pas la vue. Les autres travaux autorisés suivent leur propre état." }
+                else { "Préservez ou intégrez les modifications et les fichiers ignorés, puis relisez l’état réel du dossier." })
+        } else if is_view {
+            ("review_required", "Le dernier contrôle n’a pas signalé de divergence. La vue reste conservée.",
+             "Vérifiez les processus, les usages et les preuves de cette tâche avant son retrait natif. Ce statut n’autorise pas un retrait ; les autres travaux autorisés suivent leur propre état.")
         } else if workspace.head_on_branch == Some(false) {
             ("branch_changed", "Le dernier rapport ne place plus HEAD sur la branche attendue.",
              "Examinez les commits et la branche réelle. Préservez le travail avant toute décision de retrait.")
@@ -4630,6 +4657,21 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
                 "phase":r.phase,"code":r.code})).collect::<Vec<_>>()
         });
         if repair.phase=="published" {view["cwd"]=json!(task.effective_execution_cwd());}
+    }
+    if full && task.workspace.is_none() && let Some(binding)=task.commit_view_prepare.as_ref() {
+        if !view["detail"].is_object() {view["detail"]=json!({});}
+        view["detail"]["commit_view_preparation"]=json!({
+            "binding":binding,"publication":"not_attested",
+            "conservation":if task.cleanup_done {"confirmed"} else {"unconfirmed"},
+            "message":"La publication du dossier de cette tâche n'est pas attestée ; cela ne prouve pas son absence.",
+            "next_action":if task.cleanup_done {
+                "Conserver les fichiers et preuves privées. La conservation native est confirmée, mais aucun rapport de fichiers n'autorise leur retrait. Faire inspecter cette liaison sur le serveur avant toute suppression. Les autres travaux autorisés suivent leur propre état."
+            } else if task.terminal() || task.state=="cancelling" {
+                "Conserver cette tâche, sa clé et ses preuves. Faire clôturer la préparation par son propriétaire puis attendre la confirmation native. Une annulation déjà demandée ne prouve pas l'arrêt ; ne pas créer de remplacement d'issue inconnue. Si la preuve manque, demander au responsable Bridget une inspection ciblée de ce bootstrap. Les autres travaux autorisés suivent leur propre état."
+            } else {
+                "Attendre la fin de cette préparation et relire la même tâche. Ne pas créer de demande concurrente pour le même travail. Les autres travaux autorisés suivent leur propre état."
+            }
+        });
     }
     if !full {
         view.as_object_mut().unwrap().remove("result");
@@ -4969,6 +5011,157 @@ pub(super) fn handle_attested(
     )
 }
 
+/// Le lecteur ne choisit jamais l'exécution ou le worker. Ces faits viennent
+/// de la connexion vivante, du lien Fleet et du slot courant de la Task.
+fn commit_file_context(st:&DaemonState,conn:&str,task_id:Option<&str>,thread:Option<&str>)
+    ->Result<(Task,bridget_transport::protocol::WorkerResultIdentity),&'static str> {
+    recheck_attested_thread(st,conn,thread).map_err(|_|"commit_file_attestation_unavailable")?;
+    let (actor,instance)=live_connection_identity(st,conn).ok_or("commit_file_identity_unavailable")?;
+    let task=if let Some(id)=task_id {
+        let task=st.delegation_store.get(id).map_err(|_|"commit_file_store_unavailable")?
+            .ok_or("task_unavailable")?;
+        if !can_own_task(st,&task,&actor,&instance).map_err(|_|"commit_file_ownership_unavailable")? {
+            return Err("task_unavailable");
+        }task
+    } else {
+        let task=st.delegation_store.for_child(&actor).map_err(|_|"commit_file_store_unavailable")?
+            .ok_or("commit_file_child_unlinked")?;
+        if task.child!=actor || task.child_instance.as_deref()!=Some(instance.as_str()) {
+            return Err("commit_file_child_unlinked");
+        }task
+    };
+    if !matches!(task.state.as_str(),"mission_pending"|"working"|"waiting_for_children")
+        || task.cleanup_done || task.guard_released
+        || task.mission_deadline_at.is_some_and(|deadline|deadline<=unix_timestamp()) {
+        return Err("commit_file_task_not_active");
+    }
+    if crate::referent_control::read(st.store.connection()).map_err(|_|"commit_file_control_unavailable")?.paused {
+        return Err("commit_file_task_paused");
+    }
+    if st.delegation_store.revoked_agent(&task.owner).map_err(|_|"commit_file_revocation_unavailable")?
+        || st.delegation_store.revoked_agent(&task.root_owner_agent_id).map_err(|_|"commit_file_revocation_unavailable")?
+        || st.delegation_store.revoked(&task.owner_instance).map_err(|_|"commit_file_revocation_unavailable")?
+        || st.delegation_store.revoked(task.child_instance.as_deref().ok_or("commit_file_child_unlinked")?)
+            .map_err(|_|"commit_file_revocation_unavailable")? {
+        return Err("commit_file_revoked");
+    }
+    let record=task.workspace.as_ref().ok_or("commit_file_view_unavailable")?;
+    if !matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+        || record.commit_view.is_none() || task.commit_view_binding().is_none() || !task.remote_prepared {
+        return Err("commit_file_view_unavailable");
+    }
+    let command=remote_command_identity(st,&task).map_err(|_|"commit_file_execution_unavailable")?;
+    let current=st.execution_store.latest_in_chain(&format!("execution-{}",task.mission))
+        .map_err(|_|"commit_file_execution_unavailable")?.ok_or("commit_file_execution_unavailable")?;
+    let slots=task.remote_result_slots.iter().filter(|slot|slot.identity.command==command
+        && slot.identity.mission_id==task.mission && slot.identity.round==u32::from(task.round)
+        && slot.identity.execution_id==current.execution_id && slot.identity.execution_generation==current.generation)
+        .collect::<Vec<_>>();
+    if slots.len()!=1 {return Err("commit_file_execution_unavailable");}
+    slots[0].validate().map_err(|_|"commit_file_execution_unavailable")?;
+    let execution=slots[0].identity.clone();
+    Ok((task,execution))
+}
+
+fn commit_file_refusal(code:&str,task:Option<&Task>)->Value {
+    let action=match code {
+        "commit_file_path_invalid"=>"Utiliser le chemin relatif exact indiqué dans la carte de cette vue, sans préfixe absolu ni composant parent. Aucun chemin de preuve privée n'est une entrée autorisée.",
+        "commit_file_task_not_active"=>"Lire les fichiers déjà présents dans la vue. Cette tâche n'est plus active : cette lecture ne la relance pas et ne crée aucun export de remplacement.",
+        "commit_file_task_paused"=>"Attendre la reprise autorisée de cette tâche, puis demander le même fichier. Ne pas lever une pause ni interrompre un autre travail pour forcer la lecture.",
+        "commit_file_view_unavailable"=>"Vérifier que cette tâche possède une vue de commit publiée. Ne pas employer ce port sur Shared ou Worktree ni changer le mode d'une tâche existante.",
+        "commit_file_revoked"=>"Demander au propriétaire de vérifier la révocation de cette tâche. Ne pas élargir les droits ou changer de compte pour passer.",
+        "commit_file_child_unlinked"|"task_unavailable"=>"L'enfant doit utiliser sa connexion native courante, ou le parent fournir l'identifiant de sa propre tâche. Aucun identifiant tiers ne donne accès.",
+        _=>"Conserver cette tâche et toute opération en cours. Faire vérifier par le responsable Bridget le lien, le reçu et l'exécution courante ; la vérification manquante ne prouve pas une panne de stockage, de compte ou de réseau.",
+    };
+    json!({"version":1,"status":"refused","code":code,"message":format!("{action} Portée : cette lecture de fichier. Les autres travaux autorisés suivent leur propre état."),
+        "detail":{"scope":"this_file_read","task_id":task.map(|task|&task.task_id),
+            "cause":match code {
+                "commit_file_path_invalid"=>"invalid_path","commit_file_task_not_active"=>"task_not_active",
+                "commit_file_task_paused"=>"paused","commit_file_view_unavailable"=>"view_not_attested",
+                "commit_file_revoked"=>"revoked",_=>"unobserved"},
+            "recovery":"Ne pas créer de nouvelle mission ni effacer la vue. Une lecture réussie doit être attestée avant d'utiliser le fichier.",
+            "human_action":"Si la vérification dépasse vos droits, demander à l'utilisateur l'accès au diagnostic ciblé de cette tâche, sans réinitialisation générale."}})
+}
+
+/// Réutiliser la forme de refus native ; ce port conserve le code worker
+/// observé, sans transformer ce fait en diagnostic de compte ou de réseau.
+fn commit_file_worker_refusal(reason:bridget_transport::protocol::WorkerRefusal,task:&Task)->Value {
+    use bridget_transport::protocol::WorkerRefusal::*;
+    let action=match reason {
+        UnsupportedVersion|CapabilityRequired=>"Comparer les versions chargées et la capacité WorkspaceViewV1 du maître et du worker de cette machine. Si la capacité n'est pas négociée, faire charger un lecteur compatible avant de demander de nouveau ce fichier.",
+        WorkerUnavailable|StaleConnection=>"Vérifier le lien natif courant avec ce worker et attendre son retour attesté avant de demander de nouveau ce fichier. La réponse n'est pas disponible ; cela ne prouve ni panne réseau ni arrêt de l'opération.",
+        Unauthorized=>"Faire vérifier l'autorisation native de cette lecture entre maître et worker. Ne pas copier de secret, changer de compte fournisseur ou élargir les droits pour passer.",
+        PlacementMismatch=>"Comparer la machine, le worker et le placement au reçu de cette tâche, sans déplacer la vue ni modifier le reçu pour passer.",
+        CommandMismatch=>"Comparer la commande, l'instance, la ronde et la génération à l'exécution courante de cette tâche. Faire réconcilier une divergence ; ne pas réécrire ces identifiants.",
+        DefinitionChanged|PermissionsChanged=>"Faire comparer la définition et les restrictions courantes avec celles admises pour cette tâche. Ne retirer aucune restriction et ne changer aucun compte pour passer.",
+        ResourceLimit=>"Faire lire le diagnostic corrélé de ce worker pour nommer la borne atteinte. Ce code seul ne distingue pas file, store ou métadonnées ; ne pas interrompre les tâches d'autrui.",
+        PrepareExpired|ReleaseExpired|ProbeExpired|ResultSlotExpired=>"Vérifier l'échéance et l'état natif de cette opération. Une expiration n'atteste aucun arrêt ; conserver la vue et toute opération encore détenue avant une nouvelle lecture du même fichier.",
+        StoreUnavailable|JournalUnavailable=>"Faire vérifier la lecture du store ou du journal de ce worker. Ne pas purger les reçus ; la cause d'accès précise reste inconnue.",
+        _=>"Conserver cette tâche et l'opération connue. Faire vérifier par le responsable Bridget le diagnostic corrélé à ce code worker ; sa cause précise reste inconnue.",
+    };
+    let mut view=commit_file_refusal("commit_file_worker_refused",Some(task));
+    view["detail"]["worker_reason"]=json!(reason);
+    view["detail"]["cause"]=json!(reason);
+    view["detail"]["cause_kind"]=json!("worker");
+    view["detail"]["machine_id"]=json!(task.remote_placement.as_ref().map(|placement|&placement.machine_id));
+    view["message"]=json!(format!("{action} Portée : cette lecture sur cette machine, pas un arrêt global. Les autres travaux autorisés suivent leur propre état."));
+    view["detail"]["recovery"]=json!("Conserver la même tâche, sa vue et sa base. Après résolution du contrôle nommé et fin attestée de l'opération précédente, demander de nouveau le même fichier ; aucune mission de remplacement.");
+    view["detail"]["human_action"]=json!(format!("Si cette intervention dépasse vos droits, demander à l'utilisateur l'autorisation ciblée sur ce composant de cette machine : {action}"));
+    view
+}
+
+fn read_commit_file(conn:&str,task_id:Option<&str>,path:&str,thread:Option<&str>,state:&Arc<Mutex<DaemonState>>)->Value {
+    use bridget_transport::protocol::*;
+    if !commit_view_file_path(path){return commit_file_refusal("commit_file_path_invalid",None);}
+    let (task,execution)={
+        let st=state.lock().unwrap_or_else(|error|error.into_inner());
+        match commit_file_context(&st,conn,task_id,thread){Ok(context)=>context,Err(code)=>return commit_file_refusal(code,None)}
+    };
+    let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+    let response=remote_worker_roundtrip_with_send_deadline(state,&worker,&execution.command,
+        WorkerRequestOperation::ReadCommitViewFile{execution:execution.clone(),path:path.into()},
+        Instant::now()+Duration::from_secs(125),Instant::now()+Duration::from_secs(1));
+    let response=match response {
+        Ok(response)=>response,
+        Err(reason)=>return commit_file_worker_refusal(reason,&task),
+    };
+    let current={
+        let st=state.lock().unwrap_or_else(|error|error.into_inner());
+        match commit_file_context(&st,conn,task_id,thread){Ok(context)=>context,Err(code)=>return commit_file_refusal(code,Some(&task))}
+    };
+    let same_workspace=serde_json::to_value(&current.0.workspace).ok()
+        .zip(serde_json::to_value(&task.workspace).ok()).is_some_and(|(current,previous)|current==previous);
+    if current.0.task_id!=task.task_id || current.1!=execution || !same_workspace
+        || current.0.permission_snapshot!=task.permission_snapshot {
+        return commit_file_refusal("commit_file_context_changed",Some(&task));
+    }
+    let WorkerResponseOperation::CommitViewFile{execution:observed,path:returned,available,reason,failure}=response
+        else{return commit_file_refusal("commit_file_response_unavailable",Some(&task));};
+    if observed!=execution || returned!=path {return commit_file_refusal("commit_file_response_unavailable",Some(&task));}
+    if !available {
+        if matches!(failure,None|Some(CommitViewFailure::Unknown)) && let Some(reason)=reason {
+            return commit_file_worker_refusal(reason,&task);
+        }
+        let mut view=commit_file_refusal("commit_file_materialization_refused",Some(&task));
+        view["detail"]["worker_reason"]=json!(reason);view["detail"]["cause"]=json!(failure);
+        if let Some(cause)=failure {
+            view["detail"]["cause_kind"]=json!("commit_view");
+            let action=workspace_preparation210::view_failure_action(cause);
+            let file_action=if cause==CommitViewFailure::OperationCapacity {
+                " Après sa fin attestée, demander de nouveau le même fichier sur cette tâche, sans boucle serrée."
+            } else {""};
+            view["message"]=json!(format!("{action}{file_action} Portée : cette lecture de fichier de cette tâche, pas toute la machine. Les autres travaux autorisés suivent leur propre état."));
+            view["detail"]["recovery"]=json!("Conserver cette tâche, sa vue et l'opération connue. Attendre la fin attestée d'un helper encore détenu avant de demander de nouveau le même fichier ; ne pas créer de tâche de remplacement ni changer sa base.");
+            view["detail"]["human_action"]=json!(format!("Si cette intervention dépasse vos droits, demander à l'utilisateur de l'autoriser seulement pour cette tâche et cette machine : {action}"));
+        }
+        return view;
+    }
+    let record=task.workspace.as_ref().unwrap();
+    json!({"version":1,"status":"available","task_id":task.task_id,"base_commit":record.base_commit,
+        "file":Path::new(&record.path).join(path),"path":path,"machine_id":worker.machine_id,
+        "message":"Le fichier du commit exact est disponible dans cette vue privée sur la machine indiquée. L'enfant peut le lire sur place ; le parent distant ne doit pas traiter ce chemin comme local. Le dépôt source et les fichiers existants n'ont pas été remplacés."})
+}
+
 fn catalogue_blocked177(st:&DaemonState,instance:&str)->Result<Vec<String>,String>{
     Ok(st.registry.resolved_definitions()?.into_iter().map(|(name,_)|name).filter(|name|st.provider_limits
         .scoped_quota(name,instance,unix_timestamp()).or_else(||st.provider_limits.quota(name,unix_timestamp()))
@@ -5017,6 +5210,18 @@ fn handle_with_fact(
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
+    let workspace = match &request {
+        NativeDelegationRequest::Delegate {workspace,..}=>workspace.as_ref(),
+        NativeDelegationRequest::AutoDelegate(request)=>request.workspace.as_ref(),
+        NativeDelegationRequest::AutoDelegateV2(request)=>request.workspace.as_ref(),
+        _=>None,
+    };
+    if matches!(workspace, Some(WorkspaceRequest::CommitView {})) {
+        return DaemonToWrapper::NativeDelegationResult {result:failure("workspace_commit_view_not_enabled")};
+    }
+    if let NativeDelegationRequest::ReadCommitFile{task_id,path}=&request {
+        return DaemonToWrapper::NativeDelegationResult{result:read_commit_file(conn,task_id.as_deref(),path,thread,state)};
+    }
     if let NativeDelegationRequest::RepairWorkspace {task_id,repair}=&request {
         return DaemonToWrapper::NativeDelegationResult {result:
             workspace_repair::repair(conn,task_id,repair,fact.as_ref(),thread,state)
@@ -5550,7 +5755,7 @@ fn delegate_remote_with_routing(
     // Le premier contrôle168 Worktree atteste la base et les droits, sans
     // matérialisation Git avant que la Task ne soit durcie.
     let inspect_only =
-        routing.is_some() && matches!(workspace, Some(WorkspaceRequest::Worktree { .. }));
+        routing.is_some() && matches!(workspace, Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {}));
     let (owner, parent, worker, mut prepare, task_id) = {
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         recheck_attested_thread(&st, conn, thread)?;
@@ -5702,7 +5907,20 @@ fn delegate_remote_with_routing(
         }
     }
     let outcome = (|| -> Result<(), String> {
-        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+        if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
+            prepare.workspace=workspace.clone();
+            let binding=crate::remote_worker::commit_view_preparation_binding(&worker,&provisional,&prepare)
+                .map_err(|reason|format!("remote_prepare:{reason:?}"))?;
+            let st=state.lock().unwrap_or_else(|error|error.into_inner());
+            let mut task=st.delegation_store.get(&task_id)?.ok_or("task_unavailable")?;
+            if task.state!="queued" || task.child_instance.is_some()
+                || task.commit_view_prepare.as_ref().is_some_and(|known|known!=&binding) {
+                return Err("remote_admission_changed".into());
+            }
+            task.commit_view_prepare=Some(binding);
+            st.delegation_store.save(&task)?;
+        }
+        if matches!(workspace, Some(WorkspaceRequest::Worktree { .. } | WorkspaceRequest::CommitView {})) {
             prepare.workspace = workspace.clone();
             let response = remote_worker_roundtrip(
                 state,
@@ -5720,9 +5938,14 @@ fn delegate_remote_with_routing(
                         }
                     } else { operation }
                 },
-                Instant::now() + Duration::from_secs(30) + crate::workspace_git::WORKTREE_ADD_TIMEOUT,
+                Instant::now()+if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
+                    Duration::from_secs(125)
+                } else {Duration::from_secs(30)+crate::workspace_git::WORKTREE_ADD_TIMEOUT},
             )
             .map_err(|e| format!("remote_workspace_prepare:{e:?}"))?;
+            if let WorkerResponseOperation::CommitViewRejected{reason,failure}=&response {
+                return Err(workspace_preparation210::view_error_code(*reason,*failure));
+            }
             if let WorkerResponseOperation::WorkspaceRejected {reason,failure} = &response {
                 return Err(workspace_preparation210::error_code(*reason,*failure));
             }
@@ -5769,6 +5992,24 @@ fn delegate_remote_with_routing(
                 })
                 .transpose()?;
             if let Some(record) = &record {
+                if matches!(workspace,Some(WorkspaceRequest::CommitView{})) {
+                    let binding=task.commit_view_prepare.as_ref().ok_or("remote_workspace_missing")?;
+                    let reference=record.commit_view.as_ref().ok_or("remote_workspace_invalid")?;
+                    let path=Path::new(&record.path);
+                    if !matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+                        || reference.binding!=*binding || !record.branch.is_empty()
+                        || record.base_commit!=prepared.placement.base_commit.as_deref().ok_or("remote_workspace_invalid")?
+                        || Path::new(&record.toplevel)!=mapping.remote_root.join(&prepared.placement.relative_cwd)
+                        || !path.is_absolute() || path.components().any(|part|matches!(part,std::path::Component::ParentDir))
+                        || path.starts_with(&mapping.remote_root)
+                        || !path.ends_with(binding.key().map_err(|_|"remote_workspace_invalid")?)
+                        || !Path::new(&prepared.placement.execution_cwd).starts_with(path)
+                        || record.dirty!=Some(false) || record.head_commit.is_some() || record.branch_commit.is_some()
+                        || record.head_on_branch.is_some() || record.commit_count.is_some() || !record.commits.is_empty()
+                        || record.truncated {
+                        return Err("remote_workspace_invalid".into());
+                    }
+                } else {
                 let expected_branch = match workspace {
                     Some(WorkspaceRequest::Worktree { branch, .. }) => branch
                         .clone()
@@ -5783,7 +6024,8 @@ fn delegate_remote_with_routing(
                 {
                     return Err("remote_workspace_invalid".into());
                 }
-            } else if matches!(workspace, Some(WorkspaceRequest::Worktree { .. })) {
+                }
+            } else if matches!(workspace, Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView{})) {
                 return Err("remote_workspace_missing".into());
             }
             task.workspace = record;
@@ -8036,6 +8278,7 @@ fn admit_delegate(
         };
         let record = Task {
             remote_prepared: false,
+            commit_view_prepare:None,
             start_recovery: None,
             workspace_repairs: Vec::new(),
             remote_result_slots: Vec::new(),
@@ -8687,6 +8930,7 @@ fn handle_locked_with_remote_proof(
             )?;
             current_task_view(st, &next, true)
         }
+        NativeDelegationRequest::ReadCommitFile{..}=>Err("commit_file_requires_coordinator".into()),
         NativeDelegationRequest::RepairWorkspace { .. } => Err("workspace_repair_requires_coordinator".into()),
         NativeDelegationRequest::Grant { .. } => unreachable!(),
     }
@@ -10667,7 +10911,7 @@ fn report_text(value: &str) -> String {
         .collect()
 }
 
-/// O(B+L), résultat borné à 256 Kio, L ligne de faits Git. Aucun fait du texte enfant.
+/// O(B+L), résultat borné à 256 Kio, L ligne de faits contrôlés. Aucun fait du texte enfant.
 fn append_workspace_result(task: &mut Task) {
     let Some(workspace) = &task.workspace else {
         return;
@@ -10677,19 +10921,33 @@ fn append_workspace_result(task: &mut Task) {
         Some(false) => "non",
         None => "indisponible",
     };
-    let commits = workspace
-        .commit_count
-        .map(|n| format!("{n} commit(s)"))
-        .unwrap_or_else(|| "nombre de commits indisponible".into());
-    let line = format!(
-        "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}. Consultez le statut de la tâche avant tout retrait. Clôturez la tâche, préservez le travail et vérifiez les autres usages du dossier.",
-        report_text(&workspace.branch),
-        &workspace.base_commit[..workspace.base_commit.len().min(7)],
-        commits,
-        yes_no(workspace.dirty),
-        yes_no(workspace.head_on_branch),
-        report_text(&workspace.path)
-    );
+    let line = if matches!(workspace.strategy,crate::delegation::WorkspaceStrategy::CommitView) {
+        let complete=workspace.commit_view.is_some() && workspace.branch.is_empty()
+            && workspace.head_commit.is_none() && workspace.branch_commit.is_none()
+            && workspace.head_on_branch.is_none() && workspace.commit_count.is_none()
+            && workspace.commits.is_empty() && !workspace.truncated;
+        let checked=match (complete,workspace.dirty) {
+            (true,Some(false))=>"conforme",
+            (true,Some(true))=>"divergence constatée",
+            _=>"indisponible",
+        };
+        format!("[Bridget] espace de travail : vue de lecture du commit {}, dernier contrôle des fichiers : {}, dossier conservé : {}. Cette vue ne contient pas de dépôt Git. Consultez le statut de cette tâche, préservez ses fichiers et vérifiez son arrêt et les autres usages avant tout retrait. Les autres travaux autorisés suivent leur propre état.",
+            report_text(&workspace.base_commit),checked,report_text(&workspace.path))
+    } else {
+        let commits = workspace
+            .commit_count
+            .map(|n| format!("{n} commit(s)"))
+            .unwrap_or_else(|| "nombre de commits indisponible".into());
+        format!(
+            "[Bridget] espace de travail : branche {}, base {}, {}, modifications non commitées : {}, tête sur la branche : {}, worktree conservé : {}. Consultez le statut de la tâche avant tout retrait. Clôturez la tâche, préservez le travail et vérifiez les autres usages du dossier.",
+            report_text(&workspace.branch),
+            &workspace.base_commit[..workspace.base_commit.len().min(7)],
+            commits,
+            yes_no(workspace.dirty),
+            yes_no(workspace.head_on_branch),
+            report_text(&workspace.path)
+        )
+    };
     let Some(body) = &task.result else {
         return;
     };
@@ -10727,6 +10985,8 @@ fn complete_workspace_report(state: &Arc<Mutex<DaemonState>>, job: WorkspaceRepo
             if record.path == job.workspace.path
                 && record.branch == job.workspace.branch
                 && record.base_commit == job.workspace.base_commit
+                && (!matches!(job.workspace.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+                    || crate::remote_worker::same_workspace_anchor(&job.workspace,&json!(record)))
             {
                 Ok(record)
             } else {
@@ -12497,6 +12757,54 @@ pub(super) fn cancel_remote_task(
     StopOutcome::Stopped
 }
 
+/// Dernière étape de la clôture native, jamais appelée par task_view ou un
+/// ACK. Le claim de rapport existant sérialise la décision sans verrou réseau.
+fn complete_commit_view_conservation(state: &Arc<Mutex<DaemonState>>, snapshot: &Task) -> bool {
+    use bridget_transport::protocol::{WorkerRequestOperation,WorkerResponseOperation};
+    let Some(binding)=snapshot.commit_view_binding().cloned() else {return false;};
+    let reference=snapshot.workspace.as_ref().and_then(|workspace|workspace.commit_view.as_ref());
+    let worker=&binding.worker;
+    let command=&binding.command;
+    let digest=&binding.prepare_digest;
+    let key=(snapshot.task_id.clone(),snapshot.mission.clone(),snapshot.round_no());
+    let _claim={
+        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let Ok(Some(current))=st.delegation_store.get(&snapshot.task_id) else {return false;};
+        if current.mission!=snapshot.mission || current.round_no()!=snapshot.round_no()
+            || current.workspace.as_ref().and_then(|w|w.commit_view.as_ref())!=reference
+            || current.commit_view_binding()!=Some(&binding)
+            || !super::commit_view_conservation_matches(&current,worker,command,digest)
+            || st.delegation_store.child_closure_pending(&current.task_id).unwrap_or(true) {
+            return false;
+        }
+        if current.cleanup_done {return true;}
+        let mut work=st.workspace_work.lock().unwrap_or_else(|e|e.into_inner());
+        if !work.reports.insert(key.clone()) {return false;}
+        WorkspaceClaim {work:Arc::clone(&st.workspace_work),key:WorkspaceClaimKey::Report(key)}
+    };
+    let response=remote_worker_roundtrip(state,worker,command,
+        WorkerRequestOperation::ConserveCommitView {prepare_digest:digest.clone()},
+        Instant::now()+Duration::from_secs(5));
+    if !matches!(&response,Ok(WorkerResponseOperation::CommitViewConserved {prepare_digest}) if prepare_digest==digest) {
+        // Code fermé seulement. L'erreur métier d'origine n'est pas remplacée.
+        warn!("conservation de vue non confirmée : tâche={}, cause={:?}",snapshot.task_id,
+            response.err().unwrap_or(bridget_transport::protocol::WorkerRefusal::CommandMismatch));
+        return false;
+    }
+    let st=state.lock().unwrap_or_else(|e|e.into_inner());
+    let Ok(Some(mut current))=st.delegation_store.get(&snapshot.task_id) else {return false;};
+    if current.mission!=snapshot.mission || current.round_no()!=snapshot.round_no()
+        || current.workspace.as_ref().and_then(|w|w.commit_view.as_ref())!=reference
+            || current.commit_view_binding()!=Some(&binding)
+        || !super::commit_view_conservation_matches(&current,worker,command,digest)
+        || st.delegation_store.child_closure_pending(&current.task_id).unwrap_or(true) {
+        return false;
+    }
+    if let Some(workspace)=current.workspace.as_mut() {workspace.state=crate::delegation::WorkspaceState::Kept;}
+    current.cleanup_done=true;
+    st.delegation_store.save(&current).is_ok()
+}
+
 fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
     let (root_id, members, task_ids) = {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
@@ -12755,21 +13063,29 @@ fn cancel_tree(state: &Arc<Mutex<DaemonState>>, task: &Task) {
         for job in reports {
             complete_workspace_report(state, job);
         }
-        let st = state.lock().unwrap_or_else(|error| error.into_inner());
-        for id in closed {
-            if let Ok(Some(mut entry)) = st.delegation_store.get(&id)
-                && entry.terminal()
-                && workspace_report_ready(&entry)
-                && (!entry.guarded || entry.guard_released)
-                && !st
-                    .delegation_store
-                    .child_closure_pending(&id)
-                    .unwrap_or(true)
-            {
-                entry.cleanup_done = true;
-                let _ = st.delegation_store.save(&entry);
+        let mut views=Vec::new();
+        {
+            let st = state.lock().unwrap_or_else(|error| error.into_inner());
+            for id in closed {
+                if let Ok(Some(mut entry)) = st.delegation_store.get(&id)
+                    && entry.terminal()
+                    && workspace_report_ready(&entry)
+                    && (!entry.guarded || entry.guard_released)
+                    && !st.delegation_store.child_closure_pending(&id).unwrap_or(true)
+                {
+                    if entry.commit_view_prepare.is_some() || entry.workspace.as_ref().is_some_and(|w|
+                        matches!(w.strategy,crate::delegation::WorkspaceStrategy::CommitView)) {
+                        // Ne publier cleanup_done qu'après l'ACK de la liaison
+                        // originale. Les espaces Git gardent leur contrat.
+                        views.push(entry);
+                    } else {
+                        entry.cleanup_done = true;
+                        let _ = st.delegation_store.save(&entry);
+                    }
+                }
             }
         }
+        for view in views {let _=complete_commit_view_conservation(state,&view);}
     }
 }
 
@@ -26480,7 +26796,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(done["status"],"failed");
             // Un rapport achevé peut être indisponible ; ne jamais le dire confirmé.
             task.workspace=Some(crate::delegation::WorkspaceRecord {
-                strategy:crate::delegation::WorkspaceStrategy::Worktree, state:crate::delegation::WorkspaceState::Kept, toplevel:"/private".into(), path:"/private".into(),
+                strategy:crate::delegation::WorkspaceStrategy::Worktree, commit_view:None, state:crate::delegation::WorkspaceState::Kept, toplevel:"/private".into(), path:"/private".into(),
                 branch:"review".into(), base_commit:"a".repeat(40), branch_commit:None,
                 head_commit:None, head_on_branch:None, commit_count:None,
                 commits:Vec::new(), truncated:false, dirty:None,
@@ -34664,4 +34980,459 @@ mod permission_projection214_tests {
         drop(shared);super::tests::cleanup(&config);
     }
 
+}
+
+
+#[cfg(test)]
+mod commit_view_reader221_tests {
+    use super::*;
+    fn c19_master_file_fixture()->(DaemonState,DaemonConfig,Task,bridget_transport::protocol::RemoteResultEnvelope) {
+        use crate::delegation::{WorkspaceRecord,WorkspaceStrategy,WorkspaceState,ViewBinding,CommitViewRecord};
+        let (mut state,config,mut task,result)=super::tests::remote162_capture_fixture();
+        let mut prepare=result.identity.command.clone();prepare.instance_id.clear();prepare.generation=0;
+        let binding=ViewBinding{worker:result.worker.clone(),command:prepare,prepare_digest:"a".repeat(64)};
+        task.commit_view_prepare=Some(binding.clone());
+        task.workspace=Some(WorkspaceRecord{strategy:WorkspaceStrategy::CommitView,
+            commit_view:Some(CommitViewRecord{proof_root:"/private/proofs".into(),intent_digest:"d".repeat(64),binding}),
+            state:WorkspaceState::Kept,toplevel:"/private/source".into(),path:"/private/view".into(),
+            branch:String::new(),base_commit:"a".repeat(40),head_commit:None,branch_commit:None,
+            head_on_branch:None,commit_count:None,commits:vec![],truncated:false,dirty:Some(false)});
+        state.delegation_store.save(&task).unwrap();
+        (state,config,task,result)
+    }
+
+    #[test]
+    fn spec221_c19_file_context_binds_parent_child_round_revocation_and_pause_without_mutation() {
+        let (mut state,config,task,result)=c19_master_file_fixture();
+        let before=serde_json::to_vec(&state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        assert_eq!(commit_file_context(&state,"conn-1",Some(&task.task_id),None).unwrap().1,result.identity);
+        assert!(matches!(commit_file_context(&state,"conn-1",None,None),Err("commit_file_child_unlinked")));
+        // L'enfant courant lit sa propre vue sans droit de créer d'autres enfants.
+        let instance=task.child_instance.clone().unwrap();
+        assert!(matches!(handle_register_with_channel("file-child",2,"native-test".into(),task.child.clone(),
+            Some("cartae".into()),Some("codex_app_server".into()),ChannelReport::Known("unix".into()),
+            Some(PresenceMode::Cli),None,Some("linux".into()),Some(instance.clone()),None,false,Some(true),
+            &mut state,false),DaemonToWrapper::Registered{..}));
+        let (socket,peer)=UnixStream::pair().unwrap();
+        state.connections.insert("file-child".into(),Arc::new(Mutex::new(BufWriter::new(socket))));
+        state.conn_instances.insert("file-child".into(),instance.clone());
+        assert_eq!(commit_file_context(&state,"file-child",None,None).unwrap().1,result.identity);
+        assert!(matches!(commit_file_context(&state,"file-child",Some(&task.task_id),None),Err("task_unavailable")));
+        for case in 0..9 {
+            let (case_state,case_config,mut wrong,_)=c19_master_file_fixture();
+            match case {
+                0=>wrong.round+=1,
+                1=>wrong.child_instance=Some("other-instance".into()),
+                2=>wrong.remote_result_slots[0].identity.execution_generation+=1,
+                3=>wrong.remote_result_slots.push(wrong.remote_result_slots[0].clone()),
+                4=>wrong.cleanup_done=true,
+                5=>wrong.guard_released=true,
+                6=>wrong.state="result_available".into(),
+                7=>wrong.mission_deadline_at=Some(unix_timestamp()-1),
+                _=>wrong.workspace.as_mut().unwrap().strategy=crate::delegation::WorkspaceStrategy::Worktree,
+            }
+            match case_state.delegation_store.save(&wrong) {
+                Ok(())=>assert!(commit_file_context(&case_state,"conn-1",Some(&wrong.task_id),None).is_err(),"case {case}"),
+                Err(code)=>{
+                    assert!(matches!(case,2|3),"reçu refusé avant la lecture : case {case}, {code}");
+                    assert_eq!(code,if case==2 {"remote_result_slots_stale"}else{"remote_result_slot_invalid"});
+                }
+            }
+            drop(case_state);super::tests::cleanup(&case_config);
+        }
+        let control=crate::referent_control::read(state.store.connection()).unwrap();
+        crate::referent_control::set(state.store.connection(),crate::referent_control::ControlMutation{
+            command_id:"file-test-pause",expected_generation:control.generation,paused:Some(true),
+            auto_objectives_cap:None,reason:Some("test"),actor:"test",now:unix_timestamp(),
+            agent_posture:None,auto_reassignment:None}).unwrap().unwrap();
+        assert!(matches!(commit_file_context(&state,"conn-1",Some(&task.task_id),None),Err("commit_file_task_paused")));
+        let control=crate::referent_control::read(state.store.connection()).unwrap();
+        crate::referent_control::set(state.store.connection(),crate::referent_control::ControlMutation{
+            command_id:"file-test-resume",expected_generation:control.generation,paused:Some(false),
+            auto_objectives_cap:None,reason:Some("test"),actor:"test",now:unix_timestamp(),
+            agent_posture:None,auto_reassignment:None}).unwrap().unwrap();
+        state.delegation_store.grant(&instance,Path::new("/private/view"),SpawnPosture::Discovery,true).unwrap();
+        assert!(matches!(commit_file_context(&state,"conn-1",Some(&task.task_id),None),Err("commit_file_revoked")));
+        assert_eq!(serde_json::to_vec(&state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        assert!(state.pending_worker_responses.is_empty());
+        drop(peer);drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_file_roundtrip_gates_old_peer_and_rechecks_task_and_execution_after_response() {
+        use bridget_transport::protocol::*;
+        use std::io::{BufRead,Read};
+        let (mut state,config,task,result)=c19_master_file_fixture();
+        let raw=json!({"agents":{"native-test":{"command":"/bin/sh","args":["app-server"],
+            "protocol":"codex_app_server","forbidden_env":[]}},
+            "machines":{"cartae":{"enabled":true,"worker_id":result.worker.worker_id,
+                "provisioning_revision":result.worker.provisioning_revision,"credential_fingerprint":"a".repeat(64),
+                "allowed_agent_types":["native-test"],"mappings":{}}}});
+        state.registry=AgentRegistry::from_json(&raw.to_string(),state.registry.source().to_path_buf()).unwrap();
+        let (socket,mut peer)=UnixStream::pair().unwrap();peer.set_nonblocking(true).unwrap();
+        state.connections.insert("file-worker".into(),Arc::new(Mutex::new(BufWriter::new(socket))));
+        state.remote_workers.insert("cartae".into(),RemoteWorkerConnection{
+            identity:result.worker.clone(),conn_id:"file-worker".into(),epoch:"file-epoch".into(),capabilities:vec![],
+            catalogues:HashMap::new(),catalogue_refresh_id:"file-epoch".into(),catalogue_refresh_at:None,
+            contact:WorkerContactState::Connected,last_contact:Instant::now(),last_contact_at:unix_timestamp()});
+        let before=serde_json::to_vec(&state.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        let shared=Arc::new(Mutex::new(state));
+        let refused=read_commit_file("conn-1",Some(&task.task_id),"large.bin",None,&shared);
+        assert_eq!(refused["detail"]["worker_reason"],"capability_required");
+        let mut byte=[0u8;1];
+        assert_eq!(peer.read(&mut byte).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+        assert_eq!(serde_json::to_vec(&shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        shared.lock().unwrap().remote_workers.get_mut("cartae").unwrap().capabilities.push(WorkerCapability::WorkspaceViewV1);
+        peer.set_nonblocking(false).unwrap();peer.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        let incoming=Arc::clone(&shared);
+        let execution=result.identity.clone();let task_id=task.task_id.clone();
+        let responder=std::thread::spawn(move||{
+            let mut reader=std::io::BufReader::new(peer);
+            for case in 0..4 {
+                let mut line=String::new();reader.read_line(&mut line).unwrap();
+                let DaemonToWrapper::WorkerRequest{request}=serde_json::from_str(&line).unwrap()
+                    else{panic!("demande worker attendue");};
+                assert_eq!(request.request,WorkerRequestOperation::ReadCommitViewFile {
+                    execution:execution.clone(),path:"large.bin".into()});
+                let mut returned=execution.clone();
+                if case==2 {returned.execution_id="foreign-file-execution".into();}
+                if case==3 {
+                    let st=incoming.lock().unwrap();
+                    let mut ended=st.delegation_store.get(&task_id).unwrap().unwrap();
+                    ended.state="failed".into();st.delegation_store.save(&ended).unwrap();
+                }
+                let response=WorkerResponse{version:request.version,correlation_id:request.correlation_id,
+                    connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+                    response:WorkerResponseOperation::CommitViewFile{execution:returned,path:"large.bin".into(),
+                        available:case!=1,reason:(case==1).then_some(WorkerRefusal::ResourceLimit),
+                        failure:(case==1).then_some(CommitViewFailure::OperationCapacity)}};
+                response.validate().unwrap();
+                assert!(super::super::handle_worker_message(&incoming,"file-worker",
+                    WrapperToDaemon::WorkerResponse{response}).is_none());
+            }
+        });
+        let available=read_commit_file("conn-1",Some(&task.task_id),"large.bin",None,&shared);
+        assert_eq!(available["status"],"available");assert_eq!(available["file"],"/private/view/large.bin");
+        assert_eq!(available["base_commit"],"a".repeat(40));
+        assert_eq!(available["machine_id"],"cartae");
+        assert!(!available.to_string().contains("/private/proofs"));
+        assert_eq!(serde_json::to_vec(&shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        let occupied=read_commit_file("conn-1",Some(&task.task_id),"large.bin",None,&shared);
+        assert_eq!(occupied["detail"]["cause_kind"],"commit_view");
+        assert!(occupied["message"].as_str().unwrap().contains("demander de nouveau le même fichier"));
+        assert!(!occupied["message"].as_str().unwrap().contains("  "));
+        let foreign=read_commit_file("conn-1",Some(&task.task_id),"large.bin",None,&shared);
+        assert_eq!(foreign["code"],"commit_file_response_unavailable");
+        let ended=read_commit_file("conn-1",Some(&task.task_id),"large.bin",None,&shared);
+        assert_eq!(ended["code"],"commit_file_task_not_active");
+        responder.join().unwrap();
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
+        drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_file_worker_refusals_keep_observed_code_and_specific_next_action() {
+        use bridget_transport::protocol::WorkerRefusal::*;
+        let (state,config,task,_)=c19_master_file_fixture();
+        for (reason,fragment) in [(CapabilityRequired,"WorkspaceViewV1"),(WorkerUnavailable,"lien natif"),
+            (StaleConnection,"lien natif"),(Unauthorized,"autorisation native"),(PlacementMismatch,"placement"),
+            (CommandMismatch,"génération"),(ResourceLimit,"borne"),(StoreUnavailable,"store")] {
+            let refused=commit_file_worker_refusal(reason,&task);
+            assert_eq!(refused["detail"]["cause"],json!(reason));
+            assert_eq!(refused["detail"]["worker_reason"],json!(reason));
+            assert_eq!(refused["detail"]["cause_kind"],"worker");
+            assert_eq!(refused["detail"]["machine_id"],"cartae");
+            let message=refused["message"].as_str().unwrap();
+            assert!(message.contains(fragment) && message.contains("cette lecture sur cette machine"));
+            assert!(message.contains("Les autres travaux autorisés suivent leur propre état"));
+            assert!(refused["detail"]["human_action"].as_str().unwrap().contains("utilisateur"));
+            assert!(!refused.to_string().contains("/private/proofs"));
+        }
+        drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_preparation_capacity_never_recommends_replaying_a_file_read() {
+        use bridget_transport::protocol::{WorkerRefusal,CommitViewFailure};
+        let (state,config,mut task,_)=c19_master_file_fixture();
+        task.error=Some(format!("remote_start_failed:{}",workspace_preparation210::view_error_code(
+            WorkerRefusal::ResourceLimit,CommitViewFailure::OperationCapacity)));
+        let mut view=json!({});workspace_preparation210::project(&task,&mut view);
+        let message=view["error_message"].as_str().unwrap();
+        assert!(!message.contains("fichier"));
+        assert!(message.contains("relire l'état de la même tâche"));
+        assert!(view["error_recovery"].as_str().unwrap().contains("ne relance pas la préparation"));
+        drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_view_retention_distinguishes_file_report_from_git_without_mutation() {
+        use crate::delegation::{WorkspaceRecord,WorkspaceStrategy,WorkspaceState,ViewBinding,CommitViewRecord};
+        let (state,config,mut task,_)=super::tests::remote162_capture_fixture();
+        task.state="failed".into();task.error=None;task.cleanup_done=true;
+        task.workspace_report_mission=Some(task.mission.clone());
+        let reference=CommitViewRecord { proof_root:"/private/c19-proof".into(),intent_digest:"d".repeat(64),
+            binding:ViewBinding {
+                worker:bridget_transport::protocol::WorkerIdentity {machine_id:"fixture".into(),worker_id:"worker".into(),provisioning_revision:1},
+                command:bridget_transport::protocol::WorkerCommandIdentity {task_id:task.task_id.clone(),command_id:"prepare".into(),instance_id:String::new(),generation:0},
+                prepare_digest:"a".repeat(64),
+            },
+        };
+        task.workspace=Some(WorkspaceRecord { strategy:WorkspaceStrategy::CommitView,
+            commit_view:Some(reference),state:WorkspaceState::Kept,toplevel:"/private/source".into(),
+            path:"/private/view".into(),branch:String::new(),base_commit:"a".repeat(40),
+            head_commit:None,branch_commit:None,head_on_branch:None,commit_count:None,
+            commits:vec![],truncated:false,dirty:Some(false) });
+        for (dirty,expected) in [(Some(false),"conforme"),(Some(true),"divergence constatée"),(None,"indisponible")] {
+            let mut result=task.clone();
+            result.workspace.as_mut().unwrap().dirty=dirty;
+            result.result=Some("Résultat conservé".into());
+            append_workspace_result(&mut result);
+            let body=result.result.as_ref().unwrap();
+            assert!(body.contains(&format!("vue de lecture du commit {}","a".repeat(40))));
+            assert!(body.contains(&format!("dernier contrôle des fichiers : {expected}")));
+            assert!(body.contains("dossier conservé : /private/view"));
+            assert!(body.contains("Les autres travaux autorisés suivent leur propre état"));
+            for invented in ["branche ","commit(s)","worktree conservé","tête sur la branche"] {
+                assert!(!body.contains(invented));
+            }
+            let mut contradictory=result.clone();
+            contradictory.workspace.as_mut().unwrap().head_on_branch=Some(true);
+            contradictory.result=Some("Résultat".into());
+            append_workspace_result(&mut contradictory);
+            assert!(contradictory.result.unwrap().contains("dernier contrôle des fichiers : indisponible"));
+        }
+        let before=serde_json::to_value(&task).unwrap();
+        let view=task_view(&task,None,true);
+        assert_eq!(view["workspace"]["retention"]["code"],"review_required");
+        assert!(view["workspace"]["retention"]["recovery"].as_str().unwrap().contains("retrait natif"));
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        task.workspace.as_mut().unwrap().dirty=Some(true);
+        let view=task_view(&task,None,true);
+        assert_eq!(view["workspace"]["retention"]["code"],"changes_present");
+        assert!(view["workspace"]["retention"]["recovery"].as_str().unwrap().contains("ne régénérez pas"));
+        task.workspace.as_mut().unwrap().dirty=Some(false);
+        task.workspace.as_mut().unwrap().head_on_branch=Some(true);
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"report_unavailable");
+        task.workspace.as_mut().unwrap().head_on_branch=None;
+        let known_reference=task.workspace.as_ref().unwrap().commit_view.clone();
+        task.workspace.as_mut().unwrap().commit_view=None;
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"report_unavailable");
+        task.cleanup_done=false;
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"stop_unconfirmed");
+        task.workspace.as_mut().unwrap().commit_view=known_reference;
+        task.guarded=true;task.guard_released=false;
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"stop_unconfirmed");
+        task.guard_released=true;
+        let pending=task_view(&task,None,true);
+        assert_eq!(pending["workspace"]["retention"]["code"],"view_conservation_unconfirmed");
+        assert!(pending["workspace"]["retention"]["recovery"].as_str().unwrap().contains("cause précise"));
+        assert!(pending["workspace"]["retention"]["recovery"].as_str().unwrap().contains("Les autres travaux"));
+        task.state="result_available".into();task.result_sent=false;task.idle_deadline_at=None;
+        assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"result_delivery_pending");
+
+        drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_master_conservation_requires_closed_noncontinuable_task_and_exact_reference() {
+        use std::io::Read;
+        use crate::delegation::{WorkspaceRecord,WorkspaceStrategy,WorkspaceState,ViewBinding,CommitViewRecord};
+        let (mut state,config,mut task,_)=super::tests::remote162_capture_fixture();
+        let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+        let command=bridget_transport::protocol::WorkerCommandIdentity {
+            task_id:task.task_id.clone(),command_id:"original-view-preparation".into(),
+            instance_id:String::new(),generation:0,
+        };
+        let digest="a".repeat(64);
+        task.state="result_available".into();task.cleanup_done=true;task.result_sent=false;task.idle_deadline_at=None;
+        task.workspace_report_mission=Some(task.mission.clone());
+        task.guarded=false;task.guard_released=false;
+        task.workspace=Some(WorkspaceRecord {
+            strategy:WorkspaceStrategy::CommitView,state:WorkspaceState::Kept,
+            commit_view:Some(CommitViewRecord {proof_root:"/private/proof".into(),intent_digest:"b".repeat(64),
+                binding:ViewBinding {worker:worker.clone(),command:command.clone(),prepare_digest:digest.clone()}}),
+            toplevel:"/private/source".into(),path:"/private/view".into(),branch:String::new(),
+            base_commit:"c".repeat(40),head_commit:None,branch_commit:None,head_on_branch:None,
+            commit_count:None,commits:vec![],truncated:false,dirty:None,
+        });
+        let check=|task:&Task|super::super::commit_view_conservation_matches(task,&worker,&command,&digest);
+        assert!(check(&task));
+        let before=serde_json::to_value(&task).unwrap();
+        for case in 0..8 {
+            let mut wrong=task.clone();
+            match case {
+                0=>wrong.workspace_report_mission=None,
+                1=>{wrong.result_sent=true;wrong.idle_deadline_at=Some(unix_timestamp()+60);},
+                2=>wrong.state="working".into(),
+                3=>{wrong.guarded=true;wrong.guard_released=false;},
+                4=>wrong.workspace.as_mut().unwrap().strategy=WorkspaceStrategy::Worktree,
+                5=>wrong.workspace.as_mut().unwrap().commit_view=None,
+                6=>wrong.workspace.as_mut().unwrap().commit_view.as_mut().unwrap().binding.prepare_digest="f".repeat(64),
+                _=>wrong.task_id="other-task".into(),
+            }
+            assert!(!check(&wrong),"case{case}");
+        }
+        let mut other_worker=worker.clone();other_worker.worker_id="other-worker".into();
+        assert!(!super::super::commit_view_conservation_matches(&task,&other_worker,&command,&digest));
+        let mut other_command=command.clone();other_command.command_id="other-preparation".into();
+        assert!(!super::super::commit_view_conservation_matches(&task,&worker,&other_command,&digest));
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        // Ancien pair : refus avant écriture de la moindre trame. La machine
+        // est désactivée, sans réactivation : seule la conservation d'une Task
+        // connue serait autorisée si la capacité était présente.
+        let path=state.registry.source().to_path_buf();
+        // La fixture initiale charge son registre en mémoire, sans fichier.
+        let raw=json!({"agents":{"native-test":{"command":"/bin/sh","args":["app-server"],
+            "protocol":"codex_app_server","forbidden_env":[]}},
+            "machines":{"cartae":{"enabled":false,"worker_id":worker.worker_id,
+                "provisioning_revision":worker.provisioning_revision,"credential_fingerprint":"a".repeat(64),
+                "allowed_agent_types":["native-test"],"mappings":{}}}});
+
+        state.registry=AgentRegistry::from_json(&raw.to_string(),&path).unwrap();
+        task.cleanup_done=false;
+        assert!(check(&task),"la clôture de la vue précède cleanup_done");
+        state.delegation_store.save(&task).unwrap();
+        let (socket,mut peer)=UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        state.connections.insert("view-worker".into(),Arc::new(Mutex::new(BufWriter::new(socket))));
+        state.remote_workers.insert("cartae".into(),RemoteWorkerConnection {
+            identity:worker.clone(),conn_id:"view-worker".into(),epoch:"view-epoch".into(),capabilities:vec![],
+            catalogues:HashMap::new(),catalogue_refresh_id:"view-epoch".into(),catalogue_refresh_at:None,
+            contact:bridget_transport::protocol::WorkerContactState::Connected,
+            last_contact:Instant::now(),last_contact_at:unix_timestamp(),
+        });
+        let shared=Arc::new(Mutex::new(state));
+        let operation=bridget_transport::protocol::WorkerRequestOperation::ConserveCommitView {prepare_digest:digest.clone()};
+        assert_eq!(remote_worker_roundtrip(&shared,&worker,&command,operation.clone(),Instant::now()+Duration::from_secs(1)),
+            Err(bridget_transport::protocol::WorkerRefusal::CapabilityRequired));
+        let mut byte=[0u8;1];
+        assert_eq!(peer.read(&mut byte).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+        assert!(!complete_commit_view_conservation(&shared,&task));
+        assert!(!shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap().cleanup_done);
+        assert!(shared.lock().unwrap().workspace_work.lock().unwrap().reports.is_empty());
+        assert_eq!(peer.read(&mut byte).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+
+        {
+            let mut st=shared.lock().unwrap();
+            st.remote_workers.get_mut("cartae").unwrap().capabilities.push(bridget_transport::protocol::WorkerCapability::WorkspaceViewV1);
+            let mut active=task.clone();active.result_sent=true;active.idle_deadline_at=Some(unix_timestamp()+60);assert!(active.continuable());st.delegation_store.save(&active).unwrap();
+        }
+        assert_eq!(remote_worker_roundtrip(&shared,&worker,&command,operation,Instant::now()+Duration::from_secs(1)),
+            Err(bridget_transport::protocol::WorkerRefusal::Unauthorized));
+        assert_eq!(peer.read(&mut byte).unwrap_err().kind(),std::io::ErrorKind::WouldBlock);
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
+        shared.lock().unwrap().delegation_store.save(&task).unwrap();
+        peer.set_nonblocking(false).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let incoming=Arc::clone(&shared);
+        let original_digest=digest.clone();
+        let task_id=task.task_id.clone();
+        let responder=std::thread::spawn(move||{
+            use std::io::BufRead;
+            let mut line=String::new();
+            std::io::BufReader::new(peer).read_line(&mut line).unwrap();
+            let DaemonToWrapper::WorkerRequest {request}=serde_json::from_str(&line).unwrap()
+                else {panic!("demande worker attendue");};
+            assert_eq!(request.request,bridget_transport::protocol::WorkerRequestOperation::ConserveCommitView {
+                prepare_digest:original_digest.clone()});
+            assert!(!incoming.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap().cleanup_done,
+                "ne jamais publier cleanup_done avant l'ACK");
+            let response=bridget_transport::protocol::WorkerResponse {
+                version:request.version,correlation_id:request.correlation_id,
+                connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+                response:bridget_transport::protocol::WorkerResponseOperation::CommitViewConserved {
+                    prepare_digest:original_digest},
+            };
+            assert!(super::super::handle_worker_message(&incoming,"view-worker",
+                WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
+            response
+        });
+        assert!(complete_commit_view_conservation(&shared,&task));
+        let reply=responder.join().unwrap();
+        let final_task=shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap();
+        assert!(final_task.cleanup_done);
+        assert_eq!(final_task.workspace.as_ref().unwrap().state,WorkspaceState::Kept);
+        let final_bytes=serde_json::to_vec(&final_task).unwrap();
+        // Réponse tardive exacte : absorbée sans effet ni faux nouvel arrêt.
+        assert!(super::super::handle_worker_message(&shared,"view-worker",
+            WrapperToDaemon::WorkerResponse {response:reply.clone()}).is_none());
+        let mut stale=reply.clone();stale.connection_epoch="old-epoch".into();
+        assert!(matches!(super::super::handle_worker_message(&shared,"view-worker",
+            WrapperToDaemon::WorkerResponse {response:stale}),
+            Some(DaemonToWrapper::WorkerRejected {reason:bridget_transport::protocol::WorkerRefusal::StaleConnection})));
+        let mut wrong=reply.clone();wrong.command.command_id="unknown-preparation".into();
+        assert!(matches!(super::super::handle_worker_message(&shared,"view-worker",
+            WrapperToDaemon::WorkerResponse {response:wrong}),
+            Some(DaemonToWrapper::WorkerRejected {reason:bridget_transport::protocol::WorkerRefusal::CommandMismatch})));
+        assert_eq!(serde_json::to_vec(&shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),final_bytes);
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
+        drop(shared);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_preparation_failure_names_cause_scope_owner_action_and_preserves_task() {
+        use bridget_transport::protocol::{CommitViewFailure as V,WorkerRefusal};
+        let (state,config,mut task,_)=super::tests::remote162_capture_fixture();
+        task.state="failed".into();task.workspace=None;task.cleanup_done=false;
+        for cause in [V::ObjectUnavailable,V::StopUnconfirmed,V::MetadataCapacity,V::StorageSpaceUnknown,V::Unknown] {
+            task.error=Some(format!("remote_start_failed:{}",workspace_preparation210::view_error_code(
+                WorkerRefusal::WorkspacePrepareFailed,cause)));
+            let before=serde_json::to_value(&task).unwrap();
+            let view=task_view(&task,None,true);
+            assert_eq!(view["detail"]["commit_view_failure"]["cause"],serde_json::to_value(cause).unwrap());
+            assert!(view["error_message"].as_str().unwrap().contains("préparation de cette tâche"));
+            assert!(view["error_message"].as_str().unwrap().contains("autres travaux"));
+            assert!(view["error_recovery"].as_str().unwrap().contains("clôture native"));
+            assert!(view["error_human_action"].as_str().unwrap().contains("utilisateur"));
+            assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        }
+        drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_unpublished_preparation_has_exact_owner_binding_and_no_invented_report() {
+        use crate::delegation::ViewBinding;
+        let (state,config,mut task,_)=super::tests::remote162_capture_fixture();
+        let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+        let command=bridget_transport::protocol::WorkerCommandIdentity{
+            command_id:task.task_id.clone(),task_id:task.task_id.clone(),instance_id:String::new(),generation:0};
+        let binding=ViewBinding{worker:worker.clone(),command:command.clone(),prepare_digest:"a".repeat(64)};
+        task.workspace=None;task.workspace_report_mission=None;task.commit_view_prepare=Some(binding.clone());
+        task.state="failed".into();task.guarded=false;task.guard_released=false;task.cleanup_done=false;
+        task.result_sent=false;task.idle_deadline_at=None;
+        assert!(super::super::commit_view_conservation_matches(&task,&worker,&command,&binding.prepare_digest));
+        let before=serde_json::to_value(&task).unwrap();
+        let full=task_view(&task,None,true);
+        assert_eq!(full["detail"]["commit_view_preparation"]["publication"],"not_attested");
+        assert_eq!(full["detail"]["commit_view_preparation"]["conservation"],"unconfirmed");
+        assert!(full["detail"]["commit_view_preparation"]["next_action"].as_str().unwrap().contains("ne pas créer"));
+        assert!(task_view(&task,None,false)["detail"]["commit_view_preparation"].is_null());
+        assert_eq!(serde_json::to_value(&task).unwrap(),before);
+        let mut wrong=task.clone();wrong.commit_view_prepare.as_mut().unwrap().prepare_digest="f".repeat(64);
+        assert!(!super::super::commit_view_conservation_matches(&wrong,&worker,&command,&binding.prepare_digest));
+        wrong=task.clone();wrong.state="working".into();
+        assert!(!super::super::commit_view_conservation_matches(&wrong,&worker,&command,&binding.prepare_digest));
+        task.cleanup_done=true;
+        assert_eq!(task_view(&task,None,true)["detail"]["commit_view_preparation"]["conservation"],"confirmed");
+        drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_c19_reader_refuses_new_admission_before_task_or_source_effects() {
+        let (state,_config,_commands,_reader)=super::tests::fixture("c19");
+        let state=Arc::new(Mutex::new(state));
+        let request:NativeDelegationRequest=serde_json::from_value(json!({
+            "operation":"delegate","request_id":"c19-not-enabled","agent_type":"native-test",
+            "model":"fixture","task":"Read only","cwd":"/unavailable-source",
+            "posture":"discovery","workspace":{"strategy":"commit_view"}
+        })).unwrap();
+        let before=serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
+        let result=handle("conn-1",request,&state);
+        let DaemonToWrapper::NativeDelegationResult{result}=result else{panic!("native result");};
+        assert_eq!(result["code"],"workspace_commit_view_not_enabled");
+        assert!(result["message"].as_str().unwrap().contains("autres travaux"));
+        assert_eq!(result["detail"]["task_id"],Value::Null);
+        assert_eq!(serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap(),before);
+    }
 }

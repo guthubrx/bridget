@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 
 /// Même schéma fermé pour les deux admissions ; aucune valeur JSON dans le refus.
 fn parse_workspace(value: &Value) -> Result<WorkspaceRequest, ClientError> {
+    if value.get("strategy").and_then(Value::as_str)==Some("commit_view") {
+        return Err(ClientError::InvalidParams("La lecture de commit est en préparation sur ce client. Cet appel n'a pas été envoyé. Conserver toute clé ou tâche connue ; ne pas changer de mode pour forcer le passage. Faire qualifier et charger le parcours de vue et son retour compatible par le responsable Bridget. Les autres travaux autorisés suivent leur propre état.".into()));
+    }
     serde_json::from_value(value.clone()).map_err(|_| {
         ClientError::InvalidParams(
             "Corrigez la forme de workspace : un objet avec strategy égal à shared ou worktree est requis. En shared, seul strategy est accepté ; retirez base_ref, branch et tout autre champ. En worktree, seuls strategy, base_ref et branch sont acceptés ; base_ref et branch sont des chaînes si présents, jamais null. Le SHA source complet se place dans expected_base_commit pour l’admission automatique. Ce refus local concerne cet appel : il n’a pas été envoyé au serveur. Il ne prouve pas l’absence d’une demande antérieure de même request_id. Attendez la fin des appels concurrents et vérifiez tout reçu ou tâche déjà connu avant de corriger les paramètres ; un reçu existant conserve son canon. Ne créez aucun remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état. Si le client chargé ne décrit pas ces règles, demandez sa reconnexion complète ; une simple reprise de tour peut garder l’ancien programme.".into(),
@@ -80,6 +83,10 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     let mut definitions=vec![
+        json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
+            "inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1,"maxLength":128},
+                "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"],"additionalProperties":false},
+            "annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_refresh_models","description":"Demande une nouvelle observation des modèles annoncés par Codex sur les serveurs. Aucun login, modèle, profil, droit ou mission modifié. La réponse requested n’atteste pas une lecture terminée : relire ensuite bridget_capabilities et fleet.connection_catalogues. Une demande par serveur au plus toutes les 30 secondes. Un ancien worker reste non vérifié.","inputSchema":{"type":"object","properties":{"machine_id":{"type":"string","minLength":1,"maxLength":256}},"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false}}),
         json!({"name":"bridget_capabilities","description":"Catalogue natif : providers contient les verdicts locaux sur la machine d’origine ; ces refus ne décrivent pas les serveurs. fleet.options donne les choix distants déclarés pour auto_delegate (machine_id, engine, model). Ces choix ne prouvent ni éligibilité ni authentification : l’admission vérifie la cible, les droits et le dossier. Fonctionne sans T3.","inputSchema":{"type":"object","properties":{},"additionalProperties":false},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_delegate","description":"Crée un enfant Bridget et remet sa mission en un appel natif. Conserver request_id sur retry identique ; tâche, résultat et annulation appartiennent au parent. keep_alive_secs garde l'enfant après la remise pour une nouvelle ronde. Le brief est déclaré par le parent ; sources_not_verified : aucune source citée n'est vérifiée. Le journal peut être lu plus largement que l'enfant ; aucun secret dans le brief. Corps du dossier ≤ 16 Kio, refusé plutôt que tronqué.","inputSchema":{"type":"object","properties":{"request_id":{"type":"string","minLength":1,"maxLength":128},"agent_type":{"type":"string"},"model":{"type":"string"},"effort":{"type":["string","null"]},"task":{"type":"string","minLength":1,"maxLength":65536},"machine_id":{"type":"string","minLength":1,"maxLength":256,"description":"Machine de destination de la mission. Le champ cwd reste le dossier source sur la machine du parent."},"project_id":{"type":"string","minLength":1,"maxLength":256},"cwd":{"type":"string","minLength":1,"description":"Chemin absolu du dossier source sur la machine du parent appelant. Même avec machine_id distant, ne pas fournir le chemin de destination ; Bridget traduit le chemin via le mapping du projet."},"posture":{"type":"string","enum":["discovery","development"]},"reply_timeout":{"type":"integer","minimum":60,"maximum":86400,"description":"Délai de réponse de la mission en secondes (défaut 3600)."},"workspace":workspace_schema,"child_requests":{"type":"string","enum":["deny","forward"],"description":"Remonter les demandes de l’enfant Codex ; absent : deny, politique inchangée."},"keep_alive_secs":{"type":"integer","minimum":60,"maximum":7200,"description":"Durée de garde après la remise du résultat ; absent : aucune garde."},"resume_on_limit":{"type":"boolean","description":"Attendre puis reprendre après une limite d’usage attestée ; absent ou faux : inactif. Au plus 6 h et 2 rondes, même fournisseur."},"brief":brief_schema,"fallback":{"type":"array","minItems":1,"maxItems":3,"items":{"type":"object","properties":{"agent_type":{"type":"string","minLength":1},"model":{"type":"string","minLength":1},"effort":{"type":"string","minLength":1}},"required":["agent_type","model"],"additionalProperties":false}}},"required":["request_id","agent_type","model","task","cwd"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":true}}),
@@ -170,6 +177,7 @@ fn execute_with_proof(
             "urgent",
             "deliverable",
         ],
+        "bridget_read_commit_file" => &["task_id","path"],
         "bridget_refresh_models" => &["machine_id"],
         "bridget_task_repair_workspace" => &["task_id", "request_id", "target_cwd", "expected_head"],
         "bridget_task_continue" => &["task_id", "request_id", "task", "brief"],
@@ -192,6 +200,14 @@ fn execute_with_proof(
             })
     };
     let request = match name {
+        "bridget_read_commit_file"=>{
+            let path=string("path")?;
+            if !bridget_transport::protocol::commit_view_file_path(&path) {
+                return Err(ClientError::InvalidParams("path doit être un chemin de fichier relatif exact de la carte du commit, sans préfixe absolu, ../, ./ ou séparateur inverse. Cet appel n'a pas été envoyé ; conserver toute tâche et opération déjà connue.".into()));
+            }
+            NativeDelegationRequest::ReadCommitFile{
+                task_id:args.get("task_id").map(|_|string("task_id")).transpose()?,path}
+        },
         "bridget_capabilities" => NativeDelegationRequest::Catalogue,
         "bridget_refresh_models" => NativeDelegationRequest::ProviderCatalogueV1 {refresh:true,machine_id:args.get("machine_id").map(|_|string("machine_id")).transpose()?},
         "bridget_delegate" => NativeDelegationRequest::Delegate {
@@ -480,6 +496,8 @@ fn execute_with_proof(
         registered_connection(&identity.name, &identity.instance_id, socket)?
     };
     let required_feature = match &request {
+        NativeDelegationRequest::ReadCommitFile{..}=>
+            Some(("commit_view_files_v1","commit_view_file_master_upgrade_required")),
         NativeDelegationRequest::RepairWorkspace {..} =>
             Some(("task_workspace_repair_v1","workspace_repair_master_upgrade_required")),
 
@@ -510,10 +528,14 @@ fn execute_with_proof(
     }
     // Une admission peut préparer un dépôt ou un worktree. Le délai métier
     // de la mission reste distinct ; les lectures gardent leur budget court.
+    let commit_file=matches!(&request,NativeDelegationRequest::ReadCommitFile{..});
     let admission = matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)
         | NativeDelegationRequest::AutoDelegate(_) | NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::RepairWorkspace { .. });
     if admission {
         connection.set_deadline(Instant::now() + Duration::from_secs(600));
+    } else if commit_file {
+        connection.set_deadline(Instant::now()+Duration::from_secs(125)
+            +if proof.is_some(){crate::t3code_mcp::ATTESTATION_MAX_BUDGET}else{Duration::ZERO});
     }
     let recover_request_id = match &request {
         NativeDelegationRequest::AutoDelegateV2(auto) => Some(auto.request_id.clone()),
@@ -525,7 +547,7 @@ fn execute_with_proof(
     } else {
         Duration::ZERO
     };
-    if !attestation_budget.is_zero() && !admission
+    if !attestation_budget.is_zero() && !admission && !commit_file
     {
         let wait = match &request {
             NativeDelegationRequest::Wait { wait_timeout, .. } =>
@@ -656,6 +678,26 @@ fn recover_admission_with_budget171<T>(
 #[cfg(test)]
 mod admission_recovery171_tests {
     use super::*;
+
+    #[test]
+    fn spec221_c19_file_tool_parses_only_task_and_exact_relative_path() {
+        use std::os::unix::net::UnixListener;
+        let identity=ResolvedIdentity{name:"owner".into(),instance_id:"instance".into(),delegated_origin:None};
+        let socket=crate::mcp_identity::mock_socket("c19-file-invalid");
+        let listener=UnixListener::bind(&socket).unwrap();listener.set_nonblocking(true).unwrap();
+        for args in [json!({"path":"../x"}),json!({"path":"/x"}),json!({"path":"./x"}),
+            json!({"path":"x","task_id":null}),json!({"path":"x","execution":"PRIVATE"})] {
+            assert!(matches!(execute_with_proof(&identity,"bridget_read_commit_file",&args,&socket,None),
+                Err(ClientError::InvalidParams(_))));
+            assert!(matches!(listener.accept(),Err(error) if error.kind()==std::io::ErrorKind::WouldBlock));
+
+        }
+        let tools=tools(&json!({}));
+        let tool=tools.iter().find(|tool|tool["name"]=="bridget_read_commit_file").unwrap();
+        assert_eq!(tool["inputSchema"]["additionalProperties"],false);
+        assert_eq!(tool["annotations"]["destructiveHint"],false);
+        drop(listener);std::fs::remove_dir_all(socket.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn incident171_pending_admission_recovers_same_receipt_with_one_deadline() {
@@ -829,6 +871,42 @@ mod tests {
     }
 
     #[test]
+    fn spec221_c19_file_mcp_negotiates_feature_before_exact_native_request() {
+        use std::io::{BufRead,BufReader,Write};
+        use std::os::unix::net::UnixListener;
+        for supplied_task in [false,true] {
+            let socket=crate::mcp_identity::mock_socket("c19-file-mcp");
+            let listener=UnixListener::bind(&socket).unwrap();
+            crate::mcp_identity::mock_private_identity(&socket,"owner","instance");
+            let backend=std::thread::spawn(move||{
+                let (mut stream,_)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=BufReader::new(stream.try_clone().unwrap());let mut line=String::new();
+                reader.read_line(&mut line).unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"],"RegisterAuxiliary");
+                writeln!(stream,"{}",json!({"type":"Registered","agent_id":"owner","credential":null})).unwrap();
+                line.clear();reader.read_line(&mut line).unwrap();
+                assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"],"DaemonIdentityRequest");
+                writeln!(stream,"{}",json!({"type":"DaemonIdentityReport","host":"fixture","db_path":"fixture",
+                    "instance_id":"fixture","features":["commit_view_files_v1"]})).unwrap();
+                line.clear();reader.read_line(&mut line).unwrap();
+                let request:WrapperToDaemon=serde_json::from_str(&line).unwrap();
+                let WrapperToDaemon::NativeDelegation{request}=request else{panic!("requête native attendue");};
+                assert_eq!(request,NativeDelegationRequest::ReadCommitFile{
+                    task_id:supplied_task.then(||"own-task".into()),path:"sub/source.rs".into()});
+                writeln!(stream,"{}",json!({"type":"NativeDelegationResult",
+                    "result":{"status":"available","file":"/private/view/sub/source.rs"}})).unwrap();
+            });
+            let identity=ResolvedIdentity{name:"owner".into(),instance_id:"instance".into(),delegated_origin:None};
+            let args=if supplied_task{json!({"task_id":"own-task","path":"sub/source.rs"})}
+                else{json!({"path":"sub/source.rs"})};
+            let result=execute_with_proof(&identity,"bridget_read_commit_file",&args,&socket,None).unwrap();
+            assert_eq!(result["status"],"available");
+            backend.join().unwrap();
+        }
+    }
+
+    #[test]
     fn spec168_wire163_byte_compatible_et_nouveau_client_refuse_ancien_maitre() {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixListener;
@@ -840,6 +918,7 @@ mod tests {
             r#"{"operation":"auto_delegate","request_id":"legacy163","task":"mission","cwd":"/tmp"}"#
         );
         for (tool,args,expected) in [
+            ("bridget_read_commit_file",json!({"path":"sub/file.rs"}),"commit_view_file_master_upgrade_required"),
             ("bridget_auto_delegate",json!({"request_id":"new168","task":"mission","cwd":"/tmp"}),"auto_delegate_v2_unsupported"),
             ("bridget_task_repair_workspace",json!({"task_id":"task185","request_id":"repair185",
                 "target_cwd":"/srv/projet/task185","expected_head":"1".repeat(40)}),"workspace_repair_master_upgrade_required"),

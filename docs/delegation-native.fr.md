@@ -1823,3 +1823,30 @@ Pour chaque modèle, `policy_effort_status` distingue `outside_policy`, `not_con
 `account_change_detection` nomme les signaux réellement utilisés par Codex : métadonnées de connexion, de programme et de configuration, empreinte de définition et reconnexion du worker. Sans signal de fichier, seul le contrôle périodique ou explicite peut observer un changement. La cible de 120 secondes n'est pas une garantie. Les autres fournisseurs restent `unsupported` pour cette découverte.
 
 La borne de 32 connexions par worker inclut les connexions désactivées. Un inventaire plus grand rend `connection_limit` ; demander au responsable de qualifier l'inventaire. Une demande explicite ne lance alors aucun contrôle. La suppression d'une connexion, un registre illisible ou une politique désactivée ne libèrent pas la garde d'une sonde dont l'arrêt reste incertain. Le diagnostic retenu revient avec la connexion ; un cache global indisponible ne confirme aucun arrêt. Avant toute bascule, le responsable vérifie toujours les marqueurs privés. Les autres travaux suivent leur propre état.
+
+
+### Lire un fichier omis d'une vue de commit
+
+La vue contient les fichiers du commit demandé et une carte des omissions. Elle
+n'est pas un dépôt Git. L'outil natif `bridget_read_commit_file` crée la copie
+privée d'un fichier et les marqueurs nécessaires de ce même commit, puis rend le chemin à lire. Il ne relance
+pas la mission et ne modifie ni le dépôt source, ni la base, ni les droits.
+
+L'enfant courant fournit seulement `path`, le chemin relatif exact de la carte.
+Le parent fournit aussi `task_id`, l'identifiant de sa propre tâche. Aucune
+identité d'exécution ou racine de preuve ne vient du demandeur. La tâche doit
+rester active et posséder une vue publiée. La pause, la révocation et une ronde
+périmée refusent la lecture. Le contexte est vérifié avant et après l'attente.
+
+La CLI utilise `bridget task read-file [TASK] CHEMIN`. Après `status=available`,
+lire le chemin de données rendu. Un fichier divergent n'est jamais écrasé. Si
+un contrôle est encore détenu, le même chemin rejoint cette opération ; un autre
+fichier attend sa fin. Un délai ou une perte de lien ne prouve pas son arrêt.
+Conserver la tâche et la vue ; ne pas lancer de mission de remplacement.
+
+Le client exige `commit_view_files_v1` du maître ; le maître exige le lecteur
+`WorkspaceViewV1` du worker. Sans ces capacités, le refus précède l'envoi de la
+commande nouvelle. Cette lecture ne donne pas la capacité de créer une vue.
+Pendant le déploiement du lecteur, les admissions de vues restent fermées.
+
+Le détail d’un refus de lecture peut porter cause_kind : worker pour un code du worker, ou commit_view pour une cause de la vue. Ce champ est absent sans cause observée. Il ne change pas la portée de la tâche ni les droits.

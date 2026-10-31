@@ -496,6 +496,102 @@ struct WorkspacePreparationReceipt {
     #[serde(skip)]
     fenced_previous: Option<WorkerCommandIdentity>,
     record: Option<crate::delegation::WorkspaceRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    commit_view: Option<ViewReservation>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewReservation {
+    key: String,
+    intent_digest: String,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    planning:Option<ViewPlanning>,
+    reserved_bytes: u64,
+    #[serde(default)]
+    source_marker: Option<ManagedMarker>,
+    #[serde(default)]
+    source_stopped: bool,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    source_failure:Option<crate::workspace_git::ExportFailure>,
+    #[serde(default)]
+    source_attempted:bool,
+    /// Monotone : la clôture native interdit tout nouveau démarrage ou export.
+    /// Elle permet la collecte de l'histoire, jamais le retrait des données.
+    #[serde(default,skip_serializing_if="std::ops::Not::not")]
+    closed:bool,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    materialization:Option<ViewMaterialization>,
+}
+
+#[derive(Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewPlanning {seed_digest:String,adopted:bool}
+
+#[derive(Clone,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViewMaterialization {
+    execution:WorkerResultIdentity,
+    request:crate::workspace_git::ViewJobRequest,
+    marker:Option<ManagedMarker>,
+    #[serde(default)]
+    attempted:bool,
+    stopped:bool,
+    /// true exige le contrôle exact du fichier ; false ne prouve pas son absence.
+    available:Option<bool>,
+    failure:Option<crate::workspace_git::ExportFailure>,
+}
+impl ViewReservation {
+    fn validate(&self, receipt: &WorkspacePreparationReceipt) -> Result<(), WorkerStoreError> {
+        let binding = crate::workspace_git::ViewBinding { worker: receipt.worker.clone(),
+            command: receipt.command.clone(), prepare_digest: receipt.prepare_digest.clone() };
+        if binding.key().ok().as_deref() != Some(self.key.as_str())
+            || !valid_digest(&self.intent_digest)
+            || self.reserved_bytes < 5120
+            || self.reserved_bytes > 8 * 1024 * 1024 + 16*1024 + 5120
+            || self.planning.as_ref().is_some_and(|plan|!valid_digest(&plan.seed_digest)
+                || (!plan.adopted && (receipt.record.is_some() || self.materialization.is_some()))) {
+            return Err(WorkerStoreError::Quarantined);
+        }
+        if self.closed && (!self.source_stopped
+            || (receipt.record.is_some() && (self.source_marker.is_none()
+                || receipt.record.as_ref().is_some_and(|record|record.state!=crate::delegation::WorkspaceState::Kept)))
+            || (receipt.record.is_none() && (self.materialization.is_some()
+                || (self.source_attempted && self.source_marker.is_none() && self.source_failure.is_none())))
+            || self.materialization.as_ref().is_some_and(|operation|!operation.stopped)) {
+            return Err(WorkerStoreError::Quarantined);
+        }
+        if self.source_failure.is_some() && !self.source_stopped {
+            return Err(WorkerStoreError::Quarantined);
+        }
+        if self.source_marker.is_some() && !self.source_attempted {
+            return Err(WorkerStoreError::Quarantined);
+        }
+        if self.source_marker.as_ref().is_some_and(|marker|
+            marker.instance_id != receipt.command.task_id
+            || marker.command_id != receipt.command.command_id || marker.generation != 1
+            || marker.pgid == 0 || marker.birth == 0) {
+            return Err(WorkerStoreError::Quarantined);
+        }
+        if let Some(operation)=&self.materialization {
+            operation.execution.validate()?;
+            let crate::workspace_git::ViewJobRequest::Materialize{command,..}=&operation.request else {
+                return Err(WorkerStoreError::Quarantined);
+            };
+            let expected=operation.request.identity_for_binding(&binding).map_err(|_|WorkerStoreError::Quarantined)?;
+            if !self.source_stopped || self.source_marker.is_none()
+                || (operation.marker.is_some() && !operation.attempted)
+                || command!=&operation.execution.command
+                || operation.marker.as_ref().is_some_and(|marker|
+                    marker.instance_id!=expected.instance_id || marker.command_id!=expected.command_id
+                    || marker.generation!=expected.generation || marker.pgid==0 || marker.birth==0)
+                || (!operation.stopped && (operation.available.is_some() || operation.failure.is_some()))
+                || (operation.available==Some(true) && operation.failure.is_some()) {
+                return Err(WorkerStoreError::Quarantined);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Canon de la seule preuve de préparation fencée : un nouveau tour
@@ -524,9 +620,11 @@ pub(crate) fn same_workspace_anchor(record: &crate::delegation::WorkspaceRecord,
         else { return false; };
     matches!((&record.strategy, &sent.strategy),
         (crate::delegation::WorkspaceStrategy::Worktree,
-         crate::delegation::WorkspaceStrategy::Worktree)) && record.path == sent.path
+         crate::delegation::WorkspaceStrategy::Worktree) |
+        (crate::delegation::WorkspaceStrategy::CommitView,
+         crate::delegation::WorkspaceStrategy::CommitView)) && record.path == sent.path
         && record.toplevel == sent.toplevel && record.branch == sent.branch
-        && record.base_commit == sent.base_commit
+        && record.base_commit == sent.base_commit && record.commit_view == sent.commit_view
 }
 
 fn exact_fence_at(root: &Path, worker: &WorkerIdentity,
@@ -586,6 +684,60 @@ fn original_workspace_at(root: &Path, worker: &WorkerIdentity,
         }
     }
     Err(WorkerStoreError::Conflict)
+}
+
+/// Même autorité198 pour lecteur et writer : B remonte sa chaîne privée
+/// jusqu'à A. O(k), k borné par le store ; aucun manifeste ni E/S Git.
+fn view_anchor_receipt_at(root:&Path,worker:&WorkerIdentity,command:&WorkerCommandIdentity,
+    request:Option<&WorkerPrepare>)->Result<WorkspacePreparationReceipt,WorkerStoreError> {
+    command.validate_preparation()?;
+    let current=proof198::read_workspace_receipt(root,worker,command)?.ok_or(WorkerStoreError::Unknown)?;
+    if current.worker!=*worker || current.command!=*command || current.version!=STORE_VERSION {
+        return Err(WorkerStoreError::Conflict);
+    }
+    if let Some(request)=request {
+        let expected=if current.fenced_previous.is_some(){fenced_prepare_digest(command,request)?}
+            else{json_digest(&(command,request))?};
+        if current.prepare_digest!=expected {return Err(WorkerStoreError::Conflict);}
+    }
+    let original=original_workspace_at(root,worker,command)?;
+    let reference=original.commit_view.as_ref().ok_or(WorkerStoreError::Conflict)?;
+    if !matches!(original.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+        || reference.binding.worker!=*worker || reference.binding.command.task_id!=command.task_id {
+        return Err(WorkerStoreError::Conflict);
+    }
+    let anchor=proof198::read_workspace_receipt(root,worker,&reference.binding.command)?
+        .ok_or(WorkerStoreError::Unknown)?;
+    let view=anchor.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+    view.validate(&anchor)?;
+    if anchor.version!=STORE_VERSION || anchor.worker!=*worker
+        || anchor.command!=reference.binding.command
+        || anchor.prepare_digest!=reference.binding.prepare_digest
+        || anchor.fenced_previous.is_some() || view.intent_digest!=reference.intent_digest
+        || anchor.record.as_ref().is_none_or(|record|
+            !same_workspace_anchor(record,&serde_json::to_value(&original).unwrap_or(serde_json::Value::Null))) {
+        return Err(WorkerStoreError::Conflict);
+    }
+    Ok(anchor)
+}
+
+/// Contrôle lecture seule de l'alias avant fork et dans le helper géré.
+/// Une autre commande de même Task n'est pas suffisante sans BindProof198.
+pub(crate) fn view_file_alias_matches(proof_root:&Path,binding:&crate::workspace_git::ViewBinding,
+    request:&crate::workspace_git::ViewJobRequest)->bool {
+    let crate::workspace_git::ViewJobRequest::Materialize {command,..}=request else{return false;};
+    if command.validate().is_err() || command.task_id!=binding.command.task_id {return false;}
+    let Some(root)=proof_root.parent() else{return false;};
+    if root.join("view-manifests")!=proof_root || check_private(root,true).is_err() {return false;}
+    let mut prepare=command.clone();prepare.instance_id.clear();prepare.generation=0;
+    let Ok(anchor)=view_anchor_receipt_at(root,&binding.worker,&prepare,None) else{return false;};
+    let Some(view)=&anchor.commit_view else{return false;};
+    anchor.command==binding.command && anchor.prepare_digest==binding.prepare_digest
+        && !view.closed && view.source_stopped && view.source_failure.is_none()
+        && view.materialization.as_ref().is_some_and(|operation|
+            operation.execution.command==*command && operation.request==*request && !operation.stopped)
+        && anchor.record.as_ref().and_then(|record|record.commit_view.as_ref())
+            .is_some_and(|reference|Path::new(&reference.proof_root)==proof_root)
 }
 
 pub struct WorkerStore {
@@ -770,6 +922,9 @@ impl WorkerStore {
             Ok(_) => return Err(WorkerStoreError::Unknown),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {},
             Err(error) => return Err(error.into()),
+        }
+        if !self.confirm_view_sources_stopped(&identity.task_id)? {
+            return Err(WorkerStoreError::Unknown);
         }
         let proof = match existing {
             Some(proof) => {
@@ -1279,6 +1434,11 @@ impl WorkerStore {
             .map_err(|_| WorkerStoreError::Quarantined)?;
         self.health()?;
         let (commands, slots, _, _) = self.inventory()?;
+        // Les commandes et slots d'une vue conservée restent nécessaires au
+        // retrait. Ne pas perdre sa preuve de clôture après sept jours.
+        let retained_views=self.view_receipts(None)?.into_iter()
+            .filter(|receipt|receipt.commit_view.as_ref().is_none_or(|view|!view.closed))
+            .map(|receipt|receipt.command.task_id).collect::<HashSet<_>>();
         let terminal_commands: HashSet<_> = commands
             .iter()
             .filter(|c| {
@@ -1322,6 +1482,7 @@ impl WorkerStore {
             if slot
                 .finalized_at
                 .is_some_and(|at| now.saturating_sub(at) >= WORKER_RECEIPT_RETENTION_SECS)
+                && !retained_views.contains(&slot.slot.identity.command.task_id)
                 && fs::read_dir(&payload)?.count() == 1
             {
                 fs::remove_file(payload.join("publish.lock"))?;
@@ -1341,7 +1502,8 @@ impl WorkerStore {
             if matches!(
                 command.phase,
                 WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-            ) && now.saturating_sub(command.deadline_at.max(command.updated_at))
+            ) && !retained_views.contains(&command.identity.task_id)
+                && now.saturating_sub(command.deadline_at.max(command.updated_at))
                 >= WORKER_RECEIPT_RETENTION_SECS
                 && !referenced.contains(&command_key(&command.identity))
             {
@@ -1627,6 +1789,7 @@ impl WorkerStore {
             slots.push(slot);
         }
         let mut workspaces = 0;
+        let mut view_keys = BTreeSet::new();
         if self.root.join("workspaces").exists() {
             for entry in fs::read_dir(self.root.join("workspaces"))? {
                 let path = entry?.path();
@@ -1646,18 +1809,940 @@ impl WorkerStore {
                     return Err(WorkerStoreError::Quarantined);
                 }
                 workspaces += 1;
+                if let Some(view) = &receipt.commit_view {
+                    view.validate(&receipt)?;
+                    if !view_keys.insert(view.key.clone()) { return Err(WorkerStoreError::Quarantined); }
+                    let owned = self.view_companion_bytes(&view.key)?;
+                    used = used.saturating_add(view.reserved_bytes.saturating_sub(owned));
+                }
                 // Une préparation achevée est immutable ; son rejeu ne fait que la lire.
-                if receipt.record.is_none() {
+                if !receipt.commit_view.as_ref().is_some_and(|view|view.closed)
+                    && (receipt.record.is_none() || receipt.commit_view.as_ref().is_some_and(|view|
+                        view.materialization.as_ref().is_some_and(|operation|
+                            !operation.stopped || operation.available.is_none()))) {
                     used = used.saturating_add(MAX_METADATA_BYTES as u64);
                 }
             }
         }
         let count = commands.len() + slots.len() + workspaces
-            + proof198::count(&self.root, &self.worker)?;
+            + proof198::count(&self.root, &self.worker)?
+            + self.view_orphan_entries(&view_keys)?;
         if used > MAX_WORKER_STORE_BYTES as u64 || count > MAX_WORKER_STORE_ENTRIES {
             return Err(WorkerStoreError::Quota);
         }
         Ok((commands, slots, used, count))
+    }
+
+
+    fn view_root(&self) -> PathBuf { self.root.join("view-manifests") }
+
+    fn view_companion_names(key:&str)->[String;5] {
+        [format!("{key}.plan.json"),format!("{key}.intent.json"),format!("{key}.published.json"),
+            format!("{key}.lock"),format!("view-{key}.json")]
+    }
+
+    fn view_companion_bytes(&self, key: &str) -> Result<u64, WorkerStoreError> {
+        let mut bytes = 0u64;
+        for name in Self::view_companion_names(key) {
+            let path = self.view_root().join(name);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) => { check_private(&path, false)?; bytes = bytes.saturating_add(metadata.len()); }
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(bytes)
+    }
+
+    fn view_orphan_entries(&self, known: &BTreeSet<String>) -> Result<usize, WorkerStoreError> {
+        let directory = self.view_root();
+        match fs::symlink_metadata(&directory) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()), Ok(_) => check_private(&directory, true)?,
+        }
+        let mut orphans = BTreeSet::new();
+        let mut unidentified = 0usize;
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?; check_private(&entry.path(), false)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let key = [".plan.json",".intent.json", ".published.json", ".lock"].iter()
+                .find_map(|suffix| name.strip_suffix(suffix).filter(|candidate| valid_digest(candidate)))
+                .or_else(|| name.strip_prefix("view-").and_then(|value| value.strip_suffix(".json"))
+                    .filter(|candidate| valid_digest(candidate)));
+            match key {
+                Some(key) if known.contains(key) => {}
+                Some(key) => { orphans.insert(key.to_owned()); }
+                None => { unidentified = unidentified.saturating_add(1); }
+            }
+        }
+        Ok(orphans.len().saturating_add(unidentified))
+    }
+
+    /// Primitive interne encore non branchée à l'admission. Le reçu garde le
+    /// budget avant les fichiers et le processus, y compris après coupure.
+    fn reserve_view_intent(
+        &self, command: &WorkerCommandIdentity, request: &WorkerPrepare,
+        intent: &crate::workspace_git::ViewIntent,
+    ) -> Result<(), WorkerStoreError> {
+        self.health()?;
+        validate_prepare_command(command)?;
+        let digest = json_digest(&(command, request))?;
+        if !matches!(request.workspace, Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}))
+            || request.posture != Some(SpawnPosture::Discovery)
+            || intent.binding.worker != self.worker || intent.binding.command != *command
+            || intent.binding.prepare_digest != digest
+            || request.base_commit.as_deref() != Some(intent.base_commit())
+            || intent.source != Path::new(&request.remote_root).join(&request.relative_cwd)
+            || intent.data_root.starts_with(self.root.parent().ok_or(WorkerStoreError::Unknown)?) {
+            return Err(WorkerStoreError::Invalid(WorkerRefusal::InvalidEnvelope));
+        }
+        let view = ViewReservation {
+            key: intent.binding.key().map_err(workspace_failure)?,
+            intent_digest: intent.proof_digest().map_err(workspace_failure)?,
+            planning:None,
+            reserved_bytes: intent.reserved_bytes().map_err(workspace_failure)?,
+            source_marker: None, source_stopped: false,source_failure:None,source_attempted:false,closed:false,materialization:None,
+        };
+        self.reserve_view_receipt(command,request,view)?;
+        private_dir(&self.view_root())?;
+        crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?).map_err(workspace_failure)?
+            .write_intent(intent).map_err(workspace_failure)
+    }
+
+    fn reserve_view_receipt(&self,command:&WorkerCommandIdentity,request:&WorkerPrepare,view:ViewReservation)
+        ->Result<(),WorkerStoreError> {
+        let digest=json_digest(&(command,request))?;
+        let _guard = self.transition.lock().map_err(|_| WorkerStoreError::Quarantined)?;
+        let path = self.workspace_path(command);
+        if self.inventory()?.0.iter().any(|receipt|
+            receipt.identity.task_id == command.task_id && receipt.pre_start_fence.is_some()) {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        if let Some(receipt) = proof198::read_workspace_receipt(&self.root, &self.worker, command)? {
+            if receipt.version != STORE_VERSION || receipt.worker != self.worker
+                || receipt.command != *command || receipt.prepare_digest != digest
+                || receipt.commit_view.as_ref().is_none_or(|existing|
+                    existing.key != view.key || existing.intent_digest != view.intent_digest
+                        || existing.reserved_bytes != view.reserved_bytes || existing.planning!=view.planning || existing.closed)
+                || receipt.fenced_previous.is_some() {
+                return Err(WorkerStoreError::Conflict);
+            }
+        } else {
+            if proof198::read_bind(&self.root, &self.worker, command)?.is_some() {
+                return Err(WorkerStoreError::Conflict);
+            }
+            self.admit(2 * MAX_METADATA_BYTES as u64 + view.reserved_bytes, 1)?;
+            private_dir(&self.root.join("workspaces"))?;
+            let receipt = WorkspacePreparationReceipt {
+                version: STORE_VERSION, worker: self.worker.clone(), command: command.clone(),
+                prepare_digest: digest, fenced_previous: None, record: None, commit_view: Some(view),
+            };
+            self.persist(&path, &receipt)?;
+        }
+        Ok(())
+    }
+
+    fn reserve_view_plan(&self,command:&WorkerCommandIdentity,request:&WorkerPrepare,seed:&crate::workspace_git::ViewPlan)
+        ->Result<(),WorkerStoreError> {
+        self.health()?;validate_prepare_command(command)?;
+        if !matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{}))
+            || request.posture!=Some(SpawnPosture::Discovery) || seed.binding.worker!=self.worker
+            || seed.binding.command!=*command || seed.binding.prepare_digest!=json_digest(&(command,request))?
+            || request.base_commit.as_deref()!=Some(seed.base.as_str())
+            || seed.source_root!=Path::new(&request.remote_root) || seed.git_identity!=request.source_root_identity
+            || seed.source!=Path::new(&request.remote_root).join(&request.relative_cwd)
+            || seed.data_root.starts_with(self.root.parent().ok_or(WorkerStoreError::Unknown)?) {
+            return Err(WorkerStoreError::Invalid(WorkerRefusal::InvalidEnvelope));
+        }
+        let digest=seed.proof_digest().map_err(workspace_failure)?;
+        let key=seed.binding.key().map_err(workspace_failure)?;
+        // Relecture exacte : ne jamais recréer un délai ni retenter après fork.
+        if let Some(receipt)=proof198::read_workspace_receipt(&self.root,&self.worker,command)? {
+            self.view_receipt_for_binding(&seed.binding)?;
+            let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+            if view.closed || view.planning.as_ref().is_none_or(|p|p.seed_digest!=digest) {
+                return Err(WorkerStoreError::Conflict);
+            }
+            let proofs=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?).map_err(workspace_failure)?;
+            if !view.source_attempted && !view.source_stopped && view.source_marker.is_none()
+                && receipt.record.is_none() && view.planning.as_ref().is_some_and(|plan|!plan.adopted) {
+                proofs.write_plan(seed).map_err(workspace_failure)?;
+            }
+            if proofs.load_plan(&key).map_err(workspace_failure)?!=*seed {return Err(WorkerStoreError::Conflict);}
+            return Ok(());
+        }
+        seed.live().map_err(workspace_failure)?;
+        let view=ViewReservation {key,intent_digest:digest.clone(),
+            planning:Some(ViewPlanning{seed_digest:digest,adopted:false}),reserved_bytes:seed.reserved_bytes(),
+            source_marker:None,source_stopped:false,source_failure:None,source_attempted:false,closed:false,materialization:None};
+        self.reserve_view_receipt(command,request,view)?;
+        private_dir(&self.view_root())?;
+        crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?).map_err(workspace_failure)?
+            .write_plan(seed).map_err(workspace_failure)
+    }
+
+    fn adopt_view_plan(&self,binding:&crate::workspace_git::ViewBinding,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        let proofs=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?).map_err(workspace_failure)?;
+        let seed=proofs.load_plan(&binding.key().map_err(workspace_failure)?).map_err(workspace_failure)?;
+        seed.matches(intent).map_err(workspace_failure)?;
+        let digest=intent.proof_digest().map_err(workspace_failure)?;
+        let seed_digest=seed.proof_digest().map_err(workspace_failure)?;
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.view_receipt_for_binding(binding)?;
+        let view=receipt.commit_view.as_mut().unwrap();
+        let planning=view.planning.as_mut().ok_or(WorkerStoreError::Conflict)?;
+        if planning.seed_digest!=seed_digest || view.closed || !view.source_stopped
+            || view.source_failure.is_some() || view.source_marker.is_none()
+            || seed.reserved_bytes()<intent.reserved_bytes().map_err(workspace_failure)? {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let reserved=seed.adopted_reserved_bytes(intent).map_err(workspace_failure)?;
+        if reserved>view.reserved_bytes {return Err(WorkerStoreError::Conflict);}
+        if planning.adopted {
+            if view.intent_digest!=digest {return Err(WorkerStoreError::Conflict);}
+            if view.reserved_bytes==reserved {return Ok(());}
+        } else {
+            seed.live().map_err(workspace_failure)?;
+            planning.adopted=true;view.intent_digest=digest;
+        }
+        // Le manifeste est maintenant exact et immutable. Ne pas garder8Mio
+        // inconnus pendant toute la mission ; les preuves privées restent
+        // comptées. Les données exportées relèvent du volume, pas de ce quota.
+        view.reserved_bytes=reserved;
+        self.persist(&self.workspace_path(&binding.command),&receipt)
+    }
+
+
+
+    fn mark_view_source_attempt(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        self.checked_view_receipt(command,intent)?;
+        self.mark_view_source_attempt_binding(&intent.binding)
+    }
+
+    fn mark_view_source_attempt_binding(&self,binding:&crate::workspace_git::ViewBinding)
+        ->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.view_receipt_for_binding(binding)?;
+        let view=receipt.commit_view.as_mut().unwrap();
+        if receipt.record.is_some() || view.closed || view.source_attempted || view.source_stopped || view.source_marker.is_some() {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        view.source_attempted=true;
+        self.persist(&self.workspace_path(&binding.command),&receipt)
+    }
+
+    /// Seulement après Child arrêté, ou échec de spawn attesté par le contrôleur
+    /// courant. Au redémarrage, l'absence du marqueur ne suffit jamais.
+    fn record_view_source_exit(&self,binding:&crate::workspace_git::ViewBinding,
+        result:Option<Result<(),crate::workspace_git::ExportFailure>>)
+        ->Result<bool,WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.view_receipt_for_binding(binding)?;
+        let view=receipt.commit_view.as_ref().unwrap();
+        if view.closed {return Ok(true);} // arrêt déjà durci ; ignorer le résultat tardif sans réécriture
+        if !view.source_stopped && self.marker_for_view(&receipt)?.is_some_and(|marker|
+            crate::managed_process::group_exists(marker.pgid).unwrap_or(true)
+                && crate::managed_process::process_birth(marker.pgid).ok().is_none_or(|birth|birth==marker.birth)) {
+            return Ok(false);
+        }
+        let view=receipt.commit_view.as_mut().unwrap();
+        let changed=!view.source_stopped || (matches!(result,Some(Err(_))) && view.source_failure.is_none());
+        view.source_stopped=true;
+        if let Some(Err(cause))=result {view.source_failure.get_or_insert(cause);}
+        if changed {self.persist(&self.workspace_path(&binding.command),&receipt)?;}
+        Ok(true)
+    }
+
+    fn authorize_view_source(
+        &self, command:&WorkerCommandIdentity, intent:&crate::workspace_git::ViewIntent,
+        marker:&ManagedMarker,
+    ) -> Result<(),WorkerStoreError> {
+        self.checked_view_receipt(command,intent)?;
+        self.authorize_view_source_binding(&intent.binding,marker)
+    }
+    fn authorize_view_source_binding(&self,binding:&crate::workspace_git::ViewBinding,marker:&ManagedMarker)
+        ->Result<(),WorkerStoreError> {
+        let command=&binding.command;
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.view_receipt_for_binding(binding)?;
+        if receipt.record.is_some() {return Err(WorkerStoreError::Conflict);}
+        let view=receipt.commit_view.as_ref().unwrap();
+        if view.closed || view.source_stopped { return Err(WorkerStoreError::InvalidTransition); }
+        if marker.instance_id!=command.task_id || marker.command_id!=command.command_id
+            || marker.generation!=1 || marker.pgid==0 || marker.birth==0 {
+            return Err(WorkerStoreError::Conflict);
+        }
+        if let Some(previous)=&view.source_marker {
+            return if previous==marker {Ok(())} else {Err(WorkerStoreError::Conflict)};
+        }
+        let proofs=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?;
+        if proofs.source_marker(binding).map_err(workspace_failure)?.as_ref()!=Some(marker) {
+            return Err(WorkerStoreError::Conflict);
+        }
+        receipt.commit_view.as_mut().unwrap().source_attempted=true;
+        receipt.commit_view.as_mut().unwrap().source_marker=Some(marker.clone());
+        self.persist(&self.workspace_path(command),&receipt)
+    }
+
+
+    /// Le seul writer natif d'un record de vue : l'export et son groupe doivent
+    /// avoir fini avant publication. Un rapport exact seul ne clôt aucun PID.
+    fn prepare_view_workspace_publication(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        {
+            let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+            let mut receipt=self.checked_view_receipt(command,intent)?;
+            let view=receipt.commit_view.as_ref().unwrap();
+            if self.inventory()?.0.iter().any(|known|
+                known.identity.task_id==command.task_id && known.pre_start_fence.is_some()) {
+                return Err(WorkerStoreError::InvalidTransition);
+            }
+            if view.closed {return Err(WorkerStoreError::InvalidTransition);}
+            if view.source_failure.is_some() {
+                return Err(WorkerStoreError::Workspace(WorkerRefusal::WorkspacePrepareFailed));
+            }
+            if view.materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+                return Err(WorkerStoreError::Unknown);
+            }
+            let marker=view.source_marker.as_ref().ok_or(WorkerStoreError::Unknown)?;
+            if !view.source_stopped && crate::managed_process::group_exists(marker.pgid)? {
+                return Err(WorkerStoreError::Unknown);
+            }
+            if !view.source_stopped {
+                receipt.commit_view.as_mut().unwrap().source_stopped=true;
+                self.persist(&self.workspace_path(command),&receipt)?;
+            }
+            let known=if receipt.commit_view.as_ref().unwrap().materialization.is_some() {
+                self.marker_for_materialization(&receipt)?
+            } else {self.marker_for_view(&receipt)?};
+            if let Some(marker)=known {
+                crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+                    .map_err(workspace_failure)?.remove_stopped_marker(&intent.binding,&marker).map_err(workspace_failure)?;
+            }
+        }
+        // Preuve petite de publication avant d'allouer le lecteur ; un exit0
+        // sans publication ou un fence n'est jamais mis en attente d'audit.
+        crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?.workspace_metadata(intent,crate::delegation::WorkspaceState::Active)
+            .map_err(workspace_failure)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn publish_view_workspace(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<crate::delegation::WorkspaceRecord,WorkerStoreError> {
+        self.prepare_view_workspace_publication(command,intent)?;
+        let record=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?.workspace(intent).map_err(workspace_failure)?;
+        self.publish_view_snapshot(command,intent,record,&Mutex::new(BTreeSet::new()))
+    }
+
+    fn publish_view_snapshot(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent,
+        record:crate::delegation::WorkspaceRecord,cancelled:&Mutex<BTreeSet<String>>)
+        ->Result<crate::delegation::WorkspaceRecord,WorkerStoreError> {
+        let expected=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?.workspace_metadata(intent,crate::delegation::WorkspaceState::Active)
+            .map_err(workspace_failure)?;
+        if serde_json::to_value(&expected).map_err(|_|WorkerStoreError::Conflict)?
+            !=serde_json::to_value(&record).map_err(|_|WorkerStoreError::Conflict)? {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.checked_view_receipt(command,intent)?;
+        if receipt.commit_view.as_ref().unwrap().closed
+            || !receipt.commit_view.as_ref().unwrap().source_stopped
+            || receipt.commit_view.as_ref().unwrap().materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+            return Err(WorkerStoreError::Unknown);
+        }
+        if self.inventory()?.0.iter().any(|known|
+            known.identity.task_id==command.task_id && known.pre_start_fence.is_some()) {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        // Le lecteur réseau ne prend jamais transition : il pose seulement
+        // cette clé puis enfile Cancel. Le writer unique prend le jeu après
+        // ses lectures, le garde jusqu'au persist et ne fait aucun audit ici.
+        let cancellations=cancelled.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        if cancellations.contains(&json_digest(command)?) {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        if let Some(existing)=receipt.record {
+            return if same_workspace_anchor(&existing,&serde_json::to_value(&record)
+                .map_err(|_|WorkerStoreError::Conflict)?) {Ok(existing)}
+                else {Err(WorkerStoreError::Conflict)};
+        }
+        receipt.record=Some(record.clone());
+        self.persist(&self.workspace_path(command),&receipt)?;
+        Ok(record)
+    }
+
+    fn checked_view_receipt(
+        &self, command:&WorkerCommandIdentity, intent:&crate::workspace_git::ViewIntent,
+    ) -> Result<WorkspacePreparationReceipt,WorkerStoreError> {
+        self.health()?;
+        let receipt=proof198::read_workspace_receipt(&self.root,&self.worker,command)?
+            .ok_or(WorkerStoreError::Unknown)?;
+        let binding=crate::workspace_git::ViewBinding {worker:self.worker.clone(),
+            command:command.clone(),prepare_digest:receipt.prepare_digest.clone()};
+        if receipt.version!=STORE_VERSION || receipt.worker!=self.worker || receipt.command!=*command
+            || intent.binding!=binding || receipt.fenced_previous.is_some() {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        view.validate(&receipt)?;
+        if view.intent_digest!=intent.proof_digest().map_err(workspace_failure)?
+            || (view.planning.as_ref().is_some_and(|plan|!plan.adopted))
+            || ((if view.planning.is_some() {view.reserved_bytes<intent.reserved_bytes().map_err(workspace_failure)?}
+                else {view.reserved_bytes!=intent.reserved_bytes().map_err(workspace_failure)?})
+                && (!view.closed || view.reserved_bytes!=intent.closed_reserved_bytes().map_err(workspace_failure)?)) {
+            return Err(WorkerStoreError::Conflict);
+        }
+        Ok(receipt)
+    }
+
+    /// Le reçu de commande existe avant que Start retire PreparedRuntime.
+    /// Sa rétention dure tant que la vue est ouverte ; la fermeture de vue
+    /// bloque ensuite tout réexport, même après collecte de cette commande.
+    fn view_preparation_unused(&self,command:&WorkerCommandIdentity)->Result<bool,WorkerStoreError> {
+        self.health()?;validate_prepare_command(command)?;
+        let receipt:Option<WorkerCommandReceipt>=read_optional(&self.command_path(command),MAX_METADATA_BYTES)?;
+        let Some(receipt)=receipt else {return Ok(true);};
+        if receipt.identity.command_id!=command.command_id || receipt.identity.task_id!=command.task_id {
+            return Err(WorkerStoreError::Conflict);
+        }
+        self.read_command(&receipt.identity)?.ok_or(WorkerStoreError::Unknown)?;
+        Ok(false)
+    }
+
+    fn view_receipt_for_binding(&self,binding:&crate::workspace_git::ViewBinding)
+        ->Result<WorkspacePreparationReceipt,WorkerStoreError> {
+        self.health()?;
+        let receipt=proof198::read_workspace_receipt(&self.root,&self.worker,&binding.command)?
+            .ok_or(WorkerStoreError::Unknown)?;
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        view.validate(&receipt)?;
+        if receipt.worker!=self.worker || binding.worker!=self.worker
+            || receipt.command!=binding.command || receipt.prepare_digest!=binding.prepare_digest
+            || receipt.fenced_previous.is_some()
+            || binding.key().ok().as_deref()!=Some(view.key.as_str()) {
+            return Err(WorkerStoreError::Conflict);
+        }
+        Ok(receipt)
+    }
+
+    /// O(1) reçus bornés, sans chargement du manifeste ni audit de fichiers.
+    /// Cette liveness sert aussi à interrompre le helper d'une mission terminée.
+    fn active_view_command(&self,execution:&WorkerResultIdentity)->Result<WorkerCommandReceipt,WorkerStoreError> {
+        self.health()?;execution.validate()?;
+        let current=self.read_command(&execution.command)?.ok_or(WorkerStoreError::Unknown)?;
+        let slot=self.read_slot(execution)?.ok_or(WorkerStoreError::Unknown)?;
+        if current.phase!=WorkerCommandPhase::Released || !current.native_ready
+            || slot.closed.is_some() || slot.producer_terminal || slot.disposition.is_some() {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        Ok(current)
+    }
+
+    /// Lecture de l'exécution attestée avant toute matérialisation. Aucun
+    /// répertoire ni processus n'est créé par ce contrôle. Après Release, le
+    /// délai du bootstrap ne borne plus la mission : le slot corrélé et les
+    /// gardes natives attestent son activité, sans prolonger ce délai.
+    fn active_view_execution(&self,execution:&WorkerResultIdentity)
+        ->Result<(crate::workspace_git::ViewIntent,WorkspacePreparationReceipt),WorkerStoreError> {
+        let current=self.active_view_command(execution)?;
+        let (request,prepared)=current.preparation.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        if !matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}))
+            || prepared.effective_posture!=SpawnPosture::Discovery {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let mut command=execution.command.clone();command.instance_id.clear();command.generation=0;
+        let receipt=view_anchor_receipt_at(&self.root,&self.worker,&command,Some(request))?;
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        if view.closed || view.source_failure.is_some() {return Err(WorkerStoreError::InvalidTransition);}
+        let intent=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?.load(&view.key).map_err(workspace_failure)?;
+        let receipt=self.checked_view_receipt(&intent.binding.command,&intent)?;
+        let record=receipt.record.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        let digest=intent.proof_digest().map_err(workspace_failure)?;
+        let (_,cwd)=intent.execution_paths(Path::new(&request.remote_root)).map_err(workspace_failure)?;
+        let proof_root=self.view_root().canonicalize()?;
+        if !matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+            || Path::new(&record.path)!=intent.destination().map_err(workspace_failure)?
+            || Path::new(&record.toplevel)!=intent.source
+            || record.base_commit!=intent.base_commit()
+            || Path::new(&current.placement.execution_cwd)!=cwd
+            || !receipt.commit_view.as_ref().unwrap().source_stopped
+            || receipt.commit_view.as_ref().unwrap().source_marker.is_none()
+            || record.commit_view.as_ref().is_none_or(|reference|
+                reference.binding!=intent.binding || reference.intent_digest!=digest
+                    || Path::new(&reference.proof_root)!=proof_root)
+            || !prepared.workspace.as_ref().is_some_and(|value|same_workspace_anchor(record,value))
+            || prepared.placement!=current.placement
+            || request.base_commit.as_deref()!=Some(intent.base_commit())
+            || current.placement.base_commit.as_deref()!=Some(intent.base_commit()) {
+            return Err(WorkerStoreError::Conflict);
+        }
+        Ok((intent,receipt))
+    }
+
+    fn begin_materialization(&self,execution:&WorkerResultIdentity,path:&str)
+        ->Result<(crate::workspace_git::ViewIntent,crate::workspace_git::ViewJobRequest),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let (intent,mut receipt)=self.active_view_execution(execution)?;
+        let view=receipt.commit_view.as_ref().unwrap();
+        let mut sequence=1;
+        if let Some(previous)=&view.materialization {
+            let crate::workspace_git::ViewJobRequest::Materialize {sequence:old,path:old_path,..}=&previous.request
+                else{return Err(WorkerStoreError::Quarantined);};
+            // Le contrôle différé possède encore cette opération après
+            // l'arrêt du helper. Son résultat ne doit pas être remplacé.
+            let pending=!previous.stopped || previous.available.is_none();
+            if previous.execution==*execution && old_path==path && pending {
+                return Ok((intent,previous.request.clone()));
+            }
+            if pending {
+                return Err(WorkerStoreError::Locked);
+            }
+            sequence=old.checked_add(1).ok_or(WorkerStoreError::Quota)?;
+        }
+        let request=crate::workspace_git::ViewJobRequest::Materialize {
+            command:execution.command.clone(),sequence,path:path.to_owned(),
+        };
+        request.identity(&intent).map_err(|_|WorkerStoreError::Invalid(WorkerRefusal::InvalidEnvelope))?;
+        // Le même budget de marqueur est réutilisé après l'arrêt de l'export ;
+        // les métadonnées du reçu et leur temporaire sont admis avant écriture.
+        self.admit(2*MAX_METADATA_BYTES as u64,0)?;
+        let old_marker=if view.materialization.is_some(){self.marker_for_materialization(&receipt)?}
+            else{self.marker_for_view(&receipt)?};
+        if let Some(marker)=old_marker {
+            crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+                .map_err(workspace_failure)?.remove_stopped_marker(&intent.binding,&marker).map_err(workspace_failure)?;
+        }
+        receipt.commit_view.as_mut().unwrap().materialization=Some(ViewMaterialization {
+            execution:execution.clone(),request:request.clone(),marker:None,attempted:false,stopped:false,available:None,failure:None,
+        });
+        self.persist(&self.workspace_path(&receipt.command),&receipt)?;
+        Ok((intent,request))
+    }
+
+    fn mark_materialization_attempt(&self,execution:&WorkerResultIdentity,request:&crate::workspace_git::ViewJobRequest)
+        ->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let (_,mut receipt)=self.active_view_execution(execution)?;
+        let operation=receipt.commit_view.as_mut().unwrap().materialization.as_mut().ok_or(WorkerStoreError::Unknown)?;
+        if operation.execution!=*execution || operation.request!=*request || operation.stopped
+            || operation.attempted || operation.marker.is_some() {return Err(WorkerStoreError::InvalidTransition);}
+        operation.attempted=true;
+        let command=receipt.command.clone();
+        self.persist(&self.workspace_path(&command),&receipt)
+    }
+
+    fn authorize_materialization(&self,execution:&WorkerResultIdentity,request:&crate::workspace_git::ViewJobRequest,
+        marker:&ManagedMarker)->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let (intent,mut receipt)=self.active_view_execution(execution)?;
+        let operation=receipt.commit_view.as_mut().unwrap().materialization.as_mut()
+            .ok_or(WorkerStoreError::Unknown)?;
+        if operation.execution!=*execution || operation.request!=*request || operation.stopped {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let expected=request.identity(&intent).map_err(workspace_failure)?;
+        if marker.instance_id!=expected.instance_id || marker.command_id!=expected.command_id
+            || marker.generation!=expected.generation || marker.pgid==0 || marker.birth==0 {
+            return Err(WorkerStoreError::Conflict);
+        }
+        let actual=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?.operation_marker(&intent.binding,&expected).map_err(workspace_failure)?;
+        if actual.as_ref()!=Some(marker) {return Err(WorkerStoreError::Conflict);}
+        if let Some(previous)=&operation.marker {
+            return if previous==marker {Ok(())}else{Err(WorkerStoreError::Conflict)};
+        }
+        operation.attempted=true;
+        operation.marker=Some(marker.clone());
+        self.persist(&self.workspace_path(&receipt.command),&receipt)
+    }
+
+    fn marker_for_materialization(&self,receipt:&WorkspacePreparationReceipt)
+        ->Result<Option<ManagedMarker>,WorkerStoreError> {
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        let Some(operation)=&view.materialization else{return Ok(None);};
+        if let Some(marker)=&operation.marker {return Ok(Some(marker.clone()));}
+        let binding=crate::workspace_git::ViewBinding {worker:self.worker.clone(),
+            command:receipt.command.clone(),prepare_digest:receipt.prepare_digest.clone()};
+        let expected=operation.request.identity_for_binding(&binding).map_err(workspace_failure)?;
+        crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?.operation_marker(&binding,&expected).map_err(workspace_failure)
+    }
+
+    /// Un résultat de helper n'est pas une preuve d'arrêt. Durcir l'arrêt avant
+    /// le contrôle du fichier, puis son constat ; aucune commande n'est relancée.
+    fn stop_materialization(&self,execution:&WorkerResultIdentity,request:&crate::workspace_git::ViewJobRequest,
+        result:Option<Result<(),crate::workspace_git::ExportFailure>>)->Result<Option<crate::workspace_git::ViewIntent>,WorkerStoreError> {
+        let mut prepare=execution.command.clone();prepare.instance_id.clear();prepare.generation=0;
+        let intent={
+            let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+            self.health()?;
+            let mut receipt=view_anchor_receipt_at(&self.root,&self.worker,&prepare,None)?;
+            prepare=receipt.command.clone();
+            let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+            if view.closed {return Err(WorkerStoreError::InvalidTransition);}
+            view.validate(&receipt)?;
+            let operation=view.materialization.as_ref().ok_or(WorkerStoreError::Unknown)?;
+            if operation.execution!=*execution || operation.request!=*request {return Err(WorkerStoreError::Conflict);}
+            let marker=self.marker_for_materialization(&receipt)?;
+            if !operation.stopped && (marker.as_ref().is_some_and(|marker|
+                crate::managed_process::group_exists(marker.pgid).unwrap_or(true))
+                || (marker.is_none() && operation.attempted && result.is_none())) {
+                return Ok(None);
+            }
+            if !operation.stopped {
+                receipt.commit_view.as_mut().unwrap().materialization.as_mut().unwrap().stopped=true;
+                self.persist(&self.workspace_path(&prepare),&receipt)?;
+            }
+            let view=receipt.commit_view.as_ref().unwrap();
+            let intent=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+                .map_err(workspace_failure)?.load(&view.key).map_err(workspace_failure)?;
+            self.checked_view_receipt(&prepare,&intent)?;
+            intent
+        };
+        Ok(Some(intent))
+    }
+
+    fn finish_materialization(&self,execution:&WorkerResultIdentity,request:&crate::workspace_git::ViewJobRequest,
+        result:Option<Result<(),crate::workspace_git::ExportFailure>>)->Result<bool,WorkerStoreError> {
+        let Some(intent)=self.stop_materialization(execution,request,result)? else{return Ok(false);};
+        let crate::workspace_git::ViewJobRequest::Materialize{path,..}=request else {
+            return Err(WorkerStoreError::Conflict);
+        };
+        let (available,failure)=match result {
+            Some(Err(cause))=>(Some(false),Some(cause)),
+            observed=>{
+                let available=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+                    .map_err(workspace_failure)?.file_available(&intent,path);
+                match available {
+                    Ok(true)=>(Some(true),None),
+                    Ok(false) if observed.is_none()=>(Some(false),None),
+                    _=>(Some(false),Some(crate::workspace_git::ExportFailure::IntegrityFailed)),
+                }
+            }
+        };
+        self.publish_materialization_report(execution,request,&intent,available,failure)
+    }
+
+    fn publish_materialization_report(&self,execution:&WorkerResultIdentity,request:&crate::workspace_git::ViewJobRequest,
+        intent:&crate::workspace_git::ViewIntent,available:Option<bool>,
+        failure:Option<crate::workspace_git::ExportFailure>)->Result<bool,WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let prepare=&intent.binding.command;
+        let mut receipt=self.checked_view_receipt(prepare,intent)?;
+        if receipt.commit_view.as_ref().unwrap().closed {return Err(WorkerStoreError::InvalidTransition);}
+        let operation=receipt.commit_view.as_mut().unwrap().materialization.as_mut().ok_or(WorkerStoreError::Unknown)?;
+        if operation.execution!=*execution || operation.request!=*request || !operation.stopped {
+            return Err(WorkerStoreError::Conflict);
+        }
+        // Une preuve antérieure d'intégrité ne devient pas un succès de processus ;
+        // il s'agit seulement de la disponibilité constatée du fichier.
+        operation.available=available;operation.failure=failure;
+        self.persist(&self.workspace_path(&prepare),&receipt)?;
+        Ok(true)
+    }
+
+    fn conserve_unreserved_view(&self,binding:&crate::workspace_git::ViewBinding)->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        self.health()?;
+        if binding.worker!=self.worker {return Err(WorkerStoreError::Conflict);}
+        validate_prepare_command(&binding.command)?;
+        if proof198::read_workspace_receipt(&self.root,&self.worker,&binding.command)?.is_some()
+            || !self.view_receipts(Some(&binding.command.task_id))?.is_empty() {
+            return Err(WorkerStoreError::Unknown);
+        }
+        let key=binding.key().map_err(workspace_failure)?;
+        if self.view_root().exists() {check_private(&self.view_root(),true)?;}
+        for name in Self::view_companion_names(&key) {
+            match fs::symlink_metadata(self.view_root().join(name)) {
+                Ok(_)=>return Err(WorkerStoreError::Unknown),
+                Err(error) if error.kind()==io::ErrorKind::NotFound=>{},
+                Err(error)=>return Err(error.into()),
+            }
+        }
+        let (commands,slots,_,_)=self.inventory()?;
+        let mut exact_fence=false;
+        for command in commands.iter().filter(|command|command.identity.task_id==binding.command.task_id) {
+            if command.phase!=WorkerCommandPhase::Refused || command.pre_start_fence.is_none()
+                || command.marker.is_some() || command.permit.is_some() || command.preparation.is_some()
+                || command.release_epoch.is_some() || command.native_ready {
+                return Err(WorkerStoreError::Unknown);
+            }
+            exact_fence|=command.identity.command_id==binding.command.command_id;
+        }
+        if !exact_fence || slots.iter().any(|slot|slot.slot.identity.command.task_id==binding.command.task_id) {
+            return Err(WorkerStoreError::Unknown);
+        }
+        self.admit(2*MAX_METADATA_BYTES as u64+5120,1)?;
+        private_dir(&self.root.join("workspaces"))?;
+        self.persist(&self.workspace_path(&binding.command),&WorkspacePreparationReceipt{
+            version:STORE_VERSION,worker:self.worker.clone(),command:binding.command.clone(),
+            prepare_digest:binding.prepare_digest.clone(),fenced_previous:None,record:None,
+            commit_view:Some(ViewReservation{key,intent_digest:binding.prepare_digest.clone(),planning:None,
+                reserved_bytes:5120,source_marker:None,source_stopped:true,source_failure:None,
+                source_attempted:false,closed:true,materialization:None}),
+        })
+    }
+
+    fn conserve_unpublished_view(&self,binding:&crate::workspace_git::ViewBinding)->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.view_receipt_for_binding(binding)?;
+        if receipt.record.is_some() {return Err(WorkerStoreError::InvalidTransition);}
+        let view=receipt.commit_view.as_ref().unwrap();
+        if view.closed {return Ok(());}
+        if view.materialization.is_some() || (view.source_attempted && (!view.source_stopped
+            || (view.source_marker.is_none() && view.source_failure.is_none()))) {
+            return Err(WorkerStoreError::Unknown);
+        }
+        if let Some(marker)=self.marker_for_view(&receipt)? {
+            if crate::managed_process::group_exists(marker.pgid)?
+                && crate::managed_process::process_birth(marker.pgid).ok().is_none_or(|birth|birth==marker.birth) {
+                return Err(WorkerStoreError::Unknown);
+            }
+        }
+        let (commands,slots,_,_)=self.inventory()?;
+        let related=commands.iter().filter(|command|command.identity.task_id==binding.command.task_id);
+        for command in related {
+            if command.phase!=WorkerCommandPhase::Refused || command.pre_start_fence.is_none()
+                || command.marker.is_some() || command.permit.is_some() || command.release_epoch.is_some()
+                || command.native_ready || command.preparation.is_some() {
+                return Err(WorkerStoreError::InvalidTransition);
+            }
+        }
+        if slots.iter().any(|slot|slot.slot.identity.command.task_id==binding.command.task_id) {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        let view=receipt.commit_view.as_mut().unwrap();
+        view.closed=true;view.source_stopped=true;
+        view.reserved_bytes=view.reserved_bytes.min(5120+16*1024); // jamais d'augmentation à la clôture
+        self.persist(&self.workspace_path(&binding.command),&receipt)
+    }
+
+    /// O(c+s) reçus bornés. Cette garde prouve seulement la clôture native,
+    /// jamais l'absence de lecteur externe ni une autorisation de supprimer.
+    fn check_view_native_closure(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        self.check_view_native_closure_locked(command,intent)
+    }
+
+    /// Appelant sous transition.lock ; mêmes preuves, sans deuxième autorité.
+    fn check_view_native_closure_locked(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        self.health()?;
+        let receipt=self.checked_view_receipt(command,intent)?;
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        if view.closed {return Ok(());}
+        if receipt.record.is_none() || !view.source_stopped || view.source_marker.is_none()
+            || view.materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+            return Err(WorkerStoreError::InvalidTransition);
+        }
+        let (commands,slots,_,_)=self.inventory()?;
+        let related=commands.iter().filter(|current|current.identity.task_id==command.task_id)
+            .collect::<Vec<_>>();
+        if !related.iter().any(|current|current.identity.command_id==command.command_id) {
+            return Err(WorkerStoreError::Unknown);
+        }
+        let identities=related.iter().map(|current|command_key(&current.identity)).collect::<HashSet<_>>();
+        for current in &related {
+            if !matches!(current.phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused) {
+                return Err(WorkerStoreError::InvalidTransition);
+            }
+            if let Some(marker)=&current.marker {
+                if crate::managed_process::group_exists(marker.pgid)?
+                    && crate::managed_process::process_birth(marker.pgid).ok().is_none_or(|birth|birth==marker.birth) {
+                    return Err(WorkerStoreError::InvalidTransition);
+                }
+                if !self.drainage_proven(current)? {return Err(WorkerStoreError::Unknown);}
+            } else if current.pre_start_fence.is_none() || current.permit.is_some()
+                || current.release_epoch.is_some() || current.native_ready || current.startup_failed {
+                // Le seul état Terminal, ou un reçu manquant, ne vaut pas preuve
+                // d'arrêt. Sans naissance, exiger le fence natif persistant.
+                return Err(WorkerStoreError::Unknown);
+            }
+        }
+        for slot in slots.iter().filter(|slot|slot.slot.identity.command.task_id==command.task_id) {
+            if !identities.contains(&command_key(&slot.slot.identity.command)) {
+                return Err(WorkerStoreError::Unknown);
+            }
+            let disposed=slot.disposition.as_ref().is_some_and(|entry|entry.disposition.is_final());
+            let closed_without_result=slot.closed.is_some() && slot.disposition.is_none()
+                && self.read_blob(slot)?.is_none();
+            if !slot.producer_terminal || !(disposed || closed_without_result) {
+                return Err(WorkerStoreError::InvalidTransition);
+            }
+        }
+        Ok(())
+    }
+
+    /// Décision de conservation autorisée par le propriétaire à l'entrée native
+    /// (port encore fermé). Aucun inventaire Linux incomplet ne mène au retrait.
+    /// La clôture monotone précède toute réduction, sous le verrou du store.
+    fn freeze_view(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        self.check_view_native_closure_locked(command,intent)?;
+        let mut receipt=self.checked_view_receipt(command,intent)?;
+        if receipt.commit_view.as_ref().unwrap().closed {return Ok(());}
+        receipt.commit_view.as_mut().unwrap().closed=true;
+        receipt.record.as_mut().ok_or(WorkerStoreError::Unknown)?.state=crate::delegation::WorkspaceState::Kept;
+        self.persist(&self.workspace_path(command),&receipt)
+    }
+
+    /// Arrêts natifs prouvés, mais données conservées : pas de déplacement,
+    /// retrait ou nouveau droit. Une coupure garde la réservation pleine jusqu'à
+    /// ce que la petite preuve soit durable. L'ancre close reste sans expiration.
+    fn compact_closed_view(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
+        ->Result<(),WorkerStoreError> {
+        self.freeze_view(command,intent)?;
+        let proofs=crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(workspace_failure)?;
+        let reserved=proofs.compact_closed(intent).map_err(workspace_failure)?;
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        let mut receipt=self.checked_view_receipt(command,intent)?;
+        let view=receipt.commit_view.as_mut().unwrap();
+        if !view.closed {return Err(WorkerStoreError::InvalidTransition);}
+        if view.reserved_bytes!=reserved {
+            view.reserved_bytes=reserved;
+            self.persist(&self.workspace_path(command),&receipt)?;
+        }
+        Ok(())
+    }
+
+    fn view_receipts(&self,task_id:Option<&str>)->Result<Vec<WorkspacePreparationReceipt>,WorkerStoreError> {
+        self.health()?;
+        let directory=self.root.join("workspaces");
+        if !directory.exists() {return Ok(Vec::new());}
+        check_private(&directory,true)?;
+        let mut result=Vec::new();
+        for (index,entry) in fs::read_dir(&directory)?.enumerate() {
+            if index>=MAX_WORKER_STORE_ENTRIES {return Err(WorkerStoreError::Quota);}
+            let path=entry?.path();
+            if path.extension().is_none_or(|ext|ext!="json") {continue;}
+            let receipt:WorkspacePreparationReceipt=read_optional(&path,MAX_METADATA_BYTES)?
+                .ok_or(WorkerStoreError::Quarantined)?;
+            if task_id.is_some_and(|task|receipt.command.task_id!=task) {continue;}
+            validate_prepare_command(&receipt.command)?;
+            if receipt.version!=STORE_VERSION || receipt.worker!=self.worker
+                || self.workspace_path(&receipt.command)!=path {
+                return Err(WorkerStoreError::Quarantined);
+            }
+            match &receipt.commit_view {
+                Some(view)=>view.validate(&receipt)?,
+                None if receipt.record.as_ref().is_some_and(|record|
+                    matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView))=>
+                        return Err(WorkerStoreError::Unknown),
+                None=>continue,
+            }
+            result.push(receipt);
+        }
+        Ok(result)
+    }
+
+    fn marker_for_view(&self,receipt:&WorkspacePreparationReceipt)->Result<Option<ManagedMarker>,WorkerStoreError> {
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        if let Some(marker)=&view.source_marker {return Ok(Some(marker.clone()));}
+        if !self.view_root().exists() {return Ok(None);}
+        let binding=crate::workspace_git::ViewBinding {worker:self.worker.clone(),
+            command:receipt.command.clone(),prepare_digest:receipt.prepare_digest.clone()};
+        crate::workspace_git::ViewProofs::open(&self.view_root().canonicalize()?)
+            .map_err(|_|WorkerStoreError::Unknown)?.source_marker(&binding)
+            .map_err(|_|WorkerStoreError::Unknown)
+    }
+
+    fn view_source_markers(&self,task_id:&str)->Result<Vec<(String,WorkerCommandIdentity,ManagedMarker)>,WorkerStoreError> {
+        let mut markers=Vec::new();
+        for receipt in self.view_receipts(Some(task_id))? {
+            let view=receipt.commit_view.as_ref().unwrap();
+            if !view.source_stopped
+                && let Some(marker)=self.marker_for_view(&receipt)? {
+                markers.push((view.key.clone(),receipt.command.clone(),marker));
+            }
+            if view.materialization.as_ref().is_some_and(|operation|!operation.stopped)
+                && let Some(marker)=self.marker_for_materialization(&receipt)? {
+                let operation=view.materialization.as_ref().unwrap();
+                markers.push((format!("{}-file-{}",view.key,marker.command_id),operation.execution.command.clone(),marker));
+            }
+        }
+        Ok(markers)
+    }
+
+    /// transition est détenu. Le reçu fait autorité même sans sidecar.
+    fn confirm_view_receipt_stopped(&self,receipt:&mut WorkspacePreparationReceipt)->Result<bool,WorkerStoreError> {
+        let mut changed=false;
+        if !receipt.commit_view.as_ref().unwrap().source_stopped {
+            match self.marker_for_view(receipt)? {
+                Some(marker) if crate::managed_process::group_exists(marker.pgid)?=>return Ok(false),
+                None if receipt.commit_view.as_ref().unwrap().source_attempted=>return Ok(false),
+                _=>{},
+            }
+            receipt.commit_view.as_mut().unwrap().source_stopped=true;changed=true;
+        }
+        if receipt.commit_view.as_ref().unwrap().materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+            match self.marker_for_materialization(receipt)? {
+                Some(marker) if crate::managed_process::group_exists(marker.pgid)?=>return Ok(false),
+                None if receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap().attempted=>return Ok(false),
+                _=>{},
+            }
+            receipt.commit_view.as_mut().unwrap().materialization.as_mut().unwrap().stopped=true;changed=true;
+        }
+        if changed {self.persist(&self.workspace_path(&receipt.command),receipt)?;}
+        Ok(true)
+    }
+
+    fn confirm_view_sources_stopped(&self,task_id:&str)->Result<bool,WorkerStoreError> {
+        for mut receipt in self.view_receipts(Some(task_id))? {
+            if !self.confirm_view_receipt_stopped(&mut receipt)? {return Ok(false);}
+        }
+        Ok(true)
+    }
+
+    /// O(1) reçu borné par commande ; pas de parcours global par Reconcile.
+    fn settle_view_command_sources(&self,command:&WorkerCommandIdentity)->Result<bool,WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        self.health()?;
+        let mut prep=command.clone();prep.instance_id.clear();prep.generation=0;
+        let Some(mut receipt)=proof198::read_workspace_receipt(&self.root,&self.worker,&prep)?
+            else{return Ok(true);};
+        if receipt.worker!=self.worker || receipt.command!=prep {return Err(WorkerStoreError::Conflict);}
+        let Some(view)=&receipt.commit_view else{return Ok(true);};
+        view.validate(&receipt)?;
+        self.confirm_view_receipt_stopped(&mut receipt)
+    }
+
+    fn report_retained_view(&self,command:&WorkerCommandIdentity,record:&crate::delegation::WorkspaceRecord)
+        ->Result<crate::delegation::WorkspaceRecord,WorkerStoreError> {
+        let mut prep=command.clone();prep.instance_id.clear();prep.generation=0;
+        let receipt=view_anchor_receipt_at(&self.root,&self.worker,&prep,None)?;
+        let view=receipt.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        view.validate(&receipt)?;
+        let original=receipt.record.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        let reference=original.commit_view.as_ref().ok_or(WorkerStoreError::Unknown)?;
+        if receipt.worker!=self.worker || receipt.command.task_id!=prep.task_id
+            || !view.source_stopped || view.materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+            return Err(WorkerStoreError::Unknown);
+        }
+        if !same_workspace_anchor(original,&serde_json::to_value(record).map_err(|_|WorkerStoreError::Conflict)?)
+            || reference.binding.worker!=self.worker || reference.binding.command!=receipt.command
+            || reference.binding.prepare_digest!=receipt.prepare_digest
+            || reference.intent_digest!=view.intent_digest
+            || Path::new(&reference.proof_root)!=self.view_root().canonicalize()? {
+            return Err(WorkerStoreError::Conflict);
+        }
+        crate::workspace_git::report(original).map_err(workspace_failure)
+    }
+
+    fn settle_view_sources(&self,task_id:&str)->Result<bool,WorkerStoreError> {
+        let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
+        self.health()?;
+        self.confirm_view_sources_stopped(task_id)
     }
 
     fn workspace_path(&self, command: &WorkerCommandIdentity) -> PathBuf {
@@ -1757,7 +2842,7 @@ impl WorkerStore {
         }
         self.persist(&path, &WorkspacePreparationReceipt {
             version: STORE_VERSION, worker: self.worker.clone(), command: command.clone(),
-            prepare_digest: digest, fenced_previous: None, record: None,
+            prepare_digest: digest, fenced_previous: None, record: None, commit_view: None,
         })
     }
 
@@ -1817,6 +2902,7 @@ impl WorkerStore {
             prepare_digest: digest,
             fenced_previous: None,
             record: None,
+            commit_view: None,
         };
         {
             let _guard = self
@@ -2450,6 +3536,114 @@ fn workspace_probe_reason_for_master(
     }
 }
 
+/// Forme et empreinte partagées ; l'appelant authentifie la session et relit
+/// ses autorités avant tout effet. Cette fonction n'accorde aucun droit.
+pub(crate) fn commit_view_preparation_binding(worker:&WorkerIdentity,command:&WorkerCommandIdentity,request:&WorkerPrepare)
+    ->Result<crate::delegation::ViewBinding,WorkerRefusal> {
+    worker.validate()?;command.validate_preparation()?;request.validate()?;
+    if request.machine_id!=worker.machine_id || request.provisioning_revision!=worker.provisioning_revision
+        || !matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{}))
+        || request.posture!=Some(SpawnPosture::Discovery) {
+        return Err(WorkerRefusal::InvalidEnvelope);
+    }
+    Ok(crate::delegation::ViewBinding{worker:worker.clone(),command:command.clone(),
+        prepare_digest:json_digest(&(command,request)).map_err(refuse)?})
+}
+
+type ViewFileError=(WorkerRefusal,Option<crate::workspace_git::ExportFailure>);
+fn view_file_error(error:WorkerStoreError)->ViewFileError {
+    let failure=match &error {
+        WorkerStoreError::Quota=>Some(crate::workspace_git::ExportFailure::MetadataCapacity),
+        WorkerStoreError::Io(error)=>match error.raw_os_error() {
+            Some(libc::ENOSPC|libc::EDQUOT)=>Some(crate::workspace_git::ExportFailure::DiskFull),
+            Some(libc::EACCES|libc::EPERM|libc::EROFS)=>Some(crate::workspace_git::ExportFailure::AccessDenied),
+            _=>None,
+        },
+        _=>None,
+    };
+    (match error {
+        WorkerStoreError::Conflict=>WorkerRefusal::CommandMismatch,
+        WorkerStoreError::Unknown|WorkerStoreError::InvalidTransition=>WorkerRefusal::UnknownExecution,
+        WorkerStoreError::Locked|WorkerStoreError::Quota=>WorkerRefusal::ResourceLimit,
+        WorkerStoreError::Invalid(reason)=>reason,error=>refuse(error),
+    },failure)
+}
+
+/// Jeton interne, non sérialisé et sans copie du manifeste. Le futur port
+/// authentifie la mission avant begin et conserve ce jeton pour ses polls.
+struct ViewFileRead {
+    binding:crate::workspace_git::ViewBinding,
+    execution:WorkerResultIdentity,
+    request:crate::workspace_git::ViewJobRequest,
+}
+
+struct ViewSourceRead {
+    binding:crate::workspace_git::ViewBinding,
+}
+
+/// Contexte privé du constructeur, jamais sérialisé ni fourni par un client.
+/// L'appelant authentifie la commande du maître avant begin ; aucun droit de
+/// Start ne découle de ce jeton tant que poll n'a pas publié WorkerPrepared.
+struct ViewPrepareRead {
+    source:ViewSourceRead,
+    request:WorkerPrepare,
+    routing:Option<RoutingPreparation>,
+    definition_digest:String,
+    permission_digest:String,
+    expires:Instant,
+}
+
+// Le runtime reste seul propriétaire. Seules les corrélations du lien courant
+// attendent une réponse ; la graine et son échéance survivent à la reconnexion.
+struct PendingViewPreparation {
+    operation_digest:String,
+    read:ViewPrepareRead,
+    epoch:String,
+    correlations:BTreeSet<String>,
+}
+
+struct ViewFileAudit {
+    binding:crate::workspace_git::ViewBinding,
+    execution:WorkerResultIdentity,
+    request:crate::workspace_git::ViewJobRequest,
+    state:ViewFileAuditState,
+}
+
+// Le constat terminé reste possédé jusqu'au CAS. Une panne d'écriture ne
+// recommence ni l'audit des données ni le helper de matérialisation.
+enum ViewFileAuditState {
+    Reading(std::thread::JoinHandle<(crate::workspace_git::ViewIntent,Result<bool,crate::workspace_git::ExportFailure>)>),
+    Ready {intent:crate::workspace_git::ViewIntent,available:Option<bool>,
+        failure:Option<crate::workspace_git::ExportFailure>,retry_at:Instant,last_error:Option<String>},
+}
+
+struct PendingViewFile {
+    request:WorkerRequest,
+    read:ViewFileRead,
+    expires:Instant,
+    correlations:BTreeSet<String>,
+}
+
+struct PendingViewControl {
+    request:WorkerRequest,
+    operation_digest:String,
+    expires:Instant,
+    correlations:BTreeSet<String>,
+    reader:std::thread::JoinHandle<Result<crate::delegation::WorkspaceRecord,WorkerRefusal>>,
+}
+
+struct ViewReportRead {
+    binding:crate::workspace_git::ViewBinding,
+    expires:Instant,
+    reader:std::thread::JoinHandle<Result<(crate::workspace_git::ViewIntent,crate::delegation::WorkspaceRecord),String>>,
+}
+
+struct ViewSourceProcess {
+    binding:crate::workspace_git::ViewBinding,
+    child:crate::workspace_git::ViewJob,
+    materialization:Option<(WorkerResultIdentity,crate::workspace_git::ViewJobRequest)>,
+}
+
 struct WorkerRuntime {
     config: WorkerRuntimeConfig,
     identity: WorkerIdentity,
@@ -2461,6 +3655,12 @@ struct WorkerRuntime {
     held: BTreeMap<String, HeldRuntime>,
     running: BTreeMap<String, RunningManagedChild>,
     abandoned: BTreeMap<String, std::process::Child>,
+    view_sources:BTreeMap<String,ViewSourceProcess>,
+    view_reports:BTreeMap<String,ViewReportRead>,
+    view_preparations:BTreeMap<String,PendingViewPreparation>,
+    view_controls:BTreeMap<String,PendingViewControl>,
+    view_files:BTreeMap<String,PendingViewFile>,
+    view_file_audits:BTreeMap<String,ViewFileAudit>,
     last_maintenance: Instant,
     cancelled: Arc<Mutex<BTreeSet<String>>>,
     cancel_signal_issued: BTreeSet<String>,
@@ -2469,6 +3669,1137 @@ struct WorkerRuntime {
 }
 
 impl WorkerRuntime {
+
+    /// Empreinte seule sur le fil ; la liaison et les chemins viennent du reçu
+    /// privé. Toute preuve manquante conserve les données et refuse la clôture.
+    fn conserve_commit_view(&self, command: &WorkerCommandIdentity, prepare_digest: &str)
+        -> Result<WorkerResponseOperation, WorkerRefusal> {
+        validate_prepare_command(command)?;
+        let binding=crate::workspace_git::ViewBinding {
+            worker:self.identity.clone(),command:command.clone(),prepare_digest:prepare_digest.into(),
+        };
+        if proof198::read_workspace_receipt(&self.store.root,&self.identity,command).map_err(refuse)?.is_none() {
+            if self.view_sources.values().any(|source|source.binding.command.task_id==command.task_id)
+                || self.view_reports.values().any(|report|report.binding.command.task_id==command.task_id) {
+                return Err(WorkerRefusal::UnknownExecution);
+            }
+            self.store.conserve_unreserved_view(&binding).map_err(refuse_fenced_workspace)?;
+            return Ok(WorkerResponseOperation::CommitViewConserved{prepare_digest:prepare_digest.into()});
+        }
+        let receipt=self.store.view_receipt_for_binding(&binding).map_err(refuse)?;
+        if receipt.record.is_none() {
+            self.store.conserve_unpublished_view(&binding).map_err(refuse)?;
+            return Ok(WorkerResponseOperation::CommitViewConserved{prepare_digest:prepare_digest.into()});
+        }
+        let proofs=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize().map_err(unavailable)?)
+            .map_err(|_|WorkerRefusal::WorkspacePrepareFailed)?;
+        let intent=proofs.load(&binding.key().map_err(|_|WorkerRefusal::InvalidEnvelope)?)
+            .map_err(|_|WorkerRefusal::WorkspacePrepareFailed)?;
+        if intent.binding!=binding {return Err(WorkerRefusal::CommandMismatch);}
+        // La conservation fige les écritures, sans audit de512Mio dans la
+        // boucle worker. La réduction reste une opération privée séparée.
+        self.store.freeze_view(command,&intent).map_err(refuse)?;
+        Ok(WorkerResponseOperation::CommitViewConserved {prepare_digest:prepare_digest.into()})
+    }
+
+    /// Begin ne fait aucune attente de fin d'export. Le port natif conserve
+    /// le petit jeton et revient au prochain tick ; aucune mission n'est créée.
+    fn begin_view_source(
+        &mut self, command:&WorkerCommandIdentity, request:&WorkerPrepare,
+        intent:crate::workspace_git::ViewIntent,
+    ) -> Result<ViewSourceRead,ViewFileError> {
+        let cancel_key=json_digest(command).map_err(view_file_error)?;
+        let cancelled=self.cancelled.lock().map_err(|_|(WorkerRefusal::StoreUnavailable,None))?
+            .contains(&cancel_key);
+        if cancelled {return Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));}
+        self.store.reserve_view_intent(command,request,&intent).map_err(view_file_error)?;
+        let key=marker_key(command);
+        let read=ViewSourceRead {binding:intent.binding.clone()};
+        let receipt=self.store.checked_view_receipt(command,&intent).map_err(view_file_error)?;
+        let state=receipt.commit_view.as_ref().unwrap();
+        if state.closed {return Err((WorkerRefusal::UnknownExecution,None));}
+        if let Some(cause)=state.source_failure {
+            return Err((WorkerRefusal::WorkspacePrepareFailed,Some(cause)));
+        }
+        if !self.view_sources.contains_key(&key) && state.source_attempted && !state.source_stopped
+            && state.source_marker.is_none() {
+            return Err((WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        }
+        if !self.view_sources.contains_key(&key) && (receipt.record.is_some()
+            || state.source_marker.is_some() || state.source_stopped) {
+            return Ok(read);
+        }
+        if !self.view_sources.contains_key(&key) {
+            let proofs=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+                .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?)
+                .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+            let executable=std::env::current_exe().map_err(|_|(WorkerRefusal::WorkerUnavailable,Some(crate::workspace_git::ExportFailure::StartupUnavailable)))?;
+            let store=&self.store;
+            let cancelled=&self.cancelled;
+            match crate::workspace_git::ViewJob::start_registered(&proofs,&intent,&crate::workspace_git::ViewJobRequest::Export,&executable,&self.source,
+                ||store.mark_view_source_attempt(command,&intent).map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable),
+                |marker|{
+                    if cancelled.lock().map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)?
+                        .contains(&cancel_key) {return Err(crate::workspace_git::ExportFailure::Cancelled);}
+                    store.authorize_view_source(command,&intent,marker)
+                        .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)
+                }) {
+                Ok(child)=>{self.view_sources.insert(key,ViewSourceProcess {binding:intent.binding.clone(),child,materialization:None});}
+                Err((cause,retained))=>{
+                    if let Some(child)=retained {
+                        self.view_sources.insert(key,ViewSourceProcess {binding:intent.binding.clone(),child,materialization:None});
+                    } else {
+                        self.store.record_view_source_exit(&intent.binding,Some(Err(cause))).map_err(view_file_error)?;
+                    }
+                    return Err((WorkerRefusal::WorkspacePrepareFailed,Some(cause)));
+                }
+            }
+        }
+        Ok(read)
+    }
+
+    fn begin_planned_view_source(&mut self,command:&WorkerCommandIdentity,request:&WorkerPrepare,
+        seed:crate::workspace_git::ViewPlan)->Result<ViewSourceRead,ViewFileError> {
+        if !self.store.view_preparation_unused(command).map_err(view_file_error)? {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        let cancel_key=json_digest(command).map_err(view_file_error)?;
+        if self.cancelled.lock().map_err(|_|(WorkerRefusal::StoreUnavailable,None))?.contains(&cancel_key) {
+            return Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        }
+        self.store.reserve_view_plan(command,request,&seed).map_err(view_file_error)?;
+        let key=marker_key(command);
+        let read=ViewSourceRead{binding:seed.binding.clone()};
+        let receipt=self.store.view_receipt_for_binding(&seed.binding).map_err(view_file_error)?;
+        let state=receipt.commit_view.as_ref().unwrap();
+        if state.closed {return Err((WorkerRefusal::UnknownExecution,None));}
+        if let Some(cause)=state.source_failure {return Err((WorkerRefusal::WorkspacePrepareFailed,Some(cause)));}
+        if self.view_sources.contains_key(&key) || receipt.record.is_some() || state.source_stopped || state.source_marker.is_some() {
+            return Ok(read);
+        }
+        if state.source_attempted {return Err((WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));}
+        // Un seul export natif à la fois. Les graines suivantes attendent sous
+        // leur échéance d'origine ; un marqueur inconnu ne libère pas le créneau.
+        if !self.view_writer_available(&seed.binding,&key)? {return Ok(read);}
+        let proofs=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?)
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+        let executable=std::env::current_exe().map_err(|_|(WorkerRefusal::WorkerUnavailable,None))?;
+        let store=&self.store;let cancelled=&self.cancelled;
+        match crate::workspace_git::ViewJob::start_plan_registered(&proofs,&seed,&executable,&self.source,
+            ||store.mark_view_source_attempt_binding(&seed.binding).map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable),
+            |marker|{
+                if cancelled.lock().map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)?
+                    .contains(&cancel_key) {return Err(crate::workspace_git::ExportFailure::Cancelled);}
+                store.authorize_view_source_binding(&seed.binding,marker).map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)
+            }) {
+            Ok(child)=>{self.view_sources.insert(key,ViewSourceProcess{binding:seed.binding,child,materialization:None});}
+            Err((cause,retained))=>{
+                if let Some(child)=retained {self.view_sources.insert(key,ViewSourceProcess{binding:seed.binding,child,materialization:None});}
+                else {self.store.record_view_source_exit(&seed.binding,Some(Err(cause))).map_err(view_file_error)?;}
+                return Err((WorkerRefusal::WorkspacePrepareFailed,Some(cause)));
+            }
+        }
+        Ok(read)
+    }
+
+    /// O(1) petits reçus pendant l'export. L'audit final reste borné et ne
+    /// survient qu'après la preuve d'arrêt, jamais à chaque poll en cours.
+    fn poll_view_source(&mut self,read:&ViewSourceRead)
+        ->Result<Option<crate::delegation::WorkspaceRecord>,ViewFileError> {
+        let command=&read.binding.command;
+        let receipt=self.store.view_receipt_for_binding(&read.binding).map_err(view_file_error)?;
+        let state=receipt.commit_view.as_ref().unwrap();
+        if state.closed {return Err((WorkerRefusal::UnknownExecution,None));}
+        let cancel_key=json_digest(command).map_err(view_file_error)?;
+        let cancelled=self.cancelled.lock().map_err(|_|(WorkerRefusal::StoreUnavailable,None))?
+            .contains(&cancel_key);
+        let key=marker_key(command);
+        if let Some(source)=self.view_sources.get_mut(&key) {
+            if source.binding!=read.binding || source.materialization.is_some() {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            if cancelled {let _=source.child.abort(crate::workspace_git::ExportFailure::Cancelled,Duration::ZERO);}
+            match source.child.poll().map_err(|_|(WorkerRefusal::UnknownExecution,None))? {
+                crate::workspace_git::JobPoll::Running=>return Ok(None),
+                crate::workspace_git::JobPoll::StopUnconfirmed=>return Err((WorkerRefusal::UnknownExecution,
+                    Some(crate::workspace_git::ExportFailure::StopUnconfirmed))),
+                crate::workspace_git::JobPoll::Stopped(result)=>{
+                    if !self.store.record_view_source_exit(&source.binding,Some(result)).map_err(view_file_error)? {
+                        return Err((WorkerRefusal::UnknownExecution,None));
+                    }
+                    self.view_sources.remove(&key);
+                }
+            }
+        } else if !state.source_stopped && !self.store.confirm_view_sources_stopped(&command.task_id).map_err(view_file_error)? {
+            return Err((WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        }
+        if cancelled {return Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));}
+        let receipt=self.store.view_receipt_for_binding(&read.binding).map_err(view_file_error)?;
+        if let Some(cause)=receipt.commit_view.as_ref().unwrap().source_failure {
+            return Err((WorkerRefusal::WorkspacePrepareFailed,Some(cause)));
+        }
+        if !receipt.commit_view.as_ref().unwrap().source_stopped {
+            return Err((WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        }
+        if let Some(report)=self.view_reports.get(&key) {
+            if report.binding!=read.binding {return Err((WorkerRefusal::CommandMismatch,None));}
+            if !report.reader.is_finished() {return Ok(None);}
+            let report=self.view_reports.remove(&key).unwrap();
+            let (intent,record)=report.reader.join().map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?
+                .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+            if intent.binding!=read.binding {return Err((WorkerRefusal::CommandMismatch,None));}
+            let result=self.store.publish_view_snapshot(command,&intent,record,&self.cancelled);
+            if result.is_err() && self.cancelled.lock().map_err(|_|(WorkerRefusal::StoreUnavailable,None))?
+                .contains(&cancel_key) {
+                return Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+            }
+            return result.map(Some).map_err(view_file_error);
+        }
+        let proofs=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?)
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+        let intent=proofs.load(&read.binding.key().map_err(|_|(WorkerRefusal::CommandMismatch,None))?)
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+        if receipt.commit_view.as_ref().is_some_and(|view|view.planning.is_some()) {
+            self.store.adopt_view_plan(&read.binding,&intent).map_err(view_file_error)?;
+        }
+        self.store.prepare_view_workspace_publication(command,&intent).map_err(view_file_error)?;
+        let private=self.store.view_root().canonicalize().map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+        #[cfg(test)]
+        let hold_report=self.source.contains_key("B221_VIEW_TEST_REPORT_HOLD");
+        let reader=std::thread::Builder::new().name("bridget-view-audit".into()).spawn(move||{
+            #[cfg(test)] if hold_report {
+                let deadline=Instant::now()+Duration::from_secs(10);
+                while !private.join("allow-report").exists() && Instant::now()<deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            let record=crate::workspace_git::ViewProofs::open(&private)?.workspace(&intent)?;
+            Ok((intent,record))
+        }).map_err(|_|(WorkerRefusal::WorkerUnavailable,None))?;
+        self.view_reports.insert(key,ViewReportRead{binding:read.binding.clone(),expires:Instant::now()+Duration::from_secs(120),reader});
+        Ok(None)
+    }
+
+    #[cfg(test)]
+    fn prepare_view_source(&mut self,command:&WorkerCommandIdentity,request:&WorkerPrepare,
+        intent:crate::workspace_git::ViewIntent)->Result<crate::delegation::WorkspaceRecord,ViewFileError> {
+        let read=self.begin_view_source(command,request,intent)?;
+        loop {
+            if let Some(record)=self.poll_view_source(&read)? {return Ok(record);}
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Un seul écrivain de données C19 par worker, y compris après coupure.
+    /// Les lecteurs d'audit n'écrivent pas ; un marqueur inconnu garde le créneau.
+    fn view_writer_available(&self,binding:&crate::workspace_git::ViewBinding,operation:&str)
+        ->Result<bool,ViewFileError> {
+        if self.view_sources.keys().any(|key|key!=operation){return Ok(false);}
+        Ok(!self.store.view_receipts(None).map_err(view_file_error)?.iter().any(|receipt|
+            receipt.command!=binding.command && receipt.commit_view.as_ref().is_some_and(|view|
+                (view.source_attempted && !view.source_stopped)
+                    || view.materialization.as_ref().is_some_and(|file|file.attempted && !file.stopped))))
+    }
+
+    fn native_view_plan(&self,command:&WorkerCommandIdentity,request:&WorkerPrepare)
+        ->Result<crate::workspace_git::ViewPlan,ViewFileError> {
+        validate_prepare_command(command).map_err(|reason|(reason,None))?;
+        request.validate().map_err(|reason|(reason,None))?;
+        let source_root=Path::new(&request.remote_root);
+        let data_root=crate::workspace_git::ViewPlan::native_data_root(source_root)
+            .map_err(|_|(WorkerRefusal::PlacementMismatch,None))?;
+        crate::registry::validate_unprotected_local_path(source_root,&self.protected())
+            .map_err(|_|(WorkerRefusal::PlacementMismatch,None))?;
+        if self.protected().iter().any(|path|data_root.starts_with(path)) {
+            return Err((WorkerRefusal::PlacementMismatch,None));
+        }
+        let binding=commit_view_preparation_binding(&self.identity,command,request).map_err(|reason|(reason,None))?;
+        // Une graine persistée est l'unique échéance au rejeu.
+        if proof198::read_workspace_receipt(&self.store.root,&self.identity,command).map_err(view_file_error)?.is_some() {
+            let proofs=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+                .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?)
+                .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+            let seed=proofs.load_plan(&binding.key().map_err(|_|(WorkerRefusal::CommandMismatch,None))?)
+                .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+            if seed.binding!=binding || seed.data_root!=data_root || !seed.native_placement_v1 {return Err((WorkerRefusal::CommandMismatch,None));}
+            return Ok(seed);
+        }
+        crate::workspace_git::ViewPlan::new_native(binding,&source_root.join(&request.relative_cwd),
+            request.base_commit.as_deref().ok_or((WorkerRefusal::InvalidEnvelope,None))?,
+            source_root,&request.source_root_identity).map_err(|_|(WorkerRefusal::InvalidEnvelope,None))
+    }
+
+    fn begin_prepared_view(&mut self,command:&WorkerCommandIdentity,request:&WorkerPrepare,
+        routing:Option<(RoutingPreparation,&str,&str)>,seed:crate::workspace_git::ViewPlan)
+        ->Result<ViewPrepareRead,ViewFileError> {
+        validate_prepare_command(command).map_err(|r|(r,None))?;
+        request.validate().map_err(|r|(r,None))?;
+        if !matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}))
+            || request.posture!=Some(SpawnPosture::Discovery) {
+            return Err((WorkerRefusal::InvalidEnvelope,None));
+        }
+        if seed.binding.worker!=self.identity || seed.binding.command!=*command
+            || seed.binding.prepare_digest!=json_digest(&(command,request)).map_err(view_file_error)? {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        if !self.store.view_preparation_unused(command).map_err(view_file_error)? {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        if !self.held.is_empty()
+            || (self.prepared.len()>=128 && !self.prepared.contains_key(&command.command_id)) {
+            return Err((WorkerRefusal::ResourceLimit,None));
+        }
+        let registry=self.registry().map_err(|r|(r,None))?;
+        if let Some((selection,_,_))=&routing {
+            self.check_routing_connection(&registry,request,selection).map_err(|r|(r,None))?;
+        }
+        let mapping=self.mapping_authority(request,&registry).map_err(|r|(r,None))?;
+        let (mapping,cwd)=self.read_view().mapping_paths(request,mapping).map_err(|r|(r,None))?;
+        let mut operation=crate::native_permissions::PermissionReadOperation::default();
+        let initial=self.readiness_at(&registry,request,&mapping,&cwd,&mut operation,None)
+            .map_err(|r|(r,None))?;
+        operation.finish().map_err(|_|(WorkerRefusal::PermissionsChanged,None))?;
+        if initial.effective_posture!=SpawnPosture::Discovery {
+            return Err((WorkerRefusal::PermissionsChanged,None));
+        }
+        let permission_digest=json_digest(&initial.child_policy).map_err(view_file_error)?;
+        if let Some((_,definition,permission))=&routing {
+            if initial.definition.digest!=*definition {return Err((WorkerRefusal::DefinitionChanged,None));}
+            if permission_digest!=*permission {return Err((WorkerRefusal::PermissionsChanged,None));}
+        }
+        let expires=Instant::now()+seed.remaining().map_err(|_|(WorkerRefusal::PrepareExpired,None))?;
+        let source=self.begin_planned_view_source(command,request,seed)?;
+        Ok(ViewPrepareRead {source,request:request.clone(),routing:routing.map(|(selection,_,_)|selection),
+            definition_digest:initial.definition.digest,permission_digest,expires})
+    }
+
+    /// La boucle réseau a déjà validé identité, époque et capacité créateur.
+    /// Aucun travail lourd n'attend dans cette boucle : begin possède le
+    /// sous-processus, puis poll récolte seulement les lecteurs terminés.
+    fn defer_view_preparation(&mut self,request:&WorkerRequest)->Result<bool,ViewFileError> {
+        let operation=match &request.request {
+            WorkerRequestOperation::PrepareDiagnosed{prepare}=>prepare.as_ref(),
+            other=>other,
+        };
+        let (prepare,routing)=match operation {
+            WorkerRequestOperation::Prepare{prepare}=>(prepare,None),
+            WorkerRequestOperation::PrepareV2{prepare,inspect_only:false,workload,connection_id,engine,
+                expected_definition_digest,expected_permission_digest}=>(prepare,Some((
+                    RoutingPreparation{connection_id:connection_id.clone(),engine:engine.clone(),workload:*workload},
+                    expected_definition_digest.as_str(),expected_permission_digest.as_str()))),
+            _=>return Ok(false),
+        };
+        if !matches!(prepare.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{})) {
+            return Ok(false);
+        }
+        request.validate().map_err(|reason|(reason,None))?;
+        if request.worker!=self.identity {return Err((WorkerRefusal::PlacementMismatch,None));}
+        let key=marker_key(&request.command);
+        let digest=json_digest(&request.request).map_err(view_file_error)?;
+        if let Some(pending)=self.view_preparations.get_mut(&key) {
+            if pending.read.source.binding.command!=request.command || pending.operation_digest!=digest {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            if Instant::now()>=pending.read.expires {return Err((WorkerRefusal::PrepareExpired,Some(crate::workspace_git::ExportFailure::PreparationExpired)));}
+            if pending.epoch!=request.connection_epoch {
+                pending.correlations.clear();
+                pending.epoch=request.connection_epoch.clone();
+            }
+            if pending.correlations.len()>=8 && !pending.correlations.contains(&request.correlation_id) {
+                return Err((WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+            }
+            pending.correlations.insert(request.correlation_id.clone());
+            return Ok(true);
+        }
+        if self.view_preparations.len()>=128 {return Err((WorkerRefusal::ResourceLimit,None));}
+        let seed=self.native_view_plan(&request.command,prepare)?;
+        let read=self.begin_prepared_view(&request.command,prepare,routing,seed)?;
+        self.view_preparations.insert(key,PendingViewPreparation{operation_digest:digest,read,
+            epoch:request.connection_epoch.clone(),correlations:BTreeSet::from([request.correlation_id.clone()])});
+        Ok(true)
+    }
+
+    fn view_prepare_rejection((reason,failure):ViewFileError)->WorkerResponseOperation {
+        // Le pair sait lire la cause fermée. Une erreur sans preuve reste inconnue.
+        WorkerResponseOperation::CommitViewRejected{reason,
+            failure:failure.unwrap_or(crate::workspace_git::ExportFailure::Unknown)}
+    }
+
+    fn poll_view_preparations(&mut self,epoch:&str)->Vec<WorkerResponse> {
+        let keys=self.view_preparations.keys().cloned().collect::<Vec<_>>();
+        let mut responses=Vec::new();
+        for key in keys {
+            let mut pending=self.view_preparations.remove(&key).unwrap();
+            if pending.epoch!=epoch {
+                pending.correlations.clear();
+                pending.epoch=epoch.into();
+            }
+            let response=match self.poll_prepared_view(&pending.read) {
+                Ok(None)=>{self.view_preparations.insert(key,pending);continue;},
+                Ok(Some(prepared))=>WorkerResponseOperation::Prepared{prepared},
+                Err(error)=>Self::view_prepare_rejection(error),
+            };
+            for correlation_id in pending.correlations {
+                responses.push(WorkerResponse{version:REMOTE_WORKER_VERSION,correlation_id,
+                    connection_epoch:epoch.into(),worker:self.identity.clone(),
+                    command:pending.read.source.binding.command.clone(),response:response.clone()});
+            }
+        }
+        responses
+    }
+
+    /// Audit de fichiers seul ; le lecteur ne reçoit ni store ni fournisseur.
+    /// Start/Release relisent ensuite leurs autorités avant tout effet.
+    fn defer_view_control(&mut self,request:&WorkerRequest)->Result<bool,WorkerRefusal> {
+        let (value,expires)=match &request.request {
+            WorkerRequestOperation::Start{..}|WorkerRequestOperation::StartDetailed{..}=>{
+                if !matches!(self.store.command(&request.command),Err(WorkerStoreError::Unknown)) {return Ok(false);}
+                let Some(prepared)=self.prepared.get(&request.command.command_id) else{return Ok(false);};
+                if !matches!(prepared.request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{})) {
+                    return Ok(false);
+                }
+                (prepared.prepared.workspace.clone().ok_or(WorkerRefusal::CommandMismatch)?,prepared.expires)
+            },
+            WorkerRequestOperation::Release{..}=>{
+                let Some(held)=self.held.get(&request.command.command_id) else{return Ok(false);};
+                if !matches!(held.prepared.request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{})) {
+                    return Ok(false);
+                }
+                (held.prepared.prepared.workspace.clone().ok_or(WorkerRefusal::CommandMismatch)?,held.expires)
+            },
+            WorkerRequestOperation::PrepareFenced{previous,prepare,placement,workspace:Some(workspace),..}
+                if matches!(prepare.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{}))=>{
+                    let original=self.store.fenced_workspace(previous,placement,workspace).map_err(refuse_fenced_workspace)?;
+                    (serde_json::to_value(original).map_err(unavailable)?,
+                        self.prepared.get(&request.command.command_id).map(|prepared|prepared.expires)
+                            .unwrap_or_else(||Instant::now()+Duration::from_secs(30)))
+                },
+            _=>return Ok(false),
+        };
+        request.validate()?;
+        if request.worker!=self.identity {return Err(WorkerRefusal::PlacementMismatch);}
+        if Instant::now()>=expires {return Err(WorkerRefusal::PrepareExpired);}
+        let key=json_digest(&request.command).map_err(refuse)?;
+        let digest=json_digest(&request.request).map_err(refuse)?;
+        if let Some(pending)=self.view_controls.get_mut(&key) {
+            if pending.request.command!=request.command || pending.operation_digest!=digest {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
+            if pending.request.connection_epoch!=request.connection_epoch {
+                pending.correlations.clear();
+                pending.request.connection_epoch=request.connection_epoch.clone();
+            }
+            if pending.correlations.len()>=8 && !pending.correlations.contains(&request.correlation_id) {
+                return Err(WorkerRefusal::ResourceLimit);
+            }
+            pending.correlations.insert(request.correlation_id.clone());return Ok(true);
+        }
+        if self.view_controls.len()>=128 {return Err(WorkerRefusal::ResourceLimit);}
+        let record:crate::delegation::WorkspaceRecord=serde_json::from_value(value)
+            .map_err(|_|WorkerRefusal::CommandMismatch)?;
+        if !matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView) || record.commit_view.is_none() {
+            return Err(WorkerRefusal::CommandMismatch);
+        }
+        #[cfg(test)] let hold=self.source.contains_key("B221_VIEW_TEST_CONTROL_HOLD");
+        #[cfg(test)] let allow=self.config.state_root.join("allow-view-control");
+        let reader=std::thread::Builder::new().name("bridget-view-control-audit".into()).spawn(move||{
+            #[cfg(test)] if hold {
+                let until=Instant::now()+Duration::from_secs(10);
+                while !allow.exists() && Instant::now()<until {std::thread::sleep(Duration::from_millis(5));}
+            }
+            crate::workspace_git::report(&record).map_err(|_|WorkerRefusal::WorkspacePrepareFailed)
+        }).map_err(|_|WorkerRefusal::WorkerUnavailable)?;
+        self.view_controls.insert(key,PendingViewControl{request:request.clone(),operation_digest:digest,expires,
+            correlations:BTreeSet::from([request.correlation_id.clone()]),reader});
+        Ok(true)
+    }
+
+    fn control_refusal(operation:&WorkerRequestOperation,reason:WorkerRefusal)->WorkerResponseOperation {
+        if matches!(operation,WorkerRequestOperation::StartDetailed{..}) {
+            WorkerResponseOperation::StartRejected{reason,cause:WorkerStartCapacityCause::Unknown}
+        } else {WorkerResponseOperation::Rejected{reason}}
+    }
+
+    fn poll_view_controls(&mut self,epoch:&str,disconnected:&AtomicBool)->Vec<WorkerResponse> {
+        let keys=self.view_controls.keys().cloned().collect::<Vec<_>>();
+        let mut responses=Vec::new();
+        for key in keys {
+            let mut pending=self.view_controls.remove(&key).unwrap();
+            if pending.request.connection_epoch!=epoch {pending.correlations.clear();}
+            let cancelled=self.cancelled.lock().map_or(true,|cancelled|cancelled.contains(&key));
+            let expired=Instant::now()>=pending.expires;
+            let result=if cancelled || expired || disconnected.load(Ordering::Acquire) {
+                Some(if expired {
+                    if matches!(pending.request.request,WorkerRequestOperation::Release{..}) {
+                        WorkerRefusal::ReleaseExpired
+                    } else {WorkerRefusal::PrepareExpired}
+                } else {WorkerRefusal::UnknownExecution})
+            } else if pending.reader.is_finished() && !pending.correlations.is_empty() {
+                let report=pending.reader.join().unwrap_or(Err(WorkerRefusal::WorkspacePrepareFailed));
+                let result=report.and_then(|report|match &pending.request.request {
+                    WorkerRequestOperation::Start{start}|WorkerRequestOperation::StartDetailed{start}=>{
+                        let mut capacity=WorkerStartCapacityCause::Unknown;
+                        let result=self.start_with_view_report(&pending.request.command,start,disconnected,
+                            &mut capacity,Some(&report));
+                        if matches!(pending.request.request,WorkerRequestOperation::StartDetailed{..}) {
+                            Ok(match result {Ok(response)=>response,Err(reason)=>WorkerResponseOperation::StartRejected{
+                                reason,cause:if reason==WorkerRefusal::ResourceLimit {capacity}else{WorkerStartCapacityCause::Unknown}}})
+                        } else {result}
+                    },
+                    WorkerRequestOperation::Release{permit}=>self.release_with_view_report(
+                        &pending.request.command,permit,epoch,disconnected,Some(&report)),
+                    WorkerRequestOperation::PrepareFenced{previous,prepare,placement,workspace,routing}=>
+                        self.prepare_fenced_with_view_report(&pending.request.command,previous,prepare,placement,
+                            workspace.as_ref(),routing.as_ref(),Some(&report))
+                            .map(|prepared|WorkerResponseOperation::Prepared{prepared}),
+                    _=>Err(WorkerRefusal::InvalidEnvelope),
+                });
+                for correlation_id in pending.correlations {
+                    responses.push(WorkerResponse{version:REMOTE_WORKER_VERSION,correlation_id,
+                        connection_epoch:epoch.into(),worker:self.identity.clone(),command:pending.request.command.clone(),
+                        response:match &result {Ok(response)=>response.clone(),
+                            Err(reason)=>Self::control_refusal(&pending.request.request,*reason)}});
+                }
+                continue;
+            } else {None};
+            if let Some(reason)=result {
+                for correlation_id in std::mem::take(&mut pending.correlations) {
+                    responses.push(WorkerResponse{version:REMOTE_WORKER_VERSION,correlation_id,
+                        connection_epoch:epoch.into(),worker:self.identity.clone(),command:pending.request.command.clone(),
+                        response:Self::control_refusal(&pending.request.request,reason)});
+                }
+            }
+            if pending.reader.is_finished() && pending.correlations.is_empty() {
+                let _=pending.reader.join();
+            } else {self.view_controls.insert(key,pending);}
+        }
+        responses
+    }
+
+    fn check_prepared_view_replay(&self,read:&ViewPrepareRead)->Result<(),ViewFileError> {
+        let command=&read.source.binding.command;
+        let Some(previous)=self.prepared.get(&command.command_id) else {return Ok(());};
+        if previous.command!=*command || previous.routing!=read.routing
+            || json_digest(&previous.request).map_err(view_file_error)?
+                !=json_digest(&read.request).map_err(view_file_error)? {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        if Instant::now()>=previous.expires {return Err((WorkerRefusal::PrepareExpired,None));}
+        let receipt=self.store.view_receipt_for_binding(&read.source.binding).map_err(view_file_error)?;
+        let record=receipt.record.ok_or((WorkerRefusal::CommandMismatch,None))?;
+        if !previous.prepared.workspace.as_ref().is_some_and(|value|same_workspace_anchor(&record,value)) {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        let intent=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?)
+            .and_then(|proofs|proofs.load(&read.source.binding.key()?))
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+        let (_,cwd)=intent.execution_paths(Path::new(&read.request.remote_root))
+            .map_err(|_|(WorkerRefusal::CommandMismatch,None))?;
+        if Path::new(&previous.prepared.placement.execution_cwd)!=cwd {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        Ok(())
+    }
+
+    fn poll_prepared_view(&mut self,read:&ViewPrepareRead)
+        ->Result<Option<WorkerPrepared>,ViewFileError> {
+        let command=&read.source.binding.command;
+        if read.source.binding.worker!=self.identity
+            || read.source.binding.prepare_digest!=json_digest(&(command,&read.request)).map_err(view_file_error)? {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        if !self.store.view_preparation_unused(command).map_err(view_file_error)? {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        self.check_prepared_view_replay(read)?;
+        if Instant::now()>=read.expires {
+            let stopped=if let Some(source)=self.view_sources.get_mut(&marker_key(command)) {
+                if source.binding!=read.source.binding || source.materialization.is_some() {
+                    return Err((WorkerRefusal::CommandMismatch,None));
+                }
+                source.child.abort(crate::workspace_git::ExportFailure::PreparationExpired,Duration::ZERO)
+                    .unwrap_or(false)
+            } else {
+                self.store.view_receipt_for_binding(&read.source.binding).map_err(view_file_error)?
+                    .commit_view.as_ref().is_some_and(|view|view.source_stopped || !view.source_attempted)
+            };
+            return Err((WorkerRefusal::PrepareExpired,Some(if stopped {
+                crate::workspace_git::ExportFailure::PreparationExpired
+            } else {crate::workspace_git::ExportFailure::StopUnconfirmed})));
+        }
+        let waiting=self.store.view_receipt_for_binding(&read.source.binding).map_err(view_file_error)?;
+        if waiting.commit_view.as_ref().is_some_and(|view|!view.source_attempted && !view.source_stopped && !view.closed) {
+            let seed=self.native_view_plan(command,&read.request)?;
+            self.begin_planned_view_source(command,&read.request,seed)?;
+            let after=self.store.view_receipt_for_binding(&read.source.binding).map_err(view_file_error)?;
+            if after.commit_view.as_ref().is_some_and(|view|!view.source_attempted) {return Ok(None);}
+        }
+        let Some(record)=self.poll_view_source(&read.source)? else {return Ok(None);};
+        let registry=self.registry().map_err(|r|(r,None))?;
+        if let Some(selection)=&read.routing {
+            self.check_routing_connection(&registry,&read.request,selection).map_err(|r|(r,None))?;
+        }
+        let mapping=self.mapping_authority(&read.request,&registry).map_err(|r|(r,None))?;
+        let (mut mapping,source_cwd)=self.read_view().mapping_paths(&read.request,mapping).map_err(|r|(r,None))?;
+        let mut operation=crate::native_permissions::PermissionReadOperation::default();
+        let initial=self.readiness_at(&registry,&read.request,&mapping,&source_cwd,&mut operation,None)
+            .map_err(|r|(r,None))?;
+        if initial.definition.digest!=read.definition_digest {
+            return Err((WorkerRefusal::DefinitionChanged,None));
+        }
+        if initial.effective_posture!=SpawnPosture::Discovery
+            || json_digest(&initial.child_policy).map_err(view_file_error)?!=read.permission_digest {
+            return Err((WorkerRefusal::PermissionsChanged,None));
+        }
+        let reference=record.commit_view.as_ref().ok_or((WorkerRefusal::CommandMismatch,None))?;
+        if reference.binding!=read.source.binding {return Err((WorkerRefusal::CommandMismatch,None));}
+        let intent=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?)
+            .and_then(|proofs|proofs.load(&read.source.binding.key()?))
+            .map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?;
+        let (root,cwd)=intent.execution_paths(&mapping.remote_root)
+            .map_err(|_|(WorkerRefusal::PlacementMismatch,None))?;
+        mapping.remote_root=crate::registry::validate_unprotected_local_path(&root,&self.protected())
+            .map_err(|_|(WorkerRefusal::PlacementMismatch,None))?;
+        let cwd=crate::registry::validate_unprotected_local_path(&cwd,&self.protected())
+            .map_err(|_|(WorkerRefusal::PlacementMismatch,None))?;
+        if !cwd.starts_with(&mapping.remote_root) {return Err((WorkerRefusal::PlacementMismatch,None));}
+        let readiness=self.readiness_at(&registry,&read.request,&mapping,&cwd,&mut operation,None)
+            .map_err(|r|(r,None))?;
+        operation.finish().map_err(|_|(WorkerRefusal::PermissionsChanged,None))?;
+        if readiness.effective_posture!=SpawnPosture::Discovery {
+            return Err((WorkerRefusal::PermissionsChanged,None));
+        }
+        if Instant::now()>=read.expires {
+            return Err((WorkerRefusal::PrepareExpired,None));
+        }
+        let permission=json_digest(&readiness.child_policy).map_err(view_file_error)?;
+        if let Some(previous)=self.prepared.get(&command.command_id) {
+            if previous.command!=*command || previous.routing!=read.routing
+                || json_digest(&previous.request).map_err(view_file_error)?
+                !=json_digest(&read.request).map_err(view_file_error)? {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            if Instant::now()>=previous.expires {return Err((WorkerRefusal::PrepareExpired,None));}
+            if previous.prepared.definition.digest!=readiness.definition.digest {
+                return Err((WorkerRefusal::DefinitionChanged,None));
+            }
+            if previous.prepared.placement.permission_digest!=permission {
+                return Err((WorkerRefusal::PermissionsChanged,None));
+            }
+            if Path::new(&previous.prepared.placement.execution_cwd)!=cwd
+                || !previous.prepared.workspace.as_ref().is_some_and(|value|
+                    same_workspace_anchor(&record,value)) {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            return Ok(Some(previous.prepared.clone()));
+        }
+        if self.prepared.len()>=128 || !self.held.is_empty() {
+            return Err((WorkerRefusal::ResourceLimit,None));
+        }
+        let prepared=WorkerPrepared {
+            workspace:Some(serde_json::to_value(record).map_err(|_|(WorkerRefusal::WorkspacePrepareFailed,None))?),
+            placement:RemotePlacement {
+                machine_id:self.identity.machine_id.clone(),worker_id:self.identity.worker_id.clone(),
+                provisioning_revision:self.identity.provisioning_revision,project_id:read.request.project_id.clone(),
+                mapping_revision:read.request.mapping_revision,origin_host:read.request.origin_host.clone(),
+                origin_cwd:read.request.origin_cwd.clone(),source_root_identity:read.request.source_root_identity.clone(),
+                relative_cwd:read.request.relative_cwd.clone(),execution_cwd:cwd.to_string_lossy().into(),
+                base_commit:read.request.base_commit.clone(),definition_digest:readiness.definition.digest.clone(),
+                permission_digest:permission,
+            },token:uuid::Uuid::new_v4().to_string(),definition:readiness.definition,
+            child_policy:readiness.child_policy,effective_posture:readiness.effective_posture,prepared_at:worker_now(),
+        };
+        self.prepared.insert(command.command_id.clone(),PreparedRuntime {
+            routing:read.routing.clone(),command:command.clone(),request:read.request.clone(),
+            prepared:prepared.clone(),expires:Instant::now()+Duration::from_secs(30),
+        });
+        Ok(Some(prepared))
+    }
+
+    /// Relire les droits ne constitue pas une admission de vue ou de modèle.
+    fn recheck_view_file_actor(&self,execution:&WorkerResultIdentity,path:Option<&str>)->Result<(),WorkerRefusal> {
+        let (intent,_)=self.store.active_view_execution(execution).map_err(|error|match error {
+            WorkerStoreError::Conflict=>WorkerRefusal::CommandMismatch,
+            WorkerStoreError::Unknown|WorkerStoreError::InvalidTransition=>WorkerRefusal::UnknownExecution,
+            WorkerStoreError::Invalid(reason)=>reason,error=>refuse(error),
+        })?;
+        let current=self.store.command(&execution.command).map_err(refuse)?;
+        let (request,prepared)=current.preparation.as_ref().ok_or(WorkerRefusal::UnknownExecution)?;
+        let registry=self.registry()?;
+        if let Some(routing)=&current.routing {self.check_routing_connection(&registry,request,routing)?;}
+        let (mut mapping,_)=self.mapping_for(request,&registry,current.routing.as_ref().map(|routing|routing.workload))?;
+        let (root,cwd)=intent.execution_paths(&mapping.remote_root).map_err(|_|WorkerRefusal::PlacementMismatch)?;
+        let protected=self.protected();
+        mapping.remote_root=crate::registry::validate_unprotected_local_path(&root,&protected)
+            .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+        let cwd=crate::registry::validate_unprotected_local_path(&cwd,&protected)
+            .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+        if !cwd.starts_with(&mapping.remote_root) || cwd!=Path::new(&current.placement.execution_cwd) {
+            return Err(WorkerRefusal::PlacementMismatch);
+        }
+        if let Some(path)=path {
+            if !bridget_transport::protocol::commit_view_file_path(path)
+                || !intent.destination().map_err(|_|WorkerRefusal::PlacementMismatch)?.join(path)
+                    .starts_with(&mapping.remote_root) {
+                return Err(WorkerRefusal::PlacementMismatch);
+            }
+        }
+        let mut operation=crate::native_permissions::PermissionReadOperation::default();
+        let fresh=self.readiness_at(&registry,request,&mapping,&cwd,&mut operation,None)?;
+        operation.finish().map_err(|_|WorkerRefusal::PermissionsChanged)?;
+        if fresh.definition!=prepared.definition {return Err(WorkerRefusal::DefinitionChanged);}
+        if fresh.effective_posture!=SpawnPosture::Discovery || fresh.child_policy!=prepared.child_policy
+            || json_digest(&fresh.child_policy).map_err(refuse)?!=current.placement.permission_digest {
+            return Err(WorkerRefusal::PermissionsChanged);
+        }
+        Ok(())
+    }
+
+    /// Le fil maître a déjà prouvé l'acteur ; cette boucle ne reçoit qu'une
+    /// exécution courante et un chemin fermé, sous WorkspaceViewV1.
+    fn defer_view_file(&mut self,request:&WorkerRequest)->Result<bool,ViewFileError> {
+        let WorkerRequestOperation::ReadCommitViewFile{execution,path}=&request.request else{return Ok(false);};
+        request.validate().map_err(|reason|(reason,None))?;
+        if request.worker!=self.identity {return Err((WorkerRefusal::PlacementMismatch,None));}
+        let key=json_digest(&(&execution,path)).map_err(view_file_error)?;
+        if let Some(pending)=self.view_files.get_mut(&key) {
+            if pending.request.command!=request.command || pending.request.request!=request.request {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            if Instant::now()>=pending.expires {
+                return Err((WorkerRefusal::PrepareExpired,Some(crate::workspace_git::ExportFailure::TimedOut)));
+            }
+            if pending.request.connection_epoch!=request.connection_epoch {
+                pending.correlations.clear();pending.request.connection_epoch=request.connection_epoch.clone();
+            }
+            if pending.correlations.len()>=8 && !pending.correlations.contains(&request.correlation_id) {
+                return Err((WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+            }
+            pending.correlations.insert(request.correlation_id.clone());return Ok(true);
+        }
+        if self.view_files.len()>=128 {
+            return Err((WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+        }
+        let read=self.begin_view_file(execution,path)?;
+        self.view_files.insert(key,PendingViewFile{request:request.clone(),read,
+            expires:Instant::now()+Duration::from_secs(120),
+            correlations:BTreeSet::from([request.correlation_id.clone()])});
+        Ok(true)
+    }
+
+    fn view_file_response(request:&WorkerRequest,result:Result<(),ViewFileError>)->WorkerResponseOperation {
+        let WorkerRequestOperation::ReadCommitViewFile{execution,path}=&request.request else {
+            return WorkerResponseOperation::Rejected{reason:WorkerRefusal::InvalidEnvelope};
+        };
+        let (available,reason,failure)=match result {
+            Ok(())=>(true,None,None),
+            Err((reason,failure))=>(false,Some(reason),Some(failure.unwrap_or(crate::workspace_git::ExportFailure::Unknown))),
+        };
+        WorkerResponseOperation::CommitViewFile{execution:execution.clone(),path:path.clone(),available,reason,failure}
+    }
+
+    fn poll_view_files(&mut self,epoch:&str)->Vec<WorkerResponse> {
+        let keys=self.view_files.keys().cloned().collect::<Vec<_>>();
+        let mut responses=Vec::new();
+        for key in keys {
+            let mut pending=self.view_files.remove(&key).unwrap();
+            if pending.request.connection_epoch!=epoch {pending.correlations.clear();}
+            let result=if Instant::now()>=pending.expires {
+                let source=format!("file-{}",marker_key(&pending.read.binding.command));
+                let stopped=if let Some(source)=self.view_sources.get_mut(&source) {
+                    source.child.abort(crate::workspace_git::ExportFailure::TimedOut,Duration::ZERO).unwrap_or(false)
+                } else {
+                    // L'absence en mémoire n'atteste pas l'arrêt d'un helper.
+                    proof198::read_workspace_receipt(&self.store.root,&self.identity,&pending.read.binding.command)
+                        .ok().flatten().is_some_and(|receipt|
+                            receipt.commit_view.as_ref().and_then(|view|view.materialization.as_ref())
+                                .is_some_and(|operation|operation.execution==pending.read.execution
+                                    && operation.request==pending.read.request && operation.stopped))
+                };
+                Err((WorkerRefusal::PrepareExpired,Some(if stopped {crate::workspace_git::ExportFailure::TimedOut}
+                    else {crate::workspace_git::ExportFailure::StopUnconfirmed})))
+            } else {match self.poll_view_file(&pending.read) {
+                Ok(false)=>{self.view_files.insert(key,pending);continue;},
+                Ok(true)=>Ok(()),Err(error)=>Err(error),
+            }};
+            let response=Self::view_file_response(&pending.request,result);
+            for correlation_id in pending.correlations {
+                responses.push(WorkerResponse{version:REMOTE_WORKER_VERSION,correlation_id,connection_epoch:epoch.into(),
+                    worker:self.identity.clone(),command:pending.request.command.clone(),response:response.clone()});
+            }
+        }
+        responses
+    }
+
+    /// Le runtime possède la matérialisation ; aucun acteur ni chemin de preuve
+    /// n'est accepté depuis le lecteur.
+
+    fn begin_view_file(&mut self,execution:&WorkerResultIdentity,path:&str)
+        ->Result<ViewFileRead,ViewFileError> {
+        let plain=view_file_error;
+        self.recheck_view_file_actor(execution,Some(path)).map_err(|reason|(reason,None))?;
+        let cancel_key=json_digest(&execution.command).map_err(plain)?;
+        let cancelled=self.cancelled.clone();
+        let cancellation=||cancelled.lock().map(|set|set.contains(&cancel_key))
+            .map_err(|_|(WorkerRefusal::StoreUnavailable,None));
+        if cancellation()? {
+            return Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        }
+        let (anchor,_)=self.store.active_view_execution(execution).map_err(plain)?;
+        let key=format!("file-{}",marker_key(&anchor.binding.command));
+        if !self.view_writer_available(&anchor.binding,&key)? {
+            return Err((WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+        }
+        let (intent,request)=self.store.begin_materialization(execution,path).map_err(|error|match error {
+            WorkerStoreError::Locked=>(WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)),
+            error=>plain(error),
+        })?;
+        let read=ViewFileRead {binding:intent.binding.clone(),execution:execution.clone(),request:request.clone()};
+        let receipt=self.store.checked_view_receipt(&intent.binding.command,&intent).map_err(plain)?;
+        let operation=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        if !self.view_sources.contains_key(&key) && (operation.marker.is_some() || operation.attempted) {
+            return Ok(read);
+        }
+        if !self.view_sources.contains_key(&key) {
+            let proofs=crate::workspace_git::ViewProofs::open(&self.store.view_root().canonicalize()
+                .map_err(|_|(WorkerRefusal::StoreUnavailable,None))?).map_err(|_|(WorkerRefusal::StoreUnavailable,None))?;
+            let executable=std::env::current_exe().map_err(|_|(WorkerRefusal::WorkerUnavailable,None))?;
+            let release_reason=std::cell::Cell::new(None);
+            let started=crate::workspace_git::ViewJob::start_registered(&proofs,&intent,&request,&executable,&self.source,
+                ||self.store.mark_materialization_attempt(execution,&request).map_err(|error|{
+                    release_reason.set(Some(plain(error)));crate::workspace_git::ExportFailure::ProofUnavailable
+                }),|marker|{
+                if let Err(reason)=self.recheck_view_file_actor(execution,Some(path)) {
+                    release_reason.set(Some((reason,None)));
+                    return Err(crate::workspace_git::ExportFailure::ProofUnavailable);
+                }
+                match cancellation() {
+                    Ok(false)=>{},
+                    Ok(true)=>{
+                        release_reason.set(Some((WorkerRefusal::WorkspacePrepareFailed,
+                            Some(crate::workspace_git::ExportFailure::Cancelled))));
+                        return Err(crate::workspace_git::ExportFailure::Cancelled);
+                    },
+                    Err(error)=>{
+                        release_reason.set(Some(error));
+                        return Err(crate::workspace_git::ExportFailure::ProofUnavailable);
+                    },
+                }
+                self.store.authorize_materialization(execution,&request,marker).map_err(|error|{
+                    release_reason.set(Some(plain(error)));crate::workspace_git::ExportFailure::ProofUnavailable
+                })
+            });
+            match started {
+                Ok(child)=>{self.view_sources.insert(key.clone(),ViewSourceProcess {
+                    binding:intent.binding.clone(),child,materialization:Some((execution.clone(),request.clone())),
+                });}
+                Err((cause,retained))=>{
+                    if let Some(child)=retained {self.view_sources.insert(key,ViewSourceProcess {
+                        binding:intent.binding.clone(),child,materialization:Some((execution.clone(),request)),
+                    });} else {
+                        self.store.finish_materialization(execution,&request,Some(Err(cause))).map_err(plain)?;
+                    }
+                    return Err(release_reason.get().unwrap_or((WorkerRefusal::WorkspacePrepareFailed,Some(cause))));
+                }
+            }
+        }
+        Ok(read)
+    }
+
+    /// Arrêt durci avant le lecteur ; le store n'entre jamais dans son thread.
+    fn begin_view_file_audit(&mut self,read:&ViewFileRead,
+        result:Option<Result<(),crate::workspace_git::ExportFailure>>)->Result<bool,ViewFileError> {
+        let key=format!("file-{}",marker_key(&read.binding.command));
+        if let Some(audit)=self.view_file_audits.get(&key) {
+            if audit.binding!=read.binding || audit.execution!=read.execution || audit.request!=read.request {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            return Ok(true);
+        }
+        let Some(intent)=self.store.stop_materialization(&read.execution,&read.request,result).map_err(view_file_error)?
+            else{return Ok(false);};
+        if intent.binding!=read.binding {return Err((WorkerRefusal::CommandMismatch,None));}
+        if let Some(Err(cause))=result {
+            return self.store.publish_materialization_report(&read.execution,&read.request,&intent,
+                Some(false),Some(cause)).map_err(view_file_error);
+        }
+        let receipt=self.store.checked_view_receipt(&read.binding.command,&intent).map_err(view_file_error)?;
+        if receipt.commit_view.as_ref().and_then(|view|view.materialization.as_ref())
+            .is_some_and(|operation|operation.available.is_some()) {return Ok(true);}
+        if self.view_file_audits.len()>=128 {
+            return Err((WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+        }
+        let crate::workspace_git::ViewJobRequest::Materialize{path,..}=&read.request else {
+            return Err((WorkerRefusal::InvalidEnvelope,None));
+        };
+        let path=path.clone();
+        let root=self.store.view_root().canonicalize().map_err(|_|(WorkerRefusal::StoreUnavailable,None))?;
+        #[cfg(test)] let hold=self.source.contains_key("B221_VIEW_TEST_FILE_AUDIT_HOLD");
+        #[cfg(test)] let allow=self.config.state_root.join("allow-file-audit");
+        let reader=std::thread::Builder::new().name("bridget-view-file-audit".into()).spawn(move||{
+            let available=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+                #[cfg(test)] if hold {
+                    let until=Instant::now()+Duration::from_secs(10);
+                    while !allow.exists() && Instant::now()<until{std::thread::sleep(Duration::from_millis(5));}
+                }
+                crate::workspace_git::ViewProofs::open(&root)
+                    .and_then(|proofs|proofs.file_available(&intent,&path))
+                    .map_err(|error|match crate::workspace_git::view_export_failure(&error) {
+                        crate::workspace_git::ExportFailure::Unknown=>crate::workspace_git::ExportFailure::ProofUnavailable,
+                        cause=>cause,
+                    })
+                    .and_then(|available|if !available && result.is_some() {
+                        Err(crate::workspace_git::ExportFailure::IntegrityFailed)
+                    } else {Ok(available)})
+            })).unwrap_or(Err(crate::workspace_git::ExportFailure::ProofUnavailable));
+            (intent,available)
+        }).map_err(|_|(WorkerRefusal::WorkerUnavailable,None))?;
+        self.view_file_audits.insert(key,ViewFileAudit{binding:read.binding.clone(),
+            execution:read.execution.clone(),request:read.request.clone(),state:ViewFileAuditState::Reading(reader)});
+        Ok(true)
+    }
+
+    /// Reprendre seulement un audit de données dont l'arrêt est déjà durci.
+    /// Aucun helper, mission ou copie n'est démarré après réouverture du worker.
+    fn resume_stopped_view_file_audits(&mut self) {
+        let receipts=match self.store.view_receipts(None) {
+            Ok(receipts)=>receipts,Err(_)=>{log::warn!("view_file_recovery_inventory_unavailable");return;},
+        };
+        for receipt in receipts {
+            let Some(view)=&receipt.commit_view else{continue;};
+            if view.closed {continue;}
+            let Some(operation)=&view.materialization else{continue;};
+            if !operation.stopped || operation.available.is_some() {continue;}
+            let read=ViewFileRead {
+                binding:crate::workspace_git::ViewBinding{worker:receipt.worker.clone(),
+                    command:receipt.command.clone(),prepare_digest:receipt.prepare_digest.clone()},
+                execution:operation.execution.clone(),request:operation.request.clone(),
+            };
+            if let Err((reason,_))=self.begin_view_file_audit(&read,None) {
+                log::warn!("view_file_recovery_unavailable reason={reason:?}");
+            }
+        }
+    }
+
+    fn collect_view_file_audits(&mut self) {
+        // O(n), n <= 128 ; aucun join avant fin, aucun nouvel audit après CAS refusé.
+        let keys=self.view_file_audits.iter().filter_map(|(key,audit)|match &audit.state {
+            ViewFileAuditState::Reading(reader)=>reader.is_finished().then_some(key.clone()),
+            ViewFileAuditState::Ready{retry_at,..}=>(*retry_at<=Instant::now()).then_some(key.clone()),
+        }).collect::<Vec<_>>();
+        for key in keys {
+            let ViewFileAudit{binding,execution,request,state}=self.view_file_audits.remove(&key).unwrap();
+            let (intent,available,failure,last_error)=match state {
+                ViewFileAuditState::Reading(reader)=>{
+                    let Ok((intent,available))=reader.join() else {log::warn!("view_file_audit_unavailable");continue;};
+                    let (available,failure)=match available {
+                        Ok(value)=>(Some(value),None),Err(cause)=>(Some(false),Some(cause)),
+                    };
+                    (intent,available,failure,None)
+                },
+                ViewFileAuditState::Ready{intent,available,failure,last_error,..}=>(intent,available,failure,last_error),
+            };
+            if intent.binding!=binding {log::warn!("view_file_audit_binding_unconfirmed");continue;}
+            if let Err(error)=self.store.publish_materialization_report(&execution,&request,&intent,available,failure) {
+                // Une clôture native exacte rend le constat obsolète, sans
+                // promettre sa disponibilité. Une panne de stockage le conserve.
+                let closed=self.store.view_receipt_for_binding(&binding).ok()
+                    .and_then(|receipt|receipt.commit_view).is_some_and(|view|view.closed);
+                if closed {continue;}
+                let code=error.to_string(); // Display contient seulement un code fermé.
+                if last_error.as_deref()!=Some(code.as_str()) {
+                    log::warn!("view_file_audit_commit_unconfirmed reason={code}");
+                }
+                self.view_file_audits.insert(key,ViewFileAudit{binding,execution,request,
+                    state:ViewFileAuditState::Ready{intent,available,failure,
+                        retry_at:Instant::now()+Duration::from_secs(1),last_error:Some(code)}});
+            }
+        }
+    }
+
+    /// Un seul pas, jamais d'attente de fin de lecture dans la boucle worker.
+    /// Les polls en cours ne chargent pas le manifeste et n'auditent pas la vue.
+    fn poll_view_file(&mut self,read:&ViewFileRead)->Result<bool,ViewFileError> {
+        let execution=&read.execution;let request=&read.request;
+        let key=format!("file-{}",marker_key(&read.binding.command));
+        let receipt=proof198::read_workspace_receipt(&self.store.root,&self.identity,&read.binding.command)
+            .map_err(view_file_error)?.ok_or((WorkerRefusal::UnknownExecution,None))?;
+        let view=receipt.commit_view.as_ref().ok_or((WorkerRefusal::CommandMismatch,None))?;
+        view.validate(&receipt).map_err(view_file_error)?;
+        if receipt.prepare_digest!=read.binding.prepare_digest || receipt.worker!=read.binding.worker
+            || receipt.command!=read.binding.command || read.binding.key().ok().as_deref()!=Some(view.key.as_str())
+            || !view.materialization.as_ref().is_some_and(|operation|
+                operation.execution==*execution && operation.request==*request) {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        // Ne pas rendre un fichier à une mission déjà terminée. Le collecteur
+        // conserve puis ferme indépendamment le propriétaire de son helper.
+        self.store.active_view_command(execution).map_err(view_file_error)?;
+        let cancel_key=json_digest(&execution.command).map_err(view_file_error)?;
+        let cancelled=match self.cancelled.lock() {
+            Ok(set)=>set.contains(&cancel_key),
+            Err(_)=>return Err((WorkerRefusal::StoreUnavailable,None)),
+        };
+        if cancelled {
+            self.stop_owned_view_sources(&execution.command).map_err(|reason|(reason,None))?;
+        }
+        if let Some(owned)=self.view_sources.get_mut(&key) {
+            if !owned.materialization.as_ref().is_some_and(|(owner,operation)|
+                owner==execution && operation==request) {
+                return Err((WorkerRefusal::CommandMismatch,None));
+            }
+            match owned.child.poll().map_err(|_|(WorkerRefusal::UnknownExecution,None))? {
+                crate::workspace_git::JobPoll::Running=>return Ok(false),
+                crate::workspace_git::JobPoll::StopUnconfirmed=>return Err((WorkerRefusal::UnknownExecution,
+                    Some(crate::workspace_git::ExportFailure::StopUnconfirmed))),
+                crate::workspace_git::JobPoll::Stopped(result)=>{
+                    if !self.begin_view_file_audit(read,Some(result))? {
+                        return Err((WorkerRefusal::UnknownExecution,None));
+                    }
+                    self.view_sources.remove(&key);
+                },
+            }
+        } else if (!view.materialization.as_ref().unwrap().stopped
+            || view.materialization.as_ref().unwrap().available.is_none())
+            && !self.begin_view_file_audit(read,None)? {
+            return Err((WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        }
+        self.collect_view_file_audits();
+        if cancelled {
+            return Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        }
+        if self.view_file_audits.contains_key(&key) {return Ok(false);}
+        let crate::workspace_git::ViewJobRequest::Materialize{path,..}=&read.request else {
+            return Err((WorkerRefusal::InvalidEnvelope,None));
+        };
+        self.recheck_view_file_actor(execution,Some(path)).map_err(|reason|(reason,None))?;
+        let done=proof198::read_workspace_receipt(&self.store.root,&self.identity,&read.binding.command)
+            .map_err(view_file_error)?.ok_or((WorkerRefusal::UnknownExecution,None))?;
+        let operation=done.commit_view.as_ref().and_then(|view|view.materialization.as_ref())
+            .ok_or((WorkerRefusal::UnknownExecution,None))?;
+        if operation.execution!=*execution || operation.request!=*request || !operation.stopped {
+            return Err((WorkerRefusal::CommandMismatch,None));
+        }
+        if operation.available==Some(true) && operation.failure.is_none(){Ok(true)}else {
+            Err((WorkerRefusal::WorkspacePrepareFailed,operation.failure))
+        }
+    }
+
+    /// Seulement l'adaptateur des fixtures. Aucun port de production ne doit
+    /// attendre ici : il conserve ViewFileRead et revient au prochain tick.
+    #[cfg(test)]
+    fn materialize_view_file(&mut self,execution:&WorkerResultIdentity,path:&str)->Result<(),ViewFileError> {
+        let read=self.begin_view_file(execution,path)?;
+        loop {
+            if self.poll_view_file(&read)? {return Ok(());}
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn collect_view_sources(&mut self) {
+        self.collect_view_file_audits();
+        let completed=self.view_reports.iter().filter_map(|(key,report)|{
+            let cancelled=json_digest(&report.binding.command).ok().and_then(|digest|
+                self.cancelled.lock().ok().map(|set|set.contains(&digest))).unwrap_or(false);
+            ((cancelled || Instant::now()>=report.expires) && report.reader.is_finished()).then_some(key.clone())
+        }).collect::<Vec<_>>();
+        for key in completed {
+            if let Some(report)=self.view_reports.remove(&key) {let _=report.reader.join();}
+        }
+
+        let keys=self.view_sources.keys().cloned().collect::<Vec<_>>();
+        for key in keys {
+            let source=self.view_sources.get_mut(&key).unwrap();
+            if source.materialization.is_none() {
+                let cancel=json_digest(&source.binding.command).and_then(|key|self.cancelled.lock()
+                    .map(|set|set.contains(&key)).map_err(|_|WorkerStoreError::Quarantined));
+                let cause=match cancel {Ok(false)=>None,
+                    Ok(true)=>Some(crate::workspace_git::ExportFailure::Cancelled),
+                    Err(_)=>Some(crate::workspace_git::ExportFailure::ProofUnavailable)};
+                if let Some(cause)=cause {let _=source.child.abort(cause,Duration::ZERO);}
+            }
+            if let Some((execution,_))=&source.materialization {
+                let cancel_key=json_digest(&execution.command);
+                let cancellation=cancel_key.and_then(|key|self.cancelled.lock()
+                    .map(|set|set.contains(&key)).map_err(|_|WorkerStoreError::Quarantined));
+                let cause=match cancellation {
+                    Ok(true)=>Some(crate::workspace_git::ExportFailure::Cancelled),
+                    Ok(false) if self.store.active_view_command(execution).is_ok()=>None,
+                    _=>Some(crate::workspace_git::ExportFailure::ProofUnavailable),
+                };
+                if let Some(cause)=cause {
+                    let _=source.child.abort(cause,Duration::ZERO);
+                }
+            }
+            match source.child.poll() {
+                Ok(crate::workspace_git::JobPoll::Stopped(result))=>{
+                    let task=source.binding.command.task_id.clone();
+                    if let Some((execution,request))=&source.materialization {
+                        let read=ViewFileRead{binding:source.binding.clone(),execution:execution.clone(),request:request.clone()};
+                        if self.begin_view_file_audit(&read,Some(result)).is_ok_and(|started|started) {
+                            self.view_sources.remove(&key);
+                        }
+                        continue;
+                    }
+                    let settled=self.store.record_view_source_exit(&source.binding,Some(result))
+                        .and_then(|stopped|if stopped {self.store.settle_view_sources(&task)}else{Ok(false)});
+                    let already_closed=matches!(settled,Err(WorkerStoreError::InvalidTransition))
+                        && source.materialization.as_ref().is_some_and(|(execution,request)|
+                            self.store.view_receipt_for_binding(&source.binding).ok()
+                                .and_then(|receipt|receipt.commit_view)
+                                .is_some_and(|view|view.closed && view.materialization.as_ref().is_some_and(|operation|
+                                    operation.stopped && operation.execution==*execution && operation.request==*request)));
+                    if matches!(settled,Ok(true)) || already_closed {self.view_sources.remove(&key);}
+                }
+                Ok(_)=>{}
+                Err(_)=>log::warn!("source_view_status_unconfirmed key={key}"),
+            }
+        }
+    }
+
+    fn stop_owned_view_sources(&mut self,command:&WorkerCommandIdentity)->Result<(),WorkerRefusal> {
+        for (_,source) in self.view_sources.iter_mut().filter(|(_,source)|
+            source.materialization.as_ref().map_or_else(||
+                source.binding.command.task_id==command.task_id
+                    && source.binding.command.command_id==command.command_id,
+                |(execution,_)|execution.command==*command)) {
+            let suffix=source.materialization.as_ref().map(|(_,request)|
+                request.identity_for_binding(&source.binding).map(|identity|format!("-file-{}",identity.command_id)))
+                .transpose().map_err(|_|WorkerRefusal::CommandMismatch)?.unwrap_or_default();
+            let stop_key=format!("view-source-{}{}",source.binding.key()
+                .map_err(|_|WorkerRefusal::CommandMismatch)?,suffix);
+            worker_stop_once(&mut self.cancel_signal_issued,&stop_key,||{
+                source.child.cancel(Duration::from_millis(500))
+                    .map(|_|()).map_err(|_|WorkerRefusal::UnknownExecution)
+            })?;
+        }
+        for (key,owner,marker) in self.store.view_source_markers(&command.task_id).map_err(refuse)? {
+            let owns=if owner.validate_preparation().is_ok() {
+                owner.task_id==command.task_id && owner.command_id==command.command_id
+            } else {owner==*command};
+            if !owns {continue;}
+            let stop_key=format!("view-source-{key}");
+            if self.cancel_signal_issued.contains(&stop_key)
+                || !crate::managed_process::group_exists(marker.pgid).map_err(unavailable)? {continue;}
+            if crate::managed_process::process_birth(marker.pgid).ok()!=Some(marker.birth) {
+                return Err(WorkerRefusal::UnknownExecution);
+            }
+            worker_stop_once(&mut self.cancel_signal_issued,&stop_key,||{
+                // Identité relue juste avant le signal ; jamais un PID du RPC.
+                if crate::managed_process::process_birth(marker.pgid).ok()!=Some(marker.birth) {
+                    return Err(WorkerRefusal::UnknownExecution);
+                }
+                crate::managed_process::signal_group(marker.pgid,libc::SIGTERM).map_err(unavailable)
+            })?;
+        }
+        self.collect_view_sources();
+        Ok(())
+    }
+
     fn read_view(&self) -> read::WorkerReadView<'_> {
         read::WorkerReadView { config: &self.config, identity: &self.identity,
             credential: &self.credential, source: &self.source, quiet: false }
@@ -2492,6 +4823,12 @@ impl WorkerRuntime {
             held: BTreeMap::new(),
             running: BTreeMap::new(),
             abandoned: BTreeMap::new(),
+            view_sources:BTreeMap::new(),
+            view_reports:BTreeMap::new(),
+            view_preparations:BTreeMap::new(),
+            view_controls:BTreeMap::new(),
+            view_files:BTreeMap::new(),
+            view_file_audits:BTreeMap::new(),
             last_maintenance: Instant::now() - Duration::from_secs(1),
             cancelled: Arc::new(Mutex::new(BTreeSet::new())),
             cancel_signal_issued: BTreeSet::new(),
@@ -2501,6 +4838,7 @@ impl WorkerRuntime {
         runtime
             .reconcile_all()
             .map_err(|e| format!("worker_reconcile:{e:?}"))?;
+        runtime.resume_stopped_view_file_audits();
         Ok(runtime)
     }
 
@@ -2586,6 +4924,16 @@ impl WorkerRuntime {
         operation: &mut crate::native_permissions::PermissionReadOperation,
         diagnostics: Option<(&ProbePermissionDiagnostics<'_>, &str)>,
     ) -> Result<CandidateReadiness, WorkerRefusal> {
+        if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}))
+            && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED || request.posture!=Some(SpawnPosture::Discovery)) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        self.readiness_at(registry,request,mapping,cwd,operation,diagnostics)
+    }
+
+    fn readiness_at(&self,registry:&AgentRegistry,request:&WorkerPrepare,mapping:&ProjectMapping,
+        cwd:&Path,operation:&mut crate::native_permissions::PermissionReadOperation,
+        diagnostics:Option<(&ProbePermissionDiagnostics<'_>,&str)>)->Result<CandidateReadiness,WorkerRefusal> {
         let pinned = registry
             .clone()
             .pin_delegation_model(
@@ -2742,6 +5090,19 @@ impl WorkerRuntime {
         mapping: &ProjectMapping,
         cwd: &Path,
     ) -> Result<(), CandidateProbeRefusal> {
+        if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{})) {
+            if request.posture!=Some(SpawnPosture::Discovery) {return Err(CandidateProbeRefusal::InvalidRequest);}
+            let base=request.base_commit.as_deref().ok_or(CandidateProbeRefusal::WorkspaceBaseUnavailable)?;
+            // Lire A ne qualifie ni ne rafraîchit HEAD B. Le miroir local est
+            // lu selon le contrat existant, sans fetch pendant la sonde.
+            return match crate::workspace_git::remote_source_commit(cwd,Some(base)) {
+                Ok(actual) if actual==base=>Ok(()),
+                Err(crate::workspace_git::WorkspacePreflightError::Refused(error))
+                    if error=="workspace_base_unavailable: référence de base inconnue"=>
+                        Err(CandidateProbeRefusal::WorkspaceBaseUnavailable),
+                _=>Err(CandidateProbeRefusal::WorkspaceUnavailable),
+            };
+        }
         if let Some(bridget_transport::protocol::WorkspaceRequest::Worktree { base_ref, branch }) =
             &request.workspace
         {
@@ -3120,11 +5481,16 @@ impl WorkerRuntime {
         inspect_only: bool,
     ) -> Result<WorkerPrepared, WorkerRefusal> {
         validate_prepare_command(command)?;
+        let is_view=matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}));
+        if is_view && (!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED || !inspect_only) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
         if inspect_only
             && (routing.is_none()
                 || !matches!(
                     request.workspace,
-                    Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. })
+                    Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. }
+                        | bridget_transport::protocol::WorkspaceRequest::CommitView {})
                 ))
         {
             return Err(WorkerRefusal::InvalidEnvelope);
@@ -3182,6 +5548,10 @@ impl WorkerRuntime {
                 return Err(WorkerRefusal::PlacementMismatch);
             }
             inspected_base = Some(preflight.base_commit);
+        } else if is_view {
+            self.probe_workspace_preconditions(request,&mapping,&cwd)
+                .map_err(|_|WorkerRefusal::WorkspacePrepareFailed)?;
+            inspected_base=request.base_commit.clone();
         } else if let Some(base) = request.base_commit.as_deref() {
             let root = self.checkout_root(&mapping, &cwd)?;
             self.shared_refresh_allowed(&root, base)
@@ -3317,6 +5687,16 @@ impl WorkerRuntime {
         workspace: Option<&serde_json::Value>,
         fenced_routing: Option<&bridget_transport::protocol::WorkerFencedRouting>,
     ) -> Result<WorkerPrepared, WorkerRefusal> {
+        self.prepare_fenced_with_view_report(command,previous,request,placement,workspace,fenced_routing,None)
+    }
+
+    fn prepare_fenced_with_view_report(&mut self,command:&WorkerCommandIdentity,previous:&WorkerCommandIdentity,
+        request:&WorkerPrepare,placement:&RemotePlacement,workspace:Option<&serde_json::Value>,
+        fenced_routing:Option<&bridget_transport::protocol::WorkerFencedRouting>,
+        view_report:Option<&crate::delegation::WorkspaceRecord>,
+    )->Result<WorkerPrepared,WorkerRefusal> {
+        let is_view=matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView{}));
+        if is_view && view_report.is_none() {return Err(WorkerRefusal::CapabilityRequired);}
         let routing = fenced_routing.map(|value| RoutingPreparation {
             connection_id: value.connection_id.clone(),
             engine: value.engine.clone(),
@@ -3329,7 +5709,8 @@ impl WorkerRuntime {
         if previous.task_id != command.task_id || previous.command_id == command.command_id
             || !placement.matches_worker(&self.identity)
             || !matches!((&request.workspace, workspace),
-                (Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. }), Some(_))
+                (Some(bridget_transport::protocol::WorkspaceRequest::Worktree { .. }
+                    | bridget_transport::protocol::WorkspaceRequest::CommitView {}), Some(_))
                     | (Some(bridget_transport::protocol::WorkspaceRequest::Shared {}), None))
         {
             return Err(WorkerRefusal::InvalidEnvelope);
@@ -3343,7 +5724,25 @@ impl WorkerRuntime {
         let original = if let Some(workspace) = workspace {
             let original = self.store.fenced_workspace(previous, placement, workspace)
                 .map_err(refuse_fenced_workspace)?;
-            if !matches!(original.strategy, crate::delegation::WorkspaceStrategy::Worktree)
+            if is_view {
+                let Some(report)=view_report else{return Err(WorkerRefusal::CapabilityRequired);};
+                let mut prior=previous.clone();prior.instance_id.clear();prior.generation=0;
+                let anchor=view_anchor_receipt_at(&self.store.root,&self.identity,&prior,None)
+                    .map_err(refuse_fenced_workspace)?;
+                let state=anchor.commit_view.as_ref().ok_or(WorkerRefusal::UnknownExecution)?;
+                if state.closed || !state.source_stopped || state.source_marker.is_none() || state.source_failure.is_some()
+                    || state.materialization.as_ref().is_some_and(|operation|!operation.stopped) {
+                    return Err(WorkerRefusal::UnknownExecution);
+                }
+                if !matches!(original.strategy,crate::delegation::WorkspaceStrategy::CommitView)
+                    || request.posture!=Some(SpawnPosture::Discovery) || !original.branch.is_empty()
+                    || original.commit_view.is_none() || report.dirty!=Some(false)
+                    || !same_workspace_anchor(&original,&serde_json::to_value(report).map_err(unavailable)?)
+                    || request.base_commit.as_deref()!=Some(original.base_commit.as_str())
+                    || placement.base_commit.as_deref()!=Some(original.base_commit.as_str()) {
+                    return Err(WorkerRefusal::PlacementMismatch);
+                }
+            } else if !matches!(original.strategy, crate::delegation::WorkspaceStrategy::Worktree)
                 || request.base_commit.as_deref() != Some(original.base_commit.as_str())
                 || placement.base_commit.as_deref() != Some(original.base_commit.as_str())
                 || !matches!(&request.workspace,
@@ -3365,7 +5764,26 @@ impl WorkerRuntime {
         }
         let (mut mapping, source_cwd) = self.mapping_for(
             request, &registry, routing.as_ref().map(|selection| selection.workload))?;
-        let cwd = if let Some(original) = &original {
+        let cwd = if is_view {
+            let original=original.as_ref().ok_or(WorkerRefusal::CommandMismatch)?;
+            let reference=original.commit_view.as_ref().ok_or(WorkerRefusal::CommandMismatch)?;
+            let private=self.store.view_root().canonicalize().map_err(|_|WorkerRefusal::PlacementMismatch)?;
+            if Path::new(&reference.proof_root)!=private || Path::new(&original.toplevel)!=source_cwd {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
+            let intent=crate::workspace_git::ViewProofs::open(&private)
+                .and_then(|proofs|proofs.load(&reference.binding.key()?))
+                .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+            if intent.proof_digest().map_err(|_|WorkerRefusal::PlacementMismatch)?!=reference.intent_digest {
+                return Err(WorkerRefusal::CommandMismatch);
+            }
+            let (root,cwd)=intent.execution_paths(&mapping.remote_root).map_err(|_|WorkerRefusal::PlacementMismatch)?;
+            mapping.remote_root=crate::registry::validate_unprotected_local_path(&root,&self.protected())
+                .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+            let cwd=crate::registry::validate_unprotected_local_path(&cwd,&self.protected())
+                .map_err(|_|WorkerRefusal::PlacementMismatch)?;
+            if !cwd.starts_with(&mapping.remote_root){return Err(WorkerRefusal::PlacementMismatch);}cwd
+        } else if let Some(original) = &original {
             self.remap_prepared_worktree(&mut mapping, &source_cwd, original)?
         } else {
             Self::verify_base_commit(&source_cwd, request.base_commit.as_deref())?;
@@ -3374,7 +5792,7 @@ impl WorkerRuntime {
         if cwd != Path::new(&placement.execution_cwd) {
             return Err(WorkerRefusal::PlacementMismatch);
         }
-        if let Some(original) = &original {
+        if let Some(original) = &original && !is_view {
             let report = crate::workspace_git::report(original)
                 .map_err(|_| WorkerRefusal::PlacementMismatch)?;
             if report.head_commit.as_deref() != Some(original.base_commit.as_str())
@@ -3383,8 +5801,9 @@ impl WorkerRuntime {
             }
         }
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
-        let readiness = self.inspect_candidate(&registry, request, &mapping, &cwd,
-            &mut operation, None)?;
+        let readiness=if is_view {
+            self.readiness_at(&registry,request,&mapping,&cwd,&mut operation,None)?
+        } else {self.inspect_candidate(&registry, request, &mapping, &cwd,&mut operation,None)?};
         operation.finish().map_err(|_| WorkerRefusal::PermissionsChanged)?;
         if let Some(value) = fenced_routing {
             if readiness.definition.digest != value.expected_definition_digest {
@@ -3441,7 +5860,8 @@ impl WorkerRuntime {
             // qui devra signer Release. Garder le token sans garder l'ancienne révision.
             let renewed = PreparedRuntime {routing:retained.routing.clone(),command:retained.command.clone(),
                 request:request.clone(),prepared:retained.prepared.clone(),expires:retained.expires};
-            self.recheck(&renewed)?;
+            self.read_view().recheck_at_with_view_report(&renewed,true,None,&read::ReadTrace::default(),
+                &mut None,view_report)?;
             let prepared=renewed.prepared.clone();
             self.prepared.insert(command.command_id.clone(),renewed);
             return Ok(prepared);
@@ -3489,6 +5909,13 @@ impl WorkerRuntime {
         disconnected: &AtomicBool,
         capacity_cause: &mut WorkerStartCapacityCause,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        self.start_with_view_report(command,start,disconnected,capacity_cause,None)
+    }
+
+    fn start_with_view_report(&mut self,command:&WorkerCommandIdentity,start:&WorkerStart,
+        disconnected:&AtomicBool,capacity_cause:&mut WorkerStartCapacityCause,
+        view_report:Option<&crate::delegation::WorkspaceRecord>,
+    )->Result<WorkerResponseOperation,WorkerRefusal> {
         // Même un rejeu durable ne transforme jamais une inspection en Start.
         if start.prepared_token == bridget_transport::protocol::WORKER_INSPECTION_TOKEN {
             return Err(WorkerRefusal::InvalidEnvelope);
@@ -3531,7 +5958,8 @@ impl WorkerRuntime {
         {
             return Err(WorkerRefusal::CommandMismatch);
         }
-        let registry = self.recheck(prepared)?;
+        let registry=self.read_view().recheck_at_with_view_report(prepared,true,None,
+            &read::ReadTrace::default(),&mut None,view_report)?;
         // Le quota est testé avant de retirer le token volatil.
         match self
             .store
@@ -3746,17 +6174,23 @@ impl WorkerRuntime {
     }
 
     fn fence_unstarted(
-        &self,
+        &mut self,
         command: &WorkerCommandIdentity,
         placement: &RemotePlacement,
         deadline_at: i64,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        command.validate()?;
+        placement.validate()?;
+        if !placement.matches_worker(&self.identity) || deadline_at <= 0 {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
         if self.held.contains_key(&command.command_id)
             || self.running.contains_key(&command.command_id)
             || self.abandoned.contains_key(&command.command_id)
         {
             return Err(WorkerRefusal::UnknownExecution);
         }
+        self.stop_owned_view_sources(command)?;
         self.store.fence_unstarted(command, placement, deadline_at, worker_now())
             .map_err(|error| match error {
                 WorkerStoreError::Conflict => WorkerRefusal::CommandMismatch,
@@ -3773,6 +6207,12 @@ impl WorkerRuntime {
         epoch: &str,
         disconnected: &AtomicBool,
     ) -> Result<WorkerResponseOperation, WorkerRefusal> {
+        self.release_with_view_report(command,permit,epoch,disconnected,None)
+    }
+
+    fn release_with_view_report(&mut self,command:&WorkerCommandIdentity,permit:&WorkerReleasePermit,
+        epoch:&str,disconnected:&AtomicBool,view_report:Option<&crate::delegation::WorkspaceRecord>,
+    )->Result<WorkerResponseOperation,WorkerRefusal> {
         // Vérifier le tuple avant de retirer le bootstrap, même sur une erreur.
         self.store.command(command).map_err(|error| match error {
             WorkerStoreError::Conflict => WorkerRefusal::CommandMismatch,
@@ -3791,7 +6231,8 @@ impl WorkerRuntime {
             {
                 return Err(WorkerRefusal::ReleaseExpired);
             }
-            self.recheck(&held.prepared)?;
+            self.read_view().recheck_at_with_view_report(&held.prepared,true,None,
+                &read::ReadTrace::default(),&mut None,view_report)?;
             let (_, slots, _, _) = self.store.inventory().map_err(refuse)?;
             if !slots.iter().any(|slot| {
                 slot.slot.identity.command == *command
@@ -3876,6 +6317,11 @@ impl WorkerRuntime {
             if observation.phase == WorkerCommandPhase::Terminal {
                 observation.exit_code = receipt.terminal_exit_code.or(observation.exit_code);
             }
+        }
+        if matches!(&response,WorkerResponseOperation::Observation {observation}
+            if matches!(observation.phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused))
+            && !self.store.settle_view_command_sources(command).map_err(refuse)? {
+            return Err(WorkerRefusal::UnknownExecution);
         }
         Ok(response)
     }
@@ -4072,9 +6518,13 @@ impl WorkerRuntime {
                 && let Some(value) = retained.prepared.workspace.as_ref()
                 && let Ok(record) = serde_json::from_value::<crate::delegation::WorkspaceRecord>(value.clone())
             {
-                workspace_report = Some(if let Some(anchor) = anchor.as_ref() {
-                    crate::workspace_git::report_repaired_workspace(&record, anchor)
-                } else { crate::workspace_git::report(&record) }.map_err(|_| WorkerRefusal::PlacementMismatch));
+                workspace_report=Some(if matches!(record.strategy,crate::delegation::WorkspaceStrategy::CommitView) {
+                    self.store.report_retained_view(&retained.command,&record).map_err(refuse_fenced_workspace)
+                } else {
+                    if let Some(anchor)=anchor.as_ref(){
+                        crate::workspace_git::report_repaired_workspace(&record,anchor)
+                    } else {crate::workspace_git::report(&record)}.map_err(|_|WorkerRefusal::PlacementMismatch)
+                });
             }
             observation.workspace = workspace_report.and_then(Result::ok)
                 .and_then(|report| serde_json::to_value(report).ok());
@@ -4142,8 +6592,19 @@ impl WorkerRuntime {
             }
         }
         drop(terminal);
-        let retained_commands = commands.iter().map(|command| json_digest(&command.identity))
+        let mut retained_commands = commands.iter().map(|command| json_digest(&command.identity))
             .collect::<Result<BTreeSet<_>, _>>().map_err(unavailable)?;
+        for receipt in self.store.view_receipts(None).map_err(refuse)? {
+            let view=receipt.commit_view.as_ref().unwrap();
+            retained_commands.insert(format!("view-source-{}",view.key));
+            if let Some(operation)=&view.materialization {
+                let binding=crate::workspace_git::ViewBinding {worker:self.identity.clone(),
+                    command:receipt.command.clone(),prepare_digest:receipt.prepare_digest.clone()};
+                let identity=operation.request.identity_for_binding(&binding)
+                    .map_err(|_|WorkerRefusal::CommandMismatch)?;
+                retained_commands.insert(format!("view-source-{}-file-{}",view.key,identity.command_id));
+            }
+        }
         self.cancel_signal_issued.retain(|key| retained_commands.contains(key));
         for command in commands {
             if matches!(
@@ -4174,13 +6635,34 @@ impl WorkerRuntime {
         }
         Ok(())
     }
+    /// O(n), n <= 128 par famille : préserver l'identité d'exécution des
+    /// fichiers, y compris quand leur ancre appartient à une préparation antérieure.
+    fn retain_view_cancellations(&self)->Result<(),String> {
+        let commands=self.view_preparations.values().map(|pending|&pending.read.source.binding.command)
+            .chain(self.view_sources.values().map(|source|&source.binding.command))
+            .chain(self.view_reports.values().map(|report|&report.binding.command))
+            .chain(self.view_files.values().map(|pending|&pending.read.execution.command))
+            .chain(self.view_sources.values().filter_map(|source|
+                source.materialization.as_ref().map(|(execution,_)|&execution.command)))
+            .chain(self.view_file_audits.values().map(|audit|&audit.execution.command));
+        let retained=commands.map(json_digest).collect::<Result<BTreeSet<_>,_>>()
+            .map_err(|_|"worker_cancel_identity_invalid")?;
+        self.cancelled.lock().map_err(|_|"worker_cancel_poisoned")?
+            .retain(|key|retained.contains(key)||self.view_controls.contains_key(key));
+        Ok(())
+    }
+
     fn abandon_held(&mut self) {
+        for pending in self.view_preparations.values_mut() {pending.correlations.clear();}
+        for pending in self.view_controls.values_mut() {pending.correlations.clear();}
+        for pending in self.view_files.values_mut() {pending.correlations.clear();}
         self.prepared.clear();
         for (command, held) in std::mem::take(&mut self.held) {
             self.abandoned.insert(command, held.child.abandon().0);
         }
     }
     fn tick(&mut self) -> Result<(), WorkerRefusal> {
+        self.collect_view_sources();
         self.prepared
             .retain(|_, value| value.expires > Instant::now());
         let expired = self
@@ -4243,6 +6725,10 @@ impl WorkerRuntime {
             };
         }
         match &request.request {
+            // Le port différé possède le helper ; jamais de boucle d'attente ici.
+            WorkerRequestOperation::ReadCommitViewFile{..}=>Err(WorkerRefusal::CapabilityRequired),
+            WorkerRequestOperation::ConserveCommitView {prepare_digest} =>
+                self.conserve_commit_view(&request.command,prepare_digest),
             WorkerRequestOperation::PrepareDiagnosed { prepare } => {
                 let mut inner = request.clone();
                 inner.request = *prepare.clone();
@@ -4421,6 +6907,8 @@ impl WorkerRuntime {
             WorkerStoreError::Unknown => WorkerRefusal::UnknownExecution,
             error => refuse(error),
         })?;
+        let source_stop=self.stop_owned_view_sources(command);
+        let result:Result<WorkerResponseOperation,WorkerRefusal>=(|| {
         let cancel_key = json_digest(command).map_err(unavailable)?;
         self.prepared.remove(&command.command_id);
         if let Some(held) = self.held.remove(&command.command_id) {
@@ -4468,6 +6956,9 @@ impl WorkerRuntime {
             Ok(())
         })?;
         self.reconcile(command)
+        })();
+        source_stop?;
+        result
     }
     fn journal(
         &self,
@@ -4600,7 +7091,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
-    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,
+    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,workspace_view:bool,workspace_view_create:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -4615,18 +7106,24 @@ impl MasterWorkerFeatures {
             WorkerCapability::StartRecoveryV1=>self.start_recovery,
             WorkerCapability::WorkspaceFailureV1=>self.workspace_failure,
             WorkerCapability::ProviderCatalogueV1=>self.provider_catalogue,
+            WorkerCapability::WorkspaceViewV1=>self.workspace_view,
+            WorkerCapability::WorkspaceViewCreateV1=>self.workspace_view_create,
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1]
-            .into_iter().filter(|v|self.supports(*v)).collect()
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]
+            .into_iter().filter(|v|self.supports(*v)
+                && (*v!=WorkerCapability::WorkspaceViewCreateV1 || crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=10 && accepted.iter().enumerate().all(|(index,capability)|
-            self.supports(*capability) && !accepted[..index].contains(capability))
+        accepted.len()<=12
+            && (!accepted.contains(&WorkerCapability::WorkspaceViewCreateV1)
+                || accepted.contains(&WorkerCapability::WorkspaceViewV1))
+            && accepted.iter().enumerate().all(|(index,capability)|
+                self.capabilities().contains(capability) && !accepted[..index].contains(capability))
     }
 }
 
@@ -4650,6 +7147,8 @@ fn probe_worker_capability(
                 start_recovery:has("worker_start_recovery_v1"),
                 workspace_failure:has("worker_workspace_failure_v1"),
                 provider_catalogue:has("worker_provider_catalogue_v1"),
+                workspace_view:has("worker_workspace_view_v1"),
+                workspace_view_create:has("worker_workspace_view_create_v1"),
             })
         }
         _=>Err("worker_capability_required".into()),
@@ -4773,17 +7272,17 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let start_recovery_negotiated=negotiated.contains(&WorkerCapability::StartRecoveryV1);
         let workspace_failure_negotiated=negotiated.contains(&WorkerCapability::WorkspaceFailureV1);
         let catalogue_negotiated=negotiated.contains(&WorkerCapability::ProviderCatalogueV1);
+        let workspace_view_negotiated=negotiated.contains(&WorkerCapability::WorkspaceViewV1);
+        let workspace_view_create_negotiated=negotiated.contains(&WorkerCapability::WorkspaceViewCreateV1);
         let read_catalogues=catalogues.clone();
         runtime.host_resources.reset();
         runtime.last_resource_refresh = Instant::now();
         let disconnected = Arc::new(AtomicBool::new(false));
         let (sender, receiver) = mpsc::sync_channel::<WorkerInbound>(8);
         let read_disconnected = disconnected.clone();
-        runtime
-            .cancelled
-            .lock()
-            .map_err(|_| "worker_cancel_poisoned")?
-            .clear();
+        // Une coupure n'efface pas une annulation déjà reçue pour une lecture
+        // encore possédée. Les autres identités reprennent leur contrôle durable.
+        runtime.retain_view_cancellations()?;
         let cancelled = runtime.cancelled.clone();
         let read_epoch = epoch.clone();
         let read_worker = runtime.identity.clone();
@@ -4827,6 +7326,8 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                 && (slot_deadline_negotiated || !matches!(
                                     &request.request, WorkerRequestOperation::ReserveResultSlotUntil { .. }
                                 ))
+                                && (workspace_view_negotiated || !request.request.requires_commit_view_reader())
+                                && (workspace_view_create_negotiated || !request.request.requires_commit_view_creation())
                                 && (workspace_repair_negotiated || !matches!(
                                     &request.request, WorkerRequestOperation::RepairWorkspace { .. }
                                 ))
@@ -4998,12 +7499,63 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                     }
                 }
             }
+            if workspace_view_create_negotiated {
+                for response in runtime.poll_view_preparations(&epoch) {
+                    if response.validate().is_err() {
+                        fatal=Some("worker_view_response_invalid".into());
+                        disconnected.store(true,Ordering::Release);break;
+                    }
+                    if send_worker_frame(&writer,&WrapperToDaemon::WorkerResponse{response}).is_err() {
+                        disconnected.store(true,Ordering::Release);break;
+                    }
+                }
+            }
+            if workspace_view_negotiated {
+                for response in runtime.poll_view_files(&epoch) {
+                    if response.validate().is_err() {
+                        fatal=Some("worker_view_file_response_invalid".into());
+                        disconnected.store(true,Ordering::Release);break;
+                    }
+                    if send_worker_frame(&writer,&WrapperToDaemon::WorkerResponse{response}).is_err() {
+                        disconnected.store(true,Ordering::Release);break;
+                    }
+                }
+                for response in runtime.poll_view_controls(&epoch,&disconnected) {
+                    if response.validate().is_err() {
+                        fatal=Some("worker_view_control_response_invalid".into());
+                        disconnected.store(true,Ordering::Release);break;
+                    }
+                    if send_worker_frame(&writer,&WrapperToDaemon::WorkerResponse{response}).is_err() {
+                        disconnected.store(true,Ordering::Release);break;
+                    }
+                }
+            }
             match receiver.recv_timeout(Duration::from_millis(50)) {
                 Ok(WorkerInbound::Request(request)) => {
-                    let response = match runtime.handle(&request, &epoch, &disconnected) {
-                        Ok(response) => response,
-                        Err(reason) => WorkerResponseOperation::Rejected { reason },
-                    };
+                    let file=if workspace_view_negotiated && !disconnected.load(Ordering::Acquire) {
+                        runtime.defer_view_file(&request)
+                    } else {Ok(false)};
+                    let file_error=match file {Ok(true)=>continue,Ok(false)=>None,Err(error)=>Some(error)};
+                    let control=if file_error.is_some(){Ok(false)}
+                    else if workspace_view_negotiated && !disconnected.load(Ordering::Acquire) {
+                        runtime.defer_view_control(&request)
+                    } else {Ok(false)};
+                    let control_error=match control {Ok(true)=>continue,Ok(false)=>None,Err(reason)=>Some(reason)};
+                    let deferred=if control_error.is_some() {Ok(false)}
+                    else if workspace_view_create_negotiated && !disconnected.load(Ordering::Acquire) {
+                        runtime.defer_view_preparation(&request)
+                    } else {Ok(false)};
+                    let response=if let Some(error)=file_error {WorkerRuntime::view_file_response(&request,Err(error))}
+                    else {match deferred {
+                        Ok(true)=>continue,
+                        Err(error)=>WorkerRuntime::view_prepare_rejection(error),
+                        Ok(false)=>if let Some(reason)=control_error {
+                            WorkerRuntime::control_refusal(&request.request,reason)
+                        } else {match runtime.handle(&request,&epoch,&disconnected) {
+                            Ok(response)=>response,
+                            Err(reason)=>WorkerResponseOperation::Rejected{reason},
+                        }},
+                    }};
                     let response = WorkerResponse {
                         version: REMOTE_WORKER_VERSION,
                         correlation_id: request.correlation_id,
@@ -5922,6 +8474,2431 @@ while not stop.exists(): time.sleep(.01)
         // Un refus de protocole permanent reste fatal, sans boucle ni downgrade.
         writeln!(second,"{}",serde_json::to_string(&DaemonToWrapper::Nack{id:"stop-test".into(),reason:"closed".into()}).unwrap()).unwrap();
         assert_eq!(running.join().unwrap(),Err("worker_handshake_invalid".into()));
+    }
+
+
+    #[test]
+    fn spec221_c19_worker_reader_reopens_receipt_but_rejects_new_prepare_without_effects() {
+        use bridget_transport::protocol::{WorkspaceRequest,ProviderPermissions};
+        use crate::delegation::{WorkspaceRecord,WorkspaceState,WorkspaceStrategy};
+        let fixture=Fixture::new();let store=fixture.open();
+        let mut command=command();command.instance_id.clear();command.generation=0;
+        let record=WorkspaceRecord {
+            strategy:WorkspaceStrategy::CommitView, commit_view:None,state:WorkspaceState::Kept,
+            toplevel:"/private/c19-manifests".into(),path:"/private/source-views/fixture".into(),
+            branch:"private-manifest".into(),base_commit:"a".repeat(40),
+            head_commit:None,branch_commit:None,head_on_branch:None,commit_count:None,
+            commits:vec![],truncated:false,dirty:None,
+        };
+        store.persist(&store.workspace_path(&command),&WorkspacePreparationReceipt {
+            version:STORE_VERSION,worker:worker(),command:command.clone(),
+            prepare_digest:"a".repeat(64),fenced_previous:None,record:Some(record.clone()),commit_view:None,
+        }).unwrap();
+        drop(store);
+        let reopened=fixture.open();reopened.health().unwrap();
+        let receipt=proof198::read_workspace_receipt(&reopened.root,&worker(),&command).unwrap().unwrap();
+        assert!(same_workspace_anchor(&record,&serde_json::to_value(receipt.record.unwrap()).unwrap()));
+        assert_eq!(reopened.inventory().unwrap().3,1);
+        drop(reopened);
+        let mut runtime=runtime_fixture(&fixture);
+        let before=runtime.store.inventory().unwrap();
+        let request=WorkerPrepare {
+            machine_id:"cartae".into(),project_id:"c19".into(),provisioning_revision:1,mapping_revision:1,
+            origin_host:"origin".into(),origin_cwd:"/origin/project".into(),source_root:"/origin/project".into(),
+            remote_root:"/unavailable/project".into(),source_root_identity:"fixture:c19".into(),relative_cwd:".".into(),
+            base_commit:Some("a".repeat(40)),agent_type:"codex".into(),model:"fixture".into(),effort:None,
+            posture:Some(SpawnPosture::Discovery),workspace:Some(WorkspaceRequest::CommitView {}),
+            parent:ProviderPermissions {
+                version:1,source:"native_wrapper".into(),run_id:"run-c19".into(),
+                provider_session_id:"session-c19".into(),provider_instance_id:"parent-c19".into(),
+                revision:1,driver:"codex_app_server".into(),cwd:"/origin/project".into(),
+                runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+                provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never",
+                    "approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+            },
+        };
+        // Validation pure reste capable de relire des reçus futurs. Le refus
+        // d'exécution est au port, pas dans leur désérialisation.
+        request.validate().unwrap();
+        assert!(matches!(runtime.prepare(&command,&request),Err(WorkerRefusal::CapabilityRequired)));
+        let after=runtime.store.inventory().unwrap();
+        assert_eq!((before.2,before.3),(after.2,after.3));
+        assert!(runtime.prepared.is_empty());
+    }
+
+
+    fn c19_store_fixture(fixture: &Fixture) -> (
+        WorkerStore, WorkerCommandIdentity, WorkerPrepare, crate::workspace_git::ViewIntent,
+    ) {
+        let source = fixture.0.join("repo");
+        create_private_dir(&source).unwrap();
+        let source = source.canonicalize().unwrap();
+        for args in [vec!["init","-q"],vec!["add","."],vec!["commit","-qm","fixture"]] {
+            if args[0] == "add" {
+                fs::write(source.join("tracked"),b"committed").unwrap();
+                fs::write(source.join("large.bin"),vec![b'x';200000]).unwrap();
+            }
+            let mut cmd = std::process::Command::new("git");
+            for (name, _) in std::env::vars_os().filter(|(name,_)| name.to_string_lossy().starts_with("GIT_")) {
+                cmd.env_remove(name);
+            }
+            let status = cmd.env("GIT_CONFIG_GLOBAL","/dev/null").env("GIT_CONFIG_NOSYSTEM","1")
+                .arg("-C").arg(&source)
+                .args(["-c","user.name=Fixture","-c","user.email=fixture@example.invalid",
+                    "-c","commit.gpgSign=false"]).args(args).status().unwrap();
+            assert!(status.success());
+        }
+        let output = crate::workspace_git::run_git(&source,&["rev-parse","--verify","--end-of-options","HEAD^{commit}"],Duration::from_secs(3)).unwrap();
+        assert!(output.success());
+        let base = output.stdout.trim().to_owned();
+        let data = fixture.0.join("views");
+        create_private_dir(&data).unwrap();
+        let data = data.canonicalize().unwrap();
+        let mut command = command(); command.instance_id.clear(); command.generation=0;
+        let request=WorkerPrepare {
+            machine_id:"cartae".into(),project_id:"c19".into(),provisioning_revision:1,mapping_revision:1,
+            origin_host:"origin".into(),origin_cwd:"/origin/project".into(),source_root:"/origin/project".into(),
+            remote_root:source.to_string_lossy().into(),source_root_identity:"fixture:c19".into(),relative_cwd:".".into(),
+            base_commit:Some(base.clone()),agent_type:"codex".into(),model:"fixture".into(),effort:None,
+            posture:Some(SpawnPosture::Discovery),
+            workspace:Some(bridget_transport::protocol::WorkspaceRequest::CommitView {}),
+            parent:ProviderPermissions {
+                version:1,source:"native_wrapper".into(),run_id:"run-c19".into(),
+                provider_session_id:"session-c19".into(),provider_instance_id:"parent-c19".into(),
+                revision:1,driver:"codex_app_server".into(),cwd:"/origin/project".into(),
+                runtime_mode:"full-access".into(),interaction_mode:"default".into(),
+                provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never",
+                    "approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}}),
+            },
+        };
+        request.validate().unwrap();
+        let binding = crate::workspace_git::ViewBinding { worker:worker(), command:command.clone(),
+            prepare_digest:json_digest(&(&command,&request)).unwrap() };
+        let intent = crate::workspace_git::ViewIntent::plan(binding,&source,&data,&base).unwrap();
+        let state = fixture.0.join("state");
+        create_private_dir(&state).unwrap();
+        let store = WorkerStore::open(&state.canonicalize().unwrap().join("store"), worker()).unwrap();
+        (store,command,request,intent)
+    }
+
+    #[test]
+    fn spec221_c19_worker_reserves_view_bytes_before_private_writes_and_keeps_reservation_on_reopen() {
+        let fixture=Fixture::new();
+        let (store,command,request,intent)=c19_store_fixture(&fixture);
+        let before=store.inventory().unwrap();
+        store.reserve_view_intent(&command,&request,&intent).unwrap();
+        let after=store.inventory().unwrap();
+        assert_eq!(after.3,1);
+        let receipt=proof198::read_workspace_receipt(&store.root,&worker(),&command).unwrap().unwrap();
+        let receipt_bytes=fs::metadata(store.workspace_path(&command)).unwrap().len();
+        assert_eq!(after.2-before.2,receipt_bytes+MAX_METADATA_BYTES as u64+intent.reserved_bytes().unwrap());
+        assert_eq!(receipt.commit_view.as_ref().unwrap().key,intent.binding.key().unwrap());
+        assert!(receipt.record.is_none());
+        assert!(!intent.destination().unwrap().exists()); // réservation, pas export implicite
+        let proof=store.view_root().join(format!("{}.intent.json",intent.binding.key().unwrap()));
+        let original=fs::read(&proof).unwrap();
+        store.reserve_view_intent(&command,&request,&intent).unwrap();
+        assert_eq!(fs::read(&proof).unwrap(),original);
+        let expected=(after.2,after.3);
+        let store_root=store.root.clone();
+        drop(store);
+        let reopened=WorkerStore::open(&store_root,worker()).unwrap();
+        let after=reopened.inventory().unwrap();
+        assert_eq!((after.2,after.3),expected);
+        reopened.reserve_view_intent(&command,&request,&intent).unwrap();
+        fs::write(&proof,b"{").unwrap();
+        assert!(reopened.reserve_view_intent(&command,&request,&intent).is_err());
+        assert_eq!(fs::read(&proof).unwrap(),b"{");
+        reopened.health().unwrap(); // refus de cette préparation, pas quarantaine globale
+    }
+
+    #[test]
+    fn spec221_c19_worker_view_quota_refuses_before_receipt_or_proof_creation() {
+        let fixture=Fixture::new();
+        let (store,command,request,intent)=c19_store_fixture(&fixture);
+        let filler=store.root.join("unrelated-retained-file");
+        write_private_file_atomic(&filler,b"").unwrap();
+        fs::OpenOptions::new().write(true).open(&filler).unwrap()
+            .set_len(MAX_WORKER_STORE_BYTES as u64-2*MAX_METADATA_BYTES as u64).unwrap();
+        assert_eq!(store.inventory().unwrap().2,MAX_WORKER_STORE_BYTES as u64);
+        assert!(matches!(store.reserve_view_intent(&command,&request,&intent),Err(WorkerStoreError::Quota)));
+        assert!(!store.workspace_path(&command).exists());
+        assert!(!store.view_root().exists());
+        assert!(!intent.destination().unwrap().exists());
+        assert_eq!(fs::metadata(&filler).unwrap().len(),MAX_WORKER_STORE_BYTES as u64-2*MAX_METADATA_BYTES as u64);
+    }
+
+    #[test]
+    fn spec221_c19_worker_view_binding_root_posture_and_unknown_orphans_remain_separate() {
+        let fixture=Fixture::new();
+        let (store,command,request,mut intent)=c19_store_fixture(&fixture);
+        let old_source=intent.source.clone();
+        intent.source=fixture.0.canonicalize().unwrap();
+        assert!(store.reserve_view_intent(&command,&request,&intent).is_err());
+        intent.source=old_source;
+        let mut changed=request.clone(); changed.posture=Some(SpawnPosture::Development);
+        assert!(store.reserve_view_intent(&command,&changed,&intent).is_err());
+        assert!(!store.workspace_path(&command).exists());
+        store.reserve_view_intent(&command,&request,&intent).unwrap();
+        let original_root=intent.data_root.clone();
+        let alternate=fixture.0.join("alternate-views");create_private_dir(&alternate).unwrap();
+        intent.data_root=alternate.canonicalize().unwrap();
+        assert!(matches!(store.reserve_view_intent(&command,&request,&intent),Err(WorkerStoreError::Conflict)));
+        intent.data_root=original_root;
+        let unknown="b".repeat(64);
+        for suffix in ["intent.json","published.json"] {
+            write_private_file_atomic(&store.view_root().join(format!("{unknown}.{suffix}")),b"{}").unwrap();
+        }
+        write_private_file_atomic(&store.view_root().join("unrecognized"),b"kept").unwrap();
+        write_private_file_atomic(&store.view_root().join(format!("{}-garbage",intent.binding.key().unwrap())),b"kept").unwrap();
+        let (..,count)=store.inventory().unwrap();
+        assert_eq!(count,4); // reçu + un groupe orphelin + deux fichiers non reconnus
+        let receipt=WorkspacePreparationReceipt { version:STORE_VERSION,worker:worker(),command,
+            prepare_digest:"a".repeat(64),fenced_previous:None,record:None,commit_view:None };
+        assert!(serde_json::to_value(&receipt).unwrap().get("commit_view").is_none());
+    }
+
+
+    #[test]
+    fn spec221_c19_start_fence_must_not_ignore_live_source_export() {
+        let fixture=Fixture::new();
+        let (store,prep,request,intent)=c19_store_fixture(&fixture);
+        store.reserve_view_intent(&prep,&request,&intent).unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&store.view_root().canonicalize().unwrap()).unwrap();
+        let mut env:BTreeMap<String,std::ffi::OsString>=["PATH","HOME","TMPDIR"].iter()
+            .filter_map(|key|std::env::var_os(key).map(|value|((*key).into(),value))).collect();
+        env.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let mut job=match crate::workspace_git::ViewJob::start(&proofs,&intent,&crate::workspace_git::ViewJobRequest::Export,&std::env::current_exe().unwrap(),&env,
+            |marker|store.authorize_view_source(&prep,&intent,marker)
+                .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)) {
+            Ok(job)=>job,Err((cause,_))=>panic!("source fixture {cause:?}"),
+        };
+        let ready=store.view_root().join("stall-ready");
+        let deadline=Instant::now()+Duration::from_secs(3);
+        while !ready.exists() {assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));}
+        let expires=worker_now()+300;
+        let fenced=store.fence_unstarted(&command(),&placement(),expires,worker_now());
+        let stored=proof198::read_workspace_receipt(&store.root,&worker(),&prep).unwrap().unwrap();
+        let owned_marker=stored.commit_view.as_ref().unwrap().source_marker.clone().unwrap();
+        assert!(!stored.commit_view.as_ref().unwrap().source_stopped);
+        fs::remove_file(store.view_root().join(format!("view-{}.json",intent.binding.key().unwrap()))).unwrap();
+        let missing_file=store.fence_unstarted(&command(),&placement(),expires,worker_now());
+        // Toujours récolter le helper avant l'assertion RED, sans supprimer
+        // de preuve sous son processus vivant.
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(store.view_root().join("allow-exit")).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(3);
+        loop {
+            if matches!(job.poll().unwrap(),crate::workspace_git::JobPoll::Stopped(_)) {break;}
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        }
+        eprintln!("c19 live source fence result: {fenced:?}");
+        assert!(matches!(fenced,Err(WorkerStoreError::Unknown)),
+            "une garde de démarrage ne doit pas ignorer un export vivant");
+        assert!(matches!(missing_file,Err(WorkerStoreError::Unknown)),
+            "le reçu conserve le PID même si le marqueur fichier manque");
+        store.fence_unstarted(&command(),&placement(),expires,worker_now()).unwrap();
+        let stopped=proof198::read_workspace_receipt(&store.root,&worker(),&prep).unwrap().unwrap();
+        assert!(stopped.commit_view.as_ref().unwrap().source_stopped);
+        assert_eq!(stopped.commit_view.as_ref().unwrap().source_marker.as_ref(),Some(&owned_marker));
+        assert!(matches!(store.authorize_view_source(&prep,&intent,&owned_marker),
+            Err(WorkerStoreError::InvalidTransition)));
+        assert!(matches!(store.reserve_view_intent(&prep,&request,&intent),
+            Err(WorkerStoreError::InvalidTransition)));
+        let store_root=store.root.clone();drop(store);
+        let reopened=WorkerStore::open(&store_root,worker()).unwrap();
+        reopened.fence_unstarted(&command(),&placement(),expires,worker_now()).unwrap();
+    }
+
+
+    #[test]
+    fn spec221_c19_worker_publishes_only_after_source_group_stop_and_private_audit() {
+        let fixture=Fixture::new();
+        let (store,prep,request,intent)=c19_store_fixture(&fixture);
+        store.reserve_view_intent(&prep,&request,&intent).unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&store.view_root().canonicalize().unwrap()).unwrap();
+        assert!(matches!(store.publish_view_workspace(&prep,&intent),Err(WorkerStoreError::Unknown)));
+        let env:BTreeMap<String,std::ffi::OsString>=["PATH","HOME","TMPDIR"].iter()
+            .filter_map(|key|std::env::var_os(key).map(|value|((*key).into(),value))).collect();
+        let mut job=match crate::workspace_git::ViewJob::start(&proofs,&intent,&crate::workspace_git::ViewJobRequest::Export,&std::env::current_exe().unwrap(),&env,
+            |marker| {
+                let mut false_marker=marker.clone();false_marker.birth+=1;
+                assert!(matches!(store.authorize_view_source(&prep,&intent,&false_marker),Err(WorkerStoreError::Conflict)));
+                store.authorize_view_source(&prep,&intent,marker)
+                    .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)
+            }) {
+                Ok(job)=>job,
+                Err((cause,mut retained))=>{
+                    if let Some(child)=retained.as_mut() {assert!(child.stop(Duration::from_secs(2)).unwrap());}
+                    panic!("source fixture {cause:?}");
+                }
+            };
+        let deadline=Instant::now()+Duration::from_secs(10);
+        loop {
+            match job.poll().unwrap() {
+                crate::workspace_git::JobPoll::Stopped(result)=>{assert_eq!(result,Ok(()));break;}
+                _=>{assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));}
+            }
+        }
+        // La récolte et la suppression du sidecar ne suffisent pas : le reçu
+        // conserve encore son marqueur, source_stopped=false jusqu'au constat.
+        let previous=proof198::read_workspace_receipt(&store.root,&worker(),&prep).unwrap().unwrap();
+        assert!(previous.commit_view.as_ref().unwrap().source_marker.is_some());
+        assert!(!previous.commit_view.as_ref().unwrap().source_stopped);
+        assert!(!store.view_root().join(format!("view-{}.json",intent.binding.key().unwrap())).exists());
+        let record=store.publish_view_workspace(&prep,&intent).unwrap();
+        let current=proof198::read_workspace_receipt(&store.root,&worker(),&prep).unwrap().unwrap();
+        assert!(current.commit_view.as_ref().unwrap().source_stopped);
+        assert_eq!(record.dirty,Some(false));
+        assert!(same_workspace_anchor(&record,&serde_json::to_value(current.record.unwrap()).unwrap()));
+        let again=store.publish_view_workspace(&prep,&intent).unwrap();
+        assert!(same_workspace_anchor(&record,&serde_json::to_value(again).unwrap()));
+        let root=store.root.clone();drop(store);
+        let reopened=WorkerStore::open(&root,worker()).unwrap();
+        assert!(same_workspace_anchor(&record,&serde_json::to_value(
+            reopened.publish_view_workspace(&prep,&intent).unwrap()).unwrap()));
+        let file=Path::new(&record.path).join("tracked");
+        fs::set_permissions(&file,fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&file,b"divergent").unwrap();
+        assert!(reopened.publish_view_workspace(&prep,&intent).is_err());
+        assert_eq!(fs::read(&file).unwrap(),b"divergent");
+    }
+
+
+    #[test]
+    fn spec221_c19_runtime_owns_export_until_durable_publication_and_never_restarts_it() {
+        let fixture=Fixture::new();
+        let (unused_store,prep,request,intent)=c19_store_fixture(&fixture);
+        drop(unused_store);
+        let mut runtime=runtime_fixture(&fixture);
+        let record=runtime.prepare_view_source(&prep,&request,intent.clone()).unwrap();
+        assert!(runtime.view_sources.is_empty());
+        assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
+        let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        assert!(receipt.commit_view.as_ref().unwrap().source_stopped);
+        let pid=receipt.commit_view.as_ref().unwrap().source_marker.as_ref().unwrap().pgid;
+        let replay=runtime.prepare_view_source(&prep,&request,intent.clone()).unwrap();
+        assert!(same_workspace_anchor(&record,&serde_json::to_value(replay).unwrap()));
+        let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        assert_eq!(receipt.commit_view.as_ref().unwrap().source_marker.as_ref().unwrap().pgid,pid);
+        let config=WorkerRuntimeConfig {
+            machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+            provisioning_revision:runtime.config.provisioning_revision,
+            credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+            registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone(),
+        };
+        drop(runtime);
+        let mut reopened=WorkerRuntime::new(config).unwrap();
+        let restored=reopened.prepare_view_source(&prep,&request,intent).unwrap();
+        assert!(same_workspace_anchor(&record,&serde_json::to_value(restored).unwrap()));
+        assert!(reopened.view_sources.is_empty());
+    }
+
+
+    #[test]
+    fn spec221_c19_runtime_fence_stops_only_owned_source_after_validating_the_request() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        runtime.store.reserve_view_intent(&prep,&request,&intent).unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap()).unwrap();
+        let mut env=runtime.source.clone();env.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let child=match crate::workspace_git::ViewJob::start(&proofs,&intent,&crate::workspace_git::ViewJobRequest::Export,&std::env::current_exe().unwrap(),&env,
+            |marker|runtime.store.authorize_view_source(&prep,&intent,marker)
+                .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)) {
+                Ok(child)=>child,
+                Err((cause,mut retained))=>{
+                    if let Some(child)=retained.as_mut(){assert!(child.stop(Duration::from_secs(2)).unwrap());}
+                    panic!("source fixture {cause:?}");
+                }
+            };
+        let key=marker_key(&prep);
+        runtime.view_sources.insert(key.clone(),ViewSourceProcess {binding:intent.binding.clone(),child,materialization:None});
+        let root=runtime.store.view_root();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !root.join("stall-ready").exists(){assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));}
+        assert_eq!(runtime.fence_unstarted(&command(),&placement(),0).unwrap_err(),WorkerRefusal::InvalidEnvelope);
+        assert_eq!(runtime.view_sources.get_mut(&key).unwrap().child.poll().unwrap(),crate::workspace_git::JobPoll::Running);
+        let mut foreign=command();foreign.task_id="unrelated-task".into();foreign.command_id="unrelated-command".into();
+        runtime.fence_unstarted(&foreign,&placement(),worker_now()+300).unwrap();
+        assert_eq!(runtime.view_sources.get_mut(&key).unwrap().child.poll().unwrap(),crate::workspace_git::JobPoll::Running);
+        let mut other_attempt=command();other_attempt.command_id="other-attempt".into();
+        assert_eq!(runtime.fence_unstarted(&other_attempt,&placement(),worker_now()+300).unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert!(runtime.cancel_signal_issued.is_empty(),"a different attempt must not signal this source");
+        assert_eq!(runtime.view_sources.get_mut(&key).unwrap().child.poll().unwrap(),crate::workspace_git::JobPoll::Running);
+        assert_eq!(runtime.fence_unstarted(&command(),&placement(),worker_now()+300).unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert_eq!(runtime.view_sources.get_mut(&key).unwrap().child.poll().unwrap(),crate::workspace_git::JobPoll::StopUnconfirmed);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(root.join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty(){
+            runtime.collect_view_sources();
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        let stopped=proof198::read_workspace_receipt(&runtime.store.root,&worker(),&prep).unwrap().unwrap();
+        assert!(stopped.commit_view.as_ref().unwrap().source_stopped);
+        runtime.fence_unstarted(&command(),&placement(),worker_now()+300).unwrap();
+        assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
+    }
+
+
+    #[test]
+    fn spec221_c19_restarted_runtime_recovers_receipt_identity_without_second_export() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        runtime.store.reserve_view_intent(&prep,&request,&intent).unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap()).unwrap();
+        let mut env=runtime.source.clone();env.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let child=match crate::workspace_git::ViewJob::start(&proofs,&intent,&crate::workspace_git::ViewJobRequest::Export,&std::env::current_exe().unwrap(),&env,
+            |marker|runtime.store.authorize_view_source(&prep,&intent,marker)
+                .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)) {
+                Ok(child)=>child,
+                Err((cause,mut retained))=>{
+                    if let Some(child)=retained.as_mut(){assert!(child.stop(Duration::from_secs(2)).unwrap());}
+                    panic!("source fixture {cause:?}");
+                }
+            };
+        let root=runtime.store.view_root();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !root.join("stall-ready").exists(){assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));}
+        // Le fixture garde uniquement le Child pour sa récolte finale. Le
+        // nouveau worker n'en a ni Child, ni verrou, ni propriétaire en RAM.
+        let key=marker_key(&prep);
+        runtime.view_sources.insert(key.clone(),ViewSourceProcess {binding:intent.binding.clone(),child,materialization:None});
+        let mut held=runtime.view_sources.remove(&key).unwrap();
+        let config=WorkerRuntimeConfig {
+            machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+            provisioning_revision:runtime.config.provisioning_revision,
+            credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+            registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone(),
+        };
+        drop(runtime);
+        let mut reopened=WorkerRuntime::new(config).unwrap();
+        assert!(reopened.view_sources.is_empty());
+        let original=reopened.store.checked_view_receipt(&prep,&intent).unwrap();
+        let marker=original.commit_view.as_ref().unwrap().source_marker.as_ref().unwrap().clone();
+        assert_eq!(reopened.prepare_view_source(&prep,&request,intent.clone()).unwrap_err(),(WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        assert!(reopened.view_sources.is_empty());
+        assert_eq!(reopened.store.checked_view_receipt(&prep,&intent).unwrap().commit_view.as_ref().unwrap().source_marker.as_ref(),Some(&marker));
+
+        // Même PID mais naissance différente : aucun signal, même si le
+        // sidecar contient encore l'identité originale du processus vivant.
+        let mut wrong=reopened.store.checked_view_receipt(&prep,&intent).unwrap();
+        wrong.commit_view.as_mut().unwrap().source_marker.as_mut().unwrap().birth=marker.birth.checked_add(1).unwrap();
+        reopened.store.persist(&reopened.store.workspace_path(&prep),&wrong).unwrap();
+        assert_eq!(reopened.fence_unstarted(&command(),&placement(),worker_now()+300).unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert!(reopened.cancel_signal_issued.is_empty());
+        assert_eq!(held.child.poll().unwrap(),crate::workspace_git::JobPoll::Running);
+        reopened.store.persist(&reopened.store.workspace_path(&prep),&original).unwrap();
+        // Le reçu reste l'autorité lorsque le sidecar a disparu.
+        fs::remove_file(root.join(format!("view-{}.json",intent.binding.key().unwrap()))).unwrap();
+        assert_eq!(reopened.fence_unstarted(&command(),&placement(),worker_now()+300).unwrap_err(),WorkerRefusal::UnknownExecution);
+        let stop_key=format!("view-source-{}",intent.binding.key().unwrap());
+        assert_eq!(reopened.cancel_signal_issued,BTreeSet::from([stop_key]));
+        assert_eq!(reopened.fence_unstarted(&command(),&placement(),worker_now()+300).unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert_eq!(reopened.cancel_signal_issued.len(),1);
+        assert!(!reopened.store.checked_view_receipt(&prep,&intent).unwrap().commit_view.as_ref().unwrap().source_stopped);
+
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(root.join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        loop {
+            if matches!(held.child.poll().unwrap(),crate::workspace_git::JobPoll::Stopped(_)){break;}
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        reopened.fence_unstarted(&command(),&placement(),worker_now()+300).unwrap();
+        let stopped=proof198::read_workspace_receipt(&reopened.store.root,&worker(),&prep).unwrap().unwrap();
+        assert!(stopped.commit_view.as_ref().unwrap().source_stopped);
+        assert_eq!(stopped.commit_view.as_ref().unwrap().source_marker.as_ref(),Some(&marker));
+        assert!(!intent.destination().unwrap().exists());
+        assert!(reopened.view_sources.is_empty());
+    }
+
+
+    fn c19_preparation_fixture(fixture:&Fixture)
+        ->(WorkerRuntime,WorkerCommandIdentity,WorkerPrepare,crate::workspace_git::ViewIntent) {
+        let (unused,prep,request,intent)=c19_store_fixture(fixture);drop(unused);
+        let mut runtime=runtime_fixture(fixture);
+        let source=Path::new(&request.remote_root);
+        // Cette fixture garde dépôt et données à côté du runtime. La protection
+        // couvre tout le parent de la clé : isoler la clé, sans retirer de garde.
+        eprintln!("C19 fixture source_inside_credential_parent={}",
+            source.starts_with(runtime.config.credential_path.parent().unwrap()));
+        let credentials=fixture.0.join("credentials");create_private_dir(&credentials).unwrap();
+        let key=credentials.join("worker-key");
+        fs::rename(&runtime.config.credential_path,&key).unwrap();
+        runtime.config.credential_path=key;
+        let status=std::process::Command::new("git").arg("-C").arg(source)
+            .args(["config","--local","remote.origin.url","fixture:c19"]).status().unwrap();
+        assert!(status.success());
+        write_json(&runtime.config.registry_path,&serde_json::json!({
+            "agents":{"codex":{"command":"/bin/echo","args":["app-server"],"protocol":"codex_app_server",
+                "capabilities":{"execution_paths":["codex_app_server"],"models":{"fixture":{"efforts":[]}}}}},
+            "machines":{"cartae":{"enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":digest_bytes(b"worker162-test-secret"),"allowed_agent_types":["codex"],
+                "mappings":{"c19":{"source_host":"origin","source_root":"/origin/project","remote_root":source,
+                    "expected_git_identity":"fixture:c19","mapping_revision":1}}}}
+        })).unwrap();
+        (runtime,prep,request,intent)
+    }
+
+    fn c19_plan(intent:&crate::workspace_git::ViewIntent)->crate::workspace_git::ViewPlan {
+        crate::workspace_git::ViewPlan::new(intent.binding.clone(),&intent.source,&intent.data_root,
+            intent.base_commit(),&intent.source,"fixture:c19").unwrap()
+    }
+
+    fn c19_prepared_view_fixture(fixture:&Fixture)
+        ->(WorkerRuntime,crate::workspace_git::ViewIntent,PreparedRuntime) {
+        let (mut runtime,prep,request,intent)=c19_preparation_fixture(fixture);
+        let record=runtime.prepare_view_source(&prep,&request,intent.clone()).unwrap();
+        let registry=runtime.registry().unwrap();
+        let (mut mapping,_)=runtime.mapping_for(&request,&registry,None).unwrap();
+        let (root,cwd)=intent.execution_paths(&mapping.remote_root).unwrap();
+        // Même normalisation que poll_prepared_view ; conserver "/." ici
+        // fabriquait une divergence de placement textuel dans la fixture.
+        mapping.remote_root=root.canonicalize().unwrap();
+        let cwd=cwd.canonicalize().unwrap();
+        let mut operation=crate::native_permissions::PermissionReadOperation::default();
+        // Construire une entrée conservée par les vrais projecteurs de droits,
+        // sans lever inspect_candidate/prepare_for ni créer une admission.
+        let pinned=registry.clone().pin_delegation_model(&request.agent_type,&request.model,
+            request.effort.as_deref()).unwrap();
+        let (child_policy,effective_posture)=crate::native_permissions::project_remote_permissions_in_operation(
+            &request.parent,pinned.get(&request.agent_type).unwrap(),&mapping,&cwd,
+            &runtime.source,request.posture,&runtime.protected(),&mut operation).unwrap();
+        let scoped=pinned.for_inherited_delegation_in_operation(&request.agent_type,
+            &request.model,request.effort.as_deref(),&child_policy,&mut operation).unwrap();
+        let inspected=CandidateReadiness {
+            definition:scoped.resolved_definition(&request.agent_type).unwrap(),
+            child_policy,effective_posture,
+        };
+        operation.finish().unwrap();
+        let prepared=PreparedRuntime {
+            command:prep.clone(),request:request.clone(),routing:None,
+            prepared:WorkerPrepared {
+                placement:RemotePlacement {
+                    machine_id:request.machine_id.clone(),worker_id:runtime.identity.worker_id.clone(),
+                    provisioning_revision:request.provisioning_revision,project_id:request.project_id.clone(),
+                    mapping_revision:request.mapping_revision,origin_host:request.origin_host.clone(),
+                    origin_cwd:request.origin_cwd.clone(),source_root_identity:request.source_root_identity.clone(),
+                    relative_cwd:request.relative_cwd.clone(),execution_cwd:cwd.to_string_lossy().into(),
+                    base_commit:request.base_commit.clone(),definition_digest:inspected.definition.digest.clone(),
+                    permission_digest:json_digest(&inspected.child_policy).unwrap(),
+                },
+                workspace:Some(serde_json::to_value(&record).unwrap()),token:"retained-view-fixture".into(),
+                definition:inspected.definition,child_policy:inspected.child_policy,
+                effective_posture:inspected.effective_posture,prepared_at:worker_now(),
+            },
+            expires:Instant::now()+Duration::from_secs(30),
+        };
+        (runtime,intent,prepared)
+    }
+
+    #[test]
+    fn spec221_c19_prepare_begin_publishes_only_after_poll_and_replays_same_token_without_shared_refresh() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let source=Path::new(&request.remote_root);
+        fs::write(source.join("tracked"),b"descendant B").unwrap();
+        for args in [vec!["add","tracked"],vec!["commit","-qm","descendant"]] {
+            assert!(std::process::Command::new("git").arg("-C").arg(source)
+                .args(["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","-c","commit.gpgSign=false"])
+                .args(args).status().unwrap().success());
+        }
+        fs::write(source.join("tracked"),b"dirty B").unwrap();
+        let index=fs::read(source.join(".git/index")).unwrap();
+        let head=crate::workspace_git::run_git(source,&["rev-parse","--verify","--end-of-options","HEAD^{commit}"],Duration::from_secs(3)).unwrap().stdout;
+        let started=Instant::now();
+        let mut read=runtime.begin_prepared_view(&command,&request,None,c19_plan(&intent)).unwrap();
+        assert!(started.elapsed()<Duration::from_secs(3));
+        assert!(runtime.prepared.is_empty() && runtime.held.is_empty() && runtime.running.is_empty());
+        let deadline=Instant::now()+Duration::from_secs(10);
+        let prepared=loop {
+            if let Some(prepared)=runtime.poll_prepared_view(&read).unwrap() {break prepared;}
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(prepared.effective_posture,SpawnPosture::Discovery);
+        assert_eq!(prepared.placement.base_commit,request.base_commit);
+        assert_eq!(prepared.child_policy["sandbox_policy"]["type"],"readOnly");
+        let cwd=Path::new(&prepared.placement.execution_cwd);
+        assert!(cwd.starts_with(intent.destination().unwrap()));
+        assert_eq!(fs::read(cwd.join("tracked")).unwrap(),b"committed");
+        assert!(!cwd.join(".git").exists());
+        assert_eq!(fs::read(source.join("tracked")).unwrap(),b"dirty B");
+        assert_eq!(fs::read(source.join(".git/index")).unwrap(),index);
+        assert_eq!(crate::workspace_git::run_git(source,&["rev-parse","--verify","--end-of-options","HEAD^{commit}"],Duration::from_secs(3)).unwrap().stdout,head);
+        let receipt=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        let replay=loop {
+            if let Some(replay)=runtime.poll_prepared_view(&read).unwrap(){break replay;}
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(replay.token,prepared.token);
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),receipt);
+        assert!(runtime.view_sources.is_empty());
+        runtime.prepared.get_mut(&command.command_id).unwrap().routing=Some(RoutingPreparation {
+            connection_id:"different-connection".into(),engine:"codex".into(),
+            workload:bridget_transport::protocol::AutoDelegateWorkload::General,
+        });
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        runtime.prepared.get_mut(&command.command_id).unwrap().routing=None;
+        read.request.base_commit=Some("f".repeat(40));
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        assert_eq!(runtime.prepared[&command.command_id].prepared.token,prepared.token);
+        read.request=request.clone();
+        runtime.prepared.get_mut(&command.command_id).unwrap().prepared.placement.execution_cwd="/different/view".into();
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        runtime.prepared.get_mut(&command.command_id).unwrap().prepared.placement.execution_cwd=prepared.placement.execution_cwd.clone();
+        runtime.prepared.get_mut(&command.command_id).unwrap().prepared.workspace=None;
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        runtime.prepared.get_mut(&command.command_id).unwrap().prepared.workspace=prepared.workspace.clone();
+        runtime.prepared.get_mut(&command.command_id).unwrap().expires=Instant::now()-Duration::from_secs(1);
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::PrepareExpired,None));
+        assert_eq!(runtime.prepared[&command.command_id].prepared.token,prepared.token);
+        assert!(matches!(runtime.prepare(&command,&request),Err(WorkerRefusal::CapabilityRequired)));
+        let mut execution=command.clone();execution.instance_id="child-preparation".into();execution.generation=1;
+        let now=worker_now();
+        runtime.store.reserve_command(&execution,&"d".repeat(64),&prepared.placement,now+120,now).unwrap();
+        runtime.prepared.remove(&command.command_id);
+        let before=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        assert!(matches!(runtime.begin_prepared_view(&command,&request,None,c19_plan(&intent)),
+            Err((WorkerRefusal::CommandMismatch,None))));
+        assert!(runtime.prepared.is_empty() && runtime.view_sources.is_empty());
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),before);
+        runtime.store.set_phase(&execution,WorkerCommandPhase::Refused,now+1).unwrap();
+        runtime.store.collect(now+WORKER_RECEIPT_RETENTION_SECS+100).unwrap();
+        assert!(runtime.store.read_command(&execution).unwrap().is_some());
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+    }
+
+    #[test]
+    fn spec221_c19_managed_planning_reserves_before_manifest_and_adopts_once_after_stop() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=crate::workspace_git::ViewPlan::new(intent.binding.clone(),&intent.source,&intent.data_root,intent.base_commit(),&intent.source,"fixture:c19").unwrap();
+        let before=runtime.store.inventory().unwrap();
+        let read=runtime.begin_planned_view_source(&command,&request,seed.clone()).unwrap();
+        let receipt=runtime.store.view_receipt_for_binding(&seed.binding).unwrap();
+        let reserved=receipt.commit_view.as_ref().unwrap();
+        assert!(reserved.source_attempted && reserved.source_marker.is_some() && !reserved.source_stopped);
+        assert!(!reserved.planning.as_ref().unwrap().adopted);
+        assert_eq!(reserved.intent_digest,seed.proof_digest().unwrap());
+        assert_eq!(reserved.reserved_bytes,seed.reserved_bytes());
+        assert!(runtime.store.inventory().unwrap().2-before.2>=seed.reserved_bytes());
+        let deadline=Instant::now()+Duration::from_secs(10);
+        let record=loop {
+            if let Some(record)=runtime.poll_view_source(&read).unwrap(){break record;}
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(record.base_commit,intent.base_commit());
+        let receipt=runtime.store.checked_view_receipt(&command,&intent).unwrap();
+        assert!(receipt.commit_view.as_ref().unwrap().planning.as_ref().unwrap().adopted);
+        let stable=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        runtime.store.adopt_view_plan(&seed.binding,&intent).unwrap();
+        assert_eq!(stable,fs::read(runtime.store.workspace_path(&command)).unwrap());
+        // Même graine et délai ; pas de second helper ni nouveau token.
+        assert_eq!(runtime.begin_planned_view_source(&command,&request,seed).unwrap().binding,read.binding);
+        assert!(runtime.view_sources.is_empty() && runtime.prepared.is_empty() && runtime.running.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_managed_planning_crash_after_attempt_never_starts_a_second_helper() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=crate::workspace_git::ViewPlan::new(intent.binding.clone(),&intent.source,&intent.data_root,intent.base_commit(),&intent.source,"fixture:c19").unwrap();
+        runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
+        runtime.store.mark_view_source_attempt_binding(&seed.binding).unwrap();
+        let before=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        assert!(matches!(runtime.begin_planned_view_source(&command,&request,seed),
+            Err((WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)))));
+        assert_eq!(before,fs::read(runtime.store.workspace_path(&command)).unwrap());
+        assert!(runtime.view_sources.is_empty() && !intent.destination().unwrap().exists());
+    }
+
+    #[test]
+    fn spec221_c19_deferred_report_keeps_cancel_responsive_and_never_publishes_cancelled_audit() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_REPORT_HOLD".into(),"1".into());
+        let read=runtime.begin_prepared_view(&command,&request,None,c19_plan(&intent)).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(5);
+        while runtime.view_reports.is_empty() {
+            assert!(runtime.poll_prepared_view(&read).unwrap().is_none());
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));
+        }
+        let before=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        let marker=runtime.store.view_receipt_for_binding(&read.source.binding).unwrap()
+            .commit_view.as_ref().unwrap().source_marker.clone();
+        assert!(marker.is_some());
+        let started=Instant::now();
+        assert!(runtime.poll_prepared_view(&read).unwrap().is_none());
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command).unwrap());
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),
+            (WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        assert!(started.elapsed()<Duration::from_millis(100));
+        assert!(runtime.prepared.is_empty() && runtime.running.is_empty());
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),before);
+        assert_eq!(runtime.view_reports.len(),1); // lecture toujours possédée
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-report")).unwrap();
+        while !runtime.view_reports.is_empty() {
+            runtime.collect_view_sources();
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));
+        }
+        let receipt=runtime.store.view_receipt_for_binding(&read.source.binding).unwrap();
+        assert!(receipt.record.is_none());
+        assert_eq!(receipt.commit_view.as_ref().unwrap().source_marker,marker);
+        assert!(intent.destination().unwrap().is_dir());
+        let budget=runtime.store.inventory().unwrap().2;
+        runtime.conserve_commit_view(&command,&read.source.binding.prepare_digest).unwrap();
+        assert!(runtime.store.inventory().unwrap().2<=budget);
+        assert!(runtime.store.view_receipt_for_binding(&read.source.binding).unwrap().commit_view.unwrap().closed);
+        assert!(intent.destination().unwrap().is_dir());
+    }
+
+    #[test]
+    fn spec221_c19_unattempted_plan_recovers_only_exact_seed_then_conserves_without_erasing_files() {
+        let fixture=Fixture::new();
+        let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=c19_plan(&intent);let key=seed.binding.key().unwrap();
+        runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
+        let receipt_path=runtime.store.workspace_path(&command);
+        let before=fs::read(&receipt_path).unwrap();
+        let path=runtime.store.view_root().join(format!("{key}.plan.json"));
+        fs::remove_file(&path).unwrap(); // coupure après reçu, avant graine
+        runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
+        assert_eq!(fs::read(&receipt_path).unwrap(),before);
+        assert_eq!(crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap())
+            .unwrap().load_plan(&key).unwrap(),seed);
+        let before_budget=runtime.store.inventory().unwrap().2;
+        let seed_bytes=fs::read(&path).unwrap();
+        runtime.store.conserve_unpublished_view(&seed.binding).unwrap();
+        let receipt=runtime.store.view_receipt_for_binding(&seed.binding).unwrap();
+        assert!(receipt.commit_view.as_ref().unwrap().closed && receipt.record.is_none());
+        assert!(!receipt.commit_view.as_ref().unwrap().source_attempted);
+        assert!(before_budget-runtime.store.inventory().unwrap().2>8*1024*1024-32768);
+        assert_eq!(fs::read(&path).unwrap(),seed_bytes);
+        runtime.store.collect(worker_now()+WORKER_RECEIPT_RETENTION_SECS+100).unwrap();
+        let store_root=runtime.store.root.clone();let identity=runtime.identity.clone();drop(runtime);
+        let reopened=WorkerStore::open(&store_root,identity).unwrap();
+        assert!(reopened.reserve_view_plan(&command,&request,&seed).is_err());
+        let closed=fs::read(&receipt_path).unwrap();
+        reopened.conserve_unpublished_view(&seed.binding).unwrap();
+        assert_eq!(fs::read(&receipt_path).unwrap(),closed);
+    }
+
+    #[test]
+    fn spec221_c19_unknown_planning_process_never_releases_reservation_or_claims_conservation() {
+        let fixture=Fixture::new();
+        let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=c19_plan(&intent);
+        runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
+        runtime.store.mark_view_source_attempt_binding(&seed.binding).unwrap();
+        let before=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        let budget=runtime.store.inventory().unwrap().2;
+        assert!(matches!(runtime.store.conserve_unpublished_view(&seed.binding),Err(WorkerStoreError::Unknown)));
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),before);
+        assert_eq!(runtime.store.inventory().unwrap().2,budget);
+    }
+
+    #[test]
+    fn spec221_c19_failed_plan_native_conservation_keeps_cause_and_never_exports_again() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=c19_plan(&intent);
+        assert!(std::process::Command::new("git").arg("-C").arg(&intent.source)
+            .args(["config","remote.origin.url","fixture:changed"]).status().unwrap().success());
+        let read=runtime.begin_planned_view_source(&command,&request,seed.clone()).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(5);
+        loop {
+            match runtime.poll_view_source(&read) {
+                Ok(None)=>{assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));}
+                Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::SourceIdentityChanged)))=>break,
+                other=>panic!("unexpected failed plan: {other:?}"),
+            }
+        }
+        assert!(runtime.view_sources.is_empty() && !intent.destination().unwrap().exists());
+        assert!(matches!(runtime.conserve_commit_view(&command,&seed.binding.prepare_digest).unwrap(),
+            WorkerResponseOperation::CommitViewConserved{..}));
+        let receipt=runtime.store.view_receipt_for_binding(&seed.binding).unwrap();
+        let view=receipt.commit_view.as_ref().unwrap();
+        assert!(view.closed && view.source_stopped && view.source_marker.is_some());
+        assert_eq!(view.source_failure,Some(crate::workspace_git::ExportFailure::SourceIdentityChanged));
+        assert!(runtime.begin_planned_view_source(&command,&request,seed).is_err());
+    }
+
+    #[test]
+    fn spec221_c19_snapshot_commit_rechecks_cancel_and_keeps_durable_marker_and_data() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let read=runtime.begin_prepared_view(&command,&request,None,c19_plan(&intent)).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(5);
+        while runtime.view_reports.is_empty() {
+            assert!(runtime.poll_prepared_view(&read).unwrap().is_none());
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));
+        }
+        let key=marker_key(&command);
+        while !runtime.view_reports[&key].reader.is_finished() {
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));
+        }
+        let (audited_intent,audited)=runtime.view_reports.remove(&key).unwrap().reader.join().unwrap().unwrap();
+        let receipt=runtime.store.checked_view_receipt(&command,&audited_intent).unwrap();
+        assert!(receipt.record.is_none()); // premier CAS, pas un rejeu déjà publié
+        let marker=receipt.commit_view.as_ref().unwrap().source_marker.clone();assert!(marker.is_some());
+        let before=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command).unwrap());
+        assert!(matches!(runtime.store.publish_view_snapshot(&command,&audited_intent,audited,&runtime.cancelled),
+            Err(WorkerStoreError::InvalidTransition)));
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),before);
+        let receipt=runtime.store.checked_view_receipt(&command,&audited_intent).unwrap();
+        assert_eq!(receipt.commit_view.as_ref().unwrap().source_marker,marker);
+        assert!(receipt.record.is_none() && runtime.prepared.is_empty());
+        assert_eq!(fs::read(intent.destination().unwrap().join("tracked")).unwrap(),b"committed");
+    }
+
+    #[test]
+    fn spec221_c19_unknown_manifests_cannot_spawn_parallel_exports_under_existing_store_budget() {
+        let fixture=Fixture::new();
+        let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=c19_plan(&intent);
+        assert!(seed.reserved_bytes()*2>MAX_WORKER_STORE_BYTES as u64);
+        runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
+        let mut other=command.clone();other.command_id=uuid::Uuid::new_v4().to_string();other.task_id=uuid::Uuid::new_v4().to_string();
+        let binding=commit_view_preparation_binding(&runtime.identity,&other,&request).unwrap();
+        let other_seed=crate::workspace_git::ViewPlan::new(binding,&intent.source,&intent.data_root,
+            intent.base_commit(),&intent.source,"fixture:c19").unwrap();
+        assert!(matches!(runtime.store.reserve_view_plan(&other,&request,&other_seed),Err(WorkerStoreError::Quota)));
+        assert!(runtime.view_sources.is_empty());
+        assert_eq!(runtime.store.view_receipts(None).unwrap().len(),1);
+    }
+
+    #[test]
+    fn spec221_c19_native_queue_waits_for_unknown_writer_without_renewing_seed_or_exporting() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let mut other=intent.clone();other.binding.command.command_id=uuid::Uuid::new_v4().to_string();
+        other.binding.command.task_id=uuid::Uuid::new_v4().to_string();
+        other.binding.prepare_digest=json_digest(&(&other.binding.command,&request)).unwrap();
+        runtime.store.reserve_view_intent(&other.binding.command,&request,&other).unwrap();
+        runtime.store.mark_view_source_attempt(&other.binding.command,&other).unwrap();
+        let seed=runtime.native_view_plan(&command,&request).unwrap();
+        let digest=seed.proof_digest().unwrap();
+        let read=runtime.begin_prepared_view(&command,&request,None,seed).unwrap();
+        for _ in 0..3 {
+            assert!(runtime.poll_prepared_view(&read).unwrap().is_none());
+            assert!(runtime.view_sources.is_empty());
+            let state=runtime.store.view_receipt_for_binding(&read.source.binding).unwrap().commit_view.unwrap();
+            assert!(!state.source_attempted && state.source_marker.is_none() && !state.source_stopped);
+        }
+        assert_eq!(runtime.native_view_plan(&command,&request).unwrap().proof_digest().unwrap(),digest);
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command).unwrap());
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),
+            (WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        assert!(runtime.prepared.is_empty() && runtime.view_sources.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_adoption_releases_unknown_manifest_budget_and_allows_next_review() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=c19_plan(&intent);
+        let read=runtime.begin_planned_view_source(&command,&request,seed.clone()).unwrap();
+        let reserved=runtime.store.inventory().unwrap().2;
+        let deadline=Instant::now()+Duration::from_secs(5);
+        let first=loop {
+            if let Some(record)=runtime.poll_view_source(&read).unwrap(){break record;}
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(5));
+        };
+        let after=runtime.store.inventory().unwrap().2;
+        assert!(reserved-after>7*1024*1024);
+        let receipt=runtime.store.checked_view_receipt(&command,&intent).unwrap();
+        assert_eq!(receipt.commit_view.as_ref().unwrap().reserved_bytes,seed.adopted_reserved_bytes(&intent).unwrap());
+        let mut next=command.clone();next.task_id="next-review".into();next.command_id="next-review".into();
+        let binding=crate::workspace_git::ViewBinding{worker:runtime.identity.clone(),command:next.clone(),
+            prepare_digest:json_digest(&(&next,&request)).unwrap()};
+        let second=crate::workspace_git::ViewPlan::new(binding,&intent.source,&intent.data_root,
+            intent.base_commit(),&intent.source,"fixture:c19").unwrap();
+        runtime.store.reserve_view_plan(&next,&request,&second).unwrap();
+        assert!(runtime.store.inventory().unwrap().2<=MAX_WORKER_STORE_BYTES as u64);
+        assert_eq!(fs::read(Path::new(&first.path).join("tracked")).unwrap(),b"committed");
+        assert!(runtime.view_sources.is_empty()); // aucun deuxième modèle ni helper lancé
+    }
+
+    fn c19_control_request(runtime:&WorkerRuntime,prepared:&PreparedRuntime)->WorkerRequest {
+        let mut command=prepared.command.clone();command.instance_id="view-active-instance".into();command.generation=1;
+        WorkerRequest{version:REMOTE_WORKER_VERSION,worker:runtime.identity.clone(),
+            connection_epoch:"view-control-epoch".into(),correlation_id:"view-control-only".into(),command,
+            request:WorkerRequestOperation::StartDetailed{start:WorkerStart{
+                prepared_token:prepared.prepared.token.clone(),child_id:"view-child".into(),mission_id:"view-mission".into(),
+                forward_child_requests:false,placement:prepared.prepared.placement.clone(),
+                definition:prepared.prepared.definition.clone(),child_policy:prepared.prepared.child_policy.clone(),
+                effective_posture:prepared.prepared.effective_posture,deadline_at:worker_now()+60}}}
+    }
+
+    #[test]
+    fn spec221_c19_control_audit_keeps_cancel_responsive_and_never_starts_after_cancel() {
+        let fixture=Fixture::new();
+        let (mut runtime,_,prepared)=c19_prepared_view_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_CONTROL_HOLD".into(),"1".into());
+        let request=c19_control_request(&runtime,&prepared);
+        runtime.prepared.insert(request.command.command_id.clone(),prepared);
+        let before=runtime.store.inventory().unwrap().2;
+        assert!(runtime.defer_view_control(&request).unwrap());
+        assert!(runtime.poll_view_controls("view-control-epoch",&AtomicBool::new(false)).is_empty());
+        assert!(runtime.defer_view_control(&request).unwrap());
+        assert_eq!(runtime.view_controls.len(),1);
+        runtime.cancelled.lock().unwrap().insert(json_digest(&request.command).unwrap());
+        let observed=Instant::now();
+        let responses=runtime.poll_view_controls("view-control-epoch",&AtomicBool::new(false));
+        assert!(observed.elapsed()<Duration::from_millis(250));
+        assert_eq!(responses.len(),1);
+        assert_eq!(responses[0].correlation_id,request.correlation_id);
+        assert!(matches!(responses[0].response,WorkerResponseOperation::StartRejected{
+            reason:WorkerRefusal::UnknownExecution,cause:WorkerStartCapacityCause::Unknown}));
+        responses[0].validate().unwrap();
+        assert_eq!(runtime.view_controls.len(),1,"lecteur retenu jusqu'à sa fin");
+        fs::write(runtime.config.state_root.join("allow-view-control"),b"").unwrap();
+        let until=Instant::now()+Duration::from_secs(4);
+        while !runtime.view_controls.is_empty() {
+            assert!(runtime.poll_view_controls("view-control-epoch",&AtomicBool::new(false)).is_empty());
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(matches!(runtime.store.command(&request.command),Err(WorkerStoreError::Unknown)));
+        assert!(runtime.held.is_empty() && runtime.running.is_empty());
+        assert_eq!(runtime.store.inventory().unwrap().2,before);
+    }
+
+    #[test]
+    fn spec221_c19_control_audit_rechecks_revocation_before_any_start_effect() {
+        let fixture=Fixture::new();
+        let (mut runtime,_,prepared)=c19_prepared_view_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_CONTROL_HOLD".into(),"1".into());
+        let request=c19_control_request(&runtime,&prepared);
+        runtime.prepared.insert(request.command.command_id.clone(),prepared);
+        assert!(runtime.defer_view_control(&request).unwrap());
+        let mut registry:serde_json::Value=serde_json::from_slice(&fs::read(&runtime.config.registry_path).unwrap()).unwrap();
+        registry["machines"]["cartae"]["enabled"]=serde_json::json!(false);
+        write_json(&runtime.config.registry_path,&registry).unwrap();
+        fs::write(runtime.config.state_root.join("allow-view-control"),b"").unwrap();
+        let until=Instant::now()+Duration::from_secs(4);
+        let responses=loop {
+            let responses=runtime.poll_view_controls("view-control-epoch",&AtomicBool::new(false));
+            if !responses.is_empty(){break responses;}
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(responses.len(),1);responses[0].validate().unwrap();
+        assert!(matches!(responses[0].response,WorkerResponseOperation::StartRejected{
+            reason:WorkerRefusal::Unauthorized|WorkerRefusal::PlacementMismatch,
+            cause:WorkerStartCapacityCause::Unknown}));
+        assert!(runtime.view_controls.is_empty() && runtime.held.is_empty() && runtime.running.is_empty());
+        assert!(matches!(runtime.store.command(&request.command),Err(WorkerStoreError::Unknown)));
+    }
+
+    #[test]
+    fn spec221_c19_consumed_audit_refuses_foreign_anchor_and_still_rechecks_current_permissions() {
+        let fixture=Fixture::new();
+        let (runtime,_,prepared)=c19_prepared_view_fixture(&fixture);
+        let record:crate::delegation::WorkspaceRecord=serde_json::from_value(prepared.prepared.workspace.clone().unwrap()).unwrap();
+        let report=crate::workspace_git::report(&record).unwrap();
+        let check=|report:&crate::delegation::WorkspaceRecord|runtime.read_view().recheck_at_with_view_report(
+            &prepared,true,None,&read::ReadTrace::default(),&mut None,Some(report));
+        assert!(check(&report).is_ok());
+        let mut foreign=report.clone();foreign.path="/another/view".into();
+        assert!(matches!(check(&foreign),Err(WorkerRefusal::CommandMismatch)));
+        let mut registry:serde_json::Value=serde_json::from_slice(&fs::read(&runtime.config.registry_path).unwrap()).unwrap();
+        registry["machines"]["cartae"]["enabled"]=serde_json::json!(false);
+        write_json(&runtime.config.registry_path,&registry).unwrap();
+        assert!(check(&report).is_err());
+    }
+
+    #[test]
+    fn spec221_c19_probe_reads_requested_a_without_refreshing_dirty_descendant_b() {
+        let fixture=Fixture::new();
+        let (runtime,_,mut request,_)=c19_preparation_fixture(&fixture);
+        let source=Path::new(&request.remote_root);
+        let git=|args:&[&str]| {
+            let output=std::process::Command::new("git").arg("-C").arg(source)
+                .args(["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","-c","commit.gpgSign=false"])
+                .args(args).output().unwrap();
+            assert!(output.status.success());output.stdout
+        };
+        fs::write(source.join("tracked"),b"B").unwrap();git(&["add","tracked"]);git(&["commit","-qm","descendant B"]);
+        fs::write(source.join("tracked"),b"dirty B").unwrap();
+        let head=git(&["rev-parse","HEAD"]);let index=fs::read(source.join(".git/index")).unwrap();
+        let registry=runtime.registry().unwrap();
+        let mapping=runtime.mapping_authority(&request,&registry).unwrap();
+        assert_eq!(runtime.probe_workspace_preconditions(&request,&mapping,source),Ok(()));
+        assert_eq!(git(&["rev-parse","HEAD"]),head);
+        assert_eq!(fs::read(source.join(".git/index")).unwrap(),index);
+        assert_eq!(fs::read(source.join("tracked")).unwrap(),b"dirty B");
+        request.base_commit=Some("f".repeat(40));
+        assert!(runtime.probe_workspace_preconditions(&request,&mapping,source).is_err());
+        request.posture=Some(SpawnPosture::Development);
+        assert_eq!(runtime.probe_workspace_preconditions(&request,&mapping,source),Err(CandidateProbeRefusal::InvalidRequest));
+        assert!(runtime.store.view_receipts(None).unwrap().is_empty());
+        assert!(runtime.view_sources.is_empty() && runtime.prepared.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_deferred_prepare_keeps_one_owner_deadline_and_current_epoch_correlations() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,prepare,_)=c19_preparation_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_REPORT_HOLD".into(),"1".into());
+        let mut request=WorkerRequest{version:REMOTE_WORKER_VERSION,worker:runtime.identity.clone(),
+            connection_epoch:"view-epoch-1".into(),correlation_id:"view-correlation-0".into(),
+            command:command.clone(),request:WorkerRequestOperation::Prepare{prepare:prepare.clone()}};
+        assert!(runtime.defer_view_preparation(&request).unwrap());
+        let key=marker_key(&command);
+        let expires=runtime.view_preparations[&key].read.expires;
+        let until=Instant::now()+Duration::from_secs(6);
+        while runtime.view_reports.is_empty() {
+            assert!(runtime.poll_view_preparations("view-epoch-1").is_empty());
+            assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let marker=runtime.store.view_receipt_for_binding(
+            &runtime.view_preparations[&key].read.source.binding).unwrap().commit_view.unwrap().source_marker;
+        for index in 1..8 {
+            request.correlation_id=format!("view-correlation-{index}");
+            assert!(runtime.defer_view_preparation(&request).unwrap());
+        }
+        request.correlation_id="view-correlation-overflow".into();
+        assert_eq!(runtime.defer_view_preparation(&request).unwrap_err(),
+            (WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+        assert_eq!(runtime.view_preparations.len(),1);
+        assert_eq!(runtime.view_preparations[&key].read.expires,expires);
+        let mut changed=request.clone();
+        if let WorkerRequestOperation::Prepare{prepare}=&mut changed.request {prepare.model="different".into();}
+        assert_eq!(runtime.defer_view_preparation(&changed).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        runtime.abandon_held();
+        assert!(runtime.poll_view_preparations("view-epoch-2").is_empty());
+        request.connection_epoch="view-epoch-2".into();request.correlation_id="new-link-only".into();
+        assert!(runtime.defer_view_preparation(&request).unwrap());
+        assert_eq!(runtime.view_preparations[&key].read.expires,expires);
+        assert_eq!(runtime.store.view_receipt_for_binding(
+            &runtime.view_preparations[&key].read.source.binding).unwrap().commit_view.unwrap().source_marker,marker);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-report")).unwrap();
+        let responses=loop {
+            let responses=runtime.poll_view_preparations("view-epoch-2");
+            if !responses.is_empty(){break responses;}
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(responses.len(),1);
+        assert_eq!(responses[0].correlation_id,"new-link-only");
+        assert_eq!(responses[0].connection_epoch,"view-epoch-2");
+        assert!(matches!(responses[0].response,WorkerResponseOperation::Prepared{..}));
+        responses[0].validate().unwrap();
+        assert!(runtime.view_preparations.is_empty() && runtime.running.is_empty() && runtime.held.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_deferred_cancel_returns_correlated_failure_without_publishing_or_blocking_runtime() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,prepare,_)=c19_preparation_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_REPORT_HOLD".into(),"1".into());
+        let request=WorkerRequest{version:REMOTE_WORKER_VERSION,worker:runtime.identity.clone(),
+            connection_epoch:"view-epoch".into(),correlation_id:"cancel-view-only".into(),
+            command:command.clone(),request:WorkerRequestOperation::PrepareDiagnosed{
+                prepare:Box::new(WorkerRequestOperation::Prepare{prepare})}};
+        assert!(runtime.defer_view_preparation(&request).unwrap());
+        let until=Instant::now()+Duration::from_secs(6);
+        while runtime.view_reports.is_empty() {
+            assert!(runtime.poll_view_preparations("view-epoch").is_empty());
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+        }
+        runtime.cancelled.lock().unwrap().insert(json_digest(&command).unwrap());
+        // La boucle reste disponible même si le lecteur de fichiers n'a pas fini.
+        let before=Instant::now();
+        let responses=runtime.poll_view_preparations("view-epoch");
+        assert!(before.elapsed()<Duration::from_millis(250));
+        assert_eq!(responses.len(),1);
+        assert_eq!(responses[0].correlation_id,request.correlation_id);
+        assert!(matches!(responses[0].response,WorkerResponseOperation::CommitViewRejected{
+            reason:WorkerRefusal::WorkspacePrepareFailed,failure:crate::workspace_git::ExportFailure::Cancelled}));
+        responses[0].validate().unwrap();
+        assert!(runtime.prepared.is_empty() && runtime.view_reports.len()==1);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-report")).unwrap();
+        while !runtime.view_reports.is_empty() {
+            runtime.collect_view_sources();
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(runtime.prepared.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_reader_does_not_offer_or_accept_creation_even_when_peer_declares_it() {
+        let peer=MasterWorkerFeatures{workspace_view:true,workspace_view_create:true,..MasterWorkerFeatures::default()};
+        assert!(peer.supports(WorkerCapability::WorkspaceViewCreateV1));
+        assert_eq!(peer.capabilities(),vec![WorkerCapability::WorkspaceViewV1]);
+        assert!(!peer.admits(&[WorkerCapability::WorkspaceViewCreateV1]));
+        assert!(!peer.admits(&[WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]));
+        assert!(peer.admits(&[WorkerCapability::WorkspaceViewV1]));
+    }
+
+    #[test]
+    fn spec221_c19_missing_reservation_closes_only_after_exact_fence_and_survives_collection() {
+        let fixture=Fixture::new();
+        let (runtime,prepare,request,intent)=c19_preparation_fixture(&fixture);
+        let binding=intent.binding.clone();
+        let before=runtime.store.inventory().unwrap();
+        assert_eq!(runtime.conserve_commit_view(&prepare,&binding.prepare_digest).unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert_eq!(runtime.store.inventory().unwrap().2,before.2);
+        let mut command=prepare.clone();command.instance_id="never-started".into();command.generation=1;
+        runtime.store.fence_unstarted(&command,&placement(),worker_now()+60,worker_now()).unwrap();
+        assert!(matches!(runtime.conserve_commit_view(&prepare,&binding.prepare_digest).unwrap(),
+            WorkerResponseOperation::CommitViewConserved{..}));
+        let receipt=runtime.store.view_receipt_for_binding(&binding).unwrap();
+        let view=receipt.commit_view.unwrap();
+        assert!(view.closed && view.source_stopped && !view.source_attempted && view.source_marker.is_none());
+        assert!(receipt.record.is_none() && !intent.destination().unwrap().exists());
+        runtime.store.collect(worker_now()+WORKER_RECEIPT_RETENTION_SECS+100).unwrap();
+        assert!(runtime.store.reserve_view_intent(&prepare,&request,&intent).is_err());
+        runtime.conserve_commit_view(&prepare,&binding.prepare_digest).unwrap();
+        assert!(runtime.store.view_receipt_for_binding(&binding).unwrap().commit_view.unwrap().closed);
+    }
+
+    #[test]
+    fn spec221_c19_missing_reservation_with_even_empty_orphan_proof_remains_unknown() {
+        let fixture=Fixture::new();
+        let (runtime,prepare,_,intent)=c19_preparation_fixture(&fixture);
+        let mut command=prepare.clone();command.instance_id="never-started".into();command.generation=1;
+        runtime.store.fence_unstarted(&command,&placement(),worker_now()+60,worker_now()).unwrap();
+        private_dir(&runtime.store.view_root()).unwrap();
+        let path=runtime.store.view_root().join(format!("{}.lock",intent.binding.key().unwrap()));
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(),0);
+        let before=runtime.store.inventory().unwrap().2;
+        assert_eq!(runtime.conserve_commit_view(&prepare,&intent.binding.prepare_digest).unwrap_err(),WorkerRefusal::UnknownExecution);
+        assert!(proof198::read_workspace_receipt(&runtime.store.root,&runtime.identity,&prepare).unwrap().is_none());
+        assert!(path.exists());
+        assert_eq!(runtime.store.inventory().unwrap().2,before);
+    }
+
+    #[test]
+    fn spec221_c19_prepare_refuses_wrong_mode_or_binding_before_reserving_or_spawning() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let before=runtime.store.inventory().unwrap();
+        let mut changed=request.clone();changed.posture=Some(SpawnPosture::Development);
+        assert!(matches!(runtime.begin_prepared_view(&command,&changed,None,c19_plan(&intent)),
+            Err((WorkerRefusal::InvalidEnvelope,None))));
+        let mut bad=c19_plan(&intent);bad.binding.prepare_digest="f".repeat(64);
+        assert!(matches!(runtime.begin_prepared_view(&command,&request,None,bad),
+            Err((WorkerRefusal::CommandMismatch,None))));
+        assert!(!intent.destination().unwrap().exists());
+        assert!(runtime.view_sources.is_empty() && runtime.prepared.is_empty());
+        let after=runtime.store.inventory().unwrap();assert_eq!((before.2,before.3),(after.2,after.3));
+    }
+
+    #[test]
+    fn spec221_c19_prepare_rechecks_definition_after_export_and_keeps_view_on_refusal() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let read=runtime.begin_prepared_view(&command,&request,None,c19_plan(&intent)).unwrap();
+        let mut registry:serde_json::Value=serde_json::from_slice(&fs::read(&runtime.config.registry_path).unwrap()).unwrap();
+        registry["agents"]["codex"]["command"]=serde_json::json!("/bin/false");
+        write_json(&runtime.config.registry_path,&registry).unwrap();
+        let deadline=Instant::now()+Duration::from_secs(10);
+        loop {
+            match runtime.poll_prepared_view(&read) {
+                Ok(None)=>{assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));}
+                Err((WorkerRefusal::DefinitionChanged|WorkerRefusal::PermissionsChanged,None))=>break,
+                other=>panic!("unexpected preparation result: {other:?}"),
+            }
+        }
+        assert!(runtime.prepared.is_empty() && runtime.running.is_empty() && runtime.held.is_empty());
+        assert!(intent.destination().unwrap().is_dir());
+        assert_eq!(fs::read(intent.destination().unwrap().join("tracked")).unwrap(),b"committed");
+        assert!(proof198::read_workspace_receipt(&runtime.store.root,&runtime.identity,&command).unwrap().unwrap().record.is_some());
+    }
+
+    #[test]
+    fn spec221_c19_prepare_expired_context_never_renews_a_token_or_loses_owned_helper() {
+        let fixture=Fixture::new();
+        let (mut runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let mut read=runtime.begin_prepared_view(&command,&request,None,c19_plan(&intent)).unwrap();
+        let private=runtime.store.view_root();
+        let ready=Instant::now()+Duration::from_secs(3);
+        while !private.join("stall-ready").exists() {
+            assert!(Instant::now()<ready);std::thread::sleep(Duration::from_millis(10));
+        }
+        read.expires=Instant::now()-Duration::from_secs(1);
+        assert_eq!(runtime.poll_prepared_view(&read).unwrap_err(),
+            (WorkerRefusal::PrepareExpired,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        assert!(!runtime.view_sources.is_empty());
+        let receipt=runtime.store.view_receipt_for_binding(&read.source.binding).unwrap();
+        assert!(!receipt.commit_view.as_ref().unwrap().source_stopped);
+        fs::write(private.join("allow-exit"),b"").unwrap();
+        assert!(runtime.prepared.is_empty() && runtime.running.is_empty() && runtime.held.is_empty());
+        let deadline=Instant::now()+Duration::from_secs(10);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();
+            assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(runtime.prepared.is_empty());
+        let receipt=runtime.store.view_receipt_for_binding(&read.source.binding).unwrap();
+        assert_eq!(receipt.commit_view.as_ref().unwrap().source_failure,
+            Some(crate::workspace_git::ExportFailure::PreparationExpired));
+    }
+
+    #[test]
+    fn spec221_c19_retained_view_rechecks_policy_and_exact_base_without_shared_head() {
+        let fixture=Fixture::new();
+        let (runtime,intent,mut prepared)=c19_prepared_view_fixture(&fixture);
+        let request=prepared.request.clone();let prep=prepared.command.clone();
+        let record=runtime.store.checked_view_receipt(&prep,&intent).unwrap().record.unwrap();
+        let source=Path::new(&request.remote_root);
+        let cwd=PathBuf::from(&prepared.prepared.placement.execution_cwd);
+        let private_before=fs::read(runtime.store.workspace_path(&prep)).unwrap();
+        // Le Shared peut avancer et être sale ; la vue doit rester sur A.
+        fs::write(source.join("tracked"),b"descendant B").unwrap();
+        for args in [vec!["add","tracked"],vec!["commit","-qm","descendant"]] {
+            assert!(std::process::Command::new("git").arg("-C").arg(source)
+                .args(["-c","user.name=Fixture","-c","user.email=fixture@example.invalid","-c","commit.gpgSign=false"])
+                .args(args).status().unwrap().success());
+        }
+        fs::write(source.join("tracked"),b"dirty B").unwrap();
+        let source_index=fs::read(source.join(".git/index")).unwrap();
+        let source_head=fs::read(source.join(".git/refs/heads").join(
+            fs::read_to_string(source.join(".git/HEAD")).unwrap().trim().strip_prefix("ref: refs/heads/").unwrap())).unwrap();
+        for before_release in [false,true] {
+            let mut report=None;
+            let trace=read::ReadTrace::default();
+            let outcome=runtime.read_view().recheck_at_with_workspace(&prepared,before_release,None,&trace,&mut report);
+            assert!(outcome.is_ok(),"recheck {before_release}, {:?}",outcome.err());
+            let report=report.unwrap().unwrap();
+            assert_eq!(report.base_commit,request.base_commit.as_ref().unwrap().as_str());
+            assert_eq!(report.dirty,Some(false));
+            assert!(report.head_commit.is_none());
+        }
+        assert_eq!(fs::read(&cwd.join("tracked")).unwrap(),b"committed");
+        assert_eq!(fs::read(source.join("tracked")).unwrap(),b"dirty B");
+        assert_eq!(fs::read(source.join(".git/index")).unwrap(),source_index);
+        assert_eq!(fs::read(source.join(".git/refs/heads").join(
+            fs::read_to_string(source.join(".git/HEAD")).unwrap().trim().strip_prefix("ref: refs/heads/").unwrap())).unwrap(),source_head);
+        assert_eq!(fs::read(runtime.store.workspace_path(&prep)).unwrap(),private_before);
+        assert!(runtime.held.is_empty() && runtime.running.is_empty());
+
+        // Même reçu mais export encore non soldé : aucun audit/réattribution.
+        let mut receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        receipt.commit_view.as_mut().unwrap().source_stopped=false;
+        runtime.store.persist(&runtime.store.workspace_path(&prep),&receipt).unwrap();
+        let mut report=None;
+        assert!(matches!(runtime.read_view().recheck_at_with_workspace(&prepared,true,None,
+            &read::ReadTrace::default(),&mut report),Err(WorkerRefusal::UnknownExecution)));
+        assert!(report.is_none());
+        fs::write(runtime.store.workspace_path(&prep),&private_before).unwrap();
+
+        // Substitution privée cohérente dans les deux messages : le reçu seul
+        // ne permet pas de lire un autre store sous le même UID.
+        let mut receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        let mut substituted=record.clone();
+        substituted.commit_view.as_mut().unwrap().proof_root=fixture.0.join("foreign-store").to_string_lossy().into();
+        receipt.record=Some(substituted.clone());
+        runtime.store.persist(&runtime.store.workspace_path(&prep),&receipt).unwrap();
+        prepared.prepared.workspace=Some(serde_json::to_value(&substituted).unwrap());
+        assert!(matches!(runtime.read_view().recheck_at_with_workspace(&prepared,true,None,
+            &read::ReadTrace::default(),&mut report),Err(WorkerRefusal::CommandMismatch)));
+        assert!(report.is_none());
+        fs::write(runtime.store.workspace_path(&prep),&private_before).unwrap();
+        prepared.prepared.workspace=Some(serde_json::to_value(&record).unwrap());
+        prepared.prepared.effective_posture=SpawnPosture::Development;
+        assert!(matches!(runtime.read_view().recheck_at_with_workspace(&prepared,true,None,
+            &read::ReadTrace::default(),&mut report),Err(WorkerRefusal::PlacementMismatch)));
+        prepared.prepared.effective_posture=SpawnPosture::Discovery;
+
+        fs::set_permissions(cwd.join("tracked"),fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(cwd.join("tracked"),b"divergent view").unwrap();
+        assert!(matches!(runtime.read_view().recheck_at_with_workspace(&prepared,true,None,
+            &read::ReadTrace::default(),&mut report),Err(WorkerRefusal::PlacementMismatch)));
+        assert!(matches!(report,Some(Err(WorkerRefusal::PlacementMismatch))));
+        assert_eq!(fs::read(cwd.join("tracked")).unwrap(),b"divergent view");
+    }
+
+
+    fn c19_active_file_fixture(fixture:&Fixture)
+        ->(WorkerRuntime,crate::workspace_git::ViewIntent,WorkerResultIdentity) {
+        let (runtime,intent,prepared)=c19_prepared_view_fixture(fixture);
+        let mut command=prepared.command.clone();command.instance_id="file-reader-instance".into();command.generation=1;
+        let now=worker_now();
+        runtime.store.reserve_command(&command,&"d".repeat(64),&prepared.prepared.placement,now+300,now).unwrap();
+        let mut receipt=runtime.store.read_command(&command).unwrap().unwrap();
+        // Simuler l'état natif de la mission pour tester son autorisation.
+        // Ce n'est ni une admission ni une qualification fournisseur réelle.
+        receipt.phase=WorkerCommandPhase::Released;receipt.native_ready=true;
+        receipt.preparation=Some((prepared.request,prepared.prepared));
+        receipt.child_id=Some("file-reader-fixture".into());
+        runtime.store.persist(&runtime.store.command_path(&command),&receipt).unwrap();
+        let execution=WorkerResultIdentity {command,mission_id:"file-mission".into(),round:1,
+            execution_id:"file-execution".into(),execution_generation:1};
+        runtime.store.reserve_result_slot(&WorkerResultSlot {identity:execution.clone(),admission_digest:"c".repeat(64)},now).unwrap();
+        (runtime,intent,execution)
+    }
+
+    #[test]
+    fn spec221_c19_file_request_requires_exact_live_mission_before_receipt_effects() {
+        let fixture=Fixture::new();let (runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let prep=&intent.binding.command;
+        let before=fs::read(runtime.store.workspace_path(prep)).unwrap();
+        let mut wrong=execution.clone();wrong.mission_id="other-mission".into();
+        assert!(runtime.store.begin_materialization(&wrong,"large.bin").is_err());
+        wrong=execution.clone();wrong.command.instance_id="other-instance".into();
+        assert!(runtime.store.begin_materialization(&wrong,"large.bin").is_err());
+        for path in ["../elsewhere","not-in-commit"] {
+            assert!(runtime.store.begin_materialization(&execution,path).is_err());
+        }
+        assert_eq!(fs::read(runtime.store.workspace_path(prep)).unwrap(),before);
+        let (_,request)=runtime.store.begin_materialization(&execution,"large.bin").unwrap();
+        let pending=fs::read(runtime.store.workspace_path(prep)).unwrap();
+        let (_,replay)=runtime.store.begin_materialization(&execution,"large.bin").unwrap();
+        assert_eq!(request,replay);assert_eq!(fs::read(runtime.store.workspace_path(prep)).unwrap(),pending);
+        assert!(matches!(runtime.store.begin_materialization(&execution,"tracked"),
+            Err(WorkerStoreError::Locked)));
+        let snapshot=runtime.store.checked_view_receipt(prep,&intent).unwrap();
+        assert!(runtime.store.authorize_materialization(&execution,&request,
+            snapshot.commit_view.unwrap().source_marker.as_ref().unwrap()).is_err());
+        assert_eq!(fs::read(runtime.store.workspace_path(prep)).unwrap(),pending);
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+    #[test]
+    fn spec221_c19_file_marker_is_durable_before_release_and_result_after_group_stop() {
+        let fixture=Fixture::new();let (runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let (_,request)=runtime.store.begin_materialization(&execution,"large.bin").unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap()).unwrap();
+        let mut job=match crate::workspace_git::ViewJob::start(&proofs,&intent,&request,&std::env::current_exe().unwrap(),
+            &runtime.source,|marker|runtime.store.authorize_materialization(&execution,&request,marker)
+                .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)) {
+                Ok(job)=>job,Err((cause,mut held))=>{
+                    if let Some(child)=held.as_mut(){assert!(child.stop(Duration::from_secs(2)).unwrap());}
+                    panic!("file fixture {cause:?}");
+                }
+            };
+        let pending=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=pending.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.marker.is_some() && !operation.stopped && operation.available.is_none());
+        let until=Instant::now()+Duration::from_secs(10);
+        let outcome=loop {
+            if let crate::workspace_git::JobPoll::Stopped(result)=job.poll().unwrap(){break result;}
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(outcome,Ok(()));
+        assert!(runtime.store.finish_materialization(&execution,&request,Some(outcome)).unwrap());
+        let done=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=done.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.stopped);assert_eq!(operation.available,Some(true));assert!(operation.failure.is_none());
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+        let (_,next)=runtime.store.begin_materialization(&execution,"large.bin").unwrap();
+        assert!(matches!(next,crate::workspace_git::ViewJobRequest::Materialize {sequence:2,..}));
+        let mut closed=runtime.store.read_slot(&execution).unwrap().unwrap();closed.producer_terminal=true;
+        runtime.store.persist(&runtime.store.slot_dir(&execution).unwrap().join("receipt.json"),&closed).unwrap();
+        assert!(matches!(runtime.store.begin_materialization(&execution,"tracked"),Err(WorkerStoreError::InvalidTransition)));
+    }
+
+    #[test]
+    fn spec221_c19_live_file_helper_blocks_closure_even_without_its_sidecar() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let (_,request)=runtime.store.begin_materialization(&execution,"large.bin").unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap()).unwrap();
+        let mut env=runtime.source.clone();env.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let mut job=match crate::workspace_git::ViewJob::start(&proofs,&intent,&request,&std::env::current_exe().unwrap(),
+            &env,|marker|runtime.store.authorize_materialization(&execution,&request,marker)
+                .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)) {
+                Ok(job)=>job,Err((cause,mut held))=>{
+                    if let Some(child)=held.as_mut(){assert!(child.stop(Duration::from_secs(2)).unwrap());}
+                    panic!("file fixture {cause:?}");
+                }
+            };
+        let root=runtime.store.view_root();let until=Instant::now()+Duration::from_secs(3);
+        while !root.join("stall-ready").exists(){assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));}
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let marker=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap().marker.as_ref().unwrap();
+        assert!(proofs.remove_stopped_marker(&intent.binding,marker).is_err());
+        assert!(root.join(format!("view-{}.json",intent.binding.key().unwrap())).exists());
+        fs::remove_file(root.join(format!("view-{}.json",intent.binding.key().unwrap()))).unwrap();
+        assert!(!runtime.store.settle_view_sources(&execution.command.task_id).unwrap());
+        assert!(!runtime.store.finish_materialization(&execution,&request,Some(Ok(()))).unwrap());
+        runtime.stop_owned_view_sources(&execution.command).unwrap();
+        assert_eq!(runtime.cancel_signal_issued.len(),1);
+        runtime.reconcile_all().unwrap();
+        assert_eq!(runtime.cancel_signal_issued.len(),1,"maintenance must retain the issued file stop");
+        runtime.stop_owned_view_sources(&execution.command).unwrap();
+        assert_eq!(runtime.cancel_signal_issued.len(),1);
+        assert!(!runtime.store.settle_view_sources(&execution.command.task_id).unwrap());
+        let record=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap().record.unwrap();
+        assert!(matches!(runtime.store.report_retained_view(&intent.binding.command,&record),Err(WorkerStoreError::Unknown)));
+        // Le producteur simulé est terminé. Cela ne clôt pas son helper et ne
+        // permet pas de collecter la preuve de commande après sept jours.
+        runtime.store.set_phase(&execution.command,WorkerCommandPhase::Terminal,worker_now()).unwrap();
+        let slot=runtime.store.read_slot(&execution).unwrap().unwrap().slot;
+        runtime.store.mark_result_producer_terminal(&execution).unwrap();
+        runtime.store.close_result_slot(&slot,WorkerSlotClosureProof::NeverDispatched,worker_now()).unwrap();
+        assert!(matches!(runtime.reconcile(&execution.command),Err(WorkerRefusal::UnknownExecution)));
+        runtime.store.collect(worker_now()+WORKER_RECEIPT_RETENTION_SECS+1000).unwrap();
+        assert!(runtime.store.command_path(&execution.command).exists());
+        assert!(matches!(runtime.cancel(&execution.command),Err(WorkerRefusal::UnknownExecution)));
+        assert_eq!(runtime.cancel_signal_issued.len(),1);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(root.join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        loop {
+            if let crate::workspace_git::JobPoll::Stopped(_)=job.poll().unwrap(){break;}
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        // Le faux helper termine sans fichier : exit0 seul ne prouve pas la disponibilité.
+        assert!(runtime.store.finish_materialization(&execution,&request,Some(Ok(()))).unwrap());
+        let done=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=done.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.stopped);assert_eq!(operation.available,Some(false));
+        assert_eq!(operation.failure,Some(crate::workspace_git::ExportFailure::IntegrityFailed));
+        assert!(runtime.store.settle_view_sources(&execution.command.task_id).unwrap());
+        assert!(runtime.store.begin_materialization(&execution,"tracked").is_err());
+        assert!(runtime.store.report_retained_view(&intent.binding.command,&record).is_ok());
+        assert!(matches!(runtime.reconcile(&execution.command),
+            Ok(WorkerResponseOperation::Observation{observation}) if observation.phase==WorkerCommandPhase::Terminal));
+    }
+
+
+    #[test]
+    fn spec221_c19_runtime_materializes_for_live_execution_and_rechecks_each_read() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let command_before=fs::read(runtime.store.command_path(&execution.command)).unwrap();
+        runtime.materialize_view_file(&execution,"large.bin").unwrap();
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+        assert!(runtime.view_sources.is_empty());
+        assert_eq!(fs::read(runtime.store.command_path(&execution.command)).unwrap(),command_before);
+        runtime.materialize_view_file(&execution,"large.bin").unwrap();
+        let done=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        assert!(matches!(done.commit_view.as_ref().unwrap().materialization.as_ref().unwrap().request,
+            crate::workspace_git::ViewJobRequest::Materialize {sequence:2,..}));
+        let file=intent.destination().unwrap().join("large.bin");
+        fs::set_permissions(&file,fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&file,b"keep operator work").unwrap();
+        assert_eq!(runtime.materialize_view_file(&execution,"large.bin").unwrap_err().1,
+            Some(crate::workspace_git::ExportFailure::IntegrityFailed));
+        assert_eq!(fs::read(&file).unwrap(),b"keep operator work");
+        assert!(runtime.view_sources.is_empty());
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.stopped && operation.available==Some(false));
+    }
+
+    #[test]
+    fn spec221_c19_runtime_file_cancel_uses_existing_signal_and_keeps_unconfirmed_owner() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let cancelled=runtime.cancelled.clone();
+        let key=json_digest(&execution.command).unwrap();
+        let root=runtime.store.view_root();
+        let sender=std::thread::spawn(move||{
+            let until=Instant::now()+Duration::from_secs(4);
+            while !root.join("stall-ready").exists(){assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));}
+            cancelled.lock().unwrap().insert(key);
+        });
+        assert_eq!(runtime.materialize_view_file(&execution,"large.bin").unwrap_err(),
+            (WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        sender.join().unwrap();
+        assert_eq!(runtime.view_sources.len(),1);
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        assert!(!receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap().stopped);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty(){
+            runtime.collect_view_sources();
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.stopped);assert_eq!(operation.available,Some(false));
+        assert_eq!(operation.failure,Some(crate::workspace_git::ExportFailure::Cancelled));
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+
+    #[test]
+    fn spec221_c19_rejected_release_keeps_proof_then_allows_a_distinct_live_execution() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let (_,request)=runtime.store.begin_materialization(&execution,"large.bin").unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap()).unwrap();
+        let mut held=match crate::workspace_git::ViewJob::start(&proofs,&intent,&request,&std::env::current_exe().unwrap(),
+            &runtime.source,|marker|{
+                runtime.store.mark_result_producer_terminal(&execution).unwrap();
+                runtime.store.authorize_materialization(&execution,&request,marker)
+                    .map_err(|_|crate::workspace_git::ExportFailure::ProofUnavailable)
+            }) {
+                Err((crate::workspace_git::ExportFailure::ProofUnavailable,Some(child)))=>child,
+                _=>panic!("the ended execution must not release a file helper"),
+            };
+        let until=Instant::now()+Duration::from_secs(3);
+        let result=loop {
+            if let crate::workspace_git::JobPoll::Stopped(result)=held.poll().unwrap(){break result;}
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(runtime.store.finish_materialization(&execution,&request,Some(result)).unwrap());
+        drop(held);
+        let marker=runtime.store.view_root().join(format!("view-{}.json",intent.binding.key().unwrap()));
+        assert!(marker.exists(),"an abandoned bootstrap keeps its proof until scoped cleanup");
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+        let mut next=execution.clone();next.round=2;next.execution_generation=2;
+        next.execution_id="file-next-execution".into();next.mission_id="file-next-mission".into();
+        runtime.store.reserve_result_slot(&WorkerResultSlot {identity:next.clone(),admission_digest:"c".repeat(64)},worker_now()).unwrap();
+        runtime.materialize_view_file(&next,"large.bin").unwrap();
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+        assert!(!marker.exists());assert!(runtime.view_sources.is_empty());
+        assert!(runtime.store.begin_materialization(&execution,"tracked").is_err());
+    }
+
+
+    #[test]
+    fn spec221_c19_live_file_mission_outlives_its_bootstrap_deadline() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let mut current=runtime.store.read_command(&execution.command).unwrap().unwrap();
+        current.created_at=worker_now()-1000;current.deadline_at=worker_now()-900;current.updated_at=worker_now()-899;
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        runtime.materialize_view_file(&execution,"large.bin").unwrap();
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+        assert_eq!(runtime.store.read_command(&execution.command).unwrap().unwrap().deadline_at,current.deadline_at);
+        assert!(runtime.view_sources.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_file_precancel_has_no_reservation_or_process_effect() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.cancelled.lock().unwrap().insert(json_digest(&execution.command).unwrap());
+        let before=fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap();
+        assert_eq!(runtime.materialize_view_file(&execution,"large.bin").unwrap_err(),
+            (WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        assert_eq!(fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap(),before);
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+        assert!(runtime.view_sources.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_file_unknown_cancel_state_is_not_a_cancel_request() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let cancelled=runtime.cancelled.clone();
+        assert!(std::thread::spawn(move||{
+            let _held=cancelled.lock().unwrap();panic!("fixture poisons only its own cancel mutex");
+        }).join().is_err());
+        let before=fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap();
+        assert_eq!(runtime.materialize_view_file(&execution,"large.bin").unwrap_err(),
+            (WorkerRefusal::StoreUnavailable,None));
+        assert_eq!(fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap(),before);
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+        assert!(runtime.view_sources.is_empty());
+    }
+
+    #[test]
+    fn spec221_c19_file_pending_leaves_worker_free_and_collector_stops_ended_mission() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.store.view_root().join("stall-ready").exists() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!runtime.poll_view_file(&read).unwrap());
+        let mut other=execution.command.clone();
+        other.task_id="other-file-independent-task".into();other.command_id="other-file-independent-command".into();
+        other.instance_id="other-file-independent-instance".into();
+        let current=runtime.store.command(&execution.command).unwrap();
+        runtime.store.reserve_command(&other,&"f".repeat(64),&current.placement,worker_now()+300,worker_now()).unwrap();
+        // Sans marqueur ni bootstrap, Reconcile atteste Unknown, jamais
+        // un lancement. Il doit pouvoir le faire pendant la lecture en cours.
+        let other_observation=runtime.reconcile(&other);
+        assert!(matches!(&other_observation,
+            Ok(WorkerResponseOperation::Observation{observation}) if observation.phase==WorkerCommandPhase::Unknown),
+            "{other_observation:?}");
+        let mut wrong=ViewFileRead {binding:read.binding.clone(),execution:read.execution.clone(),request:read.request.clone()};
+        wrong.execution.execution_id="foreign-file-execution".into();
+        assert_eq!(runtime.poll_view_file(&wrong).unwrap_err(),(WorkerRefusal::CommandMismatch,None));
+        assert_eq!(runtime.view_sources.len(),1);
+        // Même sans lecteur qui poll, le tick garde le helper et demande son
+        // arrêt quand la mission se termine. Ce n'est pas un Cancel utilisateur.
+        runtime.store.mark_result_producer_terminal(&execution).unwrap();
+        runtime.collect_view_sources();
+        assert_eq!(runtime.view_sources.len(),1);
+        assert_eq!(runtime.poll_view_file(&read).unwrap_err(),(WorkerRefusal::UnknownExecution,None));
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.stopped);assert_eq!(operation.available,Some(false));
+        assert_eq!(operation.failure,Some(crate::workspace_git::ExportFailure::ProofUnavailable));
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+    #[test]
+    fn spec221_c19_file_poll_keeps_failure_already_published_by_collection() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.store.view_root().join("stall-ready").exists() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() || !runtime.view_file_audits.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let before=fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap();
+        for _ in 0..2 {
+            assert_eq!(runtime.poll_view_file(&read).unwrap_err(),(WorkerRefusal::WorkspacePrepareFailed,
+                Some(crate::workspace_git::ExportFailure::IntegrityFailed)));
+            assert_eq!(fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap(),before);
+        }
+        assert!(runtime.view_sources.is_empty());
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+    #[test]
+    fn spec221_c19_file_wire_reconnection_keeps_one_helper_and_only_current_correlations() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution,_)=c19_fenced_file_fixture(&fixture);
+        let request=WorkerRequest{version:REMOTE_WORKER_VERSION,worker:runtime.identity.clone(),
+            command:execution.command.clone(),connection_epoch:"file-old".into(),correlation_id:"old".into(),
+            request:WorkerRequestOperation::ReadCommitViewFile{execution:execution.clone(),path:"large.bin".into()}};
+        assert!(runtime.defer_view_file(&request).unwrap());
+        let before=runtime.store.view_receipt_for_binding(&intent.binding).unwrap()
+            .commit_view.unwrap().materialization.unwrap().request;
+        let mut replay=request.clone();replay.connection_epoch="file-new".into();replay.correlation_id="new".into();
+        assert!(runtime.defer_view_file(&replay).unwrap());
+        assert_eq!(runtime.view_files.len(),1);assert_eq!(runtime.view_sources.len(),1);
+        let key=json_digest(&execution.command).unwrap();
+        runtime.cancelled.lock().unwrap().insert(key.clone());
+        runtime.cancelled.lock().unwrap().insert("unrelated-old-command".into());
+        runtime.retain_view_cancellations().unwrap();
+        assert_eq!(*runtime.cancelled.lock().unwrap(),BTreeSet::from([key.clone()]));
+        // La conservation de l'annulation est vérifiée ; cet essai nominal la
+        // retire explicitement avant la première livraison du fichier.
+        runtime.cancelled.lock().unwrap().remove(&key);
+        let until=Instant::now()+Duration::from_secs(5);
+        let responses=loop {
+            let responses=runtime.poll_view_files("file-new");
+            if !responses.is_empty(){break responses;}
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(responses.len(),1);assert_eq!(responses[0].correlation_id,"new");
+        responses[0].validate().unwrap();
+        assert!(matches!(&responses[0].response,WorkerResponseOperation::CommitViewFile {
+            execution:returned,path,available:true,reason:None,failure:None
+        } if returned==&execution && path=="large.bin"));
+        let done=runtime.store.view_receipt_for_binding(&intent.binding).unwrap();
+        assert_eq!(done.commit_view.unwrap().materialization.unwrap().request,before);
+        assert!(runtime.view_sources.is_empty() && runtime.view_file_audits.is_empty());
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+    }
+
+    #[test]
+    fn spec221_c19_file_audit_does_not_block_commands_or_publish_before_checks() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_FILE_AUDIT_HOLD".into(),"1".into());
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(5);
+        while runtime.view_file_audits.is_empty() {
+            assert!(!runtime.poll_view_file(&read).unwrap());assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let started=Instant::now();
+        assert!(!runtime.poll_view_file(&read).unwrap());
+        assert!(started.elapsed()<Duration::from_millis(200));
+        let receipt=runtime.store.view_receipt_for_binding(&intent.binding).unwrap();
+        let operation=receipt.commit_view.unwrap().materialization.unwrap();
+        assert!(operation.stopped && operation.available.is_none());
+        assert_eq!(runtime.begin_view_file(&execution,"tracked").err().unwrap(),
+            (WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+        let repeated=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        assert_eq!(repeated.request,read.request);
+        assert!(runtime.view_sources.is_empty(),"aucun nouveau helper pendant l'audit du précédent");
+        assert!(!runtime.poll_view_file(&repeated).unwrap());
+        let mut independent=execution.command.clone();
+        independent.command_id="file-audit-independent-command".into();
+        independent.task_id="file-audit-independent-task".into();
+        independent.instance_id="file-audit-independent-instance".into();
+        let placement=runtime.store.command(&execution.command).unwrap().placement;
+        runtime.store.reserve_command(&independent,&"f".repeat(64),&placement,worker_now()+300,worker_now()).unwrap();
+        assert!(matches!(runtime.reconcile(&independent),
+            Ok(WorkerResponseOperation::Observation{..})));
+        runtime.cancelled.lock().unwrap().insert(json_digest(&execution.command).unwrap());
+        assert_eq!(runtime.poll_view_file(&read).unwrap_err(),
+            (WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+        // L'audit reste possédé même après le refus du lecteur.
+        assert_eq!(runtime.view_file_audits.len(),1);
+        fs::write(runtime.config.state_root.join("allow-file-audit"),b"").unwrap();
+        while !runtime.view_file_audits.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(runtime.poll_view_file(&read).unwrap_err(),
+            (WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)));
+    }
+
+    #[test]
+    fn spec221_c19_file_audit_retains_completed_report_until_store_publication_recovers() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_FILE_AUDIT_HOLD".into(),"1".into());
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(5);
+        while runtime.view_file_audits.is_empty() {
+            assert!(!runtime.poll_view_file(&read).unwrap());assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // L'audit possède déjà l'arrêt. Sa publication ne peut pas relire
+        // le reçu ; les preuves et les données de l'audit restent lisibles.
+        let receipt_path=runtime.store.workspace_path(&intent.binding.command);
+        fs::set_permissions(&receipt_path,fs::Permissions::from_mode(0o000)).unwrap();
+        let denied=fs::File::open(&receipt_path).err().map(|error|error.kind());
+        fs::write(runtime.config.state_root.join("allow-file-audit"),b"").unwrap();
+        let ready=loop {
+            runtime.collect_view_file_audits();
+            let ready=runtime.view_file_audits.values().any(|audit|matches!(audit.state,ViewFileAuditState::Ready{..}));
+            if ready || runtime.view_file_audits.is_empty() {break ready;}
+            if Instant::now()>=until {break false;}
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        fs::set_permissions(&receipt_path,fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(denied,Some(io::ErrorKind::PermissionDenied),"la fixture doit constater le refus réel");
+        assert!(ready,"le constat ne doit pas disparaître après une publication refusée");
+        assert!(runtime.view_sources.is_empty());
+        let receipt=runtime.store.view_receipt_for_binding(&intent.binding).unwrap();
+        assert!(receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap().available.is_none());
+        assert_eq!(runtime.begin_view_file(&execution,"tracked").err().unwrap(),
+            (WorkerRefusal::ResourceLimit,Some(crate::workspace_git::ExportFailure::OperationCapacity)));
+        for audit in runtime.view_file_audits.values_mut() {
+            if let ViewFileAuditState::Ready{retry_at,..}=&mut audit.state {*retry_at=Instant::now();}
+        }
+        // Aucun nouveau poll du fichier n'est nécessaire pour finir le CAS.
+        runtime.collect_view_sources();
+        assert!(runtime.view_file_audits.is_empty() && runtime.view_sources.is_empty());
+        let receipt=runtime.store.view_receipt_for_binding(&intent.binding).unwrap();
+        let done=receipt.commit_view.unwrap().materialization.unwrap();
+        assert_eq!(done.available,Some(true));assert_eq!(done.request,read.request);
+        assert!(runtime.poll_view_file(&read).unwrap());
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+    }
+
+    #[test]
+    fn spec221_c19_file_audit_restarts_after_durable_stop_without_request_or_new_helper() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let key=format!("file-{}",marker_key(&intent.binding.command));
+        let until=Instant::now()+Duration::from_secs(5);
+        let result=loop {
+            if let crate::workspace_git::JobPoll::Stopped(result)=runtime.view_sources.get_mut(&key).unwrap().child.poll().unwrap() {
+                break result;
+            }
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(runtime.store.stop_materialization(&execution,&read.request,Some(result)).unwrap().is_some());
+        runtime.view_sources.remove(&key);
+        let before=runtime.store.view_receipt_for_binding(&intent.binding).unwrap().commit_view.unwrap().materialization.unwrap();
+        assert!(before.stopped && before.available.is_none());
+        assert!(runtime.view_file_audits.is_empty());
+        let config=WorkerRuntimeConfig {
+            machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+            provisioning_revision:runtime.config.provisioning_revision,
+            credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+            registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone(),
+        };drop(runtime);
+        let mut recovered=WorkerRuntime::new(config).unwrap();
+        assert!(recovered.view_sources.is_empty() && recovered.view_files.is_empty());
+        assert_eq!(recovered.view_file_audits.len(),1,"audit repris depuis le reçu, sans demande du client");
+        while !recovered.view_file_audits.is_empty() {
+            recovered.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let done=recovered.store.view_receipt_for_binding(&intent.binding).unwrap().commit_view.unwrap().materialization.unwrap();
+        assert!(done.stopped && done.available==Some(true));
+        assert_eq!(done.request,before.request);assert_eq!(done.execution,before.execution);
+        assert!(recovered.view_sources.is_empty() && recovered.running.is_empty() && recovered.held.is_empty());
+        assert_eq!(fs::read(intent.destination().unwrap().join("large.bin")).unwrap(),vec![b'x';200000]);
+    }
+
+    #[test]
+    fn spec221_c19_file_deadline_without_in_memory_child_is_not_stop_proof() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_NO_READY".into(),"1".into());
+        assert!(runtime.begin_view_file(&execution,"large.bin").is_err());
+        let source_key=format!("file-{}",marker_key(&intent.binding.command));
+        let held=runtime.view_sources.remove(&source_key).unwrap();
+        let request=WorkerRequest{version:REMOTE_WORKER_VERSION,worker:runtime.identity.clone(),
+            command:execution.command.clone(),connection_epoch:"file-timeout".into(),correlation_id:"timeout".into(),
+            request:WorkerRequestOperation::ReadCommitViewFile{execution:execution.clone(),path:"large.bin".into()}};
+        assert!(runtime.defer_view_file(&request).unwrap());
+        for pending in runtime.view_files.values_mut(){pending.expires=Instant::now();}
+        let responses=runtime.poll_view_files("file-timeout");
+        assert_eq!(responses.len(),1);
+        assert!(matches!(responses[0].response,WorkerResponseOperation::CommitViewFile {
+            available:false,reason:Some(WorkerRefusal::PrepareExpired),
+            failure:Some(crate::workspace_git::ExportFailure::StopUnconfirmed),..
+        }));
+        let receipt=runtime.store.view_receipt_for_binding(&intent.binding).unwrap();
+        assert!(!receipt.commit_view.unwrap().materialization.unwrap().stopped);
+        runtime.view_sources.insert(source_key,held);
+        fs::write(runtime.store.view_root().join("allow-bootstrap-exit"),b"").unwrap();
+        let until=Instant::now()+Duration::from_secs(4);
+        while !runtime.view_sources.is_empty() || !runtime.view_file_audits.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+    #[test]
+    fn spec221_c19_native_closure_requires_stop_and_result_disposition_and_retains_both_for_cleanup() {
+        let fixture=Fixture::new();let (runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let prep=&intent.binding.command;
+        assert!(matches!(runtime.store.check_view_native_closure(prep,&intent),Err(WorkerStoreError::InvalidTransition)));
+        let mut current=runtime.store.command(&execution.command).unwrap();
+        current.phase=WorkerCommandPhase::Terminal;
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        assert!(matches!(runtime.store.check_view_native_closure(prep,&intent),Err(WorkerStoreError::Unknown)));
+        // État de commande simulé, jamais un fournisseur lancé : employer
+        // le groupe de l'export réellement terminé pour éprouver ces reçus.
+        let receipt=runtime.store.checked_view_receipt(prep,&intent).unwrap();
+        let mut marker=receipt.commit_view.as_ref().unwrap().source_marker.clone().unwrap();
+        marker.instance_id=execution.command.instance_id.clone();marker.command_id=execution.command.command_id.clone();
+        marker.generation=execution.command.generation;
+        current.marker=Some(marker);
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        if cfg!(target_os="linux") {
+            assert!(matches!(runtime.store.check_view_native_closure(prep,&intent),Err(WorkerStoreError::Unknown)));
+            let proof=WorkerDrainProof::expected(&current).unwrap();
+            runtime.store.persist(&drain_proof_path(&runtime.store.root,&execution.command),&proof).unwrap();
+        }
+        assert!(matches!(runtime.store.check_view_native_closure(prep,&intent),Err(WorkerStoreError::InvalidTransition)));
+        let stored=runtime.store.read_slot(&execution).unwrap().unwrap();
+        let outcome=result(&stored.slot,"result retained until parent disposition");
+        publish_result_blob(&runtime.store.reservation(&stored.slot).unwrap(),&outcome).unwrap();
+        runtime.store.mark_result_producer_terminal(&execution).unwrap();
+        runtime.store.close_result_slot(&stored.slot,WorkerSlotClosureProof::Cancelled,worker_now()).unwrap();
+        assert!(matches!(runtime.store.check_view_native_closure(prep,&intent),Err(WorkerStoreError::InvalidTransition)),
+            "cancelled is not an ACK of a published result");
+        runtime.store.record_disposition(&WorkerResultDisposition {identity:execution.clone(),
+            result_digest:outcome.digest,disposition:RemoteResultDisposition::Accepted{}},worker_now()).unwrap();
+        let before=fs::read(runtime.store.workspace_path(prep)).unwrap();
+        runtime.store.check_view_native_closure(prep,&intent).unwrap();
+        assert_eq!(fs::read(runtime.store.workspace_path(prep)).unwrap(),before);
+        runtime.store.collect(worker_now()+WORKER_RECEIPT_RETENTION_SECS+1).unwrap();
+        assert!(runtime.store.read_slot(&execution).unwrap().is_some());
+        assert!(runtime.store.command(&execution.command).is_ok());
+        runtime.store.check_view_native_closure(prep,&intent).unwrap();
+        let mut unsafe_receipt=runtime.store.checked_view_receipt(prep,&intent).unwrap();
+        unsafe_receipt.commit_view.as_mut().unwrap().source_stopped=false;
+        runtime.store.persist(&runtime.store.workspace_path(prep),&unsafe_receipt).unwrap();
+        assert!(matches!(runtime.store.check_view_native_closure(prep,&intent),Err(WorkerStoreError::InvalidTransition)));
+        assert!(intent.destination().unwrap().join("tracked").is_file());
+        assert!(runtime.store.view_root().join(format!("{}.intent.json",intent.binding.key().unwrap())).is_file());
+    }
+
+    #[test]
+    fn spec221_c19_native_closure_never_infers_missing_command_history_from_clean_files() {
+        let fixture=Fixture::new();let (runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.store.mark_result_producer_terminal(&execution).unwrap();
+        let stored=runtime.store.read_slot(&execution).unwrap().unwrap();
+        runtime.store.close_result_slot(&stored.slot,WorkerSlotClosureProof::Cancelled,worker_now()).unwrap();
+        fs::remove_file(runtime.store.command_path(&execution.command)).unwrap();
+        assert!(matches!(runtime.store.check_view_native_closure(&intent.binding.command,&intent),
+            Err(WorkerStoreError::Quarantined)));
+        assert_eq!(fs::read(intent.destination().unwrap().join("tracked")).unwrap(),b"committed");
+    }
+
+
+    /// La mission est simulée, son helper et son export sont réels. Ne pas
+    /// confondre ces fixtures de reçus avec une qualification fournisseur.
+    fn c19_close_file_fixture(runtime:&WorkerRuntime,intent:&crate::workspace_git::ViewIntent,
+        execution:&WorkerResultIdentity) {
+        let mut current=runtime.store.command(&execution.command).unwrap();
+        current.phase=WorkerCommandPhase::Terminal;
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,intent).unwrap();
+        let mut marker=receipt.commit_view.as_ref().unwrap().source_marker.clone().unwrap();
+        marker.instance_id=execution.command.instance_id.clone();
+        marker.command_id=execution.command.command_id.clone();
+        marker.generation=execution.command.generation;
+        current.marker=Some(marker);
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        if cfg!(target_os="linux") {
+            let proof=WorkerDrainProof::expected(&current).unwrap();
+            runtime.store.persist(&drain_proof_path(&runtime.store.root,&execution.command),&proof).unwrap();
+        }
+        let stored=runtime.store.read_slot(execution).unwrap().unwrap();
+        let outcome=result(&stored.slot,"closed fixture result");
+        publish_result_blob(&runtime.store.reservation(&stored.slot).unwrap(),&outcome).unwrap();
+        runtime.store.mark_result_producer_terminal(execution).unwrap();
+        runtime.store.record_disposition(&WorkerResultDisposition {identity:execution.clone(),
+            result_digest:outcome.digest,disposition:RemoteResultDisposition::Accepted{}},worker_now()).unwrap();
+    }
+
+    #[test]
+    fn spec221_c19_native_conservation_port_requires_exact_binding_stop_and_disposition() {
+        let fixture=Fixture::new();
+        let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let command=intent.binding.command.clone();
+        let before=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        let file=intent.destination().unwrap().join("tracked");
+        let bytes=fs::read(&file).unwrap();
+        let request=WorkerRequest {
+            version:REMOTE_WORKER_VERSION,correlation_id:"conserve-view-221".into(),
+            connection_epoch:"view-epoch-221".into(),worker:runtime.identity.clone(),
+            command:command.clone(),
+            request:WorkerRequestOperation::ConserveCommitView {prepare_digest:intent.binding.prepare_digest.clone()},
+        };
+        request.validate().unwrap();
+        let disconnected=AtomicBool::new(false);
+        assert!(runtime.handle(&request,"view-epoch-221",&disconnected).is_err());
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),before);
+        assert_eq!(fs::read(&file).unwrap(),bytes);
+        // Le fournisseur n'est pas lancé par cette fixture ; arrêt et résultat
+        // simulés, export et reçus de préparation réels.
+        c19_close_file_fixture(&runtime,&intent,&execution);
+        let current=fs::read(runtime.store.workspace_path(&command)).unwrap();
+        let mut wrong=request.clone();
+        wrong.request=WorkerRequestOperation::ConserveCommitView {prepare_digest:"f".repeat(64)};
+        assert!(runtime.handle(&wrong,"view-epoch-221",&disconnected).is_err());
+        assert_eq!(fs::read(runtime.store.workspace_path(&command)).unwrap(),current);
+        let mut foreign=request.clone();foreign.worker.worker_id="foreign-worker".into();
+        assert_eq!(runtime.handle(&foreign,"view-epoch-221",&disconnected),Err(WorkerRefusal::StaleConnection));
+        let private_intent=runtime.store.view_root().join(format!("{}.intent.json",intent.binding.key().unwrap()));
+        let original_intent=fs::read(&private_intent).unwrap();
+        let answer=runtime.handle(&request,"view-epoch-221",&disconnected).unwrap();
+        assert_eq!(answer,WorkerResponseOperation::CommitViewConserved {prepare_digest:intent.binding.prepare_digest.clone()});
+        let wire=WorkerResponse {version:request.version,correlation_id:request.correlation_id.clone(),
+            connection_epoch:request.connection_epoch.clone(),worker:request.worker.clone(),
+            command:request.command.clone(),response:answer.clone()};
+        wire.validate().unwrap();
+        assert_eq!(runtime.handle(&request,"view-epoch-221",&disconnected).unwrap(),answer);
+        let retained=runtime.store.checked_view_receipt(&command,&intent).unwrap();
+        assert!(retained.commit_view.as_ref().unwrap().closed);
+        assert_eq!(retained.record.as_ref().unwrap().state,crate::delegation::WorkspaceState::Kept);
+        assert_eq!(fs::read(&file).unwrap(),bytes);
+        assert!(runtime.view_sources.is_empty());
+        assert_eq!(fs::read(&private_intent).unwrap(),original_intent,"aucune réduction ou audit de données implicite");
+        runtime.store.collect(worker_now()+WORKER_RECEIPT_RETENTION_SECS+1).unwrap();
+        assert!(runtime.store.checked_view_receipt(&command,&intent).unwrap().commit_view.unwrap().closed);
+        assert!(runtime.handle(&request,"view-epoch-221",&disconnected).is_ok());
+    }
+
+    #[test]
+    fn spec221_c19_conservation_capability_never_appears_for_an_old_master() {
+        let absent=MasterWorkerFeatures::default();
+        assert!(!absent.supports(WorkerCapability::WorkspaceViewV1));
+        assert!(!absent.admits(&[WorkerCapability::WorkspaceViewV1]));
+        let present=MasterWorkerFeatures {workspace_view:true,..Default::default()};
+        assert_eq!(present.capabilities(),vec![WorkerCapability::WorkspaceViewV1]);
+        assert!(present.admits(&[WorkerCapability::WorkspaceViewV1]));
+        assert!(!present.admits(&[WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewV1]));
+    }
+
+    #[test]
+    fn spec221_c19_closed_view_compaction_restarts_each_phase_without_losing_quota_or_data() {
+        let fixture=Fixture::new();let (runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let prep=&intent.binding.command;
+        let path=runtime.store.workspace_path(prep);
+        let active=fs::read(&path).unwrap();
+        assert!(runtime.store.compact_closed_view(prep,&intent).is_err());
+        assert_eq!(fs::read(&path).unwrap(),active);
+        c19_close_file_fixture(&runtime,&intent,&execution);
+        let data_path=intent.destination().unwrap();
+        let card_path=data_path.join(".bridget-commit-view.json");
+        let before=fs::read(&card_path).unwrap();let meta=fs::metadata(&card_path).unwrap();
+        let original=runtime.store.inventory().unwrap().2;
+        runtime.store.freeze_view(prep,&intent).unwrap();
+        let frozen=runtime.store.checked_view_receipt(prep,&intent).unwrap();
+        assert!(frozen.commit_view.as_ref().unwrap().closed);
+        assert_eq!(frozen.commit_view.as_ref().unwrap().reserved_bytes,intent.reserved_bytes().unwrap());
+        assert!(runtime.store.reserve_view_intent(prep,
+            &runtime.store.command(&execution.command).unwrap().preparation.unwrap().0,&intent).is_err());
+        // Même avec un reçu d'exécution mal restauré en Released, le tombstone
+        // workspace refuse la réouverture avant chargement du manifeste.
+        let mut current=runtime.store.command(&execution.command).unwrap();
+        current.phase=WorkerCommandPhase::Released;
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        assert!(runtime.store.active_view_execution(&execution).is_err());
+        current.phase=WorkerCommandPhase::Terminal;
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        let proofs=crate::workspace_git::ViewProofs::open(&runtime.store.view_root().canonicalize().unwrap()).unwrap();
+        // Coupure après remplacement atomique, avant réduction du reçu.
+        let reserved=proofs.compact_closed(&intent).unwrap();
+        assert_eq!(runtime.store.checked_view_receipt(prep,&intent).unwrap().commit_view.unwrap().reserved_bytes,
+            intent.reserved_bytes().unwrap());
+        assert!(runtime.store.inventory().unwrap().2>=original.saturating_sub(512));
+        runtime.store.compact_closed_view(prep,&intent).unwrap();
+        let closed=runtime.store.checked_view_receipt(prep,&intent).unwrap();
+        assert_eq!(closed.commit_view.as_ref().unwrap().reserved_bytes,reserved);
+        let closed_bytes=fs::read(&path).unwrap();
+        runtime.store.compact_closed_view(prep,&intent).unwrap();
+        assert_eq!(fs::read(&path).unwrap(),closed_bytes);
+        assert_eq!(fs::read(&card_path).unwrap(),before);
+        assert_eq!(fs::metadata(&card_path).unwrap().ino(),meta.ino());
+        assert_eq!(fs::metadata(&card_path).unwrap().mtime(),meta.mtime());
+        assert_eq!(fs::read(data_path.join("tracked")).unwrap(),b"committed");
+        assert!(!data_path.join("large.bin").exists());
+        assert!(runtime.store.report_retained_view(prep,closed.record.as_ref().unwrap()).is_ok());
+        runtime.store.collect(worker_now()+WORKER_RECEIPT_RETENTION_SECS+301).unwrap();
+        assert!(runtime.store.read_slot(&execution).unwrap().is_none());
+        assert!(runtime.store.command(&execution.command).is_err());
+        // Après collecte de l'histoire, la preuve close garde son refus de
+        // recréation et son rapport ; la clôture ne se déduit pas d'une absence.
+        runtime.store.compact_closed_view(prep,&intent).unwrap();
+        assert_eq!(fs::read(&path).unwrap(),closed_bytes);
+        assert!(runtime.store.report_retained_view(prep,closed.record.as_ref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn spec221_c19_closed_view_keeps_full_reservation_when_card_is_missing_or_modified() {
+        let fixture=Fixture::new();let (runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        c19_close_file_fixture(&runtime,&intent,&execution);
+        let prep=&intent.binding.command;
+        let card=intent.destination().unwrap().join(".bridget-commit-view.json");
+        let original=fs::read(&card).unwrap();
+        fs::write(&card,b"{}").unwrap();
+        assert!(runtime.store.compact_closed_view(prep,&intent).is_err());
+        let receipt=runtime.store.checked_view_receipt(prep,&intent).unwrap();
+        assert!(receipt.commit_view.as_ref().unwrap().closed);
+        assert_eq!(receipt.commit_view.as_ref().unwrap().reserved_bytes,intent.reserved_bytes().unwrap());
+        assert_eq!(fs::read(&card).unwrap(),b"{}");
+        fs::write(&card,&original).unwrap();
+        runtime.store.compact_closed_view(prep,&intent).unwrap();
+        fs::remove_file(&card).unwrap();
+        assert!(runtime.store.report_retained_view(prep,receipt.record.as_ref().unwrap()).is_err());
+        assert!(runtime.store.compact_closed_view(prep,&intent).is_err());
+        assert_eq!(fs::read(intent.destination().unwrap().join("tracked")).unwrap(),b"committed");
+    }
+
+
+    #[test]
+    fn spec221_c19_closed_materialized_view_rejects_late_result_without_data_or_receipt_change() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(10);
+        while !runtime.poll_view_file(&read).unwrap() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        c19_close_file_fixture(&runtime,&intent,&execution);
+        runtime.store.compact_closed_view(&intent.binding.command,&intent).unwrap();
+        let before=fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap();
+        let file=intent.destination().unwrap().join("large.bin");
+        let bytes=fs::read(&file).unwrap();
+        assert!(runtime.store.finish_materialization(&execution,&read.request,
+            Some(Err(crate::workspace_git::ExportFailure::Unknown))).is_err());
+        assert_eq!(fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap(),before);
+        assert_eq!(fs::read(&file).unwrap(),bytes);
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        assert!(runtime.store.report_retained_view(&intent.binding.command,receipt.record.as_ref().unwrap()).is_ok());
+    }
+
+
+
+    /// La preuve198est réelle ; seul l'état de missionB est simulé pour
+    /// éprouver son port de fichiers sans lancer un fournisseur.
+    fn c19_fenced_file_fixture(fixture:&Fixture)
+        ->(WorkerRuntime,crate::workspace_git::ViewIntent,WorkerResultIdentity,WorkerCommandIdentity) {
+        let (runtime,intent,prepared)=c19_prepared_view_fixture(fixture);
+        let mut previous=prepared.command.clone();
+        previous.instance_id="never-released-original".into();previous.generation=1;
+        runtime.store.fence_unstarted(&previous,&prepared.prepared.placement,worker_now()+300,worker_now()).unwrap();
+        let mut next=prepared.command.clone();next.command_id=uuid::Uuid::new_v4().to_string();
+        runtime.store.bind_fenced_workspace(&previous,&next,&prepared.request,
+            &prepared.prepared.placement,prepared.prepared.workspace.as_ref().unwrap()).unwrap();
+        let mut command=next.clone();command.instance_id="fenced-reader".into();command.generation=1;
+        let now=worker_now();
+        runtime.store.reserve_command(&command,&"d".repeat(64),&prepared.prepared.placement,now+300,now).unwrap();
+        let mut current=runtime.store.command(&command).unwrap();
+        current.phase=WorkerCommandPhase::Released;current.native_ready=true;
+        current.preparation=Some((prepared.request,prepared.prepared));
+        current.child_id=Some("fenced-file-fixture".into());
+        runtime.store.persist(&runtime.store.command_path(&command),&current).unwrap();
+        let execution=WorkerResultIdentity {command,mission_id:"fenced-mission".into(),round:1,
+            execution_id:"fenced-execution".into(),execution_generation:1};
+        runtime.store.reserve_result_slot(&WorkerResultSlot {identity:execution.clone(),admission_digest:"c".repeat(64)},now).unwrap();
+        (runtime,intent,execution,previous)
+    }
+
+    #[test]
+    fn spec221_c19_fenced_prepare_reuses_the_same_export_through_owned_audit_without_creator() {
+        let fixture=Fixture::new();
+        let (mut runtime,intent,prepared)=c19_prepared_view_fixture(&fixture);
+        let mut previous=prepared.command.clone();previous.instance_id="never-released-view".into();previous.generation=1;
+        runtime.store.fence_unstarted(&previous,&prepared.prepared.placement,worker_now()+300,worker_now()).unwrap();
+        let mut next=prepared.command.clone();next.command_id=uuid::Uuid::new_v4().to_string();
+        let original=fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap();
+        let files=fs::read_dir(&intent.data_root).unwrap().count();
+        let mut request=WorkerRequest{version:REMOTE_WORKER_VERSION,worker:runtime.identity.clone(),command:next.clone(),
+            connection_epoch:"fenced-view-epoch".into(),correlation_id:"fenced-view-only".into(),
+            request:WorkerRequestOperation::PrepareFenced{previous,prepare:prepared.request.clone(),
+                placement:prepared.prepared.placement.clone(),workspace:prepared.prepared.workspace.clone(),routing:None}};
+        request.validate().unwrap();
+        assert!(request.request.requires_commit_view_reader());
+        assert!(!request.request.requires_commit_view_creation());
+        assert!(!crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED,"le lecteur ne devient pas créateur");
+        assert!(runtime.defer_view_control(&request).unwrap());
+        let until=Instant::now()+Duration::from_secs(5);
+        let mut observed=Vec::new();
+        for round in 0..2 {
+            let responses=loop {
+                let responses=runtime.poll_view_controls("fenced-view-epoch",&AtomicBool::new(false));
+                if !responses.is_empty(){break responses;}
+                assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+            };
+            assert_eq!(responses.len(),1);responses[0].validate().unwrap();
+            let WorkerResponseOperation::Prepared{prepared:result}=&responses[0].response
+                else{panic!("vue réutilisée attendue round={round}, {:?}",responses[0].response)};
+            assert_eq!(result.placement,prepared.prepared.placement);
+            assert_eq!(result.workspace,prepared.prepared.workspace);
+            observed.push(result.token.clone());
+            assert_eq!(runtime.prepared[&next.command_id].request,prepared.request);
+            if round==0 {
+                request.correlation_id="fenced-view-replay".into();
+                assert!(runtime.defer_view_control(&request).unwrap());
+            }
+        }
+        assert_eq!(observed[0],observed[1]);
+        assert_eq!(fs::read(runtime.store.workspace_path(&intent.binding.command)).unwrap(),original);
+        assert_eq!(fs::read_dir(&intent.data_root).unwrap().count(),files);
+        assert!(runtime.view_sources.is_empty() && runtime.running.is_empty() && runtime.held.is_empty());
+        assert_eq!(original_workspace_at(&runtime.store.root,&runtime.identity,&next).unwrap().path,
+            intent.destination().unwrap().to_string_lossy());
+    }
+
+    #[test]
+    fn spec221_c19_fenced_file_uses_original_anchor_once_and_reports_the_same_view() {
+        let fixture=Fixture::new();
+        let (mut runtime,intent,execution,_)=c19_fenced_file_fixture(&fixture);
+        let before=fs::read_dir(&intent.data_root).unwrap().count();
+        let anchor=runtime.store.active_view_execution(&execution).unwrap();
+        assert_eq!(anchor.0.binding,intent.binding);
+        assert_eq!(anchor.1.command,intent.binding.command);
+        assert_eq!(runtime.store.view_receipts(None).unwrap().len(),1,"one reservation, not one per alias");
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(10);
+        while !runtime.poll_view_file(&read).unwrap() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(runtime.view_sources.is_empty());
+        assert_eq!(fs::read_dir(&intent.data_root).unwrap().count(),before);
+        assert!(intent.destination().unwrap().join("large.bin").is_file());
+        let anchor=runtime.store.active_view_execution(&execution).unwrap().1;
+        assert!(runtime.store.report_retained_view(&execution.command,anchor.record.as_ref().unwrap()).is_ok());
+    }
+
+    #[test]
+    fn spec221_c19_fenced_file_requires_bind_canon_and_original_unclosed_anchor() {
+        let fixture=Fixture::new();
+        let (runtime,intent,execution,_)=c19_fenced_file_fixture(&fixture);
+        let mut prep=execution.command.clone();prep.instance_id.clear();prep.generation=0;
+        let bind=proof198::bind_path(&runtime.store.root,&prep);
+        let saved=fs::read(&bind).unwrap();
+        fs::remove_file(&bind).unwrap();
+        assert!(runtime.store.active_view_execution(&execution).is_err());
+        write_private_file_atomic(&bind,&saved).unwrap();
+        let mut current=runtime.store.command(&execution.command).unwrap();
+        let original=current.preparation.as_ref().unwrap().0.clone();
+        current.preparation.as_mut().unwrap().0.base_commit=Some("f".repeat(40));
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        assert!(runtime.store.begin_materialization(&execution,"large.bin").is_err());
+        current.preparation.as_mut().unwrap().0=original;
+        runtime.store.persist(&runtime.store.command_path(&execution.command),&current).unwrap();
+        assert!(runtime.store.active_view_execution(&execution).is_ok());
+        let mut anchor=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        anchor.record.as_mut().unwrap().state=crate::delegation::WorkspaceState::Kept;
+        anchor.commit_view.as_mut().unwrap().closed=true;
+        runtime.store.persist(&runtime.store.workspace_path(&intent.binding.command),&anchor).unwrap();
+        assert!(runtime.store.active_view_execution(&execution).is_err());
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+    #[test]
+    fn spec221_c19_fenced_file_cancel_matches_current_operation_not_original_command() {
+        let fixture=Fixture::new();
+        let (mut runtime,intent,execution,previous)=c19_fenced_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let read=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.store.view_root().join("stall-ready").exists() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        runtime.cancel_signal_issued.insert(format!("view-source-{}-file",intent.binding.key().unwrap()));
+        let prior=runtime.stop_owned_view_sources(&previous);
+        let unchanged=runtime.store.active_view_execution(&execution).unwrap().1
+            .commit_view.unwrap().materialization.unwrap();
+        let stopped=runtime.stop_owned_view_sources(&execution.command);
+        let count=runtime.cancel_signal_issued.len();
+        let repeated=runtime.stop_owned_view_sources(&execution.command);
+        let same_count=runtime.cancel_signal_issued.len();
+        let pending=runtime.store.active_view_execution(&execution).unwrap().1
+            .commit_view.unwrap().materialization.unwrap();
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(prior.is_ok() && stopped.is_ok() && repeated.is_ok());
+        assert!(!unchanged.stopped && !pending.stopped);
+        assert_eq!(count,same_count,"one signal per exact operation");
+        assert!(count>1,"old generic stop key did not suppress the new operation");
+        assert_eq!(runtime.poll_view_file(&read).unwrap_err(),(WorkerRefusal::WorkspacePrepareFailed,
+            Some(crate::workspace_git::ExportFailure::Cancelled)));
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+
+    #[test]
+    fn spec221_c19_source_fence_before_publication_survives_restart_without_reopening() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        let read=runtime.begin_view_source(&prep,&request,intent.clone()).unwrap();
+        let until=Instant::now()+Duration::from_secs(5);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(intent.destination().unwrap().join("tracked").is_file());
+        let mut full=prep.clone();full.instance_id="never-launched-source".into();full.generation=1;
+        runtime.fence_unstarted(&full,&placement(),worker_now()+300).unwrap();
+        assert!(runtime.poll_view_source(&read).is_err());
+        let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        assert!(receipt.record.is_none());
+        let config=WorkerRuntimeConfig {machine_id:runtime.config.machine_id.clone(),
+            worker_id:runtime.config.worker_id.clone(),provisioning_revision:runtime.config.provisioning_revision,
+            credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+            registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone()};
+        drop(runtime);
+        let mut reopened=WorkerRuntime::new(config).unwrap();
+        assert!(reopened.cancelled.lock().unwrap().is_empty());
+        assert!(reopened.begin_view_source(&prep,&request,intent.clone()).is_err());
+        assert!(reopened.view_sources.is_empty());
+        assert!(reopened.store.checked_view_receipt(&prep,&intent).unwrap().record.is_none());
+        assert!(intent.destination().unwrap().join("tracked").is_file());
+    }
+
+    #[test]
+    fn spec221_c19_source_pending_polls_use_only_small_receipts_and_do_not_wait() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let read=runtime.begin_view_source(&prep,&request,intent.clone()).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.store.view_root().join("stall-ready").exists() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        let path=runtime.store.view_root().join(format!("{}.intent.json",intent.binding.key().unwrap()));
+        let away=runtime.store.view_root().join("temporarily-unavailable");
+        fs::rename(&path,&away).unwrap();
+        let started=Instant::now();
+        let pending=(0..10).map(|_|runtime.poll_view_source(&read)).collect::<Vec<_>>();
+        let elapsed=started.elapsed();
+        let mut wrong=ViewSourceRead {binding:read.binding.clone()};
+        wrong.binding.prepare_digest="f".repeat(64);
+        let mismatch=runtime.poll_view_source(&wrong);
+        let inventory=runtime.store.inventory();
+        fs::rename(&away,&path).unwrap();
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(pending.iter().all(|result|matches!(result,Ok(None))));
+        assert!(elapsed<Duration::from_secs(1),"pending polls {elapsed:?}");
+        assert!(matches!(mismatch,Err((WorkerRefusal::CommandMismatch,None))));
+        assert!(inventory.is_ok());
+        assert!(!intent.destination().unwrap().exists());
+        assert!(runtime.poll_view_source(&read).is_err(),"exit zero without publication is not an export");
+        assert!(runtime.store.checked_view_receipt(&prep,&intent).unwrap().record.is_none());
+    }
+
+    #[test]
+    fn spec221_c19_source_failure_survives_collection_and_restart_without_second_spawn() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        fs::rename(&intent.source,fixture.0.join("source-offline")).unwrap();
+        let read=runtime.begin_view_source(&prep,&request,intent.clone()).unwrap();
+        let until=Instant::now()+Duration::from_secs(5);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        let view=receipt.commit_view.as_ref().unwrap();
+        assert!(view.source_stopped);
+        let cause=view.source_failure.expect("closed helper cause survives the lost reader");
+        let marker=view.source_marker.clone();
+        assert_eq!(runtime.poll_view_source(&read).unwrap_err(),(WorkerRefusal::WorkspacePrepareFailed,Some(cause)));
+        let config=WorkerRuntimeConfig {
+            machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+            provisioning_revision:runtime.config.provisioning_revision,
+            credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+            registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone(),
+        };
+        drop(runtime);
+        let mut reopened=WorkerRuntime::new(config).unwrap();
+        let before=fs::read(reopened.store.workspace_path(&prep)).unwrap();
+        let replay=reopened.begin_view_source(&prep,&request,intent.clone());
+        assert!(matches!(replay,Err((WorkerRefusal::WorkspacePrepareFailed,Some(actual))) if actual==cause));
+        assert!(reopened.view_sources.is_empty());
+        assert_eq!(fs::read(reopened.store.workspace_path(&prep)).unwrap(),before);
+        assert_eq!(reopened.store.checked_view_receipt(&prep,&intent).unwrap().commit_view.unwrap().source_marker,marker);
+        assert!(!intent.destination().unwrap().exists());
+    }
+
+    #[test]
+    fn spec221_c19_source_cancel_before_begin_has_no_receipt_or_process_effect() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        runtime.cancelled.lock().unwrap().insert(json_digest(&prep).unwrap());
+        let result=runtime.begin_view_source(&prep,&request,intent.clone());
+        assert!(matches!(result,Err((WorkerRefusal::WorkspacePrepareFailed,Some(crate::workspace_git::ExportFailure::Cancelled)))));
+        assert!(!runtime.store.workspace_path(&prep).exists());
+        assert!(runtime.view_sources.is_empty());
+        assert!(!intent.destination().unwrap().exists());
+    }
+
+    #[test]
+    fn spec221_c19_source_cancel_is_collected_without_reader_and_preserves_uncertain_stop() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_STALL".into(),"1".into());
+        let read=runtime.begin_view_source(&prep,&request,intent.clone()).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.store.view_root().join("stall-ready").exists() {
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        runtime.cancelled.lock().unwrap().insert(json_digest(&prep).unwrap());
+        runtime.collect_view_sources();
+        let pending=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        let held=runtime.view_sources.len();
+        let stopped=runtime.store.confirm_view_sources_stopped(&prep.task_id);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(held,1);
+        assert!(!pending.commit_view.as_ref().unwrap().source_stopped);
+        assert_eq!(stopped.unwrap(),false);
+        let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        let view=receipt.commit_view.as_ref().unwrap();
+        assert!(view.source_stopped);
+        assert_eq!(view.source_failure,Some(crate::workspace_git::ExportFailure::Cancelled));
+        assert_eq!(runtime.poll_view_source(&read).unwrap_err(),(WorkerRefusal::WorkspacePrepareFailed,
+            Some(crate::workspace_git::ExportFailure::Cancelled)));
+        assert!(receipt.record.is_none());
+        assert!(!intent.destination().unwrap().exists());
+    }
+
+    #[test]
+    fn spec221_c19_unready_bootstrap_without_marker_is_not_a_stop_proof() {
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_NO_READY".into(),"1".into());
+        assert!(runtime.prepare_view_source(&prep,&request,intent.clone()).is_err());
+        assert_eq!(runtime.view_sources.len(),1);
+        assert!(runtime.store.view_root().join("unready-started").is_file());
+        let stopped=runtime.store.confirm_view_sources_stopped(&prep.task_id);
+        let receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        let claimed=receipt.commit_view.as_ref().unwrap().source_stopped;
+        eprintln!("C19 unready retained={} stop_confirmed={stopped:?} source_stopped={claimed}",
+            runtime.view_sources.len());
+        let key=marker_key(&prep);
+        let held=runtime.view_sources.remove(&key).unwrap();
+        let config=WorkerRuntimeConfig {
+            machine_id:runtime.config.machine_id.clone(),worker_id:runtime.config.worker_id.clone(),
+            provisioning_revision:runtime.config.provisioning_revision,
+            credential_path:runtime.config.credential_path.clone(),state_root:runtime.config.state_root.clone(),
+            registry_path:runtime.config.registry_path.clone(),master_socket:runtime.config.master_socket.clone(),
+        };
+        drop(runtime);
+        let mut runtime=WorkerRuntime::new(config).unwrap();
+        let replay=runtime.prepare_view_source(&prep,&request,intent.clone());
+        assert!(matches!(replay,Err((WorkerRefusal::UnknownExecution,
+            Some(crate::workspace_git::ExportFailure::StopUnconfirmed)))));
+        assert!(runtime.view_sources.is_empty(),"restart must not start another bootstrap");
+        runtime.view_sources.insert(key,held);
+        // Toujours libérer notre fixture avant les assertions du RED.
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-bootstrap-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(stopped,Ok(false)));
+        assert!(!claimed,"missing READY/marker cannot attest that a retained Child is stopped");
+        assert!(!intent.destination().unwrap().exists());
+    }
+
+    #[test]
+    fn spec221_c19_unready_file_without_marker_stays_unconfirmed_and_is_not_restarted() {
+        let fixture=Fixture::new();let (mut runtime,intent,execution)=c19_active_file_fixture(&fixture);
+        runtime.source.insert("B221_VIEW_TEST_NO_READY".into(),"1".into());
+        assert!(runtime.begin_view_file(&execution,"large.bin").is_err());
+        assert_eq!(runtime.view_sources.len(),1);
+        let stopped=runtime.store.settle_view_sources(&execution.command.task_id).unwrap();
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let operation=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(operation.attempted && operation.marker.is_none() && !operation.stopped);
+        let key=format!("file-{}",marker_key(&intent.binding.command));
+        let held=runtime.view_sources.remove(&key).unwrap();
+        let recovered=runtime.begin_view_file(&execution,"large.bin").unwrap();
+        assert!(runtime.view_sources.is_empty());
+        assert_eq!(runtime.poll_view_file(&recovered).unwrap_err(),
+            (WorkerRefusal::UnknownExecution,Some(crate::workspace_git::ExportFailure::StopUnconfirmed)));
+        runtime.view_sources.insert(key,held);
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(runtime.store.view_root().join("allow-bootstrap-exit")).unwrap();
+        let until=Instant::now()+Duration::from_secs(3);
+        while !runtime.view_sources.is_empty() {
+            runtime.collect_view_sources();assert!(Instant::now()<until);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!stopped);
+        let receipt=runtime.store.checked_view_receipt(&intent.binding.command,&intent).unwrap();
+        let done=receipt.commit_view.as_ref().unwrap().materialization.as_ref().unwrap();
+        assert!(done.stopped && done.available==Some(false));
+        assert_eq!(done.failure,Some(crate::workspace_git::ExportFailure::StartupUnavailable));
+        assert!(!intent.destination().unwrap().join("large.bin").exists());
+    }
+
+    #[test]
+    fn spec221_c19_settled_source_does_not_recheck_an_unrelated_reused_group() {
+        use std::os::unix::process::CommandExt;
+        let fixture=Fixture::new();
+        let (unused,prep,request,intent)=c19_store_fixture(&fixture);drop(unused);
+        let mut runtime=runtime_fixture(&fixture);
+        let original=runtime.prepare_view_source(&prep,&request,intent.clone()).unwrap();
+        let mut unrelated=std::process::Command::new("/bin/cat").stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null()).process_group(0).spawn().unwrap();
+        let pid=unrelated.id();
+        let birth=crate::managed_process::process_birth(pid).unwrap();
+        let mut receipt=runtime.store.checked_view_receipt(&prep,&intent).unwrap();
+        let view=receipt.commit_view.as_mut().unwrap();
+        assert!(view.source_stopped);
+        let marker=view.source_marker.as_mut().unwrap();
+        marker.pgid=pid;marker.birth=birth.saturating_sub(1).max(1);
+        runtime.store.persist(&runtime.store.workspace_path(&prep),&receipt).unwrap();
+        let restored=runtime.prepare_view_source(&prep,&request,intent);
+        let still_live=unrelated.try_wait().unwrap().is_none();
+        drop(unrelated.stdin.take());
+        assert!(unrelated.wait().unwrap().success());
+        assert!(still_live,"no signal may target the unrelated group");
+        assert!(restored.as_ref().is_ok_and(|record|same_workspace_anchor(&original,
+            &serde_json::to_value(record).unwrap())),"{restored:?}");
     }
 
     struct Fixture(PathBuf);
@@ -8595,7 +13572,7 @@ while not stop.exists(): time.sleep(.01)
             master_socket: runtime.config.master_socket.clone(),
         };
         drop(runtime);
-        let reopened = WorkerRuntime::new(config).unwrap();
+        let mut reopened = WorkerRuntime::new(config).unwrap();
         assert_eq!(reopened.fence_unstarted(&command(), &placement(), deadline).unwrap(),
             WorkerResponseOperation::StartFenced {});
         assert_eq!(fs::read(path).unwrap(), bytes);
@@ -8604,7 +13581,7 @@ while not stop.exists(): time.sleep(.01)
     #[test]
     fn spec198_fence_quota_refuse_sans_recu_puis_accepte_meme_cle() {
         let fixture = Fixture::new();
-        let runtime = runtime_fixture(&fixture);
+        let mut runtime = runtime_fixture(&fixture);
         let deadline = worker_now() - 1;
         let quota_file = runtime.store.root.join("quota-fence198");
         let quota = OpenOptions::new().write(true).create_new(true).mode(0o600)
@@ -8625,7 +13602,7 @@ while not stop.exists(): time.sleep(.01)
         for phase in [WorkerCommandPhase::Reserved, WorkerCommandPhase::Unknown,
             WorkerCommandPhase::Refused] {
             let fixture = Fixture::new();
-            let runtime = runtime_fixture(&fixture);
+            let mut runtime = runtime_fixture(&fixture);
             let now = worker_now();
             runtime.store.reserve_command(&command(), &"d".repeat(64), &placement(), now + 300, now).unwrap();
             if phase != WorkerCommandPhase::Reserved {
@@ -8638,7 +13615,7 @@ while not stop.exists(): time.sleep(.01)
             assert_eq!(fs::read(path).unwrap(), before);
         }
         let fixture = Fixture::new();
-        let runtime = runtime_fixture(&fixture);
+        let mut runtime = runtime_fixture(&fixture);
         let marker = runtime.store.root.join("markers").join(format!("{}.json", marker_key(&command())));
         write_private_file_atomic(&marker, b"orphan").unwrap();
         assert_eq!(runtime.fence_unstarted(&command(), &placement(), worker_now() - 1).unwrap_err(),

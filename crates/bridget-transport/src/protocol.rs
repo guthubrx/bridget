@@ -2064,6 +2064,9 @@ pub struct SpawnOwnership {
 #[serde(tag = "strategy", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkspaceRequest {
     Shared {},
+    /// Lecteur C19 en préparation. Non négocié et non admissible tant que
+    /// le parcours complet et son retour compatible ne sont pas qualifiés.
+    CommitView {},
     Worktree {
         #[serde(
             default,
@@ -2172,6 +2175,12 @@ pub enum NativeDelegationRequest {
     /// Inventaire public168 ; le daemon applique sa garde locale dédiée.
     RoutingCatalogueV1 {},
     ProviderCatalogueV1 { refresh: bool, machine_id: Option<String> },
+    /// Copie d'un blob omis dans la vue privée de sa tâche active.
+    ReadCommitFile {
+        #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_present_optional")]
+        task_id:Option<String>,
+        path:String,
+    },
     /// Lecture interne du plafond MCP de l'identité authentifiée ; aucun outil.
     CallerScope {},
     /// Admission configurée, séparée du parcours explicite pour que ses
@@ -2885,6 +2894,46 @@ pub enum WorkerCapability {
     StartRecoveryV1,
     WorkspaceFailureV1,
     ProviderCatalogueV1,
+    WorkspaceViewV1,
+    WorkspaceViewCreateV1,
+}
+
+/// Cause C19 fermée partagée avec le reçu/helper ; jamais de texte fournisseur.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitViewFailure {
+    StartupUnavailable,
+    TimedOut,
+    PreparationExpired,
+    Cancelled,
+    ObjectUnavailable,
+    LinkOutsideView,
+    LinkCycle,
+    UnsupportedPath,
+    IntegrityFailed,
+    ByteLimit,
+    DiskFull,
+    AccessDenied,
+    SourceUnavailable,
+    SourceIdentityChanged,
+    ProofUnavailable,
+    MetadataCapacity,
+    OperationCapacity,
+    DestinationInsideRepository,
+    DestinationVolumeMismatch,
+    DestinationUnavailable,
+    DestinationUnsafe,
+    StorageSpaceUnknown,
+    StopUnconfirmed,
+    Unknown,
+}
+impl CommitViewFailure {
+    pub fn validate(self,reason:WorkerRefusal)->Result<(),WorkerRefusal> {
+        worker_require(self==Self::Unknown || matches!(reason,
+            WorkerRefusal::WorkspacePrepareFailed|WorkerRefusal::WorkspacePrepareIncomplete|
+            WorkerRefusal::PrepareExpired|WorkerRefusal::UnknownExecution|WorkerRefusal::ResourceLimit|
+            WorkerRefusal::DiskFull|WorkerRefusal::FilesystemAccessDenied))
+    }
 }
 
 /// Diagnostic fermé : aucun chemin, stderr ou texte du dépôt ne passe sur le fil.
@@ -3664,6 +3713,9 @@ pub struct WorkerFencedRouting {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerRequestOperation {
+    /// Clôture propriétaire, jamais retrait de fichiers ou lancement.
+    ConserveCommitView { prepare_digest: String },
+    ReadCommitViewFile {execution:WorkerResultIdentity,path:String},
     /// Une enveloppe de diagnostic seulement, jamais une nouvelle autorité.
     PrepareDiagnosed { prepare: Box<WorkerRequestOperation> },
     RepairWorkspace {
@@ -3742,6 +3794,10 @@ pub enum WorkerRequestOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerResponseOperation {
+    CommitViewFile {execution:WorkerResultIdentity,path:String,available:bool,
+        reason:Option<WorkerRefusal>,failure:Option<CommitViewFailure>},
+    CommitViewRejected {reason:WorkerRefusal,failure:CommitViewFailure},
+    CommitViewConserved { prepare_digest: String },
     WorkspaceRejected { reason: WorkerRefusal, failure: WorkspacePrepareFailure },
     WorkspaceRepair {
         status: WorkspaceRepairStatusV1,
@@ -3846,6 +3902,12 @@ fn worker_relative_path(value: &str) -> bool {
                 std::path::Component::Normal(_) | std::path::Component::CurDir
             )
         })
+}
+
+/// Chemin littéral de manifeste : pas de dossier courant, parent ni préfixe.
+pub fn commit_view_file_path(value:&str)->bool {
+    worker_relative_path(value) && !value.contains('\\')
+        && value.split('/').all(|part|!part.is_empty() && part!="." && part!="..")
 }
 
 fn worker_base_commit(value: Option<&str>) -> bool {
@@ -4099,6 +4161,7 @@ impl WorkerRequest {
                 | WorkerRequestOperation::PrepareDiagnosed { .. }
                 | WorkerRequestOperation::PrepareV2 { .. }
                 | WorkerRequestOperation::PrepareFenced { .. }
+                | WorkerRequestOperation::ConserveCommitView { .. }
         ) {
             self.command.validate_preparation()?;
         } else {
@@ -4110,6 +4173,11 @@ impl WorkerRequest {
         )?;
         worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
         match &self.request {
+            WorkerRequestOperation::ReadCommitViewFile{execution,path}=>{
+                execution.validate()?;
+                worker_require(execution.command==self.command && commit_view_file_path(path))
+            },
+            WorkerRequestOperation::ConserveCommitView { prepare_digest } => worker_require(worker_digest(prepare_digest)),
             WorkerRequestOperation::PrepareDiagnosed { prepare } => {
                 worker_require(matches!(prepare.as_ref(),
                     WorkerRequestOperation::Prepare { .. } | WorkerRequestOperation::PrepareV2 { .. }))?;
@@ -4140,7 +4208,7 @@ impl WorkerRequest {
                         && (!*inspect_only
                             || matches!(
                                 prepare.workspace,
-                                Some(WorkspaceRequest::Worktree { .. })
+                                Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {})
                             ))
                         && worker_atom(connection_id, MAX_WORKER_ATOM_BYTES)
                         && matches!(engine.as_str(), "codex" | "claude")
@@ -4164,7 +4232,7 @@ impl WorkerRequest {
                     && prepare.provisioning_revision == self.worker.provisioning_revision
                     && placement.matches_worker(&self.worker)
                     && (matches!((&prepare.workspace, workspace),
-                        (Some(WorkspaceRequest::Worktree { .. }), Some(value)) if value.is_object())
+                        (Some(WorkspaceRequest::Worktree { .. }|WorkspaceRequest::CommitView {}), Some(value)) if value.is_object())
                         || matches!((&prepare.workspace, workspace),
                             (Some(WorkspaceRequest::Shared {}), None))))?;
                 worker_serialized_size(workspace, 64 * 1024)
@@ -4230,13 +4298,31 @@ impl WorkerRequest {
     }
 }
 
+impl WorkerRequestOperation {
+    pub fn requires_commit_view_reader(&self)->bool {
+        matches!(self,Self::ConserveCommitView{..}|Self::ReadCommitViewFile{..})
+            || matches!(self,Self::PrepareFenced{prepare,..}
+                if matches!(prepare.workspace,Some(WorkspaceRequest::CommitView{})))
+    }
+
+    pub fn requires_commit_view_creation(&self)->bool {
+        match self {
+            Self::Prepare{prepare}|Self::PrepareV2{prepare,..} =>
+                matches!(prepare.workspace,Some(WorkspaceRequest::CommitView{})),
+            Self::PrepareDiagnosed{prepare}=>prepare.requires_commit_view_creation(),
+            _=>false,
+        }
+    }
+}
+
 impl WorkerResponse {
     pub fn validate(&self) -> Result<(), WorkerRefusal> {
         if self.version != REMOTE_WORKER_VERSION {
             return Err(WorkerRefusal::UnsupportedVersion);
         }
         self.worker.validate()?;
-        if matches!(&self.response, WorkerResponseOperation::Prepared { .. } | WorkerResponseOperation::WorkspaceRejected {..})
+        if matches!(&self.response, WorkerResponseOperation::Prepared { .. } | WorkerResponseOperation::WorkspaceRejected {..}
+            | WorkerResponseOperation::CommitViewConserved { .. } | WorkerResponseOperation::CommitViewRejected {..})
             || (matches!(&self.response, WorkerResponseOperation::Rejected { .. })
                 && self.command.instance_id.is_empty()
                 && self.command.generation == 0)
@@ -4251,6 +4337,17 @@ impl WorkerResponse {
         )?;
         worker_serialized_size(self, MAX_WORKER_FRAME_BYTES - WORKER_FRAME_ENVELOPE_RESERVE)?;
         match &self.response {
+            WorkerResponseOperation::CommitViewFile{execution,path,available,reason,failure}=>{
+                execution.validate()?;
+                worker_require(execution.command==self.command && commit_view_file_path(path))?;
+                if *available {worker_require(reason.is_none() && failure.is_none())}
+                else {
+                    let reason=reason.ok_or(WorkerRefusal::InvalidEnvelope)?;
+                    failure.ok_or(WorkerRefusal::InvalidEnvelope)?.validate(reason)
+                }
+            },
+            WorkerResponseOperation::CommitViewRejected{reason,failure}=>failure.validate(*reason),
+            WorkerResponseOperation::CommitViewConserved { prepare_digest } => worker_require(worker_digest(prepare_digest)),
             WorkerResponseOperation::WorkspaceRepair { status } => {
                 status.request.validate()?;
                 worker_require(matches!(status.phase.as_str(),
@@ -11761,4 +11858,106 @@ mod workspace_repair185_tests {
         assert!(response.validate().is_err());
     }
 
+}
+
+
+#[cfg(test)]
+mod commit_view_reader221_tests {
+    use super::*;
+    #[test]
+    fn spec221_c19_conservation_wire_is_closed_and_bound_to_a_preparation_identity() {
+        let request=WorkerRequest {
+            version:REMOTE_WORKER_VERSION,correlation_id:"c19-close".into(),connection_epoch:"c19-epoch".into(),
+            worker:WorkerIdentity {machine_id:"local".into(),worker_id:"worker221".into(),provisioning_revision:1},
+            command:WorkerCommandIdentity {command_id:"command221".into(),task_id:"task221".into(),instance_id:String::new(),generation:0},
+            request:WorkerRequestOperation::ConserveCommitView {prepare_digest:"a".repeat(64)},
+        };
+        request.validate().unwrap();
+        let value=serde_json::to_value(&request).unwrap();
+        assert_eq!(value["request"],serde_json::json!({"operation":"conserve_commit_view","prepare_digest":"a".repeat(64)}));
+        let mut extra=value.clone();extra["request"]["path"]=serde_json::json!("/untrusted");
+        assert!(serde_json::from_value::<WorkerRequest>(extra).is_err());
+        let mut wrong=request.clone();wrong.command.instance_id="active-instance".into();wrong.command.generation=1;
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=request.clone();wrong.request=WorkerRequestOperation::ConserveCommitView {prepare_digest:"not-a-digest".into()};
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        let mut response=WorkerResponse {version:request.version,correlation_id:request.correlation_id,
+            connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+            response:WorkerResponseOperation::CommitViewConserved {prepare_digest:"a".repeat(64)}};
+        response.validate().unwrap();
+        response.response=WorkerResponseOperation::CommitViewConserved {prepare_digest:String::new()};
+        assert_eq!(response.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        assert_eq!(serde_json::to_value(WorkerCapability::WorkspaceViewV1).unwrap(),"workspace_view_v1");
+    }
+
+    #[test]
+    fn spec221_c19_file_wire_binds_execution_and_rejects_paths_and_extra_authority() {
+        let value=serde_json::json!({"version":REMOTE_WORKER_VERSION,"correlation_id":"view-file-read","connection_epoch":"view-epoch",
+            "worker":{"machine_id":"cartae","worker_id":"worker-view","provisioning_revision":1},
+            "command":{"command_id":"view-command","task_id":"view-task","instance_id":"view-instance","generation":1},
+            "request":{"operation":"read_commit_view_file","path":"sub/file.js","execution":{
+                "command":{"command_id":"view-command","task_id":"view-task","instance_id":"view-instance","generation":1},
+                "mission_id":"view-mission","round":1,"execution_id":"view-execution","execution_generation":1}}});
+        let request:WorkerRequest=serde_json::from_value(value.clone()).unwrap();request.validate().unwrap();
+        assert!(request.request.requires_commit_view_reader() && !request.request.requires_commit_view_creation());
+        for path in ["","/etc/passwd","../file","sub/../file","./file","sub//file","sub\\file","sub/","sub/\nfile"] {
+            let mut wrong=value.clone();wrong["request"]["path"]=serde_json::json!(path);
+            assert!(serde_json::from_value::<WorkerRequest>(wrong).unwrap().validate().is_err(),"{path:?}");
+        }
+        let mut wrong=value.clone();wrong["request"]["execution"]["command"]["generation"]=serde_json::json!(2);
+        assert!(serde_json::from_value::<WorkerRequest>(wrong).unwrap().validate().is_err());
+        wrong=value.clone();wrong["request"]["proof_root"]=serde_json::json!("/PRIVATE");
+        assert!(serde_json::from_value::<WorkerRequest>(wrong).is_err());
+        let WorkerRequestOperation::ReadCommitViewFile{execution,path}=request.request else{unreachable!()};
+        let mut response=WorkerResponse{version:request.version,worker:request.worker,command:request.command,
+            correlation_id:request.correlation_id,connection_epoch:request.connection_epoch,
+            response:WorkerResponseOperation::CommitViewFile{execution,path,available:true,reason:None,failure:None}};
+        response.validate().unwrap();
+        if let WorkerResponseOperation::CommitViewFile{available,..}=&mut response.response {*available=false;}
+        assert!(response.validate().is_err(),"un refus sans cause ni code n'est pas complet");
+        if let WorkerResponseOperation::CommitViewFile{reason,failure,..}=&mut response.response {
+            *reason=Some(WorkerRefusal::ResourceLimit);*failure=Some(CommitViewFailure::OperationCapacity);
+        }
+        response.validate().unwrap();
+    }
+
+    #[test]
+    fn spec221_c19_creation_refusal_is_closed_and_requires_preparation_identity() {
+        let value=serde_json::json!({"version":REMOTE_WORKER_VERSION,"correlation_id":"reply221",
+            "connection_epoch":"epoch221","worker":{"machine_id":"cartae","worker_id":"worker221","provisioning_revision":1},
+            "command":{"command_id":"task221","task_id":"task221","instance_id":"","generation":0},
+            "response":{"operation":"commit_view_rejected","reason":"workspace_prepare_failed","failure":"destination_volume_mismatch"}});
+        let response:WorkerResponse=serde_json::from_value(value.clone()).unwrap();response.validate().unwrap();
+        assert_eq!(serde_json::to_value(&response).unwrap(),value);
+        for field in ["message","stderr","path"] {
+            let mut extra=value.clone();extra["response"][field]=serde_json::json!("PRIVATE");
+            assert!(serde_json::from_value::<WorkerResponse>(extra).is_err());
+        }
+        let mut wrong=response.clone();wrong.command.instance_id="active".into();wrong.command.generation=1;
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong=response.clone();wrong.response=WorkerResponseOperation::CommitViewRejected{
+            reason:WorkerRefusal::PermissionsChanged,failure:CommitViewFailure::DiskFull};
+        assert_eq!(wrong.validate(),Err(WorkerRefusal::InvalidEnvelope));
+        wrong.response=WorkerResponseOperation::CommitViewRejected{
+            reason:WorkerRefusal::PermissionsChanged,failure:CommitViewFailure::Unknown};
+        wrong.validate().unwrap();
+        assert_eq!(serde_json::to_value(WorkerCapability::WorkspaceViewCreateV1).unwrap(),"workspace_view_create_v1");
+    }
+
+    #[test]
+    fn spec221_c19_reader_preserves_closed_workspace_shape_without_advertising_a_launch() {
+        let value=serde_json::json!({"strategy":"commit_view"});
+        let workspace=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&workspace).unwrap(),value);
+        for extra in ["branch","base_ref","private"] {
+            let mut invalid=value.clone();invalid[extra]=serde_json::json!("untrusted");
+            assert!(serde_json::from_value::<WorkspaceRequest>(invalid).is_err());
+        }
+        // Aucun champ optionnel n'a été ajouté aux formes historiques.
+        for value in [serde_json::json!({"strategy":"shared"}),
+            serde_json::json!({"strategy":"worktree","base_ref":"a".repeat(40)})] {
+            let decoded=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(),value);
+        }
+    }
 }

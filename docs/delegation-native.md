@@ -1064,3 +1064,30 @@ For each model, `policy_effort_status` distinguishes `outside_policy`, `not_conf
 `account_change_detection` names the signals actually used by Codex: authentication, program and configuration metadata, definition digest and worker reconnection. Without a file signal, only periodic or explicit checks can observe a change. The 120-second target is not a guarantee. Discovery for other providers remains `unsupported`.
 
 The 32-connection limit per worker includes disabled connections. A larger inventory reports `connection_limit`; ask the responsible operator to qualify it. An explicit request then sends no check. Removing a connection, an unreadable registry or a disabled policy does not release custody of a probe whose stop is unconfirmed. Its retained diagnostic returns with the connection; an unavailable global cache proves no stop. Before any version switch, the operator must check private markers. Other work follows its own state.
+
+
+### Read an omitted file from a commit view
+
+A view contains files from the requested commit and a map of omissions. It is
+not a Git repository. The native `bridget_read_commit_file` tool creates a
+private copy of a file and the required markers from that same commit and returns its data path. It does
+not restart the mission or change the source repository, base or permissions.
+
+The current child supplies only `path`, the exact relative path from the map.
+The parent also supplies `task_id` for its own task. The caller supplies no
+execution identity or proof root. The task must remain active and own a
+published view. A pause, revocation or obsolete round refuses the read. Context
+is checked before and after waiting.
+
+The CLI uses `bridget task read-file [TASK] PATH`. After `status=available`, read
+the returned data path. Divergent files are never overwritten. While a check is
+still owned, the same path joins that operation; another file must wait. A
+timeout or lost connection does not prove process termination. Keep the task
+and view; do not create a replacement mission.
+
+The client requires the master's `commit_view_files_v1` feature; the master
+requires the worker's `WorkspaceViewV1` reader. Without them, the refusal occurs
+before sending the new command. Reading grants no view creation capability.
+View admissions remain closed during the reader deployment.
+
+A file-read refusal may include detail.cause_kind: worker for a worker code, or commit_view for a view cause. This field is absent without an observed cause. It changes neither task scope nor permissions.

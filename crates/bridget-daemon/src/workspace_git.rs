@@ -16,6 +16,14 @@ mod tests;
 mod repair;
 #[path = "workspace_compact.rs"]
 mod compact;
+#[path = "workspace_commit_view.rs"]
+mod commit_view;
+/// Reader A : tous les lecteurs sont présents, les créateurs restent fermés.
+/// Activer seulement après qualification du chemin complet et du retour.
+pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED:bool=false;
+
+pub(crate) use commit_view::{run_commit_view_plan, run_commit_view_export, run_commit_view_materialize, ViewPlan, ViewBinding, ViewIntent, ViewProofs, ViewJob, ViewJobRequest, JobPoll, ExportFailure, view_export_failure};
+
 pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, report_repaired_workspace, apply_repair_git};
 
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -167,6 +175,7 @@ fn allowed(args: &[&str]) -> bool {
         ["rev-parse", "--absolute-git-dir"] => true,
         ["ls-tree", "--full-tree", "-r", "-l", "-z", base] => sha(base),
         ["ls-files", "-v", "-z"] => true,
+        ["cat-file", "--batch-command"] => true,
         ["read-tree", "-mu", "HEAD"] => true,
         ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile" | "extensions.worktreeConfig"] => true,
         ["config", "--worktree", "--get", "core.sparseCheckout" | "core.sparseCheckoutCone"] => true,
@@ -273,50 +282,18 @@ pub(crate) fn take_status_reads193() -> usize {
     STATUS_READS193.with(|count| count.replace(0))
 }
 
-fn capture(
-    cwd: &Path,
-    args: &[&str],
-    timeout: Duration,
-    anchor: Option<(&Path, &Path)>,
-) -> Result<GitOutput, String> {
-    #[cfg(test)]
-    if args.first() == Some(&"status") {
-        STATUS_READS193.with(|count| count.set(count.get() + 1));
-    }
-
-    let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add") {
-        WORKTREE_ADD_TIMEOUT
-    } else if args.first() == Some(&"read-tree") {
-        WORKTREE_ADD_TIMEOUT
-    } else if args.first() == Some(&"fetch") {
-        CREATE_TIMEOUT
-    } else {
-        READ_TIMEOUT
-    });
-    let deadline = Instant::now() + timeout;
-    if !allowed(args) {
-        return Err("commande Git hors liste blanche".into());
-    }
-    // Chaque entrée réelle recontrôle le Git qui sera lancé. Pas de cache
-    // global : le PATH d'un autre appel peut choisir un autre exécutable.
-    if args != ["--version"] {
-        capture(
-            cwd,
-            &["--version"],
-            deadline.saturating_duration_since(Instant::now()),
-            anchor,
-        )?
-        .complete()?;
-    }
-    if Instant::now() >= deadline {
-        return Err("délai Git dépassé avant lancement".into());
-    }
+// Construction commune : l'export brut ajoute uniquement la lecture littérale
+// des objets ; les appels historiques gardent exactement leur environnement.
+fn spawn_git(cwd: &Path, args: &[&str], anchor: Option<(&Path, &Path)>,
+             stdin: Stdio, literal_objects: bool) -> Result<Child, String> {
+    if !allowed(args) { return Err("commande Git hors liste blanche".into()); }
     let mut command = Command::new("git");
     for (name, _) in
         std::env::vars_os().filter(|(name, _)| name.to_string_lossy().starts_with("GIT_"))
     {
         command.env_remove(name);
     }
+    if literal_objects { command.env("GIT_NO_REPLACE_OBJECTS", "1"); }
     command
         .env("LC_ALL", "C")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -367,12 +344,59 @@ fn capture(
     } else {
         command.args(args);
     }
-    let mut child = command
-        .stdin(Stdio::null())
+    command
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("workspace_git_unsupported: Git indisponible : {error}"))?;
+        .map_err(|error| format!("workspace_git_unsupported: Git indisponible : {error}"))
+
+}
+
+fn capture(
+    cwd: &Path,
+    args: &[&str],
+    timeout: Duration,
+    anchor: Option<(&Path, &Path)>,
+) -> Result<GitOutput, String> {
+    capture_with_objects(cwd, args, timeout, anchor, false)
+}
+
+fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
+    anchor: Option<(&Path, &Path)>, literal_objects: bool) -> Result<GitOutput, String> {
+    #[cfg(test)]
+    if args.first() == Some(&"status") {
+        STATUS_READS193.with(|count| count.set(count.get() + 1));
+    }
+
+    let timeout = timeout.min(if args.first() == Some(&"worktree") && args.get(1) == Some(&"add") {
+        WORKTREE_ADD_TIMEOUT
+    } else if args.first() == Some(&"read-tree") {
+        WORKTREE_ADD_TIMEOUT
+    } else if args.first() == Some(&"fetch") {
+        CREATE_TIMEOUT
+    } else {
+        READ_TIMEOUT
+    });
+    let deadline = Instant::now() + timeout;
+    if !allowed(args) {
+        return Err("commande Git hors liste blanche".into());
+    }
+    // Chaque entrée réelle recontrôle le Git qui sera lancé. Pas de cache
+    // global : le PATH d'un autre appel peut choisir un autre exécutable.
+    if args != ["--version"] {
+        capture(
+            cwd,
+            &["--version"],
+            deadline.saturating_duration_since(Instant::now()),
+            anchor,
+        )?
+        .complete()?;
+    }
+    if Instant::now() >= deadline {
+        return Err("délai Git dépassé avant lancement".into());
+    }
+    let mut child = spawn_git(cwd, args, anchor, Stdio::null(), literal_objects)?;
     let mut stdout = child.stdout.take().ok_or("stdout Git indisponible")?;
     let mut stderr = child.stderr.take().ok_or("stderr Git indisponible")?;
     for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
@@ -546,7 +570,7 @@ fn local_origin(cwd: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn remote_source_commit(cwd: &Path, base_ref: Option<&str>) -> Result<String, WorkspacePreflightError> {
+pub(crate) fn remote_source_commit(cwd: &Path, base_ref: Option<&str>) -> Result<String, WorkspacePreflightError> {
     match resolve_source_commit(cwd, base_ref) {
         Err(WorkspacePreflightError::Refused(error)) if error == "workspace_base_unavailable: référence de base inconnue" => {
             let origin = local_origin(cwd).map_err(WorkspacePreflightError::Refused)?;
@@ -880,7 +904,7 @@ pub(crate) fn create(
         ));
     }
     Ok(WorkspaceRecord {
-        strategy: WorkspaceStrategy::Worktree,
+        strategy: WorkspaceStrategy::Worktree, commit_view:None,
         state: WorkspaceState::Active,
         toplevel: preflight.toplevel.to_string_lossy().into_owned(),
         path: path_text.into(),
@@ -1020,6 +1044,13 @@ fn report_anchor(workspace: &WorkspaceRecord) -> Result<(PathBuf, PathBuf), Stri
 
 /// O(B+50), sorties bornées et 50 commits ; faits inconnus renvoyés en erreur.
 pub(crate) fn report(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord, String> {
+    if matches!(workspace.strategy,WorkspaceStrategy::CommitView) {
+        return commit_view::report_view(workspace);
+    }
+
+    if workspace.commit_view.is_some() {
+        return Err("workspace_record_invalid: conserver le dossier ; ancre de vue sur un worktree".into());
+    }
     let (git_dir, path) = report_anchor(workspace)?;
     report_at(workspace, &git_dir, &path)
 }

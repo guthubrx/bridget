@@ -63,6 +63,7 @@ pub mod runtime;
 mod service_limits;
 pub mod store;
 pub mod store_schema;
+mod storage_compatibility;
 pub mod t3code;
 pub mod t3code_contract;
 mod t3code_contract_v2;
