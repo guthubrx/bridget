@@ -1409,6 +1409,80 @@ fn interrupt_terminal_reason(reason: &str) -> bool {
     matches!(reason, "aborted_tools" | "aborted_streaming")
 }
 
+// terminal_reason est facultatif dans SDKResultMessage. Le sous-type
+// success est le repli documenté, jamais le texte d'un assistant ou d'un commit.
+// Une raison présente mais inconnue ou mal typée ne bénéficie pas de ce repli.
+fn known_claude_terminal_reason(reason: &str) -> Option<&str> {
+    matches!(reason, "completed" | "max_turns" | "tool_deferred" | "aborted_streaming"
+        | "aborted_tools" | "hook_stopped" | "stop_hook_prevented" | "background_requested"
+        | "blocking_limit" | "rapid_refill_breaker" | "prompt_too_long" | "image_error"
+        | "model_error" | "api_error" | "malformed_tool_use_exhausted" | "budget_exhausted"
+        | "structured_output_retry_exhausted" | "tool_deferred_unavailable" | "turn_setup_failed")
+        .then_some(reason)
+}
+
+fn classify_claude_result(value: &Value, interrupted: bool, rate_limited: bool) -> ManagedTerminal {
+    let reason = value.get("terminal_reason").and_then(Value::as_str);
+    let reason_absent = value.get("terminal_reason").is_none_or(Value::is_null);
+    let subtype = value.get("subtype").and_then(Value::as_str);
+    let success_type = value.get("subtype").is_none_or(Value::is_null) || subtype == Some("success");
+    if interrupted {
+        return ManagedTerminal::Failed { detail: "provider_permission_denied".into() };
+    }
+    if value["is_error"].as_bool() == Some(false)
+        && ((reason == Some("completed") && success_type)
+            || (reason_absent && subtype == Some("success")))
+    {
+        return ManagedTerminal::Completed;
+    }
+    if reason.is_some_and(interrupt_terminal_reason) {
+        return ManagedTerminal::Cancelled;
+    }
+    if rate_limited {
+        return ManagedTerminal::Failed { detail: "usage_limit".into() };
+    }
+    let fallback = if reason_absent && value["is_error"].as_bool() == Some(true) {
+        match subtype {
+            Some("error_max_turns") => Some("max_turns"),
+            Some("error_max_budget_usd") => Some("budget_exhausted"),
+            Some("error_max_structured_output_retries") => Some("structured_output_retry_exhausted"),
+            Some("error_during_execution") => Some("error_during_execution"),
+            _ => None,
+        }
+    } else { None };
+    ManagedTerminal::Failed {
+        detail: reason.filter(|reason| *reason != "completed").and_then(known_claude_terminal_reason).or(fallback)
+            .unwrap_or("terminal Claude inconnu").to_owned(),
+    }
+}
+
+// Vocabulaire fermé : aucun result, errors, chemin ou identifiant de compte.
+// L'identifiant du message actif porte la corrélation dans le journal existant.
+fn claude_result_metadata(value: &Value, terminal: &ManagedTerminal, interrupted: bool) -> Value {
+    let subtype = match value.get("subtype").and_then(Value::as_str) {
+        Some(s @ ("success" | "error_max_turns" | "error_during_execution"
+            | "error_max_budget_usd" | "error_max_structured_output_retries")) => s,
+        None if value.get("subtype").is_none_or(Value::is_null) => "missing",
+        _ => "unrecognized",
+    };
+    let reason = match value.get("terminal_reason") {
+        None | Some(Value::Null) => "missing",
+        Some(Value::String(reason)) => known_claude_terminal_reason(reason).unwrap_or("unrecognized"),
+        _ => "unrecognized",
+    };
+    json!({
+        "subtype": subtype,
+        "terminal_reason": reason,
+        "is_error": value.get("is_error").and_then(Value::as_bool),
+        "num_turns": value.get("num_turns").and_then(Value::as_u64).map(|n| n.min(1_000_000)),
+        "permission_denial_count": value.get("permission_denials").and_then(Value::as_array)
+            .map_or(0, |v| v.len().min(1_000_000)),
+        "permission_interrupted": interrupted,
+        "outcome": match terminal { ManagedTerminal::Completed => "completed",
+            ManagedTerminal::Cancelled => "cancelled", ManagedTerminal::Failed { .. } => "failed" },
+    })
+}
+
 // Même mécanisme que canUseTool de T3 ; seule AskUserQuestion sort du refus des permissions.
 fn claude_user_input(value: &Value, session: &str, turn: &str) -> Option<ChildProviderRequest> {
     if value.pointer("/request/tool_name")?.as_str()? != "AskUserQuestion" {return None;}
@@ -1836,34 +1910,13 @@ fn spawn_reader(
                 // Un outil bloqué par Claude ou un hook ne transforme pas un
                 // tour terminé en échec. Une interruption imposée par notre
                 // contrôle d'autorisation reste un refus terminal.
-                let terminal = if interrupted_for_permission {
-                    ManagedTerminal::Failed {
-                        detail: "provider_permission_denied".into(),
-                    }
-                } else if value.get("is_error").and_then(Value::as_bool) == Some(false)
-                    && value.get("terminal_reason").and_then(Value::as_str) == Some("completed")
-                {
-                    ManagedTerminal::Completed
-                } else if value
-                    .get("terminal_reason")
-                    .and_then(Value::as_str)
-                    .is_some_and(interrupt_terminal_reason)
-                {
-                    // `aborted_tools` / `aborted_streaming` : le tour a été
-                    // coupé à la demande. C'est une annulation, pas un échec —
-                    // sans quoi bridget-idle classerait l'agent en bloqué.
-                    ManagedTerminal::Cancelled
-                } else if rate_limited {
-                    ManagedTerminal::Failed { detail: "usage_limit".into() }
-                } else {
-                    ManagedTerminal::Failed {
-                        detail: value
-                            .get("terminal_reason")
-                            .and_then(Value::as_str)
-                            .unwrap_or("terminal Claude inconnu")
-                            .to_string(),
-                    }
-                };
+                let terminal = classify_claude_result(&value, interrupted_for_permission, rate_limited);
+                let active_id = queue.0.lock().unwrap_or_else(|e| e.into_inner())
+                    .active.as_ref().map(|active| active.message_id.clone());
+                if let Some(message_id) = active_id {
+                    record_or_terminal(&journal, &events, "provider_result", Some(&message_id),
+                        claude_result_metadata(&value, &terminal, interrupted_for_permission));
+                }
                 if tool_denials > 0 {
                     let mut state = queue.0.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(active) = state.active.as_mut() {
@@ -1884,7 +1937,9 @@ fn spawn_reader(
                 // (C) Issue attestée : `terminal_reason` du résultat Claude
                 // (ex. "completed"), pas le champ stop_reason fournisseur
                 // (ex. "end_turn") — attach lit payload.stop_reason.
-                let stop_reason = value
+                let stop_reason = if matches!(terminal, ManagedTerminal::Completed) {
+                    Some("completed".to_owned())
+                } else { value
                     .get("terminal_reason")
                     .and_then(Value::as_str)
                     .map(str::trim)
@@ -1897,7 +1952,7 @@ fn spawn_reader(
                             .map(str::trim)
                             .filter(|reason| !reason.is_empty())
                             .map(str::to_string)
-                    });
+                    }) };
                 let pending_result_update = {
                     let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
                     if let Some(active) = state.active.as_mut() {
@@ -2717,7 +2772,7 @@ sys.stdin.readline()
         opts.args[1] = concat!(
             "while IFS= read -r line; do ",
             "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_demo\",\"name\":\"Read\",\"input\":{\"file_path\":\"/tmp/demo.toml\",\"limit\":1}}]}}'; ",
-            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"terminal_reason\":\"completed\",\"stop_reason\":\"end_turn\",\"result\":\"ok\"}'; ",
+            "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,\"subtype\":\"success\",\"stop_reason\":\"end_turn\",\"result\":\"ok\"}'; ",
             "done"
         )
         .to_string();
@@ -2753,6 +2808,13 @@ sys.stdin.readline()
             .expect("entrée journal")
             .path();
         let journal_events = crate::journal::valid_events(&journal_path);
+        let proof = journal_events.iter().find(|event| event["event"]=="provider_result")
+            .expect("métadonnées terminales corrélées");
+        assert_eq!(proof["message_id"], "claude-e2e-1");
+        assert_eq!(proof["payload"]["subtype"], "success");
+        assert_eq!(proof["payload"]["terminal_reason"], "missing");
+        assert_eq!(proof["payload"]["outcome"], "completed");
+        assert!(proof["payload"].get("result").is_none());
         let _ = fs::remove_dir_all(&root);
         (events, journal_events)
     }
@@ -3259,15 +3321,22 @@ sys.stdin.readline()
 
     #[test]
     fn delivery171_tool_refusal_preserves_report_and_control_refusal_stays_failed() {
-        for (interrupted, provider_error) in [(false, false), (true, false), (false, true)] {
+        for (interrupted, provider_error, legacy) in [
+            (false, false, false), (true, false, false), (false, true, false),
+            (false, false, true), (true, false, true), (false, true, true),
+        ] {
             let mut configured = options();
             let control = if interrupted {
                 "printf '%s\\n' '{\"type\":\"control_request\",\"request_id\":\"denied171\",\"request\":{\"subtype\":\"can_use_tool\"}}'; IFS= read -r answer; "
             } else { "" };
-            let result = json!({"type":"result","is_error":provider_error,
+            let mut result = json!({"type":"result","is_error":provider_error,
                 "terminal_reason":if provider_error {"api_error"} else {"completed"},
                 "permission_denials":[{"tool_name":"Bash"}],
                 "result":"HEAD correct. La seconde commande a été bloquée par le hook."});
+            if legacy {
+                result.as_object_mut().unwrap().remove("terminal_reason");
+                result["subtype"] = json!(if provider_error { "error_during_execution" } else { "success" });
+            }
             configured.args[1] = format!("while IFS= read -r line; do {control}printf '%s\\n' '{result}'; done");
             let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
             transport.deliver(&message("denial-report171")).unwrap();
@@ -3286,12 +3355,56 @@ sys.stdin.readline()
                     if response.contains("HEAD correct") && response.contains("bloquée par le hook") && response.contains("1 appel(s) d'outil refusé(s)"))), "{events:?}");
                 assert!(!events.iter().any(|event| matches!(&event.kind,ManagedEventKind::DeliveryRejected {..})));
             } else {
-                let expected=if interrupted {"provider_permission_denied"} else {"api_error"};
+                let expected=if interrupted {"provider_permission_denied"} else if legacy {"error_during_execution"} else {"api_error"};
                 assert!(events.iter().any(|event| matches!(&event.kind,
                     ManagedEventKind::DeliveryRejected {reason,..} if reason==expected)), "{events:?}");
                 assert!(!events.iter().any(|event| matches!(&event.kind,ManagedEventKind::TurnFinished {terminal:ManagedTerminal::Completed,..})));
             }
         }
+    }
+
+    #[test]
+    fn spec221_claude_result_optional_reason_and_closed_diagnostics() {
+        let base = json!({"type":"result","subtype":"success","is_error":false,
+            "num_turns":0,"result":"PRIVATE_RESULT","errors":["PRIVATE_ERROR"]});
+        for reason in [None, Some(Value::Null), Some(json!("completed"))] {
+            let mut frame = base.clone();
+            if let Some(reason) = reason { frame["terminal_reason"] = reason; }
+            assert!(matches!(classify_claude_result(&frame,false,false),ManagedTerminal::Completed));
+            assert!(matches!(classify_claude_result(&frame,true,false),
+                ManagedTerminal::Failed { detail } if detail=="provider_permission_denied"));
+        }
+        let mut explicit=base.clone();
+        explicit["terminal_reason"]=json!("completed");explicit["subtype"]=Value::Null;
+        assert!(matches!(classify_claude_result(&explicit,false,false),ManagedTerminal::Completed));
+        explicit["is_error"]=json!(true);
+        assert!(matches!(classify_claude_result(&explicit,false,false),
+            ManagedTerminal::Failed { detail } if detail=="terminal Claude inconnu"));
+        for (subtype, expected) in [("error_max_turns","max_turns"),
+            ("error_max_budget_usd","budget_exhausted"),
+            ("error_max_structured_output_retries","structured_output_retry_exhausted"),
+            ("error_during_execution","error_during_execution")] {
+            let mut frame = base.clone(); frame["is_error"]=json!(true); frame["subtype"]=json!(subtype);
+            assert!(matches!(classify_claude_result(&frame,false,false),
+                ManagedTerminal::Failed { detail } if detail==expected));
+        }
+        for patch in [json!({"terminal_reason":"PRIVATE_REASON"}), json!({"terminal_reason":false}),
+            json!({"terminal_reason":""}), json!({"is_error":true}), json!({"is_error":null}),
+            json!({"subtype":"PRIVATE_SUBTYPE"}), json!({"subtype":"error_during_execution","terminal_reason":"completed"})] {
+            let mut frame = base.clone();
+            frame.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            let terminal=classify_claude_result(&frame,false,false);
+            assert!(matches!(terminal,ManagedTerminal::Failed { .. }),"{frame:?}");
+            let metadata=serde_json::to_string(&claude_result_metadata(&frame,&terminal,false)).unwrap();
+            assert!(!metadata.contains("PRIVATE") && metadata.len()<512,"{metadata}");
+        }
+        let mut frame=base.clone();frame["terminal_reason"]=json!("aborted_streaming");
+        assert!(matches!(classify_claude_result(&frame,false,true),ManagedTerminal::Cancelled));
+        frame["terminal_reason"]=json!("api_error");
+        assert!(matches!(classify_claude_result(&frame,false,true),
+            ManagedTerminal::Failed { detail } if detail=="usage_limit"));
+        assert!(matches!(classify_claude_result(&json!({"stop_reason":"end_turn"}),false,false),
+            ManagedTerminal::Failed { .. }));
     }
 
     #[test]

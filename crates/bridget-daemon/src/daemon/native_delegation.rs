@@ -4679,6 +4679,11 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         };
         view["error_human_action"]=json!("Dites à l’utilisateur : cette connexion ne permet pas d’utiliser le modèle demandé sur ce serveur. Vérifiez avec lui que le compte et l’abonnement sont ceux prévus, puis l’accès au modèle. Un changement de compte, d’offre ou de modèle exige son accord. Ne conseillez pas une réinstallation, un nouveau login ou un changement de droits sur ce seul refus.");
     }
+    if matches!(task.projected_error(),Some("terminal Claude inconnu" | "error_during_execution")) {
+        view["error_message"]=json!("Conservez les produits et faites vérifier les métadonnées provider_result du journal corrélé à cette tâche. Le résultat final Claude est inconnu ou signale une erreur d’exécution sans cause plus précise. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
+        view["error_recovery"]=json!("Depuis le statut complet, transmettez detail.provider_failure au responsable Bridget. Il doit corréler tâche, ronde, mission, instance et génération avant de lire subtype, is_error et terminal_reason. Sans événement conservé, la cause historique reste inconnue. Un commit poussé ne prouve pas la réussite du tour fournisseur. Conservez tâche, clé et fichiers ; aucun rejeu initial, remplacement ni reclassification automatique. Avant toute suite distincte autorisée, confirmez l’arrêt natif et le rapport du dossier.");
+        view["error_human_action"]=json!("Si le diagnostic manque ou qu’une reprise dépasse votre mandat, demandez à l’utilisateur la décision sur la suite du travail conservé. Ne changez ni compte, ni modèle, ni droits et ne réinstallez pas le programme sur ce seul refus.");
+    }
     if task.projected_error()==Some("api_error") {
         view["error_message"]=json!("Le fournisseur a refusé ce tour avec api_error. Ce code seul ne prouve ni quota épuisé, ni compte invalide, ni durée excessive.");
         view["error_recovery"]=json!("Conservez cette tâche, sa clé et ses fichiers. Depuis son statut complet, transmettez detail.provider_failure au responsable pour retrouver le dernier diagnostic fournisseur de CE tour dans son journal et son stderr corrélés. Un modèle non pris en charge peut demander une mise à jour du programme fournisseur ; seule la preuve corrélée permet de le conclure. Une tâche failed ne reprend ni par Continue ni par rejeu initial. Vérifiez son arrêt et son dossier avant une suite autorisée ; ne créez pas de remplacement pendant ce contrôle. Les autres travaux autorisés suivent leur propre état.");
@@ -4897,7 +4902,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
-    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "terminal Codex: failed:cause=model_not_found")) {
+    if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "terminal Codex: failed:cause=model_not_found" | "terminal Claude inconnu" | "error_during_execution")) {
         // Projection après autorisation : aucun contenu de stderr ni chemin privé.
         // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
         let command=task.remote_placement.as_ref().and_then(|_|remote_command_identity(st,task).ok());
@@ -4913,6 +4918,11 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
             "command_identity_confirmed":command.is_some(),
             "cause":if task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") { "model_not_found" } else { "unobserved" },
             "verification":"Transmettez cette référence au responsable de la machine : retrouver le reçu natif lié à task_id, vérifier instance et génération, puis lire seulement le stderr de cette identité. Si command_identity_confirmed=false, la référence de commande reste à vérifier ; ne choisissez pas un journal par approximation ni un ancien slot. Ces identifiants n’autorisent aucune reprise et ne prouvent pas un état courant du fournisseur."});
+    }
+    if full && matches!(task.projected_error(),Some("terminal Claude inconnu" | "error_during_execution")) {
+        view["detail"]["provider_failure"]["round"]=json!(task.round);
+        view["detail"]["provider_failure"]["mission_id"]=json!(task.mission);
+        view["detail"]["provider_failure"]["verification"]=json!("Retrouvez le reçu natif de cette tâche, instance et génération, puis les événements provider_result de la mission et ronde indiquées. Leur vocabulaire est fermé ; ils ne contiennent aucun résultat ni texte d’erreur privé. En l’absence de ces métadonnées dans un ancien journal, conservez la cause inconnue et les produits, sans déduire un succès depuis un commit ou un message assistant.");
     }
     if full && task.projected_error()==Some("terminal Codex: failed:cause=model_not_found") {
         view["detail"]["provider_failure"]["http_status"]=json!(400);
@@ -34946,6 +34956,30 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(before,serde_json::to_vec(&task).unwrap());
         }
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_claude_unknown_terminal_guidance_preserves_task_and_owner_scope() {
+        let (state,config,_rx,_reader,_request,_root)=routing168_fixture(1);
+        let st=state.lock().unwrap();
+        let (_,remote_config,mut task,_)=remote162_capture_fixture();
+        task.state="failed".into();task.result=None;
+        for error in ["terminal Claude inconnu","error_during_execution"] {
+            task.error=Some(error.into());
+            let before=serde_json::to_vec(&task).unwrap();
+            let view=current_task_view(&st,&task,true).unwrap();
+            assert_eq!(view["error"],error);
+            assert!(view["error_message"].as_str().unwrap().contains("provider_result"));
+            assert!(view["error_message"].as_str().unwrap().contains("autres travaux"));
+            assert!(view["error_recovery"].as_str().unwrap().contains("cause historique reste inconnue"));
+            assert!(view["error_human_action"].as_str().unwrap().contains("utilisateur"));
+            assert_eq!(view["detail"]["provider_failure"]["task_id"],task.task_id);
+            assert_eq!(view["detail"]["provider_failure"]["round"],task.round);
+            assert_eq!(view["detail"]["provider_failure"]["mission_id"],task.mission);
+            assert!(current_task_view(&st,&task,false).unwrap()["detail"]["provider_failure"].is_null());
+            assert_eq!(before,serde_json::to_vec(&task).unwrap());
+        }
+        cleanup(&remote_config);cleanup(&config);
     }
 
     #[test]
