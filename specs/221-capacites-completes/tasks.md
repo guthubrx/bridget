@@ -266,3 +266,11 @@ Deux écarts observés après activation, sans incident métier ni nouvelle Task
 - [x] T182 [US1] Correction indépendante : borner les attentes Darwin de send_catalogue_frame sans changer O_NONBLOCK du lecteur partagé. Éprouver tampon plein, écriture partielle, restauration du délai et circuit nominal sur Mac/Linux ; conserver le reproducer SIGALRM, la pile du test initial et les régressions. Revue/audit puis livraison active, sans admission ni reprise métier. Ne clôt aucune catégorie entière.
 
 T177 vérifiée31octobre : MCP8937 réellement221-write, refus local-32602 explicite observé ; aucune admission créée par ce contrôle. ReaderA livré aux services avec limites de client actuel ; voir validation/c19-reader-a.md. Programme36/182, In Progress ; C19 et gateL1c non closes.
+
+
+Convergence incident résultat Claude (C27, sans clôture supplémentaire) :
+adaptateur compatible avec terminal_reason facultatif, métadonnées fermées
+provider_result et guidage propriétaire livrés sur les sept services.
+42contrôles distincts, revue native7e52f8b3 et correction null ciblée.
+Aucun résultat historique reclassé, aucune mission métier rejouée.
+Preuve : validation/claude-result.md. Programme52/182, In Progress.

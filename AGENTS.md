@@ -109,6 +109,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/résultatClaude — source8f89c1ef intégrée/poussée, build221-claude-terminal-r1 chargé sur7services et SHA vérifiés. terminal_reason facultatif reconnu par subtype success/is_errorfalse, raisons présentes inconnues refusées, droits/annulations conservés ; métadonnées fermées provider_result et guidage propriétaire.42tests distinctsPASS, revue7e52f8b3 sans blocage après correction null ciblée. Coupure2,20s ; wrappersCartae2500061/3149928 préservés, rollback221-preparation-queue-r1 natif vérifié. Lien revenu après primary_absent transitoire ; MCP221-view-sync conservés sans nouveau schéma. Tâchef7ab1d73/ronde3 strictement inchangée, brut historique absent donc cause précise inconnue, aucun rejeu ni service métier.123276528octets de transferts retirés ; stagingMac/observationSYS incomplets, caches et revue propres conservés sans forcer. Programme52/182InProgress, aucune parité globale. Preuves : specs/221-capacites-completes/validation/claude-result.md.
+
+
 Session 221 — préparations parallèles : source 238223b5 intégrée et poussée.
 Sept contrôles ciblés distincts PASS, dont trois processus réels pour le verrou,
 et revue 68fbe3e2 sans défaut bloquant du verrou/capacité ; réserve MCP réfutée
