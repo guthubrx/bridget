@@ -16,9 +16,11 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 TIMEOUT = 300
 MAX_JSON = 1024 * 1024
+SOURCE_LOCK_WAIT_SECS = 30.0
 
 class Refused(Exception):
     pass
@@ -70,14 +72,22 @@ def private_dir(path):
     return path
 
 @contextlib.contextmanager
-def locked(path):
+def locked(path, wait=0.0):
     fd = os.open(no_links(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "a+") as handle:
-        # Non bloquant : une seconde admission reprend après la première.
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise Refused("project_preparation_busy")
+        # Seule la source attend ; le verrou distant reste non bloquant pour
+        # éviter une attente croisée entre deux préparations en sens opposés.
+        require(0.0 <= wait <= SOURCE_LOCK_WAIT_SECS, "project_preparation_lock_wait_invalid")
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise Refused("project_preparation_source_busy" if wait else "project_preparation_busy")
+                time.sleep(min(0.05, remaining))
         yield
 
 def atomic_json(path, value, previous=None):
@@ -476,7 +486,7 @@ def prepare(request):
                 "project_preparation_git_root_outside_parent")
         source = top
         require(commit_present(source, commit), "expected_base_commit_mismatch")
-    with locked(registry_path.parent / "project-preparation.lock"):
+    with locked(registry_path.parent / "project-preparation.lock", wait=SOURCE_LOCK_WAIT_SECS):
         _, registry = registry_read(registry_path)
         selected = registry.get("machines", {}).get(request["machine_id"], {})
         require(selected.get("enabled") is True, "machine_disabled")

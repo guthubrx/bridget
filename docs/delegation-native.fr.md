@@ -1941,8 +1941,7 @@ La commande humaine explicite bridget federate resume --label NOM demande le dé
 ### Capacité des contrôles d'origine simultanés
 Les lectures d'origine acceptent jusqu'à 32 contrôles en cours par worker,
 avec une borne globale de 32 attentes côté maître. Chaque appel refait sa
-preuve ; aucun succès voisin ne la remplace. La préparation Git garde un
-créneau distinct de un. Ces nombres ne garantissent pas une capacité de missions.
+preuve ; aucun succès voisin ne la remplace. La préparation Git garde sa capacité séparée et son verrou exclusif. Ces nombres ne garantissent pas une capacité de missions.
 
 Un refus de capacité attesté expose origin_proof_busy dans le détail du refus
 permission_attestation_unavailable. Attendre la fin des contrôles, puis relire
@@ -1950,3 +1949,13 @@ les mêmes task_id. Pour une opération mutante, vérifier d'abord son admission
 durable avant tout rejeu strict. Ne pas créer de tâche de remplacement ni
 changer les droits ou le compte. Ce refus concerne l'appel ; les autres travaux
 autorisés suivent leur propre état. Sans cause attestée, elle reste inconnue.
+
+
+Les préparations de projet ont une capacité séparée de16 demandes reçues
+par worker. Leur verrou source reste exclusif et attend au plus30s, dans
+l'échéance originale. Le verrou distant reste non bloquant. La capacité
+occupée, l'attente source expirée et le verrou distant occupé ont des causes
+distinctes : origin_project_preparation_busy, project_preparation_source_busy
+et project_preparation_busy. Ces refus concernent l'appel. Conserver sa clé
+et vérifier l'admission durable avant tout rejeu strict ; ne pas créer de
+remplacement d'issue inconnue. Les autres travaux suivent leur propre état.

@@ -4,6 +4,9 @@ use bridget_transport::protocol::*;
 /// Même borne que les attentes du maître. Une preuve reste indépendante par
 /// appel ; aucune réutilisation de droits ou session HTTP partagée.
 pub(crate) const MAX_ORIGIN_PROOFS: usize = 32;
+/// Préparations déjà reçues, actives ou en attente du verrou de projet.
+/// L'échéance de la requête couvre aussi l'attente ; aucune remise métier.
+pub(crate) const MAX_ORIGIN_PROJECT_PREPARATIONS: usize = 16;
 
 
 pub(crate) fn now_ms() -> i64 {

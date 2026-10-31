@@ -624,6 +624,8 @@ fn execute_tool_at_with_scope(
 
 // Aucune donnée de tâche avant attestation : seul le contrôle préalable
 // constaté est nommé. Le détail libre du daemon n'est jamais recopié.
+// Ce port ne lit que CallerScope. Les erreurs de préparation émises après
+// ce contrôle passent par delegation_mcp::execute, qui conserve leur detail.
 fn caller_scope_refusal_message(result: &Value) -> String {
     let code = result["code"].as_str().unwrap_or("refused");
     if code != "permission_attestation_unavailable" {
@@ -631,9 +633,17 @@ fn caller_scope_refusal_message(result: &Value) -> String {
     }
     let verification = match result["detail"]["verification"].as_str() {
         Some("origin_session_reattest") => "origin_session_reattest",
+        Some("origin_project_preparation") => "origin_project_preparation",
         Some("current_session_binding") => "current_session_binding",
         _ => "unknown",
     };
+    if result["detail"]["cause"]=="origin_project_preparation_busy" {
+        return json!({"status":"refused","code":code,"stage":"caller_scope",
+            "verification":verification,"cause":"origin_project_preparation_busy","scope":"this_call",
+            "message":"Attendez la fin des préparations de projet en cours, puis vérifiez l’admission avec la même clé. La capacité de préparation est occupée ; ce refus concerne cet appel, pas les droits. Les autres travaux autorisés suivent leur propre état.",
+            "recovery":"Conserver request_id, task_id éventuel et enveloppe. Vérifier l’admission durable avant tout rejeu strict. Ne créer aucun remplacement d’issue inconnue. Le verrou source attend au plus 30 s dans le délai original.",
+            "human_action":"Si l’occupation persiste, demander au responsable de vérifier la préparation détentrice du verrou et son délai. Ne supprimer ni verrou ni dossier et ne changer ni compte ni droits."}).to_string();
+    }
     if result["detail"]["cause"]=="origin_proof_busy" {
         return json!({"status":"refused","code":code,"stage":"caller_scope",
             "verification":verification,"cause":"origin_proof_busy","scope":"this_call",
@@ -9460,6 +9470,12 @@ mod capacity189_mcp_tests {
         let view:Value=serde_json::from_str(&text).unwrap();
         assert_eq!(view["cause"],"origin_proof_busy");
         assert_eq!(view["scope"],"this_call");
+        let prep=caller_scope_refusal_message(&json!({"code":"permission_attestation_unavailable",
+            "detail":{"verification":"origin_project_preparation","cause":"origin_project_preparation_busy"}}));
+        let prep:Value=serde_json::from_str(&prep).unwrap();
+        assert_eq!(prep["cause"],"origin_project_preparation_busy");
+        assert_eq!(prep["verification"],"origin_project_preparation");
+
         assert!(view["recovery"].as_str().unwrap().contains("mêmes task_id"));
         assert!(!text.contains("PRIVATE"));
         let mut unknown=busy;unknown["detail"]["cause"]=json!("PRIVATE");

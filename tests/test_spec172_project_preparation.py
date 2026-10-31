@@ -760,5 +760,62 @@ class PreparationTests(unittest.TestCase):
                             "--allow-empty", "-m", "test: contrôle"], check=True)
             self.assertTrue(marker.exists())
 
+
+class PreparationLock221Tests(unittest.TestCase):
+    def test_spec221_origin_preparation_serializes_real_waiters(self):
+        import sys
+        code = """
+import importlib.util,sys,time,os
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("prep",sys.argv[1])
+prep=importlib.util.module_from_spec(spec);spec.loader.exec_module(prep)
+print("ready",flush=True)
+with prep.locked(Path(sys.argv[2]),wait=2.0):
+    with open(sys.argv[3],"a") as f:f.write("begin "+str(os.getpid())+"\\n")
+    time.sleep(0.04)
+    with open(sys.argv[3],"a") as f:f.write("end "+str(os.getpid())+"\\n")
+"""
+        with tempfile.TemporaryDirectory(prefix="origin221-lock-") as tmp:
+            lock=Path(tmp)/"project-preparation.lock"
+            trace=Path(tmp)/"trace"
+            children=[]
+            try:
+                with prep.locked(lock):
+                    for _ in range(3):
+                        children.append(subprocess.Popen([sys.executable,"-c",code,str(MODULE),str(lock),str(trace)],
+                            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True))
+                    for child in children:self.assertEqual(child.stdout.readline().strip(),"ready")
+                    self.assertFalse(trace.exists(),"aucune préparation ne franchit le verrou détenu")
+                for child in children:
+                    out,err=child.communicate(timeout=4)
+                    self.assertEqual(child.returncode,0,err)
+                rows=trace.read_text().splitlines()
+                self.assertEqual(len(rows),6)
+                for begin,end in zip(rows[::2],rows[1::2]):
+                    self.assertTrue(begin.startswith("begin "))
+                    self.assertEqual(end,"end "+begin.split()[1])
+            finally:
+                for child in children:
+                    if child.poll() is None:
+                        child.terminate()
+                    child.communicate(timeout=4)
+
+    def test_spec221_origin_preparation_timeout_and_remote_nonblocking(self):
+        import time
+        with tempfile.TemporaryDirectory(prefix="origin221-timeout-") as tmp:
+            lock=Path(tmp)/"project-preparation.lock"
+            with prep.locked(lock):
+                started=time.monotonic()
+                with self.assertRaisesRegex(prep.Refused,"project_preparation_source_busy"):
+                    with prep.locked(lock,wait=0.05):self.fail("verrou franchi")
+                self.assertLess(time.monotonic()-started,1.0)
+                started=time.monotonic()
+                with self.assertRaisesRegex(prep.Refused,"project_preparation_busy"):
+                    with prep.locked(lock):self.fail("le distant ne doit pas attendre")
+                self.assertLess(time.monotonic()-started,0.5)
+            self.assertTrue(lock.exists(),"le fichier de verrou n'est jamais retiré")
+            with prep.locked(lock,wait=0.05):pass
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1181,8 +1181,7 @@ The explicit operator command bridget federate resume --label NAME requests acti
 ### Concurrent origin checks
 Workers accept up to 32 origin reads in flight; the coordinator retains at most
 32 pending origin checks overall. Each call verifies its own proof. A nearby
-successful call never substitutes for it. Git project preparation retains its
-separate single slot. These bounds do not guarantee mission concurrency.
+successful call never substitutes for it. Git project preparation retains its separate capacity and exclusive lock. These bounds do not guarantee mission concurrency.
 
 An observed capacity rejection exposes origin_proof_busy in the
 permission_attestation_unavailable refusal details. Wait for current checks to
@@ -1190,3 +1189,13 @@ finish, then read the same task_id values. Before strictly replaying a mutation,
 check its durable admission first. Do not create a replacement task or change
 accounts or permissions. The refusal concerns this call; other authorized work
 follows its own state. Without an observed cause, the cause remains unknown.
+
+
+Project preparation has a separate limit of16 received requests per worker.
+The source registry lock remains exclusive and waits up to30s within the
+original deadline. The destination lock remains nonblocking. Capacity,
+source lock timeout and occupied destination lock have distinct causes:
+origin_project_preparation_busy, project_preparation_source_busy and
+project_preparation_busy. These refusals concern this call. Keep its key and
+check durable admission before a strict replay; never replace unknown work.
+Other authorized work follows its own state.

@@ -1673,6 +1673,24 @@ mod tests {
         use std::os::unix::net::UnixListener;
         for (returned, expected_code, expected_detail) in [
             (
+                json!({"status":"refused","code":"project_preparation_source_busy","detail":{
+                    "cause":"project_preparation_source_busy","verification":"origin_project_preparation",
+                    "message":"Le verrou source est resté occupé pendant30s.",
+                    "recovery":"Conserver la clé et vérifier l'admission durable avant tout rejeu strict."}}),
+                "project_preparation_source_busy",
+                Some(json!({"cause":"project_preparation_source_busy","verification":"origin_project_preparation",
+                    "message":"Le verrou source est resté occupé pendant30s.",
+                    "recovery":"Conserver la clé et vérifier l'admission durable avant tout rejeu strict."})),
+            ),
+            (
+                json!({"status":"refused","code":"project_preparation_busy","detail":{
+                    "cause":"project_preparation_busy","verification":"origin_project_preparation",
+                    "message":"Le verrou distant est occupé.","recovery":"Ne pas créer de remplacement."}}),
+                "project_preparation_busy",
+                Some(json!({"cause":"project_preparation_busy","verification":"origin_project_preparation",
+                    "message":"Le verrou distant est occupé.","recovery":"Ne pas créer de remplacement."})),
+            ),
+            (
                 json!({"status":"accepted","features":{"native_delegation":true}}),
                 "catalogue160",
                 None,

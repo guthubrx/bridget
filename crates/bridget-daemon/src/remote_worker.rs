@@ -7084,14 +7084,20 @@ fn send_catalogue_frame(writer:&Mutex<UnixStream>,message:&WrapperToDaemon)->Res
 fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofRequest,
     writer:Arc<Mutex<UnixStream>>,disconnected:Arc<AtomicBool>,slots:Arc<std::sync::atomic::AtomicUsize>,registry:PathBuf) {
     use bridget_transport::protocol::{OriginProofResult,OriginProofResponse};
-    let limit=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {1} else {crate::origin_proof::MAX_ORIGIN_PROOFS};
+    let limit=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {crate::origin_proof::MAX_ORIGIN_PROJECT_PREPARATIONS} else {crate::origin_proof::MAX_ORIGIN_PROOFS};
     let busy=slots.fetch_update(Ordering::AcqRel,Ordering::Acquire,|n| (n<limit).then_some(n+1)).is_err();
     let envelope=request.clone();
     let response=move |result| WrapperToDaemon::OriginProofResponse {response:OriginProofResponse {
         version:envelope.version,correlation_id:envelope.correlation_id.clone(),connection_epoch:envelope.connection_epoch.clone(),
         worker:envelope.worker.clone(),response:result}};
     if busy {
-        eprintln!("bridget_origin_proof refused=capacity limit={limit}");
+        let operation=if matches!(&request.request,
+            bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {
+            "prepare_project"
+        } else { "read" };
+        eprintln!("bridget_origin_proof {}",serde_json::json!({
+            "refused":"capacity","operation":operation,"limit":limit,
+            "correlation_id":request.correlation_id}));
         let _=send_worker_frame(&writer,&response(OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));
         return;
     }
@@ -7742,8 +7748,29 @@ mod tests {
             OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));
         assert_eq!(full.load(Ordering::Acquire),crate::origin_proof::MAX_ORIGIN_PROOFS);
         full.fetch_sub(1,Ordering::AcqRel);
-        dispatch_origin_proof(request("after-release"),writer,disconnected,full.clone(),fixture.0.join("unused"));
+        dispatch_origin_proof(request("after-release"),writer.clone(),disconnected.clone(),full.clone(),fixture.0.join("unused"));
         assert!(matches!(read(&mut reader).response,OriginProofResult::CommunicationProject {..}));
+        let mut prep=request("prep-waits");
+        prep.expires_at_ms=crate::origin_proof::now_ms()-1000;
+        let parent=ProviderPermissions {version:1,source:"provider_turn".into(),run_id:"run221".into(),
+            provider_session_id:"session221".into(),provider_instance_id:"instance221".into(),revision:1,
+            driver:"codex_app_server".into(),cwd:"/source".into(),runtime_mode:"full-access".into(),
+            interaction_mode:"default".into(),provider_policy:serde_json::json!({"kind":"codex",
+                "approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})};
+        prep.request=OriginProofOperation::PrepareProject {source:bridget_transport::protocol::WorkerSourceBase {
+            cwd:parent.cwd.clone(),expected_base_commit:Some("a".repeat(40)),
+            workspace:Some(bridget_transport::protocol::WorkspaceRequest::Shared {}),
+            workload:AutoDelegateWorkload::General},parent,target_machine:"destination".into(),project_id:None};
+        prep.validate_shape().unwrap();
+        let preparing=Arc::new(std::sync::atomic::AtomicUsize::new(2));
+        dispatch_origin_proof(prep.clone(),writer.clone(),disconnected.clone(),preparing,fixture.0.join("unused"));
+        assert!(matches!(read(&mut reader).response,OriginProofResult::Rejected {reason:WorkerRefusal::PrepareExpired}),
+            "deux préparations reçues ne doivent plus causer un refus de capacité ; le délai refuse avant toute E/S");
+        let preparing=Arc::new(std::sync::atomic::AtomicUsize::new(crate::origin_proof::MAX_ORIGIN_PROJECT_PREPARATIONS));
+        dispatch_origin_proof(prep,writer,disconnected,preparing.clone(),fixture.0.join("unused"));
+        assert!(matches!(read(&mut reader).response,OriginProofResult::Rejected {reason:WorkerRefusal::ResourceLimit}));
+        assert_eq!(preparing.load(Ordering::Acquire),crate::origin_proof::MAX_ORIGIN_PROJECT_PREPARATIONS);
+
     }
 
     #[test]

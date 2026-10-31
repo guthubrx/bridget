@@ -3771,7 +3771,9 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
-    if code=="origin_proof_busy" { return origin_attestation_refusal(code); }
+    if matches!(code,"origin_proof_busy"|"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy") {
+        return origin_attestation_refusal(code);
+    }
     if matches!(code,"model_options_invalid"|"model_options_not_activated"
         |"model_options_not_permitted"|"model_options_launcher_ambiguous"
         |"model_options_observation_unavailable"|"model_options_account_unidentified"
@@ -5116,6 +5118,23 @@ pub(super) fn handle_with_peer(
 fn origin_attestation_refusal(code: &str) -> Value {
     let mut result=failure("permission_attestation_unavailable");
     result["detail"]["verification"]=json!("origin_session_reattest");
+    if matches!(code,"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy") {
+        let message="Attendez la fin des préparations de projet déjà reçues, puis vérifiez cette admission avec sa même clé. La capacité de préparation du projet est occupée ; ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.";
+        let message=match code {
+            "project_preparation_source_busy"=>"Attendez la fin de la préparation source, puis vérifiez cette admission avec sa même clé. Son verrou est resté occupé pendant les 30 s d’attente. Ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.",
+            "project_preparation_busy"=>"Attendez la fin de la préparation sur la destination, puis vérifiez cette admission avec sa même clé. Son verrou était occupé au contrôle non bloquant. Ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.",
+            _=>message
+        };
+        result["message"]=json!(message);
+        result["detail"]["message"]=json!(message);
+        if code!="origin_project_preparation_busy" {result["code"]=json!(code);}
+        result["detail"]["cause"]=json!(code);
+        result["detail"]["verification"]=json!("origin_project_preparation");
+        result["detail"]["recovery"]=json!("Conserver request_id, task_id éventuel et enveloppe. Vérifier l'admission durable avant tout rejeu strict. Ne créer aucune clé ou mission de remplacement d'issue inconnue. Une préparation attend au plus 30 s le verrou source, dans le délai original ; le verrou distant reste non bloquant.");
+        result["detail"]["human_action"]=json!("Si la préparation reste occupée, demander au responsable de vérifier la préparation détentrice du verrou et son délai avant toute décision de rangement. Ne supprimer ni verrou ni dossier et ne modifier ni droits, ni compte pour forcer le passage.");
+        return result;
+    }
+
     if code=="origin_proof_busy" {
         let message="Attendez la fin des contrôles d’origine en cours, puis relisez les mêmes identifiants de tâches. La capacité de contrôle est occupée ; ce refus concerne cet appel, pas un changement de droits. Les autres travaux autorisés suivent leur propre état.";
         result["message"]=json!(message);
@@ -14545,6 +14564,19 @@ mod tests {
     fn spec221_origin_busy_refusal_keeps_scope_and_never_projects_private_cause() {
         let busy=origin_attestation_refusal("origin_proof_busy");
         assert_eq!(failure("origin_proof_busy"),busy);
+        let prep=failure("origin_project_preparation_busy");
+        assert_eq!(prep["code"],"permission_attestation_unavailable");
+        assert_eq!(prep["detail"]["cause"],"origin_project_preparation_busy");
+        assert_eq!(prep["detail"]["verification"],"origin_project_preparation");
+        assert!(prep["detail"]["recovery"].as_str().unwrap().contains("30 s"));
+        for code in ["project_preparation_source_busy","project_preparation_busy"] {
+            let view=failure(code);
+            assert_eq!(view["code"],code);
+            assert_eq!(view["detail"]["cause"],code);
+            assert_eq!(view["detail"]["verification"],"origin_project_preparation");
+        }
+
+
         assert_eq!(busy["code"],"permission_attestation_unavailable");
         assert_eq!(busy["detail"]["cause"],"origin_proof_busy");
         assert!(busy["message"].as_str().unwrap().contains("cet appel"));

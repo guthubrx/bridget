@@ -100,6 +100,7 @@ fn exchange(
         );
         (writer, request, connection)
     };
+    let preparation=matches!(&request.request,OriginProofOperation::PrepareProject {..});
     let correlation = request.correlation_id.clone();
     let epoch = request.connection_epoch.clone();
     let identity = request.worker.clone();
@@ -127,12 +128,13 @@ fn exchange(
     {
         return Err("origin_proof_unavailable".into());
     }
-    checked_response(response)
+    checked_response(response, preparation)
 }
-fn checked_response(response: Option<OriginProofResult>) -> Result<OriginProofResult, String> {
+fn checked_response(response: Option<OriginProofResult>, preparation: bool) -> Result<OriginProofResult, String> {
     match response {
         Some(OriginProofResult::Rejected { reason: WorkerRefusal::ResourceLimit }) => {
-            Err("origin_proof_busy".into())
+            Err(if preparation { "origin_project_preparation_busy" }
+                else { "origin_proof_busy" }.into())
         }
         Some(OriginProofResult::Rejected { .. }) | None => Err("origin_proof_unavailable".into()),
         Some(result) => Ok(result),
@@ -145,14 +147,17 @@ mod capacity221_tests {
     fn spec221_origin_busy_is_capacity_not_a_permission_change() {
         assert_eq!(checked_response(Some(OriginProofResult::Rejected {
             reason: WorkerRefusal::ResourceLimit
-        })), Err("origin_proof_busy".into()));
+        }), false), Err("origin_proof_busy".into()));
+        assert_eq!(checked_response(Some(OriginProofResult::Rejected {
+            reason: WorkerRefusal::ResourceLimit
+        }), true), Err("origin_project_preparation_busy".into()));
         for response in [None, Some(OriginProofResult::Rejected {
             reason: WorkerRefusal::PermissionsChanged
         })] {
-            assert_eq!(checked_response(response), Err("origin_proof_unavailable".into()));
+            assert_eq!(checked_response(response, false), Err("origin_proof_unavailable".into()));
         }
         let ok=OriginProofResult::CommunicationProject { project: None };
-        assert_eq!(checked_response(Some(ok.clone())), Ok(ok));
+        assert_eq!(checked_response(Some(ok.clone()), false), Ok(ok));
     }
 }
 pub(super) fn communication_project(state:&Arc<Mutex<DaemonState>>,host:&str,root:&str,
