@@ -62,3 +62,26 @@ Les trois tests nouveaux sont repassés ensemble après le complément final ;
 les répétitions ne sont pas comptées comme de nouveaux tests.
 La première compilation du nouveau test signalait un import encode manquant ;
 qualification complète du nom corrigée avant les PASS.
+
+## Vérification réelle et second point d'attente
+Après chargement r2, la même lecture expirait encore en12248ms puis13350ms
+pendant un échantillon de pile. Aucune réussite n'a été annoncée.
+Le relais reçoit bien le contrôle ; il est alors dans resolve_window(Tail),
+last_sequence_in_files puis valid_events. Le journal réel de monuments
+couvre14 fichiers, environ53Mio ; le dernier fait environ4,7Mio.
+refresh_files résolvait Tail à chaque tranche128Kio alors qu'il utilisait
+seulement les fichiers de cette résolution. Le seuil from_seq restait figé.
+
+Correction complémentaire : réutiliser la liste déjà résolue par Seq(0)
+pour Tail durant le rejeu. Les listes de fichiers sont identiques ; aucune
+séquence, fenêtre initiale, lacune ou borne n'est changée. Le travail répété
+quadratique devient une résolution initiale et une lecture incrémentale.
+Le contrôle direct du reader reste utile : il élimine séparément l'attente
+de traitement HTTP avant de démarrer cette lecture.
+
+La contre-épreuve réelle avec from_seq38372, sur la même source r2,
+rend22événements, complet, sans notice en3079ms. La source et le transport
+fonctionnent ; cette fenêtre n'exécute pas le recalcul Tail répété.
+Le test socket nominal est revérifié PASS après le complément de cache.
+Aucun nouvel essai métier ou changement de borne ; le delta de performance
+réutilise exactement la même liste de fichiers.

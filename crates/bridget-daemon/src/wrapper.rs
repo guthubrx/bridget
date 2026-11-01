@@ -3238,8 +3238,16 @@ impl RelaySubscription {
                 }
             }
         } else {
-            let Ok(initial) = resolve_window(directory, &self.window, host_today) else {
-                return;
+            // Tail a déjà fixé from_seq à l'ouverture. Ici seuls les
+            // fichiers sont utilisés : Seq(0) donne la même liste, sans
+            // relire et désérialiser tout l'historique à chaque tranche.
+            let initial = if matches!(self.window, AttachWindow::Tail(_)) {
+                resolved
+            } else {
+                let Ok(initial) = resolve_window(directory, &self.window, host_today) else {
+                    return;
+                };
+                initial
             };
             for path in initial.files {
                 if !self.files.contains(&path) {
