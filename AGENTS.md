@@ -120,7 +120,9 @@ prochaines maintenances. Le parent du registre doit rester le namespace attesté
 tant que PrepareProject utilise registry.parent : ancien placement .config corrigé,
 3liens validés sans réécriture de fédération, octets du registre inchangés.
 Guidage link_missing corrigé, un test cibléPASS ; revue indisponible primary_absent.
-Delta exécutable à charger par225/0.7.4, pas annoncé actif en0.7.3.
+Delta a444af64 chargé par225/0.7.4r4, marqueur guidage vérifié dans les images
+Mac47877a7d/Cartae66b878a3 ; registre inchangé. PIDs de ce contrôle12673/1950987.
+Refus MCP distinct de225 conservé, cause inconnue, aucune réattestation répétée.
 Reçus : specs/221-capacites-completes/validation/mac-worker-registration.md.
 
 

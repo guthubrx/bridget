@@ -111,3 +111,33 @@ par cette branche, donc absence de récursion confirmée par le test exécuté.
 Après correction, catalogue natif lisible : 18options Mac et gel désactivé.
 updates status : rapports frais des quatre hôtes en0.7.3. La réparation du
 raccord est active ; le nouveau guidage reste à charger par le lot225.
+
+## Clôture du raccord après activation225/r4
+
+Le responsable225 a confirmé l'inclusion de a444af64 dans0.7.4/r4 et
+l'activation des sept images. Contrôles directs de ce responsable224 :
+- WorkerMac PID12673, image
+  /Users/moi/.local/lib/bridget-communication/225-cli-tables-r4/bin/bridget,
+  SHA25647877a7d0544deae3d9b0b33f7a53a97b31736b5f4d392362975e0db46470417.
+- MaîtreCartae PID1950987, image
+  /home/moi/.local/lib/bridget-communication/225-cli-tables-r4/bin/bridget,
+  SHA25666b878a32d1f4a2cf82260fb48b1f39f7ea940e7699cb0996c27d2b9478b932c.
+- Les deux images chargées contiennent origin_project_preparation_link.
+- Le plist et l'argument actif du worker conservent
+  /Users/moi/.cache/bridget-core/worker-monordinateur-agents.json,
+  même SHA256b2219f3a1871e5a82c843ec980fe8050c8b4da8ea76a233979b1a9dc0d3b9c83.
+- La commande native updates status répond0.7.4 ; les rapports frais des
+  quatre machines sont aussi attestés dans le reçu du responsable225.
+
+Le raccord et le guidage sont désormais chargés. Aucune nouvelle compilation,
+admission, réattestation, revue ou mission métier n'a été lancée pour ce constat.
+Aucune activation concurrente par224.
+
+Diagnostic distinct conservé du message
+bridget225-maintenance-after-20261101-01 :
+le MCP du responsable225 refuse capabilities avec
+permission_attestation_unavailable/origin_session_reattest après une seule
+réattestation revision14. Cause précise non établie ; le succès CLI ne prouve
+pas l'attestation MCP. Aucun nouvel essai, changement de droits ou rejeu de
+mission demandé ou effectué par224. Ce constat n'est pas clôturé par la
+réparation du namespace.
