@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session 224 — suivi des mises à jour fédérées livré en 0.7.3.
+Source 9653b21d intégrée et poussée ; sept composants chargés et empreintes vérifiées.
+Watchers Mac/Cartae/SYS/KS actifs ; quatre rapports réels 0.7.3, up_to_date/fresh.
+Unités propres et setup natif ; absent/périmé visible dans CLI/mobile.
+26 tests Python, un test Rust ciblé et revue sans P1 ; corrections retenues traitées.
+Linux commun construit sur Debian12/glibc2.36 ; APK7003 signé, six actifs publics
+vérifiés. Superviseur Cartae2500061 conservé, aucun rejeu métier. Retours reader-r1
+et pointeurs natifs qualifiés sur les quatre hôtes. Mac updater utilise Python
+système3.9.6 (Homebrew3.15/libexpat défectueux), PATH limité à son LaunchAgent.
+Preuve Android authentifiée non refaite : émulateur préalablement révoqué ; CLI
+réelle et libellé Android vérifiés. Treize transferts/435184505 octets logiques
+retirés ; caches/worktree224 conservés sous observation incomplète. Programme221
+toujours distinct. Détails : specs/224-mises-a-jour-federation/validation.md.
+
+
 Session222/T035 — nom humain ajouté aux listes/recherches/fiches, source7fa71bff.
 Version0.7.2/build222-specialists-names-r1 chargée7services/PID/SHA vérifiés ;
 CLI réelle retourne bridge1016 avec rôle et UUID séparés, aucune déclaration.

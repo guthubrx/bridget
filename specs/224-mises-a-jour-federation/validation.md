@@ -66,5 +66,29 @@ Diaporama autonome inclus avec la correction ; html_preview vérifié.
 
 ## Analyse / convergence / livraison
 Analyse manuelle spec/plan/tasks/code : CONVERGED pour les corrections du lot.
-Reste publication publique, push et bilan d'entretien, consignés dans le reçu final.
+Publication publique, push et entretien consignés ci-dessous.
 Aucune prétention de terminer le programme221 complet.
+
+## Reçu final
+Source9653b21d intégrée/poussée sur main. Releasev0.7.3 publique, six actifs
+dont taille/empreinte correspondent aux fichiers contrôlés. APK redéchargé depuis
+GitHub : SHA792434dbc724d32b02435868d78d650c370f1a8ee7b8d7e86bc80463fd468296.
+Le premier contrôle du brouillon par tag retournait404 après upload réussi.
+Aucun nouvel upload : relecture des six actifs, puis garde étendu à la recherche
+bornée du brouillon exact. Sept tests du garde PASS ; un brouillon vérifié ne
+prétend plus être public. Contrôle après publication : assets_verified et
+public_verified vrais. Ce delta porte sur l'outil de publication, sans nouveau
+binaire ni redémarrage.
+Une demande de vérification commune a été émise par updates check après
+publication ; politique automatique conservée. Les quatre rapports sont récents.
+Rôle mainteneur-bridget et périmètre bridget relus après retour du lien natif.
+
+Entretien : treize archives de transfert retirées sur les quatre hôtes,
+435184505 octets logiques. Actifs, retours compatibles, captures, manifestes et
+sauvegardes restent conservés. installed Cartae terminé ; Mac et SYS refusent le
+nettoyage sous observation des processus incomplète, sans forçage.
+Premier appel installed SYS visait l'actif alors que le dernier assemblage était
+le lecteur de retour : argument corrigé, empreinte égale puis garde d'observation
+incomplète conservée. Worktree224/branche intégrés conservés pour ce même motif,
+avec leurs fichiers ignorés de compilation. Aucun travail étranger supprimé.
+Statut : Livré pour le lot224. Programme221 indépendant non déclaré terminé.

@@ -65,7 +65,15 @@ def verify(apk, reference, version, build_tools):
 
 
 def verify_publication(version, result, checksum):
-    release = json.loads(run(["gh", "api", "repos/" + REPOSITORY + "/releases/tags/v" + version]))
+    try:
+        release = json.loads(run(["gh", "api", "repos/" + REPOSITORY + "/releases/tags/v" + version]))
+    except subprocess.CalledProcessError:
+        # GitHub ne résout pas toujours par tag un brouillon dont le tag n'existe pas encore.
+        releases = json.loads(run(["gh", "api", "repos/" + REPOSITORY + "/releases?per_page=100"]))
+        matches = [item for item in releases if item.get("tag_name") == "v" + version]
+        if len(matches) != 1:
+            raise ValueError("Release non identifiée ; aucun nouvel upload automatique")
+        release = matches[0]
     assets = {asset["name"]: asset for asset in release["assets"]}
     expected = {
         "bridget-android.apk": (result["sha256"], result["size"]),
@@ -77,6 +85,7 @@ def verify_publication(version, result, checksum):
             raise ValueError("Actifs publics non confirmés ; relire la release avant tout nouvel envoi")
     if release["tag_name"] != "v" + version:
         raise ValueError("Tag public non confirmé")
+    return not release.get("draft", False)
 
 
 
@@ -102,10 +111,10 @@ def main():
         if args.publish:
             run(["gh", "release", "upload", "v" + args.version,
                  str(apk), str(checksum), "--clobber", "--repo", REPOSITORY], timeout=600)
-        if args.publish or args.verify_published:
-            verify_publication(args.version, result, checksum)
-        print(json.dumps({**result, "published": args.publish,
-                          "public_verified": args.publish or args.verify_published}, sort_keys=True))
+        checked = args.publish or args.verify_published
+        public = verify_publication(args.version, result, checksum) if checked else False
+        print(json.dumps({**result, "uploaded": args.publish, "published": public,
+                          "assets_verified": checked, "public_verified": public}, sort_keys=True))
 
 
 if __name__ == "__main__":

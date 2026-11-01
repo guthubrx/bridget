@@ -154,3 +154,8 @@ owns it. It never removes a lock to proceed. An operator changing an existing
 configuration must stop only the idle watcher through its native service first,
 back up the configuration and use the existing atomic writer under that lock.
 Setup releases the lock before starting a new watcher.
+
+Android publication validation also supports an exact draft found through the
+bounded official release list when its tag does not exist yet. assets_verified
+only confirms the files; public_verified stays false until the release is public.
+An uncertain upload is inspected with --verify-published before any new upload.

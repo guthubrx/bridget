@@ -71,6 +71,21 @@ class AndroidPublicationTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     publication.verify_publication("0.7.1", result, checksum)
 
+    def test_draft_assets_can_be_checked_without_claiming_publication(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            checksum = Path(directory) / "checksum"
+            checksum.write_text("expected")
+            result = {"sha256": "a" * 64, "size": 42}
+            release = {"tag_name": "v0.7.3", "draft": True, "assets": [
+                {"name": "bridget-android.apk", "digest": "sha256:" + result["sha256"], "size": 42},
+                {"name": "bridget-android.apk.sha256",
+                 "digest": "sha256:" + publication.hashlib.sha256(checksum.read_bytes()).hexdigest(),
+                 "size": checksum.stat().st_size}]}
+            with patch.object(publication, "run", side_effect=[
+                    subprocess.CalledProcessError(1, ["gh"]), json.dumps([release])]):
+                self.assertFalse(publication.verify_publication("0.7.3", result, checksum))
+
 
 if __name__ == "__main__":
     unittest.main()
