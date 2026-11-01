@@ -1286,3 +1286,17 @@ a five-second minimum after a change signal, excluding other sequential checks.
 Incompatibility is retained for this image and verifier. Structural compatibility
 does not prove all provider behavior or access to a model or subscription.
 Normal runtime checks remain in force.
+
+
+### Identity refusal during internal mission delivery
+
+Internal delivery reports native_sender_primary_absent,
+native_sender_instance_changed or native_sender_not_live from the observed fact.
+It does not ask the caller to fabricate an auxiliary attachment. Read the same
+task from its parent thread. One turn attestation does not prove that the primary
+link has returned. Replaying a terminal task does not restart it. Historical
+receipts without a recorded subcause remain explicitly unknown.
+
+ResourceLimit during workspace preparation proves neither full disk nor provider
+quota. Guidance names the missing worker checks, closure prerequisites and the
+owner decision required. Other authorized work follows its own state.

@@ -344,3 +344,8 @@ Ce lot ne clôture pas les autres catégories du programme.
 - [x] T184 Implémenter le contrôle supervisé, son cache d’image, les opérations facultatives et les refus négociés ; conserver préflight sans spawn et droits inchangés.
 - [x] T185 Vérifier le delta ciblé et le faire relire ; conserver les limites exactes dans validation/program-upgrades.md.
 - [x] T186 Intégrer/pousser, construire et charger sur les sept services ; vérifier images, retour, lien natif et entretien borné.
+
+
+## Diagnostic des incidents reçus après livraison
+
+- [ ] T187 Corriger le refus d’identité des envois internes sans changer leur autorité, garder les causes historiques inconnues et rendre le refus ResourceLimit de préparation actionnable. Tests ciblés, revue, intégration/push, activation sept services et reprise des propriétaires. Reçu validation/sender-diagnostic.md.

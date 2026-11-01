@@ -4658,6 +4658,48 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
     })
 }
 
+// Projection pure : le texte historique ne permet pas d'inventer sa sous-cause.
+fn project_sender_and_prepare_refusals(task: &Task, view: &mut Value) {
+    let error = task.projected_error().unwrap_or("");
+    let sender_cause = match error {
+        "native_sender_primary_absent" => Some("primary_absent"),
+        "native_sender_instance_changed" => Some("parent_instance_changed"),
+        "native_sender_not_live" => Some("live_identity_unconfirmed"),
+        "identité expéditeur non attestée : rattachement auxiliaire requis" => Some("unobserved"),
+        _ => None,
+    };
+    if let Some(cause) = sender_cause {
+        if !view["detail"].is_object() { view["detail"] = json!({}); }
+        view["detail"]["sender_attestation"] = json!({
+            "scope":"this_task", "cause":cause, "code":error,
+            "verification":if cause=="unobserved" {
+                "Le reçu historique ne conserve pas la vérification précise qui a échoué."
+            } else {
+                "L'envoi interne a refusé l'identité vivante du parent sous le verrou du maître."
+            },
+            "requires_auxiliary_registration":false,
+        });
+        view["error_message"] = if cause == "unobserved" {
+            json!("Conserver cette tâche et sa clé, puis faire vérifier le reçu natif par le responsable Bridget. Le reçu historique signale un refus d'expéditeur sans conserver la vérification qui a échoué ; sa cause précise reste inconnue. Ne pas fabriquer de rattachement auxiliaire. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.")
+        } else {
+            json!("Vérifier le lien natif du même fil parent, puis conserver cette tâche et sa clé. La remise interne de la mission a refusé l'identité actuelle du parent ; aucun nouveau rattachement auxiliaire ne doit être fabriqué. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.")
+        };
+        view["error_recovery"] = json!("Une seule bridget_session atteste le tour courant ; elle ne prouve pas que le lien principal est revenu. Confirmer sa présence native, puis relire CETTE tâche par bridget_task_status. Une tâche failed ou cancelled ne redémarre pas au rejeu : attendre arrêt, nettoyage et rapport du dossier avant une suite autorisée. Ne pas créer de remplacement tant que son issue reste inconnue.");
+        view["error_human_action"] = json!("Si le lien reste absent ou si l'instance du parent diffère, demander au responsable Bridget de vérifier le rattachement du même fil et les éventuels enregistrements concurrents. Ne pas changer de compte, de moteur, d'identité ou de droits. Ne pas arrêter un autre travail.");
+    }
+    if error == "remote_start_failed:remote_workspace_prepare:ResourceLimit" {
+        if !view["detail"].is_object() { view["detail"] = json!({}); }
+        view["detail"]["preparation_capacity"] = json!({
+            "scope":"this_task_on_its_worker","cause":"unobserved",
+            "stage":"workspace_prepare","current_occupancy":"not_observed",
+            "verification":"Le reçu ne distingue pas une file de commandes pleine, un bootstrap retenu, la limite de préparations ou le stockage du worker.",
+        });
+        view["error_message"] = json!("Faire lire par le responsable Bridget la file de commandes, les bootstraps retenus, les préparations et le stockage du worker de cette tâche. La préparation a refusé ResourceLimit, sans sous-cause conservée ; ce code ne prouve ni disque plein ni saturation du fournisseur. La tâche et sa clé restent enregistrées. Ce refus concerne cette préparation ; les autres travaux autorisés suivent leur propre état.");
+        view["error_recovery"] = json!("Conserver cette tâche et son dossier. Le propriétaire clôture CETTE tâche puis vérifie arrêt, nettoyage et rapport du dossier. Une nouvelle demande exige une cause corrigée et une nouvelle clé ; le rejeu de l'ancienne clé ne reprend pas la préparation. Aucun drainage global ni effacement d'un travail retenu.");
+        view["error_human_action"] = json!("Si un bootstrap reste retenu ou si la capacité est réellement insuffisante, demander au propriétaire quel travail conserver et au responsable Bridget le contrôle ciblé ou l'ajustement autorisé. Ne pas augmenter les droits ou interrompre les autres missions pour contourner le refus.");
+    }
+}
+
 fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     let (agent_type, model, effort, posture) = match &task.request {
         NativeDelegationRequest::Delegate {
@@ -4796,6 +4838,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     view["mission_reply_timeout_secs"] = json!(task.reply_timeout.unwrap_or(MISSION_REPLY_LIMIT_SECS));
     permission_change::project_task(task, &mut view);
     workspace_preparation210::project(task, &mut view);
+    project_sender_and_prepare_refusals(task, &mut view);
     if task.projected_error()==Some("terminal Codex: failed:cause=server_overloaded") {
         view["error_message"]=json!("Le fournisseur a terminé le tour en signalant une saturation du modèle (server_overloaded). Cette preuve ne constate ni une file Bridget pleine, ni un disque plein, ni un quota de compte épuisé.");
         view["error_recovery"]=if task.terminal() && task.cleanup_done && workspace_report_ready(task) {
@@ -9976,6 +10019,25 @@ fn send_as_with_result_authority(
         authority,
         false,
     );
+    // Même refus et mêmes gardes : seul le diagnostic de l'envoi interne change.
+    // Le rattachement auxiliaire vient d'être créé ici ; le demander au client
+    // serait trompeur. Aucune réattribution à une nouvelle instance du parent.
+    let response = match response {
+        DaemonToWrapper::Nack { id, reason }
+            if authority.is_none() && message.from == owner
+                && reason == "identité expéditeur non attestée : rattachement auxiliaire requis" =>
+        {
+            let reason = match st.router.get_agent(owner) {
+                None => "native_sender_primary_absent",
+                Some(route) if !st.connections.contains_key(&route.connection_id) => "native_sender_not_live",
+                Some(route) if st.conn_instances.get(&route.connection_id)
+                    .is_some_and(|current| current != instance) => "native_sender_instance_changed",
+                Some(_) => "native_sender_not_live",
+            };
+            DaemonToWrapper::Nack { id, reason: reason.into() }
+        }
+        response => response,
+    };
     st.conn_names.remove(&conn);
     st.conn_instances.remove(&conn);
     st.auxiliary_connections.remove(&conn);
@@ -36861,4 +36923,53 @@ mod commit_view_reader221_tests {
         assert_eq!(result["detail"]["task_id"],Value::Null);
         assert_eq!(serde_json::to_vec(&state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap(),before);
     }
+    #[test]
+    fn spec221_sender_internal_diagnostic_keeps_refusal_and_identity_guards() {
+        let (mut st, config, task, _) = super::tests::remote162_capture_fixture();
+        let before=serde_json::to_value(&task).unwrap();
+        let parent_conn=st.router.get_agent(&task.owner).unwrap().connection_id.clone();
+        for (mode,expected) in [(0,"native_sender_instance_changed"),(1,"native_sender_not_live"),(2,"native_sender_primary_absent")] {
+            if mode==0 {st.conn_instances.insert(parent_conn.clone(),"other-instance".into());}
+            else if mode==1 {st.conn_instances.insert(parent_conn.clone(),task.owner_instance.clone());st.connections.remove(&parent_conn);}
+            else {st.router.unregister_by_conn(&parent_conn);}
+            let mut message=bridget_core::BridgetMessage::new(&task.owner,&task.child,"synthetic private brief");
+            message.id=format!("sender221-{mode}");
+            let id=message.id.clone();let mut controls=Vec::new();
+            let result=send_as(&mut st,&task.owner,&task.owner_instance,&task.task_id,message,unix_timestamp(),&mut controls);
+            assert!(matches!(result,DaemonToWrapper::Nack {ref reason,..} if reason==expected),"{result:?}");
+            assert!(controls.is_empty());
+            assert!(st.store.get_request(&id).unwrap().is_none());
+            assert!(!st.conn_names.contains_key(&format!("native-delegation:{id}")));
+            assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        }
+        super::tests::cleanup(&config);
+    }
+    #[test]
+    fn spec221_sender_and_prepare_guidance_preserves_unknown_cause_and_task_bytes() {
+        let (st,config,mut task,_) = super::tests::remote162_capture_fixture();
+        task.state="failed".into();
+        for (error,field,cause) in [
+            ("identité expéditeur non attestée : rattachement auxiliaire requis","sender_attestation","unobserved"),
+            ("native_sender_instance_changed","sender_attestation","parent_instance_changed"),
+            ("native_sender_not_live","sender_attestation","live_identity_unconfirmed"),
+            ("native_sender_primary_absent","sender_attestation","primary_absent"),
+            ("remote_start_failed:remote_workspace_prepare:ResourceLimit","preparation_capacity","unobserved"),
+        ] {
+            task.error=Some(error.into());let before=serde_json::to_value(&task).unwrap();
+            let view=task_view(&task,None,true);
+            assert_eq!(view["error"],error);
+            assert_eq!(view["detail"][field]["cause"],cause);
+            if field=="sender_attestation" && cause=="unobserved" {
+                assert!(view["error_message"].as_str().unwrap().contains("cause précise reste inconnue"));
+                assert!(!view["error_message"].as_str().unwrap().contains("identité actuelle"));
+            }
+            assert!(view["error_message"].as_str().unwrap().contains("autres travaux"));
+            assert!(view["error_recovery"].as_str().unwrap().contains("tâche"));
+            assert!(view["error_human_action"].as_str().unwrap().contains("responsable Bridget"));
+            assert_eq!(serde_json::to_value(&task).unwrap(),before);
+            assert!(!view.to_string().contains("synthetic private brief"));
+        }
+        drop(st);super::tests::cleanup(&config);
+    }
+
 }

@@ -2047,3 +2047,18 @@ signal de changement, hors durée des contrôles séquentiels. Une incompatibili
 constatée est mémorisée pour cette image et ce vérificateur. La compatibilité
 structurelle ne garantit ni tous les comportements du fournisseur, ni l’accès
 au modèle ou à l’abonnement. Les contrôles réels restent appliqués au lancement.
+
+
+### Refus d’identité pendant une remise interne
+
+Un envoi interne refusé indique native_sender_primary_absent,
+native_sender_instance_changed ou native_sender_not_live selon le fait constaté.
+Il ne demande pas de fabriquer un rattachement auxiliaire. Relire la même tâche
+depuis son fil parent ; une seule attestation du tour ne prouve pas que le lien
+principal est revenu. Une tâche terminale ne redémarre pas au rejeu. Les anciens
+reçus qui ne contiennent pas la sous-cause restent explicitement inconnus.
+
+ResourceLimit pendant la préparation du dossier ne prouve ni disque plein ni
+quota fournisseur. Le reçu indique les vérifications manquantes sur ce worker,
+les prérequis de clôture et la décision à demander au responsable. Les autres
+travaux autorisés suivent leur propre état.
