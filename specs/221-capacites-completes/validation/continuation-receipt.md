@@ -1,6 +1,7 @@
 # Reçu durable de continuation — session221
 
-Statut : correction vérifiée, activation en préparation. Programme inchangé :
+Statut : correctif serveur actif, client MCP déjà ouvert encore ancien.
+Livraison client incomplète tant que son image reste ancienne. Programme inchangé :
 52/182, In Progress.
 
 ## Incident et diagnostic
@@ -61,3 +62,52 @@ Le nouveau budget et le message client exigent une image MCP récente.
 Les clients déjà ouverts profitent du découplage serveur mais ne sont pas
 déclarés rechargés. Aucune boucle de reprise de l’application hôte.
 Aucune mission métier ni qualification fournisseur créée pour ce lot.
+
+## Livraison et constat réel
+
+Source377f647ed0dadf95e55140670b109c8e1d23095f intégrée/poussée sur main.
+Cinq tests bibliothèque Linux distincts PASS : trois nouveaux, native153,
+`spec172_remote_continuation_distinguishes_execution_state_from_permissions`
+(neuf cas de preuve distante, sans nouvelle ronde). Ce dernier réutilise le
+contrat distant existant ; ce n’est pas une nouvelle mission réelle. Aucun
+nouveau test Mac ; assemblage Mac et contrôles de compatibilité réussis.
+Les356fichiers d’assemblage correspondent à la source intégrée.
+
+Build221-continuation-receipt-r1, version0.6.5 :
+- Linux41398672octets, SHA256
+  `31811c4db7b39bed72cb6bb6c0428e1b20869b088166f156126810217627e467`.
+- Mac34180352octets, SHA256
+  `a124206c2a67b4e5e2ac9c1582e71b395885a99c2cad231a30e894a9d7def762`.
+
+Sept processus chargés et hachés : maîtreCartae266755, mobile266894,
+workerCartae268899, workerSYS1209579, workerKS1592566, workerMac27982,
+pontMac28279. Coupure maître2,13s. Wrappers observés conservés :
+Cartae2500061/naissance270585460 et SYS1204789/naissance67974065.
+Retourjournal-control-r3 vérifié dans les deux sens par le lecteur natif
+des formats. Pointeurs rollbackCartae/Mac écrits atomiquement sous verrou
+updater, SHA relus ; aucun retour exécuté.
+
+Une session native réussie. Premier catalogue pendant republication refusé
+`primary_absent` ; après preuve dans le log que bridge1016 est réexposé,
+lecture suivante réussie :45options, `delegations_halted=false`. Une session
+réussie seule n’a pas été prise pour preuve de retour du lien.
+
+La tâchebe04d2d9 est désormais `result_available`, ronde2, erreur nulle,
+mission897ba2e4 inchangée. Aucun rejeu ni résultat métier lu par ce fil.
+
+Les MCP ouverts observés utilisent encore221-journal-control-r3,
+221-thread-budget-r1 ou221-view-sync-r1. Aucun processus MCP récent
+221-continuation-receipt-r1 n’est attesté au relevé final. Le serveur retourne
+désormais le reçu avant le tick ; le nouveau budget et le guidage de perte
+de réponse restent liés au chargement du client récent. Il n’existe pas
+d’outil natif de rechargement MCP exposé dans ce fil. Geste humain précis :
+finir ce tour, quitter complètement l’application hôte, la rouvrir et reprendre
+le même fil, puis vérifier une fois l’image MCP chargée. Aucun marqueur ajouté,
+aucun arrêt global de l’hôte ni boucle de reprise lancé par ce lot.
+
+Entretien `installed` tenté sur Mac et SYS après contrôle des images. Mac
+refuse le propriétaire du staging ; SYS ne peut pas attester tous les usages.
+Caches conservés, sans forcer. Deux copies de transfert Linux et celle du Mac
+retirées après vérification des images installées ; actif/retour, preuves,
+anciennes images encore ouvertes et worktree de revue restent conservés.
+Aucun service métier ou travail indépendant terminé pour le nettoyage.

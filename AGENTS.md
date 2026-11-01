@@ -109,6 +109,23 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/reçu de continuation — source377f647e intégrée/poussée ; cinqtests
+Linux ciblés distinctsPASS, assemblagesMac/Linux et revue6622035b sans défaut
+bloquant. begin_round retourne son reçu avant le tick général ; cadence
+existante conservée, preuves obligatoires avant commit, aucun rejeu automatique.
+BudgetclientContinue70s+attestation, lecturesinchangées ; perte de réponse
+garde task_id/request_id. Build221-continuation-receipt-r1 chargé7services/SHA
+vérifiés, coupure2,13s, wrappersCartae2500061/SYS1204789 préservés ; rollback
+natifjournal-control-r3 vérifié. Lien revenu après republication,45options/gel=false.
+Tâchebe04d2d9 ronde2 result_available/erreurnulle/même mission ; aucunrejeu.
+MCPouverts encoreanciens : nouveau budget/guidageclient NONchargés, livraisonclient
+incomplète ; fermer complètement l’application hôte puis mêmefil, unevérification,
+pasdeboucle. installed conserve caches sous propriétaire/observationincomplets,
+transfertsidentifiésretirés, actif/retour/preuves/revue conservés. Premier test
+non--lib bloqué par5fixturesanciennes sans service_tier, pasdéclaréPASS.
+Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/continuation-receipt.md.
+
+
 Session221/journal — sourcesa206ec33/7c4e921d/1249ea50 intégrées/poussées ;
 build221-journal-control-r3 chargé7services/SHA vérifiés. Commandes journal
 vers relais borné sans attenteHTTP ; lecteur sansmutexwriter, identifiants
