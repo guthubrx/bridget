@@ -17,9 +17,13 @@ pub(super) fn refusal(code:&str)->Option<Value>{
             "Faites préciser l’emplacement prévu pour les prochaines missions sur cette machine.",
             "Plusieurs correspondances couvrent cette source. Le responsable doit qualifier le nouvel emplacement puis déclarer une préférence unique entre mappings de même source et mêmes droits additionnels. Un identifiant project_id explicite reste strict ; ne pas le changer dans une admission déjà enregistrée. Ne remplacer ni l’ancien mapping ni un dossier vivant. Garder la clé et lire detail.admission avant un rejeu ; les mêmes paramètres et l’absence d’appel concurrent restent requis.",
             None),
+        "project_mapping_mismatch"=>(
+            "Faire vérifier la correspondance imposée pour cette demande.",
+            "L’association demandée ne correspond pas à l’hôte ou au dossier source de ce parent. Conserver le projet, sa clé et son enveloppe ; comparer le mapping source, maître et worker avant toute correction autorisée. Ne pas modifier les droits ni déplacer un dossier actif. Lire detail.admission avant toute reprise ; une demande en cours ou d’issue inconnue ne doit pas être dupliquée.",
+            Some("project_id")),
         "project_mapping_unknown"=>(
-            "Faire vérifier le placement natif de ce projet sur la machine choisie.",
-            "Aucun mapping applicable n’a été trouvé pour cette demande. Vérifier la machine, project_id s’il est imposé et le dossier source. Demander au responsable Bridget une préparation native du projet autorisée ; ne pas inventer un project_id, déplacer un dossier actif ou copier des clés. L’absence de mapping ne prouve pas une panne du serveur.",
+            "Faire vérifier les correspondances de projet examinées pour cette demande.",
+            "Le code indique un refus de résolution de correspondance, sans prouver une absence sur tous les serveurs. Lire detail.project_checks lorsqu’il est présent : étape et machines concernées. Un ancien reçu sans ce détail ne permet pas de retrouver la machine ni de prouver qu’une cible était déjà choisie. Vérifier les registres source, maître et worker, le dossier source et project_id seulement s’il est imposé. Demander au responsable Bridget une préparation native autorisée ; ne pas inventer un identifiant, déplacer un dossier actif ou copier des clés. Ce code seul ne prouve aucune panne serveur.",
             Some("project_id")),
         "origin_request_invalid"=>(
             "Transmettre ce refus au responsable Bridget pour vérifier la source et son attestation.",
@@ -45,13 +49,108 @@ pub(super) fn refusal(code:&str)->Option<Value>{
         "human_action":"Si la résolution dépasse vos droits, demander à l’utilisateur une décision ciblée sur le dossier, le placement ou l’accès aux faits manquants décrits ci-dessus. Ne pas demander un arrêt global ou une augmentation de droits pour contourner le refus."}}))
 }
 
+
+fn is_mapping_code(code: &str) -> bool {
+    matches!(code, "project_mapping_unknown" | "project_mapping_mismatch"
+        | "project_mapping_ambiguous" | "project_mapping_preference_invalid")
+}
+
+/// Diagnostic borné. Les autres familles gardent leur code historique.
+pub(super) fn mapping_context_error(stage: &str, refused: &BTreeMap<String, String>) -> String {
+    let code = refused.values().next().map(String::as_str).unwrap_or("project_mapping_unknown");
+    if !is_mapping_code(code) { return code.to_owned(); }
+    let checks = refused.iter().map(|(machine, reason)| json!({
+        "machine_id": machine,
+        "code": if is_mapping_code(reason) {reason.as_str()} else {"unobserved"},
+    })).collect::<Vec<_>>();
+    format!("routing_project_refused:{}", json!({"stage": stage,"code": code,"checks": checks}))
+}
+
+pub(super) fn contextual_refusal(encoded: &str) -> Value {
+    let fallback = || {
+        let mut view = refusal("project_mapping_unknown").expect("known refusal");
+        view["detail"]["context_status"] = json!("unavailable");
+        view
+    };
+    if encoded.len() > 8192 { return fallback(); }
+    let Ok(value) = serde_json::from_str::<Value>(encoded) else { return fallback(); };
+    let Some(object) = value.as_object().filter(|v|v.len()==3) else { return fallback(); };
+    let Some(stage) = object.get("stage").and_then(Value::as_str)
+        .filter(|v|matches!(*v,"project_preparation"|"candidate_mapping")) else { return fallback(); };
+    let Some(code) = object.get("code").and_then(Value::as_str).filter(|v|is_mapping_code(v))
+        else { return fallback(); };
+    let Some(checks) = object.get("checks").and_then(Value::as_array)
+        .filter(|v|!v.is_empty() && v.len()<=16) else { return fallback(); };
+    let mut previous: Option<&str> = None;
+    for check in checks {
+        if !check.as_object().is_some_and(|v|v.len()==2) { return fallback(); }
+        let Some(machine) = check["machine_id"].as_str()
+            .filter(|v|v.len()<=256 && bridget_core::host_is_attested(v)
+                && v.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'.'|b'-'|b'_'))) else { return fallback(); };
+        if previous.is_some_and(|v|v>=machine) { return fallback(); }
+        previous=Some(machine);
+        if !check["code"].as_str().is_some_and(|v|is_mapping_code(v)||v=="unobserved") {
+            return fallback();
+        }
+    }
+    if checks[0]["code"]!=code { return fallback(); }
+    let mut result=refusal(code).expect("known refusal");
+    result["message"]=json!("Faire vérifier les correspondances indiquées dans detail.project_checks, sur les machines et à l’étape nommées. Ce refus concerne cette demande, sans prouver un choix final de machine ni une panne globale. Les autres travaux autorisés suivent leur propre état.");
+    result["detail"]["stage"]=json!(stage);
+    result["detail"]["scope"]=json!("this_admission");
+    result["detail"]["context_status"]=json!("observed");
+    result["detail"]["execution_selection"]=json!("not_attested_by_this_diagnostic");
+    result["detail"]["coverage"]=json!("mapping_refusals_only");
+    result["detail"]["project_checks"]=json!(checks);
+    result["detail"]["verification"]=json!("Les codes connus de correspondance sont conservés par machine. unobserved signifie que la cause précise de cet autre refus n’est pas publiée ici. Ce diagnostic ne prouve pas l’absence de correspondance sur tous les serveurs.");
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
+    fn spec221_project_context_keeps_machine_stage_code_and_closed_bounds() {
+        for code in ["project_mapping_unknown","project_mapping_mismatch",
+            "project_mapping_ambiguous","project_mapping_preference_invalid"] {
+            let error=mapping_context_error("candidate_mapping",&BTreeMap::from([("cartae".into(),code.into())]));
+            let view=contextual_refusal(error.strip_prefix("routing_project_refused:").unwrap());
+            assert_eq!(view["code"],code);
+            assert_eq!(view["detail"]["context_status"],"observed");
+        }
+        let causes=BTreeMap::from([
+            ("cartae".into(),"project_mapping_unknown".into()),
+            ("sysle2".into(),"PRIVATE helper cause".into()),
+        ]);
+        let error=mapping_context_error("project_preparation",&causes);
+        let view=contextual_refusal(error.strip_prefix("routing_project_refused:").unwrap());
+        assert_eq!(view["code"],"project_mapping_unknown");
+        assert_eq!(view["detail"]["stage"],"project_preparation");
+        assert_eq!(view["detail"]["project_checks"][0]["machine_id"],"cartae");
+        assert_eq!(view["detail"]["project_checks"][1]["code"],"unobserved");
+        assert!(!view.to_string().contains("PRIVATE"));
+        assert_eq!(view["detail"]["execution_selection"],"not_attested_by_this_diagnostic");
+        assert!(view.to_string().len()<8192);
+        assert_eq!(mapping_context_error("project_preparation",&BTreeMap::from([
+            ("cartae".into(),"permission_attestation_unavailable".into())])),
+            "permission_attestation_unavailable");
+        for raw in ["PRIVATE",r#"{"stage":"project_preparation","code":"PRIVATE","checks":[]}"#,
+            r#"{"stage":"chosen","code":"project_mapping_unknown","checks":[{"machine_id":"cartae","code":"project_mapping_unknown"}]}"#] {
+            let rejected=contextual_refusal(raw);
+            assert_eq!(rejected["detail"]["context_status"],"unavailable");
+            assert!(!rejected.to_string().contains("PRIVATE"));
+        }
+        let mut invalid=serde_json::from_str::<Value>(error.strip_prefix("routing_project_refused:").unwrap()).unwrap();
+        invalid["checks"][0]["machine_id"]=json!("/private/path");
+        assert_eq!(contextual_refusal(&invalid.to_string())["detail"]["context_status"],"unavailable");
+        invalid["checks"]=json!((0..17).map(|i|json!({"machine_id":format!("host-{i:02}"),"code":"project_mapping_unknown"})).collect::<Vec<_>>());
+        assert_eq!(contextual_refusal(&invalid.to_string())["detail"]["context_status"],"unavailable");
+    }
+
+    #[test]
     fn spec211_refusals_name_action_scope_and_human_decision(){
         for code in ["expected_base_commit_required","cwd_outside_parent_project",
-            "project_mapping_unknown","project_mapping_preference_invalid","project_mapping_ambiguous","origin_request_invalid","brief_invalid","envelope_mismatch","task_unavailable"]{
+            "project_mapping_unknown","project_mapping_mismatch","project_mapping_preference_invalid","project_mapping_ambiguous","origin_request_invalid","brief_invalid","envelope_mismatch","task_unavailable"]{
             let r=refusal(code).unwrap();
             assert_eq!(r["code"],code);
             assert!(r["message"].as_str().unwrap().contains("cette demande"));

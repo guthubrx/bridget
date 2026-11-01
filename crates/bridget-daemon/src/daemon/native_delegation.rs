@@ -867,7 +867,7 @@ fn prepare_routing_projects(
     // Contrôle réel du fait fournisseur avant toute copie. Pas de droit neuf.
     if !foreign {crate::native_permissions::prove_parent_permissions(&parent, parent.revision)?;}
     let deadline=Instant::now()+Duration::from_secs(595);
-    let mut refused = HashMap::new();
+    let mut refused = BTreeMap::new();
     for machine in machines {
         if Instant::now()>=deadline {
             refused.insert(machine,"project_preparation_timeout".to_owned());
@@ -900,7 +900,7 @@ fn prepare_routing_projects(
     }
     plan.candidates.retain(|candidate| !refused.contains_key(&candidate.machine_id));
     if plan.candidates.is_empty() {
-        return Err(refused.into_values().next().unwrap_or_else(|| "routing_candidate_unavailable".into()));
+        return Err(admission_guidance211::mapping_context_error("project_preparation",&refused));
     }
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     recheck_attested_thread(&st, conn, thread)?;
@@ -943,7 +943,7 @@ fn observe_routing_candidates_for_project(
         .map_err(|error| error.to_string())?;
     let admission_id = auto_admission_id(&canonical);
     let now = unix_timestamp();
-    let mut mapping_refusal = None;
+    let mut mapping_refusals = BTreeMap::new();
     let mut option_accounts=HashMap::new();
     let mut option_refusals=Vec::new();
     let (parent, mut observations, batches, host) = {
@@ -1110,7 +1110,7 @@ fn observe_routing_candidates_for_project(
                     project_id, &origin_host, source));
             let (project_id, mapping) = match resolved {
                 Ok(mapping) => mapping,
-                Err(reason) => { mapping_refusal = Some(reason.clone()); continue; }
+                Err(reason) => { mapping_refusals.insert(candidate.machine_id.clone(),reason.clone()); continue; }
             };
             let Ok(relative) = source.strip_prefix(&mapping.source_root) else {
                 continue;
@@ -1310,8 +1310,8 @@ fn observe_routing_candidates_for_project(
             if matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
                 "worker_commit_view_capabilities_unsupported".into()
             } else {"worker_candidate_probe_v2_unsupported".into()}
-        } else if let Some(reason) = mapping_refusal {
-            reason
+        } else if !mapping_refusals.is_empty() {
+            admission_guidance211::mapping_context_error("candidate_mapping",&mapping_refusals)
         } else if let Some(quota) = plan.connections.iter()
             .filter_map(|fact| serde_json::from_str::<Value>(&fact.summary).ok())
             .find(|quota| quota["launch_blocked"] == true)
@@ -3825,6 +3825,9 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if let Some(encoded)=code.strip_prefix("routing_project_refused:") {
+        return admission_guidance211::contextual_refusal(encoded);
+    }
     if matches!(code,"origin_proof_busy"|"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy") {
         return origin_attestation_refusal(code);
     }
@@ -13932,6 +13935,38 @@ mod tests {
         assert!(recovery.contains("nouvelle request_id"));
         assert!(recovery.contains("si une tâche existe, suivez-la"));
         assert_eq!(failure("expected_base_commit_required")["detail"]["field"],"expected_base_commit");
+    }
+
+    #[test]
+    fn spec221_project_context_mapping_refusal_is_prechoice_and_does_not_send() {
+        let (state,config,rx,_reader,request,_root)=routing168_fixture(1);
+        {
+            let mut st=state.lock().unwrap();
+            st.host="local".into();
+            let path=st.registry.source().to_path_buf();
+            let mut value:Value=serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            value["routing_policy"]["connections"][0]["machine_id"]=json!("cartae");
+            value["machines"]=json!({"cartae":{"enabled":true,"worker_id":"worker-cartae",
+                "provisioning_revision":1,"credential_fingerprint":"c".repeat(64),
+                "allowed_agent_types":["native-test"],"mappings":{}}});
+            std::fs::write(&path,serde_json::to_vec(&value).unwrap()).unwrap();
+            st.registry=AgentRegistry::load_from_path(path).unwrap();
+        }
+        let mut plan=routing168_plan(&state,&request);
+        let code=observe_routing_candidates("conn-1",&request,&mut plan,None,&state).unwrap_err();
+        assert!(code.starts_with("routing_project_refused:"));
+        let view=routing_failure_admission("conn-1",&request,None,failure(&code),&state);
+        assert_eq!(view["code"],"project_mapping_unknown");
+        assert_eq!(view["detail"]["stage"],"candidate_mapping");
+        assert_eq!(view["detail"]["project_checks"][0]["machine_id"],"cartae");
+        assert_eq!(view["detail"]["admission"]["state"],"not_recorded");
+        assert!(view["detail"]["admission"]["task_id"].is_null());
+        let st=state.lock().unwrap();
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(st.pending_candidate_probes.is_empty());
+        assert!(st.pending_worker_responses.is_empty());
+        assert!(rx.try_recv().is_err());
+        drop(st);drop(state);cleanup(&config);
     }
 
     #[test]
