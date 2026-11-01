@@ -62,3 +62,16 @@ ont chacune une preuve ci-dessus. Pas de changement de MobileUpdates.verifyApk.
 Preuves HTML autonomes générées et contrôlées dans html_preview ; gestes natifs ADB,
 pas de coordonnées DOM fabriquées. Captures/manifestes bruts hors Git :
 /Users/moi/.cache/bridget-android071.
+
+## Livraison Git et entretien
+Correction68f47111 intégrée en avance rapide dans main, poussée sur origin GitHub ;
+main Mac et Cartae synchronisés et propres. Aucun binaire Rust ni service remplacé :
+la correction active est l'APK0.7.1 public, réellement installé sur l'émulateur.
+Les pointeurs rollback des serveurs ne sont pas concernés et restent intacts.
+APK0.7.0 officiel conservé hors Git comme référence de certificat et preuve.
+
+Entretien examiné : worktree223 et branche intégrés mais conservés. lsof signale
+une observation incomplète de montages sur Cartae ; aucun usage inconnu n'est supprimé.
+Dossiers ignorés limités à Android .gradle/build et __pycache__. Pas de targetCargo
+créé. Captures, manifestes et APK sont conservés dans le cache223 ; les autres
+worktrees et binaires des sessions221/222 restent intacts.

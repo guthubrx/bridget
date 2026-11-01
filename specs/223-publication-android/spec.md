@@ -1,5 +1,5 @@
 # 223 — Publication Android cohérente
-Statut : implémenté ; intégration Git en cours. Correction demandée le 1 novembre 2026.
+Statut : Livré. Correction demandée le 1 novembre 2026.
 
 L'utilisateur doit pouvoir mettre à jour Bridget 0.7.0 vers 0.7.1 sans désinstaller
 l'application. Le paquet publié doit avoir la version annoncée et le certificat
