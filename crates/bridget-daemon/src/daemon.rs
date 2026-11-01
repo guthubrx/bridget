@@ -8,6 +8,7 @@ mod dispatch_diagnostics;
 pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
 mod mobile_admin;
+mod specialists222;
 mod origin_proof;
 mod mobile_operations;
 mod mobile_queue;
@@ -1166,6 +1167,7 @@ struct DaemonState {
     pending_replies: Vec<PendingReply>,
     /// Remises idempotentes à écrire juste après la réponse `Registered`.
     /// L'ordre rend le réenregistrement observable avant toute redélivrance.
+    specialist_capture_active:HashSet<String>,
     pending_post_response_controls: HashMap<String, Vec<DeferredControl>>,
 }
 
@@ -4302,9 +4304,11 @@ fn handle_managed_command(
                         "BootstrapReady non corrélé".to_string(),
                     ));
                 }
+                let authority_guard=prepared.specialist_authority.as_ref().map(crate::lifecycle::SpecialistLaunchAuthority::lock).transpose()?;
                 let mut child = ready
                     .persist_marker(marker_store, &prepared.lease.name)?
                     .release()?;
+                if let Some(guard)=authority_guard {guard.finish()?;}
                 child.set_status_nonblocking()?;
                 Ok(Some(child))
             })();
@@ -5098,6 +5102,7 @@ impl DaemonState {
             presences: HashMap::new(),
             conn_counter: 0,
             pending_replies: Vec::new(),
+            specialist_capture_active:HashSet::new(),
             pending_post_response_controls: HashMap::new(),
         })
     }
@@ -6543,9 +6548,12 @@ fn schedule_execution_recovery(
         }
     };
     let continuation_id = format!("continuation-recovery-{parent_execution_id}");
+    let specialist_budget=match specialists222::budget_for_execution(state,parent_execution_id) {
+        Ok(policy)=>policy,Err(code)=>{warn!("continuation conservée sans départ : {code}");return;}
+    };
     match reserve_governed_continuation(
         &state.execution_store,
-        Default::default(),
+        specialist_budget,
         autonomy_runtime_for_control(&control, crate::fleet::AutonomyRuntimeState::Ready),
         GovernedContinuationSource::RecoveryAfterIdleWrapper,
         parent_execution_id,
@@ -8832,6 +8840,9 @@ fn handle_register_with_channel(
             }
 
             state.restore_pending_for_agent(&final_agent_id, conn_id);
+            let mut specialist_controls=Vec::new();
+            specialists222::resume_for_registered(state,&final_agent_id,&mut specialist_controls);
+            state.pending_post_response_controls.entry(conn_id.into()).or_default().extend(specialist_controls);
             info!("agent '{}' enregistré ({})", final_agent_id, conn_id);
             state.revoke_identity_authorizations(conn_id);
             let credential = state.conn_instances.contains_key(conn_id).then(|| {
@@ -11985,7 +11996,7 @@ fn prepare_dispatch(
         .router
         .get_agent(&routing_from)
         .map(|agent| agent.connection_id.clone());
-    if message.reply && reply_sender_conn.is_none() {
+    if message.reply && reply_sender_conn.is_none() && !specialists222::is_human_request(st,message) {
         return Err((
             "reply_sender_unavailable",
             "--reply requiert un agent Bridget connecté ; lance la commande depuis un wrapper actif ou envoie sans --reply".to_string(),
@@ -12122,7 +12133,10 @@ fn remember_reply_cycle(
     reply_sender_conn: Option<String>,
     target_conn: String,
 ) {
-    if !message.reply {
+    if !message.reply || reply_sender_conn.is_none() {
+        // prepare_dispatch a déjà validé l'expéditeur, avant de diminuer hops.
+        // Les demandes humaines222 utilisent tracked_requests et le journal,
+        // sans socket fictive ni pending_reply destiné à un agent.
         return;
     }
     let timeout = message.reply_timeout.unwrap_or(60);
@@ -12187,6 +12201,12 @@ fn handle_idempotent_send(
     )
 }
 
+#[derive(Clone,Copy)]
+enum RetainedSendAuthority<'a> {
+    Result(&'a native_delegation::RetainedResultAuthority),
+    Specialist(&'a specialists222::SpecialistSendAuthority),
+}
+
 fn handle_idempotent_send_with_result_authority(
     conn_id: &str,
     mut message: bridget_core::BridgetMessage,
@@ -12195,7 +12215,7 @@ fn handle_idempotent_send_with_result_authority(
     admission: IdempotentSendAdmission,
     st: &mut DaemonState,
     controls: &mut Vec<DeferredControl>,
-    authority: Option<&native_delegation::RetainedResultAuthority>,
+    authority: Option<RetainedSendAuthority<'_>>,
     scoped_mobile_human: bool,
 ) -> DaemonToWrapper {
     if message.reply && message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
@@ -12216,9 +12236,11 @@ fn handle_idempotent_send_with_result_authority(
     let human_from_bare_client = matches!(message.from.as_str(), "" | "human" | "humain")
         && !st.conn_names.contains_key(conn_id);
     if let Some(authority) = authority {
-        if let Err(reason) =
-            native_delegation::authorize_retained_result(st, authority, conn_id, &message)
-        {
+        let verified=match authority {
+            RetainedSendAuthority::Result(authority)=>native_delegation::authorize_retained_result(st,authority,conn_id,&message),
+            RetainedSendAuthority::Specialist(authority)=>specialists222::authorize_prepared_send(st,authority,&message),
+        };
+        if let Err(reason)=verified {
             return DaemonToWrapper::Nack {
                 id: message_id,
                 reason,
@@ -12230,11 +12252,12 @@ fn handle_idempotent_send_with_result_authority(
             reason: "identité expéditeur non attestée : rattachement auxiliaire requis".into(),
         };
     }
-    let Some(negotiated) = st.client_negotiations.get(conn_id).cloned() else {
-        return DaemonToWrapper::ClientRejected {
-            reason: ClientRefusal::NegotiationRequired,
-        };
-    };
+    let negotiated=if let Some(RetainedSendAuthority::Specialist(authority))=authority {
+        NegotiatedClient{version:CLIENT_CONTRACT_VERSION,
+            issuer_scope:crate::communication::issuer_scope(&format!("specialist:{}",authority.issuer_scope)),
+            capabilities:vec![ClientCapability::SendIdempotent,ClientCapability::SpecialistsV1]}
+    }else if let Some(negotiated)=st.client_negotiations.get(conn_id).cloned() {negotiated}
+    else{return DaemonToWrapper::ClientRejected{reason:ClientRefusal::NegotiationRequired};};
     // L'identifiant métier est l'autorité publique ; l'ancien champ `id` de
     // Bridget est donc normalisé avant toute comparaison ou garde mutable.
     message.id = message_id.clone();
@@ -19647,6 +19670,9 @@ fn handle_wrapper_message_with_peer(
             return None;
         }
     }
+    if let WrapperToDaemon::Specialists { request } = &msg {
+        return Some(specialists222::handle_human(conn_id, request, state));
+    }
     if let WrapperToDaemon::UserInput { request } = &msg {
         return Some(user_input::handle(conn_id, request, state, peer));
     }
@@ -19869,7 +19895,7 @@ fn handle_wrapper_message_with_peer(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
-                WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
+                WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
@@ -20154,7 +20180,7 @@ fn handle_wrapper_message_with_peer(
             }
             Some(ConnectionRole::Client) => match &msg {
                 WrapperToDaemon::UserInput { .. } => None,
-                WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
+                WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
@@ -20916,6 +20942,13 @@ fn handle_wrapper_message_with_peer(
                 return None;
             }
             st.observation_sequences.insert(conn_id.into(), seq);
+            if event==ObservationKind::TurnEnded {
+                let agent=agent.clone();let instance=instance.clone();
+                drop(st);
+                specialists222::observe_history(state,&agent,&instance,seq);
+                st=state.lock().unwrap_or_else(|e|e.into_inner());
+                if live_connection_identity(&st,conn_id)!=Some((agent,instance)){return None;}
+            }
             let host = st
                 .presences
                 .get(&instance)
@@ -22024,6 +22057,7 @@ fn handle_wrapper_message_with_peer(
                             ClientCapability::CommunicationProjectsV1
                                 | ClientCapability::UserInputV1
                                 | ClientCapability::ThreadMembersV1
+                                | ClientCapability::SpecialistsV1
                         );
                     }
                     matches!(
@@ -22047,6 +22081,7 @@ fn handle_wrapper_message_with_peer(
                             | ClientCapability::ControlStateV1
                             | ClientCapability::RoutingCatalogueV1
                             | ClientCapability::ProviderCatalogueV1
+                            | ClientCapability::SpecialistsV1
                     )
                 })
                 .collect();
@@ -23970,6 +24005,7 @@ fn handle_wrapper_message_with_peer(
                     let mut features=vec![
                     "wait_v1".to_string(),
                     "user_input_v1".to_string(),
+                    "specialists_v1".to_string(),
                     "remote_worker_v1".to_string(),
                     "worker_candidate_probe_v1".to_string(),
                     "auto_delegate_v1".to_string(),
@@ -24580,7 +24616,7 @@ fn handle_wrapper_message_with_peer(
         }
 
         // Le contrôle de rôle mobile est exécuté avant cette matrice.
-        WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
+        WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
         WrapperToDaemon::LedgerProjection { scope, limit } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
@@ -48054,6 +48090,7 @@ mod presence_tests {
         )
         .unwrap();
         PreparedSpawn {
+            specialist_authority:None,
             lease: lease.clone(),
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),
@@ -48982,6 +49019,7 @@ mod presence_tests {
         .release()
         .unwrap();
         let prepared = PreparedSpawn {
+            specialist_authority:None,
             lease: lease.clone(),
             agent_type: "fixture".to_string(),
             command: "/bin/sh".to_string(),

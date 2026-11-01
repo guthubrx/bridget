@@ -138,6 +138,11 @@ Programme56/186InProgress. Preuves : specs/221-capacites-completes/validation/pr
 
 
 
+
+Session222 — rôles/profils/mémoire développés ; sept services0.7.0/build222-specialists-r3 chargés, Android authentifié et réveil/réponse/mémoire techniques vérifiés. AuditV15 révision2 pass ; code identique aux deux assemblages. Client MCP du présent fil encore à recharger : un seul TERM ciblé puis Transport closed, moteur préservé ; pas de boucle. Programme221 indépendant. Sources/limites : specs/222-roles-profils/validation.md.
+Plan : specs/222-roles-profils/plan.md. Cadrage utilisateur validé après grill-me.
+
+
 Session221/profilCodexSYS166 — programme existant0.166 qualifié par9formes du
 schéma face0.164, puis un seul tour technique natif Solhigh réussi :20b6e59c,
 marqueur reçu/result_available/erreurnulle, ACK/clôture unefois. Observations

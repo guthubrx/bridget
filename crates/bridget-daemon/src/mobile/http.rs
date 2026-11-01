@@ -657,6 +657,15 @@ fn execute(
         };
     }
     drop(store);
+    if method == Method::POST && path == "/v1/specialists" {
+        let command:bridget_transport::specialists::SpecialistRequest=match serde_json::from_slice(&bytes) {
+            Ok(command)=>command,Err(_)=>return failure("invalid_request"),
+        };
+        if command.validate().is_err(){return failure("invalid_request");}
+        return match super::client::mobile_operation(&gateway.socket,key,bridget_transport::protocol::MobileOperation::Specialists{request:command}) {
+            Ok(value)=>result(value),Err(code)=>failure(code),
+        };
+    }
     if method == Method::GET && path == "/v1/events" {
         return follow(gateway, key, &device, query, deadline);
     }

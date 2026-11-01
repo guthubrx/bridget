@@ -1,0 +1,1446 @@
+{
+  "scoring_version": "axes-2",
+  "input_sha256": "3e39ae8d3cd26ad3c85e26ec63d57f4bdafa8e28597613103975889c330a9ab0",
+  "manifest_sha256": "ad1173410cb8da57b6c8ec41beafa95fb1b53ad046819a31fd7faa93c38491b2",
+  "axes": {
+    "security": {
+      "title": "Sécurité",
+      "score": 75,
+      "grade": "C",
+      "status": "assessed",
+      "controls_verified": 5,
+      "controls_applicable": 5,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.security.01",
+        "axes.security.02",
+        "axes.security.03",
+        "axes.security.04",
+        "axes.security.05"
+      ],
+      "finding_fingerprints": [
+        "c12f22eab138af1c77d3",
+        "759639ecd93da925d906",
+        "0caf085f2d09e199f547",
+        "e7758adb035e1b7b029c",
+        "1ccba275685005e5acbc",
+        "d620a3f055d3fdbe9a99",
+        "eb6175c2e0c7e69007f0",
+        "274c2ac1987724fd6536",
+        "99646f503a41dcb1e4ef",
+        "4db296e5e1be4fb6851b",
+        "38571998a7598bcbc851",
+        "f1727ff5aad87fca21d5",
+        "00aef57d2b23fd220298",
+        "ce92ea010cfa7d0bf6fa",
+        "fc022f7caf03536f1cba",
+        "7f71e9553e14309aeaeb",
+        "e6836994487846332c1f",
+        "63e0190c29fdda7cb2f9",
+        "ad05a3def43e81fcc265",
+        "cc6388e7fcabef574222",
+        "9db463cc7a4af09a05aa",
+        "e45950a9c6e63fb9d229",
+        "158c6cd8bf58905b0244",
+        "1d307a36d5949af9477c",
+        "f52a07ecc1ca55709184",
+        "26f683fcf82bb0ff01ae",
+        "75b42b286b82339c3d1d",
+        "40f1e85c913739d637c8",
+        "65c79b66a99f0470fc57",
+        "1445b51490df37b5bf87",
+        "d6bd73ba6dcde938b616",
+        "3c62cc615e54a94676e3",
+        "ccdb5bf316bc782d59d1",
+        "dc1275c1c3253345fd4a",
+        "51df6a613f1fcafe8add",
+        "0e596c2da0d13fa2bbcc",
+        "0128e853546ce457c2df",
+        "b9dfa191ed20b52b05ed",
+        "c85a2bcce92ebb05a88b",
+        "1ff44714c738da148774",
+        "2f0fa9460150877c7f54",
+        "9fca9579c817408b3a11",
+        "28a55963bad11de9d465",
+        "83b9d24a7fcc23a00f3a",
+        "b2ca3050bba5aa41dd96",
+        "0b38b30f5526b388600f",
+        "642e7c1486a259464a74",
+        "185cae8935e9dfdbfcc0",
+        "da0b0fc627212288b032",
+        "4defb24dcc2052e837a4",
+        "89d1a83667a7035fd5d0",
+        "b49bb1a3a7e082710ff4",
+        "bf6468883478b7e8c138",
+        "740be850e425cd1def4c",
+        "6ec3098201706943c190",
+        "2ecd8841a91e555603c8",
+        "201f864d74dea449d45f"
+      ],
+      "demonstrated_score": 75,
+      "criteria": [
+        {
+          "id": "axes.security.01",
+          "axis": "security",
+          "title": "Analyse statique et validation des entrées",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Entrées fermées, autorité corrélée et scans triés ; le modèle OS même UID et les composants hors delta limitent la portée, pas une certification globale. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.02",
+          "axis": "security",
+          "title": "Protection des secrets courants",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Entrées fermées, autorité corrélée et scans triés ; le modèle OS même UID et les composants hors delta limitent la portée, pas une certification globale. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.03",
+          "axis": "security",
+          "title": "Maîtrise des secrets historiques",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Entrées fermées, autorité corrélée et scans triés ; le modèle OS même UID et les composants hors delta limitent la portée, pas une certification globale. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.04",
+          "axis": "security",
+          "title": "Authentification et séparation des droits",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Entrées fermées, autorité corrélée et scans triés ; le modèle OS même UID et les composants hors delta limitent la portée, pas une certification globale. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.security.05",
+          "axis": "security",
+          "title": "Maîtrise des dépendances vulnérables",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Entrées fermées, autorité corrélée et scans triés ; le modèle OS même UID et les composants hors delta limitent la portée, pas une certification globale. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "llm_security": {
+      "title": "Sécurité IA",
+      "score": 75,
+      "grade": "C",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.llm_security.01",
+        "axes.llm_security.02",
+        "axes.llm_security.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 75,
+      "criteria": [
+        {
+          "id": "axes.llm_security.01",
+          "axis": "llm_security",
+          "title": "Confidentialité et pseudonymisation",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Mémoire donnée/source, jamais droit ; refus humain et grant natif. Les prompts ne constituent pas un sandbox contre un administrateur du compte. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.llm_security.02",
+          "axis": "llm_security",
+          "title": "Permissions des appels externes",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Mémoire donnée/source, jamais droit ; refus humain et grant natif. Les prompts ne constituent pas un sandbox contre un administrateur du compte. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.llm_security.03",
+          "axis": "llm_security",
+          "title": "Résistance aux instructions malveillantes",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Mémoire donnée/source, jamais droit ; refus humain et grant natif. Les prompts ne constituent pas un sandbox contre un administrateur du compte. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "reliability": {
+      "title": "Fiabilité et exploitation",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.reliability.01",
+        "axes.reliability.02",
+        "axes.reliability.03",
+        "axes.reliability.04"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.reliability.01",
+          "axis": "reliability",
+          "title": "Conservation et rotation des sauvegardes",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Transactions et reçus persistants examinés ; conservation de l'issue inconnue. Pas de campagne de sinistre ni bascule réelle dans cet audit. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.reliability.02",
+          "axis": "reliability",
+          "title": "Reprise des traitements interrompus",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Transactions et reçus persistants examinés ; conservation de l'issue inconnue. Pas de campagne de sinistre ni bascule réelle dans cet audit. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.reliability.03",
+          "axis": "reliability",
+          "title": "Continuité pendant une bascule",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Transactions et reçus persistants examinés ; conservation de l'issue inconnue. Pas de campagne de sinistre ni bascule réelle dans cet audit. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.reliability.04",
+          "axis": "reliability",
+          "title": "Restauration après sinistre",
+          "weight": 1,
+          "status": "not_applicable",
+          "level": null,
+          "rating_rationale": "Périmètre de cet audit : code222 avant activation ; qualification du runtime livré et restauration complète restent T030/T031. Aucun verdict de déploiement ou de sinistre donné. Révision2 : delta mobile relu et test ciblé PASS ; preuves antérieures réutilisées pour les sources inchangées, sans nouvelle campagne générale.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": true
+        }
+      ]
+    },
+    "tests": {
+      "title": "Tests et validation",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 4,
+      "controls_applicable": 4,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.tests.01",
+        "axes.tests.02",
+        "axes.tests.03",
+        "axes.tests.04",
+        "axes.tests.05"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.tests.01",
+          "axis": "tests",
+          "title": "Typage des sources et des tests",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Typage/assemblage et cas ciblés attestés ; couverture de branches utile, sans campagne exhaustive ni UI authentifiée annoncée. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation-test.log",
+              "sha256": "9fbf10ba3d085570eaacf097c33039d718a8ceb2daf5c222c207e2f191a3c5bd"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.02",
+          "axis": "tests",
+          "title": "Analyse de style et erreurs statiques",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Typage/assemblage et cas ciblés attestés ; couverture de branches utile, sans campagne exhaustive ni UI authentifiée annoncée. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation-test.log",
+              "sha256": "9fbf10ba3d085570eaacf097c33039d718a8ceb2daf5c222c207e2f191a3c5bd"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.03",
+          "axis": "tests",
+          "title": "Régressions et cas limites",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Typage/assemblage et cas ciblés attestés ; couverture de branches utile, sans campagne exhaustive ni UI authentifiée annoncée. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation-test.log",
+              "sha256": "9fbf10ba3d085570eaacf097c33039d718a8ceb2daf5c222c207e2f191a3c5bd"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.tests.04",
+          "axis": "tests",
+          "title": "Qualification du runtime livré",
+          "weight": 1,
+          "status": "not_applicable",
+          "level": null,
+          "rating_rationale": "Périmètre de cet audit : code222 avant activation ; qualification du runtime livré et restauration complète restent T030/T031. Aucun verdict de déploiement ou de sinistre donné. Révision2 : delta mobile relu et test ciblé PASS ; preuves antérieures réutilisées pour les sources inchangées, sans nouvelle campagne générale.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation-test.log",
+              "sha256": "9fbf10ba3d085570eaacf097c33039d718a8ceb2daf5c222c207e2f191a3c5bd"
+            }
+          ],
+          "excluded": true
+        },
+        {
+          "id": "axes.tests.05",
+          "axis": "tests",
+          "title": "Tests interface et intégration des données",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Typage/assemblage et cas ciblés attestés ; couverture de branches utile, sans campagne exhaustive ni UI authentifiée annoncée. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation-test.log",
+              "sha256": "9fbf10ba3d085570eaacf097c33039d718a8ceb2daf5c222c207e2f191a3c5bd"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "performance": {
+      "title": "Performance et ressources",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 4,
+      "controls_applicable": 4,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 1,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.performance.01",
+        "axes.performance.02",
+        "axes.performance.03",
+        "axes.performance.04"
+      ],
+      "finding_fingerprints": [
+        "92cf3615e646eeb39b5f"
+      ],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.performance.01",
+          "axis": "performance",
+          "title": "Admission et saturation des demandes",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Tailles de documents/pages/lanes bornées et causes explicites ; pas de mesure représentative à très grand corpus. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.performance.02",
+          "axis": "performance",
+          "title": "Budget mémoire",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Tailles de documents/pages/lanes bornées et causes explicites ; pas de mesure représentative à très grand corpus. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.performance.03",
+          "axis": "performance",
+          "title": "Délais, annulation et libération",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Tailles de documents/pages/lanes bornées et causes explicites ; pas de mesure représentative à très grand corpus. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.performance.04",
+          "axis": "performance",
+          "title": "Mesures représentatives de latence et charge",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Tailles de documents/pages/lanes bornées et causes explicites ; pas de mesure représentative à très grand corpus. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "complexity": {
+      "title": "Complexité algorithmique",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 1,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.complexity.01",
+        "axes.complexity.02",
+        "axes.complexity.03"
+      ],
+      "finding_fingerprints": [
+        "92cf3615e646eeb39b5f"
+      ],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.complexity.01",
+          "axis": "complexity",
+          "title": "Complexité des points d’entrée",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : JOIN enlève le N+1 non borné ; tri/rappel et quotas techniques documentés. La taille durable du corpus reste libre et la latence non constante. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.complexity.02",
+          "axis": "complexity",
+          "title": "Bornes des parcours et allocations",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : JOIN enlève le N+1 non borné ; tri/rappel et quotas techniques documentés. La taille durable du corpus reste libre et la latence non constante. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.complexity.03",
+          "axis": "complexity",
+          "title": "Coût des accès et écritures de données",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : JOIN enlève le N+1 non borné ; tri/rappel et quotas techniques documentés. La taille durable du corpus reste libre et la latence non constante. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "quality": {
+      "title": "Qualité du code et des erreurs",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.quality.01",
+        "axes.quality.02",
+        "axes.quality.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.quality.01",
+          "axis": "quality",
+          "title": "Gestion des refus et messages utilisateur",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Refus et reprises visibles dans CLI/Kotlin ; circuit Android réel encore à vérifier à la livraison. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/android-release.log",
+              "sha256": "7e22148bd8849a6ec827fcd5fd0180408ca16a6566aec69fe13f78bc5d728b87"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/cli-receipt.json",
+              "sha256": "20e1f78d72a29fb6b2a04bbcadd7ad34df36abb119665a18ee634ec79184cccb"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.quality.02",
+          "axis": "quality",
+          "title": "Gestion des erreurs partielles",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Refus et reprises visibles dans CLI/Kotlin ; circuit Android réel encore à vérifier à la livraison. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/android-release.log",
+              "sha256": "7e22148bd8849a6ec827fcd5fd0180408ca16a6566aec69fe13f78bc5d728b87"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/cli-receipt.json",
+              "sha256": "20e1f78d72a29fb6b2a04bbcadd7ad34df36abb119665a18ee634ec79184cccb"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.quality.03",
+          "axis": "quality",
+          "title": "Ergonomie des parcours concernés",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Refus et reprises visibles dans CLI/Kotlin ; circuit Android réel encore à vérifier à la livraison. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/android-release.log",
+              "sha256": "7e22148bd8849a6ec827fcd5fd0180408ca16a6566aec69fe13f78bc5d728b87"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/cli-receipt.json",
+              "sha256": "20e1f78d72a29fb6b2a04bbcadd7ad34df36abb119665a18ee634ec79184cccb"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "architecture": {
+      "title": "Architecture et dépendances",
+      "score": 75,
+      "grade": "C",
+      "status": "assessed",
+      "controls_verified": 4,
+      "controls_applicable": 4,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.architecture.01",
+        "axes.architecture.02",
+        "axes.architecture.03",
+        "axes.architecture.04"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 75,
+      "criteria": [
+        {
+          "id": "axes.architecture.01",
+          "axis": "architecture",
+          "title": "Frontières et résolution des dépendances",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Une autorité de soumission, Fleet et domaine de profils existants ; aucune dépendance nouvelle. Les adaptateurs existants ne sont pas réaudités exhaustivement. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.architecture.02",
+          "axis": "architecture",
+          "title": "Maîtrise des cycles",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Une autorité de soumission, Fleet et domaine de profils existants ; aucune dépendance nouvelle. Les adaptateurs existants ne sont pas réaudités exhaustivement. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.architecture.03",
+          "axis": "architecture",
+          "title": "Séparation construction et exécution",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Une autorité de soumission, Fleet et domaine de profils existants ; aucune dépendance nouvelle. Les adaptateurs existants ne sont pas réaudités exhaustivement. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.architecture.04",
+          "axis": "architecture",
+          "title": "Assemblages et dépendances dynamiques",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Une autorité de soumission, Fleet et domaine de profils existants ; aucune dépendance nouvelle. Les adaptateurs existants ne sont pas réaudités exhaustivement. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "ai_hygiene": {
+      "title": "Responsabilité future et hygiène",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.ai_hygiene.01",
+        "axes.ai_hygiene.02",
+        "axes.ai_hygiene.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.ai_hygiene.01",
+          "axis": "ai_hygiene",
+          "title": "Invariants et compromis expliqués",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Décisions et limites écrites, avis contradictoire partiel conservé ; charge de maintenance accrue par le périmètre complet demandé. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.ai_hygiene.02",
+          "axis": "ai_hygiene",
+          "title": "Périmètre et maintenabilité du changement",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Décisions et limites écrites, avis contradictoire partiel conservé ; charge de maintenance accrue par le périmètre complet demandé. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.ai_hygiene.03",
+          "axis": "ai_hygiene",
+          "title": "Revue contradictoire et responsabilité",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Décisions et limites écrites, avis contradictoire partiel conservé ; charge de maintenance accrue par le périmètre complet demandé. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "minimalism": {
+      "title": "Minimalisme et frugalité",
+      "score": 50,
+      "grade": "F",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.minimalism.01",
+        "axes.minimalism.02",
+        "axes.minimalism.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 50,
+      "criteria": [
+        {
+          "id": "axes.minimalism.01",
+          "axis": "minimalism",
+          "title": "Dépendances nécessaires en exploitation",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Réutilisation du stockage et du transport ; pas de moteur supplémentaire. Environ20–40 lignes de formatage potentiellement partageables, non mesure exhaustive. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.minimalism.02",
+          "axis": "minimalism",
+          "title": "Poids et ressources justifiés",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Réutilisation du stockage et du transport ; pas de moteur supplémentaire. Environ20–40 lignes de formatage potentiellement partageables, non mesure exhaustive. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.minimalism.03",
+          "axis": "minimalism",
+          "title": "Code mort et simplifications possibles",
+          "weight": 1,
+          "status": "pass",
+          "level": 2,
+          "rating_rationale": "Niveau2 : Réutilisation du stockage et du transport ; pas de moteur supplémentaire. Environ20–40 lignes de formatage potentiellement partageables, non mesure exhaustive. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "business": {
+      "title": "Métier et fidélité des données",
+      "score": 75,
+      "grade": "C",
+      "status": "assessed",
+      "controls_verified": 3,
+      "controls_applicable": 3,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.business.01",
+        "axes.business.02",
+        "axes.business.03"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 75,
+      "criteria": [
+        {
+          "id": "axes.business.01",
+          "axis": "business",
+          "title": "Fidélité des données lues",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Profils et mémoires versionnés, provenance et tombstones, idempotence ; une réponse rapportée n'est pas une preuve de vérité métier. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.business.02",
+          "axis": "business",
+          "title": "Cohérence et idempotence des versions",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Profils et mémoires versionnés, provenance et tombstones, idempotence ; une réponse rapportée n'est pas une preuve de vérité métier. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.business.03",
+          "axis": "business",
+          "title": "Conformité aux règles et données de référence",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Profils et mémoires versionnés, provenance et tombstones, idempotence ; une réponse rapportée n'est pas une preuve de vérité métier. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/run.json",
+              "sha256": "0b7f4568979fb9694aed22bb2e1d16e418035a6d9e3429d353a3d1910d9b9439"
+            },
+            {
+              "kind": "artifact",
+              "path": "runs/20261101T102420165008Z/stdout.json",
+              "sha256": "8b7950d8c65822da3e4e9761e32d9226a496a062c6920ecd88cdf1401333efce"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    },
+    "traceability": {
+      "title": "Traçabilité des exigences",
+      "score": 75,
+      "grade": "C",
+      "status": "assessed",
+      "controls_verified": 2,
+      "controls_applicable": 2,
+      "coverage_percent": 100.0,
+      "failed_controls": [],
+      "active_findings": 0,
+      "candidates": 0,
+      "fixed_findings": 0,
+      "severity_counts": {},
+      "limits": [],
+      "control_ids": [
+        "axes.traceability.01",
+        "axes.traceability.02"
+      ],
+      "finding_fingerprints": [],
+      "demonstrated_score": 75,
+      "criteria": [
+        {
+          "id": "axes.traceability.01",
+          "axis": "traceability",
+          "title": "Lien constats, corrections et preuves",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Sources et tests liés à FR001–030, delta avant/après conservé ; FR031 reste une porte séparée. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        },
+        {
+          "id": "axes.traceability.02",
+          "axis": "traceability",
+          "title": "Couverture des exigences obligatoires",
+          "weight": 1,
+          "status": "pass",
+          "level": 3,
+          "rating_rationale": "Niveau3 : Sources et tests liés à FR001–030, delta avant/après conservé ; FR031 reste une porte séparée. Pour atteindre4 : qualifier les limites d'intégration ou la mesure mentionnées, sans les déduire d'un test local.",
+          "evidence": [
+            {
+              "kind": "artifact",
+              "path": "notes/context.md",
+              "sha256": "a86cfaca659d7b044aa26928f9300b8528ca30f6880dad2ff99b42bb0f038507"
+            },
+            {
+              "kind": "artifact",
+              "path": "notes/mobile-negotiation.md",
+              "sha256": "6d2b23e8f8e223b0017bf41dd2cb6705e2d896fc88167e1777cb7b86e2dec0da"
+            }
+          ],
+          "excluded": false
+        }
+      ]
+    }
+  },
+  "unmapped_findings": [],
+  "method": "Qualité observée = somme des niveaux justifiés / maximum des critères notés. Niveaux ancrés de0 à4, poids figés. Le nombre de défauts ne donne plus la note : leurs pénalités restent un garde-fou. Couverture séparée. Note démontrée = points acquis / maximum de tous les critères applicables ; les inconnus ne rapportent aucun point. Aucun niveau justifié : non noté. Pas de moyenne globale des axes.",
+  "rubric_version": "quality-1",
+  "rubric_sha256": "cf850d3dd0976f4cd6ca9385ba320154248c8e85b084392af0efe9acda208607"
+}

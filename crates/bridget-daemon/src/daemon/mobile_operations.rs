@@ -161,6 +161,12 @@ pub(super) fn handle(
     request: MobileOperationRequest,
     state: &Arc<Mutex<DaemonState>>,
 ) -> DaemonToWrapper {
+    let required_capabilities: &[ClientCapability] =
+        if matches!(&request.operation, MobileOperation::Specialists { .. }) {
+            &[ClientCapability::MobileOperationsV1, ClientCapability::SpecialistsV1]
+        } else {
+            &[ClientCapability::MobileOperationsV1]
+        };
     let root = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         if st.connection_roles.get(conn_id) != Some(&ConnectionRole::Client)
@@ -169,7 +175,7 @@ pub(super) fn handle(
             || st.peer_uids.get(conn_id).copied() != Some(unsafe { libc::geteuid() })
             || !st.client_negotiations.get(conn_id).is_some_and(|n| {
                 n.version == CLIENT_CONTRACT_VERSION
-                    && n.capabilities.as_slice() == [ClientCapability::MobileOperationsV1]
+                    && n.capabilities.as_slice() == required_capabilities
             })
         {
             return refusal("authorization_required");
@@ -186,6 +192,9 @@ pub(super) fn handle(
         Ok(device) => device,
         Err(error) => return refusal(error.code()),
     };
+    if let MobileOperation::Specialists {request:command}=&request.operation {
+        return super::specialists222::handle_mobile(conn_id,command,&device,state);
+    }
     if matches!(
         request.operation,
         MobileOperation::UpdatesStatus
@@ -271,7 +280,8 @@ pub(super) fn handle(
         return super::mobile_queue::handle(conn_id, &request.operation, &device, &mut st);
     }
     match request.operation {
-        MobileOperation::MessageQueue { .. }
+        MobileOperation::Specialists { .. }
+        | MobileOperation::MessageQueue { .. }
         | MobileOperation::MessageQueueChange { .. }
         | MobileOperation::UpdatesStatus
         | MobileOperation::UpdatesCheck
@@ -1382,6 +1392,32 @@ mod tests {
         );
         drop(st);
         assert_eq!(f.deliveries(), 0);
+    }
+
+
+    #[test]
+    fn spec222_mobile_negotiation_reaches_scope_and_keeps_legacy_guard() {
+        use bridget_transport::specialists::SpecialistRequest;
+        let f = Fixture::new();
+        let list = || MobileOperation::Specialists {
+            request: SpecialistRequest::List { version: 1, cursor: None, limit: Some(1) },
+        };
+        assert_eq!(value(handle("phone", f.request(list()), &f.state))["code"], "authorization_required");
+        f.state.lock().unwrap().client_negotiations.get_mut("phone").unwrap()
+            .capabilities.push(ClientCapability::SpecialistsV1);
+        assert_eq!(value(handle("phone", f.request(list()), &f.state))["code"], "specialists_machine_scope_unverified");
+        assert_eq!(value(handle("phone", f.request(f.command(&Uuid::new_v4().to_string(), "unchanged")), &f.state))["code"], "authorization_required");
+        let mut devices = Store::open(&f.root.join("mobile-devices.db")).unwrap();
+        let scope = Scope { all_machines: true, machines: vec![], all_projects: true, projects: vec![], operations: vec![Operation::Read] };
+        let pairing = devices.issue_pairing(&scope, unix_now_secs()).unwrap();
+        let key = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let device = devices.pair(&pairing.credential, &Uuid::new_v4().to_string(), &key, "Catalogue222", unix_now_secs()).unwrap();
+        let request = || MobileOperationRequest { credential: IdentityCredential::new(key.clone()), operation: list() };
+        let observed = value(handle("phone", request(), &f.state));
+        assert_eq!(observed["status"], "ok", "{observed}");
+        assert_eq!(f.deliveries(), 0);
+        devices.revoke(&device.device_id, unix_now_secs()).unwrap();
+        assert_eq!(value(handle("phone", request(), &f.state))["code"], "device_revoked");
     }
 
     #[test]

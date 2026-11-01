@@ -1,0 +1,103 @@
+{
+  "version": "0.7.0",
+  "build_id": "222-specialists-r3",
+  "source": {
+    "sha256": "5755d4cff0bf703eb0f4f82f941fd435cff02f99be6f330e981365f97f1283fa",
+    "files": 274
+  },
+  "targets": [
+    {
+      "machine": "cartae",
+      "at": 1793531976.1256778,
+      "images": [
+        {
+          "unit": "bridget-core.service",
+          "pid": 1324816,
+          "binary": "/home/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        },
+        {
+          "unit": "bridget-mobile.service",
+          "pid": 1324912,
+          "binary": "/home/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        },
+        {
+          "unit": "bridget-worker-cartae.service",
+          "pid": 1326104,
+          "binary": "/home/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        }
+      ],
+      "rollback": {
+        "binary": "/home/moi/.local/lib/bridget-communication/222-specialists-reader-r2/bin/bridget",
+        "sha256": "66f17b868a37fec623feed8b0a11c6961a7305b320746ef013e536d7d4788a50",
+        "native_pointer": true
+      }
+    },
+    {
+      "machine": "sysle2",
+      "at": 1793531976.855696,
+      "images": [
+        {
+          "unit": "bridget-worker-sysle2.service",
+          "pid": 1368656,
+          "binary": "/home/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        }
+      ]
+    },
+    {
+      "machine": "ksstore",
+      "at": 1793531978.0549803,
+      "images": [
+        {
+          "unit": "bridget-worker-ksstore.service",
+          "pid": 1686137,
+          "binary": "/home/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        }
+      ]
+    },
+    {
+      "machine": "monordinateur",
+      "at": 1793531978.298151,
+      "images": [
+        {
+          "unit": "com.bridget.worker.monordinateur",
+          "pid": 98177,
+          "binary": "/Users/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "128a54e63102cffd899826187ea7351934a3f3b21f8fbfecac8ed9a806742778"
+        },
+        {
+          "unit": "com.bridget.t3",
+          "pid": 98535,
+          "binary": "/Users/moi/.local/lib/bridget-communication/222-specialists-r3/bin/bridget",
+          "sha256": "128a54e63102cffd899826187ea7351934a3f3b21f8fbfecac8ed9a806742778"
+        }
+      ],
+      "rollback": {
+        "binary": "/Users/moi/.local/lib/bridget-communication/222-specialists-reader-r2/bin/bridget",
+        "sha256": "e85d5689bd39cb706323cde23ef26be5eafcb8d73aa6031f996ea8765ef3655b",
+        "native_pointer": true
+      }
+    }
+  ],
+  "android": {
+    "package": "app.cartae.bridget",
+    "versionCode": 7000,
+    "apk_sha256": "fc6de337a135eb707e26fa5879ea0493043eebe4ee13984ea7ef15deec62557d",
+    "certificate_sha256": "0c43c621254d9a6e0dbe148466f453f1aaba1a62bf23bd7332c61086f16a6588",
+    "updated_without_data_deletion": true
+  },
+  "current_thread_mcp": {
+    "status": "reload_required",
+    "old_pid": 38771,
+    "old_image": "221-worker-probe-lane-r2",
+    "one_term_attempt": true,
+    "old_pid_absent": true,
+    "host_result": "Transport closed",
+    "provider_pid_untouched": 76095
+  },
+  "outage_seconds": 2.31
+}

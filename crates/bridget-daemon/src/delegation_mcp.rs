@@ -84,6 +84,7 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
         {"type":"object","properties":{"strategy":{"const":"worktree","description":"Dossier de travail isolé : seuls strategy et les chaînes facultatives base_ref et branch sont acceptés."},"base_ref":{"type":"string","description":"Référence Git disponible dans cwd sur la machine du parent. Pour une base figée, fournir le même SHA complet que expected_base_commit ; un nom de branche peut avancer. Un commit présent uniquement sur la destination doit d’abord être récupéré dans le dépôt source."},"branch":{"type":"string"}},"required":["strategy"],"additionalProperties":false}
     ]});
     let mut definitions=vec![
+        json!({"name":"bridget_specialists","description":"Catalogue des spécialistes, rôles déclarés, profils versionnés et mémoire sourcée. Déclarer ses rôles ne donne aucun droit. request_role choisit un responsable unique et conserve sa clé ; request_status relit la demande sans réveil. Une activation durable ou un mandat permanent exige l'administration humaine. Budget Bridget sans plafond par défaut ; restrictions techniques et fournisseur restent distinctes.","inputSchema":specialists_schema222(),"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
         json!({"name":"bridget_read_commit_file","description":"Rend disponible un fichier omis dans la vue privée du commit exact de sa tâche active. path est le chemin relatif indiqué dans la carte de la vue, sans ../ ni chemin absolu. Sans task_id, l'enfant lit sa propre tâche ; avec task_id, le parent doit en être propriétaire. Copie privée contrôlée, aucun changement du dépôt source, de la base, des comptes ou des droits. Un fichier existant divergent n'est jamais écrasé. Après succès, lire le chemin de données renvoyé. Une ancienne tâche clôturée ne redémarre pas par cette lecture.",
             "inputSchema":{"type":"object","properties":{"task_id":{"type":"string","minLength":1,"maxLength":128},
                 "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"],"additionalProperties":false},
@@ -132,6 +133,17 @@ pub(crate) fn tools(brief_schema: &Value) -> Vec<Value> {
             }
         }
     }
+    let automatic=definitions.iter().find(|d|d["name"]=="bridget_auto_delegate").map(|d|d["inputSchema"].clone());
+    if let Some(automatic)=automatic {
+        if let Some(tool)=definitions.iter_mut().find(|d|d["name"]=="bridget_specialists"){
+            if let Some(branches)=tool["inputSchema"]["oneOf"].as_array_mut(){
+                branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_temporary"},
+                    "request_id":{"type":"string","minLength":1,"maxLength":128},"profile_id":{"type":"string"},
+                    "profile_revision":{"type":"integer","minimum":1},"delegation":automatic},
+                    "required":["version","action","request_id","profile_id","profile_revision","delegation"],"additionalProperties":false}));
+            }
+        }
+    }
     definitions
 }
 
@@ -164,6 +176,7 @@ fn execute_with_proof(
             "service_tier : le choix d'un niveau de service n'est pas encore activé. Faire terminer son activation par le responsable Bridget avant de le demander pour une mission. Cet appel n'a pas été envoyé ; conserver la clé et vérifier toute demande antérieure avant un nouvel essai. Les autres travaux autorisés suivent leur propre état.".into()));
     }
     let allowed: &[&str] = match name {
+        "bridget_specialists" => &["version","action","request_id","specialist_agent_id","profile_id","role_id","project_id","memory_id","cursor","limit","expected_revision","revision","profile_revision","durable","auto_start","official","shared","task","text","query","kind","mandate","scope","budget","launch_policy","definition","roles","source","after_seq","operation","delegation"],
         "bridget_capabilities" => &[],
         "bridget_delegate" => &[
             "request_id",
@@ -236,6 +249,8 @@ fn execute_with_proof(
             "Une vue de commit exige bridget_auto_delegate, posture=discovery et expected_base_commit avec le SHA exact. Cet appel n'a pas été envoyé. Conservez la clé et vérifiez toute tâche ou reçu antérieur avant de modifier les paramètres ; aucun remplacement d'issue inconnue.".into()));
     }
     let request = match name {
+        "bridget_specialists"=>NativeDelegationRequest::Specialists{request:serde_json::from_value(args.clone())
+            .map_err(|_|ClientError::InvalidParams("Spécialiste : action version1 et champs exacts requis ; aucun champ d'autorité libre.".into()))?},
         "bridget_read_commit_file"=>{
             let path=string("path")?;
             if !bridget_transport::protocol::commit_view_file_path(&path) {
@@ -532,6 +547,14 @@ fn execute_with_proof(
     } else {
         registered_connection(&identity.name, &identity.instance_id, socket)?
     };
+    if matches!(&request,NativeDelegationRequest::Specialists{..}) {
+        let cap=bridget_transport::protocol::ClientCapability::SpecialistsV1;
+        match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:bridget_transport::protocol::CLIENT_CONTRACT_VERSION,
+            issuer_scope:crate::communication::issuer_scope("bridget-specialists-agent"),capabilities:vec![cap]})? {
+            DaemonToWrapper::ClientWelcome{capabilities,..} if capabilities.contains(&cap)=>{},
+            _=>return Err(ClientError::Technical{code:"specialists_capability_required",message:"Faire charger le client et le daemon specialists_v1. Cet appel n'a pas été transmis ; conserver toute demande antérieure.".into()}),
+        }
+    }
     let required_feature = match &request {
         NativeDelegationRequest::ReadCommitFile{..}=>
             Some(("commit_view_files_v1","commit_view_file_master_upgrade_required")),
@@ -619,7 +642,7 @@ fn execute_with_proof(
         connection.set_deadline(Instant::now() + crate::communication::client::DAEMON_BUDGET
             + attestation_budget + Duration::from_secs(60));
     }
-    let mutation = !matches!(&request,
+    let mutation = !matches!(&request,NativeDelegationRequest::Specialists{request} if request.is_read()) && !matches!(&request,
         NativeDelegationRequest::Catalogue | NativeDelegationRequest::RoutingCatalogueV1 { .. }
         | NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,..}
         | NativeDelegationRequest::CallerScope { .. } | NativeDelegationRequest::Status { .. }
@@ -2333,4 +2356,84 @@ mod continuation_receipt221_tests {
     fn spec221_continuation_receipt_outlives_read_budget_without_resend() { continuation_response(false); }
     #[test]
     fn spec221_continuation_lost_response_preserves_identifiers_without_resend() { continuation_response(true); }
+}
+
+
+fn specialists_schema222()->Value {
+    let text=json!({"type":"string","minLength":1,"maxLength":256});
+    let scope=json!({"type":"object","properties":{"projects":{"type":"array","maxItems":64,"items":text},"transversal":{"type":"boolean"}},"additionalProperties":false});
+    let budget=json!({"type":["object","null"],"properties":{"max_duration_secs":{"type":["integer","null"],"minimum":0},"max_facturable_tokens":{"type":["integer","null"],"minimum":0},"max_descendants":{"type":["integer","null"],"minimum":0}},"additionalProperties":false});
+    let launch=json!({"type":["object","null"],"properties":{"agent_type":text,"cwd":{"type":"string","minLength":1,"maxLength":4096},"posture":{"enum":["discovery","development"]},"prepare_requirements":{"type":"boolean"}},"required":["agent_type","cwd","posture"],"additionalProperties":false});
+    let definition=json!({"type":"object","properties":{
+        "profile_id":text,"name":{"type":"string","minLength":1,"maxLength":80},"kind":{"enum":["profile","team"]},
+        "instructions":{"type":"string","maxLength":8000},"roles":{"type":"array","maxItems":32,"items":text},
+        "procedures":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"name":text,"instructions":{"type":"string","maxLength":8000}},"required":["name","instructions"],"additionalProperties":false}},
+        "requirements":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"kind":{"enum":["tool","capability","program"]},"name":text},"required":["kind","name"],"additionalProperties":false}},
+        "preferences":{"type":"object","properties":{"machine_id":text,"engine":text,"model":text,"effort":text},"additionalProperties":false},
+        "members":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"key":text,"role_id":text,"deliverable":{"type":"string","minLength":1,"maxLength":4000},"depends_on":{"type":"array","items":text,"maxItems":32}},"required":["key","role_id","deliverable"],"additionalProperties":false}},
+        "provenance":{"type":["string","null"],"maxLength":4096}
+    },"required":["profile_id","name","kind","instructions"],"additionalProperties":false});
+    let mut fields=serde_json::Map::new();
+    for name in ["request_id","specialist_agent_id","profile_id","role_id","project_id","memory_id","cursor"] {fields.insert(name.into(),text.clone());}
+    fields.insert("limit".into(),json!({"type":"integer","minimum":1,"maximum":100}));
+    fields.insert("expected_revision".into(),json!({"type":"integer","minimum":0}));
+    for name in ["revision","profile_revision"] {fields.insert(name.into(),json!({"type":"integer","minimum":1}));}
+    for name in ["durable","auto_start","official","shared"] {fields.insert(name.into(),json!({"type":"boolean"}));}
+    fields.insert("task".into(),json!({"type":"string","minLength":1,"maxLength":32000}));
+    fields.insert("text".into(),json!({"type":"string","minLength":1,"maxLength":16000}));
+    fields.insert("query".into(),json!({"type":"string","maxLength":4096}));
+    fields.insert("kind".into(),json!({"enum":["fact","decision","hypothesis","reported_result"]}));
+    fields.insert("mandate".into(),json!({"type":["string","null"],"maxLength":16000}));
+    fields.insert("scope".into(),scope.clone());fields.insert("budget".into(),budget);fields.insert("launch_policy".into(),launch);fields.insert("definition".into(),definition);
+    fields.insert("roles".into(),json!({"type":"array","maxItems":32,"items":{"type":"object","properties":{"role_id":text,"label":{"type":"string","minLength":1,"maxLength":160},"scope":scope},"required":["role_id","label","scope"],"additionalProperties":false}}));
+    fields.insert("source".into(),json!({"oneOf":[
+        {"type":"object","properties":{"kind":{"const":"statement"},"request_id":text},"required":["kind","request_id"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"task"},"task_id":text,"round":{"type":"integer","minimum":1},"part":{"type":"integer","minimum":0},"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["kind","task_id","round","digest"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"message"},"message_id":text,"in_reply_to":text,"part":{"type":"integer","minimum":0},"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["kind","message_id","in_reply_to","digest"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"journal"},"agent_id":text,"file":{"type":"string","maxLength":4096},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"part":{"type":"integer","minimum":0},"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["kind","agent_id","file","from_seq","to_seq","digest"],"additionalProperties":false}
+    ]}));
+    fields.insert("after_seq".into(),json!({"type":"integer","minimum":0}));
+    let rows=[
+        ("capture_history",vec!["request_id","specialist_agent_id"],vec!["project_id","after_seq","limit"]),
+        ("profiles",vec![],vec!["cursor","limit"]),
+        ("profile_versions",vec!["profile_id"],vec!["cursor","limit"]),
+        ("attach_profile",vec!["request_id","profile_id","profile_revision","expected_revision"],vec![]),
+        ("list",vec![],vec!["cursor","limit"]),("search",vec!["role_id"],vec!["project_id","cursor","limit"]),
+        ("get",vec!["specialist_agent_id"],vec![]),
+        ("declare_roles",vec!["request_id","expected_revision","roles"],vec![]),
+        ("propose_profile",vec!["request_id","definition"],vec![]),
+        ("propose_revision",vec!["request_id","expected_revision","definition"],vec![]),
+        ("approve_revision",vec!["request_id","profile_id","revision"],vec![]),
+        ("activate",vec!["request_id","specialist_agent_id","profile_id","profile_revision","expected_revision","scope","durable","auto_start"],vec!["mandate","budget","launch_policy"]),
+        ("disable",vec!["request_id","specialist_agent_id","expected_revision"],vec![]),
+        ("configure_mandate",vec!["request_id","specialist_agent_id","expected_revision","mandate","scope","auto_start"],vec!["budget","launch_policy"]),
+        ("revoke",vec!["request_id","specialist_agent_id","expected_revision"],vec![]),
+        ("designate_role",vec!["request_id","specialist_agent_id","role_id","official"],vec![]),
+        ("memory_recall",vec!["specialist_agent_id","project_id","query"],vec!["cursor","limit"]),
+        ("memory_versions",vec!["memory_id"],vec!["cursor","limit"]),
+        ("memory_write",vec!["request_id","specialist_agent_id","project_id","shared","kind","text","source"],vec![]),
+        ("memory_correct",vec!["request_id","memory_id","expected_revision","text","kind"],vec![]),
+        ("memory_forget",vec!["request_id","memory_id","expected_revision"],vec![]),
+        ("export",vec!["profile_id","revision"],vec![]),
+        ("import",vec!["request_id","definition"],vec![]),
+        ("convert",vec!["request_id","specialist_agent_id","profile_id","profile_revision","expected_revision"],vec![]),
+        ("request_role",vec!["request_id","role_id","project_id","task"],vec!["specialist_agent_id"]),
+        ("request_status",vec!["request_id"],vec![]),
+        ("request_team",vec!["request_id","profile_id","revision","project_id","task"],vec![]),
+    ];
+    let mut branches=Vec::new();
+    for (action,required,optional) in rows {
+        let mut properties=serde_json::Map::new();
+        properties.insert("version".into(),json!({"const":1}));properties.insert("action".into(),json!({"const":action}));
+        for name in required.iter().chain(optional.iter()){properties.insert((*name).into(),fields[*name].clone());}
+        let mut req=vec!["version","action"];req.extend(required);
+        if action=="memory_versions"{properties.insert("cursor".into(),json!({"type":"integer","minimum":1}));}
+        branches.push(json!({"type":"object","properties":properties,"required":req,"additionalProperties":false}));
+    }
+    let approved=branches.iter().filter(|v|matches!(v["properties"]["action"]["const"].as_str(),
+        Some("approve_revision"|"activate"|"disable"|"configure_mandate"|"revoke"|"designate_role"|"import"|"convert"|"request_role"))).cloned().collect::<Vec<_>>();
+    branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_approval"},
+        "request_id":{"type":"string","format":"uuid"},"operation":{"oneOf":approved}},
+        "required":["version","action","request_id","operation"],"additionalProperties":false}));
+    json!({"oneOf":branches})
 }

@@ -838,6 +838,7 @@ fn execute_tool_at_with_identity_once(
     }
     match name {
         "bridget_capabilities"
+        | "bridget_specialists"
         | "bridget_refresh_models"
         | "bridget_read_commit_file"
         | "bridget_delegate"

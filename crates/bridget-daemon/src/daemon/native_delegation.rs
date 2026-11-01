@@ -5719,6 +5719,52 @@ fn handle_with_fact(
     state: &Arc<Mutex<DaemonState>>,
     peer: Option<&UnixStream>,
 ) -> DaemonToWrapper {
+    if let NativeDelegationRequest::Specialists { request: operation } = &request {
+        if matches!(operation,bridget_transport::specialists::SpecialistRequest::RequestTemporary{..}) {
+            let prepared=(||->Result<_,String>{
+                let st=state.lock().unwrap_or_else(|e|e.into_inner());
+                recheck_attested_thread(&st,conn,thread)?;
+                let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
+                parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
+                let native=super::specialists222::prepare_temporary(&st,conn,&owner,operation)?;
+                Ok((owner,native))
+            })();
+            let (owner,native)=match prepared{Ok(v)=>v,Err(code)=>return DaemonToWrapper::NativeDelegationResult{result:super::specialists222::failure(&code)}};
+            let mut response=handle_with_fact(conn,NativeDelegationRequest::AutoDelegateV2(native),fact,thread,permission_proof,state,peer);
+            if let DaemonToWrapper::NativeDelegationResult{result}=&mut response{
+                let st=state.lock().unwrap_or_else(|e|e.into_inner());
+                if let Err(code)=super::specialists222::attach_temporary_result(&st,&owner,operation,result){
+                    result["specialist_attachment"]=super::specialists222::failure(&code);
+                    result["next_action"]=json!("Conserver la tâche native déjà admise. Faire vérifier son rattachement au profil ; aucune nouvelle mission ni nouvelle clé.");
+                }
+            }
+            return response;
+        }
+        if matches!(operation,bridget_transport::specialists::SpecialistRequest::CaptureHistory{..}) {
+            let principal=(||->Result<_,String>{
+                let st=state.lock().unwrap_or_else(|e|e.into_inner());
+                recheck_attested_thread(&st,conn,thread)?;
+                if !st.client_negotiations.get(conn).is_some_and(|n|n.capabilities.contains(&ClientCapability::SpecialistsV1)){return Err("specialists_capability_required".into());}
+                let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
+                parent_fact(&st,&owner,&instance,None,fact.as_ref())?.ok_or("permission_attestation_unavailable")?;
+                Ok(super::specialists222::agent_principal(&st,&owner,agent_communication_project(&st,&owner).as_ref()))
+            })();
+            let result=match principal {Ok(principal)=>super::specialists222::capture_history(operation,&principal,state),Err(code)=>super::specialists222::failure(&code)};
+            return DaemonToWrapper::NativeDelegationResult{result};
+        }
+        let mut controls=Vec::new();
+        let result = (|| -> Result<Value, String> {
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            recheck_attested_thread(&st, conn, thread)?;
+            let (owner, instance) = live_connection_identity(&st, conn).ok_or("identity_unavailable")?;
+            parent_fact(&st, &owner, &instance, None, fact.as_ref())?
+                .ok_or("permission_attestation_unavailable")?;
+            let project = agent_communication_project(&st, &owner);
+            super::specialists222::handle_agent(&mut st, conn, &owner, project.as_ref(), operation, &mut controls)
+        })().unwrap_or_else(|code| super::specialists222::failure(&code));
+        let _failed=execute_controls(controls);
+        return DaemonToWrapper::NativeDelegationResult { result };
+    }
     let workspace = match &request {
         NativeDelegationRequest::Delegate {workspace,..}=>workspace.as_ref(),
         NativeDelegationRequest::AutoDelegate(request)=>request.workspace.as_ref(),
@@ -8397,6 +8443,7 @@ fn admit_delegate(
         {
             return Err("workspace_creation_in_progress".into());
         }
+        super::specialists222::guard_child_admission(st,&owner)?;
         let fact = parent_fact(st, &owner, &instance, Some(request_id), attested)?;
         if child_requests.as_deref() == Some("forward")
             && fact.as_ref().is_none_or(|fact| {
@@ -9475,7 +9522,7 @@ fn handle_locked_with_remote_proof(
         }
         NativeDelegationRequest::ReadCommitFile{..}=>Err("commit_file_requires_coordinator".into()),
         NativeDelegationRequest::RepairWorkspace { .. } => Err("workspace_repair_requires_coordinator".into()),
-        NativeDelegationRequest::Grant { .. } => unreachable!(),
+        NativeDelegationRequest::Grant { .. } | NativeDelegationRequest::Specialists { .. } => unreachable!(),
     }
 }
 
@@ -10016,7 +10063,7 @@ fn send_as_with_result_authority(
         },
         st,
         controls,
-        authority,
+        authority.map(RetainedSendAuthority::Result),
         false,
     );
     // Même refus et mêmes gardes : seul le diagnostic de l'envoi interne change.
@@ -10050,6 +10097,8 @@ pub(super) fn capture_reply(
     conn: &str,
     message: &bridget_core::BridgetMessage,
 ) -> Result<bool, String> {
+    super::specialists222::capture_correlated_reply(st,conn,message);
+    if super::specialists222::capture_human_reply(st,conn,message)? {return Ok(true);}
     let Some(correlation) = message.in_reply_to.as_deref() else {
         return Ok(false);
     };
@@ -12916,6 +12965,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 }
             }
             if task.state == "result_available" && !task.result_sent {
+                super::specialists222::capture_task(&st,&task);
                 let Some(child_instance) = task.child_instance.as_deref() else {
                     task.state = "failed".into();
                     task.error = Some("native_result_invalid".into());

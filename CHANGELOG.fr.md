@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.0 — 2026-11-01
+
+Ajoute les rôles déclarés et désignés, profils versionnés, mandats durables, sessions à la demande, mémoire sourcée interprojets, import/export des définitions et compositions facultatives. MCP, CLI et catalogue Android utilisent les mêmes contrôles et reçus natifs. Aucun plafond de travail supplémentaire n'est actif par défaut. Un lecteur compatible des demandes de spécialiste est exigé pour le retour.
+
 ## 0.6.5 — 30 octobre 2026
 
 - Le statut explique directement un refus fournisseur de modèle et indique la décision à demander à l’utilisateur.

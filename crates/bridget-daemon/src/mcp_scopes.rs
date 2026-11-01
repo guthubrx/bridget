@@ -20,6 +20,9 @@ pub(crate) struct ToolScope {
 }
 
 pub(crate) const TOOL_SCOPES: &[ToolScope] = &[
+    ToolScope {tool:"bridget_specialists",base:Scope::Delegates,
+        read_actions:&["profiles","profile_versions","list","search","get","memory_recall","memory_versions","export","request_status"],
+        own_state_actions:&["request_approval","capture_history","attach_profile","declare_roles","propose_profile","propose_revision","memory_write","memory_correct","memory_forget"]},
     ToolScope { tool:"bridget_refresh_models",base:Scope::WritesOwnState,read_actions:&[],own_state_actions:&[] },
     ToolScope {tool:"bridget_read_commit_file",base:Scope::WritesOwnState,read_actions:&[],own_state_actions:&[]},
     ToolScope { tool: "bridget_ask_user", base: Scope::WritesOwnState, read_actions: &["status", "wait"], own_state_actions: &["create", "cancel", "acknowledge"] },

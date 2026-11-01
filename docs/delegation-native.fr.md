@@ -2062,3 +2062,15 @@ ResourceLimit pendant la préparation du dossier ne prouve ni disque plein ni
 quota fournisseur. Le reçu indique les vérifications manquantes sur ce worker,
 les prérequis de clôture et la décision à demander au responsable. Les autres
 travaux autorisés suivent leur propre état.
+
+
+
+Premier spécialiste temporaire : request_temporary porte profile_id,
+profile_revision et une delegation de forme bridget_auto_delegate. Les deux
+request_id doivent être identiques. Le profil neuf du parent est figé dans le
+prompt et les contraintes natives ; la définition reste conservée. La première
+utilisation est réservée avant admission, sans autoactivation durable. Le sort
+de la même clé se lit avec request_status. Un nouveau réemploi demande une
+décision humaine ; il ne change pas la clé d'une mission d'issue inconnue.
+
+Historique d’un souvenir : memory_versions renvoie ses révisions avec curseur numérique. L’oubli vide aussi cette vue. Il ne réécrit pas les anciens journaux ni le contexte figé d’une mission admise. Le catalogue donne les demandes natives récentes et ouvre la conversation existante pour ses contrôles de mission.

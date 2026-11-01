@@ -6,6 +6,10 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.0 — 2026-11-01
+
+Add declared roles and human-designated responsibilities, versioned specialist profiles, durable mandates, on-demand sessions, sourced cross-project memory, definition import/export and optional team compositions. MCP, CLI and the Android catalogue share native authority and receipts. No extra work budget is enabled by default. A compatible specialist-request reader is required before rollback.
+
 ## 0.6.5 — 2026-10-30
 
 - Task status explains a provider model rejection and the decision required from the user.

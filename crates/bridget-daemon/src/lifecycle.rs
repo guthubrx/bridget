@@ -27,6 +27,7 @@ pub type SourceEnvironment = BTreeMap<String, OsString>;
 
 #[derive(Debug, Clone)]
 pub struct PreparedSpawn {
+    pub(crate) specialist_authority:Option<SpecialistLaunchAuthority>,
     pub lease: SpawnLease,
     pub agent_type: String,
     pub command: String,
@@ -423,6 +424,7 @@ pub(crate) fn prepare_spawn_parts(
         );
     }
     Ok(PreparedSpawn {
+        specialist_authority:None,
         lease,
         agent_type: agent_type.to_string(),
         command: definition.command.clone(),
@@ -1873,4 +1875,80 @@ mod tests {
         drop(supervisor);
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+
+#[derive(Debug, Clone)]
+pub(crate) struct SpecialistLaunchAuthority {
+    pub db_path:PathBuf,pub agent_id:String,pub grant_id:String,pub grant_revision:u64,
+    pub profile_revision:u64,pub profile_id:String,pub project_id:String,
+    pub submission_id:String,pub human_approval_ref:Option<String>,
+}
+pub(crate) struct SpecialistReleaseGuard {connection:rusqlite::Connection}
+impl SpecialistLaunchAuthority {
+    /// Le verrou SQL est commun aux mutations humaines et au dernier RELEASE.
+    /// Il est acquis après BootstrapReady ; aucun démarrage fournisseur sous une autorité périmée.
+    pub(crate) fn lock(&self)->Result<SpecialistReleaseGuard,crate::managed_process::ManagedProcessError> {
+        use sha2::{Digest, Sha256};
+        let invalid=|code:&str|crate::managed_process::ManagedProcessError::InvalidStatus(code.into());
+        let conn=rusqlite::Connection::open(&self.db_path).map_err(|_|invalid("specialist_authority_unavailable"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(2)).map_err(|_|invalid("specialist_authority_unavailable"))?;
+        conn.execute_batch("BEGIN IMMEDIATE").map_err(|_|invalid("specialist_authority_unavailable"))?;
+        let body:String=conn.query_row("SELECT record_json FROM specialists WHERE agent_id=?1",[&self.agent_id],|r|r.get(0)).map_err(|_|invalid("mandate_required"))?;
+        let record:crate::agent_profile::specialists::SpecialistRecord=serde_json::from_str(&body).map_err(|_|invalid("specialist_authority_unavailable"))?;
+        let grant=record.grant.as_ref().ok_or_else(||invalid("mandate_required"))?;
+        let (canonical,role_official):(Vec<u8>,Option<bool>)=conn.query_row(
+            "SELECT canonical_bytes,json_extract(profile_snapshot,'$.role_official') FROM specialist_requests WHERE native_submission_id=?1 AND selected_agent_id=?2",
+            rusqlite::params![self.submission_id,self.agent_id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|invalid("specialist_authority_unavailable"))?;
+        let canonical:serde_json::Value=serde_json::from_slice(&canonical).map_err(|_|invalid("specialist_authority_unavailable"))?;
+        let role=canonical["role_id"].as_str().ok_or_else(||invalid("role_changed"))?;
+        let (scope,official):(String,bool)=conn.query_row(
+            "SELECT scope_json,official FROM specialist_roles WHERE agent_id=?1 AND role_id=?2",
+            rusqlite::params![self.agent_id,role],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|invalid("role_changed"))?;
+        let scope:bridget_transport::specialists::SpecialistScope=serde_json::from_str(&scope).map_err(|_|invalid("role_changed"))?;
+        if !scope.permits(&self.project_id)||(role_official==Some(true)&&!official){return Err(invalid("role_changed"));}
+
+        let human_request=if let Some(expected)=&self.human_approval_ref {
+            let (snapshot,canonical,selected,grant_revision):(String,Vec<u8>,String,u64)=conn.query_row(
+                "SELECT profile_snapshot,canonical_bytes,selected_agent_id,grant_revision FROM specialist_requests WHERE native_submission_id=?1",
+                [&self.submission_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|invalid("specialist_authority_unavailable"))?;
+            let snapshot:serde_json::Value=serde_json::from_str(&snapshot).map_err(|_|invalid("specialist_authority_unavailable"))?;
+            let hash=format!("{:x}",Sha256::digest(canonical));
+            let parts=expected.rsplit_once(':').ok_or_else(||invalid("human_principal_required"))?;
+            let native_question=parts.0.strip_prefix("user-input:").and_then(|id|crate::user_input::get(&conn,id).ok().flatten());
+            let question_approved=native_question.as_ref().is_some_and(|q|
+                matches!(q["state"].as_str(),Some("submitted"|"applied"))&&q["callback"]["kind"]=="specialist_approval"
+                &&q["callback"]["digest"]==hash&&q["answers"]["specialist_approval"]["selected"]==serde_json::json!(["approve"])
+                &&q["expires_at"].as_i64().is_some_and(|deadline|deadline>std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64));
+            let known=crate::referent_control::human_principal_actor(parts.0).is_some()
+                ||parts.0.strip_prefix("mobile:").is_some_and(|id|uuid::Uuid::parse_str(id).is_ok())||question_approved;
+            known&&parts.1==hash&&snapshot["human_approval_ref"]==expected.as_str()&&selected==self.agent_id&&grant_revision==self.grant_revision
+        }else{false};
+        if !record.enabled||(!record.auto_start&&!human_request)||(!record.durable&&!human_request)||record.profile_revision!=self.profile_revision
+            ||record.profile_id.as_deref()!=Some(self.profile_id.as_str())
+            ||grant.profile_id!=record.profile_id||grant.profile_revision!=record.profile_revision
+            ||grant.grant_id!=self.grant_id||grant.revision!=self.grant_revision||grant.revoked_at.is_some()
+            ||!grant.allowed_projects.permits(&self.project_id) {
+            return Err(invalid("mandate_changed"));
+        }
+        let control=crate::referent_control::read(&conn).map_err(|_|invalid("control_state_unavailable"))?;
+        if control.paused {return Err(invalid("referent_paused"));}
+        Ok(SpecialistReleaseGuard{connection:conn})
+    }
+}
+impl SpecialistReleaseGuard {
+    pub(crate) fn finish(self)->Result<(),crate::managed_process::ManagedProcessError> {
+        self.connection.execute_batch("COMMIT").map_err(|_|crate::managed_process::ManagedProcessError::InvalidStatus("specialist_authority_unavailable".into()))
+    }
+}
+
+/// Nouvelle mission de spécialiste sous mandat courant : la relance historique
+/// conserve son ancienne définition, cette frontière emploie la cible qualifiée courante.
+pub(crate) fn submit_specialist_relaunch(supervisor:&FleetSupervisor,registry:&AgentRegistry,source:&SourceEnvironment,
+    order:&SpawnOrder,now:i64,hosts:&SpawnHosts)->Result<SpawnDecision,FleetError>{
+    if order.persistent||order.requested_name.as_ref().is_none_or(|id|uuid::Uuid::parse_str(id).is_err())
+        ||!order.command_id.starts_with("specialist-")||order.posture.is_none() {
+        return Err(FleetError::InvalidOrder("specialist_launch_authority_required"));
+    }
+    submit_spawn_with_policy(supervisor,registry,source,order,now,false,hosts,true,false)
 }

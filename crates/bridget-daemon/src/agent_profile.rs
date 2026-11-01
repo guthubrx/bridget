@@ -1,5 +1,7 @@
 //! Profils d'agents partagés par le relais, séparés du routage technique.
 
+pub mod specialists;
+
 use crate::store::fold_for_search;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::collections::HashSet;
@@ -238,7 +240,9 @@ impl AgentProfileStore {
              );",
         )
         .map_err(AgentProfileError::Sqlite)?;
-        Ok(Self { conn })
+        let store=Self { conn };
+        store.init_specialists()?;
+        Ok(store)
     }
 
     fn table_exists(&self, table: &str) -> Result<bool, AgentProfileError> {
@@ -389,59 +393,16 @@ impl AgentProfileStore {
     /// crée aucun alias ni nom de routage lisible.
     /// Complexité : O(n), n étant le nombre d'identifiants fournis.
     pub fn ensure_agent_ids<I>(&mut self, agent_ids: I) -> Result<(), AgentProfileError>
-    where
-        I: IntoIterator,
-        I::Item: AsRef<str>,
-    {
-        let now = now_secs();
-        let legacy_identity_schema = self.has_legacy_identity_schema()?;
-        let transaction = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(AgentProfileError::Sqlite)?;
-        for agent_id in agent_ids {
-            let agent_id = agent_id.as_ref().trim();
-            if agent_id.is_empty() {
-                continue;
-            }
-            let existing_profile = transaction
-                .query_row(
-                    "SELECT profile.agent_id IS NOT NULL
-                     FROM agent_identities identity
-                     LEFT JOIN agent_profiles profile ON profile.agent_id = identity.agent_id
-                     WHERE identity.agent_id = ?1",
-                    [agent_id],
-                    |row| row.get::<_, bool>(0),
-                )
-                .optional()
-                .map_err(AgentProfileError::Sqlite)?;
-            if existing_profile.is_none() {
-                if legacy_identity_schema {
-                    transaction.execute(
-                        "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
-                        params![agent_id, now],
-                    ).map_err(AgentProfileError::Sqlite)?;
-                } else {
-                    transaction.execute(
-                        "INSERT INTO agent_identities(agent_id, created_at, updated_at) VALUES (?1, ?2, ?2)",
-                        params![agent_id, now],
-                    ).map_err(AgentProfileError::Sqlite)?;
-                }
-            }
-
-            if existing_profile != Some(true) {
-                let display_name = available_display_name(&transaction, "Agent")?;
-                let normalized = normalize_display_name(&display_name)?;
-                transaction.execute(
-                    "INSERT INTO agent_profiles(agent_id, display_name, display_name_normalized, avatar_shape, avatar_color, instructions, instructions_revision, revision, updated_at) VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, ?4)",
-                    params![agent_id, display_name, normalized, now],
-                ).map_err(AgentProfileError::Sqlite)?;
-            }
-            transaction.execute(
-                "INSERT OR IGNORE INTO agent_profile_applications(agent_id, provider_spawn_id, instructions_revision, status, observed_at, diagnostic_code) VALUES (?1, NULL, 1, 'applied', ?2, NULL)",
-                params![agent_id, now],
-            ).map_err(AgentProfileError::Sqlite)?;
+    where I: IntoIterator, I::Item: AsRef<str> {
+        let now=now_secs();
+        let legacy=self.has_legacy_identity_schema()?;
+        if !self.conn.is_autocommit() {
+            // Le caller222 possède déjà le savepoint atomique de la commande.
+            return ensure_profile_identities(&self.conn,agent_ids,legacy,now);
         }
+        let transaction=self.conn.transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(AgentProfileError::Sqlite)?;
+        ensure_profile_identities(&transaction,agent_ids,legacy,now)?;
         transaction.commit().map_err(AgentProfileError::Sqlite)
     }
 
@@ -1283,7 +1244,7 @@ impl AgentProfileStore {
 }
 
 fn available_display_name(
-    conn: &rusqlite::Transaction<'_>,
+    conn: &rusqlite::Connection,
     candidate: &str,
 ) -> Result<String, AgentProfileError> {
     let base = clean_display_name(candidate)?;
@@ -1848,4 +1809,52 @@ mod tests {
         assert!(!for_b_after[0].seen);
         std::fs::remove_file(path).unwrap();
     }
+}
+
+fn ensure_profile_identities<I>(connection:&Connection,agent_ids:I,legacy_identity_schema:bool,now:i64)->Result<(),AgentProfileError>
+where I:IntoIterator,I::Item:AsRef<str> {
+        for agent_id in agent_ids {
+            let agent_id = agent_id.as_ref().trim();
+            if agent_id.is_empty() {
+                continue;
+            }
+            let existing_profile = connection
+                .query_row(
+                    "SELECT profile.agent_id IS NOT NULL
+                     FROM agent_identities identity
+                     LEFT JOIN agent_profiles profile ON profile.agent_id = identity.agent_id
+                     WHERE identity.agent_id = ?1",
+                    [agent_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .optional()
+                .map_err(AgentProfileError::Sqlite)?;
+            if existing_profile.is_none() {
+                if legacy_identity_schema {
+                    connection.execute(
+                        "INSERT INTO agent_identities(agent_id, current_routing_name, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
+                        params![agent_id, now],
+                    ).map_err(AgentProfileError::Sqlite)?;
+                } else {
+                    connection.execute(
+                        "INSERT INTO agent_identities(agent_id, created_at, updated_at) VALUES (?1, ?2, ?2)",
+                        params![agent_id, now],
+                    ).map_err(AgentProfileError::Sqlite)?;
+                }
+            }
+
+            if existing_profile != Some(true) {
+                let display_name = available_display_name(&connection, "Agent")?;
+                let normalized = normalize_display_name(&display_name)?;
+                connection.execute(
+                    "INSERT INTO agent_profiles(agent_id, display_name, display_name_normalized, avatar_shape, avatar_color, instructions, instructions_revision, revision, updated_at) VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, ?4)",
+                    params![agent_id, display_name, normalized, now],
+                ).map_err(AgentProfileError::Sqlite)?;
+            }
+            connection.execute(
+                "INSERT OR IGNORE INTO agent_profile_applications(agent_id, provider_spawn_id, instructions_revision, status, observed_at, diagnostic_code) VALUES (?1, NULL, 1, 'applied', ?2, NULL)",
+                params![agent_id, now],
+            ).map_err(AgentProfileError::Sqlite)?;
+        }
+        Ok(())
 }

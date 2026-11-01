@@ -1,0 +1,28 @@
+{
+  "protocol": "15.0.0",
+  "grade": "A",
+  "score": 100,
+  "date": "2026-11-01",
+  "spec": "specs/222-roles-profils/spec.md",
+  "scope": "Code222 FR001–FR030, delta à main91083f5d : autorité, mémoire et interfaces ; FR031 relève de la livraison",
+  "decision": "pass",
+  "release_blocked": false,
+  "coverage_percent": 100.0,
+  "controls_verified": 14,
+  "controls_applicable": 14,
+  "summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0,
+    "total": 0,
+    "candidates": 0,
+    "suppressed": 0
+  },
+  "limits": [],
+  "source_drift": [],
+  "input_sha256": "3e39ae8d3cd26ad3c85e26ec63d57f4bdafa8e28597613103975889c330a9ab0",
+  "manifest_sha256": "ad1173410cb8da57b6c8ec41beafa95fb1b53ad046819a31fd7faa93c38491b2",
+  "policy_sha256": "88132df4e2ca463f2b8f303c5163527afcc650d3292350e3ffa49a4744b79446"
+}

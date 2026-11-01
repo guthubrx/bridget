@@ -198,11 +198,13 @@ pub(crate) fn mobile_operation(
     ) {
         return Err("endpoint_unavailable");
     }
+    let mut required=vec![ClientCapability::MobileOperationsV1];
+    if matches!(&operation,bridget_transport::protocol::MobileOperation::Specialists{..}){required.push(ClientCapability::SpecialistsV1);}
     if !matches!(connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version:CLIENT_CONTRACT_VERSION,issuer_scope:crate::communication::issuer_scope("mobile-operation"),
-        capabilities:vec![ClientCapability::MobileOperationsV1],
+        capabilities:required.clone(),
     }),Ok(DaemonToWrapper::ClientWelcome{version:CLIENT_CONTRACT_VERSION,capabilities,..})
-        if capabilities==[ClientCapability::MobileOperationsV1])
+        if capabilities==required)
     {
         return Err("capability_unavailable");
     }

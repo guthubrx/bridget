@@ -22,6 +22,7 @@ pub(crate) enum Operation {
     TaskCancel,
     TaskRespond,
     DevicesManage,
+    SpecialistsManage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,7 +40,7 @@ impl Scope {
     pub fn permits_federation(&self, op: Operation) -> bool {
         self.all_machines && self.all_projects && self.operations.contains(&op)
     }
-    /// O(M+P+O), listes bornées : 128 machines/projets et 8 opérations.
+    /// O(M+P+O), listes bornées : 128 machines/projets et 9 opérations.
     pub fn permits(
         &self,
         op: Operation,
@@ -56,7 +57,7 @@ impl Scope {
             || self.machines.len() > 128
             || self.projects.len() > 128
             || self.operations.is_empty()
-            || self.operations.len() > 8
+            || self.operations.len() > 9
             || (self.all_machines && !self.machines.is_empty())
             || (self.all_projects && !self.projects.is_empty())
             || self.machines.iter().any(|m| !bounded_label(m, 256))

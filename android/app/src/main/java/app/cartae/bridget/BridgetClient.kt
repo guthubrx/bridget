@@ -77,6 +77,12 @@ class BridgetClient(private val store: LocalStore) {
         catch (_: Exception) { throw MobileFailure("outcome_unknown") }
         finally { connection.disconnect() }
     }
+    suspend fun specialists(command: JSONObject): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val result = request(session.getString("endpoint"), "/v1/specialists", "POST", session.getString("device_key"), command)
+        requireSessionOrigin(session, store.get("session"))
+        return result
+    }
     suspend fun pair(qr: String? = null): JSONObject {
         val pending = if (qr == null) store.get("pairing") ?: throw MobileFailure("pairing_missing") else {
             if (store.get("session") != null || store.get("pairing") != null) throw MobileFailure("pairing_pending")

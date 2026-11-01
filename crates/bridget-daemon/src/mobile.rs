@@ -225,7 +225,7 @@ fn parse_admin(args: &[String]) -> Result<AdminRequest, &'static str> {
         }
         Some("pair") if args.len() == 2 && args[1] == "--all" => Ok(AdminRequest::Pair {
             scope: json!({"all_machines":true,"machines":[],"all_projects":true,"projects":[],
-              "operations":["read","message","task_read","task_continue","task_cancel","task_respond","devices_manage"]}),
+              "operations":["read","message","task_read","task_continue","task_cancel","task_respond","devices_manage","specialists_manage"]}),
         }),
         Some("pair") if args.len() == 3 && args[1] == "--scope-file" => {
             let path = PathBuf::from(&args[2]);

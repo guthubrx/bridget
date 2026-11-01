@@ -308,6 +308,7 @@ fn run_with_args(args: Vec<String>) {
         "mobile" => crate::mobile::run(&args[2..]),
         "updates" => crate::updates::run(&args[2..]),
         "clients" => crate::client_compatibility::run(&args[2..]),
+        "specialists" => cmd_specialists(&args[2..]),
         "accounts" => crate::provider_accounts::run(&args[2..]),
         "formats" => crate::storage_compatibility::run(&args[2..]),
         "t3" => crate::t3code::run(&args[2..]),
@@ -12541,5 +12542,53 @@ mod worker188_tests {
         assert!(diagnostic_cli_guard(Err(E::LegacyMarker),false,false).is_err());
         assert!(diagnostic_cli_guard(Err(E::T3SessionUnavailable),false,false).is_err());
         assert!(diagnostic_cli_guard(Err(E::IdentityNotFound),false,false).is_ok(),"lecture locale sans principal, sous UID propriétaire");
+    }
+}
+
+fn cmd_specialists(args:&[String]) {
+    use bridget_transport::specialists::SpecialistRequest;
+    if args.is_empty()||matches!(args[0].as_str(),"help"|"--help"|"-h") {
+        println!("bridget specialists list [--json]\nbridget specialists request --file CHEMIN_ABSOLU [--json]\nLe fichier porte une commande specialists version1. Mutations : terminal humain requis. Aucun client ne doit envoyer actor/is_human.");
+        return;
+    }
+    let json=args.iter().any(|a|a=="--json");
+    let parse=(||->Result<SpecialistRequest,String>{
+        match args[0].as_str() {
+            "list" if args[1..].iter().all(|a|a=="--json")=>Ok(SpecialistRequest::List{version:1,cursor:None,limit:Some(30)}),
+            "request"=>{
+                let mut file=None;let mut i=1;
+                while i<args.len() {match args[i].as_str() {
+                    "--json"=>{},
+                    "--file"=>{i+=1;let value=args.get(i).ok_or("--file exige un chemin")?;if file.replace(value).is_some(){return Err("--file répété".into());}},
+                    _=>return Err(unknown_argument("specialists",&args[i])),
+                }i+=1;}
+                let path=std::path::Path::new(file.ok_or("--file requis")?);
+                if !path.is_absolute(){return Err("Le fichier doit avoir un chemin absolu.".into());}
+                use std::io::Read;
+                let mut body=Vec::new();
+                std::fs::File::open(path).map_err(|_|"Fichier de commande illisible")?.take(65_537).read_to_end(&mut body).map_err(|_|"Lecture de commande impossible")?;
+                if body.len()>65_536{return Err("Commande supérieure à64Kio.".into());}
+                serde_json::from_slice(&body).map_err(|_|"Commande version1 ou champs invalides.".into())
+            }
+            _=>Err("Utiliser specialists list ou specialists request --file CHEMIN_ABSOLU.".into()),
+        }
+    })();
+    let request=match parse {Ok(q)=>q,Err(e)=>exit_coordination_error("specialists",json,"invalid_request",&e,None,2)};
+    if let Err(code)=request.validate(){exit_coordination_error("specialists",json,code,"Commande non transmise.",None,2);}
+    if !request.is_read()&&!require_interactive_terminal("specialists") {std::process::exit(1);}
+    if !request.is_read(){
+        eprintln!("Administration locale des spécialistes. Cette commande modifie exactement la demande fournie et son périmètre. Confirmer cette décision humaine ? [oui/N]");
+        let mut answer=String::new();
+        if std::io::stdin().read_line(&mut answer).is_err()||answer.trim()!="oui"{
+            eprintln!("Commande non envoyée ; aucune approbation enregistrée.");std::process::exit(1);
+        }
+    }
+
+    match crate::communication::client::human_specialists(&socket_path(),request) {
+        Ok(value)=>{
+            if json {println!("{}",value);}else{println!("{}",serde_json::to_string_pretty(&value).expect("JSON value"));}
+            if value["status"]=="refused"{std::process::exit(1);}
+        }
+        Err(error)=>exit_coordination_error("specialists",json,"specialists_unavailable",&format!("{error:?}"),None,1),
     }
 }

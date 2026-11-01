@@ -15,6 +15,7 @@ pub mod journal;
 pub mod jsonl;
 pub mod managed_session;
 pub mod protocol;
+pub mod specialists;
 pub mod provider_catalogue;
 pub mod pty;
 pub mod refusals;

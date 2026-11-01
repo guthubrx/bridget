@@ -8,6 +8,8 @@ use rusqlite::{
 };
 use std::{collections::HashMap, path::Path};
 
+pub(crate) mod specialists;
+
 pub struct ExecutionStore {
     conn: Connection,
 }
@@ -225,13 +227,17 @@ impl ExecutionStore {
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(2))?;
         Self::init_schema(&mut conn)?;
-        Ok(Self { conn })
+        let store=Self {conn};
+        store.init_specialist_requests()?;
+        Ok(store)
     }
 
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         let mut conn = Connection::open_in_memory()?;
         Self::init_schema(&mut conn)?;
-        Ok(Self { conn })
+        let store=Self {conn};
+        store.init_specialist_requests()?;
+        Ok(store)
     }
 
     /// Enregistre atomiquement l'acceptation durable et le démarrage d'une exécution.
@@ -265,6 +271,7 @@ impl ExecutionStore {
         observed_at: i64,
     ) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
+        if tx.query_row("SELECT EXISTS(SELECT 1 FROM work_submissions WHERE submission_id=?1 AND state='prepared')",[submission_id],|r|r.get::<_,bool>(0))? { return Err(rusqlite::Error::InvalidQuery); }
         tx.execute(
             "INSERT INTO work_submissions (submission_id, message_id, target_agent, origin, intent, references_json, state, accepted_at) VALUES (?1, ?1, ?2, 'system', 'trigger_turn', '[]', 'accepted', ?3) ON CONFLICT(submission_id) DO NOTHING",
             params![submission_id, target_agent, observed_at],
@@ -471,7 +478,7 @@ impl ExecutionStore {
         let tx = self.conn.unchecked_transaction()?;
         let next = tx
             .query_row(
-                "SELECT queue.submission_id, queue.target_agent, queue.priority, queue.enqueued_at, submission.message_json FROM execution_queue queue JOIN work_submissions submission ON submission.submission_id = queue.submission_id WHERE queue.target_agent = ?1 ORDER BY queue.priority DESC, queue.enqueued_at, queue.submission_id LIMIT 1",
+                "SELECT queue.submission_id, queue.target_agent, queue.priority, queue.enqueued_at, submission.message_json FROM execution_queue queue JOIN work_submissions submission ON submission.submission_id = queue.submission_id WHERE queue.target_agent = ?1 AND submission.state = 'accepted' ORDER BY queue.priority DESC, queue.enqueued_at, queue.submission_id LIMIT 1",
                 [target_agent],
                 |row| {
                     let message_json: Option<String> = row.get(4)?;

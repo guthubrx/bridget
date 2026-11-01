@@ -227,6 +227,7 @@ pub enum ClientCapability {
     /// Contrat de lecture168, sans identité d'agent ni mutation.
     RoutingCatalogueV1,
     ProviderCatalogueV1,
+    SpecialistsV1,
     /// Admission de flotte168 : reste distincte de la forme163.
     AutoDelegateV2,
 }
@@ -2175,6 +2176,7 @@ pub enum NativeDelegationRequest {
     /// Inventaire public168 ; le daemon applique sa garde locale dédiée.
     RoutingCatalogueV1 {},
     ProviderCatalogueV1 { refresh: bool, machine_id: Option<String> },
+    Specialists { request: crate::specialists::SpecialistRequest },
     /// Copie d'un blob omis dans la vue privée de sa tâche active.
     ReadCommitFile {
         #[serde(default,skip_serializing_if="Option::is_none",deserialize_with="deserialize_present_optional")]
@@ -2652,6 +2654,7 @@ pub struct MobileOperationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
 pub enum MobileOperation {
+    Specialists { request: crate::specialists::SpecialistRequest },
     UpdatesStatus,
     UpdatesCheck,
     UpdatesInstall {
@@ -5215,6 +5218,7 @@ pub enum WrapperToDaemon {
         task_id: String,
         status: WorkspaceRepairStatusV1,
     },
+    Specialists { request: crate::specialists::SpecialistRequest },
     MobileAdministration { request:MobileAdministrationRequest },
     MobileOperation { request:MobileOperationRequest },
     /// Authentification worker distincte du rôle Service et du Register agent.

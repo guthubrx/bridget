@@ -21,7 +21,10 @@ const COMMIT_VIEW_ORIGIN_ROOT:&str="workspace.commit_view.origin_root.v2";
 const MODEL_OPTIONS:&str="delegation.model_options.v1";
 const PROVIDER_ACCOUNTS: &str = "launch.provider_account.v1";
 const WORKER_CAPACITY: &str = "worker.store.capacity.v2";
-const FORMATS: &[&str] = &[WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
+const SPECIALIST_REQUESTS: &str = "specialists.requests.v1";
+// Les prepared222 ne peuvent être remis que par leur autorité épinglée.
+// Un ancien drain qui ignore cette garde ne constitue pas un lecteur compatible.
+const FORMATS: &[&str] = &[SPECIALIST_REQUESTS,WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -155,6 +158,15 @@ mod tests {
         old["writes"]=old["reads"].clone();
         assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
         assert!(validate(&serde_json::to_vec(&fixture()).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+    }
+
+    #[test]
+    fn spec222_storage_floor_refuses_reader_without_specialist_prepared_authority() {
+        let mut old = fixture();
+        old["reads"].as_array_mut().unwrap().retain(|v|v != SPECIALIST_REQUESTS);
+        old["writes"] = old["reads"].clone();
+        assert!(!validate(&serde_json::to_vec(&old).unwrap(), &"a".repeat(32), &"b".repeat(64)));
+        assert!(validate(&serde_json::to_vec(&fixture()).unwrap(), &"a".repeat(32), &"b".repeat(64)));
     }
 
     #[test]

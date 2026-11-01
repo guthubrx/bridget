@@ -5902,8 +5902,9 @@ fn ensure_claude_permission_bypass(args: &mut Vec<String>) {
     }
 }
 
-const BRIDGET_SAFE_MCP_TOOLS: [&str; 29] = [
+const BRIDGET_SAFE_MCP_TOOLS: [&str; 30] = [
     "bridget_who",
+    "bridget_specialists",
     "bridget_send",
     "bridget_ledger",
     "bridget_journal",

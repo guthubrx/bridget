@@ -1300,3 +1300,15 @@ receipts without a recorded subcause remain explicitly unknown.
 ResourceLimit during workspace preparation proves neither full disk nor provider
 quota. Guidance names the missing worker checks, closure prerequisites and the
 owner decision required. Other authorized work follows its own state.
+
+
+
+For a first temporary specialist, request_temporary carries profile_id,
+profile_revision and a delegation matching the automatic native tool schema.
+Both request_id values must match. The parent's new profile is frozen into the
+native prompt and constraints, with first-use reservation before admission.
+The definition is retained without durable activation. Read the same key with
+request_status; subsequent reuse requires a human decision, never a new key
+replacing work with an unknown outcome.
+
+MemoryVersions returns paged revisions using a numeric cursor. Forgetting clears that history view too; it does not rewrite old journals or admitted frozen mission contexts. The catalog exposes recent native requests and opens the existing conversation for mission controls.
