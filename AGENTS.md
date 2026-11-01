@@ -109,6 +109,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session222/T034 — source7333a6ed intégrée/poussée9ce22f61 ; repriseV1/V2 diffère
+sans modifier le reçu quand route/identité/preuve du parent manque, révocation
+constatée reste refusée. Client : budget unique existant, coupure réessayée sur
+même reçu, refus terminal rendu ; au délai, issue explicitement inconnue.
+Six tests ciblésPASS, assemblagesMac/LinuxPASS, auto-revue déclarée ;
+indépendante indisponible car MCPfermé, aucun remplacement. Version0.7.1/
+222-specialists-recovery-r1 chargée7services/PID/SHA vérifiés ; coupure2,20s,
+six superviseurs métier préservés. Rollbackr3 natif compatible vérifié, pointeurs
+Cartae/Mac atomiques sous verrou. Originaux17/18 toujoursrefused/tasknull et
+empreintes intégrales inchangées ; aucun rejeu ni qualification métier.
+Publicationv0.7.1/sixactifs/installer vérifiés, Android0.7.0inchangé. MCPdecefil
+dernierétatTransportclosed, nouveau guidageclient NONattesté chargé ; T028/T031/
+T034 ouverts, fermer complètement l'application hôte puis mêmefil/unevérification,
+pasdeboucle ni nouveau build. Notificationbridge1016 nonremise parMCPfermé.
+Sources/preuves : specs/222-roles-profils/validation/recovery-parent-gap.md.
+
+
+
 Session221/diagnostic expéditeur — sourcee948eef5 intégrée/poussée ;
 build221-sender-guide-r2 chargé7services/SHA vérifiés, coupure2,53s.
 Nack interne garde les mêmes droits ; routeabsente/instancedifférente/identité
