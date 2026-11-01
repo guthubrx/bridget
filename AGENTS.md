@@ -109,6 +109,22 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/profilCodexSYS166 — programme existant0.166 qualifié par9formes du
+schéma face0.164, puis un seul tour technique natif Solhigh réussi :20b6e59c,
+marqueur reçu/result_available/erreurnulle, ACK/clôture unefois. Observations
+version/SHA/contrat des deuxprofilsSYS actualisées sous verrou/CAS et sauvegarde,
+workerrevision6→7/maîtrerevision12→13 ; autreschamps strictement identiques.
+Catalogueobservé revenu reported_models/Solhigh annoncé, aucun definition_changed.
+Aucune installation, connexion, droit, modèle ou service changé ; aucun build.
+Première admissiontechnique tropprécoce refusée not_recorded, mêmeclé/enveloppe
+rejouée seulement après publication. ClémétiermaisonsSolhigh nonrejouée par ce
+responsable ; prérequis transmis monuments. RevueR55 connue214f8726 préservée,
+aucun remplacement. WTtechniquepropre/0commit sans ignoré conservé sous usage
+externeincomplètementobservable, backups/schémas privés gardés. Programme52/182
+InProgress, aucun accès àtouslesmodèles annoncé. Preuves :
+specs/221-capacites-completes/validation/codex-sys166.md.
+
+
 Session221/sondes worker — source06ba1606 intégrée/poussée, build221-worker-probe-lane-r2
 chargé7services/PID/SHA vérifiés ; coupure2,27s, wrapperCartae2500061 conservé.
 SondesGit isolées des commandes :1lecture physique inter-reconnexions,8attentes,
