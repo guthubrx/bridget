@@ -109,6 +109,20 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/diagnostic expéditeur — sourcee948eef5 intégrée/poussée ;
+build221-sender-guide-r2 chargé7services/SHA vérifiés, coupure2,53s.
+Nack interne garde les mêmes droits ; routeabsente/instancedifférente/identité
+nonconfirmée nommées, ancienreçu resteunobserved. ResourceLimitpréparation
+nomme les lectures manquantes sans drainage supposé. Deux testsLinuxPASS0,13s,
+revuef9ecb01d/P2historique corrigé et deltaauto-audité. WrappersCartae2500061
+etSYS1278163 préservés ; retourprogram-compat-r2/formats/rollbacknatifs vérifiés.
+Lien revenu45options/gel=false après réattestation33, aucunrejeu métier.
+125078904octets de transferts retirés ; caches/WT sousobservationincomplète
+conservés. Programme57/187InProgress. Preuves :
+specs/221-capacites-completes/validation/sender-diagnostic.md.
+
+
+
 Session221/mises à jour programmes — sourcea83186df intégrée/poussée,
 build221-program-compat-r2 chargé7services/SHA vérifiés, coupure2,20s.
 Nouvelle imageCodex qualifiée automatiquement par schéma CLI isolé puis handshake,

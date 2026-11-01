@@ -348,4 +348,4 @@ Ce lot ne clôture pas les autres catégories du programme.
 
 ## Diagnostic des incidents reçus après livraison
 
-- [ ] T187 Corriger le refus d’identité des envois internes sans changer leur autorité, garder les causes historiques inconnues et rendre le refus ResourceLimit de préparation actionnable. Tests ciblés, revue, intégration/push, activation sept services et reprise des propriétaires. Reçu validation/sender-diagnostic.md.
+- [x] T187 Corriger le refus d’identité des envois internes sans changer leur autorité, garder les causes historiques inconnues et rendre le refus ResourceLimit de préparation actionnable. Tests ciblés, revue, intégration/push, activation sept services et reprise des propriétaires. Reçu validation/sender-diagnostic.md.

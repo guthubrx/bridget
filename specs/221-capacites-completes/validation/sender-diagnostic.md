@@ -1,6 +1,6 @@
 # Correction221 — diagnostic expéditeur interne et préparation
 
-État : deux tests ciblés PASS ; revue traitée, activation à consigner.
+État : correctif de diagnostic intégré, poussé et actif sur les sept services.
 Base b721e29f9c32467dbe2b8f08dc98c255bcfbbd4d ; lot isolé de la session222.
 
 ## Incidents rapprochés du registre courant, sans mission rejouée
@@ -48,7 +48,7 @@ qu’un drainage résout le problème et ne conseille pas d’arrêter autrui.
 
 ## Contrôles et revue
 
-Deux tests spec221_sender PASS0,15s, via scripts/build.py cargo test filtré.
+Deux tests spec221_sender PASS0,13s après le delta final, via scripts/build.py cargo test filtré.
 L’un modifie réellement les tables de connexion du fixture : instance changée
 puis connexion absente ; Nack, aucune commande de contrôle, aucune demande
 publiée et tâche inchangée octet pour octet. L’autre contrôle codes nouveaux,
@@ -73,3 +73,47 @@ rejoué un fixture d’autorité conservée, limite déclarée. ACK/clôture une
 Les Nack restent des chaînes dans le contrat existant ; task.projected_error
 les conserve et task_view les projette en Value, sans enum réseau nouveau.
 Delta final auto-audité, aucune nouvelle campagne de revue générale.
+
+
+## Livraison active
+
+Source fonctionnelle e948eef59de471f41897e03d647bbb090014a4ff intégrée à main
+et poussée. Manifeste357sources identiques au commit, un seul fichier
+exécutable changé. Assemblages finaux Mac1min10s et Linux1min57s.
+La nuance historique de revue a été prise en compte avant toute activation ;
+les assemblages antérieurs n’ont pas été chargés.
+
+Build221-sender-guide-r2 :
+- Linux SHA14f656bf55f4c3a229d93fd07c068d45f24b66c9a2bd249da5d195124dc1e669.
+- Mac SHA3aa93e29716226471c86faaaab39af5a1aa7266823f2049562ee5564464f3571.
+- Cartae maître960490/mobile960607/worker961752.
+- SYS worker1284999 ; KS worker1650281 ; Mac worker56371/pont56518.
+Sept images réellement chargées hachées. Coupure maître2,53s.
+Wrappers Cartae2500061/naissance270585460 et SYS1278163/naissance69239797
+conservés. Le résultat de56a0a893 reste disponible ; aucun service métier,
+ancienne mission, compte, moteur ou droit relancé/modifié.
+
+Retour vers221-program-compat-r2 contrôlé dans les deux sens pour les formats
+et par clients check/validate-report. Pointeurs rollback natifs Cartae/Mac
+écrits atomiquement sous verrou, sauvegardes et actifs conservés, updaters repris.
+Après exposition du fil dans le log du pont : une bridget_session révision33
+puis capabilities PASS45options/gel=false. Aucun cycle de reprise d’application,
+aucun nouvel outil MCP. Préavis puis retour transmis aux propriétaires ;
+les remises in_flight ne sont pas présentées comme des lectures attestées.
+
+## Fin Git et entretien
+
+Main Mac/Cartae alignées au distant ; main des magasins mirror.git/repository
+SYS/KS mise à jour par bundle, HEAD détachés et origins conservés.
+T187 clôturée, programme57/187InProgress. Les catégories restantes ne sont
+pas déclarées terminées par ce correctif de diagnostic.
+
+Trois copies de transfert retirées :125078904octets. Actif, retour et preuves
+conservés. installed appelé sur les deux stagings : Mac refuse la propriété
+non enregistrée, SYS garde les caches car l’observation des processus est
+incomplète. Worktree221 toujours responsable de la suite ; worktree de revue
+conservé faute de contrôle d’usage complet. Aucun travail non intégré supprimé.
+
+Limite de diagnostic : l’origine exacte de l’ancien refus d’attestation17b
+et de la capacitéb27 n’est pas reconstruite. Le changement livre un guidage
+honnête et précis, pas une requalification rétroactive de leurs missions.
