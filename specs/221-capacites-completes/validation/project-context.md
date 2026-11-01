@@ -27,9 +27,10 @@ refus de résolution. Ce diagnostic ne suffisait pas à vérifier la bonne cible
 Les refus de correspondance portent maintenant un contexte fermé :
 stage=project_preparation ou candidate_mapping, project_checks bornés par
 machine et code. Ordre BTreeMap déterministe ; le code technique retenu reste
-celui du premier contrôle. Les autres familles conservent leur retour historique.
-Quatre codes de correspondance sont reconnus. Un autre motif ne devient pas
-un diagnostic inventé : sa cause est unobserved dans les contrôles secondaires.
+celui du premier contrôle de correspondance. Quatre codes sont reconnus.
+Si une autre famille est présente, elle garde la priorité et son guidage propre,
+quel que soit l'ordre des machines. Ce retour historique ne prétend pas publier
+les autres contrôles ; le contexte détaillé est réservé aux seuls refus de mapping.
 coverage=mapping_refusals_only indique que la liste n'explique pas tous les
 autres refus possibles des candidats.
 execution_selection=not_attested_by_this_diagnostic n'invente pas un choix final.
@@ -60,3 +61,13 @@ ce prédicat ne garantit pas une syntaxe sans chemin ; contrôle ASCII ajouté.
 Preuves privées /Users/moi/.cache/bridget221-project-context et
 /home/moi/.cache/bridget221-project-context. Pas de nouveau parcours d'interface,
 donc pas de diaporama requis.
+
+## Revue et précision des familles mixtes
+Revue indépendante adb77368 lue, ACK et clôture demandés une fois.
+Aucun P1 ; objection P2 sur la précédence d'un autre motif confirmée.
+Correction : avant toute enveloppe de correspondance, conserver le premier
+code d'une autre famille, par ordre déterministe des machines. Ainsi une
+préparation occupée ou un délai ne devient pas une cause de mapping inconnue.
+Le test ciblé couvre origin_proof_busy, project_preparation_busy et
+project_preparation_timeout, avant ou après un refus de mapping.
+La revue portait sur le patch ; elle ne qualifie ni compilation ni activation.

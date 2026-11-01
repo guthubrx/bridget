@@ -57,8 +57,12 @@ fn is_mapping_code(code: &str) -> bool {
 
 /// Diagnostic borné. Les autres familles gardent leur code historique.
 pub(super) fn mapping_context_error(stage: &str, refused: &BTreeMap<String, String>) -> String {
+    // Une autre famille garde son code et son guidage propres, quel que soit
+    // l'ordre des machines. Le contexte de correspondance reste partiel.
+    if let Some(code) = refused.values().find(|code| !is_mapping_code(code)) {
+        return code.clone();
+    }
     let code = refused.values().next().map(String::as_str).unwrap_or("project_mapping_unknown");
-    if !is_mapping_code(code) { return code.to_owned(); }
     let checks = refused.iter().map(|(machine, reason)| json!({
         "machine_id": machine,
         "code": if is_mapping_code(reason) {reason.as_str()} else {"unobserved"},
@@ -118,16 +122,27 @@ mod tests {
             assert_eq!(view["code"],code);
             assert_eq!(view["detail"]["context_status"],"observed");
         }
+        for (first, second) in [
+            ("project_mapping_unknown", "origin_proof_busy"),
+            ("project_preparation_timeout", "project_mapping_mismatch"),
+            ("project_mapping_unknown", "project_preparation_busy"),
+        ] {
+            let refused=BTreeMap::from([
+                ("cartae".into(),first.into()), ("sysle2".into(),second.into()),
+            ]);
+            let expected=if is_mapping_code(first) {second} else {first};
+            assert_eq!(mapping_context_error("project_preparation",&refused),expected);
+        }
         let causes=BTreeMap::from([
             ("cartae".into(),"project_mapping_unknown".into()),
-            ("sysle2".into(),"PRIVATE helper cause".into()),
+            ("sysle2".into(),"project_mapping_mismatch".into()),
         ]);
         let error=mapping_context_error("project_preparation",&causes);
         let view=contextual_refusal(error.strip_prefix("routing_project_refused:").unwrap());
         assert_eq!(view["code"],"project_mapping_unknown");
         assert_eq!(view["detail"]["stage"],"project_preparation");
         assert_eq!(view["detail"]["project_checks"][0]["machine_id"],"cartae");
-        assert_eq!(view["detail"]["project_checks"][1]["code"],"unobserved");
+        assert_eq!(view["detail"]["project_checks"][1]["code"],"project_mapping_mismatch");
         assert!(!view.to_string().contains("PRIVATE"));
         assert_eq!(view["detail"]["execution_selection"],"not_attested_by_this_diagnostic");
         assert!(view.to_string().len()<8192);
