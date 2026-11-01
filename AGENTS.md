@@ -109,6 +109,16 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/worker Mac : registre dédié actif
+/Users/moi/.config/bridget/worker-monordinateur-agents.json, PID89501,
+même image0.7.3. Origine origin-agents177.json inchangée pour les lancements locaux.
+Seul alias local→identité provisionnée monordinateur normalisé ; mêmes4connexions/
+18modèles, aucun droit/compte ajouté. Chargement natif compatible, source inverse
+identique, aucun tour ni admission métier. CodexPro observe8modèles ; Codexnormal
+reste definition_changed, accès non prouvé. Préserver ce registry-file lors des
+prochaines maintenances. Reçus : specs/221-capacites-completes/validation/mac-worker-registration.md.
+
+
 Session 224 — suivi des mises à jour fédérées livré en 0.7.3.
 Source 9653b21d intégrée et poussée ; sept composants chargés et empreintes vérifiées.
 Watchers Mac/Cartae/SYS/KS actifs ; quatre rapports réels 0.7.3, up_to_date/fresh.
