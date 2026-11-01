@@ -19,6 +19,21 @@ use std::time::Instant;
 /// Fichier d'état publié par le serveur t3code (`<base>/userdata/`).
 pub const RUNTIME_FILE: &str = "server-runtime.json";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+// La fenêtre officielle peut conserver un tour volumineux, même lorsque
+// payloadBudgetExceeded=true. Budget réservé à cette route de lecture.
+const MAX_BOUNDED_THREAD_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
+
+fn read_response_body(response: impl Read, limit: u64) -> Result<String, ContractError> {
+    let mut bytes = Vec::new();
+    Read::take(response, limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ContractError::Transport("lecture HTTP T3 interrompue".into()))?;
+    if bytes.len() as u64 > limit {
+        return Err(shape("HTTP T3", "response limit"));
+    }
+    String::from_utf8(bytes).map_err(|_| shape("HTTP T3", "UTF-8"))
+}
 /// Sujet de toutes les sessions Bridget ; le libellé porte l'installation.
 pub const TOKEN_SUBJECT: &str = "bridget";
 
@@ -569,6 +584,16 @@ impl Client {
         path: &str,
         body: Option<&Value>,
     ) -> Result<String, ContractError> {
+        self.request_with_limit(method, path, body, MAX_RESPONSE_BYTES)
+    }
+
+    fn request_with_limit(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        limit: u64,
+    ) -> Result<String, ContractError> {
         let url = format!("{}{}", self.base_url, path);
         let mut request = match method {
             "GET" => minreq::get(&url),
@@ -588,14 +613,7 @@ impl Client {
             .send_lazy()
             .map_err(|error| ContractError::Transport(error.to_string()))?;
         let status = response.status_code;
-        let mut bytes = Vec::new();
-        Read::take(response, 16 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| ContractError::Transport("lecture HTTP T3 interrompue".into()))?;
-        if bytes.len() > 16 * 1024 * 1024 {
-            return Err(shape("HTTP T3", "response limit"));
-        }
-        let text = String::from_utf8(bytes).map_err(|_| shape("HTTP T3", "UTF-8"))?;
+        let text = read_response_body(response, limit)?;
         match status {
             200..=299 => Ok(text),
             401 => Err(ContractError::Unauthorized),
@@ -720,7 +738,12 @@ impl Client {
         if self.uses_v2() {
             let suffix = if turn_limit <= 20 { "/bounded?compactTurnItems=1" } else { "" };
             let path = format!("/api/orchestration/threads/{segment}{suffix}");
-            return v2::parse_detail(&self.request("GET", &path, None)?, thread_id);
+            let text = if turn_limit <= 20 {
+                self.request_with_limit("GET", &path, None, MAX_BOUNDED_THREAD_RESPONSE_BYTES)?
+            } else {
+                self.request("GET", &path, None)?
+            };
+            return v2::parse_detail(&text, thread_id);
         }
         let path = format!("/api/orchestration/threads/{segment}?turnLimit={turn_limit}");
         parse_thread_detail(&self.request("GET", &path, None)?)
@@ -910,6 +933,19 @@ mod tests {
             parse_runtime(sans_repere, |_| true),
             Err(ContractError::InvalidShape { field, .. }) if field == "host"
         ));
+    }
+
+    #[test]
+    fn spec221_bounded_response_caps_keep_general_budget_and_utf8() {
+        let size = MAX_RESPONSE_BYTES + 1;
+        assert!(read_response_body(std::io::repeat(b'x').take(size), MAX_RESPONSE_BYTES).is_err());
+        assert!(read_response_body(std::io::repeat(b'x').take(size),
+            MAX_BOUNDED_THREAD_RESPONSE_BYTES).is_ok());
+        assert!(read_response_body(std::io::repeat(b'x').take(MAX_BOUNDED_THREAD_RESPONSE_BYTES),
+            MAX_BOUNDED_THREAD_RESPONSE_BYTES).is_ok());
+        assert!(read_response_body(std::io::repeat(b'x').take(MAX_BOUNDED_THREAD_RESPONSE_BYTES + 1),
+            MAX_BOUNDED_THREAD_RESPONSE_BYTES).is_err());
+        assert!(read_response_body(&[0xff_u8][..], MAX_BOUNDED_THREAD_RESPONSE_BYTES).is_err());
     }
 
     #[test]

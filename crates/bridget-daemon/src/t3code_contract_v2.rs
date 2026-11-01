@@ -896,6 +896,24 @@ pub(crate) mod tests {
         server.join().unwrap();
     }
 
+    #[test]
+    fn spec221_bounded_http_reads_large_official_window_without_full_history() {
+        let mut source=detail();
+        source["projection"]["checkpoints"]=json!([{"payload":"x".repeat(17*1024*1024)}]);
+        source["payloadBudgetExceeded"]=json!(true);
+        source["turnItemsOmitLocalVisible"]=json!(true);
+        let expected=parse_detail(&source.to_string(),"t").unwrap();
+        let body=source.to_string();
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();
+        let client=Client::for_base_url(&format!("http://{}",listener.local_addr().unwrap()),"fixture");
+        client.set_test_protocol(true);
+        let server=std::thread::spawn(move||http_reply(&listener,200,&body,
+            "GET /api/orchestration/threads/t/bounded?compactTurnItems=1 "));
+        let actual=client.thread_detail("t",20).unwrap();
+        assert_eq!(actual,expected);
+        server.join().unwrap();
+    }
+
     pub(super) fn detail() -> Value {
         json!({"snapshotSequence":18,"projection":{
             "thread":{"id":"t"},
