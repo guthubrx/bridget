@@ -30,7 +30,7 @@ use crate::t3code_contract::{
     self as contract, Client, ContractError, ServerRuntime, T3Cli, ThreadDetail, ThreadSummary,
 };
 use crate::wrapper::{
-    AttachRelayWorker, BatchedDelivery, IdempotentDeliveryTracker, connect_and_register_at,
+    AttachRelayControl, AttachRelayWorker, BatchedDelivery, IdempotentDeliveryTracker, connect_and_register_at,
     deliver_batch_to_interactive, send_wrapper_message,
 };
 
@@ -1542,6 +1542,7 @@ impl Link {
         )?;
         let daemon_alive = worker.daemon_alive.clone();
         let cancelled = worker.cancelled.clone();
+        let journal_control=(worker.relay.subscription_control(),worker.writer.clone());
         let worker_handle = thread::Builder::new()
             .name(format!("t3-{}", &summary.id[..summary.id.len().min(8)]))
             .spawn(move || worker.run(inbox))
@@ -1554,6 +1555,7 @@ impl Link {
             drained_key.clone(),
             inbound_deliveries.clone(),
             &summary.id,
+            Some(journal_control),
         ) {
             Ok(handle) => handle,
             Err(error) => {
@@ -1659,6 +1661,8 @@ impl Drop for Link {
     }
 }
 
+type ReaderJournalControl=(AttachRelayControl,Arc<Mutex<Option<BufWriter<UnixStream>>>>);
+
 fn spawn_reader(
     mut reader: BufReader<UnixStream>,
     events: Sender<LinkEvent>,
@@ -1667,6 +1671,7 @@ fn spawn_reader(
     drained_key: Arc<Mutex<Option<String>>>,
     inbound_deliveries: Arc<AtomicUsize>,
     thread_id: &str,
+    journal_control: Option<ReaderJournalControl>,
 ) -> Result<thread::JoinHandle<()>, String> {
     thread::Builder::new()
         .name(format!(
@@ -1686,6 +1691,25 @@ fn spawn_reader(
                         }
                         match decode::<DaemonToWrapper>(trimmed) {
                             Ok(frame) => {
+                                // Le journal déjà écrit ne dépend pas de HTTP ni du tour.
+                                // Réutiliser le relais borné ; ne pas doubler le traitement
+                                // dans la file de LinkWorker.
+                                if let Some((relay,writer))=&journal_control {
+                                    match &frame {
+                                        DaemonToWrapper::Subscribe {subscription_id,window,..} => {
+                                            if let Err(reason)=relay.subscribe(subscription_id.clone(),window.clone()) {
+                                                send_wrapper_message(writer,WrapperToDaemon::AttachRejected {
+                                                    subscription_id:Some(subscription_id.clone()),reason,
+                                                });
+                                            }
+                                            continue;
+                                        }
+                                        DaemonToWrapper::Unsubscribe {subscription_id} => {
+                                            relay.unsubscribe(subscription_id.clone());continue;
+                                        }
+                                        _=>{}
+                                    }
+                                }
                                 let delivery = matches!(
                                     &frame,
                                     DaemonToWrapper::Deliver { .. }
@@ -6636,6 +6660,52 @@ mod tests {
     }
 
     #[test]
+    fn spec221_journal_reader_serves_eight_entries_without_worker_progress() {
+        use std::io::Write;
+        use bridget_transport::protocol::AttachWindow;
+        let (mut worker,peer)=worker099();
+        for n in 0..8 {
+            worker.journal.enqueue("update",Some(&format!("journal-{n}")),
+                json!({"kind":"text","text":format!("entry-{n}")})).unwrap();
+        }
+        worker.journal.stop();
+        let before=serde_json::to_value(&worker.state).unwrap();
+        let (input,mut daemon)=UnixStream::pair().unwrap();
+        let (events,inbox)=mpsc::channel();
+        // Le worker ne consomme aucun événement, comme pendant un appel HTTP
+        // en attente. Le vrai lecteur socket et le vrai relais restent actifs.
+        let reader=spawn_reader(BufReader::new(input),events,worker.daemon_alive.clone(),
+            worker.cancelled.clone(),worker.drained_key.clone(),worker.inbound_deliveries.clone(),
+            "journal-blocked-worker",Some((worker.relay.subscription_control(),worker.writer.clone()))).unwrap();
+        writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Subscribe {
+            subscription_id:"journal-eight".into(),agent:worker.agent_id.clone(),window:AttachWindow::Tail(8),
+        }).unwrap()).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut output=BufReader::new(peer);
+        let mut seqs=std::collections::BTreeSet::new();let mut caught=false;
+        let until=Instant::now()+Duration::from_secs(3);
+        while Instant::now()<until {
+            let mut line=String::new();output.read_line(&mut line).unwrap();
+            match decode::<WrapperToDaemon>(&line).unwrap() {
+                WrapperToDaemon::JournalFragment {subscription_id,seq,final_fragment:true,..}
+                    if subscription_id=="journal-eight"=>{seqs.insert(seq);}
+                WrapperToDaemon::SnapshotCaughtUp {subscription_id,..} if subscription_id=="journal-eight"=>{
+                    caught=true;break;
+                }
+                WrapperToDaemon::AttachRejected {reason,..}=>panic!("journal rejected: {reason:?}"),
+                _=>{}
+            }
+        }
+        assert!(caught);assert_eq!(seqs.len(),8);assert!(inbox.try_recv().is_err());
+        writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Unsubscribe {subscription_id:"journal-eight".into()}).unwrap()).unwrap();
+        writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+        let next=inbox.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(next,LinkEvent::Frame(frame) if matches!(*frame,DaemonToWrapper::Disconnect)));
+        assert_eq!(serde_json::to_value(&worker.state).unwrap(),before);
+        drop(daemon);reader.join().unwrap();worker.relay.shutdown();
+    }
+
+    #[test]
     fn spec165_lecteur_invalide_le_drain_avant_la_file_worker() {
         use std::io::Write;
 
@@ -6651,6 +6721,7 @@ mod tests {
             drained_key.clone(),
             inbound_deliveries.clone(),
             "course-drain",
+            None,
         )
         .unwrap();
         let frame = DaemonToWrapper::Deliver {
@@ -6735,6 +6806,7 @@ mod tests {
             Arc::new(Mutex::new(None)),
             Arc::new(AtomicUsize::new(0)),
             "panic-worker",
+            None,
         )
         .unwrap();
         let worker = thread::spawn(|| panic!("panique attendue du worker"));

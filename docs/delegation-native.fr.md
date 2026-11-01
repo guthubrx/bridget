@@ -1979,3 +1979,13 @@ lues par le maître et le worker : activation globale et machine, connexion,
 moteur, modèle, effort et option de service. Une déclaration côté maître ne
 prouve pas sa présence côté worker. Le motif historique ne distingue pas ces
 gardes. Ne pas activer une politique ni élargir des droits sans mandat.
+
+
+### Lecture du journal pendant la synchronisation
+Le lecteur du lien natif transmet directement les commandes d'abonnement et
+de désabonnement au relais de journal existant. Lire les événements déjà
+enregistrés ne dépend pas de l'actualisation du fil auprès de l'application.
+Les bornes d'extrait, les lacunes, les séquences et les contrôles de source
+restent ceux du journal. Un extrait ne prouve pas la réussite d'une mission.
+Le message historique « budget JSONL dépassé » désigne un délai expiré,
+pas un dépassement prouvé du volume de l'extrait.

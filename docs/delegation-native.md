@@ -1219,3 +1219,12 @@ master and worker: global and machine activation, connection, engine, model,
 effort and service option. A master declaration does not prove a worker
 declaration. Historical reasons do not distinguish these gates. Do not enable
 a policy or extend permissions without authorization.
+
+
+### Reading the journal during synchronization
+The native connection reader sends subscription and unsubscription commands
+directly to the existing journal relay. Reading recorded events does not wait
+for the application's thread refresh. Excerpt bounds, gaps, sequences and
+source checks remain unchanged. An excerpt does not prove mission success.
+The historical “budget JSONL dépassé” message denotes an expired read deadline,
+not a proven excerpt size overflow.

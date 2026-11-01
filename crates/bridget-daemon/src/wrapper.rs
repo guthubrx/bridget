@@ -3320,6 +3320,71 @@ impl Default for AttachRelayHooks {
 /// déposer les commandes, tandis que ce worker traite chaque abonnement par
 /// petites tranches. Le contrôle coalescé vit dans un état borné partagé afin
 /// qu'un désabonnement ne soit jamais coincé derrière un rejeu volumineux.
+/// Port du relais existant, utilisable sans attendre l'actualisation du fil.
+/// Les clones partagent les mêmes bornes, annulations et état de fermeture.
+#[derive(Clone)]
+pub(crate) struct AttachRelayControl {
+    commands:mpsc::SyncSender<AttachRelayCommand>,
+    control_state:Arc<Mutex<AttachRelayControlState>>,
+    control_observed:Arc<dyn Fn()+Send+Sync>,
+    wake:Arc<(Mutex<()>,Condvar)>,
+}
+
+impl AttachRelayControl {
+    pub(crate) fn subscribe(
+        &self,
+        subscription_id: String,
+        window: AttachWindow,
+    ) -> Result<(), AttachRefusal> {
+        {
+            let mut state = self
+                .control_state
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            if state.pending.len().saturating_add(state.active.len())
+                >= ATTACH_RELAY_CONTROL_IDS_CAPACITY
+            {
+                return Err(AttachRefusal::CommandQueueSaturated);
+            }
+            state.pending.insert(subscription_id.clone());
+        }
+        let result = self
+            .commands
+            .try_send(AttachRelayCommand::Subscribe {
+                subscription_id: subscription_id.clone(),
+                window,
+            })
+            .map_err(|error| {
+                self.control_state
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .pending
+                    .remove(&subscription_id);
+                match error {
+                    mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_) => {
+                        AttachRefusal::CommandQueueSaturated
+                    }
+                }
+            });
+        self.wake.1.notify_all();
+        result
+    }
+
+    pub(crate) fn unsubscribe(&self, subscription_id: String) {
+        let mut state = self
+            .control_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if state.pending.contains(&subscription_id) || state.active.contains(&subscription_id) {
+            state.cancelled.insert(subscription_id);
+            drop(state);
+            (self.control_observed)();
+            self.wake.1.notify_all();
+        }
+    }
+
+}
+
 pub(crate) struct AttachRelayWorker {
     commands: mpsc::SyncSender<AttachRelayCommand>,
     stopped: Arc<AtomicBool>,
@@ -3763,56 +3828,20 @@ impl AttachRelayWorker {
         }
     }
 
-    pub(crate) fn subscribe(
-        &self,
-        subscription_id: String,
-        window: AttachWindow,
-    ) -> Result<(), AttachRefusal> {
-        {
-            let mut state = self
-                .control_state
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            if state.pending.len().saturating_add(state.active.len())
-                >= ATTACH_RELAY_CONTROL_IDS_CAPACITY
-            {
-                return Err(AttachRefusal::CommandQueueSaturated);
-            }
-            state.pending.insert(subscription_id.clone());
+    /// Même file et même état bornés ; aucun second relais.
+    pub(crate) fn subscription_control(&self) -> AttachRelayControl {
+        AttachRelayControl {
+            commands:self.commands.clone(),control_state:self.control_state.clone(),
+            control_observed:self.control_observed.clone(),wake:self.wake.clone(),
         }
-        let result = self
-            .commands
-            .try_send(AttachRelayCommand::Subscribe {
-                subscription_id: subscription_id.clone(),
-                window,
-            })
-            .map_err(|error| {
-                self.control_state
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .pending
-                    .remove(&subscription_id);
-                match error {
-                    mpsc::TrySendError::Full(_) | mpsc::TrySendError::Disconnected(_) => {
-                        AttachRefusal::CommandQueueSaturated
-                    }
-                }
-            });
-        self.wake.1.notify_all();
-        result
     }
 
-    pub(crate) fn unsubscribe(&self, subscription_id: String) {
-        let mut state = self
-            .control_state
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if state.pending.contains(&subscription_id) || state.active.contains(&subscription_id) {
-            state.cancelled.insert(subscription_id);
-            drop(state);
-            (self.control_observed)();
-            self.wake.1.notify_all();
-        }
+    pub(crate) fn subscribe(&self, subscription_id:String, window:AttachWindow) -> Result<(),AttachRefusal> {
+        self.subscription_control().subscribe(subscription_id,window)
+    }
+
+    pub(crate) fn unsubscribe(&self, subscription_id:String) {
+        self.subscription_control().unsubscribe(subscription_id)
     }
 
     pub(crate) fn reset_generation(&self) {
