@@ -1989,3 +1989,16 @@ Les bornes d'extrait, les lacunes, les séquences et les contrôles de source
 restent ceux du journal. Un extrait ne prouve pas la réussite d'une mission.
 Le message historique « budget JSONL dépassé » désigne un délai expiré,
 pas un dépassement prouvé du volume de l'extrait.
+
+### Reçu de continuation
+
+Une continuation peut répondre `mission_pending` après l’enregistrement durable
+de la nouvelle ronde, avant sa remise à l’enfant. Le reçu ne prouve pas encore
+`working`. La cadence native traite ensuite la remise ; son intervalle cible
+n’est pas une garantie de latence. Les contrôles de droits et de commande
+distante restent obligatoires avant l’enregistrement. Le client récent réserve
+70 s, plus le budget d’attestation le cas échéant, pour ce contrôle et le reçu.
+Les lectures ordinaires gardent leur budget. Si la réponse se perd, conserver
+`task_id`, `request_id` et l’enveloppe, puis lire le même statut. Une erreur
+de réponse ne prouve ni l’échec ni l’arrêt de la ronde ; ne pas renvoyer la
+consigne ou créer de remplacement tant que son sort reste inconnu.

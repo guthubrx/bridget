@@ -1228,3 +1228,16 @@ for the application's thread refresh. Excerpt bounds, gaps, sequences and
 source checks remain unchanged. An excerpt does not prove mission success.
 The historical “budget JSONL dépassé” message denotes an expired read deadline,
 not a proven excerpt size overflow.
+
+### Continuation receipt
+
+A continuation may return `mission_pending` after the new round is durably
+recorded, before delivery to the child. This receipt does not yet prove
+`working`. The existing native cadence handles delivery; its target interval
+is not a latency guarantee. Permission and remote command checks still precede
+recording. The updated client reserves 70 seconds, plus the attestation budget
+when applicable, for these checks and the receipt. Ordinary reads keep their
+existing budget. If the response is lost, preserve `task_id`, `request_id` and
+the envelope, then read the same task status. A response error proves neither
+failure nor termination of the round. Do not resend the instruction or create
+a replacement while its outcome remains unknown.

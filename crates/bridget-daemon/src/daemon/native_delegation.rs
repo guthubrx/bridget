@@ -5931,6 +5931,10 @@ fn handle_with_fact(
             return DaemonToWrapper::NativeDelegationResult { result };
         }
     };
+    // begin_round est le reçu durable. La cadence native existante remet la
+    // ronde suivante ; le retour du reçu ne doit pas attendre le tick général
+    // et les rapports/nettoyages d'autres tâches. Aucun thread ni rejeu ajouté.
+    let continuation_receipt = matches!(&request, NativeDelegationRequest::Continue { .. });
     let drives = matches!(
         &request,
         NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::Cancel { .. }
@@ -5976,7 +5980,7 @@ fn handle_with_fact(
     };
     // Un refus ne crée ni ne modifie aucune tâche active : il ne doit pas faire
     // avancer les autres tâches (une purge de borne éventuelle ne retire que des arbres soldés).
-    if drives && result["status"] != "refused" {
+    if drives && !continuation_receipt && result["status"] != "refused" {
         tick(state);
     }
     DaemonToWrapper::NativeDelegationResult { result }
@@ -21998,6 +22002,57 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(saved.result.as_deref(), Some("corrections faites"));
         }
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_continuation_receipt_precedes_dispatch_and_replay_keeps_one_round() {
+        let mut payload = serde_json::to_value(request("receipt-first")).unwrap();
+        payload["keep_alive_secs"] = json!(120);
+        let (shared, config, id, _, _) =
+            parent_en_cours_150(serde_json::from_value(payload).unwrap(), 0);
+        let (parent_writer, _parent) =
+            super::super::presence_tests::control_socket("receipt-parent");
+        let (child_writer, _child) =
+            super::super::presence_tests::control_socket("receipt-child");
+        let child = {
+            let mut st = shared.lock().unwrap();
+            st.connections.insert("conn-1".into(), parent_writer);
+            st.connections.insert("child-conn".into(), child_writer);
+            let mut saved = st.delegation_store.get(&id).unwrap().unwrap();
+            saved.state = "result_available".into();
+            saved.result = Some("résultat conservé".into());
+            saved.result_sent = true;
+            saved.idle_deadline_at = Some(unix_timestamp() + 120);
+            st.delegation_store.save(&saved).unwrap();
+            saved.child_instance
+        };
+        let request = NativeDelegationRequest::Continue {
+            task_id: id.clone(), request_id: "receipt-round-2".into(),
+            task: "suite de la même tâche".into(), brief: None,
+        };
+        let mut mission = None;
+        for _ in 0..2 {
+            let DaemonToWrapper::NativeDelegationResult { result } =
+                handle("conn-1", request.clone(), &shared) else {panic!("reçu attendu")};
+            assert_eq!(result["status"], "mission_pending", "le reçu précède le tick général");
+            assert_eq!(result["round"], 2);
+            let st = shared.lock().unwrap();
+            let saved = st.delegation_store.get(&id).unwrap().unwrap();
+            assert_eq!(saved.state, "mission_pending");
+            assert_eq!(saved.mission_issued_at, None);
+            assert_eq!(saved.child_instance, child);
+            assert_eq!(saved.rounds.len(), 1);
+            if let Some(expected) = &mission { assert_eq!(&saved.mission, expected); }
+            else { mission = Some(saved.mission); }
+        }
+        tick(&shared); // même cadence que le daemon en production
+        let st = shared.lock().unwrap();
+        let saved = st.delegation_store.get(&id).unwrap().unwrap();
+        assert_eq!(saved.state, "working");
+        assert_eq!(Some(saved.mission), mission);
+        assert_eq!(saved.child_instance, child);
+        assert_eq!(saved.rounds.len(), 1);
+        drop(st); drop(shared); cleanup(&config);
     }
 
     #[test]

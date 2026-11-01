@@ -579,6 +579,11 @@ fn execute_with_proof(
     }
     // Une admission peut préparer un dépôt ou un worktree. Le délai métier
     // de la mission reste distinct ; les lectures gardent leur budget court.
+    let continuation = match &request {
+        NativeDelegationRequest::Continue { task_id, request_id, .. } =>
+            Some((task_id.clone(), request_id.clone())),
+        _ => None,
+    };
     let commit_file=matches!(&request,NativeDelegationRequest::ReadCommitFile{..});
     let admission = matches!(&request, NativeDelegationRequest::AutoDelegateV2(_)
         | NativeDelegationRequest::AutoDelegate(_) | NativeDelegationRequest::Delegate { .. } | NativeDelegationRequest::RepairWorkspace { .. });
@@ -607,6 +612,12 @@ fn execute_with_proof(
         };
         connection.set_deadline(Instant::now()
             + crate::communication::client::DAEMON_BUDGET + attestation_budget + wait);
+    }
+    if continuation.is_some() {
+        // Sources d'origine (30 s), preuve worker (30 s), puis reçu durable.
+        // Ajouter l'attestation sans étendre les budgets des lectures ordinaires.
+        connection.set_deadline(Instant::now() + crate::communication::client::DAEMON_BUDGET
+            + attestation_budget + Duration::from_secs(60));
     }
     let mutation = !matches!(&request,
         NativeDelegationRequest::Catalogue | NativeDelegationRequest::RoutingCatalogueV1 { .. }
@@ -643,8 +654,14 @@ fn execute_with_proof(
     } else {
         connection.exchange(&message)
     }.map_err(|error| match error {
-        ClientError::Technical { code: code @ ("daemon_unreachable" | "outcome_unknown"), message } =>
-            ClientError::Technical { code, message: format!("{message} Attendez le retour du lien, puis consultez bridget_task_status avec le même task_id. Sans task_id, conservez request_id et tous les paramètres pour retrouver le sort de l’admission ; ne créez pas une autre demande tant que ce sort reste inconnu.") },
+        ClientError::Technical { code: code @ ("daemon_unreachable" | "outcome_unknown"), message } => {
+            let recovery = if let Some((task_id, request_id)) = &continuation {
+                format!("Consultez bridget_task_status avec task_id={task_id}. La continuation request_id={request_id} peut déjà être enregistrée et remise malgré la perte de réponse. Conservez cette tâche, cette clé et l’enveloppe ; ne renvoyez pas la consigne et ne créez pas de remplacement tant que le sort de la ronde reste inconnu. Ce refus concerne la réponse à cet appel, pas un arrêt attesté de la tâche. Les autres travaux autorisés suivent leur propre état. Si le statut reste inaccessible, demandez au responsable Bridget de vérifier le reçu de cette ronde.")
+            } else {
+                "Attendez le retour du lien, puis consultez bridget_task_status avec le même task_id. Sans task_id, conservez request_id et tous les paramètres pour retrouver le sort de l’admission ; ne créez pas une autre demande tant que ce sort reste inconnu.".into()
+            };
+            ClientError::Technical { code, message: format!("{message} {recovery}") }
+        },
         other => other,
     })?;
     match response {
@@ -2261,4 +2278,59 @@ mod schema211_tests {
         assert!(auto["inputSchema"]["properties"]["expected_base_commit"]["description"].as_str().unwrap().contains("Obligatoire"));
         assert!(auto["description"].as_str().unwrap().contains("hors Git"));
     }
+}
+
+#[cfg(test)]
+mod continuation_receipt221_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    fn continuation_response(disconnect: bool) {
+        let socket = crate::mcp_identity::mock_socket("221-continuation-receipt");
+        let listener = UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::mock_private_identity(&socket, "owner", "instance");
+        let backend = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(15))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["type"], "RegisterAuxiliary");
+            writeln!(stream, "{}", json!({"type":"Registered","agent_id":"owner","credential":null})).unwrap();
+            line.clear(); reader.read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["request"]["operation"], "continue");
+            assert_eq!(request["request"]["task_id"], "same-task");
+            assert_eq!(request["request"]["request_id"], "same-round-key");
+            if disconnect {
+                writeln!(stream, "{}", json!({"type":"Disconnect"})).unwrap();
+            } else {
+                // Une preuve autorisée peut dépasser les 10 s du budget lecture.
+                std::thread::sleep(Duration::from_secs(11));
+                writeln!(stream, "{}", json!({"type":"NativeDelegationResult","result":{
+                    "task_id":"same-task","status":"mission_pending","round":2,"message_id":"same-message"}})).unwrap();
+            }
+            line.clear();
+            assert_eq!(reader.read_line(&mut line).unwrap(), 0, "aucun rejeu automatique");
+        });
+        let identity = ResolvedIdentity {name:"owner".into(), instance_id:"instance".into(), delegated_origin:None};
+        let result = execute_with_proof(&identity, "bridget_task_continue", &json!({
+            "task_id":"same-task","request_id":"same-round-key","task":"suite"}), &socket, None);
+        backend.join().unwrap();
+        let _ = std::fs::remove_dir_all(socket.parent().unwrap());
+        if disconnect {
+            assert!(matches!(result, Err(ClientError::Technical {code:"outcome_unknown", message})
+                if message.contains("task_id=same-task") && message.contains("request_id=same-round-key")
+                    && message.contains("peut déjà être enregistrée") && message.contains("ne renvoyez pas")
+                    && message.contains("autres travaux autorisés")));
+        } else {
+            let result = result.expect("le reçu tardif doit être lu intégralement");
+            assert_eq!(result["round"], 2); assert_eq!(result["message_id"], "same-message");
+        }
+    }
+    #[test]
+    fn spec221_continuation_receipt_outlives_read_budget_without_resend() { continuation_response(false); }
+    #[test]
+    fn spec221_continuation_lost_response_preserves_identifiers_without_resend() { continuation_response(true); }
 }
