@@ -117,7 +117,7 @@ arrêté, corpssend/reply conservés, référencesvidées avantRPC et largeurmin
 conservés, aucun rejeu. Delta224/a444af64 de guidage inclus, registreMac namespace
 préservé, retours0.7.3 compatibles et rollbackatomiques vérifiés. CLIactive,
 rapportsfrais ; attestationMCPdecefil NONrétablie aprèsune réattestation, signalée
-sansboucle. Sources/preuves : specs/225-tableaux-cli/validation.md.
+sansboucle. Sourceef320910 poussée ; release0.7.4/sixactifs publics vérifiés. Quinze archives/635121669octets et branche225 retirées ; WT/vues et caches sous doute conservés. Sources/preuves : specs/225-tableaux-cli/validation.md.
 
 
 Session221/worker Mac : registre dédié actif

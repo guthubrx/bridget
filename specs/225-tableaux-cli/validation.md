@@ -82,3 +82,26 @@ SHA1677cdc3f09ee86740ec032cfe37a5e4e2a36db53e2682948866f18607b0826e.
 Android identique fonctionnellement à224 : seuls numéros du paquet changent,
 Firebase publique réutilisée. Pas de nouvelle recette téléphone ni test FCM.
 Les six actifs sont préparés ; publication et entretien ci-dessous.
+
+## Publication et entretien
+Sourceef320910 intégrée/poussée sur main ; code exécutable égal au snapshotR4
+2e9fa779. Tagv0.7.4 public avec six actifs. Noms, tailles et empreintes serveur
+GitHub égaux au manifeste local. APK public redéchargé : assets_verified et
+public_verified vrais, SHA et certificat attendus, code7004.
+Aucun nouvel upload après le contrôle, aucun nouveau déploiement pour la doc.
+
+Quinze archives de transfert retirées sur Mac/Cartae/SYS :
+635121669octets logiques. Branche session-225-cli-tables retirée après preuve
+d'égalité des fichiers intégrés par squash ; worktree détaché sur main.
+Le dossier225, ses fichiers ignorés Android et les vues de revue sont conservés :
+usages incomplets selon l'inventaire natif ; aucune suppression forcée.
+ActifR4 et retour0.7.3 conservés. Anciennes images encore sous observation
+incomplète conservées, pas choisies comme rollback.
+installed SYS : budget1,53Gio conservé ; Cartae : observation incomplète, refus
+respecté. Mac : copie source située sous le dépôt Git personnel /Users/moi/.git ;
+premier installed refusait l'appartenance. GIT_CEILING_DIRECTORIES=/Users/moi
+pour cette seule commande isole le paquet source sans Git : installed passe,
+cache1,33Gio sous budget conservé. Pas de nouvelle compilation pour l'entretien.
+
+Statut : affichage CLI225 activé et publié. Le refus d'attestation MCP de ce fil
+reste distinct, non présenté comme résolu. Programme221 non clôturé par ce lot.
