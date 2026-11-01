@@ -77,3 +77,41 @@ le propriétaire222 pour éviter une édition concurrente et une activation d’
 ancien221 incompatible avec le nouveau floor specialists.requests.v1.
 Le refus17 et ses IDs restent intacts. Aucune mission de remplacement ou revue
 métier lancée ; les préparations froides indépendantes continuent.
+
+
+## Deuxième cas : suite18 pendant la bascule222/r3
+
+Request opus201-patrimoine-communes-suite18-16-20261101-01, owner monuments
+af5ff0db-b846-45a2-8158-c4ab53a89b84. Reçu metadataV2/epoch102 :
+created1793531127=11:05:27UTC, refused/permission_not_inherited depuis
+updated1793531133=11:05:33, task_idnull. Aucune native_delegations pour la clé.
+Le maître redémarre à11:05:30, PID1324816 ; le pont monuments termine à
+11:05:31 et ne réexpose le parent qu’à11:06:22.
+
+Enveloppe conservée : sourceMac /Users/moi/Nextcloud/10.Scripts/69.opus2D,
+development/Worktree, machinesysle2, base etbase_ref
+bd50260af22d7a915233ef63e6fa2e352f880744, branche
+187-patrimoine-communes-suite18-16-20261101. Choixc001 :
+claude-sysle2-haiku213/claude-haiku-5-5, aucun effort imposé.
+Aucun snapshot complet des anciennes ProviderPermissions parent dans le canon
+ou les métadonnées du reçu.
+
+Lecture officielle du filmonuments32e1b8f8-938b-488c-a05e-67200732b973 :
+run837 commencé10:07:58UTC, projet230be153-5788-46c3-a4a6-d4042d6360b1,
+full-access/default. Ce même run couvre les deux côtés de la maintenance.
+Ces faits ne prouvent pas une différence de droits figés/courants.
+
+Le rejeu propriétaire observed1793531239 a relu le même refus. updated_at
+reste1133. Source vérifiée : admit_auto_routing lit identité/canon/reçu avant
+politique/probe ; pour Refused, auto_receipt_view renvoie auto_refusal_error.
+Il ne reconstruit ni ne compare un ancien snapshot parent à ce stade.
+Le texte de divergence de droits ne constitue donc pas le résultat d’une
+nouvelle comparaison effectuée lors de ce rejeu.
+
+Deuxième preuve transmise au responsable222 par
+bridget221-recovery18-owner222-evidence-20261101-01,
+deliverya1c39279-b861-4c0f-857b-9fe5e4236a4d/in_flight àl’envoi.
+Le parent a reçu le sort natif et la qualification figé/courant par envois
+distincts. Aucun ACK supposé. Correction encore sous responsabilité222,
+pas déclarée activée par ce fil. Aucune mission18 créée/rejouée, aucun droit,
+reçu, service ou état des missions13..17 modifié.
