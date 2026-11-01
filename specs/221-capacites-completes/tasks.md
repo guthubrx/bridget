@@ -343,4 +343,4 @@ Ce lot ne clôture pas les autres catégories du programme.
 - [x] T183 Contrat et réutilisation : définir le contrôle automatique après changement d’image, sans autorité de compte ni mutation des profils, dans contracts/program-upgrades.md.
 - [x] T184 Implémenter le contrôle supervisé, son cache d’image, les opérations facultatives et les refus négociés ; conserver préflight sans spawn et droits inchangés.
 - [x] T185 Vérifier le delta ciblé et le faire relire ; conserver les limites exactes dans validation/program-upgrades.md.
-- [ ] T186 Intégrer/pousser, construire et charger sur les sept services ; vérifier images, retour, lien natif et entretien borné.
+- [x] T186 Intégrer/pousser, construire et charger sur les sept services ; vérifier images, retour, lien natif et entretien borné.

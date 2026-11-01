@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/mises à jour programmes — sourcea83186df intégrée/poussée,
+build221-program-compat-r2 chargé7services/SHA vérifiés, coupure2,20s.
+Nouvelle imageCodex qualifiée automatiquement par schéma CLI isolé puis handshake,
+sans appelmodèle ni réécritureprofils. Preuve privée liéeSHAimage/SHAautomatique
+vérificateur ; dialecteinconnu=nonvérifié, opérationsintersectées, préflight sansspawn.
+13tests ciblésPASS, recette réelle0.163sanscomptePASS8,58s et8régressions réutilisées
+(22distincts). Revues36a5a0a2/c7a75d01 corrigées, dernierdeltaauto-audité.
+Retourworker-probe-lane-r2/formats deuxsens/rollbacknatifs vérifiés ; wrapper2500061
+préservé. Lien revenu45options/gel=false après republication, aucunrejeu métier.
+125189688octets de transferts retirés ; installedMac/SYS conserve caches sous
+propriété/observationincomplète, WTrevues conservés pourprocessusinconnus.
+Programme56/186InProgress. Preuves : specs/221-capacites-completes/validation/program-upgrades.md.
+
+
+
 Session221/profilCodexSYS166 — programme existant0.166 qualifié par9formes du
 schéma face0.164, puis un seul tour technique natif Solhigh réussi :20b6e59c,
 marqueur reçu/result_available/erreurnulle, ACK/clôture unefois. Observations
