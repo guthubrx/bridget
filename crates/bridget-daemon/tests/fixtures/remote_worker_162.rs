@@ -235,9 +235,9 @@ impl Relay {
                                     };
                                     // Le faux maître162 ne simule pas le bail de slot172.
                                     // Les cas sans relais gardent la négociation complète.
-                                    features.retain(|feature| feature != "worker_candidate_probe_v2"
-                                        && (!result_slot_delay.is_zero() || feature != "worker_result_slot_deadline_v1")
-                                        && (release_lease_feature || feature != "worker_release_lease_v2"));
+                                    features.retain(|feature|matches!(feature.as_str(),"remote_worker_v1"|"worker_candidate_probe_v1"|"worker_parent_source_proof_v1")
+                                        || (!result_slot_delay.is_zero() && feature=="worker_result_slot_deadline_v1")
+                                        || (release_lease_feature && feature=="worker_release_lease_v2"));
                                     if candidate_probe_feature && !features.iter().any(|feature| feature == "worker_candidate_probe_v1") {
                                         features.push("worker_candidate_probe_v1".into());
                                     }
@@ -934,6 +934,7 @@ impl RemoteFixture {
             generation: 0,
         };
         let prepare = WorkerPrepare {
+            service_tier: None,
             machine_id: identity().machine_id,
             project_id: "project162".into(),
             provisioning_revision: 1,
@@ -1363,6 +1364,7 @@ fn worker163_probe_groupe_huit_profils_sans_prepare_ni_lancement() {
         generation: 0,
     };
     let prepare = WorkerPrepare {
+        service_tier: None,
         machine_id: identity().machine_id,
         project_id: "project162".into(),
         provisioning_revision: 1,
@@ -1412,6 +1414,7 @@ fn worker163_probe_groupe_huit_profils_sans_prepare_ni_lancement() {
         generation: 0,
     };
     let pinned_prepare = WorkerPrepare {
+        service_tier: None,
         machine_id: identity().machine_id,
         project_id: pinned_candidate.project_id.clone(),
         provisioning_revision: 1,
@@ -2508,6 +2511,7 @@ fn probe168(f: &RemoteFixture, epoch: &str, base: &str, head: &str) -> Candidate
         },
         candidates: (1..=128)
             .map(|n| CandidateProbeV2Candidate {
+                service_tier: None,
                 candidate_id: format!("c{n:03}"),
                 project_id: "project162".into(),
                 origin_host: "origin162".into(),
@@ -2569,6 +2573,7 @@ fn prepare168(
     WorkerRequestOperation::PrepareV2 {
         inspect_only: false,
         prepare: WorkerPrepare {
+            service_tier: None,
             machine_id: identity().machine_id,
             project_id: candidate.project_id.clone(),
             provisioning_revision: 1,
@@ -2612,6 +2617,31 @@ fn assert_no_effects168(f: &RemoteFixture) {
             .iter()
             .all(|event| event["event"] != "started162")
     );
+}
+
+#[test]
+fn worker221_probe_git_blocked_still_answers_start_on_real_worker() {
+    let mut f=RemoteFixture::new_with_candidate_probe_v2();
+    let (base,head)=fixture168_routes(&f);let mut control=f.start_worker();
+    let (command,mut start,_,_)=f.prepare_start(&mut control,"probe-priority");
+    let gate=f.fixture.root.join("probe221-release");let entered=f.fixture.root.join("probe221-entered");
+    struct Release(PathBuf);impl Drop for Release {fn drop(&mut self){let _=fs::write(&self.0,b"release");}}
+    let _release=Release(gate.clone());
+    let git=f.fixture.root.join("bin/git");let real=git.canonicalize().unwrap();
+    let script=format!("#!/usr/bin/python3\nimport os,sys,time\ngate={}\nentered={}\nopen(entered,'w').close()\nlimit=time.monotonic()+8\nwhile not os.path.exists(gate) and time.monotonic()<limit: time.sleep(.01)\nos.execv({},[{},*sys.argv[1:]])\n",
+        serde_json::to_string(&gate).unwrap(),serde_json::to_string(&entered).unwrap(),
+        serde_json::to_string(&real).unwrap(),serde_json::to_string(&real).unwrap());
+    fs::remove_file(&git).unwrap();support::private_write(&git,script).unwrap();fs::set_permissions(&git,fs::Permissions::from_mode(0o700)).unwrap();
+    let mut probe=probe168(&f,&control.epoch,&base,&head);probe.candidates.truncate(1);
+    send_frame(control.reader.get_mut(),&DaemonToWrapper::CandidateProbeV2{probe}).unwrap();
+    let deadline=Instant::now()+Duration::from_secs(3);
+    while !entered.exists(){assert!(Instant::now()<deadline,"la sonde doit entrer dans Git");thread::sleep(Duration::from_millis(10));}
+    start.prepared_token="different-prepared-token".into();
+    let began=Instant::now();let response=control.request(&command,WorkerRequestOperation::Start{start});
+    assert!(matches!(response,WorkerResponseOperation::Rejected{..}),"Start doit être traité et refusé sans nouveau lancement");
+    assert!(began.elapsed()<Duration::from_secs(2),"Start ne doit pas attendre la libération de Git");
+    assert!(!gate.exists());assert_eq!(f.starts(&command.instance_id),0,"aucun fournisseur réel ou simulé avant RELEASE");
+    fs::write(&gate,b"release").unwrap();
 }
 
 #[test]

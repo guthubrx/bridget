@@ -630,8 +630,8 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Vérifiez que le même projet et son dossier source ont un placement déclaré sur la machine demandée. Ce motif seul ne distingue pas un placement absent d'un contrôle Git refusé.",
                 "Si le placement manque ou ne peut pas être vérifié, demandez à l'utilisateur de le faire qualifier sur cette machine avant toute modification."),
             Some(CandidateProbeRefusal::DefinitionUnavailable) => (
-                "Comparez le profil, le moteur, le modèle et l'effort demandés avec leur déclaration actuelle sur la même machine. La cause précise de la définition refusée reste inconnue.",
-                "Si la définition ne peut pas être qualifiée, demandez à l'utilisateur de décider sa correction ; ce code ne justifie pas une réinstallation ou un changement de modèle."),
+                "Comparez le profil, le moteur, le modèle et l'effort demandés avec leur déclaration actuelle sur la même machine. Faites aussi vérifier la version et l'empreinte du programme face à l'observation enregistrée ; le contrôle précis refusé n'a pas été conservé. Ce motif seul ne prouve pas un défaut de compte ou d'abonnement.",
+                "Si le programme a changé, demandez au responsable de qualifier cette version avant de mettre à jour son observation, ou à l'utilisateur de décider un retour vers une version déjà qualifiée. Ne remplacez pas une empreinte pour contourner la garde et ne changez ni compte, ni droits, ni modèle sur ce seul code."),
             Some(CandidateProbeRefusal::PermissionsChanged) => (
                 "Réattestez le parent, puis vérifiez si ses restrictions peuvent être conservées par le moteur demandé. Ce motif seul ne prouve pas qu'un droit a changé. Consultez detail.permission_projection.",
                 "Si une restriction n'est pas traduisible, demandez à l'utilisateur la décision sur cette restriction ou sur le moteur ; ne retirez aucune protection pour essayer."),
@@ -657,7 +657,7 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Sur les machines indiquées dans detail.probe_targets lorsqu'il est présent, comparez la politique du maître avec celle réellement lue par le worker : politique globale et machine activées, connexion déclarée et activée, moteur, modèle, effort et option de service. Vérifiez ensuite la préparation du profil et les capacités négociées. Ce motif ne distingue pas ces contrôles ; sa sous-cause non conservée reste inconnue. Un catalogue annoncé par le maître ne prouve pas sa déclaration sur le worker. Ce code ne prouve ni programme absent ni abonnement incompatible.",
                 "Si la déclaration ou la version chargée ne peut pas être vérifiée, demandez à l'utilisateur une correction ciblée de ce profil ou composant sur cette machine ; aucun changement de droits, compte, modèle ou hôte pour contourner ce refus."),
             Some(CandidateProbeRefusal::ResourceLimit) => (
-                "Attendez le drainage des demandes natives en cours sur le worker puis vérifiez detail.admission avant un éventuel rejeu strict. La file était pleine lors de la sonde ; son état actuel n'est pas établi.",
+                "Attendez le drainage des demandes natives en cours sur le worker puis vérifiez detail.admission avant un éventuel rejeu strict. Le worker n’a pas pu terminer ce contrôle dans sa capacité bornée ; ce code seul ne distingue pas une file pleine d’un délai de sonde épuisé. Son état actuel n’est pas établi.",
                 "Si la file reste saturée, demandez à l'utilisateur un arbitrage de priorité après inspection des demandes ; ne terminez pas les tâches d'autrui et ne redémarrez pas pour vider la file."),
             None => {
                 use bridget_transport::protocol::WorkerRefusal::*;
@@ -730,18 +730,18 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
         .iter()
         .any(|reason| reason["kind"] == "candidate" && reason["code"] == "resource_limit")
     {
-        let message = "Au moins une sonde de candidat a été refusée car la file bornée des demandes du worker était pleine.";
+        let message = "Au moins une sonde de candidat a été refusée par la capacité bornée de contrôle du worker ; le code seul ne distingue pas une file pleine d’un délai de sonde épuisé.";
         result["message"] = json!(message);
         result["detail"]["message"] = json!(message);
-        result["detail"]["probe_capacity"] = json!({"cause":"worker_inbound_queue_full","observed_state":"full_at_probe","current_state":"unknown"});
+        result["detail"]["probe_capacity"] = json!({"cause":"worker_probe_capacity_unavailable","observed_state":"unavailable_at_probe","current_state":"unknown"});
         result["detail"]["recovery"] = json!(
-            "Ce motif concerne la file de contrôle du worker, pas une preuve de manque de mémoire, d’espace disque ou d’authentification. La sonde refusée n’a pas été traitée ; les autres opérations peuvent continuer. Consultez detail.admission. Si state=not_recorded et qu’aucun appel concurrent de cette même demande ne subsiste, après drainage des opérations natives en cours, rejouez strictement la même request_id et la même enveloppe. Ne créez aucune nouvelle clé ni mission de remplacement, ne changez pas les contraintes pour contourner ce refus. Une tâche connue reste à suivre ; une admission pending ou d’issue inconnue ne permet aucun remplacement. Ce reçu historique ne prouve pas que la file soit encore pleine maintenant."
+            "Ce motif concerne la capacité de contrôle du worker, pas une preuve de manque de mémoire, d’espace disque ou d’authentification. Une lecture peut avoir commencé sans finir dans son budget ; elle ne crée pas de tâche à elle seule. Les autres opérations autorisées suivent leur propre état. Consultez detail.admission. Si state=not_recorded et qu’aucun appel concurrent de cette même demande ne subsiste, après retour de la capacité et résolution des autres motifs, rejouez strictement la même request_id et la même enveloppe. Ne créez aucune nouvelle clé ni mission de remplacement, ne changez pas les contraintes pour contourner ce refus. Une tâche connue reste à suivre ; une admission pending ou d’issue inconnue ne permet aucun remplacement. Ce reçu historique ne prouve pas l’état actuel de la capacité de contrôle."
         );
         result["detail"]["human_action"] = json!(
-            "Si le drainage normal ne suffit pas, transmettez au responsable du worker le code, la machine demandée, la request_id et l’heure du refus pour inspection des opérations en attente. Ne redémarrez pas le service et n’annulez pas les tâches d’autrui pour vider la file ; une décision d’arbitrage de priorité appartient à leurs propriétaires ou à l’utilisateur."
+            "Si l’attente normale ne suffit pas, transmettez au responsable du worker le code, la machine demandée, la request_id et l’heure du refus pour inspection des opérations en attente. Ne redémarrez pas le service et n’annulez pas les tâches d’autrui pour vider la file ; une décision d’arbitrage de priorité appartient à leurs propriétaires ou à l’utilisateur."
         );
     }
-    // La preuve de file pleine reste séparée : elle ne résout pas les autres
+    // Le refus de capacité reste séparé : il ne résout pas les autres
     // refus de cette admission et ne doit pas masquer leurs prérequis.
     if let Some(checks) = result["detail"]["probe_checks"].as_array()
         && let Some(first) = checks.first()
@@ -34432,7 +34432,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(result["detail"]["recovery"].as_str().unwrap().contains("tous les motifs"));
         assert!(result["detail"]["human_action"].as_str().unwrap().contains("probe_checks"));
         assert_eq!(result["detail"]["reasons"], reasons);
-        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
+        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_probe_capacity_unavailable");
         assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),2);
         for reason in reasons.as_array().unwrap() {
             let single=failure(&format!("routing_candidate_unavailable:{}",json!([reason])));
@@ -34526,7 +34526,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let result=failure(&code);
         assert_eq!(result["code"],"routing_candidate_unavailable");
         assert_eq!(result["detail"]["reasons"],json!([{"kind":"candidate","code":"resource_limit","candidates":1}]));
-        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
+        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_probe_capacity_unavailable");
         assert_eq!(result["detail"]["probe_capacity"]["current_state"],"unknown");
         assert!(result["detail"]["recovery"].as_str().unwrap().contains("même request_id"));
         assert!(result["detail"]["recovery"].as_str().unwrap().contains("not_recorded"));
@@ -34611,7 +34611,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(result["code"],"routing_candidate_unavailable");
         assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
         assert!(result["detail"]["admission"]["task_id"].is_null());
-        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_inbound_queue_full");
+        assert_eq!(result["detail"]["probe_capacity"]["cause"],"worker_probe_capacity_unavailable");
         assert!(result["detail"]["reasons"].as_array().unwrap().iter().any(|r|r["kind"]=="candidate" && r["code"]=="resource_limit" && r["candidates"]==1));
         assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),2);
         assert!(result["message"].as_str().unwrap().contains("probe_checks"));

@@ -853,7 +853,7 @@ The reader PATH must also equal the verified worker PATH: the existing Git contr
 
 A `resource_saturated` refusal exposes the measurements and limits actually evaluated in `detail.capacity`, when retained. This evidence describes the refusal time, never current capacity. The durable code is unchanged; evidence is added atomically without replacing the initial snapshot. Legacy refusals explicitly report missing evidence. Confirm a durable refusal without a task and fresh capacity on the same machine before a new key; do not stop other owners’ tasks. An MCP preflight attestation refusal reports `stage: caller_scope`: that call has not dispatched the business operation. Unverified checks remain `unknown`, without task context before authorization.
 
-A `kind:candidate/code:resource_limit` reason means that the worker inbound request queue was full when it rejected the probe. `detail.probe_capacity` distinguishes this historical fact from unknown current state. It proves neither low memory/disk nor an authentication failure. `kind:worker/code:resource_limit` remains distinct and does not establish this cause. For `not_recorded`, confirm that no concurrent call remains, then replay only the same key and envelope after native operations drain. No implicit restart, cancellation of other owners’ tasks or change of target.
+A `kind:candidate/code:resource_limit` reason means that probe control capacity was unavailable. This code alone does not distinguish a full queue from an exhausted probe deadline. `detail.probe_capacity` preserves that historical fact and leaves current capacity unknown. It proves neither low memory/disk nor an authentication failure. `kind:worker/code:resource_limit` remains distinct. For `not_recorded`, confirm completion of concurrent calls and restored capacity, then replay only the same key and envelope after resolving other reasons. A `pending` admission keeps its receipt and key. No implicit restart, cancellation of other owners’ tasks or change of target.
 
 
 ## Last master dispatch refusal (190)
@@ -1241,3 +1241,19 @@ existing budget. If the response is lost, preserve `task_id`, `request_id` and
 the envelope, then read the same task status. A response error proves neither
 failure nor termination of the round. Do not resend the instruction or create
 a replacement while its outcome remains unknown.
+
+### Worker candidate probes and commands
+
+V1/V2 candidate probes use a separate read lane. At most eight probes wait
+(seven channel entries and one timestamped head), with one physical read in
+progress. The eight command entries remain separate. The45-second probe budget
+includes queue time and is checked between candidates. A Git check already
+running keeps its existing bounded timeout; its slot remains held until the
+read physically ends. Expired queued probes are rejected without execution.
+Observations do not create tasks.
+
+Reconnection preserves an occupied read slot. An old-epoch result cannot become
+a new-link observation. Reported CPU may average activity since the worker’s
+last sample (up to10seconds). Prepare still rechecks permissions, definitions
+and live workspace guards. A probe snapshot grants no right to modify a busy
+workspace.

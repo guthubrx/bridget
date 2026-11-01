@@ -3,7 +3,7 @@ use bridget_transport::protocol::HostResourceSnapshotV1;
 #[cfg(target_os = "linux")]
 use std::io::{BufRead, Read};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct HostResourceCollector {
     previous_cpu: Option<(u64, u64)>,
     latest: Option<HostResourceSnapshotV1>,

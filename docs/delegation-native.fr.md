@@ -1593,7 +1593,7 @@ Le PATH du lecteur doit aussi égaler celui du worker vérifié : le contrôleur
 
 Un refus `resource_saturated` expose les mesures et seuils réellement évalués dans `detail.capacity`, si cette preuve a été conservée. Elle décrit l’instant du refus, jamais la capacité actuelle. Le code durable reste inchangé ; la preuve est ajoutée atomiquement au reçu et ne remplace pas le snapshot initial. Un ancien refus sans preuve annonce cette absence. Vérifier le refus durable sans tâche et une capacité fraîche sur la même machine avant une nouvelle clé ; aucune tâche d’autrui ne doit être arrêtée pour libérer la capacité. Le refus d’attestation du précontrôle MCP indique `stage: caller_scope` : l’opération métier n’a pas été envoyée par cet appel. Une vérification non établie reste `unknown`, sans contexte de tâche avant autorisation.
 
-Le motif `kind:candidate/code:resource_limit` désigne la file bornée des demandes du worker pleine au refus de sonde. `detail.probe_capacity` distingue ce fait historique d’un état actuel inconnu. Il ne prouve ni manque de mémoire/disque ni défaut d’authentification. Le motif `kind:worker/code:resource_limit` reste distinct et ne permet pas cette conclusion. Pour une admission `not_recorded`, confirmer l’absence d’appel concurrent puis, après drainage natif, rejouer uniquement la même clé et enveloppe. Aucun redémarrage, annulation d’autrui ou autre cible implicite.
+Le motif `kind:candidate/code:resource_limit` indique une capacité de contrôle indisponible. Ce code seul ne distingue pas une file pleine d’un délai de sonde épuisé. `detail.probe_capacity` conserve ce fait historique et laisse l’état actuel inconnu. Il ne prouve ni manque de mémoire/disque ni défaut d’authentification. Le motif `kind:worker/code:resource_limit` reste distinct. Pour une admission `not_recorded`, confirmer la fin de tout appel concurrent et le retour de capacité, puis rejouer uniquement la même clé et enveloppe après résolution des autres motifs. Une admission `pending` conserve son reçu et sa clé. Aucun redémarrage, annulation d’autrui ou autre cible implicite.
 
 
 ## Dernier refus observé côté maître (190)
@@ -2002,3 +2002,19 @@ Les lectures ordinaires gardent leur budget. Si la réponse se perd, conserver
 `task_id`, `request_id` et l’enveloppe, puis lire le même statut. Une erreur
 de réponse ne prouve ni l’échec ni l’arrêt de la ronde ; ne pas renvoyer la
 consigne ou créer de remplacement tant que son sort reste inconnu.
+
+### Sondes de candidats et commandes du worker
+
+Le worker garde une voie de lecture séparée pour les sondes V1/V2. Huit sondes
+au maximum attendent (sept dans le canal et une tête datée), avec une seule
+lecture physique en cours. Les huit places de commandes restent distinctes.
+Le budget de sonde de45 s inclut l’attente et est contrôlé entre candidats.
+Un contrôle Git déjà engagé garde son propre délai borné ; son créneau reste
+retenu jusqu’à sa fin physique. Une sonde expirée en attente est refusée sans
+être exécutée. Aucune nouvelle tâche ne découle d’une observation.
+
+La reprise de lien conserve le créneau de lecture encore occupé. Un résultat
+de l’ancienne époque ne vaut pas observation du nouveau lien. La CPU annoncée
+peut être une moyenne depuis le dernier relevé du worker (jusqu’à10 s).
+Prepare relit ses droits, sa définition et les gardes vivantes ; la photographie
+utilisée par une sonde n’accorde aucun droit à modifier un dossier occupé.
