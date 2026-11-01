@@ -282,3 +282,13 @@ sans attribuer une garde worker depuis le seul état maître. Deux contrôles
 daemon distinctsPASS, revue initiale partielle et audit du delta SQL final.
 Sourcee1e5e857 chargée sur les sept services. Aucune garde ni mission changée.
 Preuve : validation/workspace-busy.md. Programme52/182, In Progress.
+
+
+Convergence incident reprise (C27, sans clôture supplémentaire) :
+statut distant lié à une observation worker fraîche, capacité négociée,
+lecture OS pure et garde structurelle de conservation inchangée.
+Six contrôles distincts Linux et trois Mac PASS ; revue0b5a6415 P1levé,
+deux remarques de projection corrigées et contrôlées. Source06efa57b,
+build221-continuable-r3 chargé sur sept services/SHA vérifiés.
+Aucune ancienne mission rejouée. Preuve : validation/continuation.md.
+Programme52/182, In Progress.

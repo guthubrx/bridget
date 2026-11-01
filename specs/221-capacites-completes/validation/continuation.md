@@ -1,6 +1,6 @@
 # Statut de reprise cohérent avec la commande native
 
-Statut : correction contrôlée ; livraison en cours. Programme 52/182, In Progress.
+Statut : correction intégrée, publiée et activée. Programme 52/182, In Progress.
 
 ## Incident et faits conservés
 Signalement opus201-continuable-remote-ended-20261101-01 :
@@ -90,3 +90,49 @@ le WorkerRefusal fermé, avant tout échange réseau. Les trois contrôles cibl�
 repassent après ce complément (0,48 s). Aucun quatrième tour de revue.
 Les trois revues sont lues, acquittées, clôture demandée une fois chacune.
 Compilation et contrôle de processus macOS acquis, hors de la lecture du reviewer.
+
+## Livraison active et limites
+Source exécutable finale 06efa57b3bf9804466ec8597b812b025911a6a12,
+intégrée à main et poussée. Build 221-continuable-r3, version 0.6.5.
+Linux commun construit sur SYS : GLIBC maximum 2.34, 41 389 960 octets,
+SHA256 5f98c104bf71c83521ac333a9197b62092ba27416b39513f339125bcf6d0f2b2.
+Mac ARM64 : 34 172 608 octets,
+SHA256 aa4924611702b6c82f0b90d81acfe6867d936263908002cb499e638dcac52b8b.
+Les 356 fichiers d'assemblage sont identiques aux sources finales.
+Les trois contrôles Mac restent valables sur les fonctions OS inchangées ;
+les deux derniers changements de projection sont revérifiés sur Linux.
+Pas de nouvelle campagne.
+
+Sept images chargées et hachées : maître Cartae 3631851, mobile 3631889,
+worker Cartae 3632577, worker SYS 1152425, worker KS 1522856,
+worker Mac 41845, pont Mac 42142. Coupure maître : 2,18 s.
+Wrappers Cartae 3405178/naissance300643209 et
+2500061/naissance270585460 observés identiques avant/après.
+Aucun service métier, résultat, clé ou mission historique changé.
+
+Retour 221-workspace-busy-r1 vérifié par les lecteurs de formats dans les
+deux sens. Pointeurs rollback Cartae/Mac écrits atomiquement sous verrou
+natif, sans activation concurrente ; empreintes retour vérifiées, updaters repris.
+Les sept services sont actifs. Les MCP déjà ouverts restent 221-view-sync-r1 :
+aucun nouveau schéma requis pour ce statut JSON, aucun rechargement prétendu.
+
+Réattestation native révision13 réussie. Première lecture pendant republication
+des fils refusée primary_absent, sans doublon ; après constat du fil exposé dans
+le journal du pont, même task_status réussi. Nouveaux champs continuation
+réellement lus sur la revue close : continuable=false, portée this_task,
+requires_recheck=true. capabilities revenu, delegations_halted=false,
+45 options déclarées. Aucun nouveau témoin fournisseur ni reprise pour éprouver
+une commande distante active : ce chemin est couvert par les tests corrélés,
+pas présenté comme une mission réelle réussie.
+Monuments et les deux autres parents ont été informés par messages natifs,
+reçus in_flight conservés, sans prétendre leur lecture acquise.
+
+Trois copies de transfert hachées retirées : 124 169 880 octets au total.
+installed appelé Mac/SYS : staging non enregistré côté Mac et observation
+processus incomplète SYS ; caches conservés sans forcer.
+Workspace221 conservé pour la suite du programme. Les worktrees de revue,
+branches et anciennes images non entièrement observables restent conservés ;
+aucune suppression sur une simple absence de processus connu.
+Les candidats intermédiaires installés mais non activés sont distincts de
+l'actif et du retour ; ne pas les choisir comme retour depuis le seul numéro.
+Programme global toujours 52/182 In Progress, aucune catégorie entière close.

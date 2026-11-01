@@ -109,6 +109,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/reprise — source06efa57b intégrée/poussée ; build221-continuable-r3 chargé sur7services/SHA vérifiés, coupure2,18s. continuable distant exige délai valide, présence maître et observation fraîche worker Released/native_ready ; ExecutionStatus négocié, lecture pure reçu/OS sans signal/wait/slot/Git/fournisseur. Ancien prédicat structurel gardé pour conservation ; aucune libération de garde depuis inéligibilité. Six tests distinctsLinux/3MacPASS, revue0b5a6415 P1levé et deux remarques corrigées/contrôlées. WrappersCartae3405178/2500061 préservés, rollbackworkspace-busy natif vérifié, lien revenu après republication. Aucun rejeu5b00/ronde6 ou service métier.124169880octets de transferts retirés ; caches/WTrevues/anciennes images sous observation incomplète conservés. MCP221-view-sync existants, nouveau statut réellement lu sans nouveau schéma. Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/continuation.md.
+
+
 Session221/Shared occupé — sourcee1e5e857 intégrée/poussée, build221-workspace-busy-r1 chargé sur7services/SHA vérifiés, coupure2,28s. Refus workspace_busy joint jusqu’à8pistes de tâches de la même identité native, SQL129métadonnées maximum sans résultats/briefs ; projet/machine/racine filtrés, aucune attribution de garde worker depuis le seul maître. Deux testsdaemonPASS ; revue01ee6048 partielle et deltaSQL auto-audité, limites consignées. WrappersCartae3149928/2500061 etSYS1137782 préservés ; rollback221-claude-terminal natif vérifié, lien revenu, aucun rejeu ni garde libérée.124003632octets de transferts retirés ; caches et WTrevue propres conservés sous observationprocessusincomplète. Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/workspace-busy.md.
 
 
