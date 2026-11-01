@@ -311,3 +311,14 @@ SHA vérifiés ; coupure2,31s. Aucun placement ni mission modifié ou rejoué.
 Trois contrôlesLinux/deuxMac acquis ; complément de priorité Linux PASS.
 Revueadb77368 sansP1, P2 de précédence corrigé. Lien natif et catalogue revenus.
 Preuve : validation/project-context.md. Programme52/182InProgress.
+
+Convergence refus de sonde (C27, sans clôture supplémentaire) :
+source70d21226 intégrée/poussée, build221-probe-targets-r1 chargé sur7services.
+probe_targets conserve machine/kind/code/compte, raisons et admission inchangées.
+GuidageShared distingue HEADsource/cible et fichiers non commités ; contrôle
+capacité compare les politiques maître/worker sans les activer.
+Neuf testsLinux distinctsPASS, assemblagesMac/Linux ; revue native indisponible,
+clé03refusée sansTask après récupération, auto-audit déclaré.
+Coupure2,38s, wrappers observés préservés, rollback natif vérifié, lien revenu.
+124078464octets de transferts retirés, caches conservés sans forcer.
+Preuve : validation/probe-targets.md. Programme52/182InProgress.

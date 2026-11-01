@@ -109,6 +109,20 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/refussonde — source70d21226 intégrée/poussée, build221-probe-targets-r1
+chargé7services/SHA vérifiés, coupure2,38s. Refus rend machines/codes/comptes
+sans nouveau protocole, choix, droit ni admission ; guidageShared distingue
+HEADcible et sourcesnoncommitées. Roadie148 : Cartae11diverged, Mac18profilnon
+enregistré dans sa politiqueeffective, aucune activation/configurationchangée.
+Neuf contrôlesLinuxPASS et assemblagesMac/Linux ; revueindépendante indisponible,
+troisièmeclérefusée sansTask après réponseperdue/récupérationstricte ; autoaudit
+et limites déclarés. WrappersCartae2500061/SYS1179264 préservés ; retourprojectcontext
+et rollback natifs vérifiés. Liensession/catalogue revenus, gel=false.
+124078464octets de transferts retirés ; caches/anciennesimages sous usage ou
+observationincomplète conservés sans forcer. Aucun rejeuRoadie. Programme52/182.
+Preuves : specs/221-capacites-completes/validation/probe-targets.md.
+
+
 Session221/contexteprojet — sources34695ea0 puis a5695269 intégrées/poussées ;
 build221-project-context-r2 chargé sur7services/SHA vérifiés, coupure2,31s.
 Refus de mapping : étape/machines/codes conservés, choix final non inventé ;
