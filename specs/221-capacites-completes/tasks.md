@@ -301,3 +301,13 @@ PASS et revueeda3794b sansP1/P2. Source6b131e83 chargée sur sept services ;
 lecture de fil revenue sans response limit depuis reprise. L'annulation9396
 avait déjà réussi avant correction ; cause du premierprimary_absent noncorrélée.
 Preuve : validation/thread-budget.md. Programme52/182InProgress.
+
+Convergence diagnostic projet (C27, sans clôture supplémentaire) :
+étape et machines conservées pour les refus de correspondance, codes fermés,
+contexte pré-choix sans attribution d'une machine d'exécution. Ancien reçu
+sans contexte explicitement inconnu. Autres familles gardent leur guidage.
+Sourcea5695269 et build221-project-context-r2 chargés sur sept services,
+SHA vérifiés ; coupure2,31s. Aucun placement ni mission modifié ou rejoué.
+Trois contrôlesLinux/deuxMac acquis ; complément de priorité Linux PASS.
+Revueadb77368 sansP1, P2 de précédence corrigé. Lien natif et catalogue revenus.
+Preuve : validation/project-context.md. Programme52/182InProgress.

@@ -1,6 +1,6 @@
 # Refus de correspondance de projet : contexte exploitable
 
-Statut : contrôlé, livraison en cours. Programme52/182 InProgress.
+Statut : livré et chargé sur sept services, lien natif revenu. Programme52/182 InProgress.
 
 ## Incident conservé
 Requête revue-nouveautes-emplacement-review-20261101-01,
@@ -71,3 +71,49 @@ préparation occupée ou un délai ne devient pas une cause de mapping inconnue.
 Le test ciblé couvre origin_proof_busy, project_preparation_busy et
 project_preparation_timeout, avant ou après un refus de mapping.
 La revue portait sur le patch ; elle ne qualifie ni compilation ni activation.
+
+## Assemblage et activation
+Sources34695ea0 puis a56952695f0c46512a8919c889586705a783e12e
+intégrées et poussées. 356 fichiers de compilation identiques entre main,
+snapshotMac et snapshotSYS ; assemblages du même source.
+Build221-project-context-r2, versionpublique0.6.5 :
+- Linux SHA2560ba7d9c8868e2f56d0914a4cb658169bccede624f7f0d0ed9c382b3250658685,
+  41329576octets, assemblageSYS réussi.
+- Mac SHA256167807d7f2c19e0c844e824daf6739c4ce2a5fe80b23082f6d5470dcb823d6cf,
+  34151968octets, assemblageMac réussi.
+Le complément de priorité est revérifié par le testLinux ciblé, une exécution
+réelle PASS ; l'invocation préalable avec --exact n'a sélectionné aucun test
+et n'est pas comptée. Pas de nouvelle campagne générale.
+Images chargées et hachées :
+Cartae maître4060920, mobile4060935, worker4061528 ;
+SYS1170679 ; KS1561662 ; Mac worker73823, pont73937.
+Coupure maître2,31s. WrappersCartae4053327/naissance301872921 et
+2500061/naissance270585460 conservés à l'identique pendant le passage.
+Aucun service métier, ancienne admission, profil ou correspondance modifié.
+Les formats sont compatibles dans les deux sens avec l'ancien actif
+221-thread-budget-r1. Les pointeurs rollback natifsCartae/Mac sont écrits
+atomiquement sous verrou et relus avec SHA, sans activation concurrente.
+MCP ouverts non déclarés rechargés : le formatJSON du diagnostic est porté
+par le maître ; aucun nouveau schéma requis pour ce correctif.
+
+## Entretien borné
+123988728octets de transferts binaires identifiés et hachés retirés sur
+Mac, Cartae et KS. Les commandes installedMac/SYS refusent le nettoyage
+car l'observation des processus est incomplète ; aucun forçage.
+Actif, retour vérifié, preuves, caches et worktree de revue restent conservés
+quand l'usage ne peut pas être exclu. La tâche de revue est arrêtée, résultat
+lu/ACK, clôture propriétaire demandée une fois ; cela n'autorise pas à elle
+seule la suppression du dossier.
+
+## Retour natif et limites
+Une bridget_session après activation, puis lectures propriétaires du même
+task_id et capabilities. Le premier passage a trouvé primary_absent pendant
+la republication ; aucun restart supplémentaire, aucune nouvelle mission.
+Après exposition du fil dans le journal, la lecture native du même résultat
+adb77368 réussit ; capabilities donne45options déclarées, gel=false.
+Les données du catalogue ne prouvent pas l'éligibilité d'une nouvelle mission.
+Le clientMCP ouvert reste une image antérieure ; ce lot ne change pas son
+schéma et le nouveau guidage est calculé par les services actifs.
+L'envoi de la correction au demandeur conserve la clé d'incident et précise
+qu'aucune ancienne revue n'a été relancée. La cause historique exacte reste
+inconnue ; aucune disponibilité métier globale n'est annoncée.

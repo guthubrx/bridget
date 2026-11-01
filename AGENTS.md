@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/contexteprojet — sources34695ea0 puis a5695269 intégrées/poussées ;
+build221-project-context-r2 chargé sur7services/SHA vérifiés, coupure2,31s.
+Refus de mapping : étape/machines/codes conservés, choix final non inventé ;
+autres familles gardent leur guidage, ancien reçu explicitement sans contexte.
+Trois contrôlesLinux/2Mac acquis, complément de prioritéLinuxPASS, revueadb77368
+sansP1 et P2corrigé ; aucun changement d'admission/droits/placement ou rejeu.
+WrappersCartae4053327/2500061 préservés, rollbackthreadbudget natif vérifié.
+Lien natif et catalogue revenus après republication ; MCPouvert ancien sans
+nouveau schéma requis.123988728octets de transferts retirés ; caches/WTrevue/
+images encore sous observation incomplète conservés, installedMac/SYS refuse
+le nettoyage sans forcer. IncidentRevue : mappingactuel existe, causehistorique
+exacte inconnue ; aucune machine choisie attestée. Programme52/182InProgress.
+Preuves : specs/221-capacites-completes/validation/project-context.md.
+
+
 Session221/budgetfil — source6b131e83 intégrée/poussée ; build221-thread-budget-r1 chargé7services/SHA vérifiés, coupure2,13s. Réponse officielle bornée monuments28 038 589octets refusée16Mio ; budget64Mio réservé à cette route, autresHTTP16Mio et contrôles identiques. Trois testsLinux/2MacPASS, revueeda3794b sansP1/P2, mutexSession borne concurrence. Filmonuments exposé01:04:22UTC, plus de response limit depuis reprise ; lien natif/revue relus. Annulation9396 avait réussi00:55:47UTC avant ce correctif, causeinitialeprimary_absent noncorrélée, diagnostic rectifié. WrappersCartae3405178/2500061 préservés, rollback221-continuable-r3 natif vérifié ; aucun rejeu/service métier.124172784octets de transferts retirés ; caches/WTrevues sous observation incomplète conservés. Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/thread-budget.md.
 
 
