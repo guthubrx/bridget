@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.4 — 2026-11-01
+
+- Ajout de --table avant ou après la commande pour les inventaires, fiches et reçus finis de la CLI. Colonnes par famille, noms d'hôtes, repli Unicode et pipes sans couleur partagent un rendu natif. JSON, portées, confirmations et codes de retour conservés.
+
 ## 0.7.3 — 2026-11-01
 
 - Les mises à jour affichent toutes les machines de la fédération, même sans rapport ou avec un état périmé.

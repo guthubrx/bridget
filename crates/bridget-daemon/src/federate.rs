@@ -69,14 +69,35 @@ fn create_script() -> Result<(PathBuf, PathBuf), String> {
 
 fn invoke(arguments: &[String]) -> Result<i32, String> {
     let (directory, script) = create_script()?;
-    let result = Command::new("/bin/bash")
-        .arg(&script)
-        .arg("cli")
-        .args(arguments)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
+    let result = if crate::cli_table::active() {
+        let mut child = Command::new("/bin/bash")
+            .arg(&script)
+            .arg("cli")
+            .args(arguments)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn();
+        match child.as_mut() {
+            Ok(child) => {
+                // list/status uniquement : même script, exécuté une seule fois.
+                let read =
+                    crate::cli_table::capture_reader(child.stdout.take().expect("stdout pipé"));
+                let status = child.wait();
+                read.and(status)
+            }
+            Err(error) => Err(std::io::Error::new(error.kind(), error.to_string())),
+        }
+    } else {
+        Command::new("/bin/bash")
+            .arg(&script)
+            .arg("cli")
+            .args(arguments)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+    };
     let cleanup_result = cleanup(&directory, &script);
     let status = result.map_err(|error| format!("/bin/bash indisponible : {error}"))?;
     cleanup_result?;
@@ -87,10 +108,10 @@ fn invoke(arguments: &[String]) -> Result<i32, String> {
 
 pub fn run(arguments: &[String]) -> ! {
     match invoke(arguments) {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => crate::cli_table::exit(code),
         Err(error) => {
             eprintln!("bridget federate: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }

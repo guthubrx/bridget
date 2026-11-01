@@ -1,5 +1,6 @@
 //! CLI — point d'entrée unifié pour toutes les sous-commandes bridget.
 
+use crate::cli_table::{table_println as println, table_print as print};
 use crate::communication::client::DaemonConnection;
 use crate::daemon::{self, DaemonConfig};
 use bridget_core::{
@@ -31,9 +32,9 @@ fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
     let (name, rest) = extract_wrapper_args(args);
     if let Err(e) = crate::wrapper::launch(binary, agent_type, &rest, name.as_deref()) {
         eprintln!("bridget: {}", e);
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
-    std::process::exit(0);
+    crate::cli_table::exit(0);
 }
 
 // Constantes de validation (H-001)
@@ -86,7 +87,7 @@ fn validate_zero_arity_command(command: &str, args: &[String]) -> Result<(), Str
 
 fn exit_argument_error(error: &str) -> ! {
     eprintln!("bridget {error}");
-    std::process::exit(2);
+    crate::cli_table::exit(2);
 }
 
 fn validate_communication_entry(command: &str, args: &[String]) -> Result<(), String> {
@@ -183,9 +184,11 @@ pub fn run() {
 
 // Le test CLI doit appeler la vraie entrée malgré argv du testlib et exit().
 fn run_with_args(args: Vec<String>) {
+    let (args, _table_output) = crate::cli_table::prepare(args)
+        .unwrap_or_else(|error| exit_argument_error(&error));
     if args.len() < 2 {
         print_usage();
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 
     let cmd = &args[1];
@@ -208,7 +211,7 @@ fn run_with_args(args: Vec<String>) {
                 Ok(binding)=>binding,
                 Err(code)=>{
                     eprintln!("{}",crate::remote_worker::diagnostic_failure(&code,&command));
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
             };
             let outcome=crate::remote_worker::diagnose_live_local(&config,&command,&binding);
@@ -216,7 +219,7 @@ fn run_with_args(args: Vec<String>) {
                 Ok(mut value)=>{value["live_worker_pid"]=serde_json::json!(binding.pid);value["live_worker_birth"]=serde_json::json!(binding.birth);println!("{value}");},
                 Err(code) => {
                     eprintln!("{}", crate::remote_worker::diagnostic_failure(&code, &command));
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
             }
             return;
@@ -225,7 +228,7 @@ fn run_with_args(args: Vec<String>) {
             parse_worker_args(&args[2..]).unwrap_or_else(|error| exit_argument_error(&error));
         if let Err(error) = crate::remote_worker::run_worker(config) {
             eprintln!("bridget worker: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         return;
     }
@@ -269,7 +272,7 @@ fn run_with_args(args: Vec<String>) {
 
     if let Err(error) = delegated_cli_guard(cmd, crate::mcp_identity::resolve_current_identity()) {
         eprintln!("bridget {cmd} : {} : {}", error.code(), error.remediation());
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     // Les lanceurs historiques restent interactifs ; leur type et leur
@@ -282,17 +285,17 @@ fn run_with_args(args: Vec<String>) {
     if cmd == "--" {
         if args.len() < 3 {
             eprintln!("bridget: commande manquante après --");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
         let cmd = &args[2];
         let rest = &args[3..];
         let registry = crate::registry::AgentRegistry::load().unwrap_or_else(|error| {
             eprintln!("bridget: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         });
         let agent_type = registry.type_for_command(cmd).unwrap_or_else(|error| {
             eprintln!("bridget: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         });
         launch_agent_wrapper(cmd, &agent_type, rest);
     }
@@ -316,15 +319,15 @@ fn run_with_args(args: Vec<String>) {
         "managed-wrapper" => cmd_managed_wrapper(&args[2..]),
         "workspace-view-plan" => {
             let code=if crate::workspace_git::run_commit_view_plan(&args[2..]).is_ok(){0}else{1};
-            std::process::exit(code);
+            crate::cli_table::exit(code);
         }
         "workspace-view-export" => {
             let code = if crate::workspace_git::run_commit_view_export(&args[2..]).is_ok() { 0 } else { 1 };
-            std::process::exit(code);
+            crate::cli_table::exit(code);
         }
         "workspace-view-materialize" => {
             let code=if crate::workspace_git::run_commit_view_materialize(&args[2..]).is_ok(){0}else{1};
-            std::process::exit(code);
+            crate::cli_table::exit(code);
         }
         "mcp" => cmd_mcp(),
         "attach" => cmd_attach(&args[2..]),
@@ -376,17 +379,17 @@ fn run_with_args(args: Vec<String>) {
             if which(cmd) {
                 let registry = crate::registry::AgentRegistry::load().unwrap_or_else(|error| {
                     eprintln!("bridget: {error}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 });
                 let agent_type = registry.type_for_command(cmd).unwrap_or_else(|error| {
                     eprintln!("bridget: {error}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 });
                 launch_agent_wrapper(cmd, &agent_type, &args[2..]);
             } else {
                 eprintln!("sous-commande inconnue: {}", cmd);
                 print_usage();
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
         }
     }
@@ -395,7 +398,7 @@ fn run_with_args(args: Vec<String>) {
 fn cmd_mcp() {
     if let Err(error) = crate::mcp::run_stdio() {
         eprintln!("bridget mcp: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
@@ -474,7 +477,7 @@ fn cmd_artifact(args: &[String]) {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let response = crate::communication::client::read_artifact(
         &identity.name,
@@ -491,7 +494,7 @@ fn cmd_artifact(args: &[String]) {
                 eprintln!("bridget artifact : {code} : {message}")
             }
         }
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     println!(
         "{}",
@@ -504,7 +507,7 @@ fn cmd_artifact(args: &[String]) {
             ..
         }
     ) {
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
@@ -655,11 +658,11 @@ fn cmd_identity(args: &[String]) {
         eprintln!(
             "bridget identity migrate: daemon actif ou socket encore présent; arrêtez Bridget avant --apply"
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
     let plan = crate::identity_migration::plan(paths).unwrap_or_else(|error| {
         eprintln!("bridget identity migrate: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     if !apply {
         let output = serde_json::json!({
@@ -677,7 +680,7 @@ fn cmd_identity(args: &[String]) {
     }
     let outcome = crate::identity_migration::apply(&plan).unwrap_or_else(|error| {
         eprintln!("bridget identity migrate: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let output = serde_json::json!({
         "mode": "applied",
@@ -773,25 +776,25 @@ fn parse_worker_args(args: &[String]) -> Result<crate::remote_worker::WorkerRunt
 fn cmd_managed_bootstrap(args: &[String]) {
     if let Err(error) = crate::managed_process::run_managed_bootstrap(args) {
         eprintln!("bridget managed-bootstrap: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
 fn cmd_managed_wrapper(args: &[String]) {
     if args.len() != 3 {
         eprintln!("bridget managed-wrapper: type, nom et définition figée requis");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
     let definition = match serde_json::from_str(&args[2]) {
         Ok(definition) => definition,
         Err(error) => {
             eprintln!("bridget managed-wrapper: définition figée invalide: {error}");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     if let Err(error) = crate::wrapper::launch_managed_acp(&args[0], &args[1], &definition) {
         eprintln!("bridget managed-wrapper: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
@@ -828,6 +831,7 @@ fn which(cmd: &str) -> bool {
 }
 
 fn print_usage() {
+    println!("Affichage : bridget --table COMMANDE ou bridget COMMANDE --table.\\n--table et --json sont exclusifs ; flux et moteurs gardent leur format natif.");
     eprintln!(
         "bridget {} — protocole de communication inter-agents\n\n\
          Usage: bridget <COMMANDE> [OPTIONS]\n\n\
@@ -957,7 +961,7 @@ fn cmd_journal(args: &[String]) {
     .unwrap_or_else(|error| exit_argument_error(&error));
     let excerpt = result.read(&socket_path()).unwrap_or_else(|error| {
         eprintln!("bridget journal : {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     if let Some(to) = result.to {
         let mut send = vec!["--to".into(), to];
@@ -1072,7 +1076,7 @@ fn cmd_events(args: &[String]) {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let result = crate::communication::client::observation_request(
         &identity.name,
@@ -1082,11 +1086,11 @@ fn cmd_events(args: &[String]) {
     )
     .unwrap_or_else(|error| {
         eprintln!("bridget events : {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     println!("{result}");
     if result["status"] == "rejected" {
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
@@ -1178,7 +1182,7 @@ fn cmd_wake(args: &[String]) {
     if matches!(&action, WakeAction::AdminCancel { .. })
         && !require_interactive_terminal("wake cancel")
     {
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
     let request = WakeRequest {
         version: WAKE_CONTRACT_VERSION,
@@ -1202,7 +1206,7 @@ fn cmd_wake(args: &[String]) {
             Ok(identity) => Some(identity),
             Err(crate::mcp_identity::IdentityError::DelegatedMcpOnly) => {
                 eprintln!("wake : un sous-agent interne doit utiliser la façade MCP");
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
             Err(error)
                 if matches!(&request.request, WakeAction::List {})
@@ -1210,12 +1214,12 @@ fn cmd_wake(args: &[String]) {
                     || std::env::var_os("BRIDGET_AGENT_INSTANCE_ID").is_some() =>
             {
                 eprintln!("wake : {} : {}", error.code(), error.remediation());
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
             Err(crate::mcp_identity::IdentityError::IdentityNotFound) => None,
             Err(error) => {
                 eprintln!("wake : {} : {}", error.code(), error.remediation());
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
         };
         crate::communication::client::wake_request(
@@ -1232,14 +1236,14 @@ fn cmd_wake(args: &[String]) {
             let status = result.result["status"].as_str();
             println!("{}", result.result);
             match status {
-                Some("refused") => std::process::exit(2),
-                Some("error") => std::process::exit(1),
+                Some("refused") => crate::cli_table::exit(2),
+                Some("error") => crate::cli_table::exit(1),
                 _ => {}
             }
         }
         Err(error) => {
             eprintln!("bridget wake : {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -1251,12 +1255,12 @@ fn cmd_thread(args: &[String]) {
         None | Some("--help") | Some("-h") | Some("help")
     ) {
         println!("{THREAD_USAGE}");
-        std::process::exit(if args.is_empty() { 2 } else { 0 });
+        crate::cli_table::exit(if args.is_empty() { 2 } else { 0 });
     }
     let action = parse_thread_args(args, &resolve_thread_name).unwrap_or_else(|error| {
         eprintln!("{THREAD_USAGE}");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let parsed =
         collect_thread_args(&args[1..]).unwrap_or_else(|error| exit_argument_error(&error));
@@ -1273,7 +1277,7 @@ fn cmd_thread(args: &[String]) {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let result = crate::communication::client::thread_request(
         &identity.name,
@@ -1287,11 +1291,11 @@ fn cmd_thread(args: &[String]) {
     )
     .unwrap_or_else(|error| {
         eprintln!("bridget thread : {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     println!("{}", result.result);
     if result.result["status"] == "error" {
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 }
 
@@ -1543,14 +1547,14 @@ fn cmd_thread_watch(args: &[String]) {
         Ok(request) => request,
         Err(()) => {
             let _ = emit(&E::error(R::InvalidRequest));
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     let namespace = match crate::environment::Namespace::from_environment() {
         Ok(namespace) => namespace,
         Err(_) => {
             let _ = emit(&E::error(R::BindingUnavailable));
-            std::process::exit(3);
+            crate::cli_table::exit(3);
         }
     };
     let mut refused = false;
@@ -1585,10 +1589,10 @@ fn cmd_thread_watch(args: &[String]) {
         if !closed {
             let _ = emit(&E::error(R::BindingUnavailable));
         }
-        std::process::exit(if closed { 0 } else { 3 });
+        crate::cli_table::exit(if closed { 0 } else { 3 });
     }
     if refused {
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 }
 
@@ -1606,12 +1610,12 @@ fn cmd_thread_inspect(args: &[String]) {
                 ))
                 .unwrap()
             );
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     let namespace = crate::environment::Namespace::from_environment().unwrap_or_else(|_| {
         eprintln!("bridget thread inspect : daemon_unreachable : namespace indisponible");
-        std::process::exit(3);
+        crate::cli_table::exit(3);
     });
     let result = crate::communication::client::human_thread_view(&namespace.socket, request)
         .unwrap_or_else(|error| {
@@ -1623,14 +1627,14 @@ fn cmd_thread_inspect(args: &[String]) {
                 }
             );
             eprintln!("bridget thread inspect : {error}");
-            std::process::exit(if unavailable { 3 } else { 1 });
+            crate::cli_table::exit(if unavailable { 3 } else { 1 });
         });
     println!(
         "{}",
         serde_json::to_string(&result).expect("projection humaine sérialisable")
     );
     if matches!(result.result, HumanThreadViewOutcome::Error { .. }) {
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 }
 
@@ -2589,20 +2593,20 @@ fn cmd_handoff(args: &[String]) {
         None | Some("--help") | Some("-h") | Some("help")
     ) {
         println!("{HANDOFF_USAGE}");
-        std::process::exit(if args.is_empty() { 2 } else { 0 });
+        crate::cli_table::exit(if args.is_empty() { 2 } else { 0 });
     }
     let parsed = parse_handoff_args(args).unwrap_or_else(|error| {
         eprintln!("{HANDOFF_USAGE}");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let bytes = read_bounded_stdin(std::io::stdin().lock()).unwrap_or_else(|error| {
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let request = handoff_request_from_stdin(parsed.action, &bytes).unwrap_or_else(|error| {
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let Some(transport) = request.transport else {
         let result = crate::handoff::preview_result(&request.rendered);
@@ -2619,7 +2623,7 @@ fn cmd_handoff(args: &[String]) {
                 println!("- {detail}");
             }
         }
-        std::process::exit(0);
+        crate::cli_table::exit(0);
     };
     let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
         eprintln!(
@@ -2627,7 +2631,7 @@ fn cmd_handoff(args: &[String]) {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let mut message = BridgetMessage::new(&identity.name, &transport.to, &request.rendered.body);
     let id = transport.id.clone().unwrap_or_else(|| message.id.clone());
@@ -2656,15 +2660,15 @@ fn cmd_handoff(args: &[String]) {
         }
         Ok(DaemonToWrapper::ClientRejected { reason }) => {
             eprintln!("REJET: {reason:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     };
     let result = crate::handoff::decorate_send_result(receipt, &request.rendered);
@@ -2688,7 +2692,7 @@ fn cmd_handoff(args: &[String]) {
             crate::handoff::WARNING_DETAILS[2]
         );
     }
-    std::process::exit(if accepted { 0 } else { 1 });
+    crate::cli_table::exit(if accepted { 0 } else { 1 });
 }
 
 #[cfg(test)]
@@ -2762,12 +2766,12 @@ fn cmd_attach(args: &[String]) {
         Err(error) => {
             eprintln!("usage: bridget attach <UUID> [--from-seq N | --date AAAA-MM-JJ]");
             eprintln!("erreur: {error}");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     if let Err(error) = crate::attach::run(&agent, window, &socket_path()) {
         eprintln!("bridget attach: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
@@ -2859,7 +2863,7 @@ fn cmd_delegate_grant(args: &[String]) {
     let (target, cwd, posture, revoke) =
         parse_delegate_grant(args).unwrap_or_else(|error| exit_argument_error(&error));
     if !require_interactive_terminal("delegate-grant") {
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
     let agent_id = if validate_agent_id(&target).is_ok() {
         target
@@ -2881,16 +2885,16 @@ fn cmd_delegate_grant(args: &[String]) {
                 result.get("status").and_then(serde_json::Value::as_str),
                 Some("granted" | "revoked")
             ) {
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         }
         Ok(other) => {
             eprintln!("bridget delegate-grant : réponse inattendue : {other:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("bridget delegate-grant : résultat non confirmé : {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -3053,7 +3057,7 @@ fn cmd_auto_delegate(args: &[String]) {
     let payload = parse_auto_delegate_args(args).unwrap_or_else(|error| {
         eprintln!("{AUTO_DELEGATE_USAGE}");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
         eprintln!(
@@ -3061,7 +3065,7 @@ fn cmd_auto_delegate(args: &[String]) {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     match crate::delegation_mcp::execute(
         &identity,
@@ -3077,16 +3081,16 @@ fn cmd_auto_delegate(args: &[String]) {
             println!("{result}");
             if !confirmed {
                 eprintln!("bridget auto-delegate : dernier état non confirmé");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         }
         Err(crate::communication::client::ClientError::InvalidParams(error)) => {
             eprintln!("bridget auto-delegate : {error}");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
         Err(error) => {
             eprintln!("bridget auto-delegate : résultat non confirmé : {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -3449,7 +3453,7 @@ fn exit_coordination_error(
             eprintln!("demande : {request_id}");
         }
     }
-    std::process::exit(status);
+    crate::cli_table::exit(status);
 }
 
 fn render_native_cli_result(result: &serde_json::Value, json_output: bool) -> String {
@@ -3528,7 +3532,7 @@ fn run_native_cli(command: &str, parsed: ParsedNativeCli) {
             }
             println!("{}", render_native_cli_result(&result, parsed.json));
             if result.get("status").and_then(serde_json::Value::as_str) == Some("error") {
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         }
         Err(crate::communication::client::ClientError::InvalidParams(error)) => {
@@ -3570,7 +3574,7 @@ fn cmd_delegate(args: &[String]) {
     }
     let cwd = std::env::current_dir().unwrap_or_else(|error| {
         eprintln!("bridget delegate : dossier courant inaccessible : {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let parsed = parse_delegate_args(args, &cwd, || uuid::Uuid::new_v4().to_string())
         .unwrap_or_else(|error| {
@@ -3733,22 +3737,22 @@ fn cmd_spawn(args: &[String]) {
              [--cwd CHEMIN] [--timeout S] [--command-id ID] [--posture discovery|development]"
         );
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let now = unix_timestamp();
     let current_dir = std::env::current_dir().unwrap_or_else(|error| {
         eprintln!("bridget spawn: cwd inaccessible: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             eprintln!("bridget spawn: HOME absent");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         });
     let order = resolve_spawn_order(&parsed, now, &current_dir, &home).unwrap_or_else(|error| {
         eprintln!("bridget spawn: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     if let Some(agent_id) = parsed.agent_id.as_deref()
         && !parsed.persistent
@@ -3770,13 +3774,15 @@ fn cmd_spawn(args: &[String]) {
         }
     );
     if development && !require_interactive_terminal("spawn --posture development") {
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
     // Session 132 : attendre le délai de lancement demandé, plus une marge.
     // Avec le budget fixe de 10 s, un fournisseur lent à démarrer (serveurs
     // MCP de son profil) était lancé mais annoncé « outcome_unknown ».
     let budget = spawn_wait_budget(&order);
     println!("command_id: {command_id}");
+    // Publier la référence avant la remise, même si le client est interrompu.
+    crate::cli_table::flush();
     let response = if matches!(
         order,
         WrapperToDaemon::SpawnOrder {
@@ -3794,22 +3800,22 @@ fn cmd_spawn(args: &[String]) {
         }
         Ok(DaemonToWrapper::SpawnRejected { reason, .. }) => {
             eprintln!("SPAWN REFUSÉ: {}", display_spawn_refusal(&reason));
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(DaemonToWrapper::IdempotencyResult {
             issue: bridget_transport::protocol::IdempotencyIssue::EnvelopeMismatch,
             ..
         }) => {
             eprintln!("SPAWN REFUSÉ: command_id déjà associé à une autre enveloppe");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(other) => {
             eprintln!("réponse spawn inattendue du daemon: {other:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -3818,9 +3824,11 @@ fn cmd_stop(args: &[String]) {
     let (name, command_id) = parse_stop_args(args).unwrap_or_else(|error| {
         eprintln!("usage: bridget stop <nom> [--command-id ID]");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     println!("command_id: {command_id}");
+    // Publier la référence avant la remise, même si le client est interrompu.
+    crate::cli_table::flush();
     match send_control_to_daemon(WrapperToDaemon::StopOrder {
         agent_id: name,
         command_id: command_id.clone(),
@@ -3832,24 +3840,24 @@ fn cmd_stop(args: &[String]) {
             ),
             StopOutcome::NotManaged => {
                 eprintln!("STOP REFUSÉ: l'agent n'est pas géré par le daemon");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             StopOutcome::NotFound => {
                 eprintln!("STOP REFUSÉ: équipier introuvable");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             StopOutcome::Timeout { state } => {
                 eprintln!("STOP INCOMPLET: délai dépassé dans l'état {state}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         },
         Ok(other) => {
             eprintln!("réponse stop inattendue du daemon: {other:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -3858,9 +3866,11 @@ fn cmd_relaunch(args: &[String]) {
     let (name, command_id) = parse_lifecycle_args(args, "relaunch").unwrap_or_else(|error| {
         eprintln!("usage: bridget relaunch <nom> [--command-id ID]");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     println!("command_id: {command_id}");
+    // Publier la référence avant la remise, même si le client est interrompu.
+    crate::cli_table::flush();
     match send_control_to_daemon(WrapperToDaemon::RelaunchOrder {
         agent_id: name,
         command_id: command_id.clone(),
@@ -3871,36 +3881,36 @@ fn cmd_relaunch(args: &[String]) {
             }
             RelaunchOutcome::AlreadyRunning => {
                 eprintln!("RELANCE REFUSÉE: l'équipier est déjà actif");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             RelaunchOutcome::NotManaged => {
                 eprintln!("RELANCE REFUSÉE: l'agent n'est pas géré par le daemon");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             RelaunchOutcome::NotFound => {
                 eprintln!("RELANCE REFUSÉE: équipier introuvable");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             RelaunchOutcome::NotRelaunchable { reason } => {
                 eprintln!("RELANCE REFUSÉE: {reason}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             RelaunchOutcome::Rejected { reason } => {
                 eprintln!("RELANCE REFUSÉE: {}", display_spawn_refusal(&reason));
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             RelaunchOutcome::Timeout { state } => {
                 eprintln!("RELANCE INCOMPLÈTE: délai dépassé dans l'état {state}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         },
         Ok(other) => {
             eprintln!("réponse relaunch inattendue du daemon: {other:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -3909,9 +3919,11 @@ fn cmd_decommission(args: &[String]) {
     let (name, command_id) = parse_lifecycle_args(args, "decommission").unwrap_or_else(|error| {
         eprintln!("usage: bridget decommission <nom> [--command-id ID]");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     println!("command_id: {command_id}");
+    // Publier la référence avant la remise, même si le client est interrompu.
+    crate::cli_table::flush();
     match send_control_to_daemon(WrapperToDaemon::DecommissionOrder {
         agent_id: name,
         command_id: command_id.clone(),
@@ -3928,24 +3940,24 @@ fn cmd_decommission(args: &[String]) {
             }
             DecommissionOutcome::NotManaged => {
                 eprintln!("DÉCOMMISSIONNEMENT REFUSÉ: l'agent n'est pas géré par le daemon");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             DecommissionOutcome::NotFound => {
                 eprintln!("DÉCOMMISSIONNEMENT REFUSÉ: équipier introuvable");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             DecommissionOutcome::Timeout { state } => {
                 eprintln!("DÉCOMMISSIONNEMENT INCOMPLET: {state}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         },
         Ok(other) => {
             eprintln!("réponse decommission inattendue du daemon: {other:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -3953,12 +3965,12 @@ fn cmd_decommission(args: &[String]) {
 fn cmd_adopt_stopped(args: &[String]) {
     if args.is_empty() {
         eprintln!("usage: bridget adopt-stopped <nom>...");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
     for name in args {
         if let Err(error) = validate_agent_id(name) {
             eprintln!("adopt-stopped: agent_id invalide {name}: {error}");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     }
     let mut refused = false;
@@ -3999,7 +4011,7 @@ fn cmd_adopt_stopped(args: &[String]) {
         }
     }
     if refused {
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 
@@ -4512,7 +4524,7 @@ fn parse_attach_args(args: &[String]) -> Result<(String, AttachWindow), String> 
 fn cmd_rename(args: &[String]) {
     if args.len() != 1 || args[0].trim().is_empty() {
         eprintln!("usage: bridget rename <nouveau-nom>");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 
     if args[0].chars().any(char::is_control)
@@ -4545,11 +4557,11 @@ fn cmd_rename(args: &[String]) {
                 "bridget rename : {}",
                 encode(&response).expect("réponse sérialisable")
             );
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("bridget rename : résultat non confirmé : {error:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -4561,7 +4573,7 @@ fn resolve_command_identity(command: &str) -> crate::mcp_identity::ResolvedIdent
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     })
 }
 
@@ -4627,7 +4639,7 @@ fn cmd_daemon(args: &[String]) {
         Ok(_) => {}
         Err(e) => {
             eprintln!("daemon error: {}", e);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -4733,7 +4745,7 @@ fn cmd_send(args: &[String]) {
             eprintln!(
                 "usage: bridget send --to <agent_id> [--from <agent_id>] [--in-reply-to ID] [--reply] [--hops N] [--project-root RACINE] [--cross-project-reason MOTIF] [--] <message>"
             );
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
 
@@ -4749,7 +4761,7 @@ fn cmd_send(args: &[String]) {
             }
             Err(error) => {
                 eprintln!("erreur: {error}");
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
         }
     };
@@ -4757,13 +4769,13 @@ fn cmd_send(args: &[String]) {
     let body = body_parts.join(" ");
     if body.is_empty() {
         eprintln!("erreur: message vide");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 
     // Validation du corps du message (H-001)
     if let Err(e) = validate_message_body(&body) {
         eprintln!("erreur: {}", e);
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 
     // Se nommer est un acte explicite : le daemon doit pouvoir le distinguer
@@ -4843,17 +4855,17 @@ fn cmd_send(args: &[String]) {
                 ) {
                     eprintln!("{hint}");
                 }
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             _ => {
                 eprintln!("réponse inattendue du daemon");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         },
         Err(e) => {
             eprintln!("daemon inaccessible: {}", e);
             eprintln!("  (le daemon tourne-t-il ? lancez 'bridget daemon')");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -4925,7 +4937,7 @@ fn cmd_guichet(args: &[String]) {
             eprintln!(
                 "usage: bridget guichet deposer <delivery-report|mission-status|deadline-question|delegate|registre-add|objective-close> [options]"
             );
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     let (issuer_scope, request_id, issued_at) = match &request {
@@ -4952,20 +4964,20 @@ fn cmd_guichet(args: &[String]) {
             // jeton, `guichet_integration_test.rs` l'atteste), et les changer
             // demande son propre mandat.
             if issue != "queued" && issue != "outcome_unknown" {
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         }
         Ok(DaemonToWrapper::ServiceRejected { reason }) => {
             eprintln!("REJET: {reason:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(response) => {
             eprintln!("réponse inattendue du daemon: {response:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -5321,7 +5333,7 @@ fn send_usage_error(error: &str) -> ! {
     eprintln!(
         "usage: bridget send --to <nom> [--in-reply-to ID] [--id <clé> --issued-at <unix> [--issuer-scope <portée>]] [--project-root RACINE] [--cross-project-reason MOTIF] [--] <message>"
     );
-    std::process::exit(2);
+    crate::cli_table::exit(2);
 }
 
 fn print_idempotency_issue(issue: &IdempotencyIssue, options: &IdempotentSendOptions) {
@@ -5436,20 +5448,20 @@ fn send_idempotent_if_requested(
             emit_project_warnings(&project_warnings);
             print_idempotency_issue(&issue, &options);
             if !send_deposited(&issue) {
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         }
         Ok(DaemonToWrapper::ClientRejected { reason }) => {
             eprintln!("REJET: {reason:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
     true
@@ -5784,13 +5796,13 @@ fn cmd_queue(args: &[String]) {
             eprintln!(
                 "bridget queue : delegated_tool_forbidden : une preuve enfant ne peut pas consulter ni éditer la file"
             );
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) if editing => {
             let namespace =
                 crate::environment::Namespace::from_environment().unwrap_or_else(|_| {
                     eprintln!("bridget queue : identity_not_found : contexte local non vérifiable");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 });
             let context = [
                 "BRIDGET_AGENT_ID_FILE",
@@ -5812,7 +5824,7 @@ fn cmd_queue(args: &[String]) {
                 );
             if context || error != crate::mcp_identity::IdentityError::IdentityNotFound {
                 eprintln!("bridget queue : {} : {}", error.code(), error.remediation());
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             // Aucun contexte agent : commande humaine locale explicite, via Attach.
             None
@@ -5823,7 +5835,7 @@ fn cmd_queue(args: &[String]) {
         Ok(result) => println!("{}", serde_json::to_string(&result).unwrap()),
         Err(error) => {
             eprintln!("bridget queue : {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -5832,7 +5844,7 @@ fn cmd_cancel(args: &[String]) {
     let parsed = parse_cancel_args(args).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!("usage: bridget cancel <id> [--reason <texte>]");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let identity = crate::mcp_identity::resolve_current_identity().unwrap_or_else(|error| {
         eprintln!(
@@ -5840,7 +5852,7 @@ fn cmd_cancel(args: &[String]) {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     match crate::communication::client::cancel_request(
         &identity.name,
@@ -5854,15 +5866,15 @@ fn cmd_cancel(args: &[String]) {
         }
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {}", error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -5873,7 +5885,7 @@ fn cmd_requests(args: &[String]) {
         Err(error) => {
             eprintln!("{error}");
             eprintln!("usage: bridget requests [--all] [--json]");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     let response = if options.all {
@@ -5905,15 +5917,15 @@ fn cmd_requests(args: &[String]) {
         }
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {}", error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -6082,14 +6094,14 @@ fn cmd_runtime(args: &[String]) {
             other => {
                 eprintln!("argument inconnu: {}", other);
                 eprintln!("usage: bridget runtime --model <modèle> [--effort <niveau>]");
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
         }
     }
 
     let Some(model) = model.filter(|value| !value.trim().is_empty()) else {
         eprintln!("usage: bridget runtime --model <modèle> [--effort <niveau>]");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     };
 
     let identity = resolve_command_identity("runtime");
@@ -6106,15 +6118,15 @@ fn cmd_runtime(args: &[String]) {
         },
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {}", error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -6150,7 +6162,7 @@ fn cmd_hook(args: &[String]) {
     match parse_hook_args(args).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!("usage: bridget hook <claude-runtime|claude-statusline>");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }) {
         HookCommand::ClaudeRuntime => hook_claude_runtime(),
         HookCommand::ClaudeStatusline => hook_claude_statusline(),
@@ -6434,7 +6446,7 @@ fn cmd_install_hooks(args: &[String]) {
     let remove = parse_install_hooks_args(args).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!("usage: bridget install-hooks [--remove]");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let path = claude_settings_path();
 
@@ -6442,14 +6454,14 @@ fn cmd_install_hooks(args: &[String]) {
         Ok(content) => content,
         Err(error) => {
             eprintln!("{} illisible: {}", path.display(), error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     };
     let mut settings: serde_json::Value = match serde_json::from_str(&content) {
         Ok(value) => value,
         Err(error) => {
             eprintln!("{} n'est pas un JSON valide: {}", path.display(), error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     };
 
@@ -6472,19 +6484,19 @@ fn cmd_install_hooks(args: &[String]) {
     let backup = path.with_extension(format!("json.bak-{}", timestamp()));
     if let Err(error) = std::fs::copy(&path, &backup) {
         eprintln!("sauvegarde impossible ({}) : rien n'a été modifié", error);
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     let serialized = match serde_json::to_string_pretty(&settings) {
         Ok(text) => format!("{}\n", text),
         Err(error) => {
             eprintln!("sérialisation impossible: {}", error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     };
     if let Err(error) = write_atomically(&path, &serialized) {
         eprintln!("écriture impossible: {}", error);
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     println!("Sauvegarde : {}", backup.display());
@@ -6636,7 +6648,7 @@ fn cmd_domain(args: &[String]) {
     let domain = parse_domain_args(args).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!("usage: bridget domain <nom> | bridget domain --reset");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
 
     let identity = resolve_command_identity("domain");
@@ -6659,15 +6671,15 @@ fn cmd_domain(args: &[String]) {
         },
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {}", error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -6714,7 +6726,7 @@ fn cmd_dnd(args: &[String]) {
     let parsed = parse_dnd_args(args).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!("usage: bridget dnd [off] [--duration 30m]");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let (lift, duration) = match parsed {
         DndArgs::Enable(duration) => (false, duration),
@@ -6754,15 +6766,15 @@ fn cmd_dnd(args: &[String]) {
         },
         Ok(DaemonToWrapper::Nack { reason, .. }) => {
             eprintln!("REJET: {}", reason);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(_) => {
             eprintln!("réponse inattendue du daemon");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("daemon inaccessible: {}", error);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -6805,7 +6817,7 @@ fn cmd_reply(args: &[String]) {
                     eprintln!(
                         "usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] [--] <message>"
                     );
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 }
             },
             "--id" => match option_value(args, &mut i, "--id") {
@@ -6847,7 +6859,7 @@ fn cmd_reply(args: &[String]) {
         Err(_) => {
             eprintln!("reply: aucun expediteur precedent trouve.");
             eprintln!("  (utilise 'bridget send --to <nom> \"message\"')");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     };
     // Session 102 : après une alerte de fil, le dernier contexte est un
@@ -6862,26 +6874,26 @@ fn cmd_reply(args: &[String]) {
                 "retryable": false,
             })
         );
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
     let mut previous_parts = previous.splitn(2, '\t');
     let to = previous_parts.next().unwrap_or_default().to_string();
     let implicit_in_reply_to = previous_parts.next().map(str::to_string);
     if to.is_empty() {
         eprintln!("reply: expediteur precedent vide.");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     let body = body_parts.join(" ");
     if body.is_empty() {
         eprintln!("usage: bridget reply [--in-reply-to ID] [--reply] [--hops N] [--] <message>");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 
     // Validation du corps du message (H-001)
     if let Err(e) = validate_message_body(&body) {
         eprintln!("erreur: {}", e);
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
 
     let sender = agent_id.clone();
@@ -6936,16 +6948,16 @@ fn cmd_reply(args: &[String]) {
                 ) {
                     eprintln!("{hint}");
                 }
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             _ => {
                 eprintln!("reponse inattendue du daemon");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
         },
         Err(e) => {
             eprintln!("daemon inaccessible: {}", e);
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -7002,13 +7014,13 @@ fn parse_directory_args(
 fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::DaemonStatus {
     let status = daemon::get_status(config).unwrap_or_else(|error| {
         eprintln!("bridget {command}: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     if !status.agents_inventory_available {
         eprintln!(
             "bridget {command}: daemon présent, inventaire indisponible — aucune liste vide n'est attestée"
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
     status
 }
@@ -7019,18 +7031,18 @@ fn cmd_agents(args: &[String]) {
         eprintln!(
             "usage: bridget agents [--json] [--domain <nom>] [--global] [--project-root <racine>]"
         );
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
 
     let config = DaemonConfig::default();
     let status = daemon_status_or_exit("agents", &config);
     if !status.running {
-        if parsed.json {
+        if parsed.json && !crate::cli_table::active() {
             println!("[]");
         } else {
             eprintln!("daemon non demarre (socket absente)");
         }
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     let agents = scoped_directory_or_exit("agents", &parsed, &config.socket_path);
@@ -7094,7 +7106,7 @@ fn scoped_directory_or_exit(
     )
     .unwrap_or_else(|error| {
         eprintln!("bridget {command}: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let DaemonToWrapper::CommunicationDirectory {
         mut agents,
@@ -7225,6 +7237,10 @@ fn print_control_status(
     state: &bridget_transport::protocol::ControlStateFrame,
     inbox_open_count: u32,
 ) {
+    if crate::cli_table::active() {
+        println!("{}",serde_json::json!({"control":state,"inbox_open_count":inbox_open_count}));
+        return;
+    }
     println!(
         "{}",
         control_footer_line(state, inbox_open_count, unix_now_secs_cli())
@@ -7254,11 +7270,11 @@ fn apply_control_mutation(
     agent_posture: Option<bridget_transport::protocol::AgentPosture>,
 ) {
     if !require_interactive_terminal(command) {
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
     let (current, _) = fetch_control_state().unwrap_or_else(|error| {
         eprintln!("bridget control: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     });
     let response = send_control_request(WrapperToDaemon::ControlStateSet {
         version: bridget_transport::protocol::CONTROL_STATE_CONTRACT_VERSION,
@@ -7277,15 +7293,15 @@ fn apply_control_mutation(
         }) => print_control_status(&state, inbox_open_count),
         Ok(DaemonToWrapper::ControlStateRejected { reason }) => {
             eprintln!("bridget control: refusé: {reason:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Ok(response) => {
             eprintln!("bridget control: réponse inattendue: {response:?}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
         Err(error) => {
             eprintln!("bridget control: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -7435,7 +7451,7 @@ fn cmd_control(args: &[String]) {
         Some("status") => {
             let (state, inbox_open_count) = fetch_control_state().unwrap_or_else(|error| {
                 eprintln!("bridget control: {error}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             });
             print_control_status(&state, inbox_open_count);
             match send_control_request(WrapperToDaemon::DelegationOverviewRead {
@@ -7454,15 +7470,15 @@ fn cmd_control(args: &[String]) {
                 }
                 Ok(DaemonToWrapper::DelegationControlRejected { reason }) => {
                     eprintln!("bridget control: refusé: {reason:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Ok(response) => {
                     eprintln!("bridget control: réponse inattendue: {response:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Err(error) => {
                     eprintln!("bridget control: {error}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
             }
             if args.iter().any(|argument| argument == "--history") {
@@ -7501,7 +7517,7 @@ fn cmd_control(args: &[String]) {
             if !matches!(&request, WrapperToDaemon::DelegationOverviewRead { .. })
                 && !require_interactive_terminal(&format!("control {}", args[0]))
             {
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
             let command_id = match &request {
                 WrapperToDaemon::DelegationHaltSet { command_id, .. } => Some(command_id.clone()),
@@ -7578,15 +7594,15 @@ fn cmd_control(args: &[String]) {
                     } else {
                         eprintln!("bridget control: refusé: {reason:?}");
                     }
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Ok(response) => {
                     eprintln!("bridget control: réponse inattendue: {response:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Err(error) => {
                     eprintln!("bridget control: {error}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
             }
         }
@@ -7603,7 +7619,7 @@ fn cmd_control(args: &[String]) {
             let cap = args.get(1).and_then(|value| value.parse::<u32>().ok());
             let Some(cap) = cap else {
                 eprintln!("{usage}");
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             };
             apply_control_mutation("control budget", None, Some(cap), None, None);
         }
@@ -7614,7 +7630,7 @@ fn cmd_control(args: &[String]) {
         }
         _ => {
             eprintln!("{usage}");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     }
 }
@@ -7635,6 +7651,10 @@ fn cmd_inbox(args: &[String]) {
                 limit: 100,
             }) {
                 Ok(DaemonToWrapper::HumanInbox { items, open_count }) => {
+                    if crate::cli_table::active() {
+                        println!("{}",serde_json::json!({"items":items,"open_count":open_count}));
+                        return;
+                    }
                     println!("{open_count} décision(s) en attente");
                     for item in items {
                         println!(
@@ -7655,25 +7675,25 @@ fn cmd_inbox(args: &[String]) {
                 }
                 Ok(DaemonToWrapper::HumanInboxRejected { reason }) => {
                     eprintln!("bridget inbox: refusé: {reason:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Ok(response) => {
                     eprintln!("bridget inbox: réponse inattendue: {response:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Err(error) => {
                     eprintln!("bridget inbox: {error}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
             }
         }
         Some("resolve") => {
             let (Some(item_id), Some(choice)) = (args.get(1), args.get(2)) else {
                 eprintln!("{usage}");
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             };
             if !require_interactive_terminal("inbox resolve") {
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
             match send_control_request(WrapperToDaemon::HumanInboxResolve {
                 version: HUMAN_INBOX_CONTRACT_VERSION,
@@ -7692,21 +7712,21 @@ fn cmd_inbox(args: &[String]) {
                 }
                 Ok(DaemonToWrapper::HumanInboxRejected { reason }) => {
                     eprintln!("bridget inbox: refusé: {reason:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Ok(response) => {
                     eprintln!("bridget inbox: réponse inattendue: {response:?}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
                 Err(error) => {
                     eprintln!("bridget inbox: {error}");
-                    std::process::exit(1);
+                    crate::cli_table::exit(1);
                 }
             }
         }
         _ => {
             eprintln!("{usage}");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     }
 }
@@ -7715,21 +7735,23 @@ fn cmd_who(args: &[String]) {
     let parsed = parse_directory_args("who", args, false).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!("usage: bridget who [--domain <nom>] [--global] [--project-root <racine>]");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let config = DaemonConfig::default();
     let status = daemon_status_or_exit("who", &config);
     if !status.running {
         eprintln!("daemon non démarré (socket absente)");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     let build_id = status.build_id.as_deref().unwrap_or("inconnu");
     let scoped = scoped_directory_or_exit("who", &parsed, &config.socket_path);
     let agents: Vec<_> = scoped.iter().map(|agent| agent.agent.clone()).collect();
 
-    print!("{}", render_who(&agents, parsed.domain.as_deref()));
-    if parsed.global {
+    if crate::cli_table::active() {
+        println!("{}",serde_json::to_value(&scoped).expect("annuaire sérialisable"));
+    } else {print!("{}", render_who(&agents, parsed.domain.as_deref()));}
+    if parsed.global && !crate::cli_table::active() {
         for agent in &scoped {
             println!(
                 "Projet de {} : {} ; relation {:?}",
@@ -8005,7 +8027,7 @@ fn cmd_reprise(args: &[String]) {
                     eprintln!(
                         "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
                     );
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 };
                 write_path = Some(PathBuf::from(path));
             }
@@ -8015,7 +8037,7 @@ fn cmd_reprise(args: &[String]) {
                     eprintln!(
                         "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
                     );
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 };
                 pin_path = Some(PathBuf::from(path));
             }
@@ -8025,7 +8047,7 @@ fn cmd_reprise(args: &[String]) {
                     eprintln!(
                         "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
                     );
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 };
                 repo_path = Some(PathBuf::from(path));
             }
@@ -8034,7 +8056,7 @@ fn cmd_reprise(args: &[String]) {
                 eprintln!(
                     "usage: bridget reprise [--write <chemin>] [--pin <chemin>] [--repo <chemin>]"
                 );
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
         }
         i += 1;
@@ -8061,7 +8083,7 @@ fn cmd_reprise(args: &[String]) {
             };
             if let Err(error) = crate::reprise::write_card(&path, &card) {
                 eprintln!("bridget reprise: {error}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             println!("carte écrite: {}", path.display());
         }
@@ -8076,7 +8098,7 @@ fn cmd_reaper(args: &[String]) {
             "usage: bridget reaper report --tmp DIR [--json] [--state-dir DIR] [--min-age-secs N]"
         );
         eprintln!("phase observer uniquement — aucune action destructive n'existe");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     }
     let mut json_output = false;
     let mut state_dir = crate::reaper::default_state_dir();
@@ -8092,14 +8114,14 @@ fn cmd_reaper(args: &[String]) {
                 Ok(value) => state_dir = PathBuf::from(value),
                 Err(error) => {
                     eprintln!("bridget reaper: {error}");
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 }
             },
             "--tmp" => match option_value(args, &mut i, "--tmp") {
                 Ok(value) => tmp_dir = Some(PathBuf::from(value)),
                 Err(error) => {
                     eprintln!("bridget reaper: {error}");
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 }
             },
             "--min-age-secs" => match option_value(args, &mut i, "--min-age-secs") {
@@ -8107,17 +8129,17 @@ fn cmd_reaper(args: &[String]) {
                     Ok(secs) => min_age_secs = secs,
                     Err(_) => {
                         eprintln!("bridget reaper: --min-age-secs attend un entier");
-                        std::process::exit(2);
+                        crate::cli_table::exit(2);
                     }
                 },
                 Err(error) => {
                     eprintln!("bridget reaper: {error}");
-                    std::process::exit(2);
+                    crate::cli_table::exit(2);
                 }
             },
             other => {
                 eprintln!("bridget reaper: option inconnue: {other}");
-                std::process::exit(2);
+                crate::cli_table::exit(2);
             }
         }
         i += 1;
@@ -8128,7 +8150,7 @@ fn cmd_reaper(args: &[String]) {
         eprintln!(
             "usage: bridget reaper report --tmp DIR [--json] [--state-dir DIR] [--min-age-secs N]"
         );
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
 
     crate::environment::validate_existing_tree(&state_dir)
@@ -8153,7 +8175,7 @@ fn cmd_reaper(args: &[String]) {
         }
         Err(error) => {
             eprintln!("bridget reaper report: {error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -8583,7 +8605,7 @@ fn ledger_error_exit(code: &str, reason: &str, json: bool) -> ! {
     } else {
         eprintln!("bridget ledger : {code} : {}", inert_text(reason));
     }
-    std::process::exit(if matches!(code, "invalid_params" | "invalid_cursor") {
+    crate::cli_table::exit(if matches!(code, "invalid_params" | "invalid_cursor") {
         2
     } else {
         1
@@ -8597,7 +8619,7 @@ fn ledger_identity() -> crate::mcp_identity::ResolvedIdentity {
             error.code(),
             error.remediation()
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     })
 }
 
@@ -8605,7 +8627,7 @@ fn cmd_ledger_search(args: &[String]) {
     let (request, json) = parse_ledger_search_args(args).unwrap_or_else(|error| {
         eprintln!("{LEDGER_SEARCH_USAGE}");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let identity = ledger_identity();
     let outcome = crate::communication::client::ledger_search(
@@ -8646,7 +8668,7 @@ fn cmd_ledger_read(args: &[String]) {
     let (request, json) = parse_ledger_read_args(args).unwrap_or_else(|error| {
         eprintln!("{LEDGER_SEARCH_USAGE}");
         eprintln!("erreur: {error}");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     let identity = ledger_identity();
     let outcome = crate::communication::client::ledger_read(
@@ -8706,7 +8728,7 @@ fn cmd_ledger(args: &[String]) {
     let limite = parse_ledger_args(args).unwrap_or_else(|error| {
         eprintln!("bridget ledger: {error}");
         eprintln!("usage: bridget ledger [--limit N] | ledger search … | ledger read …");
-        std::process::exit(2);
+        crate::cli_table::exit(2);
     });
     // Une de plus que la borne, pour savoir s'il y en a plus — jamais au-delà
     // de ce que la projection accepte.
@@ -8727,10 +8749,15 @@ fn cmd_ledger(args: &[String]) {
         )),
     };
     match messages {
-        Ok(messages) => print!("{}", render_ledger_borne(&messages, limite)),
+        Ok(messages) => {
+            if crate::cli_table::active() {
+                let more=messages.len()>limite;
+                println!("{}",serde_json::json!({"messages":messages.iter().take(limite).collect::<Vec<_>>(),"more":more}));
+            } else {print!("{}", render_ledger_borne(&messages, limite));}
+        },
         Err(error) => {
             eprintln!("{error}");
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
@@ -12513,7 +12540,7 @@ fn cmd_questions(args:&[String]) {
             _=>Err("Usage : bridget questions list [AGENT_UUID] | show REQUEST_UUID | answer REQUEST_UUID --revision SHA256 --command-id UUID --answers-file /chemin/absolu.json".into())
         }
     })().and_then(|request|crate::communication::client::user_input_request(&socket_path(),None,request).map_err(|e|e.to_string()));
-    match parsed {Ok(value)=>{println!("{}",serde_json::to_string_pretty(&value).unwrap_or_default());if value["status"]!="ok"{std::process::exit(1);}},Err(e)=>{eprintln!("bridget questions : {e}");std::process::exit(1);}}
+    match parsed {Ok(value)=>{println!("{}",serde_json::to_string_pretty(&value).unwrap_or_default());if value["status"]!="ok"{crate::cli_table::exit(1);}},Err(e)=>{eprintln!("bridget questions : {e}");crate::cli_table::exit(1);}}
 }
 
 
@@ -12575,20 +12602,42 @@ fn cmd_specialists(args:&[String]) {
     })();
     let request=match parse {Ok(q)=>q,Err(e)=>exit_coordination_error("specialists",json,"invalid_request",&e,None,2)};
     if let Err(code)=request.validate(){exit_coordination_error("specialists",json,code,"Commande non transmise.",None,2);}
-    if !request.is_read()&&!require_interactive_terminal("specialists") {std::process::exit(1);}
+    if !request.is_read()&&!require_interactive_terminal("specialists") {crate::cli_table::exit(1);}
     if !request.is_read(){
         eprintln!("Administration locale des spécialistes. Cette commande modifie exactement la demande fournie et son périmètre. Confirmer cette décision humaine ? [oui/N]");
         let mut answer=String::new();
         if std::io::stdin().read_line(&mut answer).is_err()||answer.trim()!="oui"{
-            eprintln!("Commande non envoyée ; aucune approbation enregistrée.");std::process::exit(1);
+            eprintln!("Commande non envoyée ; aucune approbation enregistrée.");crate::cli_table::exit(1);
         }
     }
 
     match crate::communication::client::human_specialists(&socket_path(),request) {
         Ok(value)=>{
             if json {println!("{}",value);}else{println!("{}",serde_json::to_string_pretty(&value).expect("JSON value"));}
-            if value["status"]=="refused"{std::process::exit(1);}
+            if value["status"]=="refused"{crate::cli_table::exit(1);}
         }
         Err(error)=>exit_coordination_error("specialists",json,"specialists_unavailable",&format!("{error:?}"),None,1),
+    }
+}
+
+#[cfg(test)]
+mod table225_parser_tests {
+    use super::*;
+    fn table_args(values: &[&str])->Vec<String> {
+        let input=std::iter::once("bridget").chain(values.iter().copied()).map(str::to_owned).collect();
+        crate::cli_table::normalize(input).unwrap().args[2..].to_vec()
+    }
+    #[test]
+    fn table225_uses_the_actual_native_parsers() {
+        assert!(parse_directory_args("agents",&table_args(&["agents","--global","--table"]),true).is_ok());
+        assert!(parse_requests_args(&table_args(&["requests","--all","--table"])).is_ok());
+        assert!(parse_task_args(&table_args(&["task","status","stable-id","--table"]),||"request".into()).is_ok());
+        assert!(parse_task_args(&table_args(&["task","list","--table"]),||"request".into()).is_ok());
+        assert!(parse_handoff_args(&table_args(&["handoff","preview","--json-stdin","--table"])).is_ok());
+        assert!(parse_spawn_args(&table_args(&["spawn","codex","--persistent","--table"])).is_ok());
+        assert!(parse_delegation_control(&table_args(&["control","delegations","list","--table"])).is_ok());
+        assert!(parse_ledger_args(&table_args(&["ledger","--limit","8","--table"])).is_ok());
+        assert!(parse_events_args(&table_args(&["events","missed","--table"])).is_ok());
+        assert!(validate_zero_arity_command("status",&table_args(&["status","--table"])).is_ok());
     }
 }

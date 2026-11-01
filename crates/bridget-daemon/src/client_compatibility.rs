@@ -1,4 +1,5 @@
 //! Vérification locale de support. Ni accès fournisseur ni mise à jour implicite.
+use crate::cli_table::table_println as println;
 use crate::registry::AgentRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -558,7 +559,7 @@ pub(crate) fn run(args: &[String]) {
                 .ok()
                 .is_some_and(|v| validate_local_report(&v));
         println!("{}", json!({"valid":valid}));
-        std::process::exit(if valid { 0 } else { 1 });
+        crate::cli_table::exit(if valid { 0 } else { 1 });
     }
     let as_json = match args
         .iter()
@@ -570,7 +571,7 @@ pub(crate) fn run(args: &[String]) {
         ["check", "--json"] => true,
         _ => {
             eprintln!("Usage : bridget clients check [--json]");
-            std::process::exit(2);
+            crate::cli_table::exit(2);
         }
     };
     let result=check().unwrap_or_else(|error| {
@@ -616,7 +617,7 @@ pub(crate) fn run(args: &[String]) {
     }
     let _ = std::io::stdout().flush();
     if result["verdict"] != "compatible" {
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 

@@ -1,6 +1,7 @@
 //! Comptes isolés : une connexion du registre, aucun coffre de credentials.
 //! La CLI humaine applique un aperçu lié au SHA du registre. Les mutations
 //! partagent le verrou du préparateur de projets et conservent leur sauvegarde.
+use crate::cli_table::table_println as println;
 use crate::registry::AgentRegistry;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -508,7 +509,7 @@ pub(crate) fn run(args: &[String]) {
                 json!({"status":"refused","code":code,"scope":"this_account_operation",
                 "next_action": guidance(code),"other_work":"Les autres travaux autorisés suivent leur propre état."})
             );
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }

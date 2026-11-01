@@ -121,6 +121,10 @@ fn parse(args: &[String]) -> Result<HumanLineageRequest, E> {
 pub(super) fn run(args: &[String]) {
     let mut out = std::io::stdout().lock();
     let mut emit = |value: &serde_json::Value| -> std::io::Result<()> {
+        if crate::cli_table::active() {
+            crate::cli_table::capture(value.to_string(),true);
+            return Ok(());
+        }
         serde_json::to_writer(&mut out, value)?;
         writeln!(out)?;
         out.flush()
@@ -129,14 +133,14 @@ pub(super) fn run(args: &[String]) {
         Ok(r) => r,
         Err(e) => {
             let _ = emit(&e.result());
-            std::process::exit(2)
+            crate::cli_table::exit(2)
         }
     };
     let namespace = match crate::environment::Namespace::from_environment() {
         Ok(n) => n,
         Err(_) => {
             let _ = emit(&E::BindingUnavailable.result());
-            std::process::exit(3)
+            crate::cli_table::exit(3)
         }
     };
     let mut refused = false;
@@ -175,10 +179,10 @@ pub(super) fn run(args: &[String]) {
         if !closed {
             let _ = emit(&E::BindingUnavailable.result());
         }
-        std::process::exit(if closed { 0 } else { 3 });
+        crate::cli_table::exit(if closed { 0 } else { 3 });
     }
     if refused {
-        std::process::exit(2)
+        crate::cli_table::exit(2)
     }
 }
 

@@ -109,6 +109,17 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session225 — optionCLI --table native ; deux positions, colonnes par famille,
+Unicode/NO_COLOR, JSON conservé. Six contrôles ciblés et parcours CLI réels PASS.
+Revue Sonnet4a0ad91d traitée : mêmes gardeswho/discover, pas de fauxvide daemon
+arrêté, corpssend/reply conservés, référencesvidées avantRPC et largeurmin2.
+0.7.4/r4 chargé7images et SHA vérifiés sur4hôtes ; coupure2,20s, groupes métier
+conservés, aucun rejeu. Delta224/a444af64 de guidage inclus, registreMac namespace
+préservé, retours0.7.3 compatibles et rollbackatomiques vérifiés. CLIactive,
+rapportsfrais ; attestationMCPdecefil NONrétablie aprèsune réattestation, signalée
+sansboucle. Sources/preuves : specs/225-tableaux-cli/validation.md.
+
+
 Session221/worker Mac : registre dédié actif
 /Users/moi/.cache/bridget-core/worker-monordinateur-agents.json, PID27140,
 même image0.7.3. Origine origin-agents177.json inchangée pour les lancements locaux.

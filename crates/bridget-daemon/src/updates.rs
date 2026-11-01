@@ -1,4 +1,5 @@
 //! Préférence humaine et fenêtre d'activation exclusive. Aucun téléchargement sous State.
+use crate::cli_table::table_println as println;
 use bridget_transport::protocol::{
     MobileAdministrationRequest as A, MobileAdministrationResult as R, UpdateRequest as Q,
 };
@@ -335,7 +336,7 @@ pub(crate) fn run(args: &[String]) {
             )
             .exec();
         eprintln!("update_runtime_unavailable: {error}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 
     use std::io::IsTerminal;
@@ -347,7 +348,7 @@ pub(crate) fn run(args: &[String]) {
         eprintln!(
             "human_terminal_required: utilisez les paramètres de l’application ou un terminal humain"
         );
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
     let result = (|| -> Result<R, &'static str> {
         let request = match args
@@ -404,11 +405,11 @@ pub(crate) fn run(args: &[String]) {
         Ok(R::Updates { value }) => println!("{value}"),
         Ok(R::Error { code }) => {
             eprintln!("{}", json!({"status":"refused","code":code}));
-            std::process::exit(1)
+            crate::cli_table::exit(1)
         }
         Err(code) => {
             eprintln!("{}", json!({"status":"refused","code":code}));
-            std::process::exit(1)
+            crate::cli_table::exit(1)
         }
         Ok(other) => println!("{}", serde_json::to_string(&other).unwrap()),
     }

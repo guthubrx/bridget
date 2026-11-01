@@ -1,4 +1,5 @@
 //! Accès humain mobile : identité d'appareil distincte des identités d'agent.
+use crate::cli_table::table_println as println;
 pub(crate) mod client;
 pub(crate) mod http;
 pub(crate) mod store;
@@ -302,7 +303,7 @@ pub(crate) fn run(args: &[String]) {
             }
             AdminResult::Error { code } => {
                 eprintln!("bridget mobile : {code}");
-                std::process::exit(1);
+                crate::cli_table::exit(1);
             }
             other => println!(
                 "{}",
@@ -313,7 +314,7 @@ pub(crate) fn run(args: &[String]) {
     })();
     if let Err(code) = result {
         eprintln!("bridget mobile : {code}");
-        std::process::exit(1);
+        crate::cli_table::exit(1);
     }
 }
 

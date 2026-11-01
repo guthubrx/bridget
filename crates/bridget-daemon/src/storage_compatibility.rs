@@ -1,6 +1,7 @@
 //! Compatibilité des données conservées, séparée des versions des fournisseurs.
 //! Le lecteur installé impose son plancher à tout successeur, même sans scan des
 //! stores : une racine custom oubliée ne doit jamais être assimilée à « vide ».
+use crate::cli_table::table_println as println;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -131,7 +132,7 @@ pub(crate) fn run(args: &[String]) -> ! {
     match execute(args) {
         Ok(value) => {
             println!("{value}");
-            std::process::exit(0)
+            crate::cli_table::exit(0)
         }
         Err(code) => {
             println!(
@@ -140,7 +141,7 @@ pub(crate) fn run(args: &[String]) -> ! {
                 "message":"Cette vérification de lecture des données n’a pas abouti. Aucun service n’a été arrêté.",
                 "recovery":"Conserver le binaire actif, les tâches et leurs reçus. Faire vérifier le candidat et son rapport de formats par le responsable Bridget avant une bascule ou un retour. Si le candidat ne sait pas lire ces formats, demander une version compatible ; ne pas effacer les données pour forcer le passage. Ce refus concerne ce candidat. Les autres travaux autorisés suivent leur propre état."})
             );
-            std::process::exit(1);
+            crate::cli_table::exit(1);
         }
     }
 }
