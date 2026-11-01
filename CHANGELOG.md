@@ -6,6 +6,10 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.2 — 2026-11-01
+
+- Specialist lists, searches and details also return the current human display name from the agent profile, separately from roles and stable IDs. Renames appear on the next read, including while offline.
+
 ## 0.7.1 — 2026-11-01
 
 - Admission recovery waits for the parent's live identity and permission evidence instead of treating missing evidence as changed permissions. Explicit revocation still refuses admission.

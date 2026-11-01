@@ -98,3 +98,6 @@ T021/T022/T027/T033 vérifiées par les tests ciblés et le circuit réel décri
 - [ ] T034 Préserver une admission d'époque antérieure lorsque le parent n'est pas encore republié ; conserver les refus de révocation constatée. Le client relit le même reçu sous son délai unique et rend tout refus final reçu sans le masquer. Vérifier V1/V2, absence de Start sans preuve, reprise du même choix et non-réouverture des anciens reçus17/18 ; livrer sur les services et nommer le client ancien.
 
 État après T034 :31/34tâches cochées. Code et sept services corrigés, publication0.7.1 vérifiée. T034 reste ouverte uniquement pour constater le chargement du client MCP de ce fil et remettre le bilan natif à bridge1016. T028/T031 gardent la même porte ; aucun nouveau développement ni test métier demandé pour cette reprise.
+
+## Lisibilité du catalogue
+- [ ] T035 Ajouter le nom humain courant du profil aux projections list/search/get des spécialistes, sans le confondre avec rôle ou UUID ; respecter les filtres existants. Vérifier renommage sans présence, absence de mutation et visibilité ; preuve CLI réelle avant/après, livraison active et publication complète cohérente.

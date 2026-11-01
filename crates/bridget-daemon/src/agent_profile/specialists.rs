@@ -547,7 +547,11 @@ impl AgentProfileStore {
                     if role.is_some_and(|role| !roles.iter().any(|v| v["role_id"] == role)) {
                         continue;
                     }
-                    items.push(json!({"specialist":specialist_projection(&r,p),"roles":roles}));
+                    let display_name = self
+                        .profile_for_agent_id(&r.agent_id)
+                        .map_err(|_| SpecialistError("storage_unavailable"))?
+                        .map(|profile| profile.display_name);
+                    items.push(json!({"specialist":specialist_projection(&r,p),"display_name":display_name,"roles":roles}));
                     if items.len() == limit {
                         exhausted = false;
                         break;
@@ -591,8 +595,12 @@ impl AgentProfileStore {
                         definition.remove("approved_ref");
                     }
                 }
+                let display_name = self
+                    .profile_for_agent_id(&r.agent_id)
+                    .map_err(|_| SpecialistError("storage_unavailable"))?
+                    .map(|profile| profile.display_name);
                 ok(
-                    json!({"specialist":specialist_projection(&r,p),"roles":roles,"definition":definition}),
+                    json!({"specialist":specialist_projection(&r,p),"display_name":display_name,"roles":roles,"definition":definition}),
                 )
             }
             DeclareRoles {
@@ -1169,6 +1177,56 @@ mod tests {
             provenance: None,
         }
     }
+    #[test]
+    fn spec222_specialist_human_name_tracks_profile_in_list_search_and_detail() {
+        let root = std::env::temp_dir().join(format!("bridget222-names-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut store = AgentProfileStore::open(&root.join("s.db")).unwrap();
+        let agent = Uuid::new_v4().to_string();
+        let p = SpecialistPrincipal {
+            agent_id: Some(agent.clone()), human_approval_ref: None,
+            allowed_projects: vec!["bridget".into()],
+        };
+        let declare = serde_json::from_value(json!({"version":1,"action":"declare_roles",
+            "request_id":"names-declare","expected_revision":0,
+            "roles":[{"role_id":"patate","label":"Patate",
+                "scope":{"projects":["bridget"],"transversal":false}}]})).unwrap();
+        store.specialist_apply(&declare, &p, 10).unwrap();
+        store.rename_display_name(&agent, "bridge1016", |_| false).unwrap();
+        let before = store.get_specialist(&agent).unwrap().unwrap();
+        let queries = [
+            json!({"version":1,"action":"list"}),
+            json!({"version":1,"action":"search","role_id":"patate","project_id":"bridget"}),
+            json!({"version":1,"action":"get","specialist_agent_id":agent}),
+        ];
+        // Le nom vient du profil persistant, même sans présence en ligne.
+        for name in ["bridge1016", "Gentil"] {
+            store.rename_display_name(&agent, name, |_| false).unwrap();
+            for value in &queries {
+                let q = serde_json::from_value(value.clone()).unwrap();
+                let v = store.specialist_apply(&q, &p, 11).unwrap();
+                let item = if value["action"] == "get" { &v["data"] }
+                    else { &v["data"]["items"][0] };
+                assert_eq!(item["display_name"], name);
+                assert_eq!(item["specialist"]["agent_id"], agent);
+                assert_eq!(item["roles"][0]["role_id"], "patate");
+                assert_eq!(serde_json::to_value(store.get_specialist(&agent).unwrap().unwrap()).unwrap(),
+                    serde_json::to_value(&before).unwrap());
+            }
+        }
+        // L'enrichissement intervient après le filtre d'autorisation, sans fuite du nom.
+        let other = SpecialistPrincipal {
+            agent_id: Some(Uuid::new_v4().to_string()), human_approval_ref: None,
+            allowed_projects: vec!["autre-projet".into()],
+        };
+        let q = serde_json::from_value(queries[0].clone()).unwrap();
+        let hidden = store.specialist_apply(&q, &other, 12).unwrap();
+        assert!(hidden["data"]["items"].as_array().unwrap().is_empty());
+        assert!(!hidden.to_string().contains("Gentil"));
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn spec222_profiles_grants_and_versions_require_human() {
         let root = std::env::temp_dir().join(format!("bridget222-profile-{}", Uuid::new_v4()));

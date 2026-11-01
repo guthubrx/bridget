@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.2 — 2026-11-01
+
+- Le catalogue et les fiches des spécialistes retournent aussi le nom humain courant du profil, distinct du rôle et de l'identifiant. Un renommage est visible à la prochaine lecture, même hors ligne.
+
 ## 0.7.1 — 2026-11-01
 
 - Une admission en reprise attend la republication et la preuve du parent, sans inventer un changement de droits. Les révocations restent refusées.
