@@ -1,0 +1,186 @@
+{
+  "receipts": [
+    {
+      "host": "cartae",
+      "removed": [
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-r2",
+          "bytes_logical": 43393160,
+          "sha256": "c524a7a711ed63bda9541a8b4bc1b2ee642c06ea067864fcfa861689fd35f159"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-reader-r2",
+          "bytes_logical": 43393624,
+          "sha256": "66f17b868a37fec623feed8b0a11c6961a7305b320746ef013e536d7d4788a50"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-r3",
+          "bytes_logical": 43393232,
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        }
+      ],
+      "kept": [],
+      "already_absent": [],
+      "logical_bytes_removed": 130180016,
+      "physical_gain_not_claimed": true,
+      "installed_images_untouched": true
+    },
+    {
+      "host": "sysle2",
+      "removed": [
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-r2",
+          "bytes_logical": 43393160,
+          "sha256": "c524a7a711ed63bda9541a8b4bc1b2ee642c06ea067864fcfa861689fd35f159"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-reader-r2",
+          "bytes_logical": 43393624,
+          "sha256": "66f17b868a37fec623feed8b0a11c6961a7305b320746ef013e536d7d4788a50"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-release/bridget-linux-r2",
+          "bytes_logical": 43393160,
+          "sha256": "c524a7a711ed63bda9541a8b4bc1b2ee642c06ea067864fcfa861689fd35f159"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-release/bridget-linux-reader-r2",
+          "bytes_logical": 43393624,
+          "sha256": "66f17b868a37fec623feed8b0a11c6961a7305b320746ef013e536d7d4788a50"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-release/bridget-linux-r3",
+          "bytes_logical": 43393232,
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        }
+      ],
+      "kept": [],
+      "already_absent": [
+        "/home/moi/.cache/bridget222-delivery/bridget-linux-r3"
+      ],
+      "logical_bytes_removed": 216966800,
+      "physical_gain_not_claimed": true,
+      "installed_images_untouched": true
+    },
+    {
+      "host": "ksstore",
+      "removed": [
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-r2",
+          "bytes_logical": 43393160,
+          "sha256": "c524a7a711ed63bda9541a8b4bc1b2ee642c06ea067864fcfa861689fd35f159"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-reader-r2",
+          "bytes_logical": 43393624,
+          "sha256": "66f17b868a37fec623feed8b0a11c6961a7305b320746ef013e536d7d4788a50"
+        },
+        {
+          "path": "/home/moi/.cache/bridget222-delivery/bridget-linux-r3",
+          "bytes_logical": 43393232,
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        }
+      ],
+      "kept": [],
+      "already_absent": [],
+      "logical_bytes_removed": 130180016,
+      "physical_gain_not_claimed": true,
+      "installed_images_untouched": true
+    },
+    {
+      "host": "monordinateur",
+      "removed": [
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/release/bridget-linux-r2",
+          "bytes_logical": 43393160,
+          "sha256": "c524a7a711ed63bda9541a8b4bc1b2ee642c06ea067864fcfa861689fd35f159"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/release/bridget-linux-reader-r2",
+          "bytes_logical": 43393624,
+          "sha256": "66f17b868a37fec623feed8b0a11c6961a7305b320746ef013e536d7d4788a50"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/release/bridget-linux-r3",
+          "bytes_logical": 43393232,
+          "sha256": "14fca9f0a89e93c296bfdab3fb410d2ad409fecdd89c749d9c965cb14b0f863f"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/release/bridget-mac-r2",
+          "bytes_logical": 35685584,
+          "sha256": "69016ed3654827fc9196201d78911e19183d9d30f6f2192cf8f078d7375a9da5"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/release/bridget-mac-reader-r2",
+          "bytes_logical": 35685584,
+          "sha256": "e85d5689bd39cb706323cde23ef26be5eafcb8d73aa6031f996ea8765ef3655b"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/release/bridget-mac-r3",
+          "bytes_logical": 35685584,
+          "sha256": "128a54e63102cffd899826187ea7351934a3f3b21f8fbfecac8ed9a806742778"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/bridget222-debug.apk",
+          "bytes_logical": 31546075,
+          "sha256": "da60c1a0f63699a90ae40322ad93e6a8c584a332626c6effd42a7d00f3a488ed"
+        },
+        {
+          "path": "/Users/moi/.cache/bridget222-roles-profils/bridget222-fixture.apk",
+          "bytes_logical": 31546087,
+          "sha256": "8531e9edd34701a932d8d131c84615abb864b0bcf91ed4022d15fbf34b72f55a"
+        }
+      ],
+      "kept": [],
+      "already_absent": [],
+      "logical_bytes_removed": 300328930,
+      "physical_gain_not_claimed": true,
+      "installed_images_untouched": true
+    }
+  ],
+  "public_transfer": {
+    "removed": [
+      {
+        "path": "/Users/moi/.cache/bridget222-roles-profils/release/public/bridget-0.7.0-darwin-arm64.tar.gz",
+        "sha256": "a374e1cd42ecf0ce052952b05eb3cfed17cbb77a675adfb00b8ba2d6a7510e2f",
+        "bytes_logical": 14172009
+      },
+      {
+        "path": "/Users/moi/.cache/bridget222-roles-profils/release/public/bridget-0.7.0-darwin-arm64.tar.gz.sha256",
+        "sha256": "c664ccaf7f7b50efe2cd4be2feca46637f373957ec9e3bd7e9e630541814f27f",
+        "bytes_logical": 100
+      },
+      {
+        "path": "/Users/moi/.cache/bridget222-roles-profils/release/public/bridget-0.7.0-linux-x86_64.tar.gz",
+        "sha256": "61bb37ca886a1b840a127d1672e886ea675676fa4f156f1ac2821a64b9749098",
+        "bytes_logical": 15403365
+      },
+      {
+        "path": "/Users/moi/.cache/bridget222-roles-profils/release/public/bridget-0.7.0-linux-x86_64.tar.gz.sha256",
+        "sha256": "60b576c2170c6c2e80a7f9a6a405f00bb9bbd3f1311c91a70dc7ce9a014dc04c",
+        "bytes_logical": 100
+      },
+      {
+        "path": "/Users/moi/.cache/bridget222-roles-profils/release/public/bridget-android.apk",
+        "sha256": "fc6de337a135eb707e26fa5879ea0493043eebe4ee13984ea7ef15deec62557d",
+        "bytes_logical": 3967747
+      },
+      {
+        "path": "/Users/moi/.cache/bridget222-roles-profils/release/public/bridget-android.apk.sha256",
+        "sha256": "2302bd9ddd40474fbffde43374774e8ed7f6c7b6ff4c4d172a357d276b2a6695",
+        "bytes_logical": 86
+      }
+    ],
+    "kept": [],
+    "logical_bytes_removed": 33543407,
+    "authoritative_release_packages_retained": "/home/moi/.cache/bridget222-release/public",
+    "github_asset_digests_verified": true
+  },
+  "removed_files": 25,
+  "removed_logical_bytes": 811199169,
+  "physical_gain_not_claimed": true,
+  "installed_images": "active_r3_and_reader_r2_preserved; older loaded or externally unobserved images preserved",
+  "build_caches": "Cartae3.03GiB/SYS0.60GiB retained by native cleaner; Mac staging not registered, retained without override",
+  "worktrees": "principal222 and review spaces preserved under incomplete external-use observation; Android child dirty preserved",
+  "other_work_preserved": true
+}

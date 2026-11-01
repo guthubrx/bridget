@@ -50,7 +50,7 @@ Si le client ne revient pas, conserver les preuves et nommer le composant hôte 
 Les erreurs locales de syntaxe/TTY du responsable sont conservées dans les sorties de qualification ; pas de panne générale ou de révocation déduite.
 
 ## Git, publication et nettoyage
-En cours de clôture documentaire : commit/intégration/push et publication0.7.0 à enregistrer dans validation/git-delivery.json.
+Code dadca5d0 intégré par def90b94, main poussé et SHA distant vérifié. Publication0.7.0 publique avec six digests GitHub comparés aux fichiers ; voir validation/git-delivery.json et validation/release.json. Script public exact servi au SHA39857e2e, une seule redirection changée et Caddy rechargé sans changer de PID. Clôture documentaire séparée, sans changement du code compilé.
 build.py installed exécuté Cartae etSYS : pas de purge forcée, caches3,03Gio/0,60Gio conservés. Mac refuse le staging non enregistré : cache conservé, aucune suppression manuelle de garde.
 Actif et retour, sauvegardes de maintenance, preuves et travaux d'autrui restent protégés. Les candidats222 éligibles sont traités par chemins exacts et leurs conservations justifiées dans validation/cleanup.md.
 L'intégration du code validé suit la consigne utilisateur permanente de committer/pousser le travail validé et de poursuivre les actions sûres malgré un composant hôte bloqué. Elle ne change ni le gate de ce client ni le statut In Progress en Livré.

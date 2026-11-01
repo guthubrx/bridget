@@ -1,0 +1,92 @@
+[
+  {
+    "task_id": "b27b9714-e163-4f15-bbdb-cb82e81f5bbc",
+    "state": "cancelled",
+    "guarded": false,
+    "cleanup_done": true,
+    "workspace": {
+      "strategy": null,
+      "state": null,
+      "path": null,
+      "branch": null,
+      "dirty": null
+    },
+    "removal_by_this_delivery": false,
+    "reason": "usages externes incomplets ; pas de privilège ajouté ni de suppression de garde"
+  },
+  {
+    "task_id": "21b30002-6661-494c-bd15-f1df70ef3acf",
+    "state": "result_available",
+    "guarded": false,
+    "cleanup_done": true,
+    "workspace": {
+      "strategy": "worktree",
+      "state": "kept",
+      "path": "/home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/21b30002",
+      "branch": "222-revue-plan-roles",
+      "dirty": false
+    },
+    "removal_by_this_delivery": false,
+    "reason": "usages externes incomplets ; pas de privilège ajouté ni de suppression de garde"
+  },
+  {
+    "task_id": "b47a61ea-1b0a-4383-ac1a-7ed0e9dda17e",
+    "state": "result_available",
+    "guarded": false,
+    "cleanup_done": true,
+    "workspace": {
+      "strategy": "worktree",
+      "state": "kept",
+      "path": "/home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/b47a61ea",
+      "branch": "222-revue-plan-roles-r2",
+      "dirty": false
+    },
+    "removal_by_this_delivery": false,
+    "reason": "usages externes incomplets ; pas de privilège ajouté ni de suppression de garde"
+  },
+  {
+    "task_id": "e9ce2aba-02a9-4c3b-b824-615b03220d73",
+    "state": "result_available",
+    "guarded": false,
+    "cleanup_done": true,
+    "workspace": {
+      "strategy": "worktree",
+      "state": "kept",
+      "path": "/home/moi/.local/share/bridget-projects/bridget/repository/.worktrees/e9ce2aba",
+      "branch": "222-specialists-android",
+      "dirty": true
+    },
+    "removal_by_this_delivery": false,
+    "reason": "travail Android noncommité conservé"
+  },
+  {
+    "task_id": "cc02dca4-3892-4f29-ba32-e5b47724a484",
+    "state": "result_available",
+    "guarded": false,
+    "cleanup_done": true,
+    "workspace": {
+      "strategy": "commit_view",
+      "state": "kept",
+      "path": "/home/moi/.local/share/bridget-projects/bridget/.bridget-commit-views/e5ff1fa483957661eb67fdea76d13d800fc58ec180e44a13c826d17e54af056e",
+      "branch": "",
+      "dirty": false
+    },
+    "removal_by_this_delivery": false,
+    "reason": "usages externes incomplets ; pas de privilège ajouté ni de suppression de garde"
+  },
+  {
+    "task_id": "d51b1c2c-d469-4bd2-b5c4-c02f4c768265",
+    "state": "result_available",
+    "guarded": false,
+    "cleanup_done": true,
+    "workspace": {
+      "strategy": "commit_view",
+      "state": "kept",
+      "path": "/home/moi/.local/share/bridget-projects/bridget/.bridget-commit-views/64e70af863e144daad7adae02c2a47ff8b80bcf0e1bf06a5d1bad43ed473b7ee",
+      "branch": "",
+      "dirty": false
+    },
+    "removal_by_this_delivery": false,
+    "reason": "usages externes incomplets ; pas de privilège ajouté ni de suppression de garde"
+  }
+]

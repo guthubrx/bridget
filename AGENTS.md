@@ -139,7 +139,7 @@ Programme56/186InProgress. Preuves : specs/221-capacites-completes/validation/pr
 
 
 
-Session222 — rôles/profils/mémoire développés ; sept services0.7.0/build222-specialists-r3 chargés, Android authentifié et réveil/réponse/mémoire techniques vérifiés. AuditV15 révision2 pass ; code identique aux deux assemblages. Client MCP du présent fil encore à recharger : un seul TERM ciblé puis Transport closed, moteur préservé ; pas de boucle. Programme221 indépendant. Sources/limites : specs/222-roles-profils/validation.md.
+Session222 —31/33tâches vérifiées, rôles/profils/mémoire développés ; sept services0.7.0/build222-specialists-r3 chargés, Android authentifié et réveil/réponse/mémoire techniques vérifiés. AuditV15 révision2 pass ; code identique aux deux assemblages. Client MCP du présent fil encore à recharger : un seul TERM ciblé puis Transport closed, moteur préservé ; pas de boucle. Publication0.7.0 et sources main poussées ;25copies/811199169octets logiques retirés,1autostash222 conservé en patch puis retiré. Programme221 indépendant. Sources/limites : specs/222-roles-profils/validation.md.
 Plan : specs/222-roles-profils/plan.md. Cadrage utilisateur validé après grill-me.
 
 

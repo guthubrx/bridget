@@ -1,0 +1,40 @@
+{
+  "url": "https://github.com/guthubrx/bridget/releases/tag/v0.7.0",
+  "tag": "v0.7.0",
+  "target": "def90b94a7889811736195a1c4329cf68e97e03c",
+  "assets": [
+    {
+      "name": "bridget-0.7.0-darwin-arm64.tar.gz",
+      "sha256": "a374e1cd42ecf0ce052952b05eb3cfed17cbb77a675adfb00b8ba2d6a7510e2f",
+      "bytes": 14172009
+    },
+    {
+      "name": "bridget-0.7.0-darwin-arm64.tar.gz.sha256",
+      "sha256": "c664ccaf7f7b50efe2cd4be2feca46637f373957ec9e3bd7e9e630541814f27f",
+      "bytes": 100
+    },
+    {
+      "name": "bridget-0.7.0-linux-x86_64.tar.gz",
+      "sha256": "61bb37ca886a1b840a127d1672e886ea675676fa4f156f1ac2821a64b9749098",
+      "bytes": 15403365
+    },
+    {
+      "name": "bridget-0.7.0-linux-x86_64.tar.gz.sha256",
+      "sha256": "60b576c2170c6c2e80a7f9a6a405f00bb9bbd3f1311c91a70dc7ce9a014dc04c",
+      "bytes": 100
+    },
+    {
+      "name": "bridget-android.apk",
+      "sha256": "fc6de337a135eb707e26fa5879ea0493043eebe4ee13984ea7ef15deec62557d",
+      "bytes": 3967747
+    },
+    {
+      "name": "bridget-android.apk.sha256",
+      "sha256": "2302bd9ddd40474fbffde43374774e8ed7f6c7b6ff4c4d172a357d276b2a6695",
+      "bytes": 86
+    }
+  ],
+  "verified_from_github_digest": true,
+  "public_installer_commit": "def90b94a7889811736195a1c4329cf68e97e03c",
+  "public_installer_sha256": "39857e2ea1334c7063962062a47de6234306c371d25c246209eebaf21b1a561b"
+}

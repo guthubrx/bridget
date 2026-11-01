@@ -68,12 +68,12 @@ Tous les chemins ci-dessous désignent le worktree serveur222. Les commandes Car
 
 ## Livraison
 
-- [ ] T030 Construire les composants concernés Linux/Mac/Android, qualifier un retour compatible et intégrer/pousser le lot complet sans embarquer d'autres travaux. Fichiers : `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/specs/222-roles-profils/validation.md`, `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/scripts/build.py`.
+- [x] T030 Construire les composants concernés Linux/Mac/Android, qualifier un retour compatible et intégrer/pousser le lot complet sans embarquer d'autres travaux. Fichiers : `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/specs/222-roles-profils/validation.md`, `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/scripts/build.py`.
 - [ ] T031 Activer via maintenance native, contrôler les images réellement chargées et le lien, puis vérifier le circuit visuel et publier ses preuves ; nommer tout client ancien. Fichiers : `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/specs/222-roles-profils/validation.md`, `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/preuves-corrections/2026-11-01-222-specialistes/preuves.html`.
 
 ## Nettoyage
 
-- [ ] T032 Contrôler fusion/push/propreté/usages et nettoyer seulement les ressources éligibles ; conserver les tâches, preuves, actif/retour et usages non attestés. Fichiers : `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/specs/222-roles-profils/validation.md`.
+- [x] T032 Contrôler fusion/push/propreté/usages et nettoyer seulement les ressources éligibles ; conserver les tâches, preuves, actif/retour et usages non attestés. Fichiers : `/home/moi/10.Scripts/64.bridget/.worktrees/222-roles-profils/specs/222-roles-profils/validation.md`.
 
 ## Couverture
 US1 T005 ; US2 T004/T006/T007 ; US3 T008–T013 ; US4 T014–T017 ; US5 T018–T022 ; US6 T023/T024 ; US7 T025.
@@ -89,4 +89,7 @@ T009/T011/T027 couvrent les préparations sans exécution : aucun drain ni recov
 - [x] T033 Corriger la négociation mobile spécifique222 : accepter exactement MobileOperationsV1 + SpecialistsV1 pour cette opération, conserver la garde historique pour les autres ; test du vrai handler avec portée limitée, lecture autorisée, absence de remise et révocation, puis relire le catalogue Android réel.
 
 ## Preuves finales de qualification
-T021/T022/T027/T033 vérifiées par les tests ciblés et le circuit réel décrit dans validation.md. T028/T031 restent ouverts pour le client MCP de CE fil. T030 attend Git/push effectifs ; T032 attend le bilan borné. Aucun nouveau code manquant FR001–030 identifié.
+T021/T022/T027/T033 vérifiées par les tests ciblés et le circuit réel décrit dans validation.md. T028/T031 restent ouverts pour le client MCP de CE fil. T030 : Git/push, publication et images vérifiés. T032 : nettoyage borné et conservations justifiées. Aucun nouveau code manquant FR001–030 identifié.
+
+## État de clôture
+31/33tâches cochées. Première ouverte T028, puis T031 : même dépendance au client MCP de ce fil. Les fonctions sont développées et les services activés ; SpecKit et pipeline restent In Progress. Aucun test/build/revue/mission à refaire lors de la reprise du client.

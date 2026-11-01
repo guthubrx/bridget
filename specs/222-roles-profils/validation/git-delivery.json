@@ -1,0 +1,15 @@
+{
+  "feature": "222-roles-profils",
+  "branch": "session-222-roles-profils",
+  "target": "main",
+  "remote": "https://github.com/guthubrx/bridget.git",
+  "fork": null,
+  "code_commit": "dadca5d0a4eeb39864174df6043db90640fd7db0",
+  "integration_commit": "def90b94a7889811736195a1c4329cf68e97e03c",
+  "pushed_ref_sha_verified": "def90b94a7889811736195a1c4329cf68e97e03c",
+  "release_tag": "v0.7.0",
+  "release_target": "def90b94a7889811736195a1c4329cf68e97e03c",
+  "proof_html_same_code_commit": true,
+  "final_documentation_separate": true,
+  "code_sha256": "5755d4cff0bf703eb0f4f82f941fd435cff02f99be6f330e981365f97f1283fa"
+}
