@@ -6,6 +6,13 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.3 — 2026-11-01
+
+- Update status includes every registered machine, including missing and stale reports.
+- Local updater setup supports machine-specific worker units on SYS, KS and macOS.
+- Stopped services stay stopped. Missing observation dates stay unknown.
+- Linux package built on Debian12/glibc2.36; Android7003 uses the existing signing certificate.
+
 ## 0.7.2 — 2026-11-01
 
 - Specialist lists, searches and details also return the current human display name from the agent profile, separately from roles and stable IDs. Renames appear on the next read, including while offline.

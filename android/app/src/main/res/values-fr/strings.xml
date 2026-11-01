@@ -195,7 +195,7 @@
 <string name="preview_html_update_action">Ouvrir Google Play</string>
 <string name="preview_html_update_manual">Ouvrez Google Play et recherchez Android System WebView.</string>
  <string name="automatic_updates">Mises à jour automatiques</string>
- <string name="automatic_updates_detail">Activées par défaut pour Android, Mac et Cartae. Bridget prépare la version officielle et attend une activation sûre. Android peut demander une autorisation.</string>
+ <string name="automatic_updates_detail">Activées par défaut sur ce téléphone et les machines de la fédération raccordées aux mises à jour. Bridget attend une activation sûre. Android peut demander une autorisation.</string>
  <string name="update_last_check">Dernière vérification : %1$s</string>
  <string name="update_checking">Recherche d’une version plus récente…</string>
  <string name="update_available_stage">Une nouvelle version est disponible.</string>
@@ -212,7 +212,7 @@
  <string name="update_storage_unavailable">Préparation indisponible. Vérifiez l’espace disponible puis recherchez à nouveau.</string>
  <string name="update_disabled">Installation automatique désactivée. La version préparée reste disponible.</string>
     <string name="android_updates_title">Application Android</string>
-    <string name="host_updates_title">Bridget sur Mac et Cartae</string>
+    <string name="host_updates_title">Fédération Bridget</string>
     <string name="host_updates_pending">Choix à transmettre aux ordinateurs. Leur réglage n’est pas encore confirmé.</string>
     <string name="host_updates_unknown">État des mises à jour indisponible. Vérifiez à nouveau la connexion.</string>
     <string name="host_updates_on">Mises à jour automatiques activées sur les ordinateurs.</string>
@@ -388,4 +388,8 @@
  <string name="specialist_memory_history">Historique du souvenir</string>
  <string name="specialist_open_conversation">Ouvrir la conversation et ses missions</string>
  <string name="specialist_pending_status">Lire l’état exact</string>
+ <string name="host_update_not_reported">Aucun état reçu. Vérifier le service de mise à jour sur cette machine.</string>
+ <string name="host_update_stale">État ancien. Vérifier le service de mise à jour et sa connexion.</string>
+ <string name="host_update_version_unknown">Version non observée</string>
+ <string name="host_update_service_inactive">Service arrêté ou état non confirmé. Demander au responsable de cette machine avant sa remise en route.</string>
 </resources>

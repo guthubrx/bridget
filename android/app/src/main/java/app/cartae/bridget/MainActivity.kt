@@ -899,8 +899,8 @@ private fun Settings(vm: MobileViewModel, onRevoke: () -> Unit, onForget: () -> 
                     vm.hostUpdates.optJSONObject("hosts")?.let { hosts ->
                         hosts.keys().asSequence().sorted().forEach { host ->
                             val item = hosts.getJSONObject(host)
-                            Text(host + " : " + item.optString("installed") + " · " + hostUpdateStage(item.optString("stage")), style = MaterialTheme.typography.bodySmall)
-                            Text(stringResource(R.string.update_last_check, dateText(item.optLong("observed_at"))), style = MaterialTheme.typography.bodySmall)
+                            Text(host + " : " + (item.optString("installed").takeIf { it.isNotBlank() && it != "null" } ?: stringResource(R.string.host_update_version_unknown)) + " · " + hostUpdateStage(item.optString("stage")), style = MaterialTheme.typography.bodySmall)
+                            if (!item.isNull("observed_at") && item.optLong("observed_at") > 0) Text(stringResource(R.string.update_last_check, dateText(item.optLong("observed_at"))), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                     if (vm.updateState.has("checked_at")) Text(stringResource(R.string.update_last_check,
@@ -1075,6 +1075,9 @@ private fun dateText(seconds: Long): String = java.text.DateFormat.getDateTimeIn
 })
 
 @Composable private fun hostUpdateStage(stage: String): String = stringResource(when(stage) {
+    "service_inactive" -> R.string.host_update_service_inactive
+    "not_reported" -> R.string.host_update_not_reported
+    "stale" -> R.string.host_update_stale
     "active" -> R.string.host_update_active
     "error" -> R.string.update_error_stage
     "up_to_date" -> R.string.app_up_to_date

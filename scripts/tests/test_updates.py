@@ -15,6 +15,11 @@ spec.loader.exec_module(update)
 
 
 class Updates179Tests(unittest.TestCase):
+    def setUp(self):
+        running = patch.object(update, "services_running", return_value=True)
+        running.start()
+        self.addCleanup(running.stop)
+
     def metadata(self, release="0.6.0"):
         name = f"bridget-{release}-linux-x86_64.tar.gz"
         return {"draft": False, "prerelease": False, "tag_name": "v" + release, "assets": [
@@ -357,6 +362,78 @@ class Updates179Tests(unittest.TestCase):
                 updater.step()
             restart.assert_not_called()
             self.assertEqual(updater.link.resolve(),old)
+
+
+
+class Updates224Tests(unittest.TestCase):
+    def test_machine_units_are_explicit_and_closed(self):
+        for machine in ["sysle2", "ksstore", "cartae"]:
+            name = "bridget-worker-" + machine + ".service"
+            self.assertEqual(update.service_command("linux", "restart", name),
+                             ["systemctl", "--user", "restart", name])
+        self.assertEqual(update.service_name("darwin", "com.bridget.worker.monordinateur"),
+                         "com.bridget.worker.monordinateur")
+        self.assertEqual(update.service_name("linux", "worker"), "bridget-worker-cartae.service")
+        for name in ["ssh.service", "../bridget-worker-sys.service", "bridget-updates.service",
+                     "bridget-worker-sys.service;reboot", "/tmp/bridget-worker-sys.service"]:
+            with self.assertRaises(update.Refused):
+                update.service_name("linux", name)
+
+    def test_setup_creates_only_the_update_service_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            root = home / "state"
+            root.mkdir(mode=0o700)
+            binary = home / "installed/bridget"
+            binary.parent.mkdir()
+            binary.write_text("fixture")
+            link = home / ".local/bin/bridget"
+            link.parent.mkdir(parents=True)
+            link.symlink_to(binary)
+            unit = "bridget-worker-sysle2.service"
+            with patch.object(update.platform, "system", return_value="Linux"), \
+                 patch.object(update.subprocess, "run") as run:
+                import fcntl
+                with (root / "update-host.lock").open("w") as held:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    with self.assertRaisesRegex(update.Refused, "update_setup_watcher_busy"):
+                        update.setup(home, root, "sysle2", [unit])
+                    self.assertFalse((root / "update-host.json").exists())
+                self.assertEqual(update.setup(home, root, "sysle2", [unit])["status"], "ok")
+                original = (home / ".config/systemd/user/bridget-updates.service").read_bytes()
+                update.setup(home, root, "sysle2", [unit])
+                self.assertEqual(original, (home / ".config/systemd/user/bridget-updates.service").read_bytes())
+                commands = [call.args[0] for call in run.call_args_list]
+                self.assertNotIn(["systemctl", "--user", "restart", unit], commands)
+                self.assertNotIn(["systemctl", "--user", "start", unit], commands)
+                with self.assertRaises(update.Refused):
+                    update.setup(home, root, "another-host", [unit])
+            self.assertEqual(update.private_json(root / "update-host.json"),
+                             {"host": "sysle2", "services": [unit]})
+            self.assertIn(b"SendSIGKILL=no", original)
+
+    def test_worker_configuration_no_longer_requires_cartae(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater = Updates179Tests().fixture(Path(temp))[0]
+            update.atomic_json(updater.root / "update-host.json",
+                              {"host": "ksstore", "services": ["bridget-worker-ksstore.service"]})
+            with patch.object(update.platform, "system", return_value="Linux"), \
+                 patch.object(update.platform, "machine", return_value="x86_64"):
+                actual = update.Updater(updater.home, updater.root)
+            self.assertEqual(actual.services, ["bridget-worker-ksstore.service"])
+
+    def test_stopped_service_is_preserved_before_activation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            updater, old, executable = Updates179Tests().fixture(Path(temp))
+            before = updater.link.resolve()
+            with patch.object(update, "rpc", return_value={"status":"ok","automatic":True}), \
+                 patch.object(update, "services_running", return_value=False), \
+                 patch.object(update, "restart") as restart, patch.object(update, "client_check") as check:
+                updater.activate(executable, "0.6.0")
+            restart.assert_not_called()
+            check.assert_not_called()
+            self.assertEqual(updater.link.resolve(), before)
+            self.assertEqual(updater.state["stage"], "service_inactive")
 
 
 if __name__ == "__main__":

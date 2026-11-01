@@ -183,6 +183,37 @@ pub(crate) fn policy(root: &Path, request: &Q) -> Result<Value, &'static str> {
         json!({"status":"ok","automatic":p.automatic,"hosts":p.hosts,"check_generation":p.check_generation,"install_target":p.install_target,"source":"github_stable","core_version":env!("CARGO_PKG_VERSION"),"observed_at":now()}),
     )
 }
+/// Ajouter les machines connues sans transformer l'absence de rapport en succès.
+pub(crate) fn project_federation(
+    mut value: Value, machines: &BTreeSet<String>, observed_now: i64,
+) -> Value {
+    let Some(hosts) = value.get_mut("hosts").and_then(Value::as_object_mut) else {
+        return value;
+    };
+    for machine in machines {
+        hosts.entry(machine.clone()).or_insert_with(|| json!({
+            "installed":null,"available":null,"observed_at":null,"stage":"not_reported"
+        }));
+    }
+    for (machine, item) in hosts.iter_mut() {
+        let reported = item.get("observed_at").and_then(Value::as_i64);
+        let fresh = reported.is_some_and(|t| t <= observed_now + 60 && t >= observed_now - 180);
+        item["machine_id"] = json!(machine);
+        item["registered"] = json!(machines.contains(machine));
+        item["report_freshness"] = json!(if reported.is_none() {"not_observed"} else if fresh {"fresh"} else {"stale"});
+        item["scope"] = json!("this_machine");
+        if !fresh {
+            item["reported_stage"] = item["stage"].clone();
+            item["stage"] = json!(if reported.is_some() {"stale"} else {"not_reported"});
+            item["cause"] = json!(if reported.is_none() {"update_report_missing"} else {"update_report_stale"});
+            item["next_action"] = json!("Vérifier le service de mise à jour sur cette machine et son lien au maître. S'il manque, le raccorder avec bridget updates setup. Demander au responsable de cette machine si cette installation dépasse votre mandat. Les autres travaux autorisés suivent leur propre état ; aucun arrêt global n'est constaté.");
+        }
+    }
+    value["scope"] = json!("federation");
+    value
+}
+
+
 pub(crate) fn version(value: &str) -> Option<[u16; 3]> {
     let parts: Vec<_> = value.split('.').collect();
     if parts.len() != 3 {
@@ -287,11 +318,17 @@ impl Gate {
     }
 }
 pub(crate) fn run(args: &[String]) {
-    if args == ["watch"] || args == ["once"] {
+    if args.iter().any(|s| matches!(s.as_str(), "--help" | "-h")) || args.is_empty() {
+        println!("bridget updates status | check | auto on/off | install VERSION | once | watch\n  setup --host MACHINE --service UNITE [--service UNITE] : raccorder cette machine\nLa politique est commune à la fédération. Chaque machine doit avoir son service de mise à jour.\nUne machine sans rapport reste visible comme non observée. Les activations préservent les travaux.");
+        return;
+    }
+    if args == ["watch"] || args == ["once"] || args.first().is_some_and(|v| v == "setup") {
         use std::os::unix::process::CommandExt;
         let error = std::process::Command::new("python3")
             .arg("-c")
             .arg(include_str!("../../../scripts/update.py"))
+            .args(if args.first().is_some_and(|v| v == "setup") { &args[1..] } else { &[] })
+            .env("BRIDGET_UPDATE_SETUP", if args.first().is_some_and(|v| v == "setup") { "1" } else { "0" })
             .env(
                 "BRIDGET_UPDATE_WATCH",
                 if args == ["watch"] { "1" } else { "0" },
@@ -355,7 +392,7 @@ pub(crate) fn run(args: &[String]) {
             },
             _ => {
                 return Err(
-                    "usage: bridget updates status | auto on/off | prepare TOKEN | finish TOKEN | report FILE | grant DEVICE",
+                    "usage: bridget updates status | check | auto on/off | install VERSION | setup --host MACHINE --service UNITE | once | watch",
                 );
             }
         };
@@ -384,6 +421,26 @@ mod tests {
         crate::environment::ensure_private_directory(&r).unwrap();
         r
     }
+    #[test]
+    fn spec224_federation_never_hides_missing_or_stale_reports() {
+        let original = json!({"status":"ok","hosts":{
+            "cartae":{"installed":"0.7.2","observed_at":1000,"stage":"up_to_date"},
+            "ksstore":{"installed":"0.7.1","observed_at":500,"stage":"up_to_date"}
+        }});
+        let machines = ["cartae","ksstore","sysle2"].into_iter().map(str::to_string).collect();
+        let result = project_federation(original.clone(), &machines, 1001);
+        assert_eq!(result["hosts"]["sysle2"]["stage"], "not_reported");
+        assert!(result["hosts"]["sysle2"]["installed"].is_null());
+        assert!(result["hosts"]["sysle2"]["observed_at"].is_null());
+        assert_eq!(result["hosts"]["sysle2"]["cause"], "update_report_missing");
+        assert_eq!(result["hosts"]["ksstore"]["stage"], "stale");
+        assert_eq!(result["hosts"]["ksstore"]["reported_stage"], "up_to_date");
+        assert_eq!(result["hosts"]["cartae"]["stage"], "up_to_date");
+        assert_eq!(result["hosts"]["cartae"]["report_freshness"], "fresh");
+        assert_eq!(original["hosts"].as_object().unwrap().len(), 2);
+        assert!(result["hosts"]["sysle2"]["next_action"].as_str().unwrap().contains("autres travaux"));
+    }
+
     #[test]
     fn updates179_barrier_survives_restart_and_excludes_concurrent_work() {
         let r = root();

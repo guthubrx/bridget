@@ -2,6 +2,15 @@
 use super::*;
 use bridget_transport::protocol::{MobileAdministrationRequest, MobileAdministrationResult};
 
+pub(super) fn project_update_status(value: serde_json::Value, state: &Arc<Mutex<DaemonState>>) -> serde_json::Value {
+    let st = state.lock().unwrap_or_else(|e| e.into_inner());
+    let mut machines = std::collections::BTreeSet::new();
+    machines.insert(st.host.clone());
+    machines.extend(st.registry.machines().keys().cloned());
+    machines.extend(st.remote_workers.keys().cloned());
+    crate::updates::project_federation(value, &machines, unix_now_secs())
+}
+
 pub(super) fn handle(
     conn_id: &str,
     request: MobileAdministrationRequest,
@@ -72,7 +81,7 @@ pub(super) fn handle(
                     .unwrap_or_else(|e| e.into_inner())
                     .update_gate
                     .finish(token),
-                _ => crate::updates::policy(&root, &request),
+                _ => crate::updates::policy(&root, &request).map(|v| project_update_status(v, state)),
             }
         })();
         return DaemonToWrapper::MobileAdministrationResult {

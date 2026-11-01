@@ -8,6 +8,13 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.3 — 2026-11-01
+
+- Les mises à jour affichent toutes les machines de la fédération, même sans rapport ou avec un état périmé.
+- Raccord local du service de mise à jour avec setup ; unités propres à SYS, KS et au worker Mac.
+- Un service arrêté reste arrêté. Les dates non observées restent inconnues.
+- Paquet Linux construit sur Debian12/glibc2.36 ; APK7003 signé avec le certificat existant.
+
 ## 0.7.2 — 2026-11-01
 
 - Le catalogue et les fiches des spécialistes retournent aussi le nom humain courant du profil, distinct du rôle et de l'identifiant. Un renommage est visible à la prochaine lecture, même hors ligne.

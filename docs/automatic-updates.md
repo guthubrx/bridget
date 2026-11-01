@@ -19,7 +19,9 @@ Switching off stops future automatic work and attempts to abandon an uncommitted
 
 ## Mac and Linux
 
-The stable executable link is `~/.local/bin/bridget`. The embedded updater runs as a user service with Python3.9 or later: `bridget updates watch`. Its private `BRIDGET_HOME/update-host.json` contains `host` and `services`. Linux roles are `core`, `mobile` and `worker`; the worker unit is `bridget-worker-cartae.service`. Supervised services execute the stable link. Configuration contains no downloaded command.
+The stable executable link is `~/.local/bin/bridget`. The embedded updater runs as a user service with Python3.9 or later: `bridget updates watch`. Its private `BRIDGET_HOME/update-host.json` contains `host` and `services`. Linux accepts the legacy roles core/mobile/worker and explicit Bridget unit names,
+such as bridget-worker-sysle2.service. macOS also accepts com.bridget.worker.monordinateur.
+No unrelated service name or command is accepted. Supervised services execute the stable link. Configuration contains no downloaded command.
 
 [Adapter contract details](adapters/t3.md#note-50).
 
@@ -121,3 +123,34 @@ A local reference signed by another key cannot authorize that key. Upload has a
 600-second bound; after upload, both public digests and sizes must match before
 success. Interrupted uploads remain unconfirmed and must be inspected first.
 Use --verify-published to check an existing publication without uploading again.
+
+## Federation coverage (224)
+
+The same policy controls all participating hosts. Status includes every machine
+known to the master, even without an update report. A missing report is
+not_reported; a report older than three minutes is stale. Both remain visible
+with the last observation date and a next action. They do not prove an update
+service is installed or that the machine is offline.
+
+Configure each host once through the local CLI, using its existing Bridget units:
+
+    bridget updates setup --host sysle2 --service bridget-worker-sysle2.service
+    bridget updates setup --host ksstore --service bridget-worker-ksstore.service
+
+Run each command on the named host. This installs and starts only its user update
+watcher. It does not start or restart a worker or change the common policy.
+A different existing configuration is refused, never replaced silently.
+Mac/Linux service identities belong to private local configuration; they never
+come from a release download or a phone request.
+
+Then run bridget updates check and bridget updates status from any participating
+host. Each watcher reads the shared policy, publishes its own state and performs
+the existing verified activation when its safety checks permit it. Check does
+not mean activation is complete. Updates remain serialized by the common barrier.
+Windows is currently a client platform, not a native worker/update host.
+
+Setup uses the same local update lock and refuses while a watcher or activation
+owns it. It never removes a lock to proceed. An operator changing an existing
+configuration must stop only the idle watcher through its native service first,
+back up the configuration and use the existing atomic writer under that lock.
+Setup releases the lock before starting a new watcher.

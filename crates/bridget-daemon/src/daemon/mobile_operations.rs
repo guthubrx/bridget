@@ -220,7 +220,7 @@ pub(super) fn handle(
             _ => bridget_transport::protocol::UpdateRequest::Status,
         };
         return match crate::updates::policy(&root, &q) {
-            Ok(result) => DaemonToWrapper::MobileOperationResult { result },
+            Ok(result) => DaemonToWrapper::MobileOperationResult { result: super::mobile_admin::project_update_status(result, state) },
             Err(code) => refusal(code),
         };
     }

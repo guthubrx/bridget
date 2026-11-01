@@ -195,7 +195,7 @@
 <string name="preview_html_update_action">Open Google Play</string>
 <string name="preview_html_update_manual">Open Google Play and search for Android System WebView.</string>
  <string name="automatic_updates">Automatic updates</string>
- <string name="automatic_updates_detail">Enabled by default for Android, Mac and Cartae. Bridget prepares the official release and waits for safe activation. Android may require permission.</string>
+ <string name="automatic_updates_detail">Enabled by default on this phone and federation machines configured for updates. Bridget waits for safe activation. Android may require permission.</string>
  <string name="update_last_check">Last checked: %1$s</string>
  <string name="update_checking">Checking for a newer version…</string>
  <string name="update_available_stage">A newer version is available.</string>
@@ -212,7 +212,7 @@
  <string name="update_storage_unavailable">Preparation unavailable. Check available storage, then check again.</string>
  <string name="update_disabled">Automatic installation is off. The prepared version remains available.</string>
     <string name="android_updates_title">Android application</string>
-    <string name="host_updates_title">Bridget on Mac and Cartae</string>
+    <string name="host_updates_title">Bridget federation</string>
     <string name="host_updates_pending">Choice pending for computers. Their setting is not confirmed yet.</string>
     <string name="host_updates_unknown">Update status unavailable. Check the connection again.</string>
     <string name="host_updates_on">Automatic updates are enabled on computers.</string>
@@ -388,4 +388,8 @@
  <string name="specialist_memory_history">Memory revisions</string>
  <string name="specialist_open_conversation">Open conversation and tasks</string>
  <string name="specialist_pending_status">Read exact status</string>
+ <string name="host_update_not_reported">No report received. Check this machine’s update service.</string>
+ <string name="host_update_stale">Old report. Check the update service and its connection.</string>
+ <string name="host_update_version_unknown">Version not observed</string>
+ <string name="host_update_service_inactive">Service stopped or unconfirmed. Ask this machine’s administrator before restarting it.</string>
 </resources>

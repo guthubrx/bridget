@@ -2,6 +2,8 @@
 """Bridget updates: official stable assets, one host lock, bounded activation.
 Bundled in the binary. No URL, service command or path is accepted from mobile.
 """
+import argparse
+import plistlib
 import fcntl
 import hashlib
 import io
@@ -290,13 +292,119 @@ def switch_link(link, target):
         temp.unlink(missing_ok=True)
 
 
+def service_name(system, service):
+    if service in SERVICES.get(system, {}):
+        return SERVICES[system][service]
+    # Noms d'unités Bridget seulement, jamais un chemin ou une commande téléchargée.
+    pattern = (r"bridget-(?:core|mobile|worker)(?:-[a-zA-Z0-9_-]{1,128})?\.service"
+               if system == "linux" else r"com\.bridget\.(?:t3|worker\.[a-zA-Z0-9_-]{1,128})")
+    if system not in SERVICES or not isinstance(service, str) or not re.fullmatch(pattern, service):
+        raise Refused("update_service_invalid")
+    return service
+
+
+def setup(home, root, host, services):
+    """Raccord local explicite ; ne démarre aucun worker ni mission."""
+    system = platform.system().lower()
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", host):
+        raise Refused("update_host_not_configured")
+    if not services or len(services) > 16 or len(set(services)) != len(services):
+        raise Refused("update_service_invalid")
+    names = [service_name(system, service) for service in services]
+    if len(set(names)) != len(names):
+        raise Refused("update_service_invalid")
+    binary = home / ".local/bin/bridget"
+    socket_path = os.environ.get("BRIDGET_SOCKET", str(root / "bridget.sock"))
+    if not binary.is_symlink() or not binary.resolve().is_file():
+        raise Refused("update_stable_link_required")
+    lock_path = root / "update-host.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Refused("update_setup_watcher_busy")
+        if private_json(root / "update-host-state.json", {}).get("activation"):
+            raise Refused("update_activation_active")
+        old = private_json(root / "update-host.json")
+        if old and old != {"host": host, "services": services}:
+            raise Refused("update_setup_conflict")
+        # Vérifier les unités avant toute écriture. Un service arrêté reste arrêté.
+        for name in names:
+            command = (["systemctl", "--user", "cat", name] if system == "linux"
+                       else ["launchctl", "print", "gui/" + str(os.getuid()) + "/" + name])
+            subprocess.run(command, check=True, capture_output=True, timeout=10)
+        if system == "linux":
+            unit = home / ".config/systemd/user/bridget-updates.service"
+            def quoted(value):
+                if any(c in str(value) for c in "\r\n"):
+                    raise Refused("update_setup_path_invalid")
+                return '"' + str(value).replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"') + '"'
+            content = ("[Unit]\nDescription=Bridget automatic updates\nAfter=network-online.target\n"
+                       "[Service]\nType=simple\nExecStart=" + quoted(binary) + " updates watch\n"
+                       "Environment=" + quoted("BRIDGET_HOME=" + str(root)) + "\n"
+                       "Environment=" + quoted("BRIDGET_SOCKET=" + socket_path) + "\n"
+                       "Environment=" + quoted("PATH=" + str(home / ".local/bin") + ":/usr/local/bin:/usr/bin:/bin") + "\n"
+                       "UMask=0077\nRestart=on-failure\nRestartSec=60\nKillMode=process\n"
+                       "SendSIGKILL=no\nTimeoutStopSec=30\n[Install]\nWantedBy=default.target\n")
+            start = [["systemctl", "--user", "daemon-reload"],
+                     ["systemctl", "--user", "enable", "--now", "bridget-updates.service"]]
+        else:
+            unit = home / "Library/LaunchAgents/com.bridget.updates.plist"
+            content = plistlib.dumps({"Label": "com.bridget.updates",
+                "ProgramArguments": [str(binary), "updates", "watch"],
+                "EnvironmentVariables": {"BRIDGET_HOME": str(root), "BRIDGET_SOCKET": socket_path,
+                    "PATH": str(home / ".local/bin") + ":/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+                "RunAtLoad": True, "KeepAlive": True, "ExitTimeOut": 30, "ThrottleInterval": 60,
+                "Umask": 63, "StandardOutPath": str(root / "updates-service.log"),
+                "StandardErrorPath": str(root / "updates-service.log")}).decode()
+            start = [["launchctl", "bootstrap", "gui/" + str(os.getuid()), str(unit)]]
+        if unit.is_symlink():
+            raise Refused("update_setup_path_invalid")
+        unit.parent.mkdir(parents=True, exist_ok=True)
+        if not unit.exists():
+            with unit.open("x") as stream:
+                stream.write(content)
+            unit.chmod(0o600)
+        else:
+            # Une unité gérée par l'opérateur n'est pas écrasée en silence.
+            if unit.stat().st_uid != os.getuid() or not unit.is_file() or unit.stat().st_mode & 0o022:
+                raise Refused("update_setup_path_invalid")
+            if system == "darwin":
+                present = subprocess.run(["launchctl", "print", "gui/" + str(os.getuid()) + "/com.bridget.updates"],
+                                         capture_output=True, timeout=10)
+                if present.returncode == 0:
+                    start = []
+        atomic_json(root / "update-host.json", {"host": host, "services": services})
+    for command in start:
+        subprocess.run(command, check=True, capture_output=True, timeout=30)
+    return {"status": "ok", "host": host, "services": services,
+            "next_action": "Lire bridget updates status ; les autres travaux suivent leur état."}
+
+
+
 def service_command(system, action, service):
-    name = SERVICES[system][service]
+    name = service_name(system, service)
     if system == "linux":
         return ["systemctl", "--user", action, name]
     if action == "restart":
         return ["launchctl", "kickstart", "-k", "gui/" + str(os.getuid()) + "/" + name]
     return ["launchctl", "print", "gui/" + str(os.getuid()) + "/" + name]
+
+
+def services_running(system, services):
+    for service in services:
+        try:
+            result = subprocess.run(
+                service_command(system, "is-active" if system == "linux" else "print", service),
+                capture_output=True, timeout=5)
+            if result.returncode or (system == "linux" and result.stdout.strip() != b"active"):
+                return False
+            if system == "darwin" and b"state = running" not in result.stdout:
+                return False
+        except (OSError, subprocess.SubprocessError):
+            return False
+    return True
 
 
 def restart(system, services, deadline):
@@ -318,7 +426,7 @@ def healthy(system, services, binary, expected, deadline):
                 if system == "darwin" and b"state = running" not in result.stdout:
                     raise Refused("update_service_unavailable")
             for service in services:
-                name = SERVICES[system][service]
+                name = service_name(system, service)
                 if system == "linux":
                     pid = subprocess.run(["systemctl", "--user", "show", "-p", "MainPID", "--value", name], check=True, capture_output=True, timeout=5).stdout.decode().strip()
                     if not pid.isdigit() or Path("/proc", pid, "exe").resolve() != Path(binary).resolve():
@@ -384,8 +492,11 @@ class Updater:
         if not re.fullmatch(r"[a-zA-Z0-9_.-]{1,128}", config["host"]):
             raise Refused("update_host_not_configured")
         services = config["services"]
-        if not isinstance(services, list) or not services or len(set(services)) != len(services) or any(s not in SERVICES[self.system] for s in services):
+        if not isinstance(services, list) or not services or len(set(services)) != len(services) or len(services) > 16 or any(not isinstance(s, str) for s in services):
             raise Refused("update_host_not_configured")
+        names = [service_name(self.system, service) for service in services]
+        if len(set(names)) != len(names):
+            raise Refused("update_service_invalid")
         self.host, self.services = config["host"], services
         architecture = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64"}.get(platform.machine())
         if not architecture:
@@ -500,6 +611,10 @@ class Updater:
         current = rpc(self.binary, "status")
         if not current.get("automatic", False) and not (manual and current.get("install_target") == v):
             self.report("disabled", v)
+            return
+        if not services_running(self.system, self.services):
+            self.save(error="update_service_inactive")
+            self.report("service_inactive", v)
             return
         try:
             clients = client_check(executable, self.binary)
@@ -648,6 +763,13 @@ def main():
     root = Path(os.environ.get("BRIDGET_HOME", str(home / ".cache/bridget-core")))
     if not root.is_dir() or root.is_symlink() or root.stat().st_uid != os.getuid() or root.stat().st_mode & 0o077:
         raise Refused("update_root_invalid")
+    if os.environ.get("BRIDGET_UPDATE_SETUP") == "1":
+        parser = argparse.ArgumentParser(description="Raccorder cette machine aux mises à jour de la fédération")
+        parser.add_argument("--host", required=True)
+        parser.add_argument("--service", action="append", required=True)
+        args = parser.parse_args()
+        print(json.dumps(setup(home, root, args.host, args.service)))
+        return
     lock_path = root / "update-host.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w") as lock:
@@ -679,4 +801,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (Refused, OSError, subprocess.SubprocessError) as error:
+        code = str(error) if isinstance(error, Refused) else "update_local_service_unavailable"
+        messages = {
+            "update_setup_watcher_busy": "Lire le reçu de maintenance puis attendre la fin du passage en cours. Le watcher possède encore son verrou ; ne pas retirer ce verrou.",
+            "update_setup_conflict": "Conserver la configuration existante. Demander au responsable de cette machine quelle liste de services doit être suivie.",
+            "update_service_invalid": "Corriger le nom du service : seuls les services Bridget de cette machine sont admis.",
+            "update_activation_active": "Conserver les services actuels. Faire terminer la maintenance déjà enregistrée avant de modifier le raccord."
+        }
+        print(json.dumps({"status":"refused","code":code,"scope":"this_machine",
+            "message":messages.get(code, "Faire vérifier le service local et sa configuration par le responsable de cette machine."),
+            "recovery":"Aucune mission à recréer. Les autres travaux autorisés suivent leur propre état ; aucun arrêt global n'est constaté."}))
+        sys.exit(1)
