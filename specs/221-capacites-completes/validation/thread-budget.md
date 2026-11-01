@@ -1,6 +1,6 @@
 # Budget de lecture du connecteur de bureau
 
-Statut : contrôlé, livraison en cours. Programme 52/182 In Progress.
+Statut : intégré, publié et activé. Programme 52/182 In Progress.
 
 ## Incident et corrélation
 Signalement opus201-primary-absent-petits1075-20261101-01, tâche
@@ -53,3 +53,45 @@ Le correctif est technique, sans nouveau parcours d'interface :
 pas de diaporama requis. Les preuves brutes, journaux et reçus restent privés
 dans /Users/moi/.cache/bridget221-thread-budget et
 /home/moi/.cache/bridget221-thread-budget.
+
+## Revue et activation
+Revue native eda3794b, lecture seule : aucun P1/P2 concret dans le delta.
+Sa réserve de concurrence est bornée par Session::call : le mutex partagé
+couvre la requête et son parse ; le pont ne lance pas ces lectures en parallèle.
+Cela ne supprime pas le coût de décodage du corps. Tests effectivement PASS
+chez le responsable ; revue lue/ACK et clôture demandée une fois.
+
+Source exécutable 6b131e83e077734489439058dcb09d37a900b224,
+intégrée/poussée. Build 221-thread-budget-r1, version 0.6.5.
+Linux : 41 390 928 octets, GLIBC maximum 2.34,
+SHA256 b5ddd06b91b965a073ce02995f70b0b1ec28b3446d90505fdb67c09f74b5f1dc.
+Mac : 34 172 608 octets,
+SHA256 9ef290f2e7a2a8bcefdf96fb486a9a5bafd4a36fd093ca0c34ddb45388d8df29.
+356 fichiers de sources comparés aux snapshots : aucune différence.
+
+Sept images réellement chargées et hachées : maître Cartae 3685534,
+mobile 3685611, worker Cartae 3686415, worker SYS 1155585, worker KS1527812,
+worker Mac 86452, pont Mac86817. Coupure maître 2,13 s.
+Wrappers Cartae3405178/naissance300643209 et2500061/naissance270585460
+observés conservés. Aucun service métier ni mission historique relancé.
+
+Retour221-continuable-r3 compatible par les deux lecteurs de formats ;
+pointeurs rollback Cartae/Mac écrits par l'écrivain natif atomique sous verrou,
+sans activation concurrente. Retour haché, updaters repris.
+Les anciens clients MCP221-view-sync sont conservés ; pas de nouveau schéma.
+
+Pont repris à01:03:54UTC ; fil monuments exposé à01:04:22UTC,
+nom confirmé à01:04:24UTC, état privé actualisé après exposition.
+Aucune erreur response limit entre la reprise et la lecture de preuve ;
+le même fil échouait toutes les6s avant le passage.
+Réattestation native révision15 puis même task_status de revue réussis.
+Pas d'annulation ou de mission de qualification supplémentaire.
+Les trois parents ont été informés, reçus in_flight conservés ; leur lecture
+n'est pas prétendue acquise.
+
+Trois copies binaires de transfert vérifiées retirées :124172784octets.
+installed appelé Mac/SYS : staging non enregistré Mac et observation
+processus incomplète SYS ; caches conservés sans forcer.
+Actif et retour, images encore utilisées et worktrees de revue sous
+observation incomplète conservés. Workspace221 reste nécessaire à la suite.
+Programme global52/182InProgress, aucune catégorie entière close.

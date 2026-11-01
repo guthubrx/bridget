@@ -292,3 +292,12 @@ deux remarques de projection corrigées et contrôlées. Source06efa57b,
 build221-continuable-r3 chargé sur sept services/SHA vérifiés.
 Aucune ancienne mission rejouée. Preuve : validation/continuation.md.
 Programme52/182, In Progress.
+
+
+Convergence connecteur de bureau (C27, sans clôture supplémentaire) :
+lecture V2 bornée réservée64Mio, HTTPgénéral16Mio inchangé ; réponse réelle28Mo
+confirmée, aucun repli historique ni nouveau droit. Trois contrôlesLinux/2Mac
+PASS et revueeda3794b sansP1/P2. Source6b131e83 chargée sur sept services ;
+lecture de fil revenue sans response limit depuis reprise. L'annulation9396
+avait déjà réussi avant correction ; cause du premierprimary_absent noncorrélée.
+Preuve : validation/thread-budget.md. Programme52/182InProgress.

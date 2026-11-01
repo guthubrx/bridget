@@ -109,6 +109,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/budgetfil — source6b131e83 intégrée/poussée ; build221-thread-budget-r1 chargé7services/SHA vérifiés, coupure2,13s. Réponse officielle bornée monuments28 038 589octets refusée16Mio ; budget64Mio réservé à cette route, autresHTTP16Mio et contrôles identiques. Trois testsLinux/2MacPASS, revueeda3794b sansP1/P2, mutexSession borne concurrence. Filmonuments exposé01:04:22UTC, plus de response limit depuis reprise ; lien natif/revue relus. Annulation9396 avait réussi00:55:47UTC avant ce correctif, causeinitialeprimary_absent noncorrélée, diagnostic rectifié. WrappersCartae3405178/2500061 préservés, rollback221-continuable-r3 natif vérifié ; aucun rejeu/service métier.124172784octets de transferts retirés ; caches/WTrevues sous observation incomplète conservés. Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/thread-budget.md.
+
+
 Session221/reprise — source06efa57b intégrée/poussée ; build221-continuable-r3 chargé sur7services/SHA vérifiés, coupure2,18s. continuable distant exige délai valide, présence maître et observation fraîche worker Released/native_ready ; ExecutionStatus négocié, lecture pure reçu/OS sans signal/wait/slot/Git/fournisseur. Ancien prédicat structurel gardé pour conservation ; aucune libération de garde depuis inéligibilité. Six tests distinctsLinux/3MacPASS, revue0b5a6415 P1levé et deux remarques corrigées/contrôlées. WrappersCartae3405178/2500061 préservés, rollbackworkspace-busy natif vérifié, lien revenu après republication. Aucun rejeu5b00/ronde6 ou service métier.124169880octets de transferts retirés ; caches/WTrevues/anciennes images sous observation incomplète conservés. MCP221-view-sync existants, nouveau statut réellement lu sans nouveau schéma. Programme52/182InProgress. Preuves : specs/221-capacites-completes/validation/continuation.md.
 
 
