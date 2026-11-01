@@ -1199,3 +1199,23 @@ origin_project_preparation_busy, project_preparation_source_busy and
 project_preparation_busy. These refusals concern this call. Keep its key and
 check durable admission before a strict replay; never replace unknown work.
 Other authorized work follows its own state.
+
+
+### Machines associated with a probe refusal
+Recent refusals may include `detail.probe_targets`: machine, reason family,
+code and rejected candidate count. The `detail.reasons` totals are unchanged.
+This list describes observed checks, not a final execution choice.
+A historical reason without a machine stays unknown; no subcause is inferred.
+
+In Shared mode, `workspace_diverged` compares the target HEAD to the requested
+base. A matching source HEAD is insufficient. Do not rewind the target for a
+review. To inspect a published commit, the native discovery `commit_view`
+path may be suitable when loaded. It does not include the parent's uncommitted
+edits. Publish those edits before a remote review; any new envelope must follow
+the admission rules.
+
+For `capability_unavailable`, also compare the policies actually read by the
+master and worker: global and machine activation, connection, engine, model,
+effort and service option. A master declaration does not prove a worker
+declaration. Historical reasons do not distinguish these gates. Do not enable
+a policy or extend permissions without authorization.

@@ -589,12 +589,21 @@ fn record_routing_probe_refusal(
         RoutingProbeRefusalCode::Worker(code) => ("worker", serde_json::to_value(code)),
     };
     let Ok(code) = code else { return false; };
-    let note = json!({"event":"routing_probe_refused","correlation_id":correlation_id,
+    let mut note = json!({"event":"routing_probe_refused","correlation_id":correlation_id,
         "admission_id":admission_id,"candidate_id":candidate_id,"kind":kind,"code":code})
-        .to_string();
-    if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
-        return false;
+        ;
+    if let Some(machine) = candidate_id.strip_prefix('c')
+        .and_then(|id| id.parse::<usize>().ok()).and_then(|n| n.checked_sub(1))
+        .and_then(|index| plan.candidates.get(index)).map(|candidate|candidate.machine_id.as_str())
+        .filter(|machine|probe_machine_name(machine))
+    {
+        note["machine_id"]=json!(machine);
     }
+    if note.to_string().len()>MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES {
+        note.as_object_mut().expect("object").remove("machine_id");
+    }
+    let note=note.to_string();
+    if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES { return false; }
     eprintln!("bridget_probe_refusal {note}");
     plan.decision_notes.push(note);
     true
@@ -639,13 +648,13 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Consultez detail.workspace_tasks si présent, puis bridget_task_status avec les identifiants indiqués. Shared peut devoir changer le HEAD de la racine ; une tâche dans un worktree descendant peut aussi l’interdire. Les références du maître sont des pistes, pas une preuve de réservation worker. Si elles manquent, demandez au responsable une corrélation ciblée des préparations et reçus du worker sur cette machine. Ne libérez aucune garde à la main.",
                 "Si la garde persiste après la clôture demandée par son propriétaire, demandez à l'utilisateur une vérification ciblée de l'arrêt ; n'interrompez pas les autres travaux."),
             Some(CandidateProbeRefusal::WorkspaceDiverged) => (
-                "Comparez la base attendue et le HEAD du dossier sans les modifier. Préservez les commits divergents et vérifiez le dossier réellement choisi ; ne remplacez pas la base imposée.",
+                "Comparez la base attendue avec le HEAD du dossier cible, pas seulement le HEAD source. Shared refuse lorsque ce HEAD cible n'est pas un ancêtre de la base demandée ; ne reculez ni ne remplacez son histoire. Pour revoir un commit publié sans déplacer ce dossier, le parcours natif commit_view en discovery peut convenir si ses outils sont chargés. Il ne contient pas les modifications non commitées : publier le travail à revoir avant une revue distante. Toute autre enveloppe exige une nouvelle demande autorisée après clarification de l'ancienne issue et fin de ses appels.",
                 "Si la divergence exige de modifier un dossier partagé, demandez à son propriétaire ou à l'utilisateur quelle préparation autoriser après conservation du travail."),
             Some(CandidateProbeRefusal::WorkspaceBaseUnavailable) => (
                 "Vérifiez que le SHA complet demandé est publié et lisible dans le dépôt ou miroir de la même cible. Conservez ce SHA ; une autre base ne remplace pas la source demandée.",
                 "Si le commit n'est pas accessible par la préparation native, demandez à l'utilisateur de faire corriger son accès ou sa publication ; ne créez pas de mission de substitution."),
             Some(CandidateProbeRefusal::CapabilityUnavailable) => (
-                "Comparez la déclaration du profil, du moteur, du modèle et de l'effort sur la machine demandée, puis les capacités réellement négociées par son worker. Le contrôle précis refusé n'a pas été conservé. Ce code ne prouve ni programme absent ni abonnement incompatible.",
+                "Sur les machines indiquées dans detail.probe_targets lorsqu'il est présent, comparez la politique du maître avec celle réellement lue par le worker : politique globale et machine activées, connexion déclarée et activée, moteur, modèle, effort et option de service. Vérifiez ensuite la préparation du profil et les capacités négociées. Ce motif ne distingue pas ces contrôles ; sa sous-cause non conservée reste inconnue. Un catalogue annoncé par le maître ne prouve pas sa déclaration sur le worker. Ce code ne prouve ni programme absent ni abonnement incompatible.",
                 "Si la déclaration ou la version chargée ne peut pas être vérifiée, demandez à l'utilisateur une correction ciblée de ce profil ou composant sur cette machine ; aucun changement de droits, compte, modèle ou hôte pour contourner ce refus."),
             Some(CandidateProbeRefusal::ResourceLimit) => (
                 "Attendez le drainage des demandes natives en cours sur le worker puis vérifiez detail.admission avant un éventuel rejeu strict. La file était pleine lors de la sonde ; son état actuel n'est pas établi.",
@@ -759,6 +768,7 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
 fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
     use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
     let mut counts = BTreeMap::<(String, String), usize>::new();
+    let mut targets = BTreeMap::<(String, String, String), usize>::new();
     for note in plan.decision_notes.iter().take(MAX_ROUTING_PROBE_REFUSAL_NOTES) {
         if note.len() > MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES { continue; }
         let Ok(value) = serde_json::from_str::<Value>(note) else { continue; };
@@ -771,6 +781,9 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
         };
         if valid && let Some(code) = value["code"].as_str() {
             *counts.entry((kind.to_owned(), code.to_owned())).or_default() += 1;
+            if let Some(machine)=value["machine_id"].as_str().filter(|machine|probe_machine_name(machine)) {
+                *targets.entry((machine.to_owned(),kind.to_owned(),code.to_owned())).or_default()+=1;
+            }
         }
     }
     let mut result = failure("routing_candidate_unavailable");
@@ -787,8 +800,46 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
         }).collect::<Vec<_>>();
         project_probe_constraints(&mut result, &reasons);
         result["detail"]["reasons"] = json!(reasons);
+        let targets=targets.into_iter().map(|((machine,kind,code),candidates)|
+            json!({"machine_id":machine,"kind":kind,"code":code,"candidates":candidates})).collect::<Vec<_>>();
+        if !targets.is_empty() { project_probe_targets(&mut result,&targets); }
     }
     result
+}
+
+fn probe_machine_name(machine: &str) -> bool {
+    !machine.is_empty() && machine.len()<=256
+        && machine.bytes().all(|b|b.is_ascii_alphanumeric()||matches!(b,b'.'|b'-'|b'_'))
+        && bridget_core::host_is_attested(machine)
+}
+
+fn valid_probe_targets(targets: &[Value], reasons: &[Value]) -> bool {
+    if targets.is_empty() || targets.len()>MAX_ROUTING_PROBE_REFUSAL_NOTES { return false; }
+    let mut previous=None;
+    let mut sums=BTreeMap::<(&str,&str),u64>::new();
+    for target in targets {
+        if !target.as_object().is_some_and(|o|o.len()==4) {return false;}
+        let (Some(machine),Some(kind),Some(code),Some(count))=(target["machine_id"].as_str(),
+            target["kind"].as_str(),target["code"].as_str(),target["candidates"].as_u64())
+            else {return false;};
+        if !probe_machine_name(machine) || !(1..=128).contains(&count) {return false;}
+        let key=(machine,kind,code);
+        if previous.is_some_and(|old|old>=key) {return false;} previous=Some(key);
+        let Some(total)=reasons.iter().find(|r|r["kind"]==kind&&r["code"]==code)
+            .and_then(|r|r["candidates"].as_u64()) else {return false;};
+        let sum=sums.entry((kind,code)).or_default();*sum+=count;
+        if *sum>total {return false;}
+    }
+    true
+}
+
+fn project_probe_targets(result: &mut Value, targets: &[Value]) {
+    result["detail"]["probe_targets"]=json!(targets);
+    result["detail"]["probe_stage"]=json!("candidate_probe");
+    result["detail"]["target_coverage"]=json!("reported_refusals_only");
+    result["detail"]["target_verification"]=json!("Machines des candidats refusés lors de cette sonde, sans choix final d'exécution. Les anciens motifs sans machine restent inconnus ; la sous-cause du contrôle n'est pas déduite de cette liste.");
+    let message=format!("{} Machines concernées : detail.probe_targets ; aucune machine finale choisie n'est attestée.",result["message"].as_str().unwrap_or(""));
+    result["message"]=json!(message);result["detail"]["message"]=result["message"].clone();
 }
 
 // Les relectures du choix retournent une erreur String. Transporter seulement
@@ -800,7 +851,9 @@ fn routing_probe_error(plan: &RoutingAdmissionPlan, code: String) -> String {
     let reasons = reasons.iter().map(|reason| json!({
         "kind":reason["kind"], "code":reason["code"], "candidates":reason["candidates"]
     })).collect::<Vec<_>>();
-    format!("{code}:{}", json!(reasons))
+    if let Some(targets)=failure["detail"]["probe_targets"].as_array() {
+        format!("{code}:{}",json!({"reasons":reasons,"targets":targets}))
+    } else { format!("{code}:{}", json!(reasons)) }
 }
 
 /// O(M log P) sur les mappings et préférences bornés, une fois par machine et par sonde.
@@ -3981,8 +4034,17 @@ fn failure(code: &str) -> Value {
         // O(R), R <=128. Refuser le contenu libre avant toute projection MCP.
         use bridget_transport::protocol::{CandidateProbeRefusal, WorkerRefusal};
         let mut result = failure("routing_candidate_unavailable");
-        if encoded.len() <= 16384
-            && let Ok(Value::Array(reasons)) = serde_json::from_str::<Value>(encoded)
+        let decoded=if encoded.len()<=65536 {serde_json::from_str::<Value>(encoded).ok()} else {None};
+        let (reasons,targets)=match decoded {
+            Some(Value::Array(reasons)) if encoded.len()<=16384 => (Some(reasons),None),
+            Some(Value::Object(mut object)) if object.len()==2 && object.contains_key("reasons") && object.contains_key("targets") => {
+                let reasons=object.remove("reasons").and_then(|v|v.as_array().cloned());
+                let targets=object.remove("targets").and_then(|v|v.as_array().cloned());
+                if targets.is_none() {return result;} (reasons,targets)
+            }
+            _=>(None,None),
+        };
+        if let Some(reasons)=reasons
             && !reasons.is_empty() && reasons.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTES
             && reasons.iter().all(|reason| {
                 reason.as_object().is_some_and(|r| r.len()==3)
@@ -3993,8 +4055,10 @@ fn failure(code: &str) -> Value {
                         _ => false,
                     }
             }) {
+            if targets.as_ref().is_some_and(|targets|!valid_probe_targets(targets,&reasons)) {return result;}
             project_probe_constraints(&mut result, &reasons);
             result["detail"]["reasons"] = json!(reasons);
+            if let Some(targets)=targets {project_probe_targets(&mut result,&targets);}
         }
         return result;
     }
@@ -14713,7 +14777,8 @@ mod tests {
         for (index,note) in plan.decision_notes.iter().enumerate() {
             assert!(note.len() <= MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES);
             let value:Value = serde_json::from_str(note).unwrap();
-            assert_eq!(value.as_object().unwrap().len(), 6);
+            assert_eq!(value.as_object().unwrap().len(), 7);
+            assert_eq!(value["machine_id"],"cartae");
             assert_eq!(value["correlation_id"], correlation);
             assert_eq!(value["admission_id"], admission);
             assert_eq!(value["candidate_id"], routing_candidate_id(index));
@@ -14770,6 +14835,63 @@ mod tests {
         assert_eq!(last["code"], "worker_unavailable");
         drop(state);
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec221_probe_targets_keep_machine_without_new_probe_or_private_text() {
+        use bridget_transport::protocol::*;
+        let (state,config,_rx,_reader,request,_root)=routing168_fixture(3);
+        let mut plan=routing168_plan(&state,&request);
+        plan.candidates[0].machine_id="cartae".into();
+        plan.candidates[1].machine_id="monordinateur".into();
+        let before=serde_json::to_value(state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
+        let correlation=Uuid::new_v4().to_string();
+        let admission=format!("a-{}","a".repeat(32));
+        assert!(record_routing_probe_refusal(&mut plan,&correlation,&admission,"c001",
+            RoutingProbeRefusalCode::Candidate(CandidateProbeRefusal::WorkspaceDiverged)));
+        assert!(record_routing_probe_refusal(&mut plan,&correlation,&admission,"c002",
+            RoutingProbeRefusalCode::Candidate(CandidateProbeRefusal::CapabilityUnavailable)));
+        let view=routing_probe_failure(&plan);
+        let targets=view["detail"]["probe_targets"].as_array().unwrap();
+        assert_eq!(targets.len(),2);
+        assert_eq!(targets[0]["machine_id"],"cartae");
+        assert_eq!(targets[1]["machine_id"],"monordinateur");
+        let encoded=routing_probe_error(&plan,"routing_candidate_unavailable".into());
+        let replay=failure(&encoded);
+        assert_eq!(replay["detail"]["probe_targets"],view["detail"]["probe_targets"]);
+        assert_eq!(replay["detail"]["reasons"],view["detail"]["reasons"]);
+        assert_eq!(replay["code"],"routing_candidate_unavailable");
+        assert!(auto_terminal_refusal_code(&encoded).is_none());
+        assert!(replay["message"].as_str().unwrap().contains("aucune machine finale"));
+        let mut bad=serde_json::from_str::<Value>(encoded.split_once(':').unwrap().1).unwrap();
+        bad["targets"][0]["machine_id"]=json!("/PRIVATE/path");
+        let refused=failure(&format!("routing_candidate_unavailable:{bad}"));
+        assert!(refused["detail"]["probe_targets"].is_null());
+        assert!(!refused.to_string().contains("PRIVATE"));
+        bad["targets"][0]["machine_id"]=json!("cartae");bad["targets"][0]["candidates"]=json!(128);
+        assert!(failure(&format!("routing_candidate_unavailable:{bad}"))["detail"]["probe_targets"].is_null());
+        let codes=["mapping_unavailable","definition_unavailable","permissions_changed","workspace_unavailable",
+            "workspace_dirty","workspace_busy","workspace_diverged","capability_unavailable"];
+        let reasons=codes.iter().map(|code|json!({"kind":"candidate","code":code,"candidates":16})).collect::<Vec<_>>();
+        let targets=(0..16).flat_map(|machine|codes.iter().map(move|code|json!({
+            "machine_id":format!("{machine:02}{}","x".repeat(254)),"kind":"candidate","code":code,"candidates":1
+        }))).collect::<Vec<_>>();
+        let mut targets=targets;targets.sort_by(|a,b|a["machine_id"].as_str().cmp(&b["machine_id"].as_str())
+            .then_with(||a["code"].as_str().cmp(&b["code"].as_str())));
+        let maximal=json!({"reasons":reasons,"targets":targets});
+        let encoded=maximal.to_string();assert!(encoded.len()>16384 && encoded.len()<=65536);
+        let full=failure(&format!("routing_candidate_unavailable:{encoded}"));
+        assert_eq!(full["detail"]["probe_targets"].as_array().unwrap().len(),128);
+        let mut duplicate=maximal.clone();duplicate["targets"][1]=duplicate["targets"][0].clone();
+        assert!(failure(&format!("routing_candidate_unavailable:{duplicate}"))["detail"]["probe_targets"].is_null());
+        let mut unknown=maximal.clone();unknown["targets"][0]["code"]=json!("PRIVATE_CODE");
+        let unknown=failure(&format!("routing_candidate_unavailable:{unknown}"));
+        assert!(unknown["detail"]["probe_targets"].is_null());assert!(!unknown.to_string().contains("PRIVATE_CODE"));
+        let too_big=format!("{}{}",encoded," ".repeat(65536));
+        assert!(failure(&format!("routing_candidate_unavailable:{too_big}"))["detail"]["probe_targets"].is_null());
+        let after=serde_json::to_value(state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
+        assert_eq!(before,after);
+        drop(state);cleanup(&config);
     }
 
     #[test]

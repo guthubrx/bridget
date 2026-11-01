@@ -1959,3 +1959,23 @@ distinctes : origin_project_preparation_busy, project_preparation_source_busy
 et project_preparation_busy. Ces refus concernent l'appel. Conserver sa clé
 et vérifier l'admission durable avant tout rejeu strict ; ne pas créer de
 remplacement d'issue inconnue. Les autres travaux suivent leur propre état.
+
+
+### Machines concernées par un refus de sonde
+Les refus récents peuvent ajouter `detail.probe_targets` : machine, famille,
+code et nombre de candidats refusés. Les totaux `detail.reasons` sont conservés.
+Cette liste décrit les contrôles observés, pas une machine finale choisie.
+Un ancien motif sans machine reste inconnu ; aucune sous-cause n'est inventée.
+
+`workspace_diverged` en Shared compare le HEAD cible à la base demandée.
+Le HEAD source identique à cette base ne suffit pas. Ne pas reculer le dossier
+cible pour une revue. Pour lire un commit publié, la vue native `commit_view`
+en discovery peut convenir si ce parcours est chargé. Une vue du commit ne
+contient pas les modifications non commitées du parent. Les publier avant
+une revue distante ; toute nouvelle enveloppe suit les règles d'admission.
+
+`capability_unavailable` exige aussi de comparer les politiques réellement
+lues par le maître et le worker : activation globale et machine, connexion,
+moteur, modèle, effort et option de service. Une déclaration côté maître ne
+prouve pas sa présence côté worker. Le motif historique ne distingue pas ces
+gardes. Ne pas activer une politique ni élargir des droits sans mandat.
