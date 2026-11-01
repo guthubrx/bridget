@@ -100,4 +100,4 @@ T021/T022/T027/T033 vérifiées par les tests ciblés et le circuit réel décri
 État après T034 :31/34tâches cochées. Code et sept services corrigés, publication0.7.1 vérifiée. T034 reste ouverte uniquement pour constater le chargement du client MCP de ce fil et remettre le bilan natif à bridge1016. T028/T031 gardent la même porte ; aucun nouveau développement ni test métier demandé pour cette reprise.
 
 ## Lisibilité du catalogue
-- [ ] T035 Ajouter le nom humain courant du profil aux projections list/search/get des spécialistes, sans le confondre avec rôle ou UUID ; respecter les filtres existants. Vérifier renommage sans présence, absence de mutation et visibilité ; preuve CLI réelle avant/après, livraison active et publication complète cohérente.
+- [x] T035 Ajouter le nom humain courant du profil aux projections list/search/get des spécialistes, sans le confondre avec rôle ou UUID ; respecter les filtres existants. Vérifier renommage sans présence, absence de mutation et visibilité ; preuve CLI réelle avant/après, livraison active et publication complète cohérente.

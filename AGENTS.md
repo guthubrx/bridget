@@ -109,6 +109,18 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session222/T035 — nom humain ajouté aux listes/recherches/fiches, source7fa71bff.
+Version0.7.2/build222-specialists-names-r1 chargée7services/PID/SHA vérifiés ;
+CLI réelle retourne bridge1016 avec rôle et UUID séparés, aucune déclaration.
+Un seul test cibléPASS0,02s et lecture réelle ; pas de campagne ou nouvelle mission.
+Coupure2,26s, wrapper2500061 préservé, rollbackrecovery-r1 atomique/formats vérifiés.
+Six actifs0.7.2 publiés ; APK7002/certificat/lignée et garde avant/aprèsPASS,
+Firebase conservé, pas de nouvelle recette UI/FCM. Preuve CLI HTML vérifiée.
+195478474octets logiques de transferts retirés ; caches/actif/retour/WT222 sous
+portes antérieures ou observation incomplète conservés. Preuves :
+specs/222-roles-profils/validation/display-names.md.
+
+
 Session222/T034 — source7333a6ed intégrée/poussée9ce22f61 ; repriseV1/V2 diffère
 sans modifier le reçu quand route/identité/preuve du parent manque, révocation
 constatée reste refusée. Client : budget unique existant, coupure réessayée sur
