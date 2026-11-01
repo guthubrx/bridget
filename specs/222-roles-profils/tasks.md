@@ -93,3 +93,6 @@ T021/T022/T027/T033 vérifiées par les tests ciblés et le circuit réel décri
 
 ## État de clôture
 31/33tâches cochées. Première ouverte T028, puis T031 : même dépendance au client MCP de ce fil. Les fonctions sont développées et les services activés ; SpecKit et pipeline restent In Progress. Aucun test/build/revue/mission à refaire lors de la reprise du client.
+
+## Correction de reprise signalée après activation
+- [ ] T034 Préserver une admission d'époque antérieure lorsque le parent n'est pas encore republié ; conserver les refus de révocation constatée. Le client relit le même reçu sous son délai unique et rend tout refus final reçu sans le masquer. Vérifier V1/V2, absence de Start sans preuve, reprise du même choix et non-réouverture des anciens reçus17/18 ; livrer sur les services et nommer le client ancien.

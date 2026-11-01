@@ -11720,9 +11720,9 @@ fn recovered_auto_request(receipt: &AutoAdmissionReceipt) -> Result<AutoDelegate
 
 /// Trouve une route du propriétaire sans la considérer comme un rejeu : la
 /// reprise n'utilise que les mêmes faits vivants de droits que le puits natif.
-/// Un reçu d'époque antérieure a déjà reçu une réconciliation complète : sans
-/// route ou sans fait, il ne peut plus obtenir de droit et devient refusé au
-/// passage appelant. Les erreurs techniques restent, elles, observables.
+/// Une route ou une preuve absente pendant la republication ne prouve pas une
+/// perte de droits. Le reçu reste inchangé, sans Start, jusqu'à une preuve
+/// vivante. Une révocation constatée reste un refus durable.
 fn auto_recovery_context(
     receipt: &AutoAdmissionReceipt,
     state: &Arc<Mutex<DaemonState>>,
@@ -11741,19 +11741,25 @@ fn auto_recovery_context(
     };
     let (conn, fact, host, cwd) = {
         let st = state.lock().unwrap_or_else(|error| error.into_inner());
-        let Some(route) = st.router.get_agent(&receipt.owner) else {
+        if st.delegation_store.revoked_agent(&receipt.owner)? {
             return Err("permission_not_inherited".into());
+        }
+        let Some(route) = st.router.get_agent(&receipt.owner) else {
+            return Err("admission_parent_republication_pending".into());
         };
         let conn = route.connection_id.clone();
         let Some((owner, instance)) = live_connection_identity(&st, &conn) else {
-            return Err("permission_not_inherited".into());
+            return Err("admission_parent_republication_pending".into());
         };
         if owner != receipt.owner {
+            return Err("admission_parent_republication_pending".into());
+        }
+        if st.delegation_store.revoked(&instance)? {
             return Err("permission_not_inherited".into());
         }
         let fact = parent_fact(&st, &owner, &instance, Some(&receipt.request_id), None)?;
         if fact.is_none() && root_permission(&st, &owner, &instance)?.is_none() {
-            return Err("permission_not_inherited".into());
+            return Err("admission_parent_republication_pending".into());
         }
         (conn, fact, st.host.clone(), cwd)
     };
@@ -11912,6 +11918,7 @@ fn recover_routing_admission(
     let plan = frozen_routing_plan(receipt)?;
     let (conn, fact, project) = match auto_recovery_context(receipt, state) {
         Ok(context) => context,
+        Err(code) if code == "admission_parent_republication_pending" => return Ok(()),
         Err(code) if code == "permission_not_inherited" => {
             let st = state.lock().unwrap_or_else(|e| e.into_inner());
             st.delegation_store
@@ -12003,6 +12010,7 @@ fn recover_auto_admissions(state: &Arc<Mutex<DaemonState>>) {
             let plan = frozen_auto_admission_plan(&receipt)?;
             let (conn, fact, project) = match auto_recovery_context(&receipt, state) {
                 Ok(context) => context,
+                Err(code) if code == "admission_parent_republication_pending" => return Ok(()),
                 Err(code) if code == "permission_not_inherited" => {
                     let st = state.lock().unwrap_or_else(|error| error.into_inner());
                     st.delegation_store.refuse_auto_admission(
@@ -17858,6 +17866,27 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 .execute_batch("DROP TRIGGER abort168")
                 .unwrap();
         }
+        // Fenêtre 222 : restart avant route, puis identité, puis preuve du parent.
+        let route = state.lock().unwrap().router.unregister_by_conn("conn-1").unwrap();
+        recover_auto_admissions(&state);
+        assert_eq!(routing168_receipt(&state, &request), chosen);
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        let instance = {
+            let mut st = state.lock().unwrap();
+            st.router.register(&route.agent_id, &route.agent_type, &route.connection_id).unwrap();
+            st.conn_instances.remove("conn-1").unwrap()
+        };
+        recover_auto_admissions(&state);
+        assert_eq!(routing168_receipt(&state, &request), chosen);
+        let fact = {
+            let mut st = state.lock().unwrap();
+            st.conn_instances.insert("conn-1".into(), instance);
+            st.native_permission_facts.remove("conn-1").unwrap()
+        };
+        recover_auto_admissions(&state);
+        assert_eq!(routing168_receipt(&state, &request), chosen);
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        state.lock().unwrap().native_permission_facts.insert("conn-1".into(), fact);
         recover_auto_admissions(&state);
         assert_eq!(
             routing168_receipt(&state, &request).state,
@@ -17873,6 +17902,43 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 .len(),
             1
         );
+        drop(state);
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec222_recovery_pending_parent_gap_never_overrides_revocation() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(2);
+        let mut plan = routing168_plan(&state, &request);
+        observe_routing_candidates("conn-1", &request, &mut plan, None, &state).unwrap();
+        let receipt = {
+            let mut st = state.lock().unwrap();
+            let receipt = routing_auto_receipt(OWNER.into(), &request,
+                serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap(),
+                &plan, st.coordinator_epoch, unix_timestamp()).unwrap();
+            frozen_routing_plan(&receipt).unwrap();
+            assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt, unix_timestamp()).unwrap());
+            st.coordinator_epoch += 1;
+            st.router.unregister_by_conn("conn-1").unwrap();
+            receipt
+        };
+        recover_auto_admissions(&state);
+        assert_eq!(routing168_receipt(&state, &request), receipt);
+        assert!(rx.try_recv().is_err());
+        {
+            let st = state.lock().unwrap();
+            st.delegation_store.grant_agent(OWNER, "instance-1", Path::new("/tmp"),
+                SpawnPosture::Development, true).unwrap();
+        }
+        recover_auto_admissions(&state);
+        let refused = routing168_receipt(&state, &request);
+        assert_eq!(refused.state, AutoAdmissionState::Refused);
+        assert_eq!(refused.refusal_code.as_deref(), Some("permission_not_inherited"));
+        assert!(refused.task_id.is_none());
+        recover_auto_admissions(&state);
+        assert_eq!(routing168_receipt(&state, &request), refused);
+        assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        assert!(rx.try_recv().is_err());
         drop(state);
         cleanup(&config);
     }
@@ -19819,20 +19885,16 @@ for frame in frames: print(json.dumps(frame),flush=True)
             .auto_admission_receipt("owner-hors-ligne", &offline_request.request_id)
             .unwrap()
             .unwrap();
-        assert_eq!(offline.state, AutoAdmissionState::Refused);
-        assert_eq!(
-            offline.refusal_code.as_deref(),
-            Some("permission_not_inherited")
-        );
+        assert_eq!(offline, offline_receipt, "absence de parent : aucun octet du reçu ne change");
         assert_eq!(
             st.delegation_store.admission_counts("").unwrap().0,
-            active_before_offline_recovery - 2,
-            "les reçus hors ligne et chosen invalide libèrent chacun leur slot actif"
+            active_before_offline_recovery - 1,
+            "seul chosen invalide libère son slot ; le reçu hors ligne reste en attente"
         );
         assert_eq!(
             auto_receipt_view(&mut st, &offline).unwrap_err(),
-            "permission_not_inherited",
-            "le rejeu durable reste le refus, sans HTTP ni lancement"
+            "admission_pending",
+            "le reçu attend la preuve du parent, sans HTTP ni lancement"
         );
         let resumed_timeout = st
             .delegation_store

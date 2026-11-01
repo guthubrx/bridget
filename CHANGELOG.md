@@ -6,6 +6,12 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.1 — 2026-11-01
+
+- Admission recovery waits for the parent's live identity and permission evidence instead of treating missing evidence as changed permissions. Explicit revocation still refuses admission.
+- Bounded client recovery keeps reading the same receipt through transport interruptions and returns observed terminal refusals. An unreadable outcome stays unknown. Historical requests17/18 are not replayed.
+- The Android0.7.0 application is unchanged.
+
 ## 0.7.0 — 2026-11-01
 
 Add declared roles and human-designated responsibilities, versioned specialist profiles, durable mandates, on-demand sessions, sourced cross-project memory, definition import/export and optional team compositions. MCP, CLI and the Android catalogue share native authority and receipts. No extra work budget is enabled by default. A compatible specialist-request reader is required before rollback.
