@@ -1,5 +1,5 @@
 # Lecture du journal indépendante des actualisations de fil
-Statut : correction en cours, session221/C27. Programme52/182 inchangé.
+Statut : livré, chargé et vérifié en fonctionnement. Session221/C27, programme52/182 inchangé.
 
 ## Incident et données réelles
 Signalementmonuments opus201-incident-journal-jsonl-20261101-01 :
@@ -85,3 +85,41 @@ fonctionnent ; cette fenêtre n'exécute pas le recalcul Tail répété.
 Le test socket nominal est revérifié PASS après le complément de cache.
 Aucun nouvel essai métier ou changement de borne ; le delta de performance
 réutilise exactement la même liste de fichiers.
+
+## Livraison finale r3
+Sources a206ec33, 7c4e921d puis 1249ea50859be09036ae9d8569505b1bf0409a7e
+intégrées et poussées. Les assemblages reprennent les mêmes356 fichiers que
+main ; SHA des sources vérifié sur Mac et SYS. Build221-journal-control-r3 :
+- Linux : SHA2568381c9f1795e3db503555fc5bc4649a123cb54d8d3e6984aa6155917585b7971,
+  41363648octets.
+- Mac : SHA256d73aaeb9f1b652a586b0cc8e282f0faf855059a9c78402be76c43be4d3f29dfd,
+  34180992octets.
+Images réellement chargées et hachées :
+Cartae maître120326, mobile120393, worker124411 ; SYS1192936 ;
+KS1582629 ; Mac worker7096 et pont7218.
+Deux passages maître : r2 en2,41s puis r3 en2,21s. WrapperCartae2500061,
+naissance270585460, conservé lors des deux passages. Aucun service métier,
+aucune mission historique ni aucun processus du rendu n'a été relancé.
+
+Après r3 sur le pont : le même appel tail8 rend8entrées complètes en2648ms,
+sans notice, séquences38433..38440, through38440.
+Après chargement des sept services : le même appel rend8entrées complètes
+en7610ms, sans notice, séquences38444..38451, through38451, next38452.
+Ces temps sont deux observations, pas un engagement de latence.
+Capabilities revient :45options déclarées, gel=false. Aucun nouveau modèle
+appelé pour qualifier. Une lecture du journal ne prouve aucun succès métier.
+
+Le retour natif r2 conserve les mêmes formats et marqueurs ; compatibilité
+avant/arrière, image et SHA vérifiés. Il contient le correctif de contrôle,
+mais pas l'optimisation finale Tail : ne pas le qualifier pour ce cas tail8.
+Les pointeurs rollback Cartae/Mac sont écrits atomiquement sous verrou puis
+relus. La version r1, seulement préparée, n'est jamais déclarée activée.
+Le clientMCP ouvert reste ancien ; la correction s'exécute dans le pont/relais,
+le schéma de lecture ne change pas et l'appel natif courant est vérifié.
+
+124090944octets de copies de transfert hachées retirés surMac/Cartae/KS.
+installedMac/SYS refuse encore le nettoyage pour observation incomplète des
+processus ; aucun forçage. Actif, retour, preuves et images/worktrees sous
+usage ou observation incomplète conservés. Pas de diaporama : correction
+technique vérifiée par sockets et appel MCP réel.
+Les demandeurs sont informés par messages Bridget, sans rejeu métier.

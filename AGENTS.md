@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/journal — sourcesa206ec33/7c4e921d/1249ea50 intégrées/poussées ;
+build221-journal-control-r3 chargé7services/SHA vérifiés. Commandes journal
+vers relais borné sans attenteHTTP ; lecteur sansmutexwriter, identifiants
+libérés avantEnd, Tail réutilise sa liste de fichiers pendant le rejeu.
+25contrôlesLinux distinctsPASS ; revue db7d13ed cohérente sansP1, remarques
+traitées et deltaautoaudité. R2partiel expirait encore : pile réelle a trouvé
+le recalculquadratique ; tail8 natif R3complet2,648s puis7,610s après activation.
+Liensession/catalogue revenus, coupuresmaître2,41s/2,21s ; wrapper2500061
+préservé. Rollbackr2 natif compatible, limite Tail documentée. Aucun rejeu
+métier ; patrimoine17c18e3c résultatdisponible, R55clé10refusée sanstâche.
+124090944octets de transferts retirés ; caches/images/WTsoususage ou observation
+incomplète conservés sans forcer. Programme52/182InProgress.
+Preuves : specs/221-capacites-completes/validation/journal-control.md.
+
+
 Session221/refussonde — source70d21226 intégrée/poussée, build221-probe-targets-r1
 chargé7services/SHA vérifiés, coupure2,38s. Refus rend machines/codes/comptes
 sans nouveau protocole, choix, droit ni admission ; guidageShared distingue

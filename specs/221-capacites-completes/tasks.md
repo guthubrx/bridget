@@ -322,3 +322,16 @@ clé03refusée sansTask après récupération, auto-audit déclaré.
 Coupure2,38s, wrappers observés préservés, rollback natif vérifié, lien revenu.
 124078464octets de transferts retirés, caches conservés sans forcer.
 Preuve : validation/probe-targets.md. Programme52/182InProgress.
+
+Convergence journal (C27, sans clôture supplémentaire) :
+sourcesa206ec33/7c4e921d/1249ea50 intégrées et poussées, build221-journal-control-r3
+chargé7services/SHA vérifiés. Abonnement direct au relais borné, lecteur sans
+verrou d'écriture, fin sur erreur libérant l'identifiant avant End ; Tail ne
+reparse plus l'historique à chaque tranche. Vingt-cinq contrôlesLinux distincts
+PASS ; revue db7d13ed sansP1 du mécanisme, points traités et delta auto-audité.
+Deux expirations r2 observées puis cause réelle profilée ; aucune fin annoncée
+avant tail8 réel complet en2,648s puis7,610s après sept services. Lien/catalogue
+revenus, coupures2,41s/2,21s, wrapper2500061 préservé, retourr2 compatible.
+124090944octets de transferts retirés ; caches et worktrees sous observation
+incomplète conservés. Aucun rejeu des demandes métier.
+Preuve : validation/journal-control.md. Programme52/182InProgress.
