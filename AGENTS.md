@@ -110,13 +110,18 @@ Ne pas décrire le produit par comparaison avec un client externe.
 <!-- SPECKIT START -->
 
 Session221/worker Mac : registre dédié actif
-/Users/moi/.config/bridget/worker-monordinateur-agents.json, PID89501,
+/Users/moi/.cache/bridget-core/worker-monordinateur-agents.json, PID27140,
 même image0.7.3. Origine origin-agents177.json inchangée pour les lancements locaux.
 Seul alias local→identité provisionnée monordinateur normalisé ; mêmes4connexions/
 18modèles, aucun droit/compte ajouté. Chargement natif compatible, source inverse
 identique, aucun tour ni admission métier. CodexPro observe8modèles ; Codexnormal
 reste definition_changed, accès non prouvé. Préserver ce registry-file lors des
-prochaines maintenances. Reçus : specs/221-capacites-completes/validation/mac-worker-registration.md.
+prochaines maintenances. Le parent du registre doit rester le namespace attesté,
+tant que PrepareProject utilise registry.parent : ancien placement .config corrigé,
+3liens validés sans réécriture de fédération, octets du registre inchangés.
+Guidage link_missing corrigé, un test cibléPASS ; revue indisponible primary_absent.
+Delta exécutable à charger par225/0.7.4, pas annoncé actif en0.7.3.
+Reçus : specs/221-capacites-completes/validation/mac-worker-registration.md.
 
 
 Session 224 — suivi des mises à jour fédérées livré en 0.7.3.

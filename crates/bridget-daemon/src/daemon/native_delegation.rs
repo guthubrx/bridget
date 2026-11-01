@@ -3895,7 +3895,7 @@ fn failure(code: &str) -> Value {
     if let Some(encoded)=code.strip_prefix("routing_project_refused:") {
         return admission_guidance211::contextual_refusal(encoded);
     }
-    if matches!(code,"origin_proof_busy"|"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy") {
+    if matches!(code,"origin_proof_busy"|"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy"|"project_preparation_link_missing") {
         return origin_attestation_refusal(code);
     }
     if matches!(code,"model_options_invalid"|"model_options_not_activated"
@@ -5380,6 +5380,18 @@ pub(super) fn handle_with_peer(
 fn origin_attestation_refusal(code: &str) -> Value {
     let mut result=failure("permission_attestation_unavailable");
     result["detail"]["verification"]=json!("origin_session_reattest");
+    if code == "project_preparation_link_missing" {
+        let message = "Faire comparer le dossier du registre chargé par le worker source avec le namespace des liens fédérés installés. Le contrôle n'a pas confirmé de lien correspondant à ce dossier ; il ne prouve ni une panne réseau ni un changement de droits. Ce refus concerne cette préparation de projet. Les autres travaux autorisés suivent leur propre état.";
+        result["code"] = json!(code);
+        result["message"] = json!(message);
+        result["detail"]["message"] = json!(message);
+        result["detail"]["scope"] = json!("this_project_preparation");
+        result["detail"]["cause"] = json!(code);
+        result["detail"]["verification"] = json!("origin_project_preparation_link");
+        result["detail"]["recovery"] = json!("Conserver request_id, task_id éventuel et enveloppe ; lire l'admission durable avant tout rejeu strict. Sur la source, comparer le parent du --registry-file effectif aux champs root des configurations de fédération. Le parcours actuel utilise ce dossier comme namespace. Vérifier le raccord dans le namespace déjà attesté, puis confirmer le chargement du worker et le contrôle du lien. Ne créer aucune mission ou clé de remplacement d'issue inconnue.");
+        result["detail"]["human_action"] = json!("Si le raccord ne peut pas être corrigé dans le périmètre autorisé, demander au responsable Bridget de confirmer le registre et le namespace à utiliser avant toute modification. Ne pas réécrire les liens de fédération ni changer de droits, de compte ou de serveur pour contourner le refus.");
+        return result;
+    }
     if matches!(code,"origin_project_preparation_busy"|"project_preparation_source_busy"|"project_preparation_busy") {
         let message="Attendez la fin des préparations de projet déjà reçues, puis vérifiez cette admission avec sa même clé. La capacité de préparation du projet est occupée ; ce refus concerne cet appel et ne constate aucun changement de droits. Les autres travaux autorisés suivent leur propre état.";
         let message=match code {
@@ -15030,6 +15042,29 @@ mod tests {
         let after=serde_json::to_value(state.lock().unwrap().delegation_store.tasks().unwrap()).unwrap();
         assert_eq!(before,after);
         drop(state);cleanup(&config);
+    }
+
+    #[test]
+    fn spec224_project_preparation_link_refusal_names_only_the_failed_check() {
+        let view = failure("project_preparation_link_missing");
+        assert_eq!(view, origin_attestation_refusal("project_preparation_link_missing"));
+        assert_eq!(view["code"], "project_preparation_link_missing");
+        assert_eq!(view["detail"]["cause"], "project_preparation_link_missing");
+        assert_eq!(view["detail"]["scope"], "this_project_preparation");
+        assert_eq!(view["detail"]["verification"], "origin_project_preparation_link");
+        let message = view["message"].as_str().unwrap();
+        assert_eq!(view["detail"]["message"], message);
+        assert!(message.starts_with("Faire comparer"));
+        assert!(message.contains("n'a pas confirmé"));
+        assert!(message.contains("autres travaux"));
+        let recovery = view["detail"]["recovery"].as_str().unwrap();
+        for text in ["admission durable", "--registry-file", "root", "namespace", "rejeu strict"] {
+            assert!(recovery.contains(text), "missing {text}");
+        }
+        assert!(view["detail"]["human_action"].as_str().unwrap().contains("responsable Bridget"));
+        assert!(view.get("task_id").is_none());
+        assert!(!view.to_string().contains("/Users/"));
+        assert!(!view.to_string().contains("/home/"));
     }
 
     #[test]
