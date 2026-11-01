@@ -303,3 +303,6 @@ client déjà couvertes parT174/T030–T033. Source8a80c257 et servicesB activé
 7images vérifiées ; pas de preuve de chargement du MCPappelant221-write.
 Les enveloppes techniques Codex/Claude sont non envoyées : aucune issue inconnue
 ni tâche métier nouvelle. Les autres catégories restent dans le programme.
+
+
+Correction autorisée du 1 novembre 2026 : T183–T186, contrat contracts/program-upgrades.md et reçu validation/program-upgrades.md. Réutilisation du collecteur220 et du bootstrap ; profils et autorité d’admission inchangés. Contrôle ciblé de cohérence, sans nouvelle phase du programme.

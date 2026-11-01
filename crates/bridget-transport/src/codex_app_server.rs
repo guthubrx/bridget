@@ -513,12 +513,7 @@ impl CodexAppServerTransport {
         );
 
         let setup = (|| -> Result<String, TransportError> {
-            let mut initialization = json!({
-                "clientInfo": { "name": "bridget", "version": env!("CARGO_PKG_VERSION") }
-            });
-            // thread/settings/update (091) est explicitement négocié ; aucune
-            // permission supplémentaire n'est accordée par cette capacité filaire.
-            initialization["capabilities"] = json!({"experimentalApi": true});
+            let initialization = initialization_parameters();
             let initialize = request(&writer, &waiters, &next_id, "initialize", initialization)?;
             for required in ["userAgent", "codexHome", "platformFamily", "platformOs"] {
                 if initialize.value.get(required).is_none() {
@@ -1633,6 +1628,29 @@ fn communication_prompt(message: &BridgetMessage, interactive: bool) -> String {
     )
 }
 
+/// Même initialisation pour l'observation sans tour et le transport natif.
+pub fn initialization_parameters()->Value {
+    json!({"clientInfo":{"name":"bridget","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}})
+}
+fn turn_start_parameters(thread:&str,message:&str,prompt:&str,policy:Option<&Value>,cwd:Option<&Path>)->Value {
+    let mut params=json!({"threadId":thread,"clientUserMessageId":message,"input":[{"type":"text","text":prompt}]});
+    if let Some(policy)=policy {
+        params["approvalPolicy"]=policy["approval_policy"].clone();params["approvalsReviewer"]=policy["approvals_reviewer"].clone();params["sandboxPolicy"]=policy["sandbox_policy"].clone();
+        if let Some(cwd)=cwd {params["cwd"]=json!(cwd);}
+    }params
+}
+/// Témoins des enveloppes émises : aucune requête n'est envoyée par ce helper.
+pub fn program_contract_requests()->Vec<(&'static str,Value)> {
+    let id="00000000-0000-4000-8000-000000000001";let cwd=Path::new("/tmp");
+    let policy=json!({"approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"readOnly","networkAccess":false}});
+    let start=thread_bootstrap_request(&CodexThreadBootstrap::Start,cwd,Some("gpt-6.1-sol"),false);
+    let resume=thread_bootstrap_request(&CodexThreadBootstrap::Resume{thread_id:id.into()},cwd,Some("gpt-6.1-sol"),false);
+    let fork=thread_bootstrap_request(&CodexThreadBootstrap::Fork{thread_id:id.into()},cwd,Some("gpt-6.1-sol"),false);
+    vec![("initialize",initialization_parameters()),start,("turn/start",turn_start_parameters(id,id,"bridget-contract",Some(&policy),Some(cwd))),
+        ("turn/interrupt",json!({"threadId":id,"turnId":id})),
+        ("turn/steer",json!({"threadId":id,"expectedTurnId":id,"input":[{"type":"text","text":"bridget-contract"}]})),resume,fork]
+}
+
 fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<String, String> {
     let instructions = worker
         .private_profile_instructions
@@ -1645,17 +1663,8 @@ fn start_turn_with_retry(worker: &Worker, message: &BridgetMessage) -> Result<St
     // L'enveloppe est une projection fournisseur ; le corps durable reste intact.
     let body = communication_prompt(message, worker.interactive);
     let prompt = private_prompt(instructions.as_deref(), &body);
-    let mut params = json!({
-        "threadId": worker.thread_id,
-        "clientUserMessageId": message.id,
-        "input": [{ "type": "text", "text": &prompt }],
-    });
-    if let Some(policy) = &worker.native_policy {
-        params["approvalPolicy"] = policy["approval_policy"].clone();
-        params["approvalsReviewer"] = policy["approvals_reviewer"].clone();
-        params["sandboxPolicy"] = policy["sandbox_policy"].clone();
-        params["cwd"] = json!(std::env::current_dir().map_err(|_| "cwd_unavailable")?);
-    }
+    let cwd=if worker.native_policy.is_some(){Some(std::env::current_dir().map_err(|_|"cwd_unavailable")?)}else{None};
+    let params=turn_start_parameters(&worker.thread_id,&message.id,&prompt,worker.native_policy.as_ref(),cwd.as_deref());
     for attempt in 0..=SATURATION_RETRIES {
         match request(
             &worker.writer,

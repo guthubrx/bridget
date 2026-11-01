@@ -2901,6 +2901,7 @@ pub enum WorkerCapability {
     ProviderCatalogueV1,
     ModelOptionsV1,
     ProviderAccountsV1,
+    ProgramCompatibilityV1,
     WorkspaceViewV1,
     WorkspaceViewCreateV1,
     ExecutionStatusV1,
@@ -3175,6 +3176,9 @@ pub struct CandidateProbe {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateProbeRefusal {
+    ProgramUpgradeCheckPending,
+    ProgramProtocolIncompatible,
+    ProgramCheckUnavailable,
     InvalidRequest,
     MappingUnavailable,
     DefinitionUnavailable,

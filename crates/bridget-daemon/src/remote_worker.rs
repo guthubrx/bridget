@@ -3566,6 +3566,10 @@ fn workspace_probe_refusal(error: &str) -> CandidateProbeRefusal {
 }
 
 // Un maître ancien garde le refus générique qu'il sait décoder.
+fn program_probe_reason_for_master(reason:CandidateProbeRefusal,supported:bool)->CandidateProbeRefusal {
+    if !supported && matches!(reason,CandidateProbeRefusal::ProgramUpgradeCheckPending|CandidateProbeRefusal::ProgramProtocolIncompatible|CandidateProbeRefusal::ProgramCheckUnavailable) {CandidateProbeRefusal::DefinitionUnavailable} else {reason}
+}
+
 fn workspace_probe_reason_for_master(
     reason: CandidateProbeRefusal,
     supports_workspace_diagnostics: bool,
@@ -3708,6 +3712,7 @@ struct WorkerRuntime {
     host_resources: crate::host_resources::HostResourceCollector,
     last_resource_refresh: Instant,
     provider_accounts_negotiated: bool,
+    program_compatibility_negotiated: bool,
 }
 
 impl WorkerRuntime {
@@ -4877,6 +4882,7 @@ impl WorkerRuntime {
             host_resources: crate::host_resources::HostResourceCollector::default(),
             last_resource_refresh: Instant::now(),
             provider_accounts_negotiated: false,
+            program_compatibility_negotiated: false,
         };
         runtime
             .reconcile_all()
@@ -5013,6 +5019,7 @@ impl WorkerRuntime {
             return send_worker_frame(writer,&worker_probe_refusal(&inbound,CandidateProbeRefusal::ResourceLimit));
         };
         let context=self.probe_read_context();
+        let program_compatibility=self.program_compatibility_negotiated;
         let failure=worker_probe_refusal(&inbound,CandidateProbeRefusal::ResourceLimit);
         let stopped=disconnected.clone();
         spawn_probe_read(permit,writer,disconnected.clone(),failure,move || {
@@ -5021,12 +5028,14 @@ impl WorkerRuntime {
                 WorkerInbound::CandidateProbe(probe)=>context.candidate_probe(probe,&stopped,deadline).map(|mut result| {
                     for v in &mut result.verdicts {if let CandidateProbeVerdict::Ineligible{reason,..}=v {
                         *reason=workspace_probe_reason_for_master(*reason,workspace_diagnostics);
+                        *reason=program_probe_reason_for_master(*reason,program_compatibility);
                     }}
                     WrapperToDaemon::CandidateProbeResult{result}
                 }),
                 WorkerInbound::CandidateProbeV2(probe)=>context.candidate_probe_v2(probe,&stopped,deadline).map(|mut result| {
                     for v in &mut result.verdicts {if let CandidateProbeV2Verdict::Ineligible{reason,..}=v {
                         *reason=workspace_probe_reason_for_master(*reason,workspace_diagnostics);
+                        *reason=program_probe_reason_for_master(*reason,program_compatibility);
                     }}
                     WrapperToDaemon::CandidateProbeResultV2{result}
                 }),
@@ -6735,7 +6744,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
-    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,execution_status:bool,
+    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,execution_status:bool,program_compatibility:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -6755,19 +6764,20 @@ impl MasterWorkerFeatures {
             WorkerCapability::WorkspaceViewV1=>self.workspace_view,
             WorkerCapability::WorkspaceViewCreateV1=>self.workspace_view_create,
             WorkerCapability::ExecutionStatusV1=>self.execution_status,
+            WorkerCapability::ProgramCompatibilityV1=>self.program_compatibility,
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1,WorkerCapability::ExecutionStatusV1]
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1,WorkerCapability::ExecutionStatusV1,WorkerCapability::ProgramCompatibilityV1]
             .into_iter().filter(|v|self.supports(*v)
                 && (*v!=WorkerCapability::ModelOptionsV1 || self.provider_catalogue)
                 && (*v!=WorkerCapability::WorkspaceViewCreateV1 || crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=15
+        accepted.len()<=16
             && (!accepted.contains(&WorkerCapability::ModelOptionsV1)
                 || accepted.contains(&WorkerCapability::ProviderCatalogueV1))
             && (!accepted.contains(&WorkerCapability::WorkspaceViewCreateV1)
@@ -6802,6 +6812,7 @@ fn probe_worker_capability(
                 workspace_view:has("worker_workspace_view_v1"),
                 workspace_view_create:has("worker_workspace_view_create_v1"),
                 execution_status:has("worker_execution_status_v1"),
+                program_compatibility:has("worker_program_compatibility_v1"),
             })
         }
         _=>Err("worker_capability_required".into()),
@@ -6919,6 +6930,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                 _ => return Err("worker_handshake_invalid".into()),
             };
         runtime.provider_accounts_negotiated = negotiated.contains(&WorkerCapability::ProviderAccountsV1);
+        runtime.program_compatibility_negotiated = negotiated.contains(&WorkerCapability::ProgramCompatibilityV1);
         if negotiated.contains(&WorkerCapability::ProviderCatalogueV1) {catalogues.activate(&epoch);} else {catalogues.deactivate();}
         let mut catalogue_sent=BTreeMap::<String,(String,u64)>::new();
         let candidate_probe_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV1);
@@ -13810,5 +13822,19 @@ mod catalogue220_tests {
         let mut line=String::new();std::io::BufReader::new(&mut peer).read_line(&mut line).unwrap();
         assert!(matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::DaemonIdentityRequest));
         assert_eq!(writer.lock().unwrap().write_timeout().unwrap(),None);
+    }
+}
+
+#[cfg(test)]
+mod program_compatibility221_tests {
+    use super::*;
+    #[test]
+    fn spec221_program_compat_reasons_are_downgraded_for_older_master() {
+        for reason in [CandidateProbeRefusal::ProgramUpgradeCheckPending,CandidateProbeRefusal::ProgramProtocolIncompatible,CandidateProbeRefusal::ProgramCheckUnavailable] {
+            assert_eq!(program_probe_reason_for_master(reason,false),CandidateProbeRefusal::DefinitionUnavailable);
+            assert_eq!(program_probe_reason_for_master(reason,true),reason);
+        }
+        let old=MasterWorkerFeatures::default();assert!(!old.capabilities().contains(&WorkerCapability::ProgramCompatibilityV1));assert!(!old.admits(&[WorkerCapability::ProgramCompatibilityV1]));
+        let current=MasterWorkerFeatures{program_compatibility:true,..Default::default()};assert!(current.admits(&[WorkerCapability::ProgramCompatibilityV1]));
     }
 }

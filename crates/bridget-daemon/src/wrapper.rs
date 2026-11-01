@@ -4247,7 +4247,7 @@ fn spawn_managed_session_transport(
                 notify_timeout_secs: definition.notify_timeout_secs,
                 model: codex_model_from_args(&definition.args),
                 permissions: definition.permissions.clone(),
-                provider_observation: definition.capabilities.observed.clone(),
+                provider_observation: crate::provider_program_compat::runtime_observation(definition, &crate::lifecycle::source_environment())?,
                 thread_bootstrap: repair.map_or(Default::default(),|v|
                     bridget_transport::codex_app_server::CodexThreadBootstrap::Resume {thread_id:v.1.into()}),
                 dynamic_tool_handler,

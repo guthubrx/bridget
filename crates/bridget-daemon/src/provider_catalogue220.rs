@@ -589,6 +589,73 @@ impl Rpc {
     }
 }
 
+/// Même propriétaire et même marqueur que la sonde métadonnée ; jamais deux
+/// processus simultanés, ni libération du créneau après un arrêt incertain.
+fn check_program_schema(
+    directory:&Path,markers:&ManagedMarkerStore,def:&crate::registry::AgentDefinition,
+    source:&crate::lifecycle::SourceEnvironment,digest:&str,stopping:&AtomicBool,
+)->Result<crate::provider_program_compat::CheckedContract,(CatalogueCause,Option<RunningManagedChild>)> {
+    let plain=|cause|(cause,None);
+    let job=directory.join(format!("compat-{}",uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&job).and_then(|_|std::fs::set_permissions(&job,std::fs::Permissions::from_mode(0o700)))
+        .map_err(|_|plain(CatalogueCause::SourceUnavailable))?;
+    let output=job.join("schemas");
+    let mut env=std::collections::BTreeMap::new();
+    env.insert("HOME".into(),job.as_os_str().to_os_string());
+    env.insert("PATH".into(),source.get("PATH").cloned().unwrap_or_else(||"/usr/bin:/bin".into()));
+    env.insert("LANG".into(),"C.UTF-8".into());
+    env.insert("TMPDIR".into(),job.as_os_str().to_os_string());
+    let launch=ManagedLaunch {bootstrap_executable:std::env::current_exe().map_err(|_|plain(CatalogueCause::ProgramUnavailable))?,
+        identity:ManagedIdentity{instance_id:uuid::Uuid::new_v4().to_string(),command_id:"catalogue220".into(),generation:1},
+        wrapper_executable:def.command.clone().into(),wrapper_args:vec!["app-server".into(),"generate-json-schema".into(),"--experimental".into(),"--out".into(),output.to_string_lossy().into_owned()],cwd:job.clone(),env};
+    #[cfg(not(test))]
+    let mut bootstrap=crate::managed_process::spawn_managed_bootstrap(&launch).map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
+    #[cfg(test)]
+    let mut bootstrap=crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch);
+    bootstrap.set_ready_timeout(Duration::from_secs(2)).map_err(|_|plain(CatalogueCause::SourceUnavailable))?;
+    let ready=bootstrap.wait_ready().map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
+    let marked=ready.persist_marker(markers,"probe").map_err(|_|plain(CatalogueCause::SourceUnavailable))?;
+    let mut child=match marked.release_retained(){Ok(child)=>child,Err((_,child))=>return Err((CatalogueCause::StopUnconfirmed,Some(child)))};
+    let deadline=Instant::now()+Duration::from_secs(5);
+    let result=(|| {
+        loop {
+            if stopping.load(Ordering::Acquire)||Instant::now()>=deadline {return Err(CatalogueCause::TimedOut);}
+            schema_output_bounded(&job)?;
+            match child.try_wait().map_err(|_|CatalogueCause::SourceUnavailable)? {
+                Some(status) if status.success()=>break,
+                Some(_)=>return Err(CatalogueCause::ProtocolUnavailable),
+                None=>std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+        if crate::provider_program_compat::program_digest(Path::new(&def.command)).ok().as_deref()!=Some(digest){return Err(CatalogueCause::DefinitionChanged);}
+        crate::provider_program_compat::CheckedContract::from_schemas(&output,&def.command,digest).map_err(|_|CatalogueCause::ProtocolUnavailable)
+    })();
+    if !matches!(child.stop_group(Duration::from_millis(250),Duration::from_secs(1),Duration::from_millis(20)),Ok(ManagedStopResult::Stopped|ManagedStopResult::StoppedForced{..})) {
+        return Err((CatalogueCause::StopUnconfirmed,Some(child)));
+    }
+    // Racine exclusive créée ici, arrêt confirmé ; remove_dir_all ne suit pas
+    // les liens internes. Aucun cache fournisseur ni répertoire de profil.
+    if std::fs::symlink_metadata(&job).is_ok_and(|m|m.is_dir()&&!m.file_type().is_symlink()&&m.uid()==unsafe{libc::geteuid()}) {
+        let _=std::fs::remove_dir_all(&job);
+    }
+    result.map_err(plain)
+}
+fn schema_output_bounded(root:&Path)->Result<(),CatalogueCause> {
+    let mut todo=vec![(root.to_path_buf(),0)];let mut count=0usize;let mut bytes=0u64;
+    while let Some((directory,depth))=todo.pop() {
+        let entries=std::fs::read_dir(directory).map_err(|_|CatalogueCause::SourceUnavailable)?;
+        for entry in entries {
+            count+=1;if count>1024{return Err(CatalogueCause::OutputLimit);}
+            let entry=entry.map_err(|_|CatalogueCause::SourceUnavailable)?;
+            let m=match entry.path().symlink_metadata(){Ok(m)=>m,Err(e) if e.kind()==std::io::ErrorKind::NotFound=>continue,Err(_)=>return Err(CatalogueCause::SourceUnavailable)};
+            if m.file_type().is_symlink(){return Err(CatalogueCause::SourceUnavailable);}
+            if m.is_dir(){if depth>=8{return Err(CatalogueCause::OutputLimit);}todo.push((entry.path(),depth+1));}
+            else if m.is_file(){bytes=bytes.saturating_add(m.len());if bytes>32*1024*1024{return Err(CatalogueCause::OutputLimit);}}
+            else{return Err(CatalogueCause::SourceUnavailable);}
+        }
+    }Ok(())
+}
+
 fn probe(
     directory: &Path,
     markers: &ManagedMarkerStore,
@@ -611,6 +678,11 @@ fn probe(
     {
         return Err(plain(CatalogueCause::ProtocolUnavailable));
     }
+    let automatic_contract=match crate::provider_program_compat::CheckedContract::needed(def,source) {
+        Ok(Some(digest))=>Some(check_program_schema(directory,markers,def,source,&digest,stopping)?),
+        Ok(None)=>None,
+        Err(_)=>return Err(plain(CatalogueCause::ProtocolUnavailable)),
+    };
     #[cfg(test)]
     eprintln!("metadata220 stage=environment");
     let env = crate::lifecycle::build_environment(def, source)
@@ -648,7 +720,9 @@ fn probe(
     let mut bootstrap = crate::managed_process::spawn_managed_bootstrap(&launch)
         .map_err(|_| plain(CatalogueCause::ProgramUnavailable))?;
     #[cfg(test)]
-    let mut bootstrap = crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch);
+    let mut bootstrap = if std::env::var_os("BRIDGET_REAL_CODEX_PROGRAM").is_some() {
+        crate::managed_process::tests::spawn_catalogue_test_bootstrap_with_stderr(&launch,std::process::Stdio::inherit())
+    } else {crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch)};
     bootstrap
         .set_ready_timeout(Duration::from_secs(2))
         .map_err(|_| plain(CatalogueCause::SourceUnavailable))?;
@@ -671,6 +745,7 @@ fn probe(
     #[cfg(test)]
     eprintln!("metadata220 stage=connecting");
     let deadline = Instant::now() + PROBE_BUDGET;
+    let mut contract_initialize=None;
     let result = (|| {
         let stream = loop {
             if stopping.load(Ordering::Acquire) || Instant::now() >= deadline {
@@ -702,11 +777,12 @@ fn probe(
             return Err(CatalogueCause::SourceUnavailable);
         }
         let mut rpc = Rpc::connect(stream, deadline)?;
-        rpc.call(
+        let initialize=rpc.call(
             "initialize",
-            json!({"clientInfo":{"name":"bridget","version":env!("CARGO_PKG_VERSION")}}),
+            bridget_transport::codex_app_server::initialization_parameters(),
         )?;
         rpc.write(&json!({"method":"initialized"}))?;
+        if automatic_contract.is_some() {contract_initialize=Some(initialize);}
         #[cfg(test)]
         eprintln!("metadata220 stage=account_before");
         let before = rpc.call("account/read", json!({"refreshToken":false}))?;
@@ -794,6 +870,11 @@ fn probe(
         {
             let _ = std::fs::remove_file(&socket);
         }
+    }
+    if let (Some(contract),Some(initialize))=(automatic_contract,contract_initialize) {
+        let compatible=contract.is_compatible();
+        contract.publish(source,&initialize).map_err(|code|plain(match code {"program_changed_during_check"=>CatalogueCause::DefinitionChanged,"program_protocol_incompatible"=>CatalogueCause::ProtocolUnavailable,_=>CatalogueCause::SourceUnavailable}))?;
+        if !compatible {return Err(plain(CatalogueCause::ProtocolUnavailable));}
     }
     result.map_err(plain)
 }
@@ -1346,4 +1427,46 @@ mod private_recipe220 {
         std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[cfg(test)]
+mod program_schema221_tests {
+    use super::*;
+    /// Génération et initialize réels, HOME neuf sans auth, aucun thread/tour.
+    #[test]
+    #[ignore = "programme Codex réel fourni explicitement, aucune inférence"]
+    fn spec221_program_compat_real_schema_metadata_without_model() {
+        let command=std::env::var("BRIDGET_REAL_CODEX_PROGRAM").expect("programme explicite");
+        let root=PathBuf::from(std::env::var_os("HOME").unwrap()).join(".cache").join(format!("bpr-{}",&uuid::Uuid::new_v4().simple().to_string()[..8]));
+        private_dir(&root).unwrap();private_dir(&root.join(".cache")).unwrap();
+        let directory=root.join("catalogue");private_dir(&directory).unwrap();private_dir(&directory.join("markers")).unwrap();
+        let registry=crate::registry::AgentRegistry::from_json(&json!({"agents":{"fixture":{"command":command,"protocol":"codex_app_server","args":["app-server"],"capabilities":{"execution_paths":["codex_app_server"],"observed":{"binary_path":command,"binary_version":"historical-fixture","binary_digest":"0".repeat(64),"contract_version":"old-fixture","operations":["interrupt","steer"]}}}}}).to_string(),"/tmp/real-program-compat.json").unwrap();
+        let def=registry.get("fixture").unwrap();let original=def.clone();
+        let source=crate::lifecycle::SourceEnvironment::from([("HOME".into(),root.as_os_str().to_os_string()),("PATH".into(),std::env::var_os("PATH").unwrap())]);
+        let markers=ManagedMarkerStore::at_directory(directory.join("markers"));
+        let result=probe(&directory,&markers,def,&source,b"synthetic-account-salt",&AtomicBool::new(false));
+        assert!(result.is_ok(),"sonde réelle : {:?}",result.err().map(|(cause,_)|cause));
+        let digest=crate::provider_program_compat::program_digest(Path::new(&command)).unwrap();
+        assert_eq!(crate::provider_program_compat::validate_upgrade(&command,&source,&digest),Ok(()));
+        let runtime=crate::provider_program_compat::runtime_observation(def,&source).unwrap().unwrap();
+        assert_eq!(runtime.binary_digest,digest);assert!(runtime.operations.contains(&bridget_transport::protocol::ProviderOperation::Steer));
+        assert_eq!(*def,original);assert!(markers.load("probe").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }    #[test]
+    fn spec221_program_compat_uncertain_stop_keeps_child_and_marker() {
+        let root=std::env::temp_dir().join(format!("bpc-stop-{}",&uuid::Uuid::new_v4().simple().to_string()[..8]));private_dir(&root).unwrap();
+        let directory=root.join("catalogue");private_dir(&directory).unwrap();private_dir(&directory.join("markers")).unwrap();
+        let command=root.join("codex");let release=root.join("allow-exit");
+        std::fs::write(&command,format!("#!/bin/sh\ntrap '' TERM\nwhile [ ! -f '{}' ]; do /bin/sleep 0.05; done\n",release.display())).unwrap();std::fs::set_permissions(&command,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let registry=crate::registry::AgentRegistry::from_json(&json!({"agents":{"fixture":{"command":command,"protocol":"codex_app_server","args":["app-server"],"capabilities":{"execution_paths":["codex_app_server"]}}}}).to_string(),"/tmp/retained-compat.json").unwrap();
+        let source=crate::lifecycle::SourceEnvironment::from([("HOME".into(),root.as_os_str().to_os_string())]);
+        let markers=ManagedMarkerStore::at_directory(directory.join("markers"));let digest=crate::provider_program_compat::program_digest(&command).unwrap();
+        let outcome=check_program_schema(&directory,&markers,registry.get("fixture").unwrap(),&source,&digest,&AtomicBool::new(false));
+        let (cause,child)=outcome.err().expect("sonde retenue");assert_eq!(cause,CatalogueCause::StopUnconfirmed);let mut child=child.expect("propriétaire conservé");
+        assert!(markers.load("probe").is_ok());assert_eq!(crate::provider_program_compat::validate_upgrade(command.to_str().unwrap(),&source,&digest),Err("program_upgrade_check_pending"));
+        std::fs::write(release,b"exit").unwrap();
+        assert!(matches!(child.stop_group(Duration::from_millis(500),Duration::from_secs(2),Duration::from_millis(20)),Ok(ManagedStopResult::Stopped|ManagedStopResult::StoppedForced{..})));
+        assert!(markers.load("probe").is_err());std::fs::remove_dir_all(root).unwrap();
+    }
+
 }

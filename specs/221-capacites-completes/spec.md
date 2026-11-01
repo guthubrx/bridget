@@ -362,3 +362,6 @@ L’objectif porte sur toutes les catégories du rapport219, même celles qui n�
 ## Clarification utilisateur —30octobre2026
 
 Choix explicite : « Piloter les serveurs Mac/Linux depuis ces plateformes ». Web, bureau, iOS et Windows disposent de l’interface complète ; Windows n’est pas ajouté comme hôte d’exécution natif. La demande conserve les50catégories. L’interprétation intermédiaire client+hôteWindows était plus large que le besoin et est retirée ; aucun code de portageOS n’a été écrit.
+
+
+Correction autorisée du 1 novembre 2026 : T183–T186, contrat contracts/program-upgrades.md et reçu validation/program-upgrades.md. Réutilisation du collecteur220 et du bootstrap ; profils et autorité d’admission inchangés. Contrôle ciblé de cohérence, sans nouvelle phase du programme.

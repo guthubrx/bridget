@@ -14,7 +14,6 @@ use crate::registry::{
     validate_launch_capabilities,
 };
 use bridget_transport::{ResolvedAgentDefinition, SpawnRefusal};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
@@ -58,6 +57,7 @@ pub fn source_environment() -> SourceEnvironment {
 fn validate_provider_observation(
     agent_type: &str,
     definition: &AgentDefinition,
+    source: &SourceEnvironment,
 ) -> Result<(), SpawnRefusal> {
     let Some(observed) = definition.capabilities.observed.as_ref() else {
         return Ok(());
@@ -87,11 +87,16 @@ fn validate_provider_observation(
     {
         return Err(refusal("empreinte du binaire fournisseur observé"));
     }
-    let bytes = std::fs::read(&observed.binary_path)
+    let actual_digest = crate::provider_program_compat::program_digest(Path::new(&observed.binary_path))
         .map_err(|_| refusal("binaire fournisseur observé lisible"))?;
-    let actual_digest = format!("{:x}", Sha256::digest(bytes));
     if actual_digest != observed.binary_digest {
-        return Err(refusal("empreinte du binaire fournisseur observé"));
+        if definition.protocol != "codex_app_server" {
+            return Err(refusal("compatibilité du programme modifié non vérifiée"));
+        }
+        if let Err(code)=crate::provider_program_compat::validate_upgrade(&definition.command,source,&actual_digest) {
+            crate::provider_program_compat::record_failure(code);
+            return Err(refusal(code));
+        }
     }
     Ok(())
 }
@@ -112,7 +117,7 @@ pub(crate) fn launch_preflight(
             registry: registry.source().display().to_string(),
         })?;
     validate_launch_capabilities(agent_type, definition)?;
-    validate_provider_observation(agent_type, definition)?;
+    validate_provider_observation(agent_type, definition, source)?;
     if let Some(variable) = forbidden_environment_variable(
         definition,
         allow_api_key_value(

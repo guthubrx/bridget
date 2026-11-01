@@ -656,6 +656,15 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
             Some(CandidateProbeRefusal::CapabilityUnavailable) => (
                 "Sur les machines indiquées dans detail.probe_targets lorsqu'il est présent, comparez la politique du maître avec celle réellement lue par le worker : politique globale et machine activées, connexion déclarée et activée, moteur, modèle, effort et option de service. Vérifiez ensuite la préparation du profil et les capacités négociées. Ce motif ne distingue pas ces contrôles ; sa sous-cause non conservée reste inconnue. Un catalogue annoncé par le maître ne prouve pas sa déclaration sur le worker. Ce code ne prouve ni programme absent ni abonnement incompatible.",
                 "Si la déclaration ou la version chargée ne peut pas être vérifiée, demandez à l'utilisateur une correction ciblée de ce profil ou composant sur cette machine ; aucun changement de droits, compte, modèle ou hôte pour contourner ce refus."),
+            Some(CandidateProbeRefusal::ProgramUpgradeCheckPending) => (
+                "Une nouvelle image du programme a été détectée, sans preuve de compatibilité encore disponible. L’observateur du worker contrôle son protocole hors des missions, sans appel à un modèle : objectif 120 s après succès, 30 s après échec et minimum 5 s après un signal de changement, hors durée des autres contrôles séquentiels. Relisez le catalogue après ce contrôle, puis detail.admission : un rejeu exige not_recorded, la même clé et la même enveloppe, et la fin des appels concurrents. Aucun changement de version déclarée à faire à la main.",
+                "Si le contrôle ne fournit pas de résultat, demander au responsable de vérifier l’observateur et son diagnostic sur cette machine. Ne pas réinstaller, changer de compte ou modifier les droits sur ce seul refus."),
+            Some(CandidateProbeRefusal::ProgramProtocolIncompatible) => (
+                "Les requêtes de démarrage construites par ce Bridget ne satisfont pas le schéma déclaré par cette image. Ce constat reste mémorisé pour cette image et cette révision du vérificateur ; une autre image, un vérificateur adapté ou un retour explicitement décidé vers l’image historique qualifiée le réévalue. Conservez la demande et les tâches existantes. Le refus concerne cette image sur cette machine ; les autres travaux suivent leur propre état.",
+                "Demander au responsable d’adapter le pilote à ce contrat, ou à l’utilisateur de décider un retour vers une version qualifiée. Ne pas modifier une empreinte, un compte ou des droits pour contourner le constat."),
+            Some(CandidateProbeRefusal::ProgramCheckUnavailable) => (
+                "La vérification locale de compatibilité du programme n’a pas pu être lue ou confirmée. Consultez le diagnostic de l’observateur sur cette machine ; ce refus ne prouve ni une incompatibilité de modèle, ni une déconnexion du compte. Conservez la clé et suivez detail.admission.",
+                "Si la vérification dépasse votre mandat, demander au responsable le contrôle ciblé du programme et de sa preuve locale. Ne pas changer le compte, le modèle ou les droits, ni lancer une mission de remplacement d’issue inconnue."),
             Some(CandidateProbeRefusal::ResourceLimit) => (
                 "Attendez le drainage des demandes natives en cours sur le worker puis vérifiez detail.admission avant un éventuel rejeu strict. Le worker n’a pas pu terminer ce contrôle dans sa capacité bornée ; ce code seul ne distingue pas une file pleine d’un délai de sonde épuisé. Son état actuel n’est pas établi.",
                 "Si la file reste saturée, demandez à l'utilisateur un arbitrage de priorité après inspection des demandes ; ne terminez pas les tâches d'autrui et ne redémarrez pas pour vider la file."),
@@ -710,13 +719,18 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 }
             },
         };
+        let underlying=if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable")) {reason["code"].clone()} else {json!("unobserved")};
         json!({"kind":reason["kind"],"code":reason["code"],
-            "scope":"candidate_subset","underlying_cause":"unobserved",
+            "scope":"candidate_subset","underlying_cause":underlying,
             "next_action":next_action,"human_action":human_action})
     }).collect::<Vec<_>>();
     if !checks.is_empty() {
         result["detail"]["scope"] = json!("candidate_subset");
         result["detail"]["probe_checks"] = json!(checks);
+        if checks.len()==1 && checks[0]["underlying_cause"]!="unobserved" {
+            result["detail"]["cause"]=checks[0]["underlying_cause"].clone();
+            result["detail"]["verification"]=json!("Le préflight a relevé cet état de preuve pour l’image courante : absente, non concluante ou incompatible selon le code. Il ne prouve aucun défaut de compte ni de modèle.");
+        }
     }
     if reasons.iter().any(|r| r["kind"] == "candidate" && r["code"] == "permissions_changed") {
         result["detail"]["permission_projection"] = json!({
@@ -34448,29 +34462,41 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec221_program_compat_guidance_has_observed_cause_and_request_scope() {
+        for code in ["program_upgrade_check_pending","program_protocol_incompatible","program_check_unavailable"] {
+            let encoded=json!([{"kind":"candidate","code":code,"candidates":1}]);
+            let result=failure(&format!("routing_candidate_unavailable:{encoded}"));
+            assert_eq!(result["detail"]["cause"],code);
+            assert_eq!(result["detail"]["probe_checks"][0]["underlying_cause"],code);
+            assert!(result["message"].as_str().unwrap().contains("autres travaux"));
+            assert!(result["detail"]["human_action"].as_str().unwrap().contains("responsable"));
+        }
+    }
+
+    #[test]
     fn spec221_probe_refusal_all_distinct_codes_fit_existing_frame() {
         let mut reasons=Vec::new();
         for (kind,codes) in [
-            ("candidate","invalid_request mapping_unavailable definition_unavailable permissions_changed workspace_unavailable workspace_limit workspace_dirty workspace_busy workspace_diverged workspace_base_unavailable capability_unavailable resource_limit"),
+            ("candidate","invalid_request mapping_unavailable definition_unavailable permissions_changed workspace_unavailable workspace_limit workspace_dirty workspace_busy workspace_diverged workspace_base_unavailable capability_unavailable resource_limit program_upgrade_check_pending program_protocol_incompatible program_check_unavailable"),
             ("worker","unsupported_version invalid_envelope capability_required unauthorized stale_connection placement_mismatch command_mismatch definition_changed permissions_changed prepare_expired release_expired resource_limit store_unavailable disk_full filesystem_access_denied workspace_prepare_failed workspace_prepare_incomplete worker_unavailable probe_expired journal_unavailable result_conflict result_slot_expired unknown_execution")]
         {
             for code in codes.split_whitespace() {
                 reasons.push(json!({"kind":kind,"code":code,"candidates":1}));
             }
         }
-        assert_eq!(reasons.len(),35);
-        // Cas le plus large accepté par le parseur historique :35codes
+        assert_eq!(reasons.len(),38);
+        // Cas le plus large accepté par le parseur historique :38codes
         // distincts et128raisons, compte maximal sur chaque raison.
         for reason in &mut reasons { reason["candidates"] = json!(128); }
-        for i in 35..MAX_ROUTING_PROBE_REFUSAL_NOTES { reasons.push(reasons[i%35].clone()); }
+        for i in 38..MAX_ROUTING_PROBE_REFUSAL_NOTES { reasons.push(reasons[i%38].clone()); }
         let encoded=serde_json::to_string(&reasons).unwrap();
         assert!(encoded.len()<=16384,"borne du suffixe historique en entree");
         let result=failure(&format!("routing_candidate_unavailable:{encoded}"));
-        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),35);
+        assert_eq!(result["detail"]["probe_checks"].as_array().unwrap().len(),38);
         assert_eq!(result["detail"]["reasons"],json!(reasons));
         let frame=DaemonToWrapper::NativeDelegationResult {result};
         let bytes=serde_json::to_vec(&frame).unwrap();
-        eprintln!("spec221_probe_distinct35_reasons128_wire_bytes={}",bytes.len());
+        eprintln!("spec221_probe_distinct38_reasons128_wire_bytes={}",bytes.len());
         assert!(bytes.len()<64*1024,"garde propre au test, pas une nouvelle borne protocole");
         assert!(bytes.len()<bridget_transport::jsonl::MAX_DAEMON_FRAME_BYTES);
         let decoded:DaemonToWrapper=serde_json::from_slice(&bytes).unwrap();

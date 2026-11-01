@@ -461,3 +461,6 @@ Ne pas purger d'historique ni inventer un nombre garanti de missions.
 La même comptabilité des orphelins et vues reste appliquée. Le plancher existant
 de compatibilité reçoit worker.store.capacity.v2 : un retour16Mio ne peut pas
 reprendre un store qui a légalement dépassé son ancien plafond.
+
+
+Correction autorisée du 1 novembre 2026 : T183–T186, contrat contracts/program-upgrades.md et reçu validation/program-upgrades.md. Réutilisation du collecteur220 et du bootstrap ; profils et autorité d’admission inchangés. Contrôle ciblé de cohérence, sans nouvelle phase du programme.

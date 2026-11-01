@@ -79,3 +79,6 @@ Aucun nouveau store de tâches. AbonnementsPRetwebhooks ajoutent leurs définiti
 Première unité prévue : L1a/C25 drainage, puis projection/refus liés ; sa livraison autonome requiert un sous-ensemble de tâches explicitement figé et toutes ses preuves. Si le gate anti-doublon du plan n’est pasPASS, aucune unité n’est implémentée.
 
 Clarification prioritaire : la décision utilisateur D11remplace les hypothèses de paquets natifs et de backendWindows. Clientcommun webinstallable pour les quatre plateformes ; Androidexistant maintenu par le même contrat. Aucun hôteWindows. Les interfaces ne deviennent pas des autorités. Le client et son contrat de compatibilité sont sous la responsabilité du mainteneur Bridget, pas d’un service externe.
+
+
+Correction autorisée du 1 novembre 2026 : T183–T186, contrat contracts/program-upgrades.md et reçu validation/program-upgrades.md. Réutilisation du collecteur220 et du bootstrap ; profils et autorité d’admission inchangés. Contrôle ciblé de cohérence, sans nouvelle phase du programme.

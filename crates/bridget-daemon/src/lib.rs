@@ -52,6 +52,7 @@ pub mod project_compat;
 pub(crate) mod project_preparation;
 pub(crate) mod provider_limits;
 pub(crate) mod provider_catalogue220;
+pub(crate) mod provider_program_compat;
 pub mod reaper;
 pub mod receipt_store;
 pub mod recovery_trace;

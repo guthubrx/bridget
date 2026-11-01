@@ -2018,3 +2018,32 @@ de l’ancienne époque ne vaut pas observation du nouveau lien. La CPU annoncé
 peut être une moyenne depuis le dernier relevé du worker (jusqu’à10 s).
 Prepare relit ses droits, sa définition et les gardes vivantes ; la photographie
 utilisée par une sonde n’accorde aucun droit à modifier un dossier occupé.
+
+
+### Mise à jour automatique d’un programme Codex déjà qualifié
+
+Une version ou une empreinte différente ne demande plus de réécrire le profil
+à la main. Le worker contrôle la nouvelle image dans sa voie de métadonnées,
+hors missions. Il génère son schéma de protocole dans un dossier privé sans
+authentification, contrôle les formes des requêtes utilisées et confirme
+l’initialisation puis l’arrêt. Il n’envoie ni conversation ni demande à un modèle.
+La version et l’empreinte historiques restent des faits de diagnostic.
+
+L’image est utilisable après une preuve compatible liée à cette image et au
+vérificateur Bridget courant. Les opérations restent l’intersection du profil
+déclaré et de celles qualifiées. Aucun compte, droit ou modèle n’est changé.
+Les autres protocoles gardent leur contrôle existant.
+
+En attendant, le motif est program_upgrade_check_pending. Un schéma compris
+et incompatible donne program_protocol_incompatible ; une lecture impossible
+ou un schéma non compris donne program_check_unavailable. Le refus conserve
+la clé et detail.admission. Relire après le contrôle ; un rejeu strict exige
+not_recorded et la fin des appels concurrents. Les autres travaux suivent leur
+propre état. Si le contrôle reste impossible, demander au responsable de vérifier
+le programme et la preuve privée sur ce serveur, sans réinstallation présumée.
+
+Cadence visée : 120 s après succès, 30 s après échec et minimum 5 s après un
+signal de changement, hors durée des contrôles séquentiels. Une incompatibilité
+constatée est mémorisée pour cette image et ce vérificateur. La compatibilité
+structurelle ne garantit ni tous les comportements du fournisseur, ni l’accès
+au modèle ou à l’abonnement. Les contrôles réels restent appliqués au lancement.

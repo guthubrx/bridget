@@ -51,3 +51,6 @@ base64 = "=0.22.1"
 [dev-dependencies]
 bridget-core = { path = "../bridget-core" }
 bridget-transport = { path = "../bridget-transport", features = ["test-support"] }
+
+[build-dependencies]
+sha2 = { workspace = true }

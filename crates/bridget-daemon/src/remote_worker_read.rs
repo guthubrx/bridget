@@ -1455,12 +1455,18 @@ impl ProbeReadContext {
                 };
             }
         };
-        let readiness = match self.read_view().inspect_candidate(registry, &request, &mapping, &cwd, operation, diagnostics, self.provider_accounts_negotiated) {
+        let (checked_readiness,program_failure)=crate::provider_program_compat::capture(||self.read_view().inspect_candidate(registry, &request, &mapping, &cwd, operation, diagnostics, self.provider_accounts_negotiated));
+        let readiness = match checked_readiness {
             Ok(readiness) => readiness,
             Err(WorkerRefusal::DefinitionChanged) => {
                 return CandidateProbeVerdict::Ineligible {
                     candidate_id: candidate.candidate_id.clone(),
-                    reason: CandidateProbeRefusal::DefinitionUnavailable,
+                    reason: match program_failure {
+                        Some(crate::provider_program_compat::UpgradeRefusal::Pending)=>CandidateProbeRefusal::ProgramUpgradeCheckPending,
+                        Some(crate::provider_program_compat::UpgradeRefusal::Incompatible)=>CandidateProbeRefusal::ProgramProtocolIncompatible,
+                        Some(crate::provider_program_compat::UpgradeRefusal::Unavailable)=>CandidateProbeRefusal::ProgramCheckUnavailable,
+                        None=>CandidateProbeRefusal::DefinitionUnavailable,
+                    },
                 };
             }
             Err(WorkerRefusal::PermissionsChanged) => {

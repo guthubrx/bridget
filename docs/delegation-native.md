@@ -1257,3 +1257,32 @@ a new-link observation. Reported CPU may average activity since the worker’s
 last sample (up to10seconds). Prepare still rechecks permissions, definitions
 and live workspace guards. A probe snapshot grants no right to modify a busy
 workspace.
+
+
+### Automatic verification after a qualified Codex program is updated
+
+A different version or digest no longer requires a manual profile rewrite.
+The worker checks the new image in its metadata lane, outside missions.
+It generates protocol schemas in a private directory without authentication,
+checks the request shapes used by Bridget, then confirms initialization and
+process termination. It sends no conversation or model request. The historical
+version and digest remain diagnostic facts.
+
+The image becomes usable after a compatible proof tied to that image and the
+current Bridget verifier. Runtime operations remain the intersection of the
+declared profile and verified operations. Accounts, permissions and models do
+not change. Other protocols retain their existing checks.
+
+Missing proof gives program_upgrade_check_pending. A understood incompatible
+schema gives program_protocol_incompatible; an unreadable proof or unsupported
+schema vocabulary gives program_check_unavailable. The refusal retains the key
+and detail.admission. Read again after the check; strict replay requires
+not_recorded and completion of concurrent calls. Other work follows its own
+state. If verification remains unavailable, ask the owner to inspect the
+program and private proof on that server, without assuming reinstall is needed.
+
+Target cadence is 120 seconds after success, 30 seconds after failure, with
+a five-second minimum after a change signal, excluding other sequential checks.
+Incompatibility is retained for this image and verifier. Structural compatibility
+does not prove all provider behavior or access to a model or subscription.
+Normal runtime checks remain in force.

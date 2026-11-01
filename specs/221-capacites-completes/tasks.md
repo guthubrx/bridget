@@ -335,3 +335,12 @@ revenus, coupures2,41s/2,21s, wrapper2500061 préservé, retourr2 compatible.
 124090944octets de transferts retirés ; caches et worktrees sous observation
 incomplète conservés. Aucun rejeu des demandes métier.
 Preuve : validation/journal-control.md. Programme52/182InProgress.
+
+
+## Correction validée — mise à jour des programmes (2026-11-01)
+
+Ce lot ne clôture pas les autres catégories du programme.
+- [x] T183 Contrat et réutilisation : définir le contrôle automatique après changement d’image, sans autorité de compte ni mutation des profils, dans contracts/program-upgrades.md.
+- [x] T184 Implémenter le contrôle supervisé, son cache d’image, les opérations facultatives et les refus négociés ; conserver préflight sans spawn et droits inchangés.
+- [x] T185 Vérifier le delta ciblé et le faire relire ; conserver les limites exactes dans validation/program-upgrades.md.
+- [ ] T186 Intégrer/pousser, construire et charger sur les sept services ; vérifier images, retour, lien natif et entretien borné.
