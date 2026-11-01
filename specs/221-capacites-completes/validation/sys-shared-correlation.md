@@ -66,3 +66,42 @@ pas une autorisation automatique de relance ni une preuve générale d’arrêt.
 Le geste immédiat est de laisser finir Esquirol puis relire ses conditions
 natives de clôture ; aucune posture ou stratégie n’est changée pour contourner
 la garde. Le premier bloqueur reste inconnu faute de trace historique conservée.
+
+
+## Complément : verrou source du Mac, refus à09:57:44UTC
+
+Request opus201-patrimoine-communes-suite07-8-20261101-01,
+project_preparation_source_busy/origin_project_preparation, observed1793527064.
+Au registre courant : aucune tâche ni reçu auto pour cette clé, cohérent avec
+le refus not_recorded transmis par le parent. Aucun rejeu exécuté.
+
+À09:58:54UTC, lsof a observé Python PID52891, UIDmoi, descripteur3 ouvert sur
+/Users/moi/.cache/bridget-core/project-preparation.lock, inode599398446.
+Le processus a terminé entre ce relevé et la lecture ciblée ps/lsof suivante.
+Il n’a donc pas été possible de relever sa commande, son parent et sa naissance.
+Ce descripteur ouvert ne prouve pas à lui seul qu’il détenait déjà le flock à
+09:57:44. La durée réelle de détention historique reste inconnue.
+Les relevés suivants ne montrent ni ce PID ni un autre processus ouvrant ce
+fichier. Aucun signal, effacement de verrou ni tentative de prise du flock.
+
+Le script source utilise un verrou par répertoire du registre, commun aux
+préparations de ce namespace, pas un verrou Git propre à Esquirol. Il le garde
+pendant inspection SSH, éventuel export/import et publication de mapping.
+L’attente d’un concurrent est limitée à30s. Chaque Git/SSH a un délai300s ;
+le parcours natif plafonne la préparation à595s, réduit par son échéance restante.
+Ce ne sont pas des mesures de la durée du processus52891.
+
+Le dossier temporaire restant bridget-prepare-92d65ec6… est ancien
+(mtime1793503603), destinationKS/commit68442d3f…, réponseok=true :
+il ne correspond pas à la demande SYS/base675 et n’est pas attribué au bloqueur.
+Il est conservé, aucun dossier supprimé.
+
+Conclusion bornée : ce refus source est distinct du Shared occupé surSYS.
+Aucune réservation exécutante pour cette clé n’est attestée par le registre
+courant. Le détenteur exact au moment du refus ne peut pas être reconstitué
+depuis les traces conservées ; aucun diagnostic de verrou orphelin n’est établi.
+Le fichier vide restant ne prouve pas un verrou encore pris. Conserver clé,
+base et enveloppe ; seul le parent peut décider d’une reprise strictement
+identique après fin de ses appels concurrents et vérification native actuelle.
+Esquirol et les autres travaux suivent leur propre état. Aucun code exécutable
+modifié, aucun build, test, service, compte ou droit touché dans ce complément.
