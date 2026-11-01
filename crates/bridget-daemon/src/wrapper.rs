@@ -3316,10 +3316,6 @@ impl Default for AttachRelayHooks {
     }
 }
 
-/// Relais dédié du journal ACP : la boucle de lecture du wrapper ne fait que
-/// déposer les commandes, tandis que ce worker traite chaque abonnement par
-/// petites tranches. Le contrôle coalescé vit dans un état borné partagé afin
-/// qu'un désabonnement ne soit jamais coincé derrière un rejeu volumineux.
 /// Port du relais existant, utilisable sans attendre l'actualisation du fil.
 /// Les clones partagent les mêmes bornes, annulations et état de fermeture.
 #[derive(Clone)]
@@ -3385,6 +3381,10 @@ impl AttachRelayControl {
 
 }
 
+/// Relais dédié du journal ACP : la boucle de lecture du wrapper ne fait que
+/// déposer les commandes, tandis que ce worker traite chaque abonnement par
+/// petites tranches. Le contrôle coalescé vit dans un état borné partagé afin
+/// qu'un désabonnement ne soit jamais coincé derrière un rejeu volumineux.
 pub(crate) struct AttachRelayWorker {
     commands: mpsc::SyncSender<AttachRelayCommand>,
     stopped: Arc<AtomicBool>,
@@ -3614,6 +3614,13 @@ impl AttachRelayWorker {
                         match reader.read_chunk_with_source(ATTACH_RELAY_READ_BYTES) {
                             Ok(result) => result,
                             Err(error) => {
+                                // Libérer l'identifiant avant la fin visible : un
+                                // désabonnement à réception de End ne laisse rien.
+                                {
+                                    let mut control=worker_control.lock().unwrap_or_else(|poison|poison.into_inner());
+                                    control.active.remove(&subscription_id);
+                                    control.cancelled.remove(&subscription_id);
+                                }
                                 worker_emit(WrapperToDaemon::End {
                                     subscription_id: subscription.subscription_id.clone(),
                                     reason: format!("lecture du journal impossible: {error}"),
@@ -3638,15 +3645,15 @@ impl AttachRelayWorker {
                         } else {
                             "source de journal indisponible"
                         };
+                        {
+                            let mut control=worker_control.lock().unwrap_or_else(|poison|poison.into_inner());
+                            control.active.remove(&subscription_id);
+                            control.cancelled.remove(&subscription_id);
+                        }
                         worker_emit(WrapperToDaemon::End {
                             subscription_id: subscription.subscription_id.clone(),
                             reason: reason.to_string(),
                         });
-                        worker_control
-                            .lock()
-                            .unwrap_or_else(|poison| poison.into_inner())
-                            .active
-                            .remove(&subscription_id);
                         subscriptions.remove(&subscription_id);
                         continue;
                     }
@@ -11415,6 +11422,46 @@ mod reconnect_tests {
         assert_eq!(sequences, vec![5, 6, 7]);
         worker.shutdown();
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec221_journal_read_error_releases_id_before_resubscribe() {
+        let root=relay_root("read-error-reuse");std::fs::create_dir_all(&root).unwrap();
+        let path=root.join("2026-08-22.jsonl");
+        std::fs::write(&path,b"{\"v\":1,\"seq\":1}\n").unwrap();
+        let hook_path=path.clone();let once=Arc::new(AtomicBool::new(true));let hook_once=once.clone();
+        let hooks=AttachRelayHooks {before_read:Arc::new(move||{
+            if hook_once.swap(false,Ordering::SeqCst) {
+                std::fs::remove_file(&hook_path).unwrap();std::fs::create_dir(&hook_path).unwrap();
+            }
+        }),..AttachRelayHooks::default()};
+        let (events,base_emitter)=relay_emitter();
+        let slot=Arc::new(Mutex::new(None::<AttachRelayControl>));let callback_slot=slot.clone();
+        let emitter:RelayEmitter=Arc::new(move|event| {
+            if let WrapperToDaemon::End {subscription_id,..}=&event {
+                if let Some(control)=callback_slot.lock().unwrap().as_ref() {
+                    control.unsubscribe(subscription_id.clone());
+                }
+            }
+            base_emitter(event);
+        });
+        let mut worker=AttachRelayWorker::start_with(root.clone(),"2026-08-22".into(),4,emitter,hooks);
+        *slot.lock().unwrap()=Some(worker.subscription_control());
+        worker.subscribe("same-id".into(),AttachWindow::Today).unwrap();
+        wait_for(||events.lock().unwrap().iter().any(|event|
+            matches!(event,WrapperToDaemon::End {subscription_id,..} if subscription_id=="same-id")));
+        // End peut être émis juste avant le retrait partagé : attendre le fait.
+        wait_for(||!worker.control_state.lock().unwrap().active.contains("same-id"));
+        worker.unsubscribe("same-id".into());
+        assert!(!worker.control_state.lock().unwrap().cancelled.contains("same-id"));
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path,b"{\"v\":1,\"seq\":1}\n").unwrap();
+        worker.subscribe("same-id".into(),AttachWindow::Today).unwrap();
+        wait_for(||events.lock().unwrap().iter().any(|event|
+            matches!(event,WrapperToDaemon::SnapshotCaughtUp {subscription_id,..} if subscription_id=="same-id")));
+        assert_eq!(events.lock().unwrap().iter().filter(|event|
+            matches!(event,WrapperToDaemon::Subscribed {subscription_id} if subscription_id=="same-id")).count(),2);
+        worker.shutdown();std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

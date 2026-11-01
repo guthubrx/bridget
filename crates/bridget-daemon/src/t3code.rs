@@ -1465,6 +1465,10 @@ enum LinkEvent {
     DaemonGone,
     Close,
     Unavailable,
+    JournalRejected {
+        subscription_id: String,
+        reason: bridget_transport::protocol::AttachRefusal,
+    },
 }
 
 struct Link {
@@ -1542,7 +1546,7 @@ impl Link {
         )?;
         let daemon_alive = worker.daemon_alive.clone();
         let cancelled = worker.cancelled.clone();
-        let journal_control=(worker.relay.subscription_control(),worker.writer.clone());
+        let journal_control = worker.relay.subscription_control();
         let worker_handle = thread::Builder::new()
             .name(format!("t3-{}", &summary.id[..summary.id.len().min(8)]))
             .spawn(move || worker.run(inbox))
@@ -1661,8 +1665,8 @@ impl Drop for Link {
     }
 }
 
-type ReaderJournalControl=(AttachRelayControl,Arc<Mutex<Option<BufWriter<UnixStream>>>>);
-
+// Les identités et contrôles du lecteur restent explicitement séparés.
+#[allow(clippy::too_many_arguments)]
 fn spawn_reader(
     mut reader: BufReader<UnixStream>,
     events: Sender<LinkEvent>,
@@ -1671,7 +1675,7 @@ fn spawn_reader(
     drained_key: Arc<Mutex<Option<String>>>,
     inbound_deliveries: Arc<AtomicUsize>,
     thread_id: &str,
-    journal_control: Option<ReaderJournalControl>,
+    journal_control: Option<AttachRelayControl>,
 ) -> Result<thread::JoinHandle<()>, String> {
     thread::Builder::new()
         .name(format!(
@@ -1694,13 +1698,14 @@ fn spawn_reader(
                                 // Le journal déjà écrit ne dépend pas de HTTP ni du tour.
                                 // Réutiliser le relais borné ; ne pas doubler le traitement
                                 // dans la file de LinkWorker.
-                                if let Some((relay,writer))=&journal_control {
+                                if let Some(relay) = &journal_control {
                                     match &frame {
                                         DaemonToWrapper::Subscribe {subscription_id,window,..} => {
                                             if let Err(reason)=relay.subscribe(subscription_id.clone(),window.clone()) {
-                                                send_wrapper_message(writer,WrapperToDaemon::AttachRejected {
-                                                    subscription_id:Some(subscription_id.clone()),reason,
-                                                });
+                                                // Le lecteur ne prend jamais le verrou d'écriture.
+                                                if events.send(LinkEvent::JournalRejected {
+                                                    subscription_id:subscription_id.clone(),reason,
+                                                }).is_err() {break;}
                                             }
                                             continue;
                                         }
@@ -2043,6 +2048,11 @@ impl LinkWorker {
                 ) {
                     self.report_discard(frame.as_ref(), Discard::LinkClosing);
                 }
+            }
+            LinkEvent::JournalRejected {subscription_id,reason} => {
+                send_wrapper_message(&self.writer,WrapperToDaemon::AttachRejected {
+                    subscription_id:Some(subscription_id),reason,
+                });
             }
             LinkEvent::Unavailable => {
                 self.set_observation_ready(false);
@@ -6676,7 +6686,7 @@ mod tests {
         // en attente. Le vrai lecteur socket et le vrai relais restent actifs.
         let reader=spawn_reader(BufReader::new(input),events,worker.daemon_alive.clone(),
             worker.cancelled.clone(),worker.drained_key.clone(),worker.inbound_deliveries.clone(),
-            "journal-blocked-worker",Some((worker.relay.subscription_control(),worker.writer.clone()))).unwrap();
+            "journal-blocked-worker",Some(worker.relay.subscription_control())).unwrap();
         writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Subscribe {
             subscription_id:"journal-eight".into(),agent:worker.agent_id.clone(),window:AttachWindow::Tail(8),
         }).unwrap()).unwrap();
@@ -6703,6 +6713,35 @@ mod tests {
         assert!(matches!(next,LinkEvent::Frame(frame) if matches!(*frame,DaemonToWrapper::Disconnect)));
         assert_eq!(serde_json::to_value(&worker.state).unwrap(),before);
         drop(daemon);reader.join().unwrap();worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec221_journal_saturation_never_blocks_reader_on_writer() {
+        use std::io::Write;
+        use bridget_transport::protocol::{AttachWindow,AttachRefusal};
+        let (mut worker,_output)=worker099();
+        let writer_lock=worker.writer.lock().unwrap();
+        let mut accepted=0;
+        for n in 0..128 {
+            if worker.relay.subscribe(format!("full-{n}"),AttachWindow::Tail(1)).is_err() {break;}
+            accepted+=1;
+        }
+        assert!(accepted>0 && accepted<128);
+        let (input,mut daemon)=UnixStream::pair().unwrap();
+        let (events,inbox)=mpsc::channel();
+        let reader=spawn_reader(BufReader::new(input),events,worker.daemon_alive.clone(),
+            worker.cancelled.clone(),worker.drained_key.clone(),worker.inbound_deliveries.clone(),
+            "journal-saturated",Some(worker.relay.subscription_control())).unwrap();
+        writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Subscribe {
+            subscription_id:"rejected".into(),agent:worker.agent_id.clone(),window:AttachWindow::Tail(1),
+        }).unwrap()).unwrap();
+        writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
+        assert!(matches!(inbox.recv_timeout(Duration::from_secs(1)).unwrap(),
+            LinkEvent::JournalRejected {reason:AttachRefusal::CommandQueueSaturated,..}));
+        assert!(matches!(inbox.recv_timeout(Duration::from_secs(1)).unwrap(),
+            LinkEvent::Frame(frame) if matches!(*frame,DaemonToWrapper::Disconnect)));
+        drop(daemon);reader.join().unwrap();
+        drop(writer_lock);worker.journal.stop();worker.relay.shutdown();
     }
 
     #[test]

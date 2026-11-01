@@ -35,3 +35,30 @@ Lecture du registre natif, sans rejeu :
 Aucune mission relancée, aucune enveloppe changée.
 Le rendu isolé tenant un verrou métier signalé par3315 reste distinct :
 aucun défautBridget n'est établi par ce seul fait.
+
+## Revue et complément
+Revue indépendante db7d13ed en lecture seule, résultat lu et acquitté ;
+clôture propriétaire demandée une fois. Le mécanisme est cohérent, sans P1
+confirmé. L'observation de lint sur les huit paramètres du lecteur est traitée
+par l'annotation déjà utilisée dans ce module. Documentation du relais replacée.
+
+Deux corrections suivent la revue, avec contrôle ciblé :
+- le lecteur réseau ne prend plus le mutex du writer, même pour un refus de
+  saturation. Il remet le refus fermé dans la file existante du worker.
+- une erreur disque retirait la souscription mais gardait son identifiant dans
+  active. La fin sur erreur libère désormais active et cancelled avant End ;
+  même ordre sur remplacement/troncature de source.
+Le test d'erreur disque remplace réellement le fichier par un dossier, reçoit
+End, désabonne dans le callback puis réabonne le même identifiant. Il vérifie
+absence d'entrée retenue et seconde lecture complète. Le test de saturation
+retient le mutex du writer et sature le relais : le lecteur remet le refus
+puis Disconnect sans attendre ce mutex. Le delta est auto-audité ; aucune
+seconde revue générale n'est revendiquée.
+
+Vingt-cinq contrôles Linux distincts acquis : nouveau test nominal, huit
+régressions relais et treize du lecteur, deux nouvelles contre-épreuves
+(saturation et erreur disque), plus remplacement/troncature de source.
+Les trois tests nouveaux sont repassés ensemble après le complément final ;
+les répétitions ne sont pas comptées comme de nouveaux tests.
+La première compilation du nouveau test signalait un import encode manquant ;
+qualification complète du nom corrigée avant les PASS.
