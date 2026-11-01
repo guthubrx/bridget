@@ -1,6 +1,6 @@
 # Voie de lecture des sondes worker — session221
 
-Statut : vérifié, livraison en préparation. Programme52/182 In Progress.
+Statut : correctif chargé et vérifié sur les sept services. Programme52/182 In Progress.
 
 ## Incident et limites de causalité
 
@@ -93,3 +93,78 @@ de candidats sont relues dans daemon.rs:19043–19130 ; aucun changement.
 Cette passe ne constitue pas une revue indépendante réussie du delta R2. Les erreurs initiales de
 compilation de fixtures (type BufReader puis helper absent) sont corrigées ;
 seuls les PASS finaux sont comptés, sans addition des répétitions.
+
+
+## Livraison active
+
+Source06ba1606c29f08a0932d156ec5da0efa2eebd866 intégrée à main et poussée.
+Les356fichiers du manifeste d’assemblage correspondent à cette source ;
+stagingsMac et SYS identiques au manifeste. Assemblages Linux2min et Mac1min18s
+réussis. Pas de nouveau test Mac ; les25tests distincts finaux sont Linux
+(13bibliothèque+9spec189+vrai worker+128candidats+Shared).
+
+Build221-worker-probe-lane-r2, version0.6.5 :
+- Linux41525776octets, SHA256
+  `7cd9c1a8957dd350a9ec9d41d02119bfe104b933c8656328cb725183f6d49396`.
+- Mac34318528octets, SHA256
+  `d9a6b0987034496a4ff2d14a68a57da74477ba0bf40a77189d57569d7d5852aa`.
+
+Sept images réellement chargées, chemins et SHA relus : maîtreCartae552506,
+mobile552580, workerCartae553042, workerSYS1240730, workerKS1612683,
+workerMac44587 et pontMac44891. Coupure maître2,27s. WrapperCartae2500061,
+naissance270585460, conservé. Aucun autre commandement actif dans les reçus
+worker au précontrôle ; cela ne vaut pas inventaire universel des processus.
+Le journal système mentionne Codex1240655 survivant au stopSYS ; PID absent
+au contrôle suivant, sans signal envoyé par ce lot ni conclusion métier.
+
+Retour221-continuation-receipt-r1 qualifié dans les deux sens par le lecteur
+natif de formats. Pointeurs rollbackCartae/Mac écrits atomiquement sous verrou
+updater, puis images et SHA relus ; aucun retour exécuté. Sauvegardes privées
+avant passage conservées.
+
+Une session native réussie. Première capabilities pendant republication :
+primary_absent. Après exposition attestée de bridge1016 à06:37:27UTC dans le
+journal du pont, nouvelle lecture réussie :45options, delegations_halted=false.
+Aucun nouveau schéma MCP dans ce lot : les anciens clients bénéficient du
+correctif de boucle worker. Aucun redémarrage de l’application hôte demandé.
+Les limites de client du lot continuation-receipt restent décrites dans son reçu.
+
+## Sort des demandes originales après passage
+
+Lecture administrative seule du registre maître à06:37:28UTC, puis détail nord :
+- maisons8 : même tâchec2240df5, failed/WorkerUnavailable, ronde1,
+  mission_issued_at=null. Aucun travail métier remis selon ce reçu.
+- nord8 : désormais admise sous be3d8445-e6f4-4b5f-9b83-518a43d72c54,
+  result_available, erreur nulle, ronde1. Mise à jour du reçu à1793512763.
+- sud8 : désormais refused, task_id=null,
+  routing_connection_changed:selected_probe:worker_epoch, mise à jour1793512811.
+  Cette fin de reçu précède la maintenance de ce lot ; ne pas lui attribuer
+  notre coupure. Aucune nouvelle tâche créée par le présent responsable.
+- palais7100defb : result_available, erreur nulle, ronde1.
+
+Le premier instantané nord absent/sud chosen est conservé comme historique,
+pas présenté comme état courant. Aucun résultat métier lu, aucune enveloppe
+rejouée, aucun remplacement ni changement de droits/compte/modèle. Message de
+résultat envoyé à monuments sous bridget221-worker-probe-lane-result-20261101-01,
+issued_at1793515104, delivery17f98ca8-fa27-4476-94f1-c644ab617f1b,
+in_flight ; la lecture du destinataire n’est pas attestée.
+
+## Git et entretien
+
+MainMac et mainCartae propres et poussés. Les deux stores de chaque miroir
+SYS/KS reçoivent main par bundle incrémental ; les HEAD détachés actifs restent
+inchangés, aucun checkout/reset ni changement d’origin. La preuve finale inclut
+le commit documentaire qui complète cette source fonctionnelle.
+
+Entretien installed exécuté après contrôle des images. Mac refuse le propriétaire
+du staging ; SYS indique une observation processus incomplète. Caches conservés
+sans forcer. Trois copies binaires de transfert identifiées retirées après
+vérification de l’image installée :124577328octets. Actif, retour qualifié,
+preuves, snapshots sources et anciennes images encore utilisées conservés.
+Worktrees de revue5478888b et3692016c conservés : rapport final ou observation
+d’usage incomplets ; aucune suppression fondée sur une absence supposée de
+processus. Annulation R2 demandée une fois, aucun rejeu.
+
+Correction technique de boucle et de reçu MCP ; aucun circuit d’interface
+visuelle modifié, donc pas de diaporama de clics. Programme global toujours
+52/182 In Progress, aucune parité globale annoncée.

@@ -109,6 +109,22 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session221/sondes worker — source06ba1606 intégrée/poussée, build221-worker-probe-lane-r2
+chargé7services/PID/SHA vérifiés ; coupure2,27s, wrapperCartae2500061 conservé.
+SondesGit isolées des commandes :1lecture physique inter-reconnexions,8attentes,
+budget45s réception incluse, Git engagé garde son délai ; droits/admission inchangés.
+25testsLinux distinctsPASS dont vrai worker+Start pendantGitbloqué ; assemblagesMac/LinuxPASS.
+Revue5478888b traitée ; ronde3692016c failed/WorkerUnavailable sans résultat,
+auto-auditR2 déclaré, aucun remplacement. Rollbackcontinuation-receipt natif vérifié.
+Lien revenu45options/gel=false après republication ; pas de nouveau schémaMCP.
+Originaux relus : maisonsfailed/métiernonremis, nordbe3d8445 result_available,
+sudrefused/worker_epoch avantmaintenance, palaisresult_available ; aucunrejeu.
+CodexSYS0.166 diffère du0.164 déclaré : garde préservée, qualificationdistincte.
+124577328octets de transferts retirés ; installedMac/SYS etWTrevues conservés
+sous propriétaire/observationincomplets. Programme52/182InProgress.
+Preuves : specs/221-capacites-completes/validation/worker-probe-lane.md.
+
+
 Session221/reçu de continuation — source377f647e intégrée/poussée ; cinqtests
 Linux ciblés distinctsPASS, assemblagesMac/Linux et revue6622035b sans défaut
 bloquant. begin_round retourne son reçu avant le tick général ; cadence
