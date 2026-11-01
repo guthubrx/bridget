@@ -748,7 +748,7 @@ fn recover_admission_with_budget171<T>(
         if Instant::now() >= deadline {
             return Err(ClientError::Technical {
                 code: "outcome_unknown",
-                message: format!("Admission de la demande {request_id} toujours en cours. Conserver cette clé et les mêmes arguments pour récupérer son résultat ; ne pas créer de doublon."),
+                message: format!("Rétablissez le lien natif, puis relisez la demande {request_id} avec la même clé et les mêmes arguments. Son issue finale reste inconnue : elle peut être en attente, admise ou refusée. Aucun nouveau lancement n'est justifié par cette réponse. Ne créez pas de doublon. Ce constat concerne cette lecture ; les autres travaux autorisés suivent leur propre état. Si le lien reste indisponible, demandez au responsable de lire le reçu de cette clé."),
             });
         }
         match exchange(Some(deadline)) {
@@ -756,10 +756,11 @@ fn recover_admission_with_budget171<T>(
                 std::thread::sleep(Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())));
             }
             Err(ClientError::Technical { code: "outcome_unknown" | "daemon_unreachable", .. }) => {
-                return Err(ClientError::Technical {
-                    code: "outcome_unknown",
-                    message: format!("Accusé de la demande {request_id} indisponible après récupération. La mission peut être admise. Conserver cette clé et les mêmes arguments ; ne pas créer une demande en doublon."),
-                });
+                // Une coupure de maintenance n'épuise pas à elle seule le budget.
+                // Relire le même reçu ; une réponse terminale sera rendue telle quelle.
+                std::thread::sleep(Duration::from_millis(250).min(
+                    deadline.saturating_duration_since(Instant::now())));
+
             }
             other => return other,
         }
@@ -935,6 +936,37 @@ mod admission_recovery171_tests {
     }
 
     #[test]
+    fn spec222_recovery_transport_gap_returns_observed_final_refusal() {
+        let mut calls = 0;
+        let mut fixed = None;
+        let refusal = json!({"status":"refused","code":"permission_not_inherited",
+            "detail":{"admission":{"state":"refused","task_id":null}}});
+        let result = recover_admission_with_budget171("same222-key",
+            |v: &Value| v["code"] == "admission_pending", |deadline| {
+                calls += 1;
+                if calls == 1 {
+                    assert!(deadline.is_none());
+                    return Err(ClientError::Technical {code:"outcome_unknown",message:"lost".into()});
+                }
+                if let Some(previous) = fixed { assert_eq!(deadline, Some(previous)); }
+                fixed = deadline;
+                match calls {
+                    2 => Err(ClientError::Technical {code:"daemon_unreachable",message:"restart".into()}),
+                    3 => Ok(json!({"status":"refused","code":"admission_pending"})),
+                    _ => Ok(refusal.clone()),
+                }
+            }, Duration::from_secs(2)).unwrap();
+        assert_eq!(calls, 4);
+        assert_eq!(result, refusal);
+        let unknown: Result<Value, _> = recover_admission_with_budget171("same222-key",
+            |_| false, |_| Err(ClientError::Technical {code:"outcome_unknown",message:"lost".into()}),
+            Duration::ZERO);
+        assert!(matches!(unknown, Err(ClientError::Technical {code:"outcome_unknown",message})
+            if message.contains("en attente, admise ou refusée")
+                && message.contains("same222-key") && !message.contains("toujours en cours")));
+    }
+
+    #[test]
     fn delivery171_lost_admission_reply_is_recovered_once_without_masking_refusals() {
         let mut calls = Vec::new();
         let result = recover_admission_reply171("same-key", |_| false, |deadline| {
@@ -945,10 +977,10 @@ mod admission_recovery171_tests {
         assert_eq!(calls, vec![false,true]);
         assert_eq!(result["task_id"], "same-task");
         let mut calls=0;
-        let result: Result<(),_> = recover_admission_reply171("same-key", |_| false, |_| {
+        let result: Result<(),_> = recover_admission_with_budget171("same-key", |_| false, |_| {
             calls+=1;
             Err(ClientError::Technical { code:"outcome_unknown", message:"délai".into() })
-        });
+        }, Duration::from_millis(5));
         assert_eq!(calls,2);
         assert!(matches!(result,Err(ClientError::Technical {code:"outcome_unknown",message}) if message.contains("same-key") && message.contains("doublon")));
         let mut calls=0;

@@ -8,6 +8,12 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.1 — 2026-11-01
+
+- Une admission en reprise attend la republication et la preuve du parent, sans inventer un changement de droits. Les révocations restent refusées.
+- Le client relit le même reçu pendant une coupure bornée et rend le refus final reçu. Une issue illisible reste explicitement inconnue. Aucun rejeu des demandes historiques17/18.
+- L'application Android0.7.0 reste inchangée.
+
 ## 0.7.0 — 2026-11-01
 
 Ajoute les rôles déclarés et désignés, profils versionnés, mandats durables, sessions à la demande, mémoire sourcée interprojets, import/export des définitions et compositions facultatives. MCP, CLI et catalogue Android utilisent les mêmes contrôles et reçus natifs. Aucun plafond de travail supplémentaire n'est actif par défaut. Un lecteur compatible des demandes de spécialiste est exigé pour le retour.
