@@ -1245,13 +1245,23 @@ impl Task {
         !self.terminal() || (self.guarded && !self.cleanup_done)
     }
 
-    pub fn continuable(&self) -> bool {
+    /// Garde structurelle conservée pour la rétention : ne prouve ni présence
+    /// ni délai valide. Une inéligibilité de reprise n'autorise aucun retrait.
+    pub fn continuation_guard_open(&self) -> bool {
         self.state == "result_available"
             && !self.workspace_repairs.last().is_some_and(|v|v.blocks_dispatch())
             && self.result_sent
             && self.idle_deadline_at.is_some()
             && !self.guard_released
     }
+
+    pub(crate) fn continuable_at(&self, now: i64) -> bool {
+        self.continuation_guard_open()
+            && self.guarded
+            && self.round_no() < 8
+            && self.idle_deadline_at.is_some_and(|deadline|deadline>now)
+    }
+
 }
 
 impl DelegationStore {

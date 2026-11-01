@@ -2609,7 +2609,10 @@ fn native175_conservation_expliquee_sans_mutation_ni_autorisation_de_retrait() {
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
         );
-        assert_eq!(view["continuable"], continuable);
+        assert!(!before.guarded, "la fixture conserve son admission non gardée");
+        assert_eq!(before.continuation_guard_open(), continuable);
+        assert_eq!(view["continuable"], false,
+            "un délai seul ne rend pas une admission non gardée reprenable");
         assert!(view["workspace"].get("toplevel").is_none());
         let after = fixture
             .state

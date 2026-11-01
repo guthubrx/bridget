@@ -6320,6 +6320,31 @@ impl WorkerRuntime {
             },
         }
     }
+    /// Observation sans effet : aucun signal, wait, rapport Git, écriture ou
+    /// clôture de créneau. Une preuve insuffisante n'est jamais un arrêt.
+    fn execution_status(&self,command:&WorkerCommandIdentity)
+        ->Result<WorkerResponseOperation,WorkerRefusal> {
+        let receipt=self.store.command(command).map_err(refuse)?;
+        let mut phase=receipt.phase;
+        let mut ready=false;
+        if phase==WorkerCommandPhase::Released {
+            if let Some(marker)=receipt.marker.as_ref().filter(|m|
+                m.command_id==command.command_id && m.instance_id==command.instance_id
+                    && m.generation==command.generation) {
+                ready=receipt.native_ready && !receipt.startup_failed
+                    && crate::managed_process::process_matches_live(marker.pgid,marker.birth)
+                        .map_err(unavailable)?;
+            }
+            if !ready {phase=WorkerCommandPhase::Unknown;}
+        }
+        let mut response=Self::observation_native(phase,ready,None);
+        if let WorkerResponseOperation::Observation {observation}=&mut response {
+            observation.startup_failure=receipt.startup_failure;
+            observation.exit_code=receipt.terminal_exit_code;
+        }
+        Ok(response)
+    }
+
     fn reconcile(
         &mut self,
         command: &WorkerCommandIdentity,
@@ -6866,6 +6891,9 @@ impl WorkerRuntime {
             }
             WorkerRequestOperation::RepairWorkspace { repair, action, expires_at } => self.repair_workspace(&request.command,repair,*action,*expires_at),
             WorkerRequestOperation::Reconcile {} => self.reconcile_attested(&request.command),
+            // Observation de commande seulement : pas de rapport Git ni de
+            // relecture fournisseur. La remise garde Reconcile et ses droits.
+            WorkerRequestOperation::ExecutionStatus {} => self.execution_status(&request.command),
             WorkerRequestOperation::Cancel {
                 target: WorkerCancelScope::ResultSlot { slot, proof },
             } => {
@@ -7123,7 +7151,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
-    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,
+    start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,execution_status:bool,
 }
 impl MasterWorkerFeatures {
     fn supports(&self,capability:WorkerCapability)->bool {
@@ -7142,19 +7170,20 @@ impl MasterWorkerFeatures {
             WorkerCapability::ProviderAccountsV1=>self.provider_accounts,
             WorkerCapability::WorkspaceViewV1=>self.workspace_view,
             WorkerCapability::WorkspaceViewCreateV1=>self.workspace_view_create,
+            WorkerCapability::ExecutionStatusV1=>self.execution_status,
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
-            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1]
+            WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1,WorkerCapability::ExecutionStatusV1]
             .into_iter().filter(|v|self.supports(*v)
                 && (*v!=WorkerCapability::ModelOptionsV1 || self.provider_catalogue)
                 && (*v!=WorkerCapability::WorkspaceViewCreateV1 || crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=14
+        accepted.len()<=15
             && (!accepted.contains(&WorkerCapability::ModelOptionsV1)
                 || accepted.contains(&WorkerCapability::ProviderCatalogueV1))
             && (!accepted.contains(&WorkerCapability::WorkspaceViewCreateV1)
@@ -7188,6 +7217,7 @@ fn probe_worker_capability(
                 provider_accounts:has("worker_provider_accounts_v1"),
                 workspace_view:has("worker_workspace_view_v1"),
                 workspace_view_create:has("worker_workspace_view_create_v1"),
+                execution_status:has("worker_execution_status_v1"),
             })
         }
         _=>Err("worker_capability_required".into()),
@@ -7313,6 +7343,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let workspace_failure_negotiated=negotiated.contains(&WorkerCapability::WorkspaceFailureV1);
         let catalogue_negotiated=negotiated.contains(&WorkerCapability::ProviderCatalogueV1);
         let workspace_view_negotiated=negotiated.contains(&WorkerCapability::WorkspaceViewV1);
+        let execution_status_negotiated=negotiated.contains(&WorkerCapability::ExecutionStatusV1);
         let workspace_view_create_negotiated=negotiated.contains(&WorkerCapability::WorkspaceViewCreateV1);
         let read_catalogues=catalogues.clone();
         runtime.host_resources.reset();
@@ -7366,6 +7397,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                                 && (slot_deadline_negotiated || !matches!(
                                     &request.request, WorkerRequestOperation::ReserveResultSlotUntil { .. }
                                 ))
+                                && (execution_status_negotiated || !matches!(&request.request,WorkerRequestOperation::ExecutionStatus {}))
                                 && (workspace_view_negotiated || !request.request.requires_commit_view_reader())
                                 && (workspace_view_create_negotiated || !request.request.requires_commit_view_creation())
                                 && (workspace_repair_negotiated || !matches!(
@@ -9771,6 +9803,76 @@ while not stop.exists(): time.sleep(.01)
             assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
         }
         assert!(runtime.prepared.is_empty());
+    }
+
+    #[test]
+    fn spec221_continuable_worker_status_is_negotiated_and_never_starts_a_command() {
+        let legacy=MasterWorkerFeatures::default();
+        assert!(!legacy.admits(&[WorkerCapability::ExecutionStatusV1]));
+        let modern=MasterWorkerFeatures {execution_status:true,..MasterWorkerFeatures::default()};
+        assert!(modern.admits(&[WorkerCapability::ExecutionStatusV1]));
+        {
+            use std::io::Write;
+            use std::os::unix::process::CommandExt;
+            let fixture=Fixture::new();let mut runtime=runtime_fixture(&fixture);
+            reserve(&runtime.store);
+            let mut child=std::process::Command::new("sh").args(["-c","read line"])
+                .stdin(std::process::Stdio::piped()).process_group(0).spawn().unwrap();
+            let birth=crate::managed_process::process_birth(child.id()).unwrap();
+            let marker=crate::managed_process::ManagedMarker {pgid:child.id(),birth,
+                instance_id:command().instance_id,command_id:command().command_id,generation:command().generation};
+            runtime.store.mark_command(&command(),&marker,101).unwrap();
+            let permit=WorkerReleasePermit {permit_id:"read-status221".into(),
+                command_digest:"d".repeat(64),permission_revision:1,mapping_revision:1,
+                provisioning_revision:1,issued_at:101,expires_at:106};
+            runtime.store.authorize_release(&command(),&permit,"epoch221",101).unwrap();
+            runtime.store.set_phase(&command(),WorkerCommandPhase::Released,102).unwrap();
+            runtime.store.native_status(&command(),false).unwrap();
+            let before=fs::read(runtime.store.command_path(&command())).unwrap();
+            let WorkerResponseOperation::Observation{observation}=runtime.execution_status(&command()).unwrap()
+                else {panic!("observation")};
+            assert_eq!(observation.phase,WorkerCommandPhase::Released);assert!(observation.native_ready);
+            assert_eq!(before,fs::read(runtime.store.command_path(&command())).unwrap());
+            assert!(crate::managed_process::process_matches_live(child.id(),birth).unwrap());
+            // Fixture de reçu dont la naissance est devenue étrangère.
+            let path=runtime.store.command_path(&command());
+            let mut altered:serde_json::Value=serde_json::from_slice(&before).unwrap();
+            altered["marker"]["birth"]=serde_json::json!(birth.saturating_add(1));
+            fs::write(&path,serde_json::to_vec(&altered).unwrap()).unwrap();
+            let wrong_birth=fs::read(runtime.store.command_path(&command())).unwrap();
+            let WorkerResponseOperation::Observation{observation}=runtime.execution_status(&command()).unwrap()
+                else {panic!("observation")};
+            assert_eq!(observation.phase,WorkerCommandPhase::Unknown);assert!(!observation.native_ready);
+            assert_eq!(wrong_birth,fs::read(runtime.store.command_path(&command())).unwrap());
+            fs::write(&path,&before).unwrap();
+            let before_exit=fs::read(runtime.store.command_path(&command())).unwrap();
+            // Libération normale de notre fixture par stdin, aucun signal.
+            child.stdin.take().unwrap().write_all(b"done\n").unwrap();
+            let until=Instant::now()+Duration::from_secs(3);
+            while crate::managed_process::process_matches_live(child.id(),birth).unwrap_or(false) {
+                assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(5));
+            }
+            let WorkerResponseOperation::Observation{observation}=runtime.execution_status(&command()).unwrap()
+                else {panic!("observation")};
+            assert_eq!(observation.phase,WorkerCommandPhase::Unknown);assert!(!observation.native_ready);
+            assert_eq!(before_exit,fs::read(runtime.store.command_path(&command())).unwrap());
+            child.wait().unwrap();
+        }
+        for phase in [WorkerCommandPhase::Terminal,WorkerCommandPhase::Refused] {
+            let fixture=Fixture::new();let mut runtime=runtime_fixture(&fixture);
+            reserve(&runtime.store);
+            runtime.store.set_phase(&command(),phase,worker_now()).unwrap();
+            let request=WorkerRequest {version:REMOTE_WORKER_VERSION,correlation_id:"status221".into(),
+                connection_epoch:"epoch221".into(),worker:worker(),command:command(),
+                request:WorkerRequestOperation::ExecutionStatus {}};
+            let response=runtime.handle(&request,"epoch221",&AtomicBool::new(false)).unwrap();
+            let WorkerResponseOperation::Observation {observation}=response else {panic!("observation")};
+            assert_eq!(observation.phase,phase);
+            assert!(observation.workspace.is_none() && observation.permission_digest.is_none());
+            assert!(runtime.running.is_empty() && runtime.held.is_empty() && runtime.prepared.is_empty());
+            assert_eq!(runtime.store.commands().unwrap().len(),1);
+            assert_eq!(runtime.handle(&request,"other-epoch",&AtomicBool::new(false)).unwrap_err(),WorkerRefusal::StaleConnection);
+        }
     }
 
     #[test]

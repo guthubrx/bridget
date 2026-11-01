@@ -18713,7 +18713,7 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 14
+                && capabilities.len() <= 15
                 && (!capabilities.contains(&WorkerCapability::ModelOptionsV1)
                     || capabilities.contains(&WorkerCapability::ProviderCatalogueV1))
                 && (!capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
@@ -18721,7 +18721,7 @@ fn handle_worker_message(
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1
                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
                         && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
                 })
@@ -19155,7 +19155,7 @@ fn commit_view_conservation_matches(
     command: &bridget_transport::protocol::WorkerCommandIdentity,
     prepare_digest: &str,
 ) -> bool {
-    task.terminal() && !task.continuable()
+    task.terminal() && !task.continuation_guard_open()
         && (task.workspace.is_none() || task.workspace_report_mission.as_deref()==Some(task.mission.as_str()))
         && (!task.guarded || task.guard_released)
         && task.task_id==command.task_id
@@ -19250,6 +19250,10 @@ fn remote_worker_roundtrip_with_send_deadline(
                 .capabilities
                 .contains(&WorkerCapability::CandidateProbeV2)
         {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
+        if matches!(&operation,WorkerRequestOperation::ExecutionStatus {})
+            && !session.capabilities.contains(&WorkerCapability::ExecutionStatusV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
         if operation.requires_provider_accounts()
@@ -23983,6 +23987,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_provider_catalogue_v1".to_string(),
                     "worker_model_options_v1".to_string(),
                     "worker_provider_accounts_v1".to_string(),
+                    "worker_execution_status_v1".to_string(),
                     "worker_workspace_view_v1".to_string(),
                     "commit_view_files_v1".to_string(),
                     "routing_catalogue_v1".to_string(),

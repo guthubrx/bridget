@@ -1036,7 +1036,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
 
 /// Identifiant de naissance comparable lors de la réconciliation anti-PID recyclé.
 #[cfg(target_os = "macos")]
-pub fn process_birth(pid: u32) -> io::Result<u64> {
+fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let expected = std::mem::size_of::<libc::proc_bsdinfo>();
     let written = unsafe {
@@ -1052,26 +1052,40 @@ pub fn process_birth(pid: u32) -> io::Result<u64> {
         return Err(io::Error::last_os_error());
     }
     let info = unsafe { info.assume_init() };
-    Ok(info
-        .pbi_start_tvsec
-        .saturating_mul(1_000_000)
-        .saturating_add(info.pbi_start_tvusec))
+    Ok((info.pbi_start_tvsec.saturating_mul(1_000_000)
+        .saturating_add(info.pbi_start_tvusec),
+        info.pbi_status != libc::SZOMB && info.pbi_status != libc::SIDL))
 }
 
 #[cfg(target_os = "linux")]
-pub fn process_birth(pid: u32) -> io::Result<u64> {
+fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
     let after_name = stat
         .rsplit_once(')')
         .map(|(_, tail)| tail)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "stat de processus invalide"))?;
     // Le suffixe commence au champ 3 ; starttime est le champ 22.
-    after_name
-        .split_whitespace()
-        .nth(19)
+    let state=after_name.split_whitespace().next()
+        .ok_or_else(||io::Error::new(io::ErrorKind::InvalidData,"état absent"))?;
+    let birth=after_name.split_whitespace().nth(19)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "starttime absent"))?
         .parse::<u64>()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "starttime invalide"))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "starttime invalide"))?;
+    Ok((birth,!matches!(state,"Z"|"X"|"x")))
+}
+
+pub fn process_birth(pid:u32)->io::Result<u64> {
+    process_snapshot(pid).map(|(birth,_)|birth)
+}
+
+/// Lecture OS seulement. Pas de signal, de wait ou de changement de statut.
+pub fn process_matches_live(pid:u32,birth:u64)->io::Result<bool> {
+    match process_snapshot(pid) {
+        Ok((actual,live))=>Ok(actual==birth && live),
+        Err(error) if error.kind()==io::ErrorKind::NotFound
+            || matches!(error.raw_os_error(),Some(libc::ESRCH))=>Ok(false),
+        Err(error)=>Err(error),
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]

@@ -2103,13 +2103,15 @@ fn native153_fondations_payloads149_150_et_predicats() {
         );
         assert!(restored.holds_slot());
         restored.state = "result_available".into();
-        assert!(!restored.holds_slot() && !restored.continuable());
+        assert!(!restored.holds_slot() && !restored.continuation_guard_open());
         restored.guarded = true;
         restored.result_sent = true;
         restored.idle_deadline_at = Some(100);
-        assert!(restored.holds_slot() && restored.continuable());
+        assert!(restored.holds_slot() && restored.continuable_at(99));
+        assert!(restored.holds_slot() && !restored.continuable_at(100),
+            "expiration ne libère pas la garde ou les fichiers");
         restored.guard_released = true;
-        assert!(restored.holds_slot() && !restored.continuable());
+        assert!(restored.holds_slot() && !restored.continuation_guard_open());
         restored.cleanup_done = true;
         assert!(!restored.holds_slot());
     }

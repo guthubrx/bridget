@@ -4637,7 +4637,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "child_agent_id":task.child,"message_id":task.mission,
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
         "mission_deadline_at":task.mission_deadline_at,
-        "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.continuable(),
+        "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.continuable_at(unix_timestamp()),
         "result":if full {body} else {None},"error":task.projected_error(),
         "work_state":work_state,"summary":summary,
         "summary_truncated":body.zip(summary).is_some_and(|(body, summary)| body.len() > summary.len()),
@@ -4809,10 +4809,10 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     if let Some(workspace) = &task.workspace {
         let is_view = matches!(workspace.strategy, crate::delegation::WorkspaceStrategy::CommitView);
         let (code, message, recovery) = if !task.terminal()
-            || task.continuable()
+            || task.continuation_guard_open()
             || (!is_view && task.state == "result_available" && !task.result_sent)
         {
-            ("task_active", "La tâche utilise encore cet espace ou peut reprendre.",
+            ("task_active", "La garde de cet espace reste ouverte. Son retrait n’est pas autorisé par cette lecture.",
              if is_view { "Conservez la vue. Terminez ou clôturez cette tâche avant tout examen de retrait ; les autres travaux autorisés suivent leur propre état." }
              else { "Conservez le worktree. Terminez ou clôturez la tâche existante avant tout examen de retrait." })
         } else if is_view && task.state=="result_available" && !task.result_sent {
@@ -4893,6 +4893,79 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
     view
 }
 
+// Même contrôle de présence que Continue, sans effet ni appel fournisseur.
+// La preuve distante de remise reste obligatoire dans le parcours Continue.
+fn continuation_child_live(st: &DaemonState, saved: &Task) -> Result<bool,String> {
+    Ok(match (&saved.child_instance, st.router.get_agent(&saved.child)) {
+                (Some(child_instance), Some(route))
+                    if live_connection_identity(st, &route.connection_id)
+                        == Some((saved.child.clone(), child_instance.clone())) =>
+                {
+                    if st
+                        .fleet
+                        .desired_entry(&saved.child)
+                        .map_err(|error| error.to_string())?
+                        .is_some_and(|entry| {
+                            entry.lifecycle_state == DesiredLifecycleState::Running
+                        })
+                    {
+                        match restart_identity(st, &saved) {
+                            Ok(identity) => {
+                                identity.instance_id == *child_instance
+                                    && st.managed_by_instance.get(child_instance)
+                                        == Some(&identity.command_id)
+                            }
+                            Err(code) if code == "native_restart_identity_mismatch" => false,
+                            Err(error) => return Err(error),
+                        }
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            })
+}
+
+fn project_continuation(st: &DaemonState, task: &Task, view: &mut Value, now: i64,
+    worker: Option<&bridget_transport::protocol::WorkerObservation>) {
+    use bridget_transport::protocol::WorkerCommandPhase;
+    if task.state!="result_available" {return;}
+    let ended=task.remote_placement.is_some() && (task.child_instance.as_ref()
+        .is_some_and(|id|st.managed_terminal_instances.contains(id))
+        || worker.is_some_and(|v|matches!(v.phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused)));
+    let eligible=task.continuable_at(now);
+    let presence=if eligible && task.remote_placement.is_some() {
+        Some(continuation_child_live(st,task))
+    } else {None};
+    let refused=worker.is_some_and(|v|v.phase==WorkerCommandPhase::Refused);
+    let (status,code,action)=if refused {
+        ("refused","remote_execution_ended","Conserver le résultat et les produits. Le worker signale que cette commande a été refusée ; cela ne prouve pas qu’elle a exécuté la mission. Clôturer la garde par le parcours propriétaire, puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne lance cette commande.")
+    } else if ended {
+        ("ended","remote_execution_ended","Conserver le résultat, les commits et les fichiers de cette tâche. Le maître a confirmé que cette instance distante ne peut plus recevoir de ronde. Fermer sa garde par le parcours propriétaire puis vérifier arrêt et rapport avant une suite autorisée ; aucun rejeu ne redémarre cette commande.")
+    } else if task.guard_released {
+        ("closed","keep_alive_ended","Conserver les produits. La garde de cette tâche est close ; ne pas rejouer sa clé pour relancer la commande.")
+    } else if task.guarded && task.idle_deadline_at.is_some_and(|deadline|deadline<=now) {
+        ("expired","idle_deadline_elapsed","Conserver cette tâche et ses produits. Son délai de garde est dépassé ; cela ne prouve pas l’arrêt physique. Faire confirmer clôture, arrêt et rapport avant toute suite autorisée, sans prolonger la garde ni rejouer une ancienne mission.")
+    } else if task.round_no()>=8 {
+        ("closed","round_limit","Conserver les résultats. Le plafond de rondes de cette tâche est atteint ; clôturer sa garde par le parcours propriétaire avant une suite distincte autorisée.")
+    } else if !eligible {
+        ("not_eligible","continuation_not_eligible","Relire l’état et les conditions de cette tâche : garde, remise du résultat et éventuelle réparation du dossier. Ne pas créer de remplacement d’issue inconnue.")
+    } else if matches!(presence,Some(Err(_))) {
+        ("unconfirmed","continuation_state_unavailable","Faire vérifier la lecture du magasin et de l’état natif par le responsable Bridget. Ce contrôle a échoué ; sa cause précise reste à établir. Conserver tâche, clé et produits, sans purger ni remplacer le travail.")
+    } else if task.remote_placement.is_some()
+        && (!matches!(presence,Some(Ok(true))) || !worker.is_some_and(|v|
+            v.phase==WorkerCommandPhase::Released && v.native_ready)) {
+        ("unconfirmed","remote_execution_unconfirmed","Relire bridget_task_status pour obtenir une observation ciblée du worker. La commande n’est pas confirmée prête ; cela ne prouve pas son arrêt. Ne pas appeler Continue pour tester le lien : si la présence manque, ce parcours peut fermer la garde. Conserver tâche, clé et produits sans doublon ; demander une intervention ciblée si le lien ne revient pas.")
+    } else {
+        ("eligible","continuation_requires_recheck","Une reprise de cette même tâche peut être demandée dans le mandat existant. Continue revérifie les droits, le contrôle et la commande distante avant remise ; cet état lu à un instant ne garantit pas qu’elle sera encore active au prochain appel.")
+    };
+    view["continuable"]=json!(status=="eligible");
+    view["continuation"]=json!({"status":status,"code":code,"scope":"this_task",
+         "observed_at":now,"requires_recheck":true,"eligible_for_check":eligible,
+        "master_presence_confirmed":presence.as_ref().and_then(|v|v.as_ref().ok().copied()),"next_action":action,
+        "human_action":"Si l’arrêt, le lien ou la suite dépasse votre mandat, demander au propriétaire ou à l’utilisateur la décision ciblée sur le travail conservé. Les autres travaux autorisés suivent leur propre état ; aucun arrêt global n’est déduit."});
+}
+
 /// O(log n+r log r+B), r<=32 demandes ; aucune mutation de remise.
 fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value, String> {
     let phase =
@@ -4917,6 +4990,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     let control = crate::referent_control::read(st.store.connection())
         .map_err(|_| "control_state_unavailable")?;
     let mut view = task_view(task, phase.as_deref(), full);
+    project_continuation(st,task,&mut view,unix_timestamp(),None);
     view["suspended"] = json!(
         control.paused
             && matches!(
@@ -5451,6 +5525,59 @@ fn foreign_catalogue177(conn:&str,attested:Option<&bridget_transport::protocol::
     Ok(Some(result))
 }
 
+fn status_with_worker_observation(
+    conn:&str, request:&NativeDelegationRequest,
+    project:Option<&bridget_transport::protocol::CommunicationProject>,
+    fact:Option<&bridget_transport::protocol::ProviderPermissions>, thread:Option<&str>,
+    state:&Arc<Mutex<DaemonState>>,
+)->Result<Value,String> {
+    use bridget_transport::protocol::*;
+    let NativeDelegationRequest::Status {task_id}=request else {return Err("invalid_request".into());};
+    let (task,worker,command,epoch)={
+        let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+        recheck_attested_thread(&st,conn,thread)?;
+        let initial=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
+        let task=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
+        if !task.continuable_at(unix_timestamp()) || task.remote_placement.is_none()
+            || task.child_instance.as_ref().is_some_and(|id|st.managed_terminal_instances.contains(id)) {
+            return Ok(initial);
+        }
+        let command=match remote_command_identity(&st,&task) {Ok(v)=>v,Err(_)=>return Ok(initial)};
+        let placement=task.remote_placement.as_ref().unwrap();
+        let worker=remote_worker_identity(placement);
+        let epoch=st.remote_workers.get(&worker.machine_id).map(|v|v.epoch.clone());
+        (task,worker,command,epoch)
+    };
+    let result=remote_worker_roundtrip_with_send_deadline(state,&worker,&command,
+        WorkerRequestOperation::ExecutionStatus {},
+        Instant::now()+Duration::from_secs(2),Instant::now()+Duration::from_millis(250));
+    let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
+    recheck_attested_thread(&st,conn,thread)?;
+    let mut view=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
+    let current=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
+    if current.mission!=task.mission || current.round_no()!=task.round_no()
+        || remote_command_identity(&st,&current).ok().as_ref()!=Some(&command)
+        || st.remote_workers.get(&worker.machine_id).map(|v|v.epoch.clone())!=epoch {
+        return Ok(view);
+    }
+    match result {
+        Ok(WorkerResponseOperation::Observation {observation})=>{
+            project_continuation(&st,&current,&mut view,unix_timestamp(),Some(&observation));
+            view["continuation"]["worker_check"]=json!({"status":"observed",
+                "phase":observation.phase,"native_ready":observation.native_ready,
+                "command_id":command.command_id,"generation":command.generation});
+        }
+        Err(reason)=>{
+            view["continuation"]["worker_check"]=json!({"status":"unavailable","reason":reason});
+            if reason==WorkerRefusal::CapabilityRequired {
+                view["continuation"]["next_action"]=json!("Faire charger un worker qui propose execution_status_v1 pour vérifier cette commande sans lancer de ronde. Cette ancienne version ne prouve ni arrêt ni disponibilité. Conserver tâche et clé ; ne pas utiliser Continue comme test de présence.");
+            }
+        }
+        _=>{view["continuation"]["worker_check"]=json!({"status":"unavailable","reason":"unexpected_response"});}
+    }
+    Ok(view)
+}
+
 fn handle_with_fact(
     conn: &str,
     request: NativeDelegationRequest,
@@ -5664,6 +5791,11 @@ fn handle_with_fact(
             tick(state);
         }
         return DaemonToWrapper::NativeDelegationResult { result };
+    }
+    if matches!(&request,NativeDelegationRequest::Status {..}) {
+        let result=status_with_worker_observation(conn,&request,candidate_project.as_ref(),
+            fact.as_ref(),thread,state).unwrap_or_else(|code|failure(&code));
+        return DaemonToWrapper::NativeDelegationResult {result};
     }
     let mut remote_task_context = None;
     let remote_proof = (|| -> Result<Option<Task>, String> {
@@ -9119,34 +9251,7 @@ fn handle_locked_with_remote_proof(
             if saved.guard_released || matches!(saved.state.as_str(), "failed" | "cancelled") {
                 return Err("keep_alive_ended".into());
             }
-            let child_live = match (&saved.child_instance, st.router.get_agent(&saved.child)) {
-                (Some(child_instance), Some(route))
-                    if live_connection_identity(st, &route.connection_id)
-                        == Some((saved.child.clone(), child_instance.clone())) =>
-                {
-                    if st
-                        .fleet
-                        .desired_entry(&saved.child)
-                        .map_err(|error| error.to_string())?
-                        .is_some_and(|entry| {
-                            entry.lifecycle_state == DesiredLifecycleState::Running
-                        })
-                    {
-                        match restart_identity(st, &saved) {
-                            Ok(identity) => {
-                                identity.instance_id == *child_instance
-                                    && st.managed_by_instance.get(child_instance)
-                                        == Some(&identity.command_id)
-                            }
-                            Err(code) if code == "native_restart_identity_mismatch" => false,
-                            Err(error) => return Err(error),
-                        }
-                    } else {
-                        false
-                    }
-                }
-                _ => false,
-            };
+            let child_live = continuation_child_live(st,&saved)?;
             if !child_live
                 || saved
                     .idle_deadline_at
@@ -21695,7 +21800,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         tick(&shared);
         let before_end = {
             let st = shared.lock().unwrap();
-            assert!(st.delegation_store.get(&id).unwrap().unwrap().continuable());
+            assert!(st.delegation_store.get(&id).unwrap().unwrap().continuation_guard_open());
             while receiver.try_recv().is_ok() {}
             st.delegation_store.take_changes();
             st.delegation_store.projection_meta().unwrap()
@@ -21750,6 +21855,25 @@ for frame in frames: print(json.dumps(frame),flush=True)
         original.idle_deadline_at = Some(unix_timestamp() + 120);
         original.restart_resumes = 2;
         st.delegation_store.save(&original).unwrap();
+        assert!(continuation_child_live(&st,&original).unwrap());
+        let live=current_task_view(&st,&original,true).unwrap();
+        assert_eq!(live["continuable"],true);
+        assert_eq!(live["continuation"]["status"],"eligible");
+        let (_,remote_config,remote_seed,_)=remote162_capture_fixture();
+        let mut remote=original.clone();remote.remote_placement=remote_seed.remote_placement;
+        let observation=bridget_transport::protocol::WorkerObservation {
+            startup_failure:None,workspace:None,permission_digest:None,
+            phase:bridget_transport::protocol::WorkerCommandPhase::Released,
+            native_ready:true,exit_code:None,observed_at:unix_timestamp(),
+        };
+        let mut checked=json!({});
+        project_continuation(&st,&remote,&mut checked,unix_timestamp(),None);
+        assert_eq!(checked["continuable"],false);
+        project_continuation(&st,&remote,&mut checked,unix_timestamp(),Some(&observation));
+        assert_eq!(checked["continuable"],true);
+        assert_eq!(checked["continuation"]["master_presence_confirmed"],true);
+        cleanup(&remote_config);
+
         let (tx, rx) = mpsc::channel();
         st.managed_tx = tx;
         let mut round_two = None;
@@ -27394,12 +27518,26 @@ for frame in frames: print(json.dumps(frame),flush=True)
         Task,
         bridget_transport::protocol::RemoteResultEnvelope,
     ) {
+        remote162_capture_fixture_guarded(false)
+    }
+
+    fn remote162_capture_fixture_guarded(guarded: bool) -> (
+        DaemonState,
+        DaemonConfig,
+        Task,
+        bridget_transport::protocol::RemoteResultEnvelope,
+    ) {
         use bridget_transport::protocol::{
             RemotePlacement, RemoteResultEnvelope, WorkerIdentity, WorkerResultIdentity,
             WorkerResultSlot,
         };
         let (mut st, config, _rx, _reader) = fixture("r162");
-        let mut task = tache_151(&mut st, "result162");
+        let mut task = if guarded {
+            let mut payload=serde_json::to_value(request("result162")).unwrap();
+            payload["keep_alive_secs"]=json!(120);
+            let created=handle_locked("conn-1",serde_json::from_value(payload).unwrap(),&mut st).unwrap();
+            st.delegation_store.get(created["task_id"].as_str().unwrap()).unwrap().unwrap()
+        } else {tache_151(&mut st,"result162")};
         task.remote_prepared = true;
         task.remote_placement = Some(RemotePlacement {
             machine_id: "cartae".into(),
@@ -27423,7 +27561,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             project: None,
             requested_name: Some(task.child.clone()),
             cwd: PathBuf::from("/tmp"),
-            persistent: false,
+            persistent: task.guarded,
             command_id: Uuid::new_v4().to_string(),
             issued_at: now,
             deadline_at: now + 120,
@@ -33740,7 +33878,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 expected_head:"1".repeat(40),
             },phase:"prepared".into(),prepared:None,proof:Some(json!({"private":"not exposed"})),code:None,
         });
-        assert!(!task.continuable());
+        assert!(!task.continuation_guard_open());
         let view=task_view(&task,None,true);
         assert_eq!(view["workspace_repair"]["phase"],"prepared");
         assert!(!view.to_string().contains("not exposed"));
@@ -35013,6 +35151,117 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
+        use bridget_transport::protocol::*;
+        use std::os::unix::fs::PermissionsExt;
+        for (capable,phase,change_epoch) in [
+            (false,WorkerCommandPhase::Terminal,false),
+            (true,WorkerCommandPhase::Terminal,false),
+            (true,WorkerCommandPhase::Refused,false),
+            (true,WorkerCommandPhase::Released,false),
+            (true,WorkerCommandPhase::Released,true),
+        ] {
+            let (mut st,config,mut task,_)=remote162_capture_fixture_guarded(true);
+            let root=st.fixture_root.as_ref().unwrap().0.clone();
+            let registry=root.join("status-registry.json");
+            std::fs::write(&registry,serde_json::to_vec(&json!({"agents":{},"machines":{"cartae":{
+                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":"c".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}
+            }}})).unwrap()).unwrap();
+            std::fs::set_permissions(&registry,std::fs::Permissions::from_mode(0o600)).unwrap();
+            st.registry=AgentRegistry::load_from_path(registry).unwrap();
+            task.state="result_available".into();task.guarded=true;task.result_sent=true;
+            task.guard_released=false;task.idle_deadline_at=Some(unix_timestamp()+120);
+            st.delegation_store.save(&task).unwrap();
+            let task=st.delegation_store.get(&task.task_id).unwrap().unwrap();
+            assert!(task.guarded && task.continuable_at(unix_timestamp()));
+            let before=serde_json::to_vec(&task).unwrap();
+            let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+            let (socket,peer)=std::os::unix::net::UnixStream::pair().unwrap();
+            peer.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            st.connections.insert("status-worker".into(),Arc::new(Mutex::new(std::io::BufWriter::new(socket))));
+            st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+                catalogues:HashMap::new(),catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
+                identity:worker,conn_id:"status-worker".into(),epoch:"status-epoch".into(),
+                capabilities:if capable {vec![WorkerCapability::ExecutionStatusV1]} else {vec![]},
+                last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected,
+            });
+            let state=Arc::new(Mutex::new(st));
+            let request=NativeDelegationRequest::Status {task_id:task.task_id.clone()};
+            assert!(status_with_worker_observation("unknown",&request,None,None,None,&state).is_err());
+            let listener=if capable {
+                let responder=state.clone();
+                Some(std::thread::spawn(move||{
+                    let mut reader=std::io::BufReader::new(peer);let mut line=String::new();
+                    std::io::BufRead::read_line(&mut reader,&mut line).unwrap();
+                    let DaemonToWrapper::WorkerRequest {request}=serde_json::from_str(&line).unwrap() else {panic!("worker read")};
+                    request.validate().unwrap();
+                    assert!(matches!(request.request,WorkerRequestOperation::ExecutionStatus {}));
+                    let mut st=responder.lock().unwrap();
+                    let reply=st.pending_worker_responses[&request.correlation_id].reply.clone();
+                    if change_epoch {st.remote_workers.get_mut("cartae").unwrap().epoch="new-epoch".into();}
+                    drop(st);
+                    reply.send(WorkerResponseOperation::Observation {observation:WorkerObservation {
+                        startup_failure:None,workspace:None,permission_digest:None,phase,
+                        native_ready:true,exit_code:None,observed_at:unix_timestamp(),
+                    }}).unwrap();
+                }))
+            } else {drop(peer);None};
+            let view=status_with_worker_observation("conn-1",&request,None,None,None,&state).unwrap();
+            if let Some(listener)=listener {listener.join().unwrap();}
+            assert_eq!(view["continuable"],false);
+            if change_epoch {
+                assert!(view["continuation"]["worker_check"].is_null());
+            } else if !capable {
+                assert_eq!(view["continuation"]["worker_check"]["reason"],"capability_required");
+            } else {
+                assert_eq!(view["continuation"]["worker_check"]["status"],"observed");
+                assert_eq!(view["continuation"]["worker_check"]["phase"],serde_json::to_value(phase).unwrap());
+                assert_eq!(view["continuation"]["code"],if matches!(phase,WorkerCommandPhase::Terminal|WorkerCommandPhase::Refused) {
+                    "remote_execution_ended"
+                } else {"remote_execution_unconfirmed"}); // pas de route enfant dans cette fixture.
+            }
+            let st=state.lock().unwrap();
+            assert!(st.pending_worker_responses.is_empty());
+            assert_eq!(before,serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap());
+            drop(st);drop(state);cleanup(&config);
+        }
+    }
+
+    #[test]
+    fn spec221_continuable_obeys_deadline_round_and_confirmed_remote_end() {
+        let (mut st,config,mut task,_)=remote162_capture_fixture();
+        task.state="result_available".into();task.guarded=true;task.guard_released=false;
+        task.result_sent=true;task.round=5;task.idle_deadline_at=Some(101);
+        assert!(task.continuable_at(100));
+        assert!(!task.continuable_at(101));assert!(!task.continuable_at(102));
+        task.idle_deadline_at=Some(200);task.round=8;assert!(!task.continuable_at(100));
+        task.round=5;task.guarded=false;assert!(!task.continuable_at(100));
+        task.guarded=true;
+        let before=serde_json::to_vec(&task).unwrap();
+        let mut view=json!({});project_continuation(&st,&task,&mut view,100,None);
+        assert_eq!(view["continuable"],false);
+        assert_eq!(view["continuation"]["status"],"unconfirmed");
+        st.managed_terminal_instances.insert("unrelated-instance".into());
+        project_continuation(&st,&task,&mut view,100,None);
+        assert_eq!(view["continuation"]["status"],"unconfirmed");
+        st.managed_terminal_instances.insert(task.child_instance.clone().unwrap());
+        project_continuation(&st,&task,&mut view,100,None);
+        assert_eq!(view["continuable"],false);
+        assert_eq!(view["continuation"]["code"],"remote_execution_ended");
+        assert_eq!(before,serde_json::to_vec(&task).unwrap());
+        st.managed_terminal_instances.clear();
+        let mut local=task.clone();local.remote_placement=None;
+        project_continuation(&st,&local,&mut view,100,None);
+        assert_eq!(view["continuable"],true);
+        assert_eq!(view["continuation"]["requires_recheck"],true);
+        project_continuation(&st,&local,&mut view,200,None);
+        assert_eq!(view["continuable"],false);
+        assert_eq!(view["continuation"]["status"],"expired");
+        cleanup(&config);
+    }
+
+    #[test]
     fn spec221_workspace_busy_projection_requires_current_owner_and_shared() {
         let (state,config,rx,_reader,mut request,_root)=routing168_fixture(1);
         request.workspace=Some(WorkspaceRequest::Shared {});
@@ -36220,7 +36469,7 @@ mod commit_view_reader221_tests {
         {
             let mut st=shared.lock().unwrap();
             st.remote_workers.get_mut("cartae").unwrap().capabilities.push(bridget_transport::protocol::WorkerCapability::WorkspaceViewV1);
-            let mut active=task.clone();active.result_sent=true;active.idle_deadline_at=Some(unix_timestamp()+60);assert!(active.continuable());st.delegation_store.save(&active).unwrap();
+            let mut active=task.clone();active.guarded=true;active.result_sent=true;active.idle_deadline_at=Some(unix_timestamp()+60);assert!(active.continuation_guard_open());st.delegation_store.save(&active).unwrap();
         }
         assert_eq!(remote_worker_roundtrip(&shared,&worker,&command,operation,Instant::now()+Duration::from_secs(1)),
             Err(bridget_transport::protocol::WorkerRefusal::Unauthorized));

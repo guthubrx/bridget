@@ -2903,6 +2903,7 @@ pub enum WorkerCapability {
     ProviderAccountsV1,
     WorkspaceViewV1,
     WorkspaceViewCreateV1,
+    ExecutionStatusV1,
 }
 
 /// Cause C19 fermée partagée avec le reçu/helper ; jamais de texte fournisseur.
@@ -3791,6 +3792,7 @@ pub enum WorkerRequestOperation {
         permit: WorkerReleasePermit,
     },
     Reconcile {},
+    ExecutionStatus {},
     Cancel {
         target: WorkerCancelScope,
     },
@@ -4313,7 +4315,7 @@ impl WorkerRequest {
                 result.validate()?;
                 worker_require(result.identity.command == self.command)
             }
-            WorkerRequestOperation::Reconcile {} | WorkerRequestOperation::Cancel { .. } => Ok(()),
+            WorkerRequestOperation::Reconcile {} | WorkerRequestOperation::ExecutionStatus {} | WorkerRequestOperation::Cancel { .. } => Ok(()),
         }
     }
 }
