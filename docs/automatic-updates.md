@@ -85,3 +85,39 @@ installation path; it cannot replace a current controller. This check verifies
 neither provider accounts nor model access.
 
 An installed reader without the validation command blocks this manual installation. Use the native updater to qualify the initial reader; do not replace the program by hand. The installer source cache may already have been downloaded; no provider, profile or service setting has changed when formats are refused.
+
+## Android publication gate
+
+Publish Android through `scripts/publish-android.py`. It checks the APK package,
+version name/code and verified signing certificate against the previous official
+APK before uploading. The inspected private copy is the copy uploaded. A reused
+older APK cannot be attached under a newer tag. No installation check is relaxed.
+
+```sh
+python3 scripts/publish-android.py --version 0.7.1 \
+  --apk /absolute/path/to/signed/bridget-android.apk \
+  --reference-apk /absolute/path/to/previous-official.apk \
+  --build-tools /absolute/path/to/android-sdk/build-tools/35.0.0 --publish
+```
+
+Without `--publish`, this only verifies. Keep the reference APK outside Git.
+The reference must come from the previous official publication, not from an
+unverified local build. The tool keeps the current certificate; a future key
+rotation requires its own qualification. It replaces only the APK and checksum.
+Keep the existing Firebase application configuration when building.
+
+For the existing Android 28+ signing lineage, signing uses V3 with
+`--rotation-min-sdk-version 28 --v1-signing-enabled false
+--v2-signing-enabled false --v4-signing-enabled false`. Reuse the production
+keystore and the lineage which retains the historical permission capability.
+Never generate a replacement signing key to fix a publication mismatch.
+
+If assets of an existing tag were corrected, select **Check for updates** again
+before downloading: this refreshes the digest cached by the application.
+Do not uninstall the application to resolve a bad published package.
+
+The production certificate fingerprint is pinned in the publication gate too.
+A local reference signed by another key cannot authorize that key. Upload has a
+600-second bound; after upload, both public digests and sizes must match before
+success. Interrupted uploads remain unconfirmed and must be inspected first.
+Use --verify-published to check an existing publication without uploading again.
