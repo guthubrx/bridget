@@ -4637,7 +4637,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
         "child_agent_id":task.child,"message_id":task.mission,
         "agent_type":agent_type,"model":model,"effort":effort,"cwd":task.cwd,"posture":task.effective_posture.or(*posture),
         "mission_deadline_at":task.mission_deadline_at,
-        "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.continuable_at(unix_timestamp()),
+        "round":task.round_no(),"idle_deadline_at":task.idle_deadline_at,"continuable":task.remote_placement.is_none() && task.continuable_at(unix_timestamp()),
         "result":if full {body} else {None},"error":task.projected_error(),
         "work_state":work_state,"summary":summary,
         "summary_truncated":body.zip(summary).is_some_and(|(body, summary)| body.len() > summary.len()),
@@ -5536,13 +5536,21 @@ fn status_with_worker_observation(
     let (task,worker,command,epoch)={
         let mut st=state.lock().unwrap_or_else(|e|e.into_inner());
         recheck_attested_thread(&st,conn,thread)?;
-        let initial=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
+        let mut initial=handle_locked_with_project(conn,request.clone(),project,fact,&mut st)?;
         let task=st.delegation_store.get(task_id)?.ok_or("task_unavailable")?;
         if !task.continuable_at(unix_timestamp()) || task.remote_placement.is_none()
             || task.child_instance.as_ref().is_some_and(|id|st.managed_terminal_instances.contains(id)) {
             return Ok(initial);
         }
-        let command=match remote_command_identity(&st,&task) {Ok(v)=>v,Err(_)=>return Ok(initial)};
+        let command=match remote_command_identity(&st,&task) {
+            Ok(v)=>v,
+            Err(reason)=>{
+                initial["continuation"]["worker_check"]=json!({"status":"unavailable",
+                    "stage":"command_identity","reason":reason});
+                initial["continuation"]["next_action"]=json!("Faire vérifier le reçu et l’identité de commande par le responsable Bridget. Ce contrôle a refusé avant tout échange worker ; conserver tâche, clé et produits sans utiliser Continue comme sonde. Les autres travaux autorisés suivent leur propre état.");
+                return Ok(initial);
+            }
+        };
         let placement=task.remote_placement.as_ref().unwrap();
         let worker=remote_worker_identity(placement);
         let epoch=st.remote_workers.get(&worker.machine_id).map(|v|v.epoch.clone());
@@ -35154,6 +35162,23 @@ for frame in frames: print(json.dumps(frame),flush=True)
     fn spec221_continuable_status_uses_only_fresh_correlated_worker_read() {
         use bridget_transport::protocol::*;
         use std::os::unix::fs::PermissionsExt;
+        {
+            let (st,config,mut task,_)=remote162_capture_fixture_guarded(true);
+            task.state="result_available".into();task.result_sent=true;
+            task.child_instance=None;task.idle_deadline_at=Some(unix_timestamp()+120);
+            st.delegation_store.save(&task).unwrap();
+            let before=serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+            let state=Arc::new(Mutex::new(st));
+            let request=NativeDelegationRequest::Status{task_id:task.task_id.clone()};
+            let view=status_with_worker_observation("conn-1",&request,None,None,None,&state).unwrap();
+            assert_eq!(view["continuable"],false);
+            assert_eq!(view["continuation"]["worker_check"]["stage"],"command_identity");
+            assert_eq!(view["continuation"]["worker_check"]["reason"],"unknown_execution");
+            let st=state.lock().unwrap();
+            assert!(st.pending_worker_responses.is_empty());
+            assert_eq!(before,serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap());
+            drop(st);drop(state);cleanup(&config);
+        }
         for (capable,phase,change_epoch) in [
             (false,WorkerCommandPhase::Terminal,false),
             (true,WorkerCommandPhase::Terminal,false),
@@ -35238,6 +35263,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
         task.idle_deadline_at=Some(200);task.round=8;assert!(!task.continuable_at(100));
         task.round=5;task.guarded=false;assert!(!task.continuable_at(100));
         task.guarded=true;
+        task.idle_deadline_at=Some(i64::MAX);
+        assert!(task.continuable_at(unix_timestamp()));
+        assert_eq!(task_view(&task,None,true)["continuable"],false,
+            "la projection brute ne promet aucune reprise distante");
+        task.idle_deadline_at=Some(200);
         let before=serde_json::to_vec(&task).unwrap();
         let mut view=json!({});project_continuation(&st,&task,&mut view,100,None);
         assert_eq!(view["continuable"],false);

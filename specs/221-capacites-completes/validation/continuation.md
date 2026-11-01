@@ -79,3 +79,14 @@ son admission non gardée : le délai seul ne rend plus son statut reprenable,
 mais sa garde structurelle interdit toujours le retrait. Il passe en 63,43 s.
 Le dernier ajustement de cette assertion est limité à cfg(test) ; il est copié
 dans les snapshots, sans effet sur les exécutables release en cours.
+
+## Revue et dernier complément
+R1 : 71659ed0 ; R2 : ba84c4db ; revue ciblée finale 0b5a6415.
+La revue R2 a bloqué l'appel à reconcile ; il est remplacé par la lecture pure.
+La revue R3 approuve cette correction et l'absence de régression de rétention.
+Ses deux remarques sont traitées : la projection brute reste fausse à distance ;
+une identité de commande refusée expose worker_check/stage=command_identity et
+le WorkerRefusal fermé, avant tout échange réseau. Les trois contrôles ciblés
+repassent après ce complément (0,48 s). Aucun quatrième tour de revue.
+Les trois revues sont lues, acquittées, clôture demandée une fois chacune.
+Compilation et contrôle de processus macOS acquis, hors de la lecture du reviewer.
