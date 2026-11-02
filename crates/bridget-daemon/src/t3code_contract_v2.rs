@@ -440,6 +440,12 @@ fn rpc_read_error(error: tungstenite::Error) -> ContractError {
     ContractError::Transport(code.into())
 }
 
+fn rpc_budget(tag: &str, payload: &Value) -> Duration {
+    // Une remise peut relire un fil volumineux avant son commit. Le délai
+    // historique de 10 s interrompait cette lecture réelle (13,5 s observées).
+    Duration::from_secs(if tag == "orchestration.dispatchCommand" && payload["type"] == "message.dispatch" { 60 } else { 10 })
+}
+
 /// RPC unary natif, taille/durée bornées ; aucun retry ou repli après envoi.
 pub(crate) fn rpc(
     base_url: &str,
@@ -455,8 +461,9 @@ pub(crate) fn rpc(
     if !address.ip().is_loopback() {
         return Err(ContractError::NotLoopback(address.ip().to_string()));
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let stream = TcpStream::connect_timeout(&address, Duration::from_secs(10))
+    let budget = rpc_budget(tag, payload);
+    let deadline = Instant::now() + budget;
+    let stream = TcpStream::connect_timeout(&address, budget.min(Duration::from_secs(10)))
         .map_err(|_| ContractError::Transport("connexion RPC T3 impossible".into()))?;
     let mut request = format!("ws://{address}/ws?orchestrationProtocol=2")
         .into_client_request()
@@ -1225,6 +1232,14 @@ pub(crate) mod tests {
 
 #[cfg(test)]
 mod timeout226_tests {
+    #[test]
+    fn spec226_rpc_budget_is_reserved_for_message_delivery() {
+        use super::*;
+        assert_eq!(rpc_budget("orchestration.dispatchCommand", &json!({"type":"message.dispatch"})), Duration::from_secs(60));
+        for tag in ["server.getConfig", "orchestration.getTurnItem", "orchestration.dispatchCommand"] {
+            assert_eq!(rpc_budget(tag, &json!({"type":"runtime-request.respond"})), Duration::from_secs(10));
+        }
+    }
     #[test]
     fn spec226_rpc_failure_keeps_closed_cause_without_private_text() {
         use super::*;

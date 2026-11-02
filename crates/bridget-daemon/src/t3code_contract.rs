@@ -570,6 +570,7 @@ pub struct DispatchResult {
 }
 
 /// Client HTTP loopback minimal, un jeton porteur, délais bornés.
+#[derive(Clone)]
 pub struct Client {
     base_url: String,
     token: String,

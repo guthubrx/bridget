@@ -6,6 +6,10 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.5 — 2026-11-02
+
+- Keep live bridge connections during bounded read timeouts. Suspend observations until a fresh check succeeds. Report closed RPC failure causes without replaying uncertain deliveries.
+
 ## 0.7.4 — 2026-11-01
 
 - Add explicit global --table output for finite CLI inventories, details and receipts, before or after the command. Family columns, hostnames, Unicode wrapping and colour-free pipes share one native renderer. JSON, scopes, confirmations and exit codes stay unchanged.

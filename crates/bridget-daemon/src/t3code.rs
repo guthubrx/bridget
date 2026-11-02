@@ -883,6 +883,50 @@ impl Session {
         }
     }
 
+    /// La remise longue ne garde pas le mutex des lectures. Chaque fil a
+    /// déjà sa file bornée et n'exécute qu'une remise à la fois.
+    fn call_detached<T>(
+        &self,
+        call: impl Fn(&Client) -> Result<T, ContractError>,
+    ) -> Result<T, ContractError> {
+        let (generation, runtime, client) = {
+            let inner = self.lock();
+            (inner.generation, inner.runtime.clone(), inner.client.clone())
+        };
+        let birth = crate::managed_process::process_birth(runtime.pid)
+            .map_err(|_| ContractError::Transport("rpc_runtime_identity_unavailable".into()))?;
+        let unchanged = || self.lock().runtime == runtime
+            && crate::managed_process::process_birth(runtime.pid).ok() == Some(birth);
+        let first = call(&client);
+        if !unchanged() {
+            return Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into()));
+        }
+        if !matches!(first, Err(ContractError::Unauthorized)) {
+            return first;
+        }
+        // Seul 401 conserve le renouvellement unique déjà prévu. Aucune
+        // coupure ni expiration ne provoque une nouvelle remise ici.
+        self.renew(generation)?;
+        let (generation, client) = {
+            let inner = self.lock();
+            if inner.runtime != runtime {
+                return Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into()));
+            }
+            (inner.generation, inner.client.clone())
+        };
+        let retried = call(&client);
+        if !unchanged() {
+            return Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into()));
+        }
+        if matches!(retried, Err(ContractError::Unauthorized)) {
+            let mut inner = self.lock();
+            if inner.generation == generation {
+                inner.auth_failed = true;
+            }
+        }
+        retried
+    }
+
     fn renew(&self, seen_generation: u64) -> Result<(), ContractError> {
         let mut inner = self.lock();
         if inner.auth_failed {
@@ -2862,7 +2906,7 @@ impl LinkWorker {
         // Vérifier aussi dans sa closure, à la dernière frontière HTTP.
         self.awaiting_snapshot_change = Some(summary.change_key());
         self.publish_drain_state(false);
-        match self.session.call(|client| {
+        match self.session.call_detached(|client| {
             if !self.daemon_alive.load(Ordering::SeqCst)
                 || messages.iter().any(|message| {
                     self.cancelled
@@ -4483,6 +4527,50 @@ fn uncertain_answer(detail: &ThreadDetail, message_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::t3code_contract::{LatestTurn, Message};
+
+    #[test]
+    fn spec226_slow_delivery_does_not_hold_the_snapshot_mutex() {
+        let (mut worker, _peer) = worker099();
+        let session = worker.session.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let delivery = thread::spawn(move || session.call_detached(|_| {
+            entered_tx.send(()).unwrap();
+            release_rx.lock().unwrap().recv().unwrap();
+            Ok(())
+        }));
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let session = worker.session.clone();
+        let (read_tx, read_rx) = mpsc::channel();
+        let reader = thread::spawn(move || read_tx.send(session.call(|_| Ok(()))).unwrap());
+        let read = read_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        assert_eq!(delivery.join().unwrap(), Ok(()));
+        reader.join().unwrap();
+        assert_eq!(read.unwrap(), Ok(()));
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
+
+    #[test]
+    fn spec226_detached_transport_never_retries_and_runtime_change_is_unknown() {
+        let (mut worker, _peer) = worker099();
+        let calls = std::cell::Cell::new(0);
+        let result = worker.session.call_detached::<()>(|_| {
+            calls.set(calls.get() + 1);
+            Err(ContractError::Transport("rpc_response_timeout".into()))
+        });
+        assert_eq!(result, Err(ContractError::Transport("rpc_response_timeout".into())));
+        assert_eq!(calls.get(), 1);
+        let result = worker.session.call_detached(|_| {
+            worker.session.reset_runtime(ServerRuntime {pid: std::process::id(), port: 2});
+            Ok(())
+        });
+        assert_eq!(result, Err(ContractError::Transport("rpc_runtime_changed_effect_unknown".into())));
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
 
     #[test]
     fn spec226_timeout_grace_requires_same_server_and_recent_success() {

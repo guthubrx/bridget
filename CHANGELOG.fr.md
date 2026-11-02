@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.5 — 2026-11-02
+
+- Conserver les connexions vivantes du pont pendant les délais de lecture bornés. Suspendre les observations jusqu’au contrôle frais. Nommer les erreurs RPC sans rejouer les remises incertaines.
+
 ## 0.7.4 — 2026-11-01
 
 - Ajout de --table avant ou après la commande pour les inventaires, fiches et reçus finis de la CLI. Colonnes par famille, noms d'hôtes, repli Unicode et pipes sans couleur partagent un rendu natif. JSON, portées, confirmations et codes de retour conservés.
