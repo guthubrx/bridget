@@ -29,6 +29,18 @@ Le vrai composant lit correctement cette copie ; le dernier temps complet est
 10,69 s sous charge de construction et d’entrées-sorties. Mesure active à refaire
 après chargement, sans rejouer une demande métier dont l’issue reste inconnue.
 
+Complément de revue R2 : la vraie lecture fenêtrée de 20 tours a été comparée
+entre la source initiale sans les trois nouveaux index et la source corrigée.
+Même copie privée complète, retrait des index dans une transaction ensuite
+annulée, présence des trois index restaurés vérifiée avant la seconde lecture.
+Résultat : 15,6906 → 13,2514 s, 88 284 635 octets, 2 441 éléments, 2 596 nœuds,
+129 messages. Empreinte identique :
+a45c748aa7f610f358c94859dda4da7f8dec2f90ec1701d2042fa0fcbe102a31.
+Il s’agit du résultat interne brut, pas de la taille du message réseau final.
+Ancienne lecture exécutée en premier ; aucun gain garanti à cache froid annoncé.
+Le test ciblé passe, sans nouvelle modification exécutable ni campagne générale.
+Cela complète la vérification de non-régression du plan fenêtré demandée en revue.
+
 Migration unique : 230,85 s, trois index totalisant 313 208 832 octets, pris dans
 les pages libres de la copie. Prévoir plusieurs minutes au premier démarrage.
 Le runner enveloppe ses migrations dans une transaction ; une interruption ne
