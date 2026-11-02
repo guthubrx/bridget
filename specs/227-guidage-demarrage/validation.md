@@ -32,4 +32,15 @@ Trois tests distincts acquis ; aucun autre test relancé. La version du paquet
 est ensuite portée à0.7.6 sans autre changement du comportement testé.
 
 Preuves privées : /Users/moi/.cache/bridget227-start-guidance.
-Revue, assemblages, chargement et relecture native du propriétaire : à compléter.
+Revue indépendante Bridget02fa9e11, commit8849081b : acceptable, aucun P1.
+Deux P2 corrigés : clôture native encore requise après une erreur historique,
+et mandat de lecture conditionnel. Deux remarques P3 traitées : présence du
+résultat durable et placement éventuellement absent. Le petit doublon avec
+Release est conservé : extraire un helper n'améliore pas cette correction
+locale de projection. Le dernier delta a été relu par l'auteur.
+La revue n'a ni exécuté les tests ni lu tout le dossier de spécification.
+Résultat lu, ACK et clôture natifs effectués ; résultat conservé.
+Les deux tests227 passent après ce delta en0,19s. Le contrôle Release précédent
+reste applicable : sa branche est inchangée. Aucun second banc général.
+
+Assemblages, chargement et relecture native du propriétaire : à compléter.

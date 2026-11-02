@@ -4805,23 +4805,31 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             | "remote_start_failed:remote_start:StaleConnection"
     )) {
         let code = task.projected_error();
-        if body.is_some() || task.mission_issued_at.is_some() {
+        if task.result.is_some() || task.mission_issued_at.is_some() {
             // Une preuve ultérieure de remise ou résultat prime ce fait historique.
             view["error"] = Value::Null;
             if !view["detail"].is_object() { view["detail"] = json!({}); }
+            let recovery = if task.terminal()
+                && (!task.cleanup_done || !workspace_report_ready(task)) {
+                "Conservez cette tâche jusqu’à la confirmation native de son arrêt, de son nettoyage et du rapport de son dossier. Consultez son état actuel ; ce défaut historique ne justifie aucune relance ni mission de remplacement."
+            } else if task.result.is_some() && body.is_none() {
+                "Le résultat est enregistré mais pas encore exposé. Consultez cette même tâche jusqu’à la fin des contrôles de nettoyage et du rapport du dossier ; ne recréez pas la mission."
+            } else {
+                "Consultez l’état et le résultat de cette même tâche. Le défaut initial ne justifie ni relance ni remplacement de la mission."
+            };
             view["detail"]["initial_start"] = json!({
                 "code":code, "current_failure":false,
                 "message":"La tentative de remise métier ou son résultat est enregistré. La confirmation initiale du lancement distant n’avait pas été obtenue.",
-                "recovery":"Consultez l’état et le résultat de cette même tâche. Le défaut initial ne justifie ni relance ni remplacement de la mission."
+                "recovery":recovery
             });
         } else {
-            view["error_message"] = json!("Faites vérifier le lien natif et le reçu de démarrage de cette tâche. Bridget n’a pas reçu la confirmation du lancement distant ; la cause précise reste inconnue. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
+            view["error_message"] = json!("Faites vérifier le lien natif et le reçu de démarrage de cette tâche. Bridget n’a pas reçu la confirmation du lancement distant ; la cause précise reste inconnue. Ce constat concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
             view["error_recovery"] = if task.terminal() {
                 json!("Conservez la tâche, sa request_id, son dossier et les produits. Vérifiez la clôture native, le reçu de démarrage et le rapport du dossier avant de décider d’une suite autorisée. Un état terminal local ou une absence de reçu ne prouvent pas seuls l’arrêt physique. Rejouer cette clé ne relance pas la mission ; ne créez aucun remplacement automatique.")
             } else {
-                json!("Conservez cette tâche, sa request_id et son dossier ; aucune remise métier n’est enregistrée. Faites corréler par le responsable Bridget le reçu de démarrage, la commande, l’instance et la génération sur le worker de cette tâche, puis son observation d’exécution native. Une absence de reçu ou un délai ne prouvent pas l’arrêt. Ne rejouez pas le lancement, ne créez pas de remplacement et ne changez ni machine, ni compte, ni droits. Relire cette même clé consulte son état, sans relancer la mission.")
+                json!("Conservez cette tâche, sa request_id et son dossier ; aucune remise métier n’est enregistrée. Faites corréler le reçu de démarrage, la commande, l’instance et la génération, puis l’observation d’exécution native. Utilisez le placement de detail.remote_start ; s’il manque, faites identifier le worker avant de le contacter. Une absence de reçu ou un délai ne prouvent pas l’arrêt. Ne rejouez pas le lancement, ne créez pas de remplacement et ne changez ni machine, ni compte, ni droits. Relire cette même clé consulte son état, sans relancer la mission.")
             };
-            view["error_human_action"] = json!("La maintenance déjà autorisée peut effectuer ces lectures. Si le contrôle nécessaire dépasse ce mandat ou reste refusé, demandez la décision ciblée sur l’accès ou la maintenance nommés par ce contrôle. Ne demandez pas de réinstallation ou de changement de compte sur le seul code WorkerUnavailable ou StaleConnection.");
+            view["error_human_action"] = json!("Si votre mandat de maintenance couvre ces lectures, effectuez-les. Sinon, transmettez ces références au responsable Bridget désigné. Si le contrôle nécessaire dépasse son mandat ou reste refusé, demandez la décision ciblée sur l’accès ou la maintenance nommés par ce contrôle. Ce message n’accorde aucun droit. Ne demandez pas de réinstallation ou de changement de compte sur le seul code WorkerUnavailable ou StaleConnection.");
             let request_id = match &task.request {
                 NativeDelegationRequest::Delegate {request_id,..} => Some(request_id.as_str()),
                 _ => None,
@@ -27939,6 +27947,12 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(working["error"].is_null());
         assert_eq!(working["detail"]["initial_start"]["current_failure"], false);
         assert_eq!(working["status"], "working");
+        task.state = "failed".into();
+        task.cleanup_done = false;
+        let pending_cleanup = task_view(&task, None, true);
+        assert!(pending_cleanup["detail"]["initial_start"]["recovery"].as_str().unwrap().contains("confirmation native de son arrêt"));
+        assert!(pending_cleanup["detail"]["initial_start"]["recovery"].as_str().unwrap().contains("rapport de son dossier"));
+        assert_eq!(pending_cleanup["status"], "failed");
         task.state = "result_available".into();
         task.result = Some("résultat confirmé".into());
         let before = serde_json::to_value(&task).unwrap();
