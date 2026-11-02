@@ -28,12 +28,27 @@ fn read_response_body(response: impl Read, limit: u64) -> Result<String, Contrac
     let mut bytes = Vec::new();
     Read::take(response, limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| ContractError::Transport("lecture HTTP T3 interrompue".into()))?;
+        .map_err(http_read_error)?;
     if bytes.len() as u64 > limit {
         return Err(shape("HTTP T3", "response limit"));
     }
     String::from_utf8(bytes).map_err(|_| shape("HTTP T3", "UTF-8"))
 }
+fn http_read_error(error: std::io::Error) -> ContractError {
+    let code = match error.kind() {
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "http_timeout",
+        _ => "http_response_interrupted",
+    };
+    ContractError::Transport(code.into())
+}
+
+fn http_request_error(error: minreq::Error) -> ContractError {
+    match error {
+        minreq::Error::IoError(error) => http_read_error(error),
+        _ => ContractError::Transport("http_request_unavailable".into()),
+    }
+}
+
 /// Sujet de toutes les sessions Bridget ; le libellé porte l'installation.
 pub const TOKEN_SUBJECT: &str = "bridget";
 
@@ -611,7 +626,7 @@ impl Client {
         }
         let response = request
             .send_lazy()
-            .map_err(|error| ContractError::Transport(error.to_string()))?;
+            .map_err(http_request_error)?;
         let status = response.status_code;
         let text = read_response_body(response, limit)?;
         match status {
@@ -908,6 +923,15 @@ impl T3Cli {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spec226_http_timeout_is_closed_and_other_io_does_not_gain_grace() {
+        use std::io::{Error, ErrorKind};
+        for kind in [ErrorKind::TimedOut, ErrorKind::WouldBlock] {
+            assert_eq!(super::http_read_error(Error::new(kind,"PRIVATE")),super::ContractError::Transport("http_timeout".into()));
+            assert_eq!(super::http_request_error(minreq::Error::IoError(Error::new(kind,"PRIVATE"))),super::ContractError::Transport("http_timeout".into()));
+        }
+        assert_eq!(super::http_read_error(Error::new(ErrorKind::ConnectionReset,"PRIVATE")),super::ContractError::Transport("http_response_interrupted".into()));
+    }
     use super::*;
 
     const RUNTIME: &str = r#"{"version":1,"pid":19619,"host":"127.0.0.1","port":3773,"origin":"http://127.0.0.1:3773","startedAt":"2026-09-14T07:28:30.671Z"}"#;

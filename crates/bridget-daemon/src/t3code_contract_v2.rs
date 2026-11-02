@@ -429,6 +429,17 @@ impl Write for RpcSocket {
     }
 }
 
+fn rpc_read_error(error: tungstenite::Error) -> ContractError {
+    let code = match error {
+        tungstenite::Error::Io(error) if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock) => "rpc_response_timeout",
+        tungstenite::Error::Capacity(_) => "rpc_response_limit",
+        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => "rpc_connection_closed",
+        _ => "rpc_response_interrupted",
+    };
+    // Après envoi, ces causes ne prouvent pas l'absence d'effet.
+    ContractError::Transport(code.into())
+}
+
 /// RPC unary natif, taille/durée bornées ; aucun retry ou repli après envoi.
 pub(crate) fn rpc(
     base_url: &str,
@@ -482,7 +493,7 @@ pub(crate) fn rpc(
     loop {
         let frame = socket
             .read()
-            .map_err(|_| ContractError::Transport("réponse RPC T3 interrompue".into()))?;
+            .map_err(rpc_read_error)?;
         match frame {
             tungstenite::Message::Text(text) => {
                 let value: Value = serde_json::from_str(&text).map_err(|_| invalid("RPC JSON"))?;
@@ -1209,5 +1220,16 @@ pub(crate) mod tests {
         let frame = server.join().unwrap();
         assert_eq!(frame["deliveryIntent"], "restart");
         assert_eq!(frame["text"], "nouvelle direction");
+    }
+}
+
+#[cfg(test)]
+mod timeout226_tests {
+    #[test]
+    fn spec226_rpc_failure_keeps_closed_cause_without_private_text() {
+        use super::*;
+        assert_eq!(rpc_read_error(tungstenite::Error::Io(io::Error::new(io::ErrorKind::TimedOut,"PRIVATE"))),ContractError::Transport("rpc_response_timeout".into()));
+        assert_eq!(rpc_read_error(tungstenite::Error::ConnectionClosed),ContractError::Transport("rpc_connection_closed".into()));
+        assert_eq!(rpc_read_error(tungstenite::Error::Capacity(tungstenite::error::CapacityError::MessageTooLong {size:5,max_size:4})),ContractError::Transport("rpc_response_limit".into()));
     }
 }

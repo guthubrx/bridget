@@ -1117,6 +1117,29 @@ fn notify_user(text: &str) {
     });
 }
 
+const SNAPSHOT_TIMEOUT_GRACE: Duration = Duration::from_secs(90);
+
+/// Une lecture lente ne prouve pas la disparition du serveur. La grâce ne
+/// conserve que les liens, jamais une observation ni un droit mis en cache.
+fn retain_links_after_timeout(
+    detail: &str,
+    last_success: Option<(Instant, ServerRuntime, u64)>,
+    observed: Option<(ServerRuntime, u64)>,
+    now: Instant,
+) -> bool {
+    matches!(detail, "http_timeout" | "rpc_response_timeout")
+        && last_success.zip(observed).is_some_and(|((at, runtime, birth), current)| {
+            now.saturating_duration_since(at) < SNAPSHOT_TIMEOUT_GRACE
+                && current == (runtime, birth)
+        })
+}
+
+fn runtime_incarnation(base: &Path) -> Option<(ServerRuntime, u64)> {
+    let runtime = contract::read_runtime(base).ok()?;
+    let birth = crate::managed_process::process_birth(runtime.pid).ok()?;
+    Some((runtime, birth))
+}
+
 fn serve(paths: &Paths) -> Result<(), String> {
     crate::service_limits::ensure_open_file_limit()?;
     paths.ensure()?;
@@ -1148,7 +1171,12 @@ fn serve(paths: &Paths) -> Result<(), String> {
     let declaration = std::fs::read_to_string(contract::runtime_file(&t3_base))
         .ok()
         .zip(contract::read_runtime(&t3_base).ok());
+    let mut last_snapshot_success = None;
     loop {
+        let expected_runtime = session.lock().runtime.clone();
+        let snapshot_incarnation = runtime_incarnation(&t3_base)
+            .filter(|(runtime, _)| *runtime == expected_runtime);
+        let snapshot_started = Instant::now();
         let snapshot = match session.call(|client| client.snapshot()) {
             Ok(snapshot) => snapshot,
             Err(ContractError::Unauthorized) => {
@@ -1174,7 +1202,23 @@ fn serve(paths: &Paths) -> Result<(), String> {
             }
             Err(ContractError::Transport(detail)) => {
                 identities.clear();
-                // Serveur parti : on ferme les liens et on attend son retour.
+                if retain_links_after_timeout(
+                    &detail,
+                    last_snapshot_success.clone(),
+                    runtime_incarnation(&t3_base),
+                    Instant::now(),
+                ) {
+                    for link in links.values() {
+                        let _ = link.events.send(LinkEvent::Unavailable);
+                    }
+                    warn!("lecture T3 expirée ({detail}) ; liens conservés, observations suspendues");
+                    publish_status(paths, "degraded", &format!("{detail} : lecture expirée ; liens conservés au plus 90 s depuis la dernière lecture réussie, opérations soumises à une preuve fraîche"), links.len());
+                    thread::sleep(poll);
+                    continue;
+                }
+                // Un autre transport, un nouveau serveur ou une grâce expirée
+                // ferme toujours les liens. Aucune remise n'est rejouée.
+                last_snapshot_success = None;
                 warn!("t3code injoignable ({detail}) ; liens fermés");
                 for (_, link) in std::mem::take(&mut links) {
                     link.close();
@@ -1197,6 +1241,9 @@ fn serve(paths: &Paths) -> Result<(), String> {
             }
         };
 
+        last_snapshot_success = snapshot_incarnation
+            .filter(|incarnation| runtime_incarnation(&t3_base).as_ref() == Some(incarnation))
+            .map(|(runtime, birth)| (snapshot_started, runtime, birth));
         let counts = relation_counts(&snapshot.threads);
         if last_relation_counts != Some(counts) {
             info!(
@@ -2055,6 +2102,8 @@ impl LinkWorker {
                 });
             }
             LinkEvent::Unavailable => {
+                // Le lien vit encore ; ce heartbeat n'atteste aucun tour ni droit.
+                send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
                 self.set_observation_ready(false);
                 self.last_key.clear();
                 self.publish_drain_state(false);
@@ -4429,6 +4478,45 @@ fn uncertain_answer(detail: &ThreadDetail, message_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::t3code_contract::{LatestTurn, Message};
+
+    #[test]
+    fn spec226_timeout_grace_requires_same_server_and_recent_success() {
+        let now = Instant::now();
+        let runtime = ServerRuntime { pid: 42, port: 4321 };
+        let previous = Some((now, runtime.clone(), 123));
+        let current = Some((runtime.clone(), 123));
+        assert!(retain_links_after_timeout("http_timeout", previous.clone(), current.clone(), now));
+        assert!(retain_links_after_timeout("rpc_response_timeout", previous.clone(), current.clone(), now));
+        assert!(!retain_links_after_timeout("http_response_interrupted", previous.clone(), current.clone(), now));
+        assert!(!retain_links_after_timeout("http_timeout", None, current.clone(), now));
+        assert!(!retain_links_after_timeout("http_timeout", previous.clone(), None, now));
+        assert!(!retain_links_after_timeout("http_timeout", previous.clone(), Some((runtime,124)), now));
+        assert!(!retain_links_after_timeout("http_timeout", previous.clone(), Some((ServerRuntime {pid:43,port:4321},123)), now));
+        assert!(!retain_links_after_timeout("http_timeout", previous, current, now + SNAPSHOT_TIMEOUT_GRACE));
+    }
+
+    #[test]
+    fn spec226_unavailable_keeps_connection_but_clears_observation() {
+        let (mut worker, peer) = worker099();
+        worker.last_key = "stale".into();
+        worker.handle_event(LinkEvent::Unavailable);
+        assert!(worker.last_key.is_empty());
+        assert!(worker.daemon_alive.load(Ordering::SeqCst));
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut reader = BufReader::new(peer);
+        let mut saw_heartbeat = false;
+        for _ in 0..8 {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(), WrapperToDaemon::Heartbeat) {
+                saw_heartbeat = true;
+                break;
+            }
+        }
+        assert!(saw_heartbeat, "heartbeat absent après les trames initiales du lien");
+        worker.journal.stop();
+        worker.relay.shutdown();
+    }
 
     fn replies105(peer: UnixStream) -> Vec<bridget_core::BridgetMessage> {
         peer.set_nonblocking(true).unwrap();
