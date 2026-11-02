@@ -74,11 +74,28 @@ Le candidat Mac R1 jamais activé a été retiré après contrôle des fichiers
 ouverts :35971376octets. Les caches restent conservés lorsque l'observation
 des processus est incomplète, notamment le refus installed sur SYS.
 
-Fin de passage client encore requise : huit façades MCP Mac chargent226-r3.
-Leur schéma n'a pas changé et le guidage vient du maître, mais elles ne sont
-pas déclarées rechargées. Le parcours natif redémarre la session fournisseur ;
-aucun outil de rechargement MCP séparé n'est exposé dans ce fil. La fermeture
-native puis la réouverture de T3 sont couvertes par l'autorisation de maintenance.
-Les travaux et reçus sont conservés avant ce passage, puis le même fil doit
-vérifier les images et le retour du lien. La remise au propriétaire a expiré
-sans réponse observée ; ne pas la confondre avec une lecture du diagnostic.
+Passage client terminé : fermeture native de T3 confirmée puis réouverture.
+Les huit anciennes façades MCP ont quitté. Les cinq façades actuellement
+chargées utilisent227-r2, leurs images et empreintes sont vérifiées. Le worker
+et le pont Mac restent à la même image. Attestation du même fil et annuaire
+natifs revenus ; les sept services distants restent aux PID et SHA vérifiés.
+L'autorisation permanente couvre cette courte interruption des sessions.
+Aucun arrêt forcé ; travaux et reçus conservés avant passage. Le LaunchAgent
+ponctuel a été retiré après sa sortie pour empêcher une répétition au login.
+Avis de reprise envoyés aux six destinataires encore joignables. La septième
+adresse, issue d'une revue T3 distincte, n'était plus reconnue à l'envoi ; aucune
+nouvelle revue ni diffusion de remplacement.
+
+Limite de remise : la demande suivie à piétons a expiré sans réponse. La
+relecture strictement identique de son envoi rend outcome_unknown. Le diagnostic
+est conservé dans le ledger, sans preuve de réception ou lecture par son
+destinataire. La relecture native de7024 par son propriétaire n'est donc pas
+déclarée acquise. Aucun nouvel envoi de cet incident, aucune mission rejouée.
+
+Nettoyage de ce lot : cinq fichiers retirés,113283437octets logiques, dont le
+candidat R1, les deux archives déjà publiées et vérifiées, la copie Linux de
+transfert et la copie APK de publication. L'APK vérifié, les actifs installés,
+le retour226-r3, les sources, tâches et preuves sont conservés. Les worktrees
+de construction récents gardent la propriété de leurs caches ; les autres vues
+et worktrees sous observation incomplète restent conservés. Branche227 intégrée
+à main ; retrait local et distant vérifié à la clôture Git.

@@ -109,6 +109,20 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session227 — guidage des démarrages distants non confirmés livré en0.7.6.
+Source723c7dbd intégrée à main et poussée ; trois tests ciblés distincts acquis,
+revue02fa9e11 sansP1 et deuxP2 traités, dernier delta relu. Sept services/SHA
+vérifiés sur quatre hôtes, coupure maître1,98s, trois superviseurs métier conservés.
+Retours226-r3 compatibles et rollback atomiques natifs vérifiés. Fermeture puis
+réouverture natives de T3 : huit anciensMCP retirés, toutes les façades actuelles
+227-r2 vérifiées, attestation et lien revenus, registreMac spécial conservé.
+Release0.7.6/sixactifs publics et APK7006/certificat/lignée vérifiés. Tâche7024
+strictement inchangée, préparation présente/Start absent, aucune remise métier ;
+cause précise et arrêt physique non confirmés, aucun rejeu. Diagnostic envoyé à
+piétons mais remise outcome_unknown, lecture propriétaire non attestée. Cinq
+copies/113283437octets retirés ; caches et vues sous observation incomplète gardés.
+Sources et limites : specs/227-guidage-demarrage/validation.md.
+
 Session225 — optionCLI --table native ; deux positions, colonnes par famille,
 Unicode/NO_COLOR, JSON conservé. Six contrôles ciblés et parcours CLI réels PASS.
 Revue Sonnet4a0ad91d traitée : mêmes gardeswho/discover, pas de fauxvide daemon
