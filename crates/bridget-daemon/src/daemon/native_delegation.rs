@@ -4800,6 +4800,42 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
             view.as_object_mut().unwrap().remove("error_message");
             view.as_object_mut().unwrap().remove("error_recovery");
         }
+    } else if matches!(task.projected_error(), Some(
+        "remote_start_failed:remote_start:WorkerUnavailable"
+            | "remote_start_failed:remote_start:StaleConnection"
+    )) {
+        let code = task.projected_error();
+        if body.is_some() || task.mission_issued_at.is_some() {
+            // Une preuve ultérieure de remise ou résultat prime ce fait historique.
+            view["error"] = Value::Null;
+            if !view["detail"].is_object() { view["detail"] = json!({}); }
+            view["detail"]["initial_start"] = json!({
+                "code":code, "current_failure":false,
+                "message":"La tentative de remise métier ou son résultat est enregistré. La confirmation initiale du lancement distant n’avait pas été obtenue.",
+                "recovery":"Consultez l’état et le résultat de cette même tâche. Le défaut initial ne justifie ni relance ni remplacement de la mission."
+            });
+        } else {
+            view["error_message"] = json!("Faites vérifier le lien natif et le reçu de démarrage de cette tâche. Bridget n’a pas reçu la confirmation du lancement distant ; la cause précise reste inconnue. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état.");
+            view["error_recovery"] = if task.terminal() {
+                json!("Conservez la tâche, sa request_id, son dossier et les produits. Vérifiez la clôture native, le reçu de démarrage et le rapport du dossier avant de décider d’une suite autorisée. Un état terminal local ou une absence de reçu ne prouvent pas seuls l’arrêt physique. Rejouer cette clé ne relance pas la mission ; ne créez aucun remplacement automatique.")
+            } else {
+                json!("Conservez cette tâche, sa request_id et son dossier ; aucune remise métier n’est enregistrée. Faites corréler par le responsable Bridget le reçu de démarrage, la commande, l’instance et la génération sur le worker de cette tâche, puis son observation d’exécution native. Une absence de reçu ou un délai ne prouvent pas l’arrêt. Ne rejouez pas le lancement, ne créez pas de remplacement et ne changez ni machine, ni compte, ni droits. Relire cette même clé consulte son état, sans relancer la mission.")
+            };
+            view["error_human_action"] = json!("La maintenance déjà autorisée peut effectuer ces lectures. Si le contrôle nécessaire dépasse ce mandat ou reste refusé, demandez la décision ciblée sur l’accès ou la maintenance nommés par ce contrôle. Ne demandez pas de réinstallation ou de changement de compte sur le seul code WorkerUnavailable ou StaleConnection.");
+            let request_id = match &task.request {
+                NativeDelegationRequest::Delegate {request_id,..} => Some(request_id.as_str()),
+                _ => None,
+            };
+            if !view["detail"].is_object() { view["detail"] = json!({}); }
+            view["detail"]["remote_start"] = json!({
+                "scope":"this_task", "stage":"remote_start", "code":code,
+                "task_id":task.task_id, "request_id":request_id,
+                "machine_id":task.remote_placement.as_ref().map(|p|p.machine_id.as_str()),
+                "worker_id":task.remote_placement.as_ref().map(|p|p.worker_id.as_str()),
+                "mission_dispatch_recorded":false, "physical_execution":"not_observed",
+                "cause":"not_recorded", "next_action":"verify_start_receipt_and_execution"
+            });
+        }
     } else if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
@@ -27853,6 +27889,75 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert!(task_view(&task, None, true).get("error_message").is_none());
         assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
         assert!(rx.try_recv().is_err(), "aucune remise métier ni relance au rejeu");
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec227_remote_start_unconfirmed_preserves_receipt_and_explains_missing_proof() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let task_id = admitted["task_id"].as_str().unwrap().to_owned();
+        for reason in ["WorkerUnavailable", "StaleConnection"] {
+            {
+                let st = state.lock().unwrap();
+                let mut task = st.delegation_store.get(&task_id).unwrap().unwrap();
+                task.state = "starting".into();
+                task.mission_issued_at = None;
+                st.delegation_store.save(&task).unwrap();
+            }
+            let code = format!("remote_start:{reason}");
+            let view = remote_admission_outcome(&state, &task_id, Err(code)).unwrap();
+            assert_eq!(view["status"], "starting");
+            assert_eq!(view["error"], format!("remote_start_failed:remote_start:{reason}"));
+            assert_eq!(view["detail"]["remote_start"]["scope"], "this_task");
+            assert_eq!(view["detail"]["remote_start"]["task_id"], task_id);
+            assert_eq!(view["detail"]["remote_start"]["request_id"], request.request_id);
+            assert_eq!(view["detail"]["remote_start"]["mission_dispatch_recorded"], false);
+            assert_eq!(view["detail"]["remote_start"]["physical_execution"], "not_observed");
+            assert!(view["error_message"].as_str().unwrap().contains("cause précise reste inconnue"));
+            assert!(view["error_recovery"].as_str().unwrap().contains("reçu de démarrage"));
+            let before = serde_json::to_value(state.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap()).unwrap();
+            let replay = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+            assert_eq!(replay, view);
+            let after = serde_json::to_value(state.lock().unwrap().delegation_store.get(&task_id).unwrap().unwrap()).unwrap();
+            assert_eq!(after, before, "le guidage ne modifie pas le reçu durable");
+        }
+        assert_eq!(state.lock().unwrap().delegation_store.tasks().unwrap().len(), 1);
+        assert!(rx.try_recv().is_err(), "aucune remise métier ni relance");
+        drop(state); cleanup(&config);
+    }
+
+    #[test]
+    fn spec227_remote_start_historical_error_does_not_hide_later_work_or_result() {
+        let (state, config, _rx, _reader, request, _root) = routing168_fixture(1);
+        let admitted = admit_auto_routing("conn-1", &request, None, None, None, None, &state).unwrap();
+        let mut task = state.lock().unwrap().delegation_store.get(admitted["task_id"].as_str().unwrap()).unwrap().unwrap();
+        task.error = Some("remote_start_failed:remote_start:WorkerUnavailable".into());
+        task.state = "working".into();
+        task.mission_issued_at = Some(unix_timestamp());
+        let working = task_view(&task, None, true);
+        assert!(working["error"].is_null());
+        assert_eq!(working["detail"]["initial_start"]["current_failure"], false);
+        assert_eq!(working["status"], "working");
+        task.state = "result_available".into();
+        task.result = Some("résultat confirmé".into());
+        let before = serde_json::to_value(&task).unwrap();
+        let result = task_view(&task, None, true);
+        assert_eq!(result["result"], "résultat confirmé");
+        assert!(result["error"].is_null());
+        assert!(result.get("error_message").is_none());
+        assert_eq!(result["detail"]["initial_start"]["current_failure"], false);
+        assert_eq!(serde_json::to_value(&task).unwrap(), before);
+        task.result = None;
+        task.mission_issued_at = None;
+        task.state = "failed".into();
+        task.cleanup_done = false;
+        let unresolved = task_view(&task, None, true);
+        assert!(unresolved["error_recovery"].as_str().unwrap().contains("clôture"));
+        assert!(!unresolved["error_message"].as_str().unwrap().contains("est arrêté"));
+        task.error = Some("remote_start_failed:remote_start:ResourceLimit".into());
+        let capacity = task_view(&task, None, true);
+        assert!(capacity["detail"].get("remote_start").is_none());
         drop(state); cleanup(&config);
     }
 

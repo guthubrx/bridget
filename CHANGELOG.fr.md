@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.6 — 2026-11-02
+
+- Expliquer les démarrages distants non confirmés avec les contrôles ciblés et les références de la demande conservées. Une erreur initiale ne masque plus une remise ou un résultat ultérieur. Aucun changement des reprises, admissions ou droits.
+
 ## 0.7.5 — 2026-11-02
 
 - Conserver les connexions vivantes du pont pendant les délais de lecture bornés. Suspendre les observations jusqu’au contrôle frais. Nommer les erreurs RPC sans rejouer les remises incertaines.

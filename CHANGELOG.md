@@ -6,6 +6,10 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.6 — 2026-11-02
+
+- Explain unconfirmed remote starts with task-scoped checks and preserved request references. Historical start errors no longer hide later recorded work or results. No change to retries, admission or permissions.
+
 ## 0.7.5 — 2026-11-02
 
 - Keep live bridge connections during bounded read timeouts. Suspend observations until a fresh check succeeds. Report closed RPC failure causes without replaying uncertain deliveries.
