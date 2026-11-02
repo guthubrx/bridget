@@ -1,8 +1,8 @@
 # Lectures de gros historiques — préparation du chargement
 
-État au 2 novembre 2026 : correction du serveur de l’application hôte développée,
-intégrée et poussée. Paquet signé vérifié, mais application active encore ancienne.
-La livraison de ce complément reste incomplète avant son chargement réel.
+État au 2 novembre 2026, après 12:18 UTC : correction du serveur de l’application
+hôte développée, intégrée, poussée et chargée. Migration réelle vérifiée.
+La performance complète de remise sur le gros fil reste à mesurer.
 Aucune purge et aucune nouvelle commande de nettoyage développée.
 
 ## Source et correction
@@ -90,3 +90,16 @@ Preuves privées et copie volumineuse conservées dans :
 /Volumes/8TB2/50-repos-archives/11.Repositories/t3code/.worktrees/006-large-thread-command-reads/.t3/qualification.
 Le worktree intégré reste conservé pour cette copie et la qualification à terminer.
 Le candidat signé et la version active restent conservés jusqu’au chargement.
+
+## Chargement réel constaté le 2 novembre
+
+Installation native à 12:18 UTC : version 0.1.0-local.20261102.volume, source
+7a024e9b866c46be6491059a1218b985df19f37d. Application PID 23693 et serveur PID
+23781 démarrés respectivement à 13:18:11 et 13:18:13 heure de Paris.
+SHA-256 ASAR installé :
+950013df70a1a271266af3e9b3c0ee521256bd1225af086c664b469fac6a824e.
+Base active ouverte seulement en lecture : migration 65 CommandProjectionReadIndexes
+présente et les trois index attendus présents. Ancienne application conservée par
+l’installateur ; aucune réécriture de base par cet installateur.
+La mesure complète de remise sur relance monde n’est pas remplacée par ces
+contrôles. Aucun ancien message métier réémis pour la vérifier.
