@@ -43,4 +43,30 @@ Résultat lu, ACK et clôture natifs effectués ; résultat conservé.
 Les deux tests227 passent après ce delta en0,19s. Le contrôle Release précédent
 reste applicable : sa branche est inchangée. Aucun second banc général.
 
-Assemblages, chargement et relecture native du propriétaire : à compléter.
+Assemblages finaux Mac et Linux au commit723c7dbd, build227-start-guidance-r2.
+Mac : d7ec031b2aea52019fb0e077b345d45a220a410cc6662ac64570908837e63de5.
+Linux Debian12/glibc2.36 :
+e57922159be48dd517b3bd440cbd19ca5be5c8faf0ece601642536178e629ba6.
+Sept images chargées et vérifiées par les PID et leurs exécutables : worker et
+pont Mac, maître/mobile/worker Cartae, workers SYS et KS. Coupure maître1,98s.
+Trois superviseurs métier observés conservés, dont Cartae2500061 et deux SYS.
+Registre worker Mac spécial conservé. Aucune nouvelle mission métier.
+Compatibilité des formats dans les deux sens et des clients locaux vérifiée sur
+les quatre hôtes. Retour226-r3 conservé, pointeurs rollback écrits avec le writer
+atomique natif sous verrou après arrêt natif de l'updater. Updaters repris.
+L'attestation du fil et une lecture native de tâche/annuaire fonctionnent après
+chargement. Le guidage est rendu par le maître ; aucun nouveau schéma MCP.
+
+7024 : payload et canonical strictement identiques au contrôle avant passage,
+SHA payload24a44aa30255e0be97bd29ffea3c4ed2e77d6a0cfad8c71d4992a7adc6050887.
+La commande reste starting/génération1890/même instance. Préparation toujours
+présente, reçu Start absent. Aucun arrêt physique déclaré par cette seule absence.
+Avis de reprise et diagnostic envoyés à piétons et au propriétaire du monde ;
+remises initiales en vol, relecture unique du statut demandée à son propriétaire.
+
+Android0.7.6/code7006 compilé sur Cartae, certificat de production et lignée
+existants vérifiés. Empreinte APK :
+62298909b9bae115779695bfc2adc618dc4d338b8841fc97fe20993a38bae649.
+Aucune interface Android modifiée ; pas de nouvelle recette UI/FCM requise.
+Correction technique de projection API : tests natifs habituels, pas de parcours
+graphique modifié. Publication et nettoyage final : à compléter.
