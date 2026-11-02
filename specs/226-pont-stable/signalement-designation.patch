@@ -1,0 +1,24 @@
+--- /Users/moi/.agents/skills/bridget-signalement/SKILL.md.avant
++++ /Users/moi/.agents/skills/bridget-signalement/SKILL.md
+@@ -23,0 +24,17 @@
++
++Commencer par les décisions humaines déjà présentes dans la conversation et
++son contexte transmis. Si François a explicitement désigné le responsable de
++cette maintenance, utiliser cette désignation tant qu'elle reste applicable,
++sans lui demander de la confirmer à nouveau. Résoudre son identité et vérifier
++sa présence dans l'annuaire natif actuel. Un ancien nom mémorisé, sans cette
++décision humaine, ne suffit pas.
++
++Cette désignation permet de choisir le destinataire du signalement dans les
++droits d'envoi existants. Elle ne modifie ni rôle, ni mandat persistant, ni
++permissions. Un refus de lecture du catalogue (`role_scope_denied`) reste local
++à cette lecture : il ne révoque pas une désignation humaine déjà connue et ne
++prouve pas que l'envoi direct autorisé est interdit. Dans ce cas, envoyer le
++signalement au responsable désigné, avec le motif interprojets prévu, puis
++conserver le reçu. Ne pas changer de compte ni forcer l'accès au catalogue.
++
++En l'absence de désignation humaine applicable, suivre la recherche ci-dessous.
+@@ -48,0 +66,3 @@
++  Sans ambiguïté réelle entre plusieurs responsables, ne pas poser une nouvelle
++  question « est-ce bien lui ? » à partir du seul refus technique. Continuer les
++  autres travaux autorisés et indiquer une fois le blocage de cette vérification.
