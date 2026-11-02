@@ -87,9 +87,10 @@ Après lancement : attendre la migration, reprendre le même fil, vérifier imag
 migration et délai réel par une lecture ou une remise technique distincte.
 
 Preuves privées et copie volumineuse conservées dans :
-/Volumes/8TB2/50-repos-archives/11.Repositories/t3code/.worktrees/006-large-thread-command-reads/.t3/qualification.
-Le worktree intégré reste conservé pour cette copie et la qualification à terminer.
-Le candidat signé et la version active restent conservés jusqu’au chargement.
+/Volumes/8TB2/50-repos-archives/11.Repositories/t3code/.t3-qualification-archives/226-volume-7a024e9b.
+Les preuves ont été déplacées hors du worktree le 2 novembre, sans copie ni
+suppression de la base de qualification. Le worktree intégré et sa branche
+sont retirés après chargement. L’archive signée, l’actif et un retour sont conservés.
 
 ## Chargement réel constaté le 2 novembre
 
