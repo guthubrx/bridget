@@ -69,4 +69,16 @@ existants vérifiés. Empreinte APK :
 62298909b9bae115779695bfc2adc618dc4d338b8841fc97fe20993a38bae649.
 Aucune interface Android modifiée ; pas de nouvelle recette UI/FCM requise.
 Correction technique de projection API : tests natifs habituels, pas de parcours
-graphique modifié. Publication et nettoyage final : à compléter.
+graphique modifié. Releasev0.7.6 publique, six actifs et empreintes relus.
+Le candidat Mac R1 jamais activé a été retiré après contrôle des fichiers
+ouverts :35971376octets. Les caches restent conservés lorsque l'observation
+des processus est incomplète, notamment le refus installed sur SYS.
+
+Fin de passage client encore requise : huit façades MCP Mac chargent226-r3.
+Leur schéma n'a pas changé et le guidage vient du maître, mais elles ne sont
+pas déclarées rechargées. Le parcours natif redémarre la session fournisseur ;
+aucun outil de rechargement MCP séparé n'est exposé dans ce fil. La fermeture
+native puis la réouverture de T3 sont couvertes par l'autorisation de maintenance.
+Les travaux et reçus sont conservés avant ce passage, puis le même fil doit
+vérifier les images et le retour du lien. La remise au propriétaire a expiré
+sans réponse observée ; ne pas la confondre avec une lecture du diagnostic.
