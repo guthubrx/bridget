@@ -1209,7 +1209,7 @@ fn serve(paths: &Paths) -> Result<(), String> {
                     Instant::now(),
                 ) {
                     for link in links.values() {
-                        let _ = link.events.send(LinkEvent::Unavailable);
+                        let _ = link.events.send(LinkEvent::SnapshotTimeout);
                     }
                     warn!("lecture T3 expirée ({detail}) ; liens conservés, observations suspendues");
                     publish_status(paths, "degraded", &format!("{detail} : lecture expirée ; liens conservés au plus 90 s depuis la dernière lecture réussie, opérations soumises à une preuve fraîche"), links.len());
@@ -1507,6 +1507,8 @@ fn serve(paths: &Paths) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 enum LinkEvent {
+    /// Envoyé seulement dans la grâce bornée du snapshot.
+    SnapshotTimeout,
     Frame(Box<DaemonToWrapper>),
     Tick(Box<ThreadSummary>),
     DaemonGone,
@@ -2101,9 +2103,12 @@ impl LinkWorker {
                     subscription_id:Some(subscription_id),reason,
                 });
             }
-            LinkEvent::Unavailable => {
-                // Le lien vit encore ; ce heartbeat n'atteste aucun tour ni droit.
+            LinkEvent::SnapshotTimeout => {
+                // Seulement pendant la grâce : aucun tour ni droit attesté.
                 send_wrapper_message(&self.writer, WrapperToDaemon::Heartbeat);
+                self.handle_event(LinkEvent::Unavailable);
+            }
+            LinkEvent::Unavailable => {
                 self.set_observation_ready(false);
                 self.last_key.clear();
                 self.publish_drain_state(false);
@@ -4496,24 +4501,35 @@ mod tests {
     }
 
     #[test]
-    fn spec226_unavailable_keeps_connection_but_clears_observation() {
+    fn spec226_heartbeat_only_during_bounded_snapshot_grace() {
         let (mut worker, peer) = worker099();
+        peer.set_nonblocking(true).unwrap();
+        let mut reader = BufReader::new(peer);
+        let drain = |reader: &mut BufReader<UnixStream>| {
+            let mut frames = Vec::new();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => frames.push(serde_json::from_str::<WrapperToDaemon>(&line).unwrap()),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(e) => panic!("lecture du lien : {e}"),
+                }
+            }
+            frames
+        };
+        let _initial = drain(&mut reader);
         worker.last_key = "stale".into();
+        worker.observation_events = vec![bridget_transport::protocol::ObservationKind::TurnEnded];
         worker.handle_event(LinkEvent::Unavailable);
         assert!(worker.last_key.is_empty());
+        assert!(worker.observation_events.is_empty());
+        assert!(!drain(&mut reader).iter().any(|frame| matches!(frame, WrapperToDaemon::Heartbeat)));
+        worker.last_key = "stale".into();
+        worker.handle_event(LinkEvent::SnapshotTimeout);
+        assert!(worker.last_key.is_empty());
         assert!(worker.daemon_alive.load(Ordering::SeqCst));
-        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
-        let mut reader = BufReader::new(peer);
-        let mut saw_heartbeat = false;
-        for _ in 0..8 {
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            if matches!(serde_json::from_str::<WrapperToDaemon>(&line).unwrap(), WrapperToDaemon::Heartbeat) {
-                saw_heartbeat = true;
-                break;
-            }
-        }
-        assert!(saw_heartbeat, "heartbeat absent après les trames initiales du lien");
+        assert!(drain(&mut reader).iter().any(|frame| matches!(frame, WrapperToDaemon::Heartbeat)));
         worker.journal.stop();
         worker.relay.shutdown();
     }

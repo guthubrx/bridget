@@ -44,7 +44,7 @@ fn http_read_error(error: std::io::Error) -> ContractError {
 
 fn http_request_error(error: minreq::Error) -> ContractError {
     match error {
-        minreq::Error::IoError(error) => http_read_error(error),
+        minreq::Error::IoError(error) if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => http_read_error(error),
         _ => ContractError::Transport("http_request_unavailable".into()),
     }
 }
