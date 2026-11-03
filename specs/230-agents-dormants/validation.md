@@ -45,8 +45,8 @@ de mission inchangés. La source exacte de la lenteur du listener reste inconnue
 Le connecteur réel a conservé19liaisons, dont17observations de source déjà lues
 au contrôle, sans commande en attente. Les transitions dans les deux sens sont
 vérifiées par les fixtures natives ; aucun geste de classement imposé à un fil
-utilisateur pour cette vérification. Une nouvelle lecture suivra le rechargement
-client prévu.
+utilisateur pour cette vérification. Après le rechargement client, les19liaisons sont observées et la file
+reste vide.
 
 Preuves : preuves-corrections/2026-11-03-agents-dormants/preuves.html.
 Le document contient les sorties réelles du circuit CLI. Aucune capture ou
@@ -89,9 +89,34 @@ Start ou Fence. Empreinte intégrale attendue du payload7024 :
 
 Le code exécutable assemblé est le commit246efc16. Les compléments de preuves et
 ce bilan ne changent aucun code exécutable ; le delta est contrôlé avant fusion.
-Sources main/push, release publique, rechargement des façades MCP et nettoyage
-final restent à consigner après leurs contrôles réels. Aucun build ou test ne
-sera répété pour ces seules écritures documentaires.
+Sources intégrées et poussées sur main15e3de35, propres et alignées sur les
+quatre hôtes (racines détachées conservées sur SYS et KS). Release0.8.0 publique,
+six actifs vérifiés avant et après publication, cible15e3de35. La branche230
+locale est retirée ; elle n'a jamais été poussée. Aucun worktree230 créé.
+
+Fermeture puis réouverture natives de T3 confirmées : ancien PID d'application
+40972, nouveau3285. Les processus portant le même exécutable sans être une
+application native n'ont pas été ciblés. Les sept anciens MCP ont disparu.
+Les deux façades courantes observées7054/7370 chargentR4, empreinte Mac vérifiée.
+Une lecture MCP same_project rend le projet de communication non nul et le
+lien du même agent. Les deux revues sont lues, clôturées et désormais ACK.
+Le LaunchAgent ponctuel de rechargement est retiré après sa fin.
+
+Payload7024 relu après reprise cliente : empreinte intégrale inchangée. Aucun
+rejeu de mission. Cinq avis de reprise restent in_flight, sans lecture attestée ;
+un sixième rend unknown_recipient, sans réacheminement ni relance d'agent.
+
+Nettoyage :16copies de binaires et transferts devenus inutiles retirées sur
+quatre hôtes,681416376octets logiques. ActifR4 et retourR3 conservés. Les preuves,
+reçus, sources de construction, vues de revue et autres travaux restent gardés.
+Les anciennes images sous usages ou namespace non qualifiés ne sont pas purgées.
+Le nettoyeur Cargo conserve les caches Mac/SYS lorsque son observation des
+processus est incomplète ; aucune suppression forcée. Les manifests privés
+précisent chaque retrait et son empreinte.
+
+Aucun build ou test répété pour ces seules écritures documentaires. La limite
+Android graphique ci-dessus reste ouverte ; aucune validation complète de ce
+circuit n'est revendiquée.
 
 Les originaux, reçus et manifestes privés sont conservés dans
 /Users/moi/.cache/bridget230-agent-history et les caches homologues Linux.

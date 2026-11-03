@@ -109,6 +109,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session230 — agents dormants natifs activés en0.8.0/230-agents-dormants-r4.
+Sommeil indépendant, synchro des gestes bidirectionnelle par défaut et option
+locale ; nouvelles sollicitations/rondes refusées, résultats admis conservés,
+réveil sans tour. Source15e3de35 intégrée/poussée, code exécutable identique au
+commit assemblé246efc16. 25tests natifs utiles et39Android acquis, deux revues
+traitées ; CLI réelle maître/Mac vérifiée, faux refus de sonde redondante corrigé.
+Sept services/SHA vérifiés sur4hôtes, coupures2,18s puis1,96s. WrapperCartae2500061
+et registreMac conservés. Retour0.8R3 compatible et rollback atomiques vérifiés,
+ancien0.7.8 interdit par formats/marqueur8. Relance native T3 :7anciens MCP retirés,
+2façades courantes R4/SHA vérifiées, attestation et lien revenus,19liaisons observées.
+Release0.8/sixactifs et APK8000/certificat/lignée vérifiés. Preuve UI Android
+INCOMPLÈTE : émulateur natif ne démarre pas ; T006 reste ouvert, aucune recette
+visuelle inventée. Branche230 retirée,16copies/681416376octets logiques nettoyés ;
+caches/vues et anciennes images sous usage ou namespace non qualifié conservés.
+Payload7024 strictement inchangé, revue T3 métier distincte non touchée. Sources
+et limites : specs/230-agents-dormants/validation.md.
+
+
 Session229 — raccordement des projets préparés chargé en0.7.8/229-project-relay-r3.
 Sourceffe7896b intégrée/poussée ; contexte natif négocié, publication atomique
 au maître, worktrees et racines additionnelles déjà autorisées conservés.
