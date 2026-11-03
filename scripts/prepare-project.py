@@ -348,7 +348,11 @@ def publish_prepared(request):
             require(contained(absolute(request["source_root"]), absolute(mapping["source_root"])),
                     "project_mapping_mismatch")
             extra = mapping.get("additional_root")
-            require(extra is None or any(m.get("additional_root") == extra
+            # La destination privée change avec le projet ; l'autorisation
+            # existante porte sur la source, son propriétaire et son accès.
+            source_fields = ("source_root", "source_uid", "source_mode", "access")
+            require(extra is None or any(m.get("additional_root") is not None
+                    and all(m["additional_root"].get(k) == extra.get(k) for k in source_fields)
                     and m["source_host"] == request["origin_host"]
                     for m in selected.get("mappings", {}).values()),
                     "project_preparation_additional_root_changed")

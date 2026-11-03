@@ -118,6 +118,33 @@ class PreparationTests(unittest.TestCase):
         result = prep.publish_prepared(request)
         self.assertEqual(result["mapping"]["source_root"], str(self.source))
 
+    def test_spec229_publication_reuses_approved_extra_with_new_private_destination(self):
+        extra_source = self.base / "approved-extra"
+        extra_source.mkdir(mode=0o700)
+        source_right = dict(source_root=str(extra_source), source_uid=os.geteuid(),
+                            source_mode=0o700, access="inherit")
+        self.request["additional_root"] = source_right
+        previous_extra = dict(source_right, remote_root=str(self.home / "old-extra"),
+                              remote_uid=os.geteuid(), remote_mode=0o700)
+        self.config["machines"]["test"]["mappings"]["previous"] = dict(
+            source_host="source", source_root=str(self.base / "previous-project"),
+            remote_root=str(self.home / "previous-repository"),
+            expected_git_identity="fixture:previous", mapping_revision=1,
+            additional_root=previous_extra)
+        prep.atomic_json(self.registry, self.config)
+        coordinator, request = self.prepared_publication229()
+        self.assertNotEqual(request["mapping"]["additional_root"]["remote_root"],
+                            previous_extra["remote_root"])
+        prep.publish_prepared(request)
+        self.assertEqual(len(json.loads(coordinator.read_text())["machines"]["test"]["mappings"]), 2)
+        # La même source avec un droit modifié ne devient pas approuvée.
+        fresh = json.loads(coordinator.read_text())
+        fresh["machines"]["test"]["mappings"].pop(request["project_id"])
+        prep.atomic_json(coordinator, fresh)
+        request["mapping"]["additional_root"]["source_mode"] = 0o750
+        with self.assertRaisesRegex(prep.Refused, "project_preparation_additional_root_changed"):
+            prep.publish_prepared(request)
+
     def test_spec221_future_preference_preserves_explicit_old_mapping(self):
         import copy
         selected=self.config["machines"]["test"]

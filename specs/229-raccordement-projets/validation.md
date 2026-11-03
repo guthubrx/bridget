@@ -54,3 +54,39 @@ La demande corrigée est distincte de ce refus ; aucune mission inconnue rejoué
 Les deux appels historiques 29.Mails ont aussi des durées 10 et 1 secondes.
 Leur refus de mapping a précédé ce contrôle de durée. Ce paramètre devra être
 corrigé par leur propriétaire avant une admission, selon leur état durable.
+
+## Traitement de la revue
+
+Revue native c2726ed4, Sonnet choisi automatiquement sur KS, résultat lu,
+ACK et clôture propriétaire effectués. Pas de P1 ; deux P2 et trois P3.
+Lecture statique partielle, sans diff Git disponible et sans tests exécutés
+par le lecteur. Les limites de cette revue sont conservées.
+
+- P2-2 retenu et corrigé : comparer l'autorisation source de la racine
+  additionnelle, pas sa destination privée propre au projet. Essai positif
+  avec deux destinations distinctes et essai de changement de mode refusé.
+- P2-1 : restriction proposée aux seules clés auto et dossiers gérés non
+  retenue. Les correspondances explicites préprovisionnées sont aussi valides.
+  La source du reçu n'est pas un argument de mission : worker d'origine
+  authentifié, helper natif, contrôle du dépôt commun et validation SSH de
+  la destination, puis égalité au registre source relu. Une racine `/`
+  substituée dans une préparation normale ne passe pas le contrôle du dépôt
+  commun dans prepare(). Une réponse arbitraire nécessite de compromettre
+  ce worker de confiance. Le maître garde le cwd attesté et les sondes de la
+  cible avant toute mission. La validation lexicale des chemins distants
+  dans le maître est volontaire ; il ne possède pas leur système de fichiers.
+  Aucune nouvelle restriction de placement légitime n'est ajoutée.
+- P3-1 traité par un essai natif supplémentaire : vraie connexion locale
+  corrélée du worker authentifié, prepare_project du maître, writer réel,
+  publication puis résolution ; six cas : succès, mauvaise autorité, clé
+  imposée différente, mapping invalide et deux replis ancien worker.
+  Aucun modèle, service ou tâche créé. Le désaccord de clé rend désormais
+  project_mapping_mismatch, plutôt qu'un diagnostic d'identité machine.
+- P3-2 : guidage des autorités divergentes précisé, dépôt préparé conservé.
+- P3-3 : commentaire sur la négociation au moment de l'échange ajouté.
+
+Dernier module Python : 48 PASS en 29,356 s. Quatre cas Rust229 PASS en
+0,32 s, dont le parcours maître à six variantes. Deux anciens contrôles du
+helper et le contrôle Git d'origine restent acquis, soit sept tests Rust
+distincts utiles pour ce lot. Le dernier delta de guidage ne change pas
+les validations. Réassemblage final nécessaire pour le helper embarqué.
