@@ -26,6 +26,13 @@ Le delta R2 limite cette présentation au tools/list ; les schémas canoniques
 et les validateurs natifs restent identiques. Le test reconstitue chaque schéma
 canonique depuis sa référence et compare tous ses octets JSON structurés.
 
+Le contrôle de compatibilité des dialectes précise le placement : R3 met le
+schéma COMPLET dans la référence locale, pas seulement ses combinateurs. Les
+clients draft4-7 qui ignorent les voisins de $ref conservent ainsi les propriétés,
+champs requis et fermetures. Les propriétés restent aussi lisibles à la racine.
+Référence primaire : https://json-schema.org/understanding-json-schema/structuring.
+Aucune référence externe ni élargissement du validateur natif.
+
 RevueR1e9052af4 : delta objet correct, mais catalogue complet non démontré.
 Objection31/37 retenue et corrigée par R2. La revue n'a pas exécuté les contrôles.
 Résultat lu, ACK et clôture natifs effectués ; aucun remplacement de cette revue.

@@ -2605,17 +2605,16 @@ fn discovery_tools() -> Vec<Value> {
     let mut catalogue = tools();
     for tool in &mut catalogue {
         let schema = tool["inputSchema"].as_object_mut().expect("schéma objet");
-        let mut constraints = serde_json::Map::new();
-        for key in ["allOf", "anyOf", "oneOf"] {
-            if let Some(value) = schema.remove(key) { constraints.insert(key.into(), value); }
-        }
-        if constraints.is_empty() { continue; }
-        if let Some(value) = schema.remove("$ref") { constraints.insert("$ref".into(), value); }
+        if !["allOf", "anyOf", "oneOf"].iter().any(|key| schema.contains_key(*key)) { continue; }
+        // Le schéma COMPLET reste dans la référence : les anciens validateurs
+        // qui ignorent les voisins de $ref gardent aussi champs requis et fermeture.
+        let original = Value::Object(schema.clone());
+        for key in ["allOf", "anyOf", "oneOf"] { schema.remove(key); }
         let definitions = schema.entry("$defs").or_insert_with(|| json!({}))
             .as_object_mut().expect("définitions objet");
         let mut key = "bridget_constraints".to_owned();
         while definitions.contains_key(&key) { key.push('_'); }
-        definitions.insert(key.clone(), Value::Object(constraints));
+        definitions.insert(key.clone(), original);
         schema.insert("$ref".into(), json!(format!("#/$defs/{key}")));
     }
     catalogue
@@ -3074,17 +3073,13 @@ mod tests {
         let mut referenced = BTreeSet::new();
         for (wire, original) in catalogue.iter().zip(&canonical) {
             assert_eq!(wire["name"], original["name"]);
-            let mut restored = wire["inputSchema"].clone();
-            let root = restored.as_object_mut().unwrap();
-            if let Some(reference) = root.remove("$ref") {
+            let schema = &wire["inputSchema"];
+            let restored = if let Some(reference) = schema.get("$ref") {
                 let key = reference.as_str().unwrap().strip_prefix("#/$defs/").unwrap();
-                let constraints = root["$defs"][key].as_object().unwrap().clone();
-                root["$defs"].as_object_mut().unwrap().remove(key);
-                if root["$defs"].as_object().unwrap().is_empty() { root.remove("$defs"); }
-                root.extend(constraints);
                 referenced.insert(wire["name"].as_str().unwrap());
-            }
-            assert_eq!(restored, original["inputSchema"], "contraintes de {}", wire["name"]);
+                &schema["$defs"][key]
+            } else { schema };
+            assert_eq!(*restored, original["inputSchema"], "contraintes de {}", wire["name"]);
         }
         assert_eq!(referenced, BTreeSet::from(["bridget_auto_delegate", "bridget_domain",
             "bridget_queue", "bridget_send", "bridget_specialists", "bridget_wake"]));
