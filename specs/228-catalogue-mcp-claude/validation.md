@@ -100,3 +100,14 @@ Claude : il corrige la description du catalogue et garde les contraintes natives
 Il n'y a pas de comparaison avant/après une mise à jour de Claude ; une mise à
 jour ayant révélé le défaut n'est donc ni établie ni exclue. La qualification
 prouve les parcours nommés, pas toutes les versions futures d'un client.
+
+Complément après le passage client signalé par evols-t3 (message
+mcp-96207-6ae972af-1) : application T3 chargée depuis
+/Applications/T3 Code (Local).app, version0.1.7-local.20261102.upstream,
+PID86233 démarré le3novembre2026 à06:31:42 locale. PID et fichiers chargés
+vérifiés, lien installé228-r3 et empreinte Mac74bfb568… conformes. Les six
+façades MCP observées, le worker et le pont Mac chargent tous228-r3.
+Le propriétaire atteste sa propre lecture native : projet non nul, même fil,
+specialists/search status=ok/items=[], sans origin_session_reattest. Cette
+preuve du demandeur est distincte de notre inspection des images. Aucun essai
+Claude ni inférence supplémentaire effectué pour ce complément.
