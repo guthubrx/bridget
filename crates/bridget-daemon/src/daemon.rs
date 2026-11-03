@@ -2784,9 +2784,9 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     continue;
                 }
                 if let Some(due) = calendar.due_at {
-                    if wake_target_guard(&st, &schedule.owner, &schedule.target).is_err() {
-                        continue;
-                    }
+                    let target_guard = wake_target_guard(&st, &schedule.owner, &schedule.target);
+                    let dormant = target_guard == Err("agent_dormant");
+                    if target_guard.is_err() && !dormant { continue; }
                     let mut wake = FrozenWake {
                         version: 1,
                         source: WakeSource::Scheduled,
@@ -2828,6 +2828,13 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                         ),
                         Ok(true)
                     ) {
+                        if dormant {
+                            // Pas de rattrapage au réveil : cette occurrence est close,
+                            // sans émission. La cadence suivante reste programmée.
+                            let _ = st.store.settle_wake_occurrence(&schedule.schedule_id,&wake.id,
+                                WakePhase::MissedBeforeDeparture,calendar.next_at,calendar.next_calendar_date.as_deref());
+                            continue;
+                        }
                         frozen = Some(wake);
                     }
                 } else if calendar.next_at != schedule.next_at
@@ -9408,7 +9415,10 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         })
         .map(|(conn, _)| conn.clone())
         .collect();
-    let dormant=crate::agent_tracking::dormant_ids(state.store.connection()).unwrap_or_else(|_|state.presences.values().map(|p|p.name.clone()).collect());
+    let dormant=crate::agent_tracking::dormant_ids(state.store.connection()).unwrap_or_else(|_| {
+        // Une fiche illisible diffère son rappel ; les autres restent indépendantes.
+        state.presences.values().filter(|p|crate::agent_tracking::dormant(state.store.connection(),&p.name).unwrap_or(true)).map(|p|p.name.clone()).collect()
+    });
     let undisturbed: std::collections::HashSet<String> = state
         .presences
         .values()
@@ -12008,7 +12018,8 @@ fn prepare_dispatch(
     let routing_from = routing_agent_id(&message.from).to_string();
     let routing_to = routing_agent_id(&message.to).to_string();
     match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
-        Ok(true)=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
+        Ok(true) if !native_task_exchange=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
+        Ok(true)=>{},
         Err(_)=>return Err(("tracking_storage_unavailable","État de sommeil illisible. Conservez cette demande ; les lectures et les autres travaux autorisés peuvent continuer.".into())),
         Ok(false)=>{},
     }
@@ -12376,7 +12387,10 @@ fn handle_idempotent_send_with_result_authority(
     // L'autorité de résultat a déjà été vérifiée ci-dessus. Sa notification
     // est une sortie du store canonique, jamais un nouvel ingress du wrapper.
     let capture = if authority.is_some() {
-        Ok(false)
+        // Le résultat canonique reste conservé, sans nouvelle notification au dormant.
+        if matches!(authority,Some(RetainedSendAuthority::Result(_))) {
+            crate::agent_tracking::dormant(st.store.connection(),&message.to).map_err(|e|e.to_string())
+        } else { Ok(false) }
     } else {
         native_delegation::capture_reply(st, conn_id, &message)
     };
@@ -12386,7 +12400,7 @@ fn handle_idempotent_send_with_result_authority(
             error!("capture native non persistée: {error}");
             return DaemonToWrapper::Nack {
                 id: message.id.clone(),
-                reason: if error == "remote_result_requires_worker" {
+                reason: if error == "remote_result_requires_worker" || error.starts_with("retained_reply_") {
                     error
                 } else {
                     "native_result_not_persisted".into()
@@ -14403,6 +14417,33 @@ mod spec099_classic_delivery_tests {
     }
 
     #[test]
+    fn tracking230_reponse_admise_conservee_sans_solliciter_parent_dormant() {
+        let (state,root,peers)=fixture(); let _cleanup=FixtureRoot(root);
+        let mut request=BridgetMessage::new(SENDER,TARGET,"travail déjà demandé");
+        request.id="230-admitted-request".into(); request.reply=true;
+        assert!(matches!(handle_wrapper_message("sender",WrapperToDaemon::Send(request),&state),Some(DaemonToWrapper::Ack{..})));
+        let mut reader=BufReader::new(peers[1].try_clone().unwrap());
+        assert!(matches!(presence_tests::read_control(&mut reader),DaemonToWrapper::Deliver{..}));
+        {
+            let mut st=state.lock().unwrap();
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==SENDER).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-parent",&agent,true,Some(false),None,100).unwrap();
+        }
+        let mut forged=BridgetMessage::new(WITNESS,SENDER,"réponse étrangère"); forged.in_reply_to=Some("230-admitted-request".into());
+        assert!(matches!(handle_wrapper_message("witness",WrapperToDaemon::Send(forged),&state),Some(DaemonToWrapper::Nack{..})));
+        let mut reply=BridgetMessage::new(TARGET,SENDER,"résultat conservé"); reply.in_reply_to=Some("230-admitted-request".into());
+        for _ in 0..2 { assert!(matches!(handle_wrapper_message("target",WrapperToDaemon::Send(reply.clone()),&state),Some(DaemonToWrapper::Ack{..}))); }
+        let mut conflict=reply.clone(); conflict.body="autre résultat avec le même identifiant".into();
+        assert!(matches!(handle_wrapper_message("target",WrapperToDaemon::Send(conflict),&state),Some(DaemonToWrapper::Nack{..})));
+        let st=state.lock().unwrap();
+        assert_eq!(st.store.get_request("230-admitted-request").unwrap().unwrap().state,"answered");
+        let count:i64=st.store.connection().query_row("SELECT COUNT(*) FROM ledger WHERE id=?1 AND body=?2",rusqlite::params![reply.id,reply.body],|r|r.get(0)).unwrap();
+        assert_eq!(count,1,"le résultat est durable et son rejeu ne l'écrase pas");
+        peers[0].set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(BufReader::new(peers[0].try_clone().unwrap()).read_line(&mut String::new()).is_err(),"aucun nouveau tour au parent dormant");
+    }
+
+    #[test]
     fn spec099_notification_systeme_bornee_meme_si_writer_occupe() {
         let (socket, _peer) = UnixStream::pair().unwrap();
         let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
@@ -15837,10 +15878,13 @@ mod spec145_human_view_tests {
                     Ok(("t3".into(), agent))
                 );
             }
+            let after = snapshot(&state);
+            let tracking = after.iter().find(|(name,_)|name=="agent_tracking").unwrap();
+            assert_eq!(tracking.1.len(),1,"la liaison conserve une seule fiche native");
             assert_eq!(
-                snapshot(&state),
-                before,
-                "le rattachement n'écrit aucune donnée métier"
+                after.into_iter().filter(|(name,_)|name!="agent_tracking").collect::<Vec<_>>(),
+                before.into_iter().filter(|(name,_)|name!="agent_tracking").collect::<Vec<_>>(),
+                "seule la métadonnée de liaison est persistée"
             );
         }
     }
@@ -23616,7 +23660,7 @@ fn handle_wrapper_message_with_peer(
                     error!("capture native non persistée: {error}");
                     return Some(DaemonToWrapper::Nack {
                         id: bridge_msg.id.clone(),
-                        reason: if error == "remote_result_requires_worker" {
+                        reason: if error == "remote_result_requires_worker" || error.starts_with("retained_reply_") {
                             error
                         } else {
                             "native_result_not_persisted".into()
@@ -29126,6 +29170,36 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    #[test]
+    fn tracking230_echeance_dormante_close_sans_rattrapage() {
+        use bridget_transport::protocol::{WakeAction,WakeCadence,WakeRequest,WakeTarget};
+        use crate::wake_schedules::WakePhase;
+        let (mut st,_config)=state_with_registered_agent("tracking230-calendar");
+        let owner=st.presences["instance-1"].name.clone();
+        let (writer,mut reader)=control_socket("tracking230-calendar"); st.connections.insert("conn-1".into(),writer);
+        let state=Arc::new(Mutex::new(st)); let now=unix_now_secs(); let clock=Instant::now();
+        handle_wake_request("conn-1",WakeRequest{version:1,request:WakeAction::Schedule{target:WakeTarget::SelfTarget{},cadence:WakeCadence::Interval{seconds:60},label:None}},&state,now);
+        let id=state.lock().unwrap().store.list_wake_schedules(Some(&owner)).unwrap()[0].schedule_id.clone();
+        {
+            let mut st=state.lock().unwrap();
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==owner).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep",&agent,true,Some(false),None,now).unwrap();
+        }
+        scheduled_wakes_tick(&state,now+60,clock+Duration::from_secs(60));
+        {
+            let mut st=state.lock().unwrap(); let schedule=st.store.wake_schedule(&id).unwrap().unwrap();
+            assert_eq!(schedule.occurrence.unwrap().phase,WakePhase::MissedBeforeDeparture);
+            assert_eq!(schedule.next_at,now+120);
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==owner).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"wake",&agent,false,Some(false),None,now+61).unwrap();
+        }
+        scheduled_wakes_tick(&state,now+61,clock+Duration::from_secs(61));
+        reader.get_ref().set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(reader.read_line(&mut String::new()).is_err(),"pas de rattrapage après réveil");
+        let st=state.lock().unwrap(); let schedule=st.store.wake_schedule(&id).unwrap().unwrap();
+        assert_eq!(schedule.next_at,now+120,"la prochaine échéance reste programmée");
     }
 
     #[test]

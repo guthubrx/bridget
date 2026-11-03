@@ -10180,7 +10180,7 @@ pub(super) fn capture_reply(
         // Une ancienne ronde est absorbée seulement sous l'identité courante
         // de cet enfant. Cette lecture ne répare aucun lien ni checkpoint.
         let Some(past) = past else {
-            return Ok(false);
+            return super::agent_tracking230::retain_classic_reply(st, conn, message);
         };
         return Ok(past.child == message.from
             && past.owner == message.to

@@ -138,7 +138,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var nextCursor by mutableStateOf<String?>(null); private set
     var favorites by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var favoritesOnly by mutableStateOf(false); private set
-    var dormantOnly by mutableStateOf(false); private set
+    var agentVisibility by mutableStateOf("active"); private set
     var selected by mutableStateOf<JSONObject?>(null); private set
     var draft by mutableStateOf(""); private set
     var outbox by mutableStateOf<List<JSONObject>>(emptyList()); private set
@@ -332,7 +332,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         fresh = true
     }
     private fun directoryFilter(): String = buildString {
-        append("&visibility="+if(dormantOnly) "dormant" else "active")
+        append("&visibility="+agentVisibility)
         if(favoritesOnly) append("&ids="+BridgetClient.encode(favorites.joinToString(",") {it.getString("agent_id")}))
         if(machine.isNotEmpty()) append("&machine="+BridgetClient.encode(machine))
         project?.let {append("&project_host="+BridgetClient.encode(it.getString("host"))+"&project_root="+BridgetClient.encode(it.getString("root")))}
@@ -445,11 +445,13 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         } catch (_: Exception) { error = "device_storage_unavailable" }
     }
     fun visibleAgents(): List<JSONObject> {
-        return agents.filter {(it.optJSONObject("tracking")?.optBoolean("dormant")==true) == dormantOnly}
+        return agents.filter {matchesVisibility(it)}
     }
-    fun showDormant(value:Boolean) {
-        if(busy || value==dormantOnly) return
-        dormantOnly=value; agents=emptyList(); nextCursor=null; fresh=false; refresh()
+    private fun matchesVisibility(row:JSONObject):Boolean = agentVisibility=="all" ||
+        (row.optJSONObject("tracking")?.optBoolean("dormant")==true)==(agentVisibility=="dormant")
+    fun showAgents(value:String) {
+        if(busy || value==agentVisibility || value !in listOf("active","dormant","all")) return
+        agentVisibility=value; agents=emptyList(); nextCursor=null; fresh=false; refresh()
     }
     fun changeTracking(dormant:Boolean, synchronize:Boolean?=null) = act {
         val agent=selected ?: return@act
@@ -483,7 +485,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         fun project(row:JSONObject)=if(row.getString("agent_id")==changedId) JSONObject(row.toString()).put("tracking",changed) else row
         selected=selected?.let(::project)
         favorites=favorites.map(::project)
-        agents=agents.map(::project).filter {(it.optJSONObject("tracking")?.optBoolean("dormant")==true) == dormantOnly}
+        agents=agents.map(::project).filter {matchesVisibility(it)}
         updatePreferences {it.put("tracking_receipt",response);it.remove("tracking_pending");it.put("selected",selected);it.put("favorites",JSONArray(favorites))}
     }
     fun select(agent: JSONObject?) {

@@ -285,8 +285,9 @@ private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
             FilterChip(selected=vm.favoritesOnly,onClick={if(!vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.favorites))})
         }
         Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected=!vm.dormantOnly,onClick={vm.showDormant(false)},label={Text(stringResource(R.string.agents_active))})
-            FilterChip(selected=vm.dormantOnly,onClick={vm.showDormant(true)},label={Text(stringResource(R.string.agents_dormant))})
+            FilterChip(selected=vm.agentVisibility=="active",onClick={vm.showAgents("active")},label={Text(stringResource(R.string.agents_active))})
+            FilterChip(selected=vm.agentVisibility=="dormant",onClick={vm.showAgents("dormant")},label={Text(stringResource(R.string.agents_dormant))})
+            FilterChip(selected=vm.agentVisibility=="all",onClick={vm.showAgents("all")},label={Text(stringResource(R.string.agents_all))})
         }
         if(!vm.fresh) Text(stringResource(R.string.attention_stale),style=MaterialTheme.typography.labelSmall)
         val agents=vm.visibleAgents().filter {search.isBlank() || listOf(it.optString("display_name"),it.optString("machine"),it.optJSONObject("project")?.optString("root").orEmpty()).any {v->v.contains(search.trim(),ignoreCase=true)}}

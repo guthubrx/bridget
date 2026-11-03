@@ -12,7 +12,9 @@ n'est envoyé automatiquement au réveil.
 
 « Réveiller » rend l'agent disponible sans lancer un tour. Un message, une
 reconnexion ou un résultat ne le réveille pas. Les résultats de travaux déjà
-admis restent collectés, et les questions humaines restent accessibles.
+admis restent collectés. Une réponse à une demande directe déjà acceptée est
+conservée dans le journal et dans son reçu de réponse, sans nouveau tour chez
+le destinataire dormant. Les questions humaines restent accessibles.
 
 ## Terminal
 
@@ -32,7 +34,7 @@ un changement effectué sur un autre appareil.
 
 ## Application
 
-Choisir « Actifs » ou « Agents dormants ». Ouvrir une fiche, puis son menu :
+Choisir « Actifs », « Agents dormants » ou « Tous ». Ouvrir une fiche, puis son menu :
 « Mettre en sommeil » ou « Réveiller ». Les favoris respectent aussi ce filtre.
 L'application conserve l'enveloppe d'une action non confirmée et la rapproche
 avant d'envoyer un autre choix.

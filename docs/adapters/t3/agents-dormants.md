@@ -45,6 +45,11 @@ le refus et permet une nouvelle confirmation humaine après résolution côté
 client. Une commande non remise et remplacée par un choix plus récent n'est
 pas envoyée. Une commande déjà incertaine n'est pas effacée.
 
+Si la synchronisation est désactivée pendant une remise incertaine, seule cette
+commande déjà partie est rapprochée avec le même identifiant. Le nouveau choix
+reste propre à Bridget. Aucun nouvel ordre de classement ne part après ce
+rapprochement. La fiche indique cette attente avant d'afficher « Bridget uniquement ».
+
 Les séquences observées et les reçus de commit empêchent un ancien instantané
 d'annuler un choix plus récent. Les refus non reconnus restent explicitement
 inconnus. Aucun numéro de version d'un fournisseur de modèle n'intervient dans
