@@ -228,6 +228,7 @@ pub enum ClientCapability {
     RoutingCatalogueV1,
     ProviderCatalogueV1,
     SpecialistsV1,
+    AgentTrackingV1,
     /// Admission de flotte168 : reste distincte de la forme163.
     AutoDelegateV2,
 }
@@ -2654,6 +2655,7 @@ pub struct MobileOperationRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag="action",rename_all="snake_case",deny_unknown_fields)]
 pub enum MobileOperation {
+    AgentTracking { request: crate::agent_tracking::AgentTrackingRequest },
     Specialists { request: crate::specialists::SpecialistRequest },
     UpdatesStatus,
     UpdatesCheck,
@@ -5240,6 +5242,7 @@ pub struct ThreadResult {
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum WrapperToDaemon {
+    AgentTracking { request: crate::agent_tracking::AgentTrackingRequest },
     WorkspaceRepairResult {
         task_id: String,
         status: WorkspaceRepairStatusV1,
@@ -6283,6 +6286,7 @@ pub struct ResolvedAgentDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum DaemonToWrapper {
+    AgentTrackingResult { result: serde_json::Value },
     ProviderCatalogueRefresh { worker: WorkerIdentity, connection_epoch: String, refresh_id: String },
     WorkspaceRepairControl {
         task_id: String,
@@ -7290,6 +7294,8 @@ pub struct ScopedAgentInfo {
     pub agent: AgentInfo,
     pub communication_project: Option<CommunicationProject>,
     pub project_relation: ProjectRelation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracking: Option<crate::agent_tracking::AgentTrackingView>,
 }
 
 /// Information sur un agent connecté.

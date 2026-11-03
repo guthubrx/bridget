@@ -1,4 +1,15 @@
 <resources>
+ <string name="agents_active">Actifs</string>
+ <string name="agents_dormant">Agents dormants</string>
+ <string name="agent_sleep">Mettre en sommeil</string>
+ <string name="agent_wake">Réveiller</string>
+ <string name="agent_dormant_detail">Cet agent est dormant. Réveillez-le avant de lui envoyer du travail. Les travaux engagés et les résultats sont conservés.</string>
+ <string name="agent_sync_on">Synchronisation dans les deux sens : active</string>
+ <string name="agent_sync_off">Bridget uniquement</string>
+ <string name="agent_sync_pending">Synchronisation avec le client lié en attente</string>
+ <string name="agent_sync_refused">Le client lié a confirmé un refus. Votre choix Bridget est conservé. Résolvez ce refus dans le client avant de réessayer.</string>
+ <string name="agent_sync_retry">Réessayer la synchronisation</string>
+ <string name="tracking_revision_conflict">Cette fiche a changé sur un autre appareil. Actualisez ses détails avant de choisir à nouveau.</string>
  <string name="app_name">Bridget</string>
  <string name="agents">Agents</string>
  <string name="outbox">Envois</string>

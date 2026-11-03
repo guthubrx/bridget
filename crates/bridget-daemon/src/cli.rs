@@ -7026,7 +7026,14 @@ fn daemon_status_or_exit(command: &str, config: &DaemonConfig) -> daemon::Daemon
 }
 
 fn cmd_agents(args: &[String]) {
-    let parsed = parse_directory_args("agents", args, true).unwrap_or_else(|error| {
+    if matches!(args.first().map(String::as_str),Some("sleep"|"wake")) {
+        cmd_agent_tracking(args); return;
+    }
+    let history=args.iter().any(|a|a=="--dormant");
+    let all=args.iter().any(|a|a=="--all");
+    if history&&all {eprintln!("Choisissez --dormant ou --all."); crate::cli_table::exit(2);}
+    let args:Vec<String>=args.iter().filter(|a|!matches!(a.as_str(),"--dormant"|"--all")).cloned().collect();
+    let parsed = parse_directory_args("agents", &args, true).unwrap_or_else(|error| {
         eprintln!("bridget {error}");
         eprintln!(
             "usage: bridget agents [--json] [--domain <nom>] [--global] [--project-root <racine>]"
@@ -7045,7 +7052,8 @@ fn cmd_agents(args: &[String]) {
         crate::cli_table::exit(1);
     }
 
-    let agents = scoped_directory_or_exit("agents", &parsed, &config.socket_path);
+    let agents:Vec<_> = scoped_directory_or_exit("agents", &parsed, &config.socket_path).into_iter()
+        .filter(|a|all || a.tracking.as_ref().is_some_and(|t|t.dormant)==history).collect();
 
     if parsed.json {
         println!(
@@ -7081,7 +7089,33 @@ fn cmd_agents(args: &[String]) {
                     .unwrap_or("inconnu"),
                 scoped.project_relation
             );
+            if let Some(tracking)=&scoped.tracking {
+                println!("    suivi : {} ; synchronisation : {}{}",if tracking.dormant{"dormant"}else{"actif"},if tracking.synchronize{"dans les deux sens"}else{"Bridget uniquement"},if tracking.synchronization_pending{" (en attente)"}else{""});
+            }
         }
+    }
+}
+
+fn cmd_agent_tracking(args:&[String]) {
+    use bridget_transport::agent_tracking::AgentTrackingRequest;
+    let failed=||{eprintln!("usage: bridget agents sleep|wake <UUID> [--local-only|--synchronize] [--request-id <UUID>] [--revision <n>] [--json]"); crate::cli_table::exit(2);};
+    let Some(agent)=args.get(1).filter(|id|uuid::Uuid::parse_str(id).is_ok()) else{failed();return};
+    let mut request_id=uuid::Uuid::new_v4().to_string(); let mut synchronize=None; let mut revision=None;
+    let mut i=2;
+    while i<args.len() {
+        match args[i].as_str() {
+            "--json"=>{},
+            "--local-only" if synchronize.is_none()=>synchronize=Some(false),
+            "--synchronize" if synchronize.is_none()=>synchronize=Some(true),
+            "--request-id"=>{i+=1;let Some(id)=args.get(i) else{failed();return};request_id=id.clone();},
+            "--revision"=>{i+=1;let Some(n)=args.get(i).and_then(|s|s.parse::<u64>().ok()) else{failed();return};revision=Some(n);},
+            _=>{failed();return},
+        } i+=1;
+    }
+    match crate::communication::client::human_agent_tracking(&socket_path(),AgentTrackingRequest::Set{
+        request_id:request_id.clone(),agent_id:agent.clone(),dormant:args[0]=="sleep",synchronize,expected_revision:revision}) {
+        Ok(result)=>{println!("{result}");if result["status"]!="ok" {crate::cli_table::exit(1);}},
+        Err(error)=>{eprintln!("Action non confirmée, identifiant {request_id} à conserver : {error}");crate::cli_table::exit(1);},
     }
 }
 

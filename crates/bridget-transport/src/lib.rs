@@ -3,6 +3,7 @@
 //! Définit les messages JSON qui circulent sur la socket locale.
 
 pub mod acp;
+pub mod agent_tracking;
 pub mod act_kind;
 pub mod claude_provider_session;
 pub mod claude_stream_json;

@@ -8,6 +8,16 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.0 — 2026-11-03
+
+- Sommeil natif des agents : historique, réveil explicite et refus des nouvelles sollicitations directes, collectives ou programmées. Les travaux déjà admis et leurs résultats sont conservés.
+- Synchronisation des gestes de classement dans les deux sens par défaut pour les clients liés, avec mode propre à Bridget, reçus persistants et reprise sans nouvelle clé tant que l'issue reste inconnue.
+- Vues Actifs/Dormants dans l'application, commandes `agents sleep|wake`, filtres CLI et caches respectant le classement serveur. Le format conservé exige un lecteur comprenant le sommeil.
+
+## 0.7.8 — 2026-11-03
+
+- Publication atomique du contexte attesté des projets déjà préparés, y compris les dossiers liés et les racines additionnelles déjà autorisées.
+
 ## 0.7.7 — 2026-11-03
 
 - Annoncer le type objet des spécialistes et présenter les schémas composés par des références locales complètes. Un client MCP strict peut ainsi découvrir les37outils au démarrage, sans modifier les actions admises, les permissions ou les gardes.

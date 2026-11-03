@@ -453,6 +453,27 @@ pub(crate) fn rpc(
     tag: &str,
     payload: &Value,
 ) -> Result<Value, ContractError> {
+    rpc_internal(base_url,token,tag,payload,false)
+}
+
+pub(crate) fn rpc_agent_tracking(base_url:&str,token:&str,payload:&Value)->Result<Value,ContractError> {
+    if !matches!(payload["type"].as_str(),Some("thread.settle"|"thread.unsettle")) || payload["commandId"].as_str().is_none() {
+        return Err(invalid("agent_tracking command"));
+    }
+    rpc_internal(base_url,token,"orchestration.dispatchCommand",payload,true)
+}
+
+/// Seul un reçu de refus PRÉCÉDEMMENT gravé prouve l'absence d'effet.
+/// La forme est corrélée exactement ; aucun texte libre n'autorise un nouvel ID.
+fn tracking_rejection(exit:&Value,command:&Value)->bool {
+    let Some(reasons)=exit["cause"].as_array().filter(|a|a.len()==1) else{return false};
+    let reason=&reasons[0];let error=&reason["error"];
+    exit["_tag"]=="Failure" && reason["_tag"]=="Fail" && error["_tag"]=="OrchestrationV2DispatchCommandError"
+        && error["commandId"]==command["commandId"] && error["commandType"]==command["type"]
+        && error["cause"]["name"]=="OrchestratorCommandPreviouslyRejectedError"
+}
+
+fn rpc_internal(base_url:&str,token:&str,tag:&str,payload:&Value,tracking:bool)->Result<Value,ContractError> {
     let address: SocketAddr = base_url
         .strip_prefix("http://")
         .ok_or_else(|| invalid("RPC origin"))?
@@ -517,6 +538,8 @@ pub(crate) fn rpc(
                                 .get("value")
                                 .cloned()
                                 .ok_or_else(|| invalid("RPC value"))
+                        } else if tracking && tracking_rejection(&reply["exit"],payload) {
+                            Err(ContractError::CommandRejected{command_id:payload["commandId"].as_str().ok_or_else(||invalid("tracking commandId"))?.into()})
                         } else {
                             Err(ContractError::Transport(
                                 "RPC T3 terminé sans succès confirmé".into(),
@@ -541,6 +564,20 @@ pub(crate) fn rpc(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[test]
+    fn tracking230_rpc_ne_confond_pas_erreur_et_refus_certain_correle() {
+        let command=json!({"type":"thread.settle","commandId":"tracking-command"});
+        let mut exit=json!({"_tag":"Failure","cause":[{"_tag":"Fail","error":{"_tag":"OrchestrationV2DispatchCommandError","commandId":"tracking-command","commandType":"thread.settle","cause":{"name":"OrchestratorCommandPreviouslyRejectedError"}}}]});
+        assert!(tracking_rejection(&exit,&command));
+        exit["cause"][0]["error"]["cause"]["name"]=json!("OrchestratorDispatchError");
+        assert!(!tracking_rejection(&exit,&command),"une erreur peut suivre un commit");
+        exit["cause"][0]["error"]["cause"]["name"]=json!("OrchestratorCommandPreviouslyRejectedError");
+        exit["cause"][0]["error"]["commandId"]=json!("another-command");
+        assert!(!tracking_rejection(&exit,&command));
+        exit["cause"][0]["error"]["commandId"]=json!("tracking-command");
+        exit["cause"].as_array_mut().unwrap().push(json!({"_tag":"Die"}));
+        assert!(!tracking_rejection(&exit,&command),"une cause ambiguë reste inconnue");
+    }
     use crate::t3code_contract::Client;
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;

@@ -52,6 +52,7 @@ pub(crate) const THREAD_NOTICE_VERSION: u16 = 1;
 /// Faits d'annuaire fournis par le daemon pour `show` ; jamais des curseurs.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MemberFacts {
+    pub dormant: bool,
     pub connected: Option<bool>,
     pub thread_notice_version: Option<u16>,
 }
@@ -910,6 +911,7 @@ fn show(
                 "agent_id": member,
                 "connected": facts.connected,
                 "thread_notice_version": facts.thread_notice_version,
+                "dormant": facts.dormant,
             })
         })
         .collect();
@@ -1263,6 +1265,33 @@ mod tests {
     const UUID_B: &str = "14700000-bbbb-4bbb-8bbb-00000000000b";
     const UUID_T: &str = "14700000-cccc-4ccc-8ccc-00000000000c";
     const UUID_OP: &str = "14700000-dddd-4ddd-8ddd-00000000000d";
+
+    #[test]
+    fn tracking230_groupe_exclut_dormant_sans_accumuler_et_rejoue_identique() {
+        let f=UuidFixture::new();
+        let third="23000000-0000-4000-8000-000000000003";
+        f.store.connection().execute("INSERT INTO discussion_members(thread_id,agent_id) VALUES(?1,?2)",rusqlite::params![UUID_T,third]).unwrap();
+        let agent:bridget_transport::protocol::ScopedAgentInfo=serde_json::from_value(json!({"agent_id":UUID_B,"display_name":"Dormant","agent_type":"fixture","connection_id":"test","host":"test","transport":"fixture","state":"busy","last_seen_secs":0,"reconnect_count":0,"communication_project":null,"project_relation":"unknown"})).unwrap();
+        let sleep=|value:bool|crate::agent_tracking::set(f.store.connection(),"human",&uuid::Uuid::new_v4().to_string(),b"fixture",&agent,value,Some(false),None,10).unwrap();
+        sleep(true);
+        struct NativeDirectory<'a>(&'a Store);
+        impl Directory for NativeDirectory<'_> {
+            fn known_agent(&self,_:&str)->bool{true}
+            fn member_facts(&self,_:&str)->MemberFacts{MemberFacts::default()}
+        }
+        let request=ThreadRequest{version:1,cross_project_reason:None,request:ThreadAction::Post{thread_id:UUID_T.into(),body:"Message conservé pour les lecteurs".into(),notify:ThreadNotify::All(bridget_transport::protocol::ThreadNotifyAll::All),operation_id:UUID_OP.into(),reply_to_seq:None,ack_receipt:None,kind:None,supersedes_seq:None}};
+        let first=handle_with_change(&f.store,&NativeDirectory(&f.store),UUID_A,request.clone(),20).0.result;
+        assert_eq!(first["status"],"posted","{first}");
+        assert!(first.to_string().contains("dormant_members_ignored"),"{first}");
+        let wakes=f.store.thread_wake_candidates(20,20).unwrap();
+        assert!(!wakes.iter().any(|w|w.agent_id==UUID_B));
+        assert!(wakes.iter().any(|w|w.agent_id==third),"les autres membres sont sollicités");
+        sleep(false);
+        let replay=handle_with_change(&f.store,&NativeDirectory(&f.store),UUID_A,request,21).0.result;
+        assert_eq!(replay,first);
+        assert!(!f.store.thread_wake_candidates(21,20).unwrap().iter().any(|w|w.agent_id==UUID_B),"aucun rattrapage au réveil");
+        assert_eq!(f.store.connection().query_row("SELECT body FROM discussion_entries WHERE thread_id=?1",[UUID_T],|r|r.get::<_,String>(0)).unwrap(),"Message conservé pour les lecteurs");
+    }
 
     struct UuidDirectory;
     impl Directory for UuidDirectory {

@@ -2571,6 +2571,22 @@ pub(crate) fn user_input_request(socket:&Path,identity:Option<(&str,&str)>,reque
     }
 }
 
+pub(crate) fn human_agent_tracking(socket:&Path,request:bridget_transport::agent_tracking::AgentTrackingRequest)->Result<serde_json::Value,ClientError> {
+    let mut connection=DaemonConnection::connect(socket)?;
+    if !matches!(connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client})?,DaemonToWrapper::RoleAccepted{role:ConnectionRole::Client}) {
+        return Err(ClientError::Technical{code:"human_principal_required",message:"Le rôle client humain est requis.".into()});
+    }
+    let capability=ClientCapability::AgentTrackingV1;
+    match connection.exchange(&WrapperToDaemon::ClientHello{contract_version:CLIENT_CONTRACT_VERSION,
+        issuer_scope:crate::communication::issuer_scope("bridget-control-cli"),capabilities:vec![capability]})? {
+        DaemonToWrapper::ClientWelcome{version,capabilities,..} if version==CLIENT_CONTRACT_VERSION&&capabilities.contains(&capability)=>{},
+        _=>return Err(ClientError::Technical{code:"agent_tracking_unavailable",message:"Le client et le service doivent charger agents dormants avant cette action.".into()}),
+    }
+    match connection.exchange(&WrapperToDaemon::AgentTracking{request})? {
+        DaemonToWrapper::AgentTrackingResult{result}=>Ok(result),other=>unexpected_response(other),
+    }
+}
+
 pub(crate) fn human_specialists(socket:&Path,request:bridget_transport::specialists::SpecialistRequest)->Result<serde_json::Value,ClientError> {
     let mut connection=DaemonConnection::connect(socket)?;
     if !matches!(connection.exchange(&WrapperToDaemon::RoleHandshake{role:ConnectionRole::Client})?,

@@ -11,6 +11,12 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 
 pub(super) fn failure(code: &str) -> Value {
+    if code=="agent_dormant" {
+        return json!({"version":1,"status":"refused","code":code,"message":crate::agent_tracking::DORMANT_MESSAGE});
+    }
+    if code=="role_dormant" {
+        return json!({"version":1,"status":"refused","code":code,"message":"Les agents de ce rôle sont dormants. Réveillez l'un d'eux depuis sa fiche avant une nouvelle sollicitation. Aucun départ n'a été créé ; les autres travaux autorisés peuvent continuer."});
+    }
     if let Some(kind) = code.strip_prefix("native_spawn_refused:") {
         let action = match kind {
             "unknown_type" => {
@@ -1222,6 +1228,9 @@ fn request_role(
         guard_child_admission(st, owner)?;
     }
     let mut store = profiles(st)?;
+    let dormant=crate::agent_tracking::dormant_ids(st.store.connection()).map_err(|_|"tracking_storage_unavailable")?;
+    if let SpecialistRequest::RequestRole{specialist_agent_id:Some(id),..}=request
+        && dormant.contains(id) {return Err("agent_dormant".into());}
     // O(n) pour la sélection après le JOIN du domaine ; aucune requête par candidat.
     let (selected, selected_official) = if let Some(r) = &existing {
         let selected = store
@@ -1235,7 +1244,7 @@ fn request_role(
             .any(|v| v["role_id"] == role && v["official"] == true);
         (selected, official)
     } else {
-        store
+        let candidates:Vec<_>=store
             .specialist_candidates(role, project)
             .map_err(|e| e.0)?
             .into_iter()
@@ -1245,7 +1254,9 @@ fn request_role(
                     ..
                 } => &candidate.agent_id == id,
                 _ => true,
-            })
+            }).collect();
+        let all_dormant=!candidates.is_empty()&&candidates.iter().all(|(c,_)|dormant.contains(&c.agent_id));
+        candidates.into_iter().filter(|(c,_)|!dormant.contains(&c.agent_id))
             .min_by_key(|(c, official)| {
                 (
                     !*official,
@@ -1259,7 +1270,7 @@ fn request_role(
                     c.agent_id.clone(),
                 )
             })
-            .ok_or("role_not_found")?
+            .ok_or(if all_dormant{"role_dormant"}else{"role_not_found"})?
     };
     let selected_context = selected.clone();
     let outcome = (|| -> Result<Value, String> {

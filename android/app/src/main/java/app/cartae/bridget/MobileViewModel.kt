@@ -138,6 +138,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var nextCursor by mutableStateOf<String?>(null); private set
     var favorites by mutableStateOf<List<JSONObject>>(emptyList()); private set
     var favoritesOnly by mutableStateOf(false); private set
+    var dormantOnly by mutableStateOf(false); private set
     var selected by mutableStateOf<JSONObject?>(null); private set
     var draft by mutableStateOf(""); private set
     var outbox by mutableStateOf<List<JSONObject>>(emptyList()); private set
@@ -331,6 +332,8 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         fresh = true
     }
     private fun directoryFilter(): String = buildString {
+        append("&visibility="+if(dormantOnly) "dormant" else "active")
+        if(favoritesOnly) append("&ids="+BridgetClient.encode(favorites.joinToString(",") {it.getString("agent_id")}))
         if(machine.isNotEmpty()) append("&machine="+BridgetClient.encode(machine))
         project?.let {append("&project_host="+BridgetClient.encode(it.getString("host"))+"&project_root="+BridgetClient.encode(it.getString("root")))}
     }
@@ -355,13 +358,26 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun refreshDirectoryQuietly() {
         val origin=store.preferencesKey(); val filter=directoryFilter()
         try {
-            val page=client.read("/v1/agents?limit=50"+filter)
+            var page=client.read("/v1/agents?limit=50"+filter)
+            val items=objects(page.getJSONArray("items")).toMutableList()
+            val window=agents.size.coerceIn(50,1000)
+            while(items.size<window && cursor(page)!=null) {
+                page=client.read("/v1/agents?limit=50"+filter+"&after="+BridgetClient.encode(cursor(page)!!))
+                items.addAll(objects(page.getJSONArray("items")))
+            }
+            val selection=selected?.optString("agent_id")
+            val currentSelection=items.firstOrNull {it.optString("agent_id")==selection} ?: selection?.let {id->
+                val detail=client.read("/v1/agents?limit=1&visibility=all&agent_id="+BridgetClient.encode(id))
+                objects(detail.getJSONArray("items")).firstOrNull()
+            }
             if(store.preferencesKey()!=origin || directoryFilter()!=filter) return
-            val items=objects(page.getJSONArray("items")); observeDirectory(items)
-            val ids=items.map {it.getString("agent_id")}.toSet()
-            val combined=items+agents.filter {it.getString("agent_id") !in ids}.map {JSONObject(it.toString()).put("cached_observation",true)}
-            agents=combined.take(1000)
-            if(combined.size>1000) notice="agent_window_limit"
+            if(currentSelection!=null && selected?.optString("agent_id")==selection) {
+                selected=currentSelection
+                updatePreferences {it.put("selected",currentSelection)}
+            }
+            observeDirectory(items)
+            // Une page absente ne reste pas visible depuis un cache sans fin.
+            agents=items
             nextCursor=cursor(page); fresh=true
         } catch(e:CancellationException) {throw e}
         catch(_:Exception) {fresh=false; directoryObservedAt=System.currentTimeMillis()}
@@ -425,20 +441,50 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
         try {
             updatePreferences { it.put("favorites_only", !favoritesOnly) }
             favoritesOnly = !favoritesOnly
+            refresh()
         } catch (_: Exception) { error = "device_storage_unavailable" }
     }
     fun visibleAgents(): List<JSONObject> {
-        if (!favoritesOnly) return agents
-        return favorites.filter { favorite ->
-            (machine.isEmpty() || favorite.optString("machine") == machine)
-                && (project == null || favorite.optJSONObject("project")?.let {
-                    it.optString("host") == project!!.optString("host") && it.optString("root") == project!!.optString("root")
-                } == true)
-        }.let { filtered ->
-            val current=agents.associateBy {it.getString("agent_id")}
-            filtered.map { favorite -> current[favorite.getString("agent_id")]
-                ?: JSONObject(favorite.toString()).put("cached_observation", true) }
+        return agents.filter {(it.optJSONObject("tracking")?.optBoolean("dormant")==true) == dormantOnly}
+    }
+    fun showDormant(value:Boolean) {
+        if(busy || value==dormantOnly) return
+        dormantOnly=value; agents=emptyList(); nextCursor=null; fresh=false; refresh()
+    }
+    fun changeTracking(dormant:Boolean, synchronize:Boolean?=null) = act {
+        val agent=selected ?: return@act
+        val pending=store.get(store.preferencesKey())?.optJSONObject("tracking_pending")
+        if(pending!=null) {
+            applyTracking(pending)
+            if(pending.optString("agent_id")==agent.getString("agent_id") && pending.optBoolean("dormant")==dormant &&
+                (synchronize==null || pending.has("synchronize") && pending.optBoolean("synchronize")==synchronize)) {
+                refreshDirectoryQuietly(); return@act
+            }
         }
+        val tracking=selected?.optJSONObject("tracking")
+        val body=JSONObject()
+            .put("action","set").put("request_id",java.util.UUID.randomUUID().toString())
+            .put("agent_id",agent.getString("agent_id")).put("dormant",dormant)
+            .put("expected_revision",tracking?.optLong("revision") ?: 0L)
+            .also {if(synchronize!=null) it.put("synchronize",synchronize)}
+        applyTracking(body)
+        refreshDirectoryQuietly()
+    }
+    private suspend fun applyTracking(body:JSONObject) {
+        updatePreferences {it.put("tracking_pending",body)}
+        val response=client.changeTracking(body)
+        if(response.optString("status")!="ok") {
+            val code=response.optString("code","outcome_unknown")
+            if(code!="outcome_unknown" && code!="storage_unavailable") updatePreferences {it.put("tracking_receipt",response);it.remove("tracking_pending")}
+            throw MobileFailure(code)
+        }
+        val changedId=response.getString("agent_id")
+        val changed=response.getJSONObject("tracking")
+        fun project(row:JSONObject)=if(row.getString("agent_id")==changedId) JSONObject(row.toString()).put("tracking",changed) else row
+        selected=selected?.let(::project)
+        favorites=favorites.map(::project)
+        agents=agents.map(::project).filter {(it.optJSONObject("tracking")?.optBoolean("dormant")==true) == dormantOnly}
+        updatePreferences {it.put("tracking_receipt",response);it.remove("tracking_pending");it.put("selected",selected);it.put("favorites",JSONArray(favorites))}
     }
     fun select(agent: JSONObject?) {
         if (busy) return
@@ -597,6 +643,7 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun discard(entry: JSONObject) = act { store.discardCommand(entry.getJSONObject("envelope").getString("command_id")) }
     fun readEvents() = act {
+        refreshDirectoryQuietly()
         val id = selected?.getString("agent_id") ?: return@act
         val page = client.read("/v1/agents/" + BridgetClient.encode(id) + "/events?after_seq=" + eventNextSeq)
         applyEvents(id, page)

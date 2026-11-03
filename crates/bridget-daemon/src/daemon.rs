@@ -9,6 +9,7 @@ pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
 mod mobile_admin;
 mod specialists222;
+mod agent_tracking230;
 mod origin_proof;
 mod mobile_operations;
 mod mobile_queue;
@@ -1911,11 +1912,15 @@ fn wake_target_guard(
 ) -> Result<(), &'static str> {
     use bridget_transport::protocol::{ThreadAction, ThreadRequest, WakeTarget};
     match target {
-        WakeTarget::SelfTarget {} => Ok(()),
+        WakeTarget::SelfTarget {} => {
+            if crate::agent_tracking::dormant(st.store.connection(),owner).map_err(|_|"tracking_storage_unavailable")? {return Err("agent_dormant");}
+            Ok(())
+        },
         WakeTarget::Agent { id } => {
             if crate::threads::canonical_uuid(id).as_deref() != Some(id.as_str()) {
                 return Err("invalid_request");
             }
+            if crate::agent_tracking::dormant(st.store.connection(),id).map_err(|_|"tracking_storage_unavailable")? {return Err("agent_dormant");}
             if !st.presences.values().any(|p| p.name == *id) && st.router.get_agent(id).is_none() {
                 return Err("target_unknown");
             }
@@ -2423,6 +2428,9 @@ fn deliver_frozen_wake(
             WakeTarget::Agent { id } => id.as_str(),
             _ => unreachable!(),
         };
+        if crate::agent_tracking::dormant(st.store.connection(),target).map_err(|_|"tracking_storage_unavailable")? {
+            return Ok(WakePhase::MissedBeforeDeparture);
+        }
         let route = st.router.get_agent(target).ok_or("target_unavailable")?;
         let conn = route.connection_id.clone();
         let instance = st
@@ -6269,6 +6277,7 @@ fn defer_idempotent_delivery(
 /// FR004 : cinq déclencheurs partagent State, route attestée et transaction.
 /// O(log N+G+B), G réservations, B enveloppe. Aucun verrou writer ici.
 fn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> bool {
+    if crate::agent_tracking::dormant(st.store.connection(),agent).unwrap_or(true) {return false;}
     let Some(route) = st.router.get_agent(agent) else {
         return false;
     };
@@ -9399,10 +9408,11 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         })
         .map(|(conn, _)| conn.clone())
         .collect();
+    let dormant=crate::agent_tracking::dormant_ids(state.store.connection()).unwrap_or_else(|_|state.presences.values().map(|p|p.name.clone()).collect());
     let undisturbed: std::collections::HashSet<String> = state
         .presences
         .values()
-        .filter(|presence| presence.is_dnd())
+        .filter(|presence| presence.is_dnd()||dormant.contains(&presence.name))
         .map(|presence| presence.name.clone())
         .collect();
     // SPEC-087 : en pause, les paliers 1 et 2 sont différés comme pour un
@@ -10624,6 +10634,7 @@ fn dispatch_thread_wakes(
     for candidate in candidates {
         st.thread_wake_departures
             .retain(|departure| now.duration_since(*departure) < Duration::from_secs(1));
+        if crate::agent_tracking::dormant(st.store.connection(),&candidate.agent_id).unwrap_or(true) {continue;}
         if st.thread_wake_departures.len() >= crate::threads::WAKE_DEPARTURES_PER_SEC as usize {
             let _ = st.store.thread_wake_defer(
                 &candidate.thread_id,
@@ -10805,6 +10816,9 @@ fn project_thread_wake(
     departure: &ThreadWakeDeparture,
     controls: &mut Vec<DeferredControl>,
 ) -> Result<(), String> {
+    if crate::agent_tracking::dormant(st.store.connection(),&departure.agent_id).map_err(|_|"tracking_storage_unavailable")? {
+        return Err("agent_dormant".into());
+    }
     let issuer_scope = st
         .idempotency
         .supervisor_scope()
@@ -10956,6 +10970,7 @@ impl crate::threads::Directory for DaemonDirectory<'_> {
             .as_ref()
             .and_then(|conn| self.state.thread_notice_versions.get(conn).copied());
         crate::threads::MemberFacts {
+            dormant: crate::agent_tracking::dormant(self.state.store.connection(),agent_id).unwrap_or(true),
             connected,
             thread_notice_version,
         }
@@ -11992,6 +12007,11 @@ fn prepare_dispatch(
 ) -> Result<PreparedDispatch, (&'static str, String)> {
     let routing_from = routing_agent_id(&message.from).to_string();
     let routing_to = routing_agent_id(&message.to).to_string();
+    match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
+        Ok(true)=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
+        Err(_)=>return Err(("tracking_storage_unavailable","État de sommeil illisible. Conservez cette demande ; les lectures et les autres travaux autorisés peuvent continuer.".into())),
+        Ok(false)=>{},
+    }
     let reply_sender_conn = st
         .router
         .get_agent(&routing_from)
@@ -14361,6 +14381,26 @@ mod spec099_classic_delivery_tests {
     const SENDER: &str = "99000000-0000-4000-8000-000000000001";
     const TARGET: &str = "99000000-0000-4000-8000-000000000002";
     const WITNESS: &str = "99000000-0000-4000-8000-000000000003";
+
+    #[test]
+    fn tracking230_sommeil_refuse_envoi_classique_et_principal_agent() {
+        let (state,root,peers)=fixture();let _cleanup=FixtureRoot(root);
+        let request=bridget_transport::agent_tracking::AgentTrackingRequest::Set{request_id:Uuid::new_v4().to_string(),agent_id:TARGET.into(),dormant:true,synchronize:None,expected_revision:None};
+        let refused=agent_tracking230::human("sender",&request,&state);
+        assert!(matches!(refused,DaemonToWrapper::AgentTrackingResult{result} if result["code"]=="human_principal_required"));
+        {
+            let mut st=state.lock().unwrap();
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==TARGET).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-target",&agent,true,Some(false),None,100).unwrap();
+        }
+        let response=handle_wrapper_message("sender",WrapperToDaemon::Send(BridgetMessage::new(SENDER,TARGET,"demande nouvelle")),&state).unwrap();
+        assert!(matches!(response,DaemonToWrapper::Nack{reason,..} if reason.contains("Agent dormant")));
+        peers[1].set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(BufReader::new(peers[1].try_clone().unwrap()).read_line(&mut String::new()).is_err(),"aucune remise au dormant");
+        let st=state.lock().unwrap();
+        assert!(st.router.get_agent(TARGET).is_some(),"le sommeil n'arrête pas le processus");
+        assert_eq!(wake_target_guard(&st,SENDER,&bridget_transport::protocol::WakeTarget::Agent{id:TARGET.into()}),Err("agent_dormant"));
+    }
 
     #[test]
     fn spec099_notification_systeme_bornee_meme_si_writer_occupe() {
@@ -19675,6 +19715,9 @@ fn handle_wrapper_message_with_peer(
     if let WrapperToDaemon::Specialists { request } = &msg {
         return Some(specialists222::handle_human(conn_id, request, state));
     }
+    if let WrapperToDaemon::AgentTracking { request } = &msg {
+        return Some(agent_tracking230::human(conn_id, request, state));
+    }
     if let WrapperToDaemon::UserInput { request } = &msg {
         return Some(user_input::handle(conn_id, request, state, peer));
     }
@@ -19897,7 +19940,7 @@ fn handle_wrapper_message_with_peer(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
-                WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
+                WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
@@ -20182,7 +20225,7 @@ fn handle_wrapper_message_with_peer(
             }
             Some(ConnectionRole::Client) => match &msg {
                 WrapperToDaemon::UserInput { .. } => None,
-                WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
+                WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
@@ -20589,22 +20632,21 @@ fn handle_wrapper_message_with_peer(
             };
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let project = connection_communication_project(&st, conn_id);
-            let all = st.agent_infos();
+            let all = match agent_tracking230::directory(&mut st) {
+                Ok(all)=>all,
+                Err(reason)=>return Some(DaemonToWrapper::Nack{id:"directory".into(),reason:reason.into()}),
+            };
             let agents = all
                 .into_iter()
-                .filter_map(|agent| {
-                    let communication_project = agent_communication_project(&st, &agent.agent_id);
+                .filter_map(|mut scoped| {
+                    let communication_project = scoped.communication_project.clone();
                     let project_relation = crate::communication::project_relation(
                         project.as_ref(),
                         communication_project.as_ref(),
                     );
                     (scope == CommunicationDirectoryScope::Global
                         || project_relation == ProjectRelation::Same)
-                        .then_some(ScopedAgentInfo {
-                            agent,
-                            communication_project,
-                            project_relation,
-                        })
+                        .then(|| {scoped.project_relation=project_relation; scoped})
                 })
                 .collect();
             let project_warnings = if project.is_none() {
@@ -20700,6 +20742,9 @@ fn handle_wrapper_message_with_peer(
                 .get(conn_id)
                 .is_some_and(|prior| prior.as_deref() != Some(&t3_thread_id));
             let response = if valid && !contradictory {
+                if let Err(code)=agent_tracking230::bind_live(&mut st,&crate::t3code::stable_uuid(&t3_thread_id),&t3_thread_id) {
+                    warn!("liaison de classement non enregistrée ({code}) ; la liaison de communication reste attestée, les autres travaux peuvent continuer");
+                }
                 st.t3_thread_bindings
                     .insert(conn_id.into(), Some(t3_thread_id));
                 None
@@ -22084,6 +22129,7 @@ fn handle_wrapper_message_with_peer(
                             | ClientCapability::RoutingCatalogueV1
                             | ClientCapability::ProviderCatalogueV1
                             | ClientCapability::SpecialistsV1
+                            | ClientCapability::AgentTrackingV1
                     )
                 })
                 .collect();
@@ -24619,7 +24665,7 @@ fn handle_wrapper_message_with_peer(
         }
 
         // Le contrôle de rôle mobile est exécuté avant cette matrice.
-        WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
+        WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
         WrapperToDaemon::LedgerProjection { scope, limit } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {

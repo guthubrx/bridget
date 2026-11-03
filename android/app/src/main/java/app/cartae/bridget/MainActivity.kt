@@ -284,6 +284,10 @@ private fun AgentDirectory(vm: MobileViewModel, onSelected: () -> Unit = {}) {
             FilterChip(selected=!vm.favoritesOnly,onClick={if(vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.agents_all))})
             FilterChip(selected=vm.favoritesOnly,onClick={if(!vm.favoritesOnly) vm.toggleFavorites()},label={Text(stringResource(R.string.favorites))})
         }
+        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected=!vm.dormantOnly,onClick={vm.showDormant(false)},label={Text(stringResource(R.string.agents_active))})
+            FilterChip(selected=vm.dormantOnly,onClick={vm.showDormant(true)},label={Text(stringResource(R.string.agents_dormant))})
+        }
         if(!vm.fresh) Text(stringResource(R.string.attention_stale),style=MaterialTheme.typography.labelSmall)
         val agents=vm.visibleAgents().filter {search.isBlank() || listOf(it.optString("display_name"),it.optString("machine"),it.optJSONObject("project")?.optString("root").orEmpty()).any {v->v.contains(search.trim(),ignoreCase=true)}}
         val favoriteIds=remember(vm.favorites) {vm.favorites.map {it.getString("agent_id")}.toSet()}
@@ -366,6 +370,8 @@ private fun ProjectAvatar(project: JSONObject?) {
 @Composable
 private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: () -> Unit, onExport: (JSONObject) -> Unit, exposed: Boolean, onOpenDrawer: () -> Unit) {
     val agent = vm.selected!!
+    val dormant=agent.optJSONObject("tracking")?.optBoolean("dormant")==true
+    val synchronize=agent.optJSONObject("tracking")?.optBoolean("synchronize",true) ?: true
     val id = agent.getString("agent_id")
     var section by rememberSaveable(id) { mutableIntStateOf(0) }
     var menu by remember { mutableStateOf(false) }
@@ -460,9 +466,19 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: (
                     DropdownMenuItem(text = { Text(stringResource(R.string.history_restart)) }, onClick = { menu = false; vm.restartHistory() })
                     DropdownMenuItem(text = { Text(stringResource(R.string.technical_events)) }, onClick = { menu = false; technical = !technical })
                     DropdownMenuItem(text = { Text(stringResource(R.string.conversation_details)) }, onClick = { menu = false; details = true })
+                    DropdownMenuItem(text = { Text(stringResource(if(dormant) R.string.agent_wake else R.string.agent_sleep)) }, onClick = {menu=false;vm.changeTracking(!dormant)})
+                    DropdownMenuItem(text = { Text(stringResource(if(synchronize) R.string.agent_sync_on else R.string.agent_sync_off)) }, onClick = {menu=false;vm.changeTracking(dormant,!synchronize)})
                 }
             }
         }
+        if(dormant) {
+            Text(stringResource(R.string.agent_dormant_detail),style=MaterialTheme.typography.bodySmall)
+            TextButton(onClick={vm.changeTracking(false)},enabled=!vm.busy) {Text(stringResource(R.string.agent_wake))}
+        }
+        if(agent.optJSONObject("tracking")?.optString("synchronization_status")=="refused") {
+            Text(stringResource(R.string.agent_sync_refused),style=MaterialTheme.typography.bodySmall)
+            TextButton(onClick={vm.changeTracking(dormant)},enabled=!vm.busy) {Text(stringResource(R.string.agent_sync_retry))}
+        } else if(agent.optJSONObject("tracking")?.optBoolean("synchronization_pending")==true) Text(stringResource(R.string.agent_sync_pending),style=MaterialTheme.typography.labelSmall)
         when (section) {
             0 -> {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -552,7 +568,7 @@ private fun Conversation(vm: MobileViewModel, onPick: () -> Unit, onPickPhoto: (
                             catch(_:SecurityException) {voiceOrigin=null;voiceError=true}
                         },enabled=!vm.busy,modifier=Modifier.semantics {contentDescription=voiceLabel}) {Icon(painterResource(R.drawable.ic_mic),contentDescription=null,modifier=Modifier.size(24.dp))}
                         val sendLabel = stringResource(R.string.send)
-                        FilledIconButton(onClick = { followBottom = true; vm.send() }, enabled = !vm.busy && (vm.draft.isNotBlank() || prepared.isNotEmpty()),
+                        FilledIconButton(onClick = { followBottom = true; vm.send() }, enabled = !vm.busy && !dormant && (vm.draft.isNotBlank() || prepared.isNotEmpty()),
                             modifier = Modifier.semantics { contentDescription = sendLabel }) { Text("↑", fontSize = 23.sp) }
                     }
                 }
@@ -1013,6 +1029,8 @@ private fun recoveryText(code: String): Int = when (code) {
     else -> R.string.error_recovery
 }
 private fun errorText(code: String): Int = when (code) {
+    "agent_dormant" -> R.string.agent_dormant_detail
+    "revision_conflict" -> R.string.tracking_revision_conflict
     "update_hosts_unavailable" -> R.string.update_hosts_unavailable
     "update_in_progress" -> R.string.update_server_in_progress
     "not_held" -> R.string.queue_already_sent
