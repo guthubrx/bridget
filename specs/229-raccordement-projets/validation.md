@@ -90,3 +90,35 @@ Dernier module Python : 48 PASS en 29,356 s. Quatre cas Rust229 PASS en
 helper et le contrôle Git d'origine restent acquis, soit sept tests Rust
 distincts utiles pour ce lot. Le dernier delta de guidage ne change pas
 les validations. Réassemblage final nécessaire pour le helper embarqué.
+
+## Passage des services
+
+Source exécutable finale ffe7896b, version0.7.8/build229-project-relay-r3.
+Assemblages Mac et Linux Debian12 acquis. Empreintes :
+Mac 5d7eb366e5ed1183ca9aa30e78ac9f5124720a207b90db5e5c725ca72acf5cc1 ;
+Linux 961352eb7e8bce2360bae0139834a3bf178cd6aa479dc195ac4b831bbfb64e73.
+Sept services chargés et empreintes relues sur quatre hôtes. Coupure du maître
+2,12 s. Superviseur Cartae2500061 conservé avec sa naissance système identique.
+Registre Mac spécial inchangé. Retours228-r3 compatibles dans les deux sens,
+pointeurs rollback écrits par le writer natif sous verrou sur les quatre hôtes.
+Les updaters ont repris. Installed Mac et SYS conservent les caches lorsque
+l'observation des processus est incomplète ; aucun nettoyage forcé.
+
+La tâche7024 conserve intégralement son payload,
+SHA24a44aa30255e0be97bd29ffea3c4ed2e77d6a0cfad8c71d4992a7adc6050887.
+Aucun rejeu, annulation, changement de génération ou service métier Opus2D.
+La revue T3 métier distincte reste hors de cette maintenance.
+
+APK0.7.8/code7008 signé avec le certificat et la lignée de production existants,
+SHA573176d52ebb69c472f6c7871ae35be3a3c7d10d242f4a8097b78081fab5ad66.
+Signature v3 comme le paquet de référence ; aucune nouvelle recette UI ou FCM.
+Les premières tentatives de construction Mac et Linux ont conservé leurs erreurs
+de configuration : JDK local absent, SDK non indiqué, paramètres de signature
+incomplets. Construction finale sur Cartae avec les outils existants, sans
+installation ni changement de certificat. Paquet et six actifs de release
+vérifiés par taille et SHA avant publication.
+
+Neuf façades MCP T3 sont encore228-r3 au contrôle avant reprise. Elles ont été
+conservées jusque-là ; rechargement natif de T3 et vérification du lien encore
+nécessaires avant de qualifier la livraison complète. Dix-sept agents concernés
+prévenus une fois, aucun accusé demandé. Suite dans le reçu de reprise privé.
