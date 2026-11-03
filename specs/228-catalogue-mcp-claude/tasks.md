@@ -5,4 +5,4 @@
 - [x] T003 Test du contrat et sonde SDK réelle ; revue indépendante ciblée.
 - [x] T004 Diagnostiquer l'attestation distincte de l'expéditeur.
 - [x] T005 Assembler, qualifier le retour, distribuer et activer.
-- [ ] T006 Publier, transmettre les faits et nettoyer le lot intégré.
+- [x] T006 Publier, transmettre les faits et nettoyer le lot intégré.

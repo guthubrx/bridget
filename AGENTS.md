@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session228 — catalogue MCP corrigé et chargé en0.7.7/228-mcp-schema-r3.
+Source exécutable779d465e intégrée et poussée ; type objet spécialistes et schémas
+complets sous références locales, validateurs natifs et gardes inchangés.
+Protocole/SDK réels37outils,88064octets ; garde complète et deux lectures
+approuvées sans prompt en520ms.472cas par dialecte draft7/2020-12 équivalents.
+Test natif finalPASS0,01s ; revue4eabd2d1 APPROVE sansP1/P2, réserves traitées.
+Sept services et toutes les façades MCP observées228-r3/SHA vérifiés sur4hôtes,
+coupure maître2,40s, superviseurCartae2500061 et registreMac conservés. Retours
+227-r2 compatibles, rollback atomiques natifs vérifiés. Projet d'evols-t3 de
+nouveau attesté dans l'annuaire ; cause historique de sa perte non prouvée.
+Release0.7.7/sixactifs et APK7007/certificat/lignée vérifiés. Branche228 retirée,
+quatre copies/77496471octets nettoyés ; caches et vues sous garde conservés.
+Aucun comportement lié à un numéro de version Claude, aucune garantie inventée
+sur les versions futures. Preuves et limites : specs/228-catalogue-mcp-claude/validation.md.
+
 Session227 — guidage des démarrages distants non confirmés livré en0.7.6.
 Source723c7dbd intégrée à main et poussée ; trois tests ciblés distincts acquis,
 revue02fa9e11 sansP1 et deuxP2 traités, dernier delta relu. Sept services/SHA

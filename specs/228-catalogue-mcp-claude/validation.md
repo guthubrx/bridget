@@ -88,4 +88,15 @@ APK0.7.7/code7007 signé avec le certificat de production et la lignée existant
 SHA9f8608dd8ae2d40b3bbda5861c9eeb955d2b52c168c0d0cfbe568b3884bae29d.
 Aucun changement d'interface, pas de nouvelle recette UI/FCM. Correctif technique
 de catalogue, preuves protocole et SDK plutôt que parcours graphique.
-Publication finale et nettoyage : à terminer dans ce même passage.
+Releasev0.7.7 publique : six actifs, tailles et empreintes relus après publication.
+Branche228 intégrée puis retirée localement et à distance. Quatre copies de
+transfert/publication retirées après vérification des empreintes et des fichiers
+ouverts :77496471octets logiques. Actif228-r3, retour227-r2 qualifié, APK canonique,
+preuves et reçus conservés. Caches récents et worktrees propriétaires maintenus ;
+vues sous observation des usages incomplète conservées, sans retrait forcé.
+
+Le correctif ne sélectionne aucun comportement selon le numéro de version de
+Claude : il corrige la description du catalogue et garde les contraintes natives.
+Il n'y a pas de comparaison avant/après une mise à jour de Claude ; une mise à
+jour ayant révélé le défaut n'est donc ni établie ni exclue. La qualification
+prouve les parcours nommés, pas toutes les versions futures d'un client.
