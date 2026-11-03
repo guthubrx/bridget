@@ -1,4 +1,4 @@
-# Validation 231 — avant activation
+# Validation 231 — correction activée
 
 ## Diagnostic constaté
 
@@ -54,5 +54,47 @@ Le changement utilisateur préexistant de AGENTS.md du dépôt client est conser
 Les archives locales de qualification sont conservées et ignorées seulement
 par le fichier privé Git info/exclude. Aucun effacement de ces archives.
 
-Activation et lecture réelle : encore à vérifier à ce point de passage.
+## Activation et lecture réelle
+
+Application installée par fermeture native, remplacement atomique et réouverture.
+Première ouverture60467 a rencontré le refus natif ServerAlreadyRunningError ;
+aucun verrou effacé ni processus forcé. Une ouverture native suivante63522 est
+constatée. Son backend63539 démarre le3novembre à17:28:51UTC et annonce la version
+0.1.7-local.20261103.attestation-r1. SHAasar actif :
+81a55cefac78c12208e99a53f6f5008bcc484b571bd4e45809a81a1c5eef6ff0.
+Le runtimeLayer corrigé est présent dans le paquet réellement chargé.
+Cinq anciennes façades MCP disparues ; les deux courantes observées au contrôle
+portent l’image Bridget230-r4/SHA attendu. La preuveT3 de ce fil est version2.
+Son premier primary_absent transitoire est conservé ; le pont natif publie
+ensuite18fils et who confirme le même projet.
+
+Le propriétaire du fil signalé, tour69, réussit le3novembre à17:32UTC :
+1. bridget_session : version2, permissions présentes, révision4 ;
+2. bridget_who same_project : huit correspondants, live=true, sans avertissement ;
+3. bridget_task_status77ba483e : failed, échéance7200s, aucune reprise, fichiers
+   conservés avec modifications non committées.
+Il confirme la clôture de l’incident. Retour mcp-82331-6aea1ab8-1,
+issued_at1793727160, delivery3d5abc50-863a-47f1-96f2-bb63471cdf97 : in_flight au
+reçu, contenu lu dans son fil d’origine. Aucun succès de délégation neuve n’est
+prétendu : aucune admission créée pour tester.
+
+Les payloads7024 et77ba483e sont strictement identiques avant/après (SHA256).
+Le LaunchAgent one-shot231 est retiré. L’application antérieure est conservée
+comme retour compatible au schéma77, sans retour réellement exécuté.
+Les sept servicesBridget0.8/r4, leur registre et leurs pointeurs de retour ne
+changent pas dans ce lot. Deux avis de reprise sont envoyés aux autresClaude
+prévenus ; leurs reçus ne prouvent pas une lecture.
+
 Correction technique sans changement visuel : pas de diaporama nécessaire.
+
+## Nettoyage et Git
+
+Worktree client détenu retiré après intégration de son commit et vérification de
+l’arrêt de ses contrôles. Les liens de dépendances ne suppriment pas leurs cibles.
+Branche client session231 retirée, local/main-20261102 alignée au fork97c8a892cd.
+Le changement utilisateur préexistant AGENTS.md du dépôt client reste conservé.
+Quatre dossiers privés de construction/test retirés : 1748674342 octets
+logiques (171 fichiers candidate, 3 artefacts, 25 fichiers fixture et 5921 fichiers
+de staging). Ce total ne comprend pas le worktree. Actif et un retour client,
+preuves/reçus, caches partagés et archives préexistantes conservés.
+Aucun autre travail ou dossier métier supprimé. Aucune nouvelle compilation.

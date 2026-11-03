@@ -109,6 +109,20 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session231 — attestation du crochet appareils corrigée dans l’adaptateur client.
+Source97c8a892cd intégrée/poussée sur local/main-20261102 du dépôt client ;
+T3 0.1.7-local.20261103.attestation-r1 chargé, backend63539/SHA vérifiés.
+Crochet interne SubagentStart reconnu sans accepter les autres crochets ;
+mutation revérifiée. 305testsClaude et25testspermissions acquis, types3paquets,
+format/lint/GraphQL PASS ; réserves Knip/budget héritées explicites.
+Revue refusée cwd_outside_parent_project sans tâche, pas de repli ; auto-relecture.
+Propriétaire opus2D : attestationV2/permissions, annuaire et état77ba483e lus
+avec succès au tour69, incident clos. Aucun rejeu77ba/194/7024, empreintes
+protégées inchangées. ServicesBridget0.8/r4 conservés sans recompilation.
+Retour client compatible conservé ; détails et nettoyage :
+specs/231-attestation-crochet-appareils/validation.md.
+
+
 Session230 — agents dormants natifs activés en0.8.0/230-agents-dormants-r4.
 Sommeil indépendant, synchro des gestes bidirectionnelle par défaut et option
 locale ; nouvelles sollicitations/rondes refusées, résultats admis conservés,

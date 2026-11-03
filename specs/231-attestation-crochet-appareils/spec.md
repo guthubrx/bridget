@@ -1,7 +1,7 @@
 # Session 231 — Attestation du crochet interne des appareils
 
 Correction autorisée par le signalement opus2D du 3 novembre 2026.
-État : correction ciblée en vérification.
+État : correction chargée et lecture native du propriétaire vérifiée.
 
 ## Défaut confirmé
 
