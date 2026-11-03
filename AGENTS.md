@@ -109,6 +109,22 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session229 — raccordement des projets préparés chargé en0.7.8/229-project-relay-r3.
+Sourceffe7896b intégrée/poussée ; contexte natif négocié, publication atomique
+au maître, worktrees et racines additionnelles déjà autorisées conservés.
+48tests Python et7Rust distincts utiles acquis ; revuec2726ed4 sansP1,
+P2racine additionnelle corrigé, restriction aux seuls projets auto non retenue
+avec justification de la chaîne native. Sept services/SHA vérifiés sur4hôtes,
+coupure2,12s ; superviseurCartae2500061 et registreMac conservés. Retours228-r3
+compatibles et rollback atomiques natifs vérifiés. Fermeture/réouverture T3
+normales :9anciens MCP retirés,6façades courantes229-r3/SHA vérifiées,
+attestation et lien natif du même projet revenus. Release0.7.8/sixactifs publics,
+APK7008/certificat/lignée vérifiés. Huit copies/342037056octets retirés,
+branche229 locale/distante supprimée ; caches et vues sous observation
+incomplète conservés. Tâche7024 strictement inchangée ; revues29.Mails non
+rejouées par ce fil, contraintes de durée précisées. Sources et limites :
+specs/229-raccordement-projets/validation.md.
+
 Session228 — catalogue MCP corrigé et chargé en0.7.7/228-mcp-schema-r3.
 Source exécutable779d465e intégrée et poussée ; type objet spécialistes et schémas
 complets sous références locales, validateurs natifs et gardes inchangés.

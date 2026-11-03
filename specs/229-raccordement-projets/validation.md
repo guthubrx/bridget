@@ -129,3 +129,22 @@ ciblé sans fichier ouvert ni diagnostic incomplet. Candidat229-r2 jamais activ�
 et transferts229 supprimés. Actif229-r3 et retour228-r3 conservés. Branche229
 intégrée, retirée localement et au distant. Caches récents et vues gardées :
 observation globale des processus incomplète, retrait natif non qualifié.
+
+## Reprise cliente vérifiée
+
+Fermeture et réouverture normales de T3 attestées par le reçu natif : anciens
+PID86233/86250 arrêtés, application revenue PID40972, neuf anciens MCP absents.
+Six façades ouvertes observées ensuite, toutes229-r3 et SHA Mac final vérifié
+sur leurs images réellement chargées. Une attestation native de ce fil puis
+une lecture de l'annuaire confirment le projet Bridget et le lien revenus.
+Aucune installation T3 ni nouveau test/build/service relancé pour cette reprise.
+LaunchAgent ponctuel retiré après sa fin constatée, scripts et reçus conservés.
+La correction est maintenant chargée aussi dans les clients observés.
+
+Dix-sept avis de reprise envoyés une fois après contrôle de présence, sans
+refus du canal. Diagnostic29.Mails et conservation R56 inclus dans leurs avis
+personnels, aucune seconde notification générique à ces destinataires.
+La remise de ces messages ne vaut pas preuve de lecture. Aucun remplacement
+ni rejeu métier demandé ou exécuté par ce fil. Les contraintes de durée des
+appels de revue29.Mails sont transmises à leur propriétaire pour sa suite
+autonome, selon l'admission et les travaux encore utiles.
