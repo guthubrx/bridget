@@ -18736,7 +18736,9 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 16
+                && capabilities.len() <= 32
+                && (!capabilities.contains(&WorkerCapability::OriginProjectContextV1)
+                    || capabilities.contains(&WorkerCapability::OriginProofV1))
                 && (!capabilities.contains(&WorkerCapability::ModelOptionsV1)
                     || capabilities.contains(&WorkerCapability::ProviderCatalogueV1))
                 && (!capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
@@ -18744,7 +18746,7 @@ fn handle_worker_message(
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
                         && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
                 })
@@ -24016,6 +24018,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_result_slot_deadline_v1".to_string(),
                     "worker_workspace_diagnostics_v1".to_string(),
                     "worker_origin_proof_v1".to_string(),
+                    "worker_origin_project_context_v1".to_string(),
                     "worker_workspace_repair_v1".to_string(),
                     "task_workspace_repair_v1".to_string(),
                     "worker_start_recovery_v1".to_string(),

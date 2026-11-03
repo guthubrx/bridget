@@ -6743,7 +6743,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 #[derive(Debug,Clone,Copy,Default)]
 struct MasterWorkerFeatures {
     candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
-    slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,workspace_repair:bool,
+    slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,origin_project_context:bool,workspace_repair:bool,
     start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,execution_status:bool,program_compatibility:bool,
 }
 impl MasterWorkerFeatures {
@@ -6755,6 +6755,7 @@ impl MasterWorkerFeatures {
             WorkerCapability::ParentSourceProofV1=>self.source_proof,
             WorkerCapability::ResultSlotDeadlineV1=>self.slot_deadline,
             WorkerCapability::OriginProofV1=>self.origin_proof,
+            WorkerCapability::OriginProjectContextV1=>self.origin_project_context && self.origin_proof,
             WorkerCapability::WorkspaceRepairV1=>self.workspace_repair,
             WorkerCapability::StartRecoveryV1=>self.start_recovery,
             WorkerCapability::WorkspaceFailureV1=>self.workspace_failure,
@@ -6770,14 +6771,16 @@ impl MasterWorkerFeatures {
     fn capabilities(&self)->Vec<WorkerCapability> {
         [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
-            WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,
+            WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,WorkerCapability::OriginProjectContextV1,
             WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1,WorkerCapability::ExecutionStatusV1,WorkerCapability::ProgramCompatibilityV1]
             .into_iter().filter(|v|self.supports(*v)
                 && (*v!=WorkerCapability::ModelOptionsV1 || self.provider_catalogue)
                 && (*v!=WorkerCapability::WorkspaceViewCreateV1 || crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED)).collect()
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
-        accepted.len()<=16
+        accepted.len()<=32
+            && (!accepted.contains(&WorkerCapability::OriginProjectContextV1)
+                || accepted.contains(&WorkerCapability::OriginProofV1))
             && (!accepted.contains(&WorkerCapability::ModelOptionsV1)
                 || accepted.contains(&WorkerCapability::ProviderCatalogueV1))
             && (!accepted.contains(&WorkerCapability::WorkspaceViewCreateV1)
@@ -6785,6 +6788,18 @@ impl MasterWorkerFeatures {
             && accepted.iter().enumerate().all(|(index,capability)|
                 self.capabilities().contains(capability) && !accepted[..index].contains(capability))
     }
+}
+
+#[cfg(test)]
+#[test]
+fn spec229_origin_context_is_negotiated_without_build_number() {
+    let old=MasterWorkerFeatures {origin_proof:true,..Default::default()};
+    assert_eq!(old.capabilities(),vec![WorkerCapability::OriginProofV1]);
+    let modern=MasterWorkerFeatures {origin_proof:true,origin_project_context:true,..Default::default()};
+    assert!(modern.admits(&modern.capabilities()));
+    assert!(modern.admits(&old.capabilities()));
+    assert!(!modern.admits(&[WorkerCapability::OriginProjectContextV1]));
+    assert!(!old.admits(&modern.capabilities()));
 }
 
 fn probe_worker_capability(
@@ -6803,7 +6818,7 @@ fn probe_worker_capability(
                 release_lease:has("worker_release_lease_v2"),source_proof:has("worker_parent_source_proof_v1"),
                 slot_deadline:has("worker_result_slot_deadline_v1"),
                 workspace_diagnostics:has("worker_workspace_diagnostics_v1"),
-                origin_proof:has("worker_origin_proof_v1"),workspace_repair:has("worker_workspace_repair_v1"),
+                origin_proof:has("worker_origin_proof_v1"),origin_project_context:has("worker_origin_project_context_v1"),workspace_repair:has("worker_workspace_repair_v1"),
                 start_recovery:has("worker_start_recovery_v1"),
                 workspace_failure:has("worker_workspace_failure_v1"),
                 provider_catalogue:has("worker_provider_catalogue_v1"),
@@ -6937,6 +6952,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let candidate_probe_v2_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV2);
         let slot_deadline_negotiated=negotiated.contains(&WorkerCapability::ResultSlotDeadlineV1);
         let origin_proof_negotiated=negotiated.contains(&WorkerCapability::OriginProofV1);
+        let origin_context_negotiated=negotiated.contains(&WorkerCapability::OriginProjectContextV1);
         let workspace_repair_negotiated=negotiated.contains(&WorkerCapability::WorkspaceRepairV1);
         let start_recovery_negotiated=negotiated.contains(&WorkerCapability::StartRecoveryV1);
         let workspace_failure_negotiated=negotiated.contains(&WorkerCapability::WorkspaceFailureV1);
@@ -6980,7 +6996,9 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         }
                         Ok(DaemonToWrapper::OriginProofRequest { request })
                             if origin_proof_negotiated && request.connection_epoch==read_epoch
-                                && request.worker==read_worker && request.validate_shape().is_ok() => {
+                                && request.worker==read_worker && request.validate_shape().is_ok()
+                                && (origin_context_negotiated || !matches!(&request.request,
+                                    bridget_transport::protocol::OriginProofOperation::PrepareProject {return_context:true,..})) => {
                             let permits=if matches!(&request.request,bridget_transport::protocol::OriginProofOperation::PrepareProject {..}) {
                                 origin_preparation_slots.clone()
                             } else {origin_slots.clone()};
@@ -7478,7 +7496,7 @@ mod tests {
         prep.request=OriginProofOperation::PrepareProject {source:bridget_transport::protocol::WorkerSourceBase {
             cwd:parent.cwd.clone(),expected_base_commit:Some("a".repeat(40)),
             workspace:Some(bridget_transport::protocol::WorkspaceRequest::Shared {}),
-            workload:AutoDelegateWorkload::General},parent,target_machine:"destination".into(),project_id:None};
+            workload:AutoDelegateWorkload::General},parent,target_machine:"destination".into(),project_id:None,return_context:false};
         prep.validate_shape().unwrap();
         let preparing=Arc::new(std::sync::atomic::AtomicUsize::new(2));
         dispatch_origin_proof(prep.clone(),writer.clone(),disconnected.clone(),preparing,fixture.0.join("unused"));

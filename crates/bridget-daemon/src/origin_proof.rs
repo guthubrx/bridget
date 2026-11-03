@@ -77,11 +77,11 @@ fn execute_with_context(
                 }
                 OriginProofResult::Attested { proof }
             }
-            OriginProofOperation::PrepareProject {parent,source,target_machine,project_id} => {
+            OriginProofOperation::PrepareProject {parent,source,target_machine,project_id,return_context} => {
                 let permission_digest = crate::native_permissions::prove_parent_permissions(parent,parent.revision)
                     .map_err(|_|WorkerRefusal::PermissionsChanged)?;
                 let registry = registry.ok_or(WorkerRefusal::Unauthorized)?;
-                let preparation_error = (|| {
+                let preparation = (|| {
                     let root=std::fs::canonicalize(&parent.cwd).map_err(|_|"project_preparation_path".to_owned())?;
                     let cwd=std::fs::canonicalize(&source.cwd).map_err(|_|"project_preparation_path".to_owned())?;
                     if root.to_string_lossy()!=parent.cwd || cwd.to_string_lossy()!=source.cwd || !cwd.starts_with(&root) {
@@ -93,17 +93,41 @@ fn execute_with_context(
                     }
                     let budget=request.expires_at_ms.saturating_sub(now()).saturating_sub(2000);
                     if budget<=0 {return Err("project_preparation_timeout".into());}
+                    let before=crate::registry::AgentRegistry::load_from_path_quiet(registry.to_path_buf())
+                        .map_err(|_|"project_preparation_registry_changed".to_owned())?;
+                    let expected=before.machine(target_machine)?;
                     let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,
                         "origin_host":request.worker.machine_id,"source_root":parent.cwd,
                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
                         "objects_only":matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))});
-                    crate::project_preparation::prepare_until(&payload,
-                        std::time::Instant::now()+std::time::Duration::from_millis(budget as u64))
-                })().err();
+                    let prepared=crate::project_preparation::prepare_receipt_until(&payload,
+                        std::time::Instant::now()+std::time::Duration::from_millis(budget as u64))?;
+                    // Sans négociation, conserver exactement la réponse historique.
+                    if !return_context {return Ok(None);}
+                    let current=crate::registry::AgentRegistry::load_from_path_quiet(registry.to_path_buf())
+                        .map_err(|_|"project_preparation_registry_changed".to_owned())?;
+                    let target=current.machine(target_machine)?;
+                    if target.worker_id!=expected.worker_id || target.provisioning_revision!=expected.provisioning_revision
+                        || target.credential_fingerprint!=expected.credential_fingerprint {
+                        return Err("project_preparation_machine_mismatch".to_owned());
+                    }
+                    let project_id=prepared["project_id"].as_str()
+                        .ok_or("project_preparation_context_missing")?.to_owned();
+                    let mapping:crate::registry::ProjectMapping=serde_json::from_value(prepared["mapping"].clone())
+                        .map_err(|_|"project_preparation_context_missing".to_owned())?;
+                    if target.mappings.get(&project_id)!=Some(&mapping) {
+                        return Err("project_preparation_mapping_changed".to_owned());
+                    }
+                    Ok::<_,String>(Some(PreparedOriginProject {
+                        target:WorkerIdentity {machine_id:target_machine.clone(),worker_id:target.worker_id.clone(),
+                            provisioning_revision:target.provisioning_revision},
+                        credential_fingerprint:target.credential_fingerprint.clone(),project_id,mapping:prepared["mapping"].clone()}))
+                })();
+                let (project,preparation_error)=match preparation {Ok(project)=>(project,None),Err(code)=>(None,Some(code))};
                 let after=crate::native_permissions::prove_parent_permissions(parent,parent.revision)
                     .map_err(|_|WorkerRefusal::PermissionsChanged)?;
                 if permission_digest!=after {return Err(WorkerRefusal::PermissionsChanged);}
-                OriginProofResult::ProjectPrepared {permission_digest,preparation_error}
+                OriginProofResult::ProjectPrepared {permission_digest,preparation_error,project}
             }
             OriginProofOperation::Sources { parent, source } => {
                 let permission_digest =
@@ -253,7 +277,11 @@ mod tests {
         envelope.request=OriginProofOperation::PrepareProject {parent:parent.clone(),
             source:WorkerSourceBase {cwd:parent.cwd.clone(),expected_base_commit:Some(head.clone()),
                 workspace:Some(WorkspaceRequest::Shared {}),workload:AutoDelegateWorkload::General},
-            target_machine:"target177".into(),project_id:None};
+            target_machine:"target177".into(),project_id:None,return_context:false};
+        let legacy=serde_json::to_value(&envelope.request).unwrap();
+        assert!(legacy.get("return_context").is_none(),"un ancien pair garde sa trame exacte");
+        let decoded:OriginProofOperation=serde_json::from_value(legacy).unwrap();
+        assert!(matches!(decoded,OriginProofOperation::PrepareProject {return_context:false,..}));
         assert!(matches!(execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
             Some(&root.join("agents.json"))),OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
             if code=="project_preparation_link_missing"));

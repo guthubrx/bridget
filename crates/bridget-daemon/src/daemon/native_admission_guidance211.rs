@@ -1,6 +1,10 @@
 use super::*;
 pub(super) fn refusal(code:&str)->Option<Value>{
     let (message,recovery,field)=match code {
+        "project_preparation_context_missing"=>(
+            "Faire charger la correction du raccordement de projet sur le worker source et le maître.",
+            "La préparation a répondu sans transmettre de correspondance utilisable au maître. Ce refus concerne cette admission ; l'identité et le projet ne sont pas déclarés inconnus. Le responsable Bridget doit vérifier les images chargées et le retour du contexte natif de préparation. Conserver la clé et l'enveloppe ; lire l'admission durable avant une reprise, sans mission de remplacement. Les autres travaux autorisés suivent leur propre état. Si la maintenance nécessaire n'est pas autorisée, demander seulement l'accord pour charger cette correction.",
+            None),
         "expected_base_commit_required"=>(
             "Fournissez expected_base_commit : le SHA Git source complet manque.",
             "Dans cwd sur la machine du parent, lire le commit résolu : HEAD en shared, workspace.base_ref (HEAD si absent) en worktree. Donner le SHA complet de 40 caractères sans changer la version demandée. Le champ est requis dans un dépôt Git et pour compilation/worktree ; hors Git en general/shared seulement il peut être omis. Consulter detail.admission avant correction de l’enveloppe : une demande en cours ou d’issue inconnue ne doit pas être dupliquée ; un refus durable ne se rouvre pas au rejeu.",
