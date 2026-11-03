@@ -15,3 +15,26 @@ catalogue : original0outil ; ajout du seul type objet racine sur specialists,
 Le refus origin_session_reattest reste distinct. L'annuaire actuel de l'expéditeur
 annonce communication_project=null ; sa cause historique reste à qualifier.
 Preuves privées : /Users/moi/.cache/bridget-claude-startup-20261103.
+
+Le candidat R1 passe le contrôle natif en0,00s et la garde SDK sans prompt en545ms,
+y compris l'application des deux lectures approuvées à cette seule session.
+Il laisse cependant six outils masqués : auto_delegate, domain, queue, send,
+specialists et wake. Tous ont un combinateur à la racine du schéma. La sonde
+comparative avec les contraintes déplacées dans une définition locale et une
+référence JSON Schema à la racine rend les37outils, sans supprimer de contrainte.
+Le delta R2 limite cette présentation au tools/list ; les schémas canoniques
+et les validateurs natifs restent identiques. Le test reconstitue chaque schéma
+canonique depuis sa référence et compare tous ses octets JSON structurés.
+
+RevueR1e9052af4 : delta objet correct, mais catalogue complet non démontré.
+Objection31/37 retenue et corrigée par R2. La revue n'a pas exécuté les contrôles.
+Résultat lu, ACK et clôture natifs effectués ; aucun remplacement de cette revue.
+Une nouvelle revue du delta R2 doit intégrer ce constat et la sonde37/37.
+
+Attestation : T3 confirme le projet9067a341-b067-4904-8abb-993ad1ca14aa, non
+supprimé, racine /Volumes/8TB2/50-repos-archives/11.Repositories/t3code, sans
+worktree pour le fil. Les deux checkouts T3 résolvent le même common-dir Git.
+Le garde-fou human_authority_guard exige un projet attesté non nul, contrairement
+à l'annuaire global. Le rattachement absent est donc un prérequis à rétablir ;
+aucun compte, mandat ou droit n'a été modifié. Reprise native et relecture unique
+du fait de projet et de bridget_session demandées à son propriétaire.
