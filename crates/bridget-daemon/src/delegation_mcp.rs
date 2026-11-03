@@ -2467,5 +2467,5 @@ fn specialists_schema222()->Value {
     branches.push(json!({"type":"object","properties":{"version":{"const":1},"action":{"const":"request_approval"},
         "request_id":{"type":"string","format":"uuid"},"operation":{"oneOf":approved}},
         "required":["version","action","request_id","operation"],"additionalProperties":false}));
-    json!({"oneOf":branches})
+    json!({"type":"object","oneOf":branches})
 }

@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.7.7 — 2026-11-03
+
+- Annoncer le type objet à la racine du schéma des spécialistes. Un client MCP strict peut ainsi découvrir le catalogue complet au démarrage, sans modifier les actions admises, les permissions ou les gardes.
+
 ## 0.7.6 — 2026-11-02
 
 - Expliquer les démarrages distants non confirmés avec les contrôles ciblés et les références de la demande conservées. Une erreur initiale ne masque plus une remise ou un résultat ultérieur. Aucun changement des reprises, admissions ou droits.

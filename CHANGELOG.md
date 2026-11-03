@@ -6,6 +6,10 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.7.7 — 2026-11-03
+
+- Declare the specialists input schema as an object at its root, so strict MCP clients can discover the startup catalogue. Accepted actions, permissions and guards are unchanged.
+
 ## 0.7.6 — 2026-11-02
 
 - Explain unconfirmed remote starts with task-scoped checks and preserved request references. Historical start errors no longer hide later recorded work or results. No change to retries, admission or permissions.

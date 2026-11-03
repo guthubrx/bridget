@@ -3023,6 +3023,37 @@ mod tests {
     const FIXTURES: &str = include_str!("../tests/fixtures/mcp/fr009.jsonl");
 
     #[test]
+    fn spec228_catalogue_input_schemas_are_objects_before_identity() {
+        let input = format!(
+            "{}\n{}\n{}\n",
+            json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}),
+            json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+        );
+        let mut output = Vec::new();
+        let identity = || -> Result<crate::mcp_identity::ResolvedIdentity, crate::mcp_identity::IdentityError> {
+            panic!("le catalogue ne doit pas exiger une identité")
+        };
+        let execute = |_: &crate::mcp_identity::ResolvedIdentity, _: &str, _: &Value| -> Result<Value, ToolError> {
+            panic!("aucune opération métier pendant la découverte")
+        };
+        serve_with(Cursor::new(input), &mut output, &identity, &execute).unwrap();
+        let responses: Vec<Value> = String::from_utf8(output).unwrap().lines()
+            .map(|line| serde_json::from_str(line).unwrap()).collect();
+        let catalogue = responses.iter().find(|r| r["id"] == 2).unwrap()["result"]["tools"]
+            .as_array().unwrap().clone();
+        assert!(!catalogue.is_empty());
+        for tool in &catalogue {
+            assert_eq!(tool["inputSchema"]["type"], "object", "{}", tool["name"]);
+        }
+        let specialists = catalogue.iter().find(|t| t["name"] == "bridget_specialists").unwrap();
+        for branch in specialists["inputSchema"]["oneOf"].as_array().unwrap() {
+            assert_eq!(branch["type"], "object");
+            assert_eq!(branch["additionalProperties"], false);
+        }
+    }
+
+    #[test]
     fn edit159_mcp_schema() {
         let queue = tools()
             .into_iter()
