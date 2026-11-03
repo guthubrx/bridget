@@ -44,3 +44,13 @@ La liste des capacités reste fermée ; sa borne passe de 16 à 32 pour porter
 
 Assemblages, revue et activation restent à consigner. Preuves privées :
 /Users/moi/.cache/bridget229-project-relay.
+
+La première demande de revue de cette correction avait reply_timeout=1, erreur
+de l'auteur de l'appel : ce champ est la durée de mission, minimum 60 secondes.
+Refus durable `reply_timeout_out_of_range`, sans tâche, conservé sous sa clé
+`bridget229-project-relay-review-20261103-01`. Aucun enfant lancé. Le message
+générique était insuffisant : guidage précis ajouté et vérifié séparément.
+La demande corrigée est distincte de ce refus ; aucune mission inconnue rejouée.
+Les deux appels historiques 29.Mails ont aussi des durées 10 et 1 secondes.
+Leur refus de mapping a précédé ce contrôle de durée. Ce paramètre devra être
+corrigé par leur propriétaire avant une admission, selon leur état durable.

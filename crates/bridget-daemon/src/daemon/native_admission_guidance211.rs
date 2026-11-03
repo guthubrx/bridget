@@ -1,6 +1,10 @@
 use super::*;
 pub(super) fn refusal(code:&str)->Option<Value>{
     let (message,recovery,field)=match code {
+        "reply_timeout_out_of_range"=>(
+            "Fixez une durée de mission comprise entre 60 et 86400 secondes, ou omettez reply_timeout pour garder 3600 secondes.",
+            "reply_timeout borne la durée de la mission, pas l'attente de la réponse de cet outil. Ce refus concerne cette demande. Lire detail.admission : si un refus durable sans tâche est enregistré, corriger la durée dans une nouvelle demande identifiée ; un rejeu identique conserve ce refus. Une demande en cours ou d'issue inconnue garde sa clé et son enveloppe. Les autres travaux autorisés suivent leur propre état. Aucun changement de droits ni décision humaine n'est nécessaire pour corriger ce paramètre dans le périmètre déjà autorisé.",
+            Some("reply_timeout")),
         "project_preparation_context_missing"=>(
             "Faire charger la correction du raccordement de projet sur le worker source et le maître.",
             "La préparation a répondu sans transmettre de correspondance utilisable au maître. Ce refus concerne cette admission ; l'identité et le projet ne sont pas déclarés inconnus. Le responsable Bridget doit vérifier les images chargées et le retour du contexte natif de préparation. Conserver la clé et l'enveloppe ; lire l'admission durable avant une reprise, sans mission de remplacement. Les autres travaux autorisés suivent leur propre état. Si la maintenance nécessaire n'est pas autorisée, demander seulement l'accord pour charger cette correction.",
