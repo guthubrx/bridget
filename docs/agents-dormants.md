@@ -15,6 +15,8 @@ reconnexion ou un résultat ne le réveille pas. Les résultats de travaux déj�
 admis restent collectés. Une réponse à une demande directe déjà acceptée est
 conservée dans le journal et dans son reçu de réponse, sans nouveau tour chez
 le destinataire dormant. Les questions humaines restent accessibles.
+Une nouvelle ronde de mission attend un réveil explicite de l'enfant ; une
+ronde déjà acceptée garde son reçu et peut finir.
 
 ## Terminal
 
