@@ -3067,6 +3067,9 @@ mod tests {
         assert!(!catalogue.is_empty());
         for tool in &catalogue {
             assert_eq!(tool["inputSchema"]["type"], "object", "{}", tool["name"]);
+            for key in ["allOf", "anyOf", "oneOf"] {
+                assert!(tool["inputSchema"].get(key).is_none(), "racine de {} : {key}", tool["name"]);
+            }
         }
         let canonical = tools();
         assert_eq!(catalogue.len(), canonical.len());
