@@ -112,9 +112,9 @@ La revue T3 métier distincte reste hors de cette maintenance.
 APK0.7.8/code7008 signé avec le certificat et la lignée de production existants,
 SHA573176d52ebb69c472f6c7871ae35be3a3c7d10d242f4a8097b78081fab5ad66.
 Signature v3 comme le paquet de référence ; aucune nouvelle recette UI ou FCM.
-Les premières tentatives de construction Mac et Linux ont conservé leurs erreurs
-de configuration : JDK local absent, SDK non indiqué, paramètres de signature
-incomplets. Construction finale sur Cartae avec les outils existants, sans
+La préparation Android a conservé ses erreurs de configuration : JDK absent
+sur le Mac, SDK non indiqué sur Cartae, paramètres de signature incomplets.
+Construction finale sur Cartae avec les outils existants, sans
 installation ni changement de certificat. Paquet et six actifs de release
 vérifiés par taille et SHA avant publication.
 
@@ -122,3 +122,10 @@ Neuf façades MCP T3 sont encore228-r3 au contrôle avant reprise. Elles ont ét
 conservées jusque-là ; rechargement natif de T3 et vérification du lien encore
 nécessaires avant de qualifier la livraison complète. Dix-sept agents concernés
 prévenus une fois, aucun accusé demandé. Suite dans le reçu de reprise privé.
+
+Nettoyage avant rechargement client : huit copies de binaires inutiles,
+342037056 octets logiques, retirées sur les quatre hôtes après contrôle d'usage
+ciblé sans fichier ouvert ni diagnostic incomplet. Candidat229-r2 jamais activé
+et transferts229 supprimés. Actif229-r3 et retour228-r3 conservés. Branche229
+intégrée, retirée localement et au distant. Caches récents et vues gardées :
+observation globale des processus incomplète, retrait natif non qualifié.
