@@ -545,7 +545,8 @@ le daemon ; réveil par événement avec filet de 5 secondes. Le client garde le
 libération en 6 secondes au plus. Un redémarrage du daemon fait échouer l'appel
 (`daemon_unreachable`) ; rappeler l'attente est possible.
 
-La sonde préalable a un budget de 3 secondes. Elle exige `wait_v1` dans `features`
+La sonde préalable garde le budget client commun de10secondes, amorçage du
+relais inclus. Elle exige `wait_v1` dans `features`
 pour les trois outils ; sinon `wait_unsupported`, sans trame nouvelle. Le montage
 Codex de Bridget seul fixe `tool_timeout_sec = 3700`. Dans un autre hôte, garder
 `wait_timeout` sous son délai d'outil. Les processus 151 doivent être chargés.

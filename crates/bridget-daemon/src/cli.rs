@@ -7042,15 +7042,9 @@ fn cmd_agents(args: &[String]) {
     });
 
     let config = DaemonConfig::default();
-    let status = daemon_status_or_exit("agents", &config);
-    if !status.running {
-        if parsed.json && !crate::cli_table::active() {
-            println!("[]");
-        } else {
-            eprintln!("daemon non demarre (socket absente)");
-        }
-        crate::cli_table::exit(1);
-    }
+    // L'annuaire effectue lui-même la négociation native et refuse les erreurs.
+    // Une sonde distincte à2s déclarait à tort le maître absent lorsque le
+    // premier octet du relais SSH arrivait ensuite dans le budget client10s.
 
     let agents:Vec<_> = scoped_directory_or_exit("agents", &parsed, &config.socket_path).into_iter()
         .filter(|a|all || a.tracking.as_ref().is_some_and(|t|t.dormant)==history).collect();

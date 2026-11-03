@@ -40,3 +40,21 @@ n'a été élargi. Un test vérifie ce guidage ; aucune répétition de mission.
 Dernier delta auto-audité après R2 : garde de nouvelle ronde, maintien du
 rejeu antérieur et diagnostic préalable. Pas de troisième mission de revue
 créée pour ces corrections ciblées couvertes par les tests.
+
+
+## Vérification réelle après activationR3 : relais Mac
+
+La commande agents depuis le Mac échoue encore sur la sonde d'identité
+préalable à2secondes. La même commande au maître réussit. Le premier octet
+sur le relais natif a été mesuré9,145s puis3,725s ; la seconde réponse sur la
+même connexion prend0,007s. L'amorçage du flux est donc compris à tort dans
+une sonde trop courte. Le point lent exact du listener n'est pas identifié.
+
+Correction cibléeR4 : agents appelle directement son annuaire déjà négocié,
+avec les mêmes contrôles de rôle, version et portée. Suppression de la sonde
+en double, aucune suppression de validation et aucune liste vide sur erreur.
+La sonde wait_v1 emploie désormais le budget client commun10s au lieu de3s,
+avant toute commande151. Les délais de mission et droits sont inchangés.
+Un serveur simulé retardé de3,2s reproduit cette amorce ; un pair muet reste
+borné par10s. Reprise de la commande réelle du Mac requise après chargement.
+Ce changement réel justifie l'assemblageR4 ; Android est inchangé.

@@ -68,10 +68,11 @@ pub(crate) fn routing_catalogue_observed(socket:&Path,observed:bool,refresh:bool
     }
 }
 
-/// Sonde sans identité auxiliaire : budget propre, avant toute trame 151.
+/// Sonde sans identité auxiliaire : budget client commun, avant toute trame151.
+/// Le premier octet du relais SSH observé arrive parfois après3secondes.
 pub(crate) fn daemon_supports_wait(socket: &Path) -> Result<bool, ClientError> {
     let mut connection =
-        DaemonConnection::connect_until(socket, Instant::now() + Duration::from_secs(3))?;
+        DaemonConnection::connect_until(socket, Instant::now() + DAEMON_BUDGET)?;
     match connection.exchange(&WrapperToDaemon::DaemonIdentityRequest)? {
         DaemonToWrapper::DaemonIdentityReport { features, .. } =>
             Ok(features.iter().any(|feature| feature == "wait_v1")),
@@ -1428,13 +1429,13 @@ mod security_tests {
     }
 
     #[test]
-    fn native151_facade_sonde_attente_budget_trois_secondes() {
+    fn native151_facade_sonde_attente_garde_budget_client_borne() {
         let path = crate::mcp_identity::mock_socket("wait-probe-timeout");
         let listener = UnixListener::bind(&path).unwrap();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
+                .set_read_timeout(Some(Duration::from_secs(12)))
                 .unwrap();
             let mut reader = BufReader::new(stream);
             let mut line = String::new();
@@ -1447,7 +1448,7 @@ mod security_tests {
         server.join().unwrap();
         std::fs::remove_file(path).unwrap();
         assert!(matches!(supported, Err(ClientError::Technical { code: "daemon_unreachable", .. })));
-        assert!((Duration::from_secs(2)..Duration::from_secs(5)).contains(&start.elapsed()));
+        assert!((Duration::from_secs(9)..Duration::from_secs(12)).contains(&start.elapsed()));
     }
 
     #[test]
@@ -2602,5 +2603,24 @@ pub(crate) fn human_specialists(socket:&Path,request:bridget_transport::speciali
     match connection.exchange(&WrapperToDaemon::Specialists{request})? {
         DaemonToWrapper::NativeDelegationResult{result}=>Ok(result),
         other=>unexpected_response(other),
+    }
+}
+
+#[cfg(test)]
+mod tracking230_federated_wait_tests {
+    use super::*;
+    use std::io::{BufRead,Write};
+    #[test]
+    fn tracking230_capacites_attente_acceptent_amorcage_relais_dans_budget_client() {
+        let path=std::env::temp_dir().join(format!("bg230-wait-{}.sock",uuid::Uuid::new_v4().simple()));
+        let listener=std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let server=std::thread::spawn(move|| {
+            let (mut stream,_)=listener.accept().unwrap(); let mut line=String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            assert!(matches!(bridget_transport::protocol::decode::<WrapperToDaemon>(&line).unwrap(),WrapperToDaemon::DaemonIdentityRequest));
+            std::thread::sleep(Duration::from_millis(3200));
+            writeln!(stream,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::DaemonIdentityReport{host:"fixture".into(),db_path:"/fixture/db".into(),instance_id:"fixture".into(),features:vec!["wait_v1".into()]}).unwrap()).unwrap();
+        });
+        assert!(daemon_supports_wait(&path).unwrap());server.join().unwrap();std::fs::remove_file(path).unwrap();
     }
 }
