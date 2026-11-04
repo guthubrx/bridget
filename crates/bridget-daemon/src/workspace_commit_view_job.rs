@@ -494,7 +494,9 @@ impl ViewJob {
                         && generation == child.marker().marker().generation =>
                     {
                         self.failure =
-                            Some(serde_json::from_str(&reason).unwrap_or(ExportFailure::Unknown));
+                            Some(serde_json::from_str::<ExportFailure>(&reason).ok()
+                                .filter(|failure| failure.validate(bridget_transport::protocol::WorkerRefusal::WorkspacePrepareFailed).is_ok())
+                                .unwrap_or(ExportFailure::Unknown));
                     }
                     Ok(None) => {}
                     _ => {

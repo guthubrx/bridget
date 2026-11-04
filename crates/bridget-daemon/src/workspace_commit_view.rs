@@ -426,12 +426,12 @@ fn manifest_paths(manifest: &Manifest) -> Result<(BTreeSet<String>, BTreeSet<Str
                 initial.insert(text.into());
             }
             if all.len() > MAX_ENTRIES + 1 {
-                return Err(refusal("entry_limit"));
+                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, all.len() as u64, (MAX_ENTRIES + 1) as u64));
             }
             parent = path.parent();
         }
         if all.len() > MAX_ENTRIES + 1 {
-            return Err(refusal("entry_limit"));
+            return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, all.len() as u64, (MAX_ENTRIES + 1) as u64));
         }
     }
     Ok((all, initial))
@@ -546,7 +546,7 @@ impl Directory {
             }
             Self::name(name)?;
             if names.len() >= MAX_ENTRIES + 1 {
-                return Err(refusal("view_entry_limit"));
+                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, (names.len() + 1) as u64, (MAX_ENTRIES + 1) as u64));
             }
             names.push(name.to_owned());
         }
@@ -1087,7 +1087,7 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
         for name in directory.names()? {
             count += 1;
             if count > MAX_ENTRIES + 1 {
-                return Err(refusal("view_entry_limit"));
+                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, count as u64, (MAX_ENTRIES + 1) as u64));
             }
             let relative = if prefix.is_empty() {
                 name.clone()
