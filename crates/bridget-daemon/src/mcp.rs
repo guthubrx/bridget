@@ -651,6 +651,13 @@ fn caller_scope_refusal_message(result: &Value) -> String {
             "recovery":"Conserver task_id, request_id et enveloppe. Pour une lecture, reprendre les mêmes task_id après la fin des contrôles. Pour une opération mutante, vérifier son admission durable avant tout rejeu strict ; ne créer aucune mission ou clé de remplacement.",
             "human_action":"Si la capacité reste occupée après la fin des contrôles, demander au responsable de vérifier les contrôles d’origine en cours et leurs délais. Ne modifier ni compte, ni droits, ni rattachement pour contourner la saturation."}).to_string();
     }
+    if matches!(result["detail"]["cause"].as_str(),Some("origin_worker_unavailable"|"origin_proof_unavailable")) {
+        return json!({"status":"refused","code":code,"stage":"caller_scope","verification":verification,
+            "cause":result["detail"]["cause"],"scope":"this_attestation",
+            "message":"Le lien de preuve de l'hôte d'origine est indisponible pour ce contrôle ; aucun changement de droits n'est établi.",
+            "recovery":"Faire vérifier le worker source et sa connexion. Conserver request_id, task_id connu et enveloppe : une admission antérieure peut exister. Après le retour natif du lien, vérifier la même admission ; ne créer ni clé ni mission de remplacement. bridget_session est une lecture et ne répare pas une connexion.",
+            "human_action":"Si le lien ne revient pas dans le périmètre autorisé, demander au responsable le contrôle du worker source. Les autres travaux autorisés suivent leur propre état."}).to_string();
+    }
     json!({"status":"refused","code":code,"stage":"caller_scope","verification":verification,
         "message":"Le contrôle préalable des droits de l’appelant n’a pas été attesté. L’opération demandée n’a pas été envoyée par cet appel.",
         "recovery":"Vérifiez le rattachement natif et la preuve de la session appelante. Une attestation antérieure ou le succès d’un autre appel ne prouve pas celui-ci. Pour une lecture, conservez le même task_id ; ne recréez aucune mission. Si la cause reste inconnue après un contrôle natif, transmettez ce code, cette étape et la vérification manquante au responsable sans répéter les essais.",
@@ -9531,6 +9538,15 @@ mod capacity189_mcp_tests {
     use std::{thread,os::{fd::AsRawFd,unix::net::UnixListener}};
     #[test]
     fn spec221_origin_busy_mcp_projection_is_closed() {
+        for code in ["origin_worker_unavailable","origin_proof_unavailable"] {
+            let text=caller_scope_refusal_message(&json!({"code":"permission_attestation_unavailable",
+                "detail":{"verification":"origin_session_reattest","cause":code,"secret":"PRIVATE"}}));
+            let projected:Value=serde_json::from_str(&text).unwrap();
+            assert_eq!(projected["cause"],code);
+            assert_eq!(projected["scope"],"this_attestation");
+            assert!(projected["recovery"].as_str().unwrap().contains("admission antérieure"));
+            assert!(!text.contains("PRIVATE"));
+        }
         let busy=json!({"code":"permission_attestation_unavailable","detail":{
             "verification":"origin_session_reattest","cause":"origin_proof_busy","secret":"PRIVATE"}});
         let text=caller_scope_refusal_message(&busy);

@@ -5430,6 +5430,20 @@ pub(super) fn handle_with_peer(
 fn origin_attestation_refusal(code: &str) -> Value {
     let mut result=failure("permission_attestation_unavailable");
     result["detail"]["verification"]=json!("origin_session_reattest");
+    if matches!(code,"origin_worker_unavailable"|"origin_proof_unavailable") {
+        let message=if code=="origin_worker_unavailable" {
+            "Le worker de l'hôte d'origine n'est pas disponible pour ce contrôle. Ce constat ne prouve pas un changement de droits."
+        } else {
+            "Le contrôle n'a pas reçu de réponse d'origine encore valide dans son délai, ou sa connexion a changé. Ce constat ne prouve pas un changement de droits."
+        };
+        result["message"]=json!(message);
+        result["detail"]["message"]=json!(message);
+        result["detail"]["cause"]=json!(code);
+        result["detail"]["scope"]=json!("this_attestation");
+        result["detail"]["recovery"]=json!("Faire vérifier la connexion du worker source et le reçu de cette clé. Une mission peut déjà être admise malgré ce refus de lecture. Conserver request_id, task_id connu et enveloppe ; après le retour du lien natif, relire la même admission sans créer de clé ni de mission de remplacement. Un appel manuel bridget_session lit la preuve : il ne répare pas la connexion et ne modifie pas les droits. Les autres travaux autorisés suivent leur propre état.");
+        result["detail"]["human_action"]=json!("Si la connexion source ne revient pas dans le périmètre autorisé, demander au responsable le contrôle de ce worker et de son lien. Ne demander ni hausse de droits ni relance métier sur ce seul refus.");
+        return result;
+    }
     if code == "project_preparation_link_missing" {
         let message = "Faire comparer le dossier du registre chargé par le worker source avec le namespace des liens fédérés installés. Le contrôle n'a pas confirmé de lien correspondant à ce dossier ; il ne prouve ni une panne réseau ni un changement de droits. Ce refus concerne cette préparation de projet. Les autres travaux autorisés suivent leur propre état.";
         result["code"] = json!(code);
@@ -15132,6 +15146,14 @@ mod tests {
 
     #[test]
     fn spec221_origin_busy_refusal_keeps_scope_and_never_projects_private_cause() {
+        for code in ["origin_worker_unavailable","origin_proof_unavailable"] {
+            let view=origin_attestation_refusal(code);
+            assert_eq!(view["code"],"permission_attestation_unavailable");
+            assert_eq!(view["detail"]["cause"],code);
+            assert_eq!(view["detail"]["scope"],"this_attestation");
+            assert!(view["detail"]["recovery"].as_str().unwrap().contains("déjà être admise"));
+            assert!(view["detail"]["recovery"].as_str().unwrap().contains("ne répare pas"));
+        }
         let busy=origin_attestation_refusal("origin_proof_busy");
         assert_eq!(failure("origin_proof_busy"),busy);
         let prep=failure("origin_project_preparation_busy");

@@ -633,6 +633,7 @@ fn execute_with_proof(
         NativeDelegationRequest::Delegate { request_id, .. } => Some(request_id.clone()),
         _ => None,
     };
+    let admission_key232 = recover_request_id.clone();
     let attestation_budget = if proof.is_some() {
         crate::t3code_mcp::ATTESTATION_MAX_BUDGET
     } else {
@@ -700,7 +701,8 @@ fn execute_with_proof(
         other => other,
     })?;
     match response {
-        DaemonToWrapper::NativeDelegationResult { result } if result["status"] == "refused" => {
+        DaemonToWrapper::NativeDelegationResult { mut result } if result["status"] == "refused" => {
+            admission_refusal_context232(&mut result, admission_key232.as_deref());
             Err(ClientError::Technical {
                 code: "native_delegation_refused",
                 message: match result.get("detail").filter(|value| !value.is_null()) {
@@ -730,6 +732,18 @@ fn execute_with_proof(
         }
         other => unexpected_response(other),
     }
+}
+
+fn admission_refusal_context232(result:&mut Value,request_id:Option<&str>) {
+    let Some(request_id)=request_id else {return;};
+    if result["code"]!="permission_attestation_unavailable" {return;}
+    if !result["detail"].is_object(){result["detail"]=json!({});}
+    if let Some(message)=result["detail"].get("message").cloned() {
+        result["detail"]["attestation_message"]=message;
+    }
+    result["detail"]["message"]=json!("Une mission peut déjà être admise avec cette clé. Le contrôle d'attestation de cet appel a échoué ; le sort de l'admission reste inconnu.");
+    result["detail"]["admission"]=json!({"request_id":request_id,"state":"outcome_unknown"});
+    result["detail"]["admission_recovery"]=json!("Le contrôle de cet appel a échoué ; cela ne prouve pas l'absence d'admission. La tâche peut déjà exister après une réponse perdue ou une relecture. Conserver cette même request_id et tous les paramètres ; vérifier son reçu après le retour du lien, sans appel manuel censé réparer les droits, sans nouvelle clé et sans mission de remplacement.");
 }
 
 fn recover_admission_reply171<T>(
@@ -782,6 +796,32 @@ fn recover_admission_with_budget171<T>(
 #[cfg(test)]
 mod admission_recovery171_tests {
     use super::*;
+
+    #[test]
+    fn spec232_lost_admission_reply_then_attestation_refusal_keeps_same_key_and_uncertainty() {
+        let mut calls=0;
+        let mut result=recover_admission_with_budget171("same-key",|_:&Value|false,|deadline| {
+            calls+=1;
+            if calls==1 {
+                assert!(deadline.is_none());
+                Err(ClientError::Technical{code:"outcome_unknown",message:"reply lost".into()})
+            } else {
+                assert!(deadline.is_some());
+                Ok(json!({"status":"refused","code":"permission_attestation_unavailable",
+                    "detail":{"verification":"origin_session_reattest","cause":"origin_worker_unavailable"}}))
+            }
+        },Duration::from_secs(1)).unwrap();
+        admission_refusal_context232(&mut result,Some("same-key"));
+        assert_eq!(calls,2);
+        assert_eq!(result["code"],"permission_attestation_unavailable");
+        assert_eq!(result["detail"]["cause"],"origin_worker_unavailable");
+        assert_eq!(result["detail"]["admission"],json!({"request_id":"same-key","state":"outcome_unknown"}));
+        assert!(result["detail"]["admission_recovery"].as_str().unwrap().contains("peut déjà exister"));
+        assert!(result.get("task_id").is_none());
+        let mut unrelated=json!({"status":"refused","code":"model_unavailable"});
+        admission_refusal_context232(&mut unrelated,Some("same-key"));
+        assert!(unrelated.get("detail").is_none());
+    }
 
 
     #[test]

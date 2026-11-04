@@ -2189,8 +2189,9 @@ pub(crate) fn connect_and_register_at(
     writer.flush().map_err(|e| e.to_string())?;
 
     let mut line = String::new();
-    reader.read_line(&mut line)
+    let received=reader.read_line(&mut line)
         .map_err(|e| format!("réponse d’enregistrement indisponible après attente bornée à 10 s: {e}"))?;
+    if received==0 {return Err("daemon fermé pendant l'enregistrement : aucune réponse reçue".into());}
     match decode(line.trim()).map_err(|_| "réponse d'enregistrement invalide".to_string())? {
         DaemonToWrapper::Registered {
             agent_id,
