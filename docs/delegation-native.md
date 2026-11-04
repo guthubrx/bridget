@@ -1088,6 +1088,16 @@ negotiate both the view reader and creator. An old component refuses before
 its new operation; keep the request key and have the compatible path loaded.
 There is no fallback to shared or worktree.
 
+The selected code files can total up to32GiB (previously512MiB). Git inventories
+and view manifests can each total up to64MiB. The entry bound remains65536.
+Export and audit helpers have a30-minute operation deadline; mission deadlines
+and Git control operations retain their own budgets. The view still requires
+real free space, exact object hashes and the authorized identity. A measured
+refusal reports its closed object kind, observed lower bound and exact maximum.
+A legacy or unmeasured refusal does not invent these values. New large views
+require readers advertising workspace.commit_view.large.v2 and
+worker.store.capacity.v3; an old512MiB reader is not a valid rollback.
+
 The task retains its base, owner, and permissions. Guards are rechecked before
 publication and launch. On closure, Bridget keeps the view when it cannot
 prove termination, integrity, or absence of use. Cleanup adds no privilege.
@@ -1158,7 +1168,8 @@ Other authorized work follows its own state.
 
 ## Remote result reservation capacity
 
-Updated workers share a256MiB budget across receipts, reserved results and views.
+Updated workers share a2GiB budget across receipts, reserved results and views.
+This preserves reserve capacity when a view intent grows from8MiB to64MiB.
 A result reserves up to2MiB; its body remains limited to256KiB. Retained files,
 metadata, workspace reservations and orphan files also count. The entry limit
 remains4096. A focused regression covers64simultaneous result reservations.

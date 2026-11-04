@@ -109,6 +109,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session232 — copies de code et diagnostic d’admission livrés en0.8.1/232-r2.
+Source5f4516ed intégrée/poussée ;512Mio→32Gio, inventaire/manifeste64Mio,
+réserveworker2Gio, export/audit30min. Export/audit réel640Mio acquis,
+47contrôles ciblés distincts ; revue plafonds traitée, récupération d’admission
+non vérifiée par le relecteur, auto-audit déclaré. Mission702d déjà créée AVANT
+la lecture manuelle ; même clé retrouvée, incertitude et causes du lien conservées.
+Cause initiale des coupures inconnue ; aucun effet de version Claude prouvé.
+Sept services/SHA vérifiés sur4hôtes, coupure2,27s ; superviseursCartae/SYS et
+registreMac conservés. RetoursR0 compatibles/nouveauxformats et rollback atomiques
+vérifiés ; ancienR4 interdit comme retour. T3 relancé nativement :20anciensMCP
+retirés,18façades232/SHA contrôlées, preuveV2 et lien revenus. Release0.8.1/sixactifs
+et APK8001/certificat/lignée vérifiés. Aucun rejeu7024/77ba/702d ou mission métier.
+Diagnostic propriétaire et avis de reprise envoyés, reçus conservés sans lecture
+inventée. Branche232 et WT compilation retirés ;455151363octets logiques de
+transferts/builds identifiés retirés, caches/vues et ancien227 sale conservés.
+Sources, preuves et limites : specs/232-plafonds-et-attestation/validation.md.
+
+
 Session231 — attestation du crochet appareils corrigée dans l’adaptateur client.
 Source97c8a892cd intégrée/poussée sur local/main-20261102 du dépôt client ;
 T3 0.1.7-local.20261103.attestation-r1 chargé, backend63539/SHA vérifiés.
