@@ -109,6 +109,22 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session233 — placement opus2D sur monordinateur qualifié sans build ni mission.
+Le mapping existait mais le contrôle Git refusait : remote origin absent et
+identité attendue Linux. Alias origin ajouté au remote cartae exact, serveur
+et commit dcd7356f vérifiés ; autres réglages, HEAD et fichiers conservés.
+Mapping opus2d/Mac révision3 identique maître/worker, écrivain natif atomique,
+verrou et sauvegardes ; autres champs strictement inchangés. Nouveau repère
+registreMac spécial : bdee09c363292d1be730eecffad779a942cd75a0d45b69725472867ff3f3587f.
+Le worker relit ce fichier ; ne pas restaurer l’ancienne empreinte232 à l’aveugle.
+Catalogue natif relu ; aucune admission déclenchée, recensement déjà surT3
+préservé. Titre inattendu issu du nom du parent, aucun autre message identifié.
+Rôle mainteneur limité à bridget/nontransversal : refus de catalogue expliqué,
+aucun droit élargi ; désignation humaine autorise le signalement direct.
+Diagnostic coordinateur envoyé/reçu conservé, lecture non confirmée.
+Preuves et limites : specs/233-placement-opus2d-mac/validation.md.
+
+
 Session232 — copies de code et diagnostic d’admission livrés en0.8.1/232-r2.
 Source5f4516ed intégrée/poussée ;512Mio→32Gio, inventaire/manifeste64Mio,
 réserveworker2Gio, export/audit30min. Export/audit réel640Mio acquis,
