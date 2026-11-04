@@ -79,6 +79,28 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn spec232_export_streams_more_than_512_mib_and_preserves_source() {
+    let f=Fixture::new();
+    let bytes=vec![b'x';8*1024*1024];
+    let source=f.repo.join("large-00.rs");
+    fs::write(&source,&bytes).unwrap();
+    for index in 1..80 {fs::hard_link(&source,f.repo.join(format!("large-{index:02}.rs"))).unwrap();}
+    f.git(&["add","."]);f.git(&["commit","-qm","large source fixture"]);
+    let before=f.snapshot();
+    let manifest=plan(&f.repo,&f.git(&["rev-parse","HEAD"])).unwrap();
+    assert!(manifest.entries.iter().filter(|e|e.selected).map(|e|e.bytes).sum::<u64>()>512*1024*1024);
+    let root=f.root.join("large-view");export(&f.repo,&manifest,&root).unwrap();audit(&manifest,&root).unwrap();
+    assert_eq!(fs::metadata(root.join("large-79.rs")).unwrap().len(),bytes.len() as u64);
+    assert_eq!(f.snapshot(),before);
+    let mut too_large=manifest.clone();
+    too_large.entries.iter_mut().find(|e|e.path=="large-00.rs").unwrap().bytes=MAX_BYTES+1;
+    let error=validate_manifest(&too_large).unwrap_err();
+    assert!(matches!(job::failure(&error),bridget_transport::protocol::CommitViewFailure::MeasuredLimit {
+        kind:bridget_transport::protocol::CommitViewLimitKind::SelectedBytes,observed,maximum
+    } if observed>MAX_BYTES && maximum==MAX_BYTES));
+}
+
+#[test]
 fn spec221_c19_exact_commit_export_preserves_dirty_shared_and_linked_checkout() {
     let f = Fixture::new();
     for index in 0..65 {
@@ -309,7 +331,7 @@ fn spec221_c19_manifest_never_reads_an_unbounded_materialized_omission() {
     file.set_len(entry.bytes).unwrap();
     let error = audit(&altered, &root).unwrap_err();
     // La carte publique peut refuser d'abord ; aucun gros fichier n'est lu.
-    assert!(error.contains("byte_limit") || error.contains("view_integrity_failed"));
+    assert!(error.contains("measured_limit") || error.contains("view_integrity_failed"));
 }
 
 #[test]

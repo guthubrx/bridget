@@ -2787,7 +2787,7 @@ pub const MAX_WORKER_RESULT_BODY_BYTES: usize = 262_144;
 // Budget de métadonnées et réservations, pas de RAM ni taille d'une réponse.
 // 16 Mio plafonnaient un worker vide à sept résultats réservés. Le budget
 // partagé reste borné et compte aussi l'historique, les vues et les orphelins.
-pub const MAX_WORKER_STORE_BYTES: usize = 256 * 1024 * 1024;
+pub const MAX_WORKER_STORE_BYTES: usize = 2 * 1024 * 1024 * 1024;
 pub const MAX_WORKER_STORE_ENTRIES: usize = 4096;
 pub const WORKER_PREPARE_TTL_SECS: i64 = 30;
 pub const WORKER_RELEASE_TTL_SECS: i64 = 5;
@@ -2927,6 +2927,7 @@ pub enum CommitViewFailure {
     UnsupportedPath,
     IntegrityFailed,
     ByteLimit,
+    MeasuredLimit { kind: CommitViewLimitKind, observed: u64, maximum: u64 },
     DiskFull,
     AccessDenied,
     SourceUnavailable,
@@ -2942,8 +2943,14 @@ pub enum CommitViewFailure {
     StopUnconfirmed,
     Unknown,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitViewLimitKind { SelectedBytes, TreeBytes, ManifestBytes, LinkBytes, Entries, PlanBytes }
 impl CommitViewFailure {
     pub fn validate(self,reason:WorkerRefusal)->Result<(),WorkerRefusal> {
+        if let Self::MeasuredLimit { observed, maximum, .. } = self {
+            worker_require(maximum > 0 && observed > maximum)?;
+        }
         worker_require(self==Self::Unknown || matches!(reason,
             WorkerRefusal::WorkspacePrepareFailed|WorkerRefusal::WorkspacePrepareIncomplete|
             WorkerRefusal::PrepareExpired|WorkerRefusal::UnknownExecution|WorkerRefusal::ResourceLimit|

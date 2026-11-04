@@ -10,6 +10,11 @@ use std::ffi::OsString;
 
 pub(crate) use bridget_transport::protocol::CommitViewFailure as ExportFailure;
 pub(crate) fn failure(error: &str) -> ExportFailure {
+    if let Some(encoded) = error.strip_prefix("workspace_commit_view_limit:") {
+        return serde_json::from_str::<ExportFailure>(encoded).ok()
+            .filter(|f| matches!(f, ExportFailure::MeasuredLimit { .. }) && f.validate(bridget_transport::protocol::WorkerRefusal::WorkspacePrepareFailed).is_ok())
+            .unwrap_or(ExportFailure::Unknown);
+    }
     match error.split(':').next().unwrap_or("") {
         "workspace_disk_full" => return ExportFailure::DiskFull,
         "workspace_access_denied" => return ExportFailure::AccessDenied,

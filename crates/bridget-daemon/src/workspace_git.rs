@@ -35,6 +35,7 @@ pub(crate) const WORKTREE_ADD_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(test) { 20 } else { 300 });
 pub(crate) const MAX_WORKTREES: usize = 128;
 const MAX_OUTPUT: usize = 1024 * 1024;
+const MAX_TREE_OUTPUT: usize = 64 * 1024 * 1024;
 const HOSTILE_CONFIG: &str = "^(filter\\..*\\.(smudge|clean|process)|include\\..*|includeif\\..*|extensions\\.partialclone|remote\\..*\\.promisor)$";
 
 #[derive(Debug)]
@@ -427,8 +428,8 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
                 Ok(0) => eof[index] = true,
                 Ok(count) => {
                     // Comme T3, chaque flux garde son budget : stdout ne peut
-                    // pas effacer le diagnostic stderr. Arbres/index : stdout 8 Mio ; autres : 1 Mio.
-                    let maximum = if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) { 8 * MAX_OUTPUT } else { MAX_OUTPUT };
+                    // pas effacer le diagnostic stderr. Arbres/index : stdout 64 Mio ; autres : 1 Mio.
+                    let maximum = if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) { MAX_TREE_OUTPUT } else { MAX_OUTPUT };
                     let remaining = maximum.saturating_sub(bytes.len());
                     bytes.extend_from_slice(&buffer[..count.min(remaining)]);
                     truncated |= count > remaining;

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 const MANIFEST: &str = "bridget-compact207.json";
-const MAX_MANIFEST: u64 = 8 * 1024 * 1024;
+const MAX_MANIFEST: u64 = 64 * 1024 * 1024;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Plan {
@@ -124,7 +124,7 @@ pub(super) fn plan(preflight: &WorkspacePreflight) -> Result<Option<Plan>, Strin
         READ_TIMEOUT,
     )?;
     if listing_output.truncated {
-        return Err("workspace_repo_unsupported: sortie Git tronquée pour compact-v1 (arbre limité à 8 Mio, diagnostic à 1 Mio). Cette préparation est refusée. Faire qualifier la taille du dépôt par son responsable, ou retirer son opt-in bridget.worktreeProfile avant une future admission ; conserver toute tâche déjà admise et sa clé.".into());
+        return Err("workspace_repo_unsupported: sortie Git tronquée pour compact-v1 (arbre limité à 64 Mio, diagnostic à 1 Mio). Cette préparation est refusée. Faire qualifier la taille du dépôt par son responsable, ou retirer son opt-in bridget.worktreeProfile avant une future admission ; conserver toute tâche déjà admise et sa clé.".into());
     }
     let listing = listing_output.complete()?;
     let mut selected = Vec::new();
@@ -234,7 +234,7 @@ pub(super) fn audit(dir: &Path, path: &Path) -> Result<(), String> {
     let read = |args: &[&str]| capture(path, args, READ_TIMEOUT, Some((dir, path)));
     let index_output = read(&["ls-files", "-v", "-z"])?;
     if index_output.truncated {
-        return Err("rapport indisponible : sortie Git tronquée (index limité à 8 Mio, diagnostic à 1 Mio). Conserver le dossier ; faire qualifier sa taille par le responsable avant une nouvelle admission. Ce refus concerne ce rapport.".into());
+        return Err("rapport indisponible : sortie Git tronquée (index limité à 64 Mio, diagnostic à 1 Mio). Conserver le dossier ; faire qualifier sa taille par le responsable avant une nouvelle admission. Ce refus concerne ce rapport.".into());
     }
     let flags = index_output.complete()?;
     for entry in flags.split('\0').filter(|e| !e.is_empty()) {

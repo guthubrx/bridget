@@ -11,9 +11,9 @@ use std::process::{ChildStderr, ChildStdin, ChildStdout};
 
 const NOTICE: &str = ".bridget-commit-view.json";
 const MAX_ENTRIES: usize = 65_536;
-const MAX_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_LINK: u64 = 4096;
-const DEADLINE: Duration = Duration::from_secs(60);
+const DEADLINE: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -34,6 +34,10 @@ pub(super) struct Manifest {
 }
 fn refusal(cause: &str) -> String {
     format!("workspace_commit_view_unavailable:cause={cause}")
+}
+fn limit_refusal(kind: bridget_transport::protocol::CommitViewLimitKind, observed: u64, maximum: u64) -> String {
+    let failure = bridget_transport::protocol::CommitViewFailure::MeasuredLimit { kind, observed, maximum };
+    format!("workspace_commit_view_limit:{}", serde_json::to_string(&failure).unwrap())
 }
 fn path_valid(path: &str) -> bool {
     !path.is_empty()
@@ -266,7 +270,7 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
         true,
     )?;
     if output.truncated {
-        return Err(refusal("tree_limit"));
+        return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::TreeBytes, MAX_TREE_OUTPUT as u64 + 1, MAX_TREE_OUTPUT as u64));
     }
     if !output.success() {
         return Err(refusal("tree_unavailable"));
@@ -276,7 +280,7 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
     let mut total = 0u64;
     for row in output.stdout.split('\0').filter(|r| !r.is_empty()) {
         if entries.len() >= MAX_ENTRIES {
-            return Err(refusal("entry_limit"));
+            return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, entries.len() as u64 + 1, MAX_ENTRIES as u64));
         }
         let (meta, path) = row
             .split_once('\t')
@@ -301,7 +305,7 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
                 .checked_add(bytes)
                 .ok_or_else(|| refusal("byte_limit"))?;
             if total > MAX_BYTES {
-                return Err(refusal("byte_limit"));
+                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, total, MAX_BYTES));
             }
         }
         if fields[0] == "120000" && bytes > MAX_LINK {
@@ -986,8 +990,8 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
             link_bytes = link_bytes
                 .checked_add(entry.bytes)
                 .ok_or_else(|| refusal("link_metadata_limit"))?;
-            if link_bytes > 8 * MAX_OUTPUT as u64 {
-                return Err(refusal("link_metadata_limit"));
+            if link_bytes > MAX_TREE_OUTPUT as u64 {
+                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::LinkBytes, link_bytes, MAX_TREE_OUTPUT as u64));
             }
         }
         if entry.selected {
@@ -995,7 +999,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
                 .checked_add(entry.bytes)
                 .ok_or_else(|| refusal("byte_limit"))?;
             if total > MAX_BYTES {
-                return Err(refusal("byte_limit"));
+                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, total, MAX_BYTES));
             }
         }
     }
@@ -1128,7 +1132,7 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
                     .checked_add(entry.bytes)
                     .ok_or_else(|| refusal("byte_limit"))?;
                 if audited_bytes > MAX_BYTES {
-                    return Err(refusal("byte_limit"));
+                    return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, audited_bytes, MAX_BYTES));
                 }
                 check_file(entry, &directory, &name, deadline)?;
             } else {
@@ -1172,12 +1176,9 @@ pub(super) fn materialize(
     if entry.selected || entry.mode == "120000" {
         return Err(refusal("view_integrity_failed"));
     }
-    if inventory
-        .bytes
-        .checked_add(entry.bytes)
-        .is_none_or(|n| n > MAX_BYTES)
-    {
-        return Err(refusal("byte_limit"));
+    let selected_bytes = inventory.bytes.checked_add(entry.bytes).ok_or_else(||refusal("byte_limit"))?;
+    if selected_bytes > MAX_BYTES {
+        return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, selected_bytes, MAX_BYTES));
     }
     let root = Directory::open(root)?;
     let mut objects = Objects::open(source)?;
@@ -1258,7 +1259,7 @@ impl ViewPlan {
             return Err(refusal("proof_binding_invalid"));
         }
         let bytes=serde_json::to_vec(self).map_err(|_|refusal("proof_invalid"))?;
-        if bytes.len()>MAX_PLAN {return Err(refusal("proof_byte_limit"));}
+        if bytes.len()>MAX_PLAN {return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::PlanBytes, bytes.len() as u64, MAX_PLAN as u64));}
         Ok(bytes)
     }
     pub(crate) fn live(&self)->Result<(),String> {
@@ -1425,7 +1426,7 @@ impl ClosedViewIntent {
     }
 }
 
-const MAX_INTENT: usize = 8 * MAX_OUTPUT;
+const MAX_INTENT: usize = 64 * MAX_OUTPUT;
 const MAX_PUBLICATION: usize = 1024;
 fn view_digest(bytes: &[u8]) -> String {
     hexadecimal(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
@@ -1512,7 +1513,7 @@ impl ViewIntent {
         self.validate()?;
         let bytes = serde_json::to_vec(self).map_err(|_| refusal("proof_invalid"))?;
         if bytes.len() > MAX_INTENT {
-            return Err(refusal("proof_byte_limit"));
+            return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::ManifestBytes, bytes.len() as u64, MAX_INTENT as u64));
         }
         Ok(bytes)
     }

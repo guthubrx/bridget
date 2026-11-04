@@ -29,22 +29,36 @@ fn parse(error: &str) -> Option<F> {
 }
 pub(super) fn view_error_code(reason:WorkerRefusal,failure:bridget_transport::protocol::CommitViewFailure)->String {
     if failure.validate(reason).is_err() {return "remote_commit_view_prepare:workspace_prepare_failed:cause=unknown".into();}
-    format!("remote_commit_view_prepare:{}:cause={}",serde_json::to_value(reason).unwrap().as_str().unwrap(),
-        serde_json::to_value(failure).unwrap().as_str().unwrap())
+    let value=serde_json::to_value(failure).unwrap();
+    let cause=value.as_str().map(str::to_owned).unwrap_or_else(||value.to_string());
+    format!("remote_commit_view_prepare:{}:cause={}",serde_json::to_value(reason).unwrap().as_str().unwrap(),cause)
 }
 
 fn parse_view(error:&str)->Option<(WorkerRefusal,bridget_transport::protocol::CommitViewFailure)> {
     let suffix=error.strip_prefix("remote_start_failed:remote_commit_view_prepare:")?;
-    if suffix.len()>160 {return None;}
+    if suffix.len()>320 {return None;}
     let (reason,cause)=suffix.split_once(":cause=")?;
     let reason:WorkerRefusal=serde_json::from_value(json!(reason)).ok()?;
-    let failure:bridget_transport::protocol::CommitViewFailure=serde_json::from_value(json!(cause)).ok()?;
+    let failure:bridget_transport::protocol::CommitViewFailure=serde_json::from_value(json!(cause))
+        .or_else(|_|serde_json::from_str(cause)).ok()?;
     failure.validate(reason).ok()?;Some((reason,failure))
 }
 
-pub(super) fn view_failure_action(cause:bridget_transport::protocol::CommitViewFailure)->&'static str {
+pub(super) fn view_failure_action(cause:bridget_transport::protocol::CommitViewFailure)->String {
     use bridget_transport::protocol::CommitViewFailure as V;
-    match cause {
+    let message=match cause {
+        V::MeasuredLimit{kind,observed,maximum}=>{
+            use bridget_transport::protocol::CommitViewLimitKind as K;
+            let (what,unit)=match kind {
+                K::SelectedBytes=>("fichiers sélectionnés","octets"),
+                K::TreeBytes=>("inventaire Git","octets"),
+                K::ManifestBytes=>("manifeste de la copie","octets"),
+                K::LinkBytes=>("métadonnées des liens","octets"),
+                K::Entries=>("inventaire de la copie","entrées"),
+                K::PlanBytes=>("plan de préparation","octets"),
+            };
+            return format!("Faire vérifier la préparation : {what}, au moins {observed} {unit} mesurés, plafond {maximum} {unit}. Conserver cette tâche et ses fichiers ; demander au responsable de qualifier ce volume avant une nouvelle admission autorisée.");
+        },
         V::ObjectUnavailable=>"Faire publier ou rétablir le commit exact et ses objets dans le dépôt cible ou son miroir configuré. Ne pas substituer HEAD ou une autre base.",
         V::DiskFull=>"Faire vérifier l'espace et le quota du volume choisi pour la vue, puis ranger seulement les données dont la clôture et les usages sont établis.",
         V::AccessDenied=>"Faire vérifier l'accès du compte worker au volume choisi. Ne pas élargir les droits pour forcer la préparation.",
@@ -58,7 +72,7 @@ pub(super) fn view_failure_action(cause:bridget_transport::protocol::CommitViewF
         V::StopUnconfirmed=>"Faire vérifier le marqueur privé, l'identité et le groupe du helper de cette préparation. Conserver les fichiers et la preuve tant que son arrêt reste inconnu.",
         V::Cancelled=>"Cette opération a reçu une annulation. Vérifier sa clôture native et conserver ses fichiers ; ne pas la remettre en marche.",
         V::PreparationExpired|V::TimedOut=>"Faire vérifier la durée de l'export ou de la lecture et de son audit, puis constater l'arrêt du helper avant toute autre admission de ce travail.",
-        V::ByteLimit=>"Faire qualifier le nombre et le volume des fichiers sélectionnés pour cette vue. Ne pas relever les bornes ou créer un worktree pour contourner le refus.",
+        V::ByteLimit=>"Faire qualifier le reçu de cette ancienne préparation : il ne distingue pas le volume des fichiers, l'inventaire et les métadonnées. Le plafond courant des fichiers est 32 Gio (34 359 738 368 octets), et celui de l'inventaire et du manifeste est 64 Mio. Le volume mesuré par cet ancien reçu reste inconnu. Conserver la tâche et ses fichiers.",
         V::LinkOutsideView|V::LinkCycle|V::UnsupportedPath=>"Faire examiner les chemins et liens du commit demandé. Préserver le dépôt ; corriger la source ou décider avec son propriétaire d'un parcours compatible.",
         V::IntegrityFailed=>"Conserver la vue et ses preuves. Faire examiner les fichiers divergents avant toute décision de rangement ; aucun retrait automatique n'est autorisé.",
         V::SourceIdentityChanged=>"Faire vérifier la correspondance du projet et l'identité Git de la source. Ne pas accepter une autre source sous la même clé.",
@@ -66,7 +80,8 @@ pub(super) fn view_failure_action(cause:bridget_transport::protocol::CommitViewF
         V::SourceUnavailable=>"Faire vérifier la disponibilité du dépôt source et des objets du commit exact. Aucun changement de base n'est autorisé.",
         V::ProofUnavailable=>"Conserver les fichiers et demander une inspection corrélée du reçu, de la graine et des preuves privées de cette préparation.",
         V::Unknown=>"La cause précise reste inconnue. Transmettre au responsable Bridget la tâche, sa clé et sa machine pour lire le reçu corrélé ; ne pas déduire un problème de compte, de réseau ou de stockage.",
-    }
+    };
+    message.to_owned()
 }
 
 fn project_view(task:&Task,view:&mut Value,error:&str) {
@@ -135,7 +150,10 @@ mod tests {
     #[test]
     fn spec221_c19_failure_code_is_closed_and_never_imports_private_text() {
         use bridget_transport::protocol::CommitViewFailure as V;
-        for cause in [V::ObjectUnavailable,V::DiskFull,V::StopUnconfirmed,V::DestinationUnavailable,V::Unknown] {
+        let measured=V::MeasuredLimit{kind:bridget_transport::protocol::CommitViewLimitKind::SelectedBytes,observed:34_359_738_369,maximum:34_359_738_368};
+        let message=view_failure_action(measured);
+        assert!(message.contains("34359738369") && message.contains("34359738368") && message.contains("fichiers sélectionnés"));
+        for cause in [V::ObjectUnavailable,V::DiskFull,V::StopUnconfirmed,V::DestinationUnavailable,V::Unknown,measured] {
             let code=format!("remote_start_failed:{}",view_error_code(WorkerRefusal::WorkspacePrepareFailed,cause));
             assert_eq!(parse_view(&code),Some((WorkerRefusal::WorkspacePrepareFailed,cause)));
             assert!(parse_view(&(code+":PRIVATE/path")).is_none());
