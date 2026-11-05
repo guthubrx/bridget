@@ -18813,7 +18813,28 @@ fn handle_worker_message(
     message: WrapperToDaemon,
 ) -> Option<DaemonToWrapper> {
     use bridget_transport::protocol::*;
-    let refused = |reason| Some(DaemonToWrapper::WorkerRejected { reason });
+    // Projection fermée : aucun corps de commande ni credential dans le diagnostic.
+    let refused_context = match &message {
+        WrapperToDaemon::WorkerResponse { response } => Some(serde_json::json!({
+            "machine_id": response.worker.machine_id,
+            "correlation_id": response.correlation_id,
+            "command": response.command,
+            "operation": match &response.response {
+                WorkerResponseOperation::Observation { observation } => format!("observation_{:?}", observation.phase),
+                WorkerResponseOperation::FinalResult { .. } => "final_result".into(),
+                _ => "other".into(),
+            },
+        })),
+        _ => None,
+    };
+    let refused = |reason| {
+        if matches!(reason, WorkerRefusal::CommandMismatch | WorkerRefusal::StoreUnavailable) {
+            eprintln!("bridget_worker_refusal235 {}", serde_json::json!({
+                "reason":reason,"context":refused_context,
+            }));
+        }
+        Some(DaemonToWrapper::WorkerRejected { reason })
+    };
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     let hello_capabilities = match &message {
         WrapperToDaemon::WorkerHello { hello } => Some((hello.clone(), Vec::new())),
