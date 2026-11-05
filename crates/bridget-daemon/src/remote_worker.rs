@@ -6843,6 +6843,23 @@ pub(crate) fn probe_capabilities198_for_test(writer:&Mutex<UnixStream>,reader:&m
     probe_worker_capability(writer,reader).map(|features|features.capabilities())
 }
 
+// O(1), projection fermée : aucun corps de trame, credential ou chemin.
+fn unexpected_frame_diagnostic235(message:&DaemonToWrapper,worker:&WorkerIdentity,epoch:&str)->serde_json::Value {
+    let (kind,identity_matches,epoch_matches,shape_valid,refusal)=match message {
+        DaemonToWrapper::WorkerRejected{reason}=>("master_rejected",None,None,None,Some(*reason)),
+        DaemonToWrapper::UpdateInProgress=>("update_in_progress",None,None,None,None),
+        DaemonToWrapper::OriginProofRequest{request}=>("origin_proof_request",Some(request.worker==*worker),Some(request.connection_epoch==epoch),Some(request.validate_shape().is_ok()),None),
+        DaemonToWrapper::ProviderCatalogueRefresh{worker:identity,connection_epoch,refresh_id}=>("catalogue_refresh",Some(identity==worker),Some(connection_epoch==epoch),Some(bridget_transport::provider_catalogue::catalogue_token(refresh_id)),None),
+        DaemonToWrapper::CandidateProbeV2{probe}=>("candidate_probe_v2",Some(probe.worker==*worker),Some(probe.connection_epoch==epoch),Some(probe.validate_shape().is_ok()),None),
+        DaemonToWrapper::CandidateProbe{probe}=>("candidate_probe",Some(probe.worker==*worker),Some(probe.connection_epoch==epoch),Some(probe.validate_shape().is_ok()),None),
+        DaemonToWrapper::WorkerRequest{request}=>("worker_request",Some(request.worker==*worker),Some(request.connection_epoch==epoch),Some(request.validate().is_ok()),None),
+        _=>("other",None,None,None,None),
+    };
+    serde_json::json!({"event":"worker_channel_reader_closed","reason":"unexpected_frame",
+        "machine_id":worker.machine_id,"frame_kind":kind,"identity_matches":identity_matches,
+        "epoch_matches":epoch_matches,"shape_valid":shape_valid,"refusal":refusal})
+}
+
 /// Client technique supervisé par l'unité existante. Une reconnexion ne détruit
 /// ni processus relâché ni reçu ; seuls les permis en mémoire sont abandonnés.
 pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
@@ -7055,8 +7072,12 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         {
                             WorkerInbound::CandidateProbeV2(probe)
                         }
-                        _ => {
-                            log::warn!("worker_channel_reader_closed reason=unexpected_frame");
+                        Ok(message) => {
+                            eprintln!("bridget_worker_channel235 {}",unexpected_frame_diagnostic235(&message,&read_worker,&read_epoch));
+                            break;
+                        }
+                        Err(_) => {
+                            eprintln!("bridget_worker_channel235 {}",serde_json::json!({"event":"worker_channel_reader_closed","reason":"frame_decode_invalid","machine_id":read_worker.machine_id}));
                             break;
                         }
                     },
@@ -13805,6 +13826,19 @@ while not stop.exists(): time.sleep(.01)
                 cause: WorkerStartCapacityCause::Unknown,
             });
         assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
+    }
+
+    #[test]
+    fn spec235_channel_diagnostic_is_closed_and_preserves_rejection() {
+        let message=DaemonToWrapper::WorkerRejected{reason:WorkerRefusal::CommandMismatch};
+        let fact=unexpected_frame_diagnostic235(&message,&worker(),"epoch");
+        assert_eq!(fact["frame_kind"],"master_rejected");assert_eq!(fact["refusal"],"command_mismatch");
+        assert_eq!(fact["identity_matches"],serde_json::Value::Null);
+        let secret=DaemonToWrapper::AgentTrackingResult{result:serde_json::json!({"private":"PRIVATE-CREDENTIAL"})};
+        let fact=unexpected_frame_diagnostic235(&secret,&worker(),"epoch");
+        assert_eq!(fact["frame_kind"],"other");assert!(!fact.to_string().contains("PRIVATE"));
+        let fact=unexpected_frame_diagnostic235(&DaemonToWrapper::UpdateInProgress,&worker(),"epoch");
+        assert_eq!(fact["frame_kind"],"update_in_progress");
     }
 
     #[test]
