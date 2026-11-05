@@ -481,8 +481,8 @@ fn notice(manifest: &Manifest, links: &BTreeMap<String, String>) -> Result<Vec<u
         "link_scope":"Les cibles sont décrites selon les chemins exacts du commit. Une cible non déclarée peut être absente ; la sécurité des alias du système de fichiers est contrôlée séparément.",
         "next_action":"Cette carte décrit la sélection initiale ; un fichier omis peut avoir été matérialisé depuis. Lire les fichiers présents. Pour un chemin omis, appeler bridget_read_commit_file avec path égal au chemin exact de cette carte, puis lire le chemin renvoyé. L'enfant utilise sa connexion courante sans task_id ; le parent indique sa propre task_id. Si l'outil manque, faire charger le client compatible ; ne pas remplacer la mission ou sa base. Aucun git show/log dans cette vue ; aucun fichier absent n'est une preuve d'absence du commit."
     })).map_err(|_|refusal("manifest_invalid"))?;
-    if bytes.len() > 8 * MAX_OUTPUT {
-        return Err(refusal("notice_limit"));
+    if bytes.len() > MAX_NOTICE {
+        return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::NoticeBytes, bytes.len() as u64, MAX_NOTICE as u64));
     }
     Ok(bytes)
 }
@@ -1334,7 +1334,7 @@ impl ViewPlan {
         let block=if stat.f_frsize>0 {stat.f_frsize as u128} else {stat.f_bsize as u128};
         if block==0 {return Err(refusal("storage_space_unavailable"));}
         let needed=manifest.entries.iter().filter(|entry|entry.selected).map(|entry|entry.bytes as u128).sum::<u128>()
-            +manifest.entries.len() as u128*block+MAX_INTENT as u128+MAX_PLAN as u128;
+            +manifest.entries.len() as u128*block+MAX_INTENT as u128+MAX_NOTICE as u128+MAX_PLAN as u128;
         if (stat.f_bavail as u128).saturating_mul(block)<needed {
             return Err("workspace_disk_full: espace insuffisant pour cette vue".into());
         }
@@ -1359,7 +1359,7 @@ impl ViewPlan {
         self.live()
     }
     pub(crate) fn proof_digest(&self)->Result<String,String>{Ok(view_digest(&self.encoded()?))}
-    pub(crate) fn reserved_bytes(&self)->u64 {(MAX_INTENT+MAX_PLAN+MAX_PUBLICATION+2*2048) as u64}
+    pub(crate) fn reserved_bytes(&self)->u64 {MAX_VIEW_RESERVATION_BYTES}
     pub(crate) fn adopted_reserved_bytes(&self,intent:&ViewIntent)->Result<u64,String> {
         self.matches(intent)?;
         intent.reserved_bytes()?.checked_add(self.encoded()?.len() as u64)
@@ -1427,7 +1427,20 @@ impl ClosedViewIntent {
 }
 
 const MAX_INTENT: usize = 64 * MAX_OUTPUT;
+// La carte répète les chemins omis et les liens, avec une mise en forme publique.
+const MAX_NOTICE: usize = 4 * MAX_INTENT;
+
+#[derive(Deserialize)]
+struct NoticeManifest { manifest: Manifest }
+
+// O(octets) ; les champs publics autres que le manifeste ne sont pas alloués.
+fn notice_manifest(reader: impl Read) -> Result<Manifest, String> {
+    let reader = std::io::BufReader::with_capacity(64 * 1024, reader.take(MAX_NOTICE as u64 + 1));
+    serde_json::from_reader::<_, NoticeManifest>(reader)
+        .map(|notice| notice.manifest).map_err(|_| refusal("proof_invalid"))
+}
 const MAX_PUBLICATION: usize = 1024;
+pub(crate) const MAX_VIEW_RESERVATION_BYTES: u64 = (MAX_INTENT+MAX_PLAN+MAX_PUBLICATION+2*2048) as u64;
 fn view_digest(bytes: &[u8]) -> String {
     hexadecimal(ring::digest::digest(&ring::digest::SHA256, bytes).as_ref())
 }
@@ -1737,28 +1750,12 @@ impl ViewProofs {
                 if metadata.dev() != publication.device || metadata.ino() != publication.inode {
                     return Err(refusal("view_identity_changed"));
                 }
-                let mut file = root.file(NOTICE, false)?;
+                let file = root.file(NOTICE, false)?;
                 let meta = file.metadata().map_err(compact::io_failure)?;
-                if !meta.is_file() || meta.len() > MAX_INTENT as u64 {
+                if !meta.is_file() || meta.len() > MAX_NOTICE as u64 {
                     return Err(refusal("proof_invalid"));
                 }
-                let mut card = Vec::new();
-                std::io::Read::by_ref(&mut file)
-                    .take(MAX_INTENT as u64 + 1)
-                    .read_to_end(&mut card)
-                    .map_err(compact::io_failure)?;
-                if card.len() > MAX_INTENT {
-                    return Err(refusal("proof_byte_limit"));
-                }
-                let mut value: serde_json::Value =
-                    serde_json::from_slice(&card).map_err(|_| refusal("proof_invalid"))?;
-                let manifest = serde_json::from_value(
-                    value
-                        .get_mut("manifest")
-                        .ok_or_else(|| refusal("proof_invalid"))?
-                        .take(),
-                )
-                .map_err(|_| refusal("proof_invalid"))?;
+                let manifest = notice_manifest(file)?;
                 let intent = ViewIntent {
                     version: 1,
                     binding: closed.binding,

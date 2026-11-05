@@ -2945,7 +2945,7 @@ pub enum CommitViewFailure {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CommitViewLimitKind { SelectedBytes, TreeBytes, ManifestBytes, LinkBytes, Entries, PlanBytes }
+pub enum CommitViewLimitKind { SelectedBytes, TreeBytes, ManifestBytes, LinkBytes, Entries, PlanBytes, NoticeBytes }
 impl CommitViewFailure {
     pub fn validate(self,reason:WorkerRefusal)->Result<(),WorkerRefusal> {
         if let Self::MeasuredLimit { observed, maximum, .. } = self {

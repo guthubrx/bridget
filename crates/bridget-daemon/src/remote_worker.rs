@@ -27,6 +27,9 @@ use std::sync::Mutex;
 mod proof198;
 #[path = "remote_worker_read.rs"]
 mod read;
+#[path = "remote_worker_capacity234.rs"]
+mod capacity234;
+pub(crate) use capacity234::recover_view_capacity;
 pub(crate) use read::{diagnose_live_local, diagnostic_failure, live_worker_binding, LiveWorkerBinding};
 #[cfg(test)]
 use read::diagnose_local;
@@ -548,7 +551,7 @@ impl ViewReservation {
         if binding.key().ok().as_deref() != Some(self.key.as_str())
             || !valid_digest(&self.intent_digest)
             || self.reserved_bytes < 5120
-            || self.reserved_bytes > 8 * 1024 * 1024 + 16*1024 + 5120
+            || self.reserved_bytes > crate::workspace_git::MAX_VIEW_RESERVATION_BYTES
             || self.planning.as_ref().is_some_and(|plan|!valid_digest(&plan.seed_digest)
                 || (!plan.adopted && (receipt.record.is_some() || self.materialization.is_some()))) {
             return Err(WorkerStoreError::Quarantined);
@@ -13804,6 +13807,70 @@ while not stop.exists(): time.sleep(.01)
         assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
     }
 
+    #[test]
+    fn spec234_large_view_reservation_reopens_and_recovers_without_receipt_rewrite() {
+        let fixture=Fixture::new();let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        let seed=c19_plan(&intent);runtime.store.reserve_view_plan(&command,&request,&seed).unwrap();
+        let root=runtime.store.root.clone();let worker=runtime.identity.clone();
+        let receipt=runtime.store.workspace_path(&command);let bytes=fs::read(&receipt).unwrap();
+        // Un reçu de préparation ordinaire conservé ne bloque pas cette reprise.
+        let mut retained:WorkspacePreparationReceipt=read_optional(&receipt,MAX_METADATA_BYTES).unwrap().unwrap();
+        retained.command.task_id=uuid::Uuid::new_v4().to_string();
+        retained.command.command_id=uuid::Uuid::new_v4().to_string();retained.commit_view=None;
+        let ordinary=runtime.store.workspace_path(&retained.command);
+        write_json(&ordinary,&retained).unwrap();let ordinary_before=fs::read(&ordinary).unwrap();
+        assert!(runtime.store.inventory().is_ok());
+        runtime.store.quarantine().unwrap();drop(runtime);
+        let result=WorkerStore::recover_legacy_view_capacity(&root,worker.clone()).unwrap();
+        assert_eq!(result["cause"],"legacy_view_reservation_limit");assert_eq!(result["processes_started"],0);
+        assert_eq!(fs::read(&receipt).unwrap(),bytes);
+        assert_eq!(fs::read(&ordinary).unwrap(),ordinary_before);
+        let reopened=WorkerStore::open(&root,worker).unwrap();assert!(reopened.inventory().is_ok());
+        assert_eq!(fs::read(&receipt).unwrap(),bytes);
+    }
+
+    #[test]
+    fn spec234_recovery_refuses_live_lock_and_missing_witness() {
+        let fixture=Fixture::new();let (runtime,_,_,_)=c19_preparation_fixture(&fixture);
+        let root=runtime.store.root.clone();let worker=runtime.identity.clone();let enrolled=runtime.store.enrollment.clone();
+        runtime.store.quarantine().unwrap();let before=fs::read(&enrolled).unwrap();
+        assert!(matches!(WorkerStore::recover_legacy_view_capacity(&root,worker.clone()),Err(WorkerStoreError::Locked)));
+        assert_eq!(fs::read(&enrolled).unwrap(),before);drop(runtime);
+        assert!(WorkerStore::recover_legacy_view_capacity(&root,worker).is_err());
+        assert_eq!(fs::read(&enrolled).unwrap(),before);
+    }
+
+    #[test]
+    fn spec234_recovery_keeps_unknown_bootstrap_and_wrong_identity_quarantined() {
+        let fixture=Fixture::new();let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        runtime.store.reserve_view_plan(&command,&request,&c19_plan(&intent)).unwrap();
+        runtime.store.mark_view_source_attempt_binding(&intent.binding).unwrap();
+        let root=runtime.store.root.clone();let worker=runtime.identity.clone();let enrolled=runtime.store.enrollment.clone();
+        runtime.store.quarantine().unwrap();let before=fs::read(&enrolled).unwrap();drop(runtime);
+        let mut other=worker.clone();other.worker_id="different-worker".into();
+        assert!(WorkerStore::recover_legacy_view_capacity(&root,other).is_err());
+        assert!(WorkerStore::recover_legacy_view_capacity(&root,worker).is_err());
+        assert_eq!(fs::read(&enrolled).unwrap(),before);
+    }
+
+    #[test]
+    fn spec234_recovery_refuses_live_orphan_marker_and_invalid_record() {
+        let fixture=Fixture::new();let (runtime,command,request,intent)=c19_preparation_fixture(&fixture);
+        runtime.store.reserve_view_plan(&command,&request,&c19_plan(&intent)).unwrap();
+        let root=runtime.store.root.clone();let worker=runtime.identity.clone();let enrolled=runtime.store.enrollment.clone();
+        private_dir(&root.join("markers")).unwrap();
+        let marker=root.join("markers/live-orphan.json");
+        write_json(&marker,&ManagedMarker{pgid:unsafe{libc::getpgrp()} as u32,birth:1,
+            instance_id:command.task_id.clone(),command_id:command.command_id.clone(),generation:1}).unwrap();
+        runtime.store.quarantine().unwrap();let before=fs::read(&enrolled).unwrap();drop(runtime);
+        assert!(WorkerStore::recover_legacy_view_capacity(&root,worker.clone()).is_err());
+        assert_eq!(fs::read(&enrolled).unwrap(),before);
+        fs::remove_file(&marker).unwrap(); // fixture only, never an operator recovery.
+        let invalid=root.join("commands/invalid.json");write_private_file_atomic(&invalid,b"{").unwrap();
+        assert!(WorkerStore::recover_legacy_view_capacity(&root,worker).is_err());
+        assert_eq!(fs::read(&enrolled).unwrap(),before);assert_eq!(fs::read(invalid).unwrap(),b"{");
+    }
+
 }
 
 #[cfg(test)]
@@ -13855,4 +13922,5 @@ mod program_compatibility221_tests {
         let old=MasterWorkerFeatures::default();assert!(!old.capabilities().contains(&WorkerCapability::ProgramCompatibilityV1));assert!(!old.admits(&[WorkerCapability::ProgramCompatibilityV1]));
         let current=MasterWorkerFeatures{program_compatibility:true,..Default::default()};assert!(current.admits(&[WorkerCapability::ProgramCompatibilityV1]));
     }
+
 }

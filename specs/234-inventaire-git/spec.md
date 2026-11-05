@@ -13,3 +13,13 @@ Une expiration doit nommer une opération fermée, son délai et ses mesures,
 sans chemin, texte Git ou secret. L’arrêt natif reste obligatoire et borné.
 Conserver les sources, les tâches, les clés et les travaux en cours ; aucune
 admission métier ne sert de test. La mission déjà démarrée surCartae reste active.
+
+Le parcours de revue a révélé un défaut du lot232 surKS : la réservation de
+vue64Mio était encore relue avec une borne8Mio. Le worker s’est mis en
+quarantaine. Centraliser la borne et fournir une récupération native froide,
+limitée à ce défaut, après inventaire complet et absence de producteurs vivants.
+Aucun reçu, marqueur ou travail ne doit être supprimé ou réécrit pour reprendre.
+La carte publique garde une borne cohérente256Mio. Sa lecture ne conserve que
+le manifeste nécessaire ; l’espace disponible inclut aussi cette carte.
+Les nouvelles capacités sont déclarées dans les formats requis. L’ancien232
+ne peut plus servir de retour ; préparer un lecteur compatible vérifié.

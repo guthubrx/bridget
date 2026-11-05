@@ -56,6 +56,7 @@ pub(super) fn view_failure_action(cause:bridget_transport::protocol::CommitViewF
                 K::LinkBytes=>("métadonnées des liens","octets"),
                 K::Entries=>("inventaire de la copie","entrées"),
                 K::PlanBytes=>("plan de préparation","octets"),
+                K::NoticeBytes=>("carte de la copie","octets"),
             };
             return format!("Faire vérifier la préparation : {what}, au moins {observed} {unit} mesurés, plafond {maximum} {unit}. Conserver cette tâche et ses fichiers ; demander au responsable de qualifier ce volume avant une nouvelle admission autorisée.");
         },

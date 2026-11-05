@@ -23,6 +23,7 @@ mod commit_view;
 pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED:bool=true;
 
 pub(crate) use commit_view::{run_commit_view_plan, run_commit_view_export, run_commit_view_materialize, ViewPlan, ViewBinding, ViewIntent, ViewProofs, ViewJob, ViewJobRequest, JobPoll, ExportFailure, view_export_failure};
+pub(crate) use commit_view::MAX_VIEW_RESERVATION_BYTES;
 
 pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, report_repaired_workspace, apply_repair_git};
 

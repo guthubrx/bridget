@@ -1281,11 +1281,11 @@ fn spec234_read_only_compact_plan_on_operator_repository() {
     let worktrees=||run_git(&root,&["worktree","list","--porcelain","-z"],READ_TIMEOUT).unwrap().stdout;
     let before_head=head();let before_worktrees=worktrees();
     let preflight=WorkspacePreflight {toplevel:root.clone(),cwd:root.clone(),offset:PathBuf::new(),
-        worktree_dir:root.join(".worktrees"),branch:None,base_commit:before_head.clone(),listed_paths:Vec::new()};
+        worktree_dir:root.join(".worktrees"),branch:None,base_commit:std::env::var("BRIDGET_234_READ_ONLY_BASE").unwrap_or_else(|_|before_head.clone()),listed_paths:Vec::new()};
     let started=Instant::now();let plan=compact::plan(&preflight).unwrap().expect("opt-in compact profile");
     let plan=serde_json::to_value(plan).unwrap();let elapsed_ms=started.elapsed().as_millis();
     assert_eq!(head(),before_head);assert_eq!(worktrees(),before_worktrees);
-    println!("bridget234_read_only_plan={}",serde_json::json!({"base":before_head,
+    println!("bridget234_read_only_plan={}",serde_json::json!({"base":plan["base"],"head":before_head,
         "elapsed_ms":elapsed_ms,"selected_files":plan["selected"].as_array().unwrap().len(),
         "selected_bytes":plan["selected_bytes"],"total_bytes":plan["total_bytes"],
         "worktree_count":before_worktrees.split('\0').filter(|s|s.starts_with("worktree ")).count(),

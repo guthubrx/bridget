@@ -204,6 +204,20 @@ fn run_with_args(args: Vec<String>) {
 
     // Le worker n'ouvre pas le namespace métier et ne démarre aucun daemon.
     if cmd == "worker" {
+        if args.get(2).is_some_and(|s| s == "recover-view-capacity") {
+            let config = parse_worker_args(&args[3..])
+                .unwrap_or_else(|error| exit_argument_error(&error));
+            match crate::remote_worker::recover_view_capacity(&config) {
+                Ok(value) => println!("{value}"),
+                Err(code) => {
+                    eprintln!("{}", serde_json::json!({"status":"refused","code":code,
+                        "scope":"this_store","message":"Conserver le magasin et ses reçus. La reprise ciblée de capacité n’a pas réuni toutes ses preuves : worker arrêté, identité, inventaire et arrêt des producteurs. Faire lire ce refus par le responsable ; aucun marqueur à effacer, aucune mission à rejouer.",
+                        "other_work":"Les autres machines et travaux autorisés suivent leur propre état."}));
+                    crate::cli_table::exit(1);
+                }
+            }
+            return;
+        }
         if args.get(2).is_some_and(|s| s == "diagnose") {
             let (config, command) = parse_worker_diagnostic_args(&args[3..])
                 .unwrap_or_else(|error| exit_argument_error(&error));

@@ -6,3 +6,10 @@
 4. Journaliser une expiration par une opération et une commande fermées, tâche de création si connue, durée, volumes et état d’arrêt ; guider le propriétaire vers ce fait.
 5. Vérifier le refus avant correction, le passage après correction et les garanties de délai, troncature et séparation des flux.
 6. Revue indépendante ciblée, assemblages, activation native sur les cibles, retour compatible, publication et nettoyage.
+
+7. Réparer la borne de réservation avec une constante partagée et un témoin
+   natif précis ; sauvegarder KS, garder la quarantaine jusqu’à preuve complète.
+8. Aligner écriture, relecture et espace physique des cartes ; vérifier un
+   manifeste de30000entrées, les références closes et les refus de récupération.
+9. Construire un retour compatible qui conserve le comportement Git antérieur,
+   puis la version active. Reprendre KS sans lancer ni rejouer sa revue annulée.

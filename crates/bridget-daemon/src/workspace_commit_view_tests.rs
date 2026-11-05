@@ -1945,3 +1945,19 @@ fn spec221_c19_real_corpus_native_export() {
     fs::write(root.join("receipt.json"), serde_json::to_vec_pretty(&receipt).unwrap()).unwrap();
     println!("{receipt}");
 }
+
+#[test]
+fn spec234_large_notice_roundtrip_keeps_only_manifest_and_rejects_duplicate_binding() {
+    let manifest = Manifest { version:1, base:"a".repeat(40), cwd:".".into(),
+        entries:(0..30_000).map(|index| Entry { path:format!("item-{index:05}-{}.bin", "x".repeat(100)),
+            mode:"100644".into(), oid:"b".repeat(40), bytes:200_000, selected:false }).collect() };
+    validate_manifest(&manifest).unwrap();
+    let card=notice(&manifest,&BTreeMap::new()).unwrap();
+    assert!(card.len()>8*MAX_OUTPUT && card.len()<MAX_NOTICE);
+    let restored=notice_manifest(card.as_slice()).unwrap();
+    assert_eq!(serde_json::to_vec(&restored).unwrap(),serde_json::to_vec(&manifest).unwrap());
+    let encoded=serde_json::to_string(&manifest).unwrap();
+    let duplicate=format!("{{\"manifest\":{encoded},\"manifest\":{encoded}}}");
+    assert!(notice_manifest(duplicate.as_bytes()).is_err());
+    eprintln!("public notice roundtrip: {} bytes, {} entries",card.len(),restored.entries.len());
+}
