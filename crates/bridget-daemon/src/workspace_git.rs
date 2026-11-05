@@ -18,29 +18,16 @@ mod repair;
 mod compact;
 #[path = "workspace_commit_view.rs"]
 mod commit_view;
+pub(crate) use commit_view::MAX_VIEW_RESERVATION_BYTES;
 /// Parcours de vue négocié : lecteur durable et créateur discovery.
 /// Toute livraison exige la qualification du chemin complet et du retour.
 pub(crate) const COMMIT_VIEW_LAUNCH_ENABLED:bool=true;
 
 pub(crate) use commit_view::{run_commit_view_plan, run_commit_view_export, run_commit_view_materialize, ViewPlan, ViewBinding, ViewIntent, ViewProofs, ViewJob, ViewJobRequest, JobPoll, ExportFailure, view_export_failure};
-pub(crate) use commit_view::MAX_VIEW_RESERVATION_BYTES;
 
 pub(crate) use repair::{RepairAnchor, inspect_repair, report_repair, report_repaired_workspace, apply_repair_git};
 
 pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(10);
-// Un arbre accepté jusqu'à 64 Mio n'est pas une lecture de configuration.
-// L'appelant conserve un délai explicite, sans prolonger les contrôles courts.
-pub(crate) const INVENTORY_TIMEOUT: Duration = Duration::from_secs(60);
-thread_local! {
-    static GIT_TASK234: std::cell::RefCell<Option<uuid::Uuid>> = const { std::cell::RefCell::new(None) };
-}
-struct GitTask234(Option<uuid::Uuid>);
-impl GitTask234 {
-    fn enter(task: uuid::Uuid) -> Self { Self(GIT_TASK234.with(|value| value.replace(Some(task)))) }
-}
-impl Drop for GitTask234 {
-    fn drop(&mut self) { GIT_TASK234.with(|value| { value.replace(self.0); }); }
-}
 const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
 // Même plafond que T3 (WORKTREE_ADD_TIMEOUT_MS) : l'extraction d'un gros dépôt
 // dépasse largement 20 s (opus2D : 13 656 fichiers, 6,1 Go, 47 s mesurées).
@@ -390,12 +377,9 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
         WORKTREE_ADD_TIMEOUT
     } else if args.first() == Some(&"fetch") {
         CREATE_TIMEOUT
-    } else if matches!(args.first(), Some(&"ls-tree" | &"ls-files")) {
-        INVENTORY_TIMEOUT
     } else {
         READ_TIMEOUT
     });
-    let started = Instant::now();
     let deadline = Instant::now() + timeout;
     if !allowed(args) {
         return Err("commande Git hors liste blanche".into());
@@ -412,7 +396,6 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
         .complete()?;
     }
     if Instant::now() >= deadline {
-        log_git_timeout234(args, timeout, started, 0, 0, "not_spawned");
         return Err("délai Git dépassé avant lancement".into());
     }
     let mut child = spawn_git(cwd, args, anchor, Stdio::null(), literal_objects)?;
@@ -434,7 +417,6 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
     let mut eof = [false; 2];
     let mut status = None;
     loop {
-        let mut progressed = false;
         for (index, reader, bytes) in [
             (0, &mut stdout as &mut dyn Read, &mut out),
             (1, &mut stderr as &mut dyn Read, &mut err),
@@ -446,7 +428,6 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
             match reader.read(&mut buffer) {
                 Ok(0) => eof[index] = true,
                 Ok(count) => {
-                    progressed = true;
                     // Comme T3, chaque flux garde son budget : stdout ne peut
                     // pas effacer le diagnostic stderr. Arbres/index : stdout 64 Mio ; autres : 1 Mio.
                     let maximum = if index == 0 && matches!(args.first(), Some(&"ls-tree" | &"ls-files")) { MAX_TREE_OUTPUT } else { MAX_OUTPUT };
@@ -472,15 +453,11 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
         }
         if Instant::now() >= deadline {
             let stopped = stop_git(&mut child);
-            log_git_timeout234(args, timeout, started, out.len(), err.len(),
-                if stopped.is_ok() { "confirmed" } else { "unconfirmed" });
             return Err(format!("délai Git dépassé; arrêt {stopped:?}"));
         }
         // Pas de thread lecteur à rejoindre : un descendant gardant un pipe
         // ouvert ne peut prolonger le délai ni épuiser la mémoire.
-        if !progressed {
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        std::thread::sleep(Duration::from_millis(1));
     }
     let output = GitOutput {
         code: status.and_then(|status| status.code()),
@@ -508,50 +485,6 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
         }
     }
     Ok(output)
-}
-
-fn git_timeout_fact234(args: &[&str], budget: Duration, elapsed: Duration,
-    stdout_retained: usize, stderr_retained: usize, stop: &str) -> serde_json::Value {
-    // Seulement des libellés fermés : jamais argv, chemin, SHA ou stderr bruts.
-    let (operation, command) = match args {
-        ["ls-tree", "--full-tree", "-r", "-l", "-z", _] =>
-            ("tree_inventory", "git ls-tree --full-tree -r -l -z <commit>"),
-        ["ls-files", ..] => ("index_inventory", "git ls-files"),
-        ["config", "--local", "--no-includes", "--get", "bridget.worktreeProfile"] =>
-            ("compact_profile_config", "git config --local --no-includes --get bridget.worktreeProfile"),
-        ["config", "--local", "--no-includes", "--get", "extensions.worktreeConfig"] =>
-            ("worktree_extension_config", "git config --local --no-includes --get extensions.worktreeConfig"),
-        ["--version"] => ("version_check", "git --version"),
-        ["worktree", "add", ..] => ("worktree_add", "git worktree add"),
-        ["read-tree", ..] => ("read_tree", "git read-tree"),
-        ["config", ..] => ("config_read", "git config"),
-        ["status", ..] => ("status_read", "git status --porcelain=v1 --untracked-files=normal"),
-        ["rev-parse", ..] => ("revision_read", "git rev-parse"),
-        ["check-ignore", ..] => ("ignore_read", "git check-ignore"),
-        ["worktree", ..] => ("worktree_read", "git worktree list --porcelain -z"),
-        ["merge-base", ..] => ("ancestry_read", "git merge-base"),
-        ["fetch", ..] => ("local_fetch", "git fetch"),
-        ["merge", ..] => ("fast_forward", "git merge --ff-only"),
-        ["log", ..] => ("history_read", "git log"),
-        ["rev-list", ..] => ("history_count", "git rev-list"),
-        ["diff", ..] => ("diff_read", "git diff"),
-        ["update-ref", ..] => ("reference_update", "git update-ref"),
-        ["cat-file", ..] => ("object_read", "git cat-file"),
-        ["checkout-index", ..] => ("checkout_index", "git checkout-index"),
-        ["ls-tree", ..] => ("tree_read", "git ls-tree"),
-        _ => ("other_allowed_operation", "other allowed Git operation"),
-    };
-    serde_json::json!({"operation":operation,"command":command,
-        "task_id":GIT_TASK234.with(|value| *value.borrow()),
-        "budget_ms":budget.as_millis(),"elapsed_ms":elapsed.as_millis(),
-        "stdout_retained_bytes":stdout_retained,"stderr_retained_bytes":stderr_retained,
-        "stop":if matches!(stop,"confirmed"|"not_spawned") {stop} else {"unconfirmed"}})
-}
-
-fn log_git_timeout234(args: &[&str], budget: Duration, started: Instant,
-    stdout_retained: usize, stderr_retained: usize, stop: &str) {
-    eprintln!("bridget_workspace_git_timeout {}", git_timeout_fact234(args,budget,
-        started.elapsed(),stdout_retained,stderr_retained,stop));
 }
 
 /// O(B), configuration commune + config.worktree, bornée, sans inclusion.
@@ -868,7 +801,6 @@ pub(crate) fn create(
 ) -> Result<WorkspaceRecord, String> {
     let task =
         uuid::Uuid::parse_str(task_id).map_err(|_| "workspace_path_unsafe: task_id invalide")?;
-    let _git_task = GitTask234::enter(task);
     let task8 = &task.simple().to_string()[..8];
     let path = preflight.worktree_dir.join(task8);
     let branch = preflight

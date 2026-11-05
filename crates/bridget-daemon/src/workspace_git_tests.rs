@@ -24,11 +24,6 @@ fn isolated(case: &str, name: &str, check: impl FnOnce(&Path)) {
         "old" => format!("exec '{}' \"$@\"", real_git.display()),
         "env" => "printf 'global=%s\\nsystem=%s\\nlazy=%s\\nallow=%s\\nDIR=%s\\nTREE=%s\\nCOMMON=%s\\n' \"$GIT_CONFIG_GLOBAL\" \"$GIT_CONFIG_NOSYSTEM\" \"$GIT_NO_LAZY_FETCH\" \"$GIT_ALLOW_PROTOCOL\" \"${GIT_DIR-unset}\" \"${GIT_WORK_TREE-unset}\" \"${GIT_COMMON_DIR-unset}\"; printf 'arg=%s\\n' \"$@\"".into(),
         "large" => "/usr/bin/awk 'BEGIN { for (i=0;i<262144;i++) { print \"abcdefgh\"; print \"ijklmnop\" > \"/dev/stderr\" } }'".into(),
-        "compact-slow-tree" => r#"for argument in "$@"; do
- if [ "$argument" = bridget.worktreeProfile ]; then printf 'compact-v1\n'; exit 0; fi
- if [ "$argument" = extensions.worktreeConfig ]; then printf 'true\n'; exit 0; fi
-done
-exec /usr/bin/python3 -c 'import sys,time;time.sleep(11);sys.stdout.write("100644 blob " + "a"*40 + " 4\tREADME.md\0")'"#.into(),
         "slow" => format!("printf '%s' \"$$\" > '{}/git.pid'; exec /bin/sleep 2", root.display()),
         "disk-full" => format!(r#"previous=
 repository=
@@ -1223,71 +1218,4 @@ fn spec207_compact_measure_private_repository() {
     let (dir,_)=report_anchor(&ws).unwrap();
     let manifest:serde_json::Value=serde_json::from_slice(&fs::read(dir.join("bridget-compact207.json")).unwrap()).unwrap();
     println!("BRIDGET207_PROBE={}",serde_json::json!({"workspace":ws,"selected_bytes":manifest["selected_bytes"],"total_bytes":manifest["total_bytes"]}));
-}
-
-
-#[test]
-fn spec234_compact_inventory_can_exceed_short_git_deadline() {
-    isolated("compact-slow-tree", "workspace_git::tests::spec234_compact_inventory_can_exceed_short_git_deadline", |root| {
-        let preflight=WorkspacePreflight {
-            toplevel:root.join("repo"),cwd:root.join("repo"),offset:PathBuf::new(),
-            worktree_dir:root.join("repo/.worktrees"),branch:None,base_commit:"a".repeat(40),listed_paths:Vec::new(),
-        };
-        let started=Instant::now();
-        let plan=compact::plan(&preflight).expect("a valid inventory may exceed the short control deadline").unwrap();
-        let value=serde_json::to_value(plan).unwrap();
-        assert_eq!(value["selected"],serde_json::json!(["README.md"]));
-        assert!(started.elapsed()>=READ_TIMEOUT);
-        assert!(started.elapsed()<Duration::from_secs(14));
-    });
-}
-
-
-#[test]
-fn spec234_git_timeout_diagnostic_is_closed_and_keeps_operation() {
-    let fact=git_timeout_fact234(&["ls-tree","--full-tree","-r","-l","-z","PRIVATE-secret-commit"],
-        INVENTORY_TIMEOUT,Duration::from_secs(61),128,64,"PRIVATE-stop-error");
-    assert_eq!(fact["operation"],"tree_inventory");
-    assert_eq!(fact["budget_ms"],60000);
-    assert_eq!(fact["stdout_retained_bytes"],128);
-    assert_eq!(fact["stop"],"unconfirmed");
-    assert!(!fact.to_string().contains("PRIVATE"));
-    assert_eq!(git_timeout_fact234(&["PRIVATE/path"],READ_TIMEOUT,Duration::ZERO,0,0,"not_spawned")["operation"],"other_allowed_operation");
-    assert_eq!(READ_TIMEOUT,Duration::from_secs(10));
-}
-
-
-#[test]
-fn spec234_git_timeout_task_context_is_scoped_and_restored() {
-    let first=uuid::Uuid::new_v4();let second=uuid::Uuid::new_v4();
-    let fact=||git_timeout_fact234(&["--version"],READ_TIMEOUT,Duration::ZERO,0,0,"not_spawned");
-    assert!(fact()["task_id"].is_null());
-    {
-        let _first=GitTask234::enter(first);
-        assert_eq!(fact()["task_id"],first.to_string());
-        {let _second=GitTask234::enter(second);assert_eq!(fact()["task_id"],second.to_string());}
-        assert_eq!(fact()["task_id"],first.to_string());
-    }
-    assert!(fact()["task_id"].is_null());
-}
-
-
-#[test]
-#[ignore = "lecture administrative explicite, aucun worktree ni admission créé"]
-fn spec234_read_only_compact_plan_on_operator_repository() {
-    let root=PathBuf::from(std::env::var("BRIDGET_234_READ_ONLY_ROOT").expect("operator repository"));
-    assert!(root.is_absolute());assert_eq!(root.canonicalize().unwrap(),root);
-    let head=||run_git(&root,&["rev-parse","--verify","--end-of-options","HEAD^{commit}"],READ_TIMEOUT).unwrap().complete().unwrap();
-    let worktrees=||run_git(&root,&["worktree","list","--porcelain","-z"],READ_TIMEOUT).unwrap().stdout;
-    let before_head=head();let before_worktrees=worktrees();
-    let preflight=WorkspacePreflight {toplevel:root.clone(),cwd:root.clone(),offset:PathBuf::new(),
-        worktree_dir:root.join(".worktrees"),branch:None,base_commit:std::env::var("BRIDGET_234_READ_ONLY_BASE").unwrap_or_else(|_|before_head.clone()),listed_paths:Vec::new()};
-    let started=Instant::now();let plan=compact::plan(&preflight).unwrap().expect("opt-in compact profile");
-    let plan=serde_json::to_value(plan).unwrap();let elapsed_ms=started.elapsed().as_millis();
-    assert_eq!(head(),before_head);assert_eq!(worktrees(),before_worktrees);
-    println!("bridget234_read_only_plan={}",serde_json::json!({"base":plan["base"],"head":before_head,
-        "elapsed_ms":elapsed_ms,"selected_files":plan["selected"].as_array().unwrap().len(),
-        "selected_bytes":plan["selected_bytes"],"total_bytes":plan["total_bytes"],
-        "worktree_count":before_worktrees.split('\0').filter(|s|s.starts_with("worktree ")).count(),
-        "head_and_worktrees_unchanged":true}));
 }

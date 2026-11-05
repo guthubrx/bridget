@@ -121,7 +121,7 @@ pub(super) fn plan(preflight: &WorkspacePreflight) -> Result<Option<Plan>, Strin
             "-z",
             &preflight.base_commit,
         ],
-        INVENTORY_TIMEOUT,
+        READ_TIMEOUT,
     )?;
     if listing_output.truncated {
         return Err("workspace_repo_unsupported: sortie Git tronquée pour compact-v1 (arbre limité à 64 Mio, diagnostic à 1 Mio). Cette préparation est refusée. Faire qualifier la taille du dépôt par son responsable, ou retirer son opt-in bridget.worktreeProfile avant une future admission ; conserver toute tâche déjà admise et sa clé.".into());
