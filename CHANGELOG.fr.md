@@ -8,6 +8,12 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.3 — 2026-11-05
+
+- Lire les seules définitions concernées par un état worker, au lieu de décoder tout l’historique conservé pour chaque commande.
+- Préserver la connexion après un refus tardif lié à la vue exacte d’une tâche close. Conserver les contrôles d’identité, d’époque et des attentes encore présentes.
+- Donner un diagnostic fermé des refus worker, sans corps de commande ni credential.
+
 ## 0.8.2 — 2026-11-05
 
 - Budget60secondes pour les inventaires Git explicitement choisis et retrait de la pause entre lectures utiles. Une expiration conserve une commande fermée, durées, volumes et état d’arrêt.

@@ -6,6 +6,12 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.3 — 2026-11-05
+
+- Read only the selected launch definitions when processing worker observations, instead of decoding the full retained history for every command.
+- Preserve a worker connection when a late refusal refers to the exact conserved view of a closed task. Identity, connection epoch and live-request correlation remain checked.
+- Report closed worker refusal diagnostics without command bodies or credentials.
+
 ## 0.8.2 — 2026-11-05
 
 - Give explicitly selected Git inventories60seconds and remove the pause between successful reads. Timeout diagnostics retain a closed command, timings, volumes and stop state.

@@ -9736,7 +9736,7 @@ pub(super) fn remote_command_identity(
         .ok_or(WorkerRefusal::UnknownExecution)?;
     let commands = st
         .idempotency
-        .spawn_commands(&st.fleet.supervisor_scope())
+        .spawn_commands_for_instance(&st.fleet.supervisor_scope(), &task.child, instance)
         .map_err(|_| WorkerRefusal::StoreUnavailable)?;
     let command = commands
         .iter()
@@ -37043,6 +37043,58 @@ mod commit_view_reader221_tests {
         assert_eq!(task_view(&task,None,true)["workspace"]["retention"]["code"],"result_delivery_pending");
 
         drop(state);super::tests::cleanup(&config);
+    }
+
+    #[test]
+    fn spec235_late_conservation_refusal_preserves_channel_and_task_guards() {
+        use bridget_transport::protocol::*;
+        let (mut state,config,mut task,_)=super::tests::remote162_capture_fixture();
+        let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
+        let command=WorkerCommandIdentity {command_id:task.task_id.clone(),task_id:task.task_id.clone(),
+            instance_id:String::new(),generation:0};
+        task.state="cancelled".into();task.guarded=false;task.cleanup_done=false;task.workspace=None;
+        task.commit_view_prepare=Some(crate::delegation::ViewBinding {
+            worker:worker.clone(),command:command.clone(),prepare_digest:"a".repeat(64)});
+        state.delegation_store.save(&task).unwrap();
+        state.remote_workers.insert("cartae".into(),RemoteWorkerConnection {
+            identity:worker.clone(),conn_id:"late235".into(),epoch:"epoch235".into(),
+            capabilities:vec![WorkerCapability::WorkspaceViewV1],catalogues:HashMap::new(),
+            catalogue_refresh_id:"epoch235".into(),catalogue_refresh_at:None,
+            contact:WorkerContactState::Connected,last_contact:Instant::now(),last_contact_at:unix_timestamp(),
+        });
+        let shared=Arc::new(Mutex::new(state));
+        let response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:"expired235".into(),
+            connection_epoch:"epoch235".into(),worker:worker.clone(),command:command.clone(),
+            response:WorkerResponseOperation::Rejected {reason:WorkerRefusal::UnknownExecution}};
+        let before=serde_json::to_vec(&shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+        let deliver=|response:WorkerResponse|super::super::handle_worker_message(&shared,"late235",
+            WrapperToDaemon::WorkerResponse {response});
+        assert!(deliver(response.clone()).is_none(),"un refus tardif connu ne ferme pas le canal");
+        assert!(serde_json::to_vec(&shared.lock().unwrap().delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap()==before);
+        for case in 0..4 {
+            let mut foreign=response.clone();
+            match case {
+                0=>foreign.command.command_id="foreign235".into(),
+                1=>foreign.command.task_id="foreign235".into(),
+                2=>foreign.connection_epoch="old235".into(),
+                _=>foreign.worker.worker_id="foreign235".into(),
+            }
+            assert!(matches!(deliver(foreign),Some(DaemonToWrapper::WorkerRejected {..})),"case{case}");
+        }
+        let (tx,rx)=std::sync::mpsc::sync_channel(1);
+        shared.lock().unwrap().pending_worker_responses.insert(response.correlation_id.clone(),
+            super::super::PendingWorkerResponse {conn_id:"late235".into(),epoch:"epoch235".into(),
+                worker,command,reply:tx});
+        assert!(deliver(response.clone()).is_none());
+        assert_eq!(rx.try_recv().unwrap(),response.response,"une attente encore présente reçoit le refus");
+        task.state="working".into();shared.lock().unwrap().delegation_store.save(&task).unwrap();
+        assert!(matches!(deliver(response.clone()),Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CommandMismatch})));
+        // La réservation est immuable après admission : vérifier la garde
+        // sans demander à save() de modifier ce fait protégé de la fixture.
+        task.state="cancelled".into();task.guarded=true;task.guard_released=false;
+        assert!(!super::super::commit_view_conservation_matches(&task,&response.worker,
+            &response.command,&task.commit_view_binding().unwrap().prepare_digest));
+        drop(shared);super::tests::cleanup(&config);
     }
 
     #[test]

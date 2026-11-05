@@ -18748,6 +18748,13 @@ fn remote_worker_has_command(
     worker: &bridget_transport::protocol::WorkerIdentity,
     command: Option<&bridget_transport::protocol::WorkerCommandIdentity>,
 ) -> bool {
+    if let Some(command) = command {
+        return st.idempotency.spawn_command(&st.fleet.supervisor_scope(), &command.command_id)
+            .is_ok_and(|known| known.is_some_and(|known|
+                known.remote_placement.as_ref().is_some_and(|placement|placement.matches_worker(worker))
+                    && known.generation == command.generation
+                    && known.instance_id.as_deref() == Some(command.instance_id.as_str())));
+    }
     st.idempotency
         .spawn_commands(&st.fleet.supervisor_scope())
         .is_ok_and(|commands| {
@@ -18756,11 +18763,6 @@ fn remote_worker_has_command(
                     .remote_placement
                     .as_ref()
                     .is_some_and(|placement| placement.matches_worker(worker))
-                    && command.is_none_or(|command| {
-                        known.command_id == command.command_id
-                            && known.generation == command.generation
-                            && known.instance_id.as_deref() == Some(command.instance_id.as_str())
-                    })
             })
         })
 }
@@ -18822,6 +18824,10 @@ fn handle_worker_message(
             "operation": match &response.response {
                 WorkerResponseOperation::Observation { observation } => format!("observation_{:?}", observation.phase),
                 WorkerResponseOperation::FinalResult { .. } => "final_result".into(),
+                WorkerResponseOperation::Rejected { reason } => format!("rejected_{reason:?}"),
+                WorkerResponseOperation::Prepared { .. } => "prepared".into(),
+                WorkerResponseOperation::CommitViewRejected { reason, .. } => format!("commit_view_rejected_{reason:?}"),
+                WorkerResponseOperation::CommitViewConserved { .. } => "commit_view_conserved".into(),
                 _ => "other".into(),
             },
         })),
@@ -19136,6 +19142,16 @@ fn handle_worker_message(
                 if let WorkerResponseOperation::CommitViewConserved {prepare_digest}=&response.response
                     && st.delegation_store.get(&response.command.task_id).ok().flatten()
                         .is_some_and(|task|commit_view_conservation_matches(&task,&response.worker,&response.command,prepare_digest)) {
+                    return None;
+                }
+                // Une conservation refusée après expiration n'a aucun effet. Le tuple
+                // doit encore désigner la vue exacte d'une tâche close, hors continuation.
+                if matches!(&response.response, WorkerResponseOperation::Rejected { .. })
+                    && st.remote_workers[&machine].capabilities.contains(&WorkerCapability::WorkspaceViewV1)
+                    && st.delegation_store.get(&response.command.task_id).ok().flatten()
+                        .is_some_and(|task|task.commit_view_binding().is_some_and(|binding|
+                            commit_view_conservation_matches(&task,&response.worker,&response.command,
+                                &binding.prepare_digest))) {
                     return None;
                 }
                 // Une sonde sans attente ou une réponse tardive ne ferme pas le canal de sa commande connue.

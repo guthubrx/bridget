@@ -34,3 +34,30 @@ Avis de courte maintenance au propriétaire :mcp-37511-6aecda4a-1,
 remise642a6fea-e98b-4c60-9135-a0b402b182d7,in_flight ; lecture non attestée.
 Aucun avis « corrigé » envoyé. La clé01 reste refusée durablement sans tâche.
 La clé02 reste non enregistrée ; le propriétaire attend l’avis de correction.
+
+## Cause et correctif candidat
+
+Le diagnostic maître activé à19:37UTC identifie la commande de préparation
+2fb96ec5-07ca-404e-a322-7cd359626b85,génération0,instance vide. Il s’agit d’une
+ancienne revue Bridget cancelled, sans enfant ni workspace publié, avec liaison
+de conservation durable. Le refus se produit hors attente corrélée. La réponse
+tardive d’entretien ne doit ni clore une autre demande ni fermer la connexion.
+Le code conserve la validation de l’époque et du worker, la capacité négociée,
+la liaison exacte de la vue et les gardes terminal/continuation/réservation.
+Une attente présente reçoit toujours sa réponse ; aucune clôture n’est inventée.
+
+Les observations relisaient jusqu’à trois fois1959 commandes sous le verrou
+partagé pour chacun des335 reçus SYS. Les lectures sont désormais bornées à la
+clé primaire ou filtrées par nom/instance avant décodage ; même ordre et mêmes
+contrôles de placement et de lien parent. La réconciliation générale reste
+stricte et inchangée.
+
+Mesure native sur la même base maître, lecture seule,20commandes SYS :
+lectures complètes2236635µs ; deux lectures ciblées par commande44737µs.
+Rapport49,997, environ50fois ; aucun chiffre de latence d’admission déduit.
+Les1959commandes sont inchangées. Benchmark temporaire hors code livré.
+Trois contrôles235 passent : projection fermée, lecture ciblée/identités et
+refus tardif sans mutation/avec gardes. Deux premiers essais ont échoué sur des
+hypothèses de fixture (scope trop court, stamps puis réservation immuable),
+corrigées après lecture des faits de sauvegarde ; aucun défaut de production
+masqué. Les quatre régressions utiles passent : conservation exacte, réponse de préparation tardive/corrélation et deux transactions atomiques de spawn.

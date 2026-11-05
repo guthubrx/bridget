@@ -5760,3 +5760,28 @@ fn edit159_promote_pause_agent_refuse() {
     assert_eq!(effect, None);
     assert_eq!(delivery_phase(&store, "delivery-promote"), "held");
 }
+
+#[test]
+fn spec235_scoped_spawn_reads_preserve_identity_and_isolate_other_definitions() {
+    let mut store=IdempotencyStore::open_in_memory().unwrap();
+    let scope=spawn_key().issuer_scope;
+    for (id,name,instance,generation) in [
+        ("selected235","child235","instance235",1),
+        ("unrelated235","other235","other-instance235",2),
+    ] {
+        let key=IdempotencyKey::new(&scope,OperationKind::Spawn,id).unwrap();
+        store.reserve_spawn(&key,b"canon-spawn",NOW,HORIZON,NOW,30,name,generation,false,NOW+60,instance).unwrap();
+    }
+    let expected=store.spawn_commands(&scope).unwrap().into_iter().find(|c|c.command_id=="selected235").unwrap();
+    // Une définition étrangère illisible ne doit pas contaminer la commande ciblée.
+    store.conn.execute("UPDATE spawn_commands SET resolved_definition_json='{' WHERE command_id='unrelated235'",[]).unwrap();
+    assert!(store.spawn_commands(&scope).is_err());
+    assert_eq!(store.spawn_command(&scope,"selected235").unwrap(),Some(expected.clone()));
+    assert_eq!(store.spawn_commands_for_instance(&scope,"child235","instance235").unwrap(),vec![expected]);
+    assert!(store.spawn_command(&scope,"unrelated235").is_err());
+    assert!(store.spawn_commands_for_instance(&scope,"other235","other-instance235").is_err());
+    assert!(store.spawn_command(&scope,"absent235").unwrap().is_none());
+    assert!(store.spawn_commands_for_instance(&scope,"child235","other-instance235").unwrap().is_empty());
+    assert!(store.spawn_commands_for_instance(&scope,"other235","instance235").unwrap().is_empty());
+    assert!(store.spawn_command("supervisor_235_other_scope","selected235").unwrap().is_none());
+}
