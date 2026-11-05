@@ -6,6 +6,18 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.2 — 2026-11-05
+
+- Give explicitly selected Git inventories60seconds and remove the pause between successful reads. Timeout diagnostics retain a closed command, timings, volumes and stop state.
+- Fix64MiB view-reservation readers and add a narrowly scoped cold quarantine recovery that preserves receipts and starts no process.
+- Allow256MiB public view maps, stream closed-reference manifest reads and include the map in free-space checks. Compatible reader floors reject older rollback images.
+- Keep cancelled, unpublished view preparations scheduled until native conservation is confirmed.
+
+## 0.8.1 — 2026-11-04
+
+- Raise selected commit-view payloads to32GiB, inventories/manifests to64MiB and helper deadlines to30minutes. Preserve disk, object integrity and mission checks.
+- Keep an admitted task visible across interrupted origin attestations and preserve the request key and unknown outcomes.
+
 ## 0.8.0 — 2026-11-03
 
 - Native sleeper agents: history, explicit wake-up and refusal of new direct, group and scheduled requests. Previously admitted work and its results are kept.

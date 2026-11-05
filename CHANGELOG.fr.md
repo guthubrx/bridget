@@ -8,6 +8,18 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.2 — 2026-11-05
+
+- Budget60secondes pour les inventaires Git explicitement choisis et retrait de la pause entre lectures utiles. Une expiration conserve une commande fermée, durées, volumes et état d’arrêt.
+- Correction des lecteurs de réservations de vues64Mio et récupération froide ciblée de cette quarantaine, sans réécriture de reçus ni lancement de processus.
+- Cartes publiques de vues256Mio, relecture en flux du seul manifeste des références closes et prise en compte de la carte dans l’espace requis. Les anciens lecteurs sont refusés comme retour.
+- Suivi des préparations de vues annulées non publiées jusqu’à confirmation native de leur conservation.
+
+## 0.8.1 — 2026-11-04
+
+- Copies sélectionnées32Gio, inventaires et manifestes64Mio, opérations d’export/audit30minutes. Contrôles du disque, des objets et des échéances métier conservés.
+- Conservation d’une admission pendant une interruption de preuve d’origine, avec la même clé et une issue inconnue explicite.
+
 ## 0.8.0 — 2026-11-03
 
 - Sommeil natif des agents : historique, réveil explicite et refus des nouvelles sollicitations directes, collectives ou programmées. Les travaux déjà admis et leurs résultats sont conservés.

@@ -109,6 +109,29 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session234 — inventaires et récupération KS livrés en0.8.2/234-inventory-r3.
+Source exécutable aa3cbeb1 intégrée/poussée,7images/SHA vérifiés sur4hôtes ;
+coupure2,19s, superviseursCartae1978546/2500061 et registreMac conservés.
+Inventaires explicitement choisis60s, lecture équitable sans pause utile,
+diagnostic fermé ; plan réel DCD408ms/613Mo/94worktrees sans mutation.
+Défaut232 réserve64Mio relue8Mio corrigé ; récupération native69commands/68slots,
+465fichiers inchangés/processus0. Cartes256Mio et lecture en flux ; suivi des vues
+annulées nonpubliées corrigé, deux conservations natives closes sans rejeu.
+Revue finale0edbc32d favorable/ACK, aucunP1/P2, quatreP3 traités par mesure/lecture ;
+23contrôles ciblés distincts acquis, répétitionsMac/Linux non recomptées.
+Sept composants activés, T3 même app231 relancée,21anciensMCP arrêtés/4nouveaux
+234/SHA vérifiés ; preuveV2 et lien natif revenus. Release0.8.2/sixactifs et
+APK8002/certificat/lignée vérifiés. Retour234-r0 compatible conservé, ancien232
+refusé ;R0 garde ancienbudgetGit/pending, source sur branche dédiée conservée.
+Diagnostic propriétaire et17avis reprise envoyés, reçus sans lecture inventée.
+KS manque réel d’espace résolu :28copies retirées ; total45copies+930fichiers
+Android/1989224619octets logiques retirés ; lecteurMac conservé faute de preuve d’usage.
+SYS transferts/WT/cache5,3Gio conservés faute de lecture privilégiée des usages ;
+Mac cache7,04Gio sous budget. Dirty227/vues/preuves conservés. Aucun rejeu métier,
+payloads7024/77ba et canoniques protégés inchangés. Preuves et limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/234-inventaire-git/validation.md.
+
+
 Session233 — placement opus2D sur monordinateur qualifié sans build ni mission.
 Le mapping existait mais le contrôle Git refusait : remote origin absent et
 identité attendue Linux. Alias origin ajouté au remote cartae exact, serveur
