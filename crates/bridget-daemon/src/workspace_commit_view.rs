@@ -265,7 +265,7 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
     let output = capture_with_objects(
         source,
         &["ls-tree", "--full-tree", "-r", "-l", "-z", base],
-        READ_TIMEOUT,
+        INVENTORY_TIMEOUT,
         None,
         true,
     )?;

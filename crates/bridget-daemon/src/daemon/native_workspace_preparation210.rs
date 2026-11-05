@@ -116,7 +116,7 @@ pub(super) fn project(task: &Task, view: &mut Value) {
         "DiskFull"=>C::DiskFull, "FilesystemAccessDenied"=>C::AccessDenied, _=>C::Unknown
     }});
     let action = match failure.cause {
-        C::GitTimeout => "Faire vérifier la durée de la lecture ou de la commande Git indiquée et la disponibilité du stockage sur la machine cible. Vérifier aussi la fin du processus Git avant une nouvelle préparation. Ne pas déduire un disque plein de ce délai.",
+        C::GitTimeout => "Faire lire l’événement bridget_workspace_git_timeout dans le journal du worker de cette machine : il nomme l’opération, la commande normalisée, son délai, sa durée, les volumes retenus et l’état d’arrêt. Un ancien journal peut ne pas conserver cette commande ; ne pas la déduire de la seule étape compact_plan. Vérifier la fin du processus Git et la conservation du dossier avant une nouvelle préparation. Ne pas déduire un disque plein de ce délai.",
         C::GitOutputTruncated => "Faire qualifier la taille de l’arbre ou de l’index Git et le budget de lecture du profil compact sur la machine cible.",
         C::RepoUnsupported => "Faire vérifier le profil compact et la configuration Git du dépôt cible ; corriger le réglage refusé avant une future admission.",
         C::BranchExists => "Faire inspecter la branche déjà présente et ses usages. Ne pas l’effacer ou la réutiliser à l’aveugle.",
