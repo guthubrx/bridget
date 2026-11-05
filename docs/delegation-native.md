@@ -1097,6 +1097,32 @@ refusal reports its closed object kind, observed lower bound and exact maximum.
 A legacy or unmeasured refusal does not invent these values. New large views
 require readers advertising workspace.commit_view.large.v2 and
 worker.store.capacity.v3; an old512MiB reader is not a valid rollback.
+The public map can total up to256MiB. Closed-reference reads stream only its
+manifest; disk-space checks include the public map. View reservation readers
+use the same64MiB manifest bound as their writer. The reader floors also require
+worker.view.reservation.v2 and workspace.commit_view.notice.v2. Version232
+readers cannot serve as a rollback for these corrected reservations.
+
+Inventory commands (`ls-tree` and `ls-files`) receive60seconds only when their
+caller selects the inventory budget. Short Git controls keep10seconds. A
+`bridget_workspace_git_timeout` event records a closed operation, normalized
+command, budget, elapsed time, retained stream sizes and stop state. It never
+records raw arguments, repository paths or Git diagnostic text. Old journals
+may lack the exact command; do not infer it from `compact_plan` alone.
+
+A cancelled view preparation remains scheduled for native conservation even
+when no workspace was published. A recovered worker can therefore acknowledge
+that same binding without restarting the task.
+
+For the confirmed legacy reservation-capacity quarantine only, the administrator
+can use `bridget worker recover-view-capacity` with the normal seven explicit
+worker options. Stop the worker and preserve its store first. The command
+requires its existing exclusive lock, provisioned identity, full valid native
+inventory, a matching oversized unadopted reservation and no live or unknown
+producer. It backs up the enrollment and lifts that quarantine only. It does
+not rewrite receipts, remove markers, start processes or replay a task. Other
+quarantines remain refused; retain their evidence and diagnose their own cause.
+
 
 The task retains its base, owner, and permissions. Guards are rechecked before
 publication and launch. On closure, Bridget keeps the view when it cannot

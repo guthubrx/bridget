@@ -23,3 +23,7 @@ La carte publique garde une borne cohérente256Mio. Sa lecture ne conserve que
 le manifeste nécessaire ; l’espace disponible inclut aussi cette carte.
 Les nouvelles capacités sont déclarées dans les formats requis. L’ancien232
 ne peut plus servir de retour ; préparer un lecteur compatible vérifié.
+
+Une préparation de vue annulée, non publiée, doit rester dans les travaux
+à conserver tant que cleanup_done=false. Le retour du worker doit permettre
+l’accusé natif de conservation de la même liaison, sans nouvelle mission.

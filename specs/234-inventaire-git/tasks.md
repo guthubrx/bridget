@@ -9,3 +9,5 @@
 
 - [x] T007 — Corriger les bornes de réservation/carte et tester la récupération froide ciblée.
 - [ ] T008 — Vérifier le retour compatible puis récupérer KS et sa clôture native.
+
+- [x] T009 — Garder au suivi les vues annulées sans espace publié ; régression SQL ciblée acquise.

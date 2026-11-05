@@ -2681,7 +2681,7 @@ WHERE state='refused' AND task_id IS NULL;
     }
 
     pub fn pending(&self) -> Result<Vec<Task>, String> {
-        let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.state') NOT IN ('failed','cancelled','result_available') OR (json_extract(payload,'$.state')='result_available' AND (json_extract(payload,'$.result_sent')=0 OR coalesce(json_extract(payload,'$.cleanup_done'),0)=0)) OR (json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) OR (json_extract(payload,'$.state')='cancelled' AND json_extract(payload,'$.workspace') IS NOT NULL AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) ORDER BY task_id").map_err(|error|error.to_string())?;
+        let mut statement=self.conn.prepare("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.state') NOT IN ('failed','cancelled','result_available') OR (json_extract(payload,'$.state')='result_available' AND (json_extract(payload,'$.result_sent')=0 OR coalesce(json_extract(payload,'$.cleanup_done'),0)=0)) OR (json_extract(payload,'$.state')='failed' AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) OR (json_extract(payload,'$.state')='cancelled' AND (json_extract(payload,'$.workspace') IS NOT NULL OR json_extract(payload,'$.commit_view_prepare') IS NOT NULL) AND coalesce(json_extract(payload,'$.cleanup_done'),0)=0) ORDER BY task_id").map_err(|error|error.to_string())?;
         statement
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|error| error.to_string())?
@@ -5558,4 +5558,22 @@ CREATE INDEX auto_admission_receipts_refused_purge ON auto_admission_receipts(st
         store.publish_projection(stamped.root_owner(), mutation);
         assert!(!store.take_changes().is_empty());
     }
+    #[test]
+    fn spec234_pending_keeps_cancelled_unpublished_view_until_native_conservation() {
+        let root=std::env::temp_dir().join(format!("bridget234-pending-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let store=DelegationStore::open(&root.join("bridget.db")).unwrap();
+        let mut task=legacy_task151();task.state="cancelled".into();task.workspace=None;task.cleanup_done=false;
+        task.commit_view_prepare=Some(serde_json::from_value(serde_json::json!({
+            "worker":{"machine_id":"ksstore","worker_id":"worker-ksstore","provisioning_revision":1},
+            "command":{"task_id":task.task_id,"command_id":task.task_id,"instance_id":"","generation":0},
+            "prepare_digest":"a".repeat(64)})).unwrap());
+        store.insert(&task,"request234",b"canonical234").unwrap();
+        assert_eq!(store.pending().unwrap().len(),1,"copie non publiée : reprendre la conservation native après retour du worker");
+        task.cleanup_done=true;store.save(&task).unwrap();assert!(store.pending().unwrap().is_empty());
+        task.cleanup_done=false;task.commit_view_prepare=None;store.save(&task).unwrap();
+        assert!(store.pending().unwrap().is_empty(),"annulation ordinaire sans espace : comportement conservé");
+        drop(store);std::fs::remove_dir_all(root).unwrap();
+    }
+
 }
