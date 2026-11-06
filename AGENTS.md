@@ -109,6 +109,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+
+Session236 — préparation sur la machine source corrigée en0.8.4/236-origin-local-r2.
+Sourcea1a320f3 poussée ; seule vueCommitView autorisée sur le relais local, autres
+gardes inchangées. Refus qualifié par champ/cause, aucune version de façade
+déduite d’un ancien reçu. Septcontrôles utiles verts, revue05acfeaa terminée/ACK,
+aucunP1 ; P2diagnostic traité, dernierdelta auto-relu. Septcomposants/SHA vérifiés,
+coupure1,87s ; wrapperCartae2500061 et registreMac conservés. Retour235R3 compatible,
+pointeurs atomiques4hôtes ;18anciensMCP absents/quatre236R2 vérifiés, preuveV2 et lien
+natif revenus, mêmeapp231 conservée. Releasepublique0.8.4/sixactifs téléchargés/SHA
+et APK8004/certificat/lignée vérifiés ; quatrehôtes0.8.4/up_to_date/fresh.
+Diagnostic propriétaire et19avis de reprise envoyés, reçus sans lecture inventée.
+CléMac03 nonrejouée ; SYS02 à ne PLUS reprendre, travail fait autrement. Tâches
+7024/77ba/702d strictement préservées, ancienne2fb et revues métier conservées.
+Retraits qualifiés Android940fichiers et cinqcopies obsolètes ; cacheMac9,82Gio
+sous budget, SYSsource/cache/ancienretour gardés faute d’observation complète.
+Revue236kept/review_required, lecteur234Mac/branche, dirty227/vues/preuves conservés.
+Détails :/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/236-preparation-origine-locale/validation.md.
+
 Session235 — canal worker livré en0.8.3/235-worker-channel-r3.
 Source93f32939 intégrée/poussée ; réponse tardive de conservation d’une ancienne
 revue annulée2fb96ec5 isolée, contrôle de connexion inchangé. Lectures ciblées
