@@ -120,8 +120,8 @@ compatible/pointeurs atomiques4hôtes, wrapperCartae2500061 et registreMac conse
 Releasepublique0.8.5/sixactifs téléchargés/SHA et APK8005/certificat/lignée vérifiés ;
 quatrehôtes0.8.5/up_to_date/fresh. DemandesMac03sansreçu et SYS05chosen/révision2/
 tasknull inchangées, aucun rejeu. SYS02 à ne PLUS reprendre. Diagnostic propriétaire
-et19avis après services envoyés, reçus sans lecture inventée. Nettoyage Android
-et anciennes copies qualifié ; SYSsources/caches/images et revues sous rétention
+et19avis après services envoyés, reçus sans lecture inventée. Nettoyage5895fichiers/510465066octetslogiques, branche etWT237 retirés ;
+SYSsources/caches/images et revues sous rétention
 conservés. À la demande deFrançois du6novembre, NE PASrelancerT3 automatiquement :
 terminer les autres étapes puis poser une question utilisateur visible.
 Façades236 encore chargées, contrôle237/lien après rechargement manuel attendu ;

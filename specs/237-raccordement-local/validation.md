@@ -147,3 +147,18 @@ Les opérationsGit et le retrait final de nos transferts sont consignés dans
 /Users/moi/.cache/bridget237-local-mapping/completion.json.
 La livraison client reste explicitement en attente de la question et du
 rechargement manuel, sans masquer ce travail restant.
+
+## BilanGit et nettoyage avant la question utilisateur
+
+Notre branche237 locale et distante ainsi que le worktree Mac propre ont été
+retirés après preuve d’intégration et observation native complète des usages.
+Worktree :4947fichiers/111720381octets logiques ; trois transferts (copieLinux
+et deuxbundles vérifiés)44227349octets. Total des retraits237 :5895fichiers et
+510465066octets logiques, hors entretienCargo déjà compté séparément.
+Ce total n’est pas un gain physique APFS mesuré. Actif237, retour236, sources
+et cachesSYS sous observation incomplète, worktrees de revue et autres preuves
+conservés. Le bilan exactGit/alignement est danscompletion.json.
+
+Aucune relanceT3 effectuée. Tout le passage serveur, publication, sources et
+entretien est terminé ; seulT006 (question visible, rechargement manuel puis
+contrôle des nouvelles façades) reste ouvert conformément à la consigne humaine.
