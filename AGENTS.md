@@ -110,6 +110,25 @@ Ne pas décrire le produit par comparaison avec un client externe.
 <!-- SPECKIT START -->
 
 
+Session237 — services0.8.5/237-local-project-r2 activés, client à recharger manuellement.
+Source1719ab96 poussée ; projection locale du placement existant sans mutation ;
+observations gérées connues sans fausse exigence de délégation, erreurs de stockage
+distinguées.55tests utiles verts, revue1390358e terminée/ACK sansP1/P2,3P3traités ;
+dernier delta auto-relu. Sept services/SHA vérifiés, coupure1,95s ; socketsSYS
+7012323/7012329 stables111,91s, aucun refus observé depuisactivation. Retour236R2
+compatible/pointeurs atomiques4hôtes, wrapperCartae2500061 et registreMac conservés.
+Releasepublique0.8.5/sixactifs téléchargés/SHA et APK8005/certificat/lignée vérifiés ;
+quatrehôtes0.8.5/up_to_date/fresh. DemandesMac03sansreçu et SYS05chosen/révision2/
+tasknull inchangées, aucun rejeu. SYS02 à ne PLUS reprendre. Diagnostic propriétaire
+et19avis après services envoyés, reçus sans lecture inventée. Nettoyage Android
+et anciennes copies qualifié ; SYSsources/caches/images et revues sous rétention
+conservés. À la demande deFrançois du6novembre, NE PASrelancerT3 automatiquement :
+terminer les autres étapes puis poser une question utilisateur visible.
+Façades236 encore chargées, contrôle237/lien après rechargement manuel attendu ;
+T006 reste ouvert. Mêmeapp231 conservée, aucune continuation automatique237 créée.
+Détails :/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/237-raccordement-local/validation.md.
+
+
 Session236 — préparation sur la machine source corrigée en0.8.4/236-origin-local-r2.
 Sourcea1a320f3 poussée ; seule vueCommitView autorisée sur le relais local, autres
 gardes inchangées. Refus qualifié par champ/cause, aucune version de façade
