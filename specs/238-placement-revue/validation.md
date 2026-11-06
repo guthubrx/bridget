@@ -103,3 +103,10 @@ l'envoi aboutit. Aucun redémarrage ni changement de permissions n'est fait.
 La cause initiale de cette interruption du lien reste inconnue ; aucune cause
 de compte, réseau ou version n'est inventée. Les références du premier refus
 et du reçu suivant sont conservées dans le dossier privé ci-dessus.
+
+Source documentaire 9d2ab53f2855110c63f8ba85ab599b655c2a6738 poussée, références
+main relues sur les quatre hôtes. Racines Mac/Cartae/KS propres sur main ; SYS
+conserve son checkout détaché propre et ses travaux, avec main mis à jour.
+Aucune nouvelle branche, aucun worktree ni intermédiaire de build n'est créé.
+Le nettoyage maximal et ses conservations du passage précédent restent décrits
+dans /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/237-raccordement-local/nettoyage-20261106.md.
