@@ -109,6 +109,20 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session238 — placement Revue Mac qualifié, configuration native sans build.
+Le mapping existant attendait le miroirLinux au lieu du remoteGitHub réel.
+Révision2 maître/worker, seuls identitéGit et numéro modifiés sous verrou/CAS
+avec sauvegardes. HEAD/configGit/cinqfichiersRevue modifiés inchangés ; helper
+natif lectureseule needs_bundle=false, aucune admission/revue créée ou rejouée.
+Nouveau SHA registreMac spécial :
+cacf9ba06704faf0699e13a6827f556d799282f96fda02b6e4dfb643e8667374.
+Ce repère remplace bdee09c pour les prochains contrôles ; ne pas restaurer un
+ancien registre à l'aveugle. RefusLinux shared attendus : HEADdifférent et
+.worktrees non suivi ; commit_view lit un commit sans déplacer le partagé.
+Rôlemaintenance limité àbridget/nontransversal : catalogueRevue vide attendu,
+aucun mandat/droit élargi. Services0.8.5 inchangés, T3 nonrelancé.
+Détails : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/238-placement-revue/validation.md.
+
 
 Session237 — services0.8.5/237-local-project-r2 activés, client à recharger manuellement.
 Source1719ab96 poussée ; projection locale du placement existant sans mutation ;
