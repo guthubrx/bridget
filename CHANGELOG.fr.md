@@ -8,6 +8,11 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.4 — 2026-11-06
+
+- Autoriser la préparation locale d’une copie du commit lorsque source et cible désignent la même machine provisionnée. Conserver les autres stratégies et les contrôles d’autorité.
+- Donner le champ et la cause fermés des refus de validation du relais, avec la limite de taille connue. Un refus générique ne suggère plus une ancienne version du client.
+
 ## 0.8.3 — 2026-11-05
 
 - Lire les seules définitions concernées par un état worker, au lieu de décoder tout l’historique conservé pour chaque commande.

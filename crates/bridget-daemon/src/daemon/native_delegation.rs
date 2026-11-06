@@ -14252,6 +14252,22 @@ mod tests {
     }
 
     #[test]
+    fn spec236_origin_field_refusal_preserves_not_recorded_and_sends_nothing() {
+        let (state,config,rx,_reader,request,_root)=routing168_fixture(1);
+        let result=routing_failure_admission("conn-1",&request,None,
+            failure("origin_request_invalid:workspace:invalid_envelope"),&state);
+        assert_eq!(result["code"],"origin_request_invalid");
+        assert_eq!(result["detail"]["field"],"workspace");
+        assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
+        assert!(result["detail"]["admission"]["task_id"].is_null());
+        let st=state.lock().unwrap();
+        assert!(st.delegation_store.auto_admission_receipt(OWNER,&request.request_id).unwrap().is_none());
+        assert!(st.delegation_store.tasks().unwrap().is_empty());
+        assert!(st.pending_origin_proofs.is_empty());
+        assert!(rx.try_recv().is_err());drop(st);drop(state);cleanup(&config);
+    }
+
+    #[test]
     fn spec211_missing_sha_not_recorded_guidance_allows_only_safe_correction(){
         let (state,config,rx,_reader,mut request,_root)=routing168_fixture(1);
         let cwd=PathBuf::from(&request.cwd);

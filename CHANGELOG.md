@@ -6,6 +6,11 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.4 — 2026-11-06
+
+- Admit origin-side commit-view preparation when the target is the same provisioned machine. Keep other workspace strategies and all authority checks unchanged.
+- Report the closed validation field and cause for origin-relay refusals, with the size limit when known. A generic refusal no longer implies an older client image.
+
 ## 0.8.3 — 2026-11-05
 
 - Read only the selected launch definitions when processing worker observations, instead of decoding the full retained history for every command.

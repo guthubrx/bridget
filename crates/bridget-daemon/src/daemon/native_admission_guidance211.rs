@@ -1,5 +1,26 @@
 use super::*;
 pub(super) fn refusal(code:&str)->Option<Value>{
+    if let Some(detail)=code.strip_prefix("origin_request_invalid:") {
+        let (field,cause)=detail.split_once(':').unwrap_or((detail,"unobserved"));
+        let cause_text=match cause {
+            "invalid_envelope"=>"la forme de l’enveloppe est invalide",
+            "permissions_changed"=>"le fait de permissions est invalide",
+            "resource_limit"=>"la taille admise est dépassée",
+            "unobserved"=>"la cause précise n’est pas conservée",
+            _=>return None,
+        };
+        if !matches!(field,"worker"|"version"|"correlation_id"|"connection_epoch"|"expires_at_ms"
+            |"envelope"|"parent"|"blocked"|"root"|"worktree"|"expected_thread"|"proof"
+            |"target_machine"|"project_id"|"cwd"|"expected_base_commit"|"workspace") {return None;}
+        let mut view=refusal("origin_request_invalid")?;
+        view["detail"]["field"]=json!(field);
+        view["detail"]["cause"]=json!(cause);
+        if cause=="resource_limit" {
+            view["detail"]["limit_bytes"]=match field {"envelope"=>json!(128*1024),"workspace"=>json!(4096),_=>Value::Null};
+        }
+        view["detail"]["recovery"]=json!(format!("Le validateur du relais d’origine a refusé le contrôle {field} : {cause_text}. Faire vérifier ce champ par le responsable Bridget dans la même demande et le même fait de session. Ce nom ne donne ni la valeur reçue ni un droit supplémentaire. Conserver la clé et l’enveloppe ; lire detail.admission avant toute reprise. Ne pas créer de remplacement d’issue inconnue. Les autres travaux autorisés suivent leur propre état."));
+        return Some(view);
+    }
     let (message,recovery,field)=match code {
         "project_preparation_machine_mismatch"=>(
             "Faire vérifier l'identité provisionnée de la machine cible dans les registres source, maître et worker.",
@@ -43,7 +64,7 @@ pub(super) fn refusal(code:&str)->Option<Value>{
             Some("project_id")),
         "origin_request_invalid"=>(
             "Transmettre ce refus au responsable Bridget pour vérifier la source et son attestation.",
-            "L’enveloppe du relais d’origine n’a pas passé sa validation. Le champ divergent n’est pas attesté par cet ancien code. Vérifier le cwd dans le périmètre du parent, la forme du SHA et les faits de session sans élargir les droits. Une réattestation seule ne prouve pas la résolution. Conserver la clé et vérifier son état durable ; ne pas créer de doublon.",
+            "L’enveloppe du relais d’origine n’a pas passé sa validation. Le champ divergent n’est pas attesté par ce reçu. Ce texte ne renseigne pas la version de la façade. Vérifier le cwd dans le périmètre du parent, la forme du SHA et les faits de session sans élargir les droits. Une réattestation seule ne prouve pas la résolution. Conserver la clé et vérifier son état durable ; ne pas créer de doublon.",
             None),
         "brief_invalid"=>(
             "Validez le brief avec le prévol bridget_handoff action=preview.",
@@ -176,6 +197,31 @@ mod tests {
         assert_eq!(contextual_refusal(&invalid.to_string())["detail"]["context_status"],"unavailable");
         invalid["checks"]=json!((0..17).map(|i|json!({"machine_id":format!("host-{i:02}"),"code":"project_mapping_unknown"})).collect::<Vec<_>>());
         assert_eq!(contextual_refusal(&invalid.to_string())["detail"]["context_status"],"unavailable");
+    }
+
+    #[test]
+    fn spec236_origin_validation_field_is_closed_and_not_a_version_claim() {
+        let plain=refusal("origin_request_invalid").unwrap();
+        assert!(plain["detail"]["field"].is_null());
+        assert!(!plain.to_string().contains("ancien code"));
+        for field in ["worker","version","correlation_id","connection_epoch","expires_at_ms",
+            "envelope","parent","blocked","root","worktree","expected_thread","proof",
+            "target_machine","project_id","cwd","expected_base_commit","workspace"] {
+            let view=refusal(&format!("origin_request_invalid:{field}")).unwrap();
+            assert_eq!(view["code"],"origin_request_invalid");
+            assert_eq!(view["detail"]["field"],field);
+            assert!(view["detail"]["recovery"].as_str().unwrap().contains(field));
+        }
+        for (field,limit) in [("envelope",128*1024),("workspace",4096)] {
+            let view=refusal(&format!("origin_request_invalid:{field}:resource_limit")).unwrap();
+            assert_eq!(view["detail"]["cause"],"resource_limit");
+            assert_eq!(view["detail"]["limit_bytes"],limit);
+        }
+        let view=refusal("origin_request_invalid:parent:permissions_changed").unwrap();
+        assert_eq!(view["detail"]["cause"],"permissions_changed");
+        for field in ["secret/path","cwd:PRIVATE","","parent\nPRIVATE"] {
+            assert!(refusal(&format!("origin_request_invalid:{field}")).is_none());
+        }
     }
 
     #[test]

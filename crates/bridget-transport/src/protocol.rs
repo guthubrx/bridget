@@ -3108,36 +3108,51 @@ pub struct OriginProofResponse {
 }
 impl OriginProofRequest {
     pub fn validate_shape(&self)->Result<(),WorkerRefusal>{
-        self.worker.validate()?;
-        worker_require(self.version==1 && worker_atom(&self.correlation_id,128)
-            && worker_atom(&self.connection_epoch,128) && self.expires_at_ms>0)?;
-        worker_serialized_size(self,128*1024)?;
+        self.validate_shape_detailed().map_err(|(_,reason)|reason)
+    }
+
+    /// Même validation ; le nom fermé du contrôle ne contient aucune valeur reçue.
+    pub fn validate_shape_detailed(&self)->Result<(),(&'static str,WorkerRefusal)>{
+        let require=|valid:bool,field:&'static str|worker_require(valid).map_err(|reason|(field,reason));
+        self.worker.validate().map_err(|reason|("worker",reason))?;
+        require(self.version==1,"version")?;
+        require(worker_atom(&self.correlation_id,128),"correlation_id")?;
+        require(worker_atom(&self.connection_epoch,128),"connection_epoch")?;
+        require(self.expires_at_ms>0,"expires_at_ms")?;
+        worker_serialized_size(self,128*1024).map_err(|reason|("envelope",reason))?;
         match &self.request {
             OriginProofOperation::Catalogue {parent,blocked} => {
-                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
-                worker_require(blocked.len()<=128 && blocked.iter().all(|name|worker_atom(name,128)))
+                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
+                require(blocked.len()<=128 && blocked.iter().all(|name|worker_atom(name,128)),"blocked")
             }
-            OriginProofOperation::CommunicationProject {root,worktree,..} => worker_require(
-                worker_absolute_path(root) && worktree.as_ref().is_none_or(|p|worker_absolute_path(p))),
-            OriginProofOperation::Attest {expected_thread,proof} => worker_require(
-                worker_atom(expected_thread,2048) && proof.endpoint.len()<=512
-                && proof.authorization.expose_for_attestation().len()<=300),
+            OriginProofOperation::CommunicationProject {root,worktree,..} => {
+                require(worker_absolute_path(root),"root")?;
+                require(worktree.as_ref().is_none_or(|p|worker_absolute_path(p)),"worktree")
+            }
+            OriginProofOperation::Attest {expected_thread,proof} => {
+                require(worker_atom(expected_thread,2048),"expected_thread")?;
+                require(proof.endpoint.len()<=512 && proof.authorization.expose_for_attestation().len()<=300,"proof")
+            }
             OriginProofOperation::PrepareProject {parent,source,target_machine,project_id,..} => {
-                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
-                worker_require(worker_atom(target_machine,128) && target_machine != &self.worker.machine_id
-                    && project_id.as_ref().is_none_or(|id| worker_atom(id,128))
-                    && worker_absolute_path(&source.cwd)
-                    && std::path::Path::new(&source.cwd).starts_with(&parent.cwd)
-                    && worker_base_commit(source.expected_base_commit.as_deref()))?;
-                worker_serialized_size(&source.workspace,4096)
+                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
+                require(worker_atom(target_machine,128),"target_machine")?;
+                // Le helper objects_only sait préparer une vue sur sa propre machine.
+                // Les autres stratégies conservent leur garde de destination distante.
+                require(target_machine!=&self.worker.machine_id
+                    || matches!(source.workspace,Some(WorkspaceRequest::CommitView {})),"workspace")?;
+                require(project_id.as_ref().is_none_or(|id|worker_atom(id,128)),"project_id")?;
+                require(worker_absolute_path(&source.cwd)
+                    && std::path::Path::new(&source.cwd).starts_with(&parent.cwd),"cwd")?;
+                require(worker_base_commit(source.expected_base_commit.as_deref()),"expected_base_commit")?;
+                worker_serialized_size(&source.workspace,4096).map_err(|reason|("workspace",reason))
             }
             OriginProofOperation::Sources {parent,source} => {
-                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
+                validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
                 if let Some(source)=source {
-                    worker_require(worker_absolute_path(&source.cwd)
-                        && std::path::Path::new(&source.cwd).starts_with(&parent.cwd)
-                        && worker_base_commit(source.expected_base_commit.as_deref()))?;
-                    worker_serialized_size(&source.workspace,4096)?;
+                    require(worker_absolute_path(&source.cwd)
+                        && std::path::Path::new(&source.cwd).starts_with(&parent.cwd),"cwd")?;
+                    require(worker_base_commit(source.expected_base_commit.as_deref()),"expected_base_commit")?;
+                    worker_serialized_size(&source.workspace,4096).map_err(|reason|("workspace",reason))?;
                 }
                 Ok(())
             }

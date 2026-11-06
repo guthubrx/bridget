@@ -82,8 +82,16 @@ fn exchange(
             request: operation,
         };
         request
-            .validate_shape()
-            .map_err(|_| "origin_request_invalid")?;
+            .validate_shape_detailed()
+            .map_err(|(field,reason)| {
+                let cause=match reason {
+                    WorkerRefusal::InvalidEnvelope=>"invalid_envelope",
+                    WorkerRefusal::PermissionsChanged=>"permissions_changed",
+                    WorkerRefusal::ResourceLimit=>"resource_limit",
+                    _=>"unobserved",
+                };
+                format!("origin_request_invalid:{field}:{cause}")
+            })?;
         let connection = worker.conn_id.clone();
         let writer = st
             .connections

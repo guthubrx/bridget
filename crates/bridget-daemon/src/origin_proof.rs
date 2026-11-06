@@ -295,7 +295,36 @@ mod tests {
         if let OriginProofOperation::PrepareProject {target_machine,..}=&mut envelope.request {
             *target_machine="origin177".into();
         }
-        assert!(envelope.validate_shape().is_err());
+        assert_eq!(envelope.validate_shape_detailed().unwrap_err().0,"workspace");
+        //236 : le helper prend déjà en charge objects_only sur la machine source.
+        if let OriginProofOperation::PrepareProject {source,..}=&mut envelope.request {
+            source.workspace=Some(WorkspaceRequest::CommitView {});
+            source.expected_base_commit=Some(head.clone());
+        }
+        assert!(envelope.validate_shape().is_ok());
+        assert!(matches!(execute_with_context(&envelope,||10_000,|_|panic!("no provider"),
+            Some(&root.join("agents.json"))),OriginProofResult::ProjectPrepared {preparation_error:Some(code),..}
+            if code=="project_preparation_link_missing"));
+        let valid=envelope.clone();
+        for (field,case) in [("cwd",0),("expected_base_commit",1),("target_machine",2),("parent",3),("worker",4)] {
+            let mut wrong=valid.clone();
+            if let OriginProofOperation::PrepareProject {parent,source,target_machine,..}=&mut wrong.request {
+                match case {
+                    0=>source.cwd="/outside236".into(),
+                    1=>source.expected_base_commit=Some("invalid236".into()),
+                    2=>*target_machine=String::new(),
+                    3=>parent.revision=0,
+                    _=>wrong.worker.provisioning_revision=0,
+                }
+            }
+            let (found,reason)=wrong.validate_shape_detailed().unwrap_err();
+            assert_eq!(found,field);assert_eq!(wrong.validate_shape(),Err(reason));
+        }
+        for workspace in [WorkspaceRequest::Shared {},WorkspaceRequest::Worktree {branch:None,base_ref:None}] {
+            let mut wrong=valid.clone();
+            if let OriginProofOperation::PrepareProject {source,..}=&mut wrong.request {source.workspace=Some(workspace);}
+            assert_eq!(wrong.validate_shape_detailed().unwrap_err().0,"workspace");
+        }
         envelope.request=OriginProofOperation::Catalogue {parent:parent.clone(),blocked:vec![]};
         assert!(matches!(prove(&envelope),OriginProofResult::Rejected {reason:WorkerRefusal::Unauthorized}));
         let catalogue=execute_with_context(&envelope,||10_000,|_|panic!("catalogue does not launch a provider"),
