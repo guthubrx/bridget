@@ -169,9 +169,9 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
         topBar = { if (!conversationOpen) TopAppBar(title = { Text("Bridget", style = MaterialTheme.typography.headlineSmall) }) },
         bottomBar = {
             if (vm.associated && !conversationOpen) NavigationBar {
-                listOf(R.string.agents, R.string.questions, R.string.outbox, R.string.settings).forEachIndexed { index, label ->
+                listOf(R.string.agents, R.string.questions, R.string.outbox, R.string.settings, R.string.specialists).forEachIndexed { index, label ->
                     NavigationBarItem(selected = tab == index, onClick = { tab = index },
-                        icon = { Text(listOf("◉", "?", "↗", "⚙")[index]) }, label = { Text(stringResource(label)) })
+                        icon = { Text(listOf("◉", "?", "↗", "⚙", "◇")[index]) }, label = { Text(stringResource(label)) })
                 }
             }
         }
@@ -211,6 +211,7 @@ private fun MobileApp(vm: MobileViewModel, scanned: String?, onScan: () -> Unit,
                     }
                     tab == 1 -> Questions(vm)
                     tab == 2 -> Outbox(vm)
+                    tab == 4 -> SpecialistsScreen(vm)
                     else -> Settings(vm, onRevoke = { revoke = true }, onForget = { forget = true }, onNotifications = onNotifications)
                 }
             }

@@ -22,6 +22,78 @@ import org.json.JSONObject
 class MobileViewModel(app: Application) : AndroidViewModel(app) {
     private val store = LocalStore(app)
     private val client = BridgetClient(store)
+    var specialists by mutableStateOf(JSONObject()); private set
+    var specialistProfiles by mutableStateOf(JSONObject()); private set
+    var specialistVersions by mutableStateOf(JSONObject()); private set
+    var specialistDetail by mutableStateOf<JSONObject?>(null); private set
+    var specialistMemory by mutableStateOf(JSONObject()); private set
+    var specialistReceipt by mutableStateOf<JSONObject?>(null); private set
+    var specialistPending by mutableStateOf(store.get("specialist_pending")); private set
+    var specialistExport by mutableStateOf<JSONObject?>(null); private set
+    var specialistCursors by mutableStateOf<Map<String, String>>(emptyMap()); private set
+    private fun mergePage(old: JSONObject, page: JSONObject): JSONObject {
+        val rows = JSONArray()
+        old.optJSONArray("items")?.let { for (i in 0 until it.length()) rows.put(it.get(i)) }
+        page.optJSONArray("items")?.let { for (i in 0 until it.length()) rows.put(it.get(i)) }
+        return JSONObject(page.toString()).put("items", rows)
+    }
+    fun specialistCommand(command: JSONObject) = act {
+        val action=command.getString("action")
+        val read=specialistIsRead(action)
+        if (!read) {
+            val pending=store.get("specialist_pending")
+            if (pending!=null && pending.getJSONObject("command").toString()!=command.toString()) throw MobileFailure("specialist_command_pending")
+            if (pending==null) {
+                val session=store.get("session") ?: throw MobileFailure("authorization_required")
+                val entry=JSONObject().put("command",command).put("endpoint",session.getString("endpoint"))
+                    .put("device_id",session.getJSONObject("device").getString("device_id"))
+                store.put("specialist_pending",entry); specialistPending=entry
+            }
+        }
+        val receipt=client.specialists(command)
+        specialistReceipt=receipt
+        val data=receipt.optJSONObject("data")
+        val more=command.has("cursor")
+        if (read) {
+            when(action) {
+                "profiles" -> specialistProfiles=if (more) mergePage(specialistProfiles,data ?: JSONObject()) else data ?: JSONObject()
+                "profile_versions" -> specialistVersions=if (more) mergePage(specialistVersions,data ?: JSONObject()) else data ?: JSONObject()
+                "list","search" -> specialists=if (more) mergePage(specialists,data ?: JSONObject()) else data ?: JSONObject()
+                "get" -> specialistDetail=data
+                "memory_recall" -> specialistMemory=if (more) mergePage(specialistMemory,data ?: JSONObject()) else data ?: JSONObject()
+                "export" -> specialistExport=data
+                "request_status" -> {
+                    val pending=store.get("specialist_pending")
+                    val same=pending?.getJSONObject("command")?.optString("request_id")==command.optString("request_id")
+                    // Seule une issue finale lue pour CETTE clé libère la commande conservée.
+                    if (same && !specialistOutcomeOpen(receipt.optString("code").ifBlank{null},
+                            (data?.optString("status") ?: receipt.optString("status")).ifBlank{null},
+                            receipt.optString("delivery_observation").ifBlank{null}) && receipt.optString("status")!="refused") {
+                        store.remove("specialist_pending"); specialistPending=null
+                    }
+                }
+            }
+            if (action in SPECIALIST_PAGED_ACTIONS) {
+                val next=data?.takeIf { !it.isNull("next_cursor") }?.optString("next_cursor")?.takeIf { it.isNotBlank() }
+                specialistCursors=if (next==null) specialistCursors-action else specialistCursors+(action to next)
+            }
+        } else if (!specialistOutcomeOpen(receipt.optString("code").ifBlank{null},receipt.optString("status").ifBlank{null},
+                receipt.optString("delivery_observation").ifBlank{null})) {
+            store.remove("specialist_pending"); specialistPending=null
+        }
+    }
+    /** Relit l'état exact de la commande conservée, sans la renvoyer ni créer de nouvelle clé. */
+    fun specialistCheckPending() {
+        val id=specialistPending?.optJSONObject("command")?.optString("request_id")?.takeIf { it.isNotBlank() } ?: return
+        specialistCommand(specialistJson(specialistRequestStatus(id)))
+    }
+    fun retrySpecialistCommand() {
+        val pending=store.get("specialist_pending") ?: return
+        val session=store.get("session") ?: return
+        if (pending.optString("endpoint")!=session.optString("endpoint") ||
+            pending.optString("device_id")!=session.getJSONObject("device").optString("device_id")) {error="authorization_origin_changed";return}
+        specialistCommand(pending.getJSONObject("command"))
+    }
     private var followJob: Job? = null
     private var receiptJob: Job? = null
     private var questionJob: Job? = null
