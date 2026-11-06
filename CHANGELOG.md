@@ -8,7 +8,7 @@ figures below describe the named release's evidence, not the current checkout.
 
 ## 0.7.7 — 2026-11-03
 
-- Declare the specialists input schema as an object at its root, so strict MCP clients can discover the startup catalogue. Accepted actions, permissions and guards are unchanged.
+- Declare the specialists input schema as an object and expose composed schemas through complete local references, so strict MCP clients can discover all37tools at startup. Accepted actions, permissions and guards are unchanged.
 
 ## 0.7.6 — 2026-11-02
 

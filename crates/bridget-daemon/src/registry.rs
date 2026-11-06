@@ -1927,7 +1927,7 @@ fn mapping_root(path: &Path) -> bool {
         })
 }
 
-fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -> Result<(), String> {
+pub(crate) fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -> Result<(), String> {
     if machines.len() > MAX_MACHINES {
         return Err("machine_registry_limit".into());
     }

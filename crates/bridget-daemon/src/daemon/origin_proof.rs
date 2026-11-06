@@ -1,5 +1,6 @@
 //! Relais d'origine sur le worker provisionné, corrélé à son époque actuelle.
 use super::*;
+use std::path::Path;
 use bridget_transport::protocol::{
     OriginProofOperation, OriginProofRequest, OriginProofResponse, OriginProofResult,
     WORKER_STALE_SECS, WorkerCapability, WorkerContactState, WorkerIdentity, WorkerRefusal,
@@ -45,7 +46,7 @@ pub(super) fn worker_is_current(st:&DaemonState,host:&str)->bool {
 fn exchange(
     state: &Arc<Mutex<DaemonState>>,
     host: &str,
-    operation: OriginProofOperation,
+    mut operation: OriginProofOperation,
     budget: Duration,
 ) -> Result<OriginProofResult, String> {
     let deadline = Instant::now() + budget;
@@ -54,6 +55,9 @@ fn exchange(
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if !worker_is_current(&st,host) {return Err("origin_worker_unavailable".into());}
         let worker=st.remote_workers.get(host).ok_or("origin_worker_unavailable")?;
+        if let OriginProofOperation::PrepareProject {return_context,..}=&mut operation {
+            *return_context=worker.capabilities.contains(&WorkerCapability::OriginProjectContextV1);
+        }
         let view_source=match &operation {
             OriginProofOperation::Sources {source,..}=>source.as_ref(),
             OriginProofOperation::PrepareProject {source,..}=>Some(source),
@@ -300,11 +304,43 @@ pub(super) fn prepare_project(
     source_in_parent211(parent,Some(&source))?;
     let budget=deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(595));
     if budget.is_zero() {return Err("project_preparation_timeout".into());}
+    let (registry_path,expected,origin_host)={
+        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let registry=AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf())?;
+        (registry.source().to_path_buf(),registry.machine(target_machine)?.clone(),host_for_owner(&st,owner)?)
+    };
     let result=parent_operation(state,owner,parent,OriginProofOperation::PrepareProject {
-        parent:parent.clone(),source,target_machine:target_machine.to_owned(),project_id:project_id.map(str::to_owned)
+        parent:parent.clone(),source:source.clone(),target_machine:target_machine.to_owned(),project_id:project_id.map(str::to_owned),return_context:false
     },budget)?.ok_or("origin_binding_unavailable")?;
-    match result {OriginProofResult::ProjectPrepared {preparation_error,..}=>preparation_error.map_or(Ok(()),Err),
-        _=>Err("origin_proof_unavailable".into())}
+    let OriginProofResult::ProjectPrepared {preparation_error,project,..}=result else {
+        return Err("origin_proof_unavailable".into());
+    };
+    if let Some(error)=preparation_error {return Err(error);}
+    let Some(project)=project else {
+        // Un ancien worker reste utilisable pour un mapping déjà connu. Son
+        // succès sans contexte ne prouve pas le raccordement d'un nouveau projet.
+        return AgentRegistry::load_from_path_quiet(registry_path)?
+            .select_project_mapping(target_machine,project_id,&origin_host,Path::new(&source.cwd))
+            .map(|_|()).map_err(|_|"project_preparation_context_missing".into());
+    };
+    if project.target.machine_id!=target_machine || project.target.worker_id!=expected.worker_id
+        || project.target.provisioning_revision!=expected.provisioning_revision
+        || project.credential_fingerprint!=expected.credential_fingerprint
+        || project_id.is_some_and(|id|id!=project.project_id) {
+        return Err("project_preparation_machine_mismatch".into());
+    }
+    let mapping:crate::registry::ProjectMapping=serde_json::from_value(project.mapping.clone())
+        .map_err(|_|"project_mapping_invalid".to_owned())?;
+    let mut validated=expected.clone();
+    validated.mappings.insert(project.project_id.clone(),mapping);
+    crate::registry::validate_machines(&std::collections::BTreeMap::from([(target_machine.to_owned(),validated)]))?;
+    crate::project_preparation::prepare_until(&serde_json::json!({
+        "operation":"publish_prepared","registry":registry_path,"machine_id":target_machine,
+        "authority":{"worker_id":expected.worker_id,"provisioning_revision":expected.provisioning_revision,
+            "credential_fingerprint":expected.credential_fingerprint},
+        "origin_host":origin_host,"source_root":parent.cwd,"cwd":source.cwd,
+        "project_id":project.project_id,"mapping":project.mapping
+    }),deadline)
 }
 pub(super) fn catalogue(state:&Arc<Mutex<DaemonState>>,owner:&str,parent:&bridget_transport::protocol::ProviderPermissions,
     blocked:Vec<String>)->Result<Vec<serde_json::Value>,String>{
@@ -444,7 +480,7 @@ mod tests {
         for operation in [
             OriginProofOperation::Sources {parent:parent.clone(),source:Some(source.clone())},
             OriginProofOperation::PrepareProject {parent:parent.clone(),source,
-                target_machine:"target".into(),project_id:Some("project".into())},
+                target_machine:"target".into(),project_id:Some("project".into()),return_context:false},
         ] {
             assert_eq!(exchange(&shared,"origin177",operation,Duration::from_secs(1)),
                 Err(if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
@@ -719,7 +755,7 @@ mod tests {
                 source:WorkerSourceBase {cwd:parent.cwd.clone(),
                     expected_base_commit:Some(config["expected_base_commit"].as_str().unwrap().into()),
                     workspace:Some(WorkspaceRequest::Shared {}),workload:AutoDelegateWorkload::General},
-                target_machine:target.into(),project_id:Some("fixture177".into())};
+                target_machine:target.into(),project_id:Some("fixture177".into()),return_context:false};
             for _ in 0..2 {
                 let result=exchange(&shared,"origin177",prepare.clone(),Duration::from_secs(300)).unwrap();
                 assert!(matches!(result,OriginProofResult::ProjectPrepared {preparation_error:None,..}),

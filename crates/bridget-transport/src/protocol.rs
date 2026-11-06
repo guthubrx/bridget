@@ -2899,6 +2899,7 @@ pub enum WorkerCapability {
     ParentSourceProofV1,
     ResultSlotDeadlineV1,
     OriginProofV1,
+    OriginProjectContextV1,
     StartRecoveryV1,
     WorkspaceFailureV1,
     ProviderCatalogueV1,
@@ -3051,7 +3052,9 @@ pub enum OriginProofOperation {
     CommunicationProject {root:String,source:CommunicationProjectSource,worktree:Option<String>},
     Attest {expected_thread:String, proof:NativePermissionProof},
     Sources {parent:ProviderPermissions, source:Option<WorkerSourceBase>},
-    PrepareProject {parent:ProviderPermissions, source:WorkerSourceBase, target_machine:String, project_id:Option<String>},
+    PrepareProject {parent:ProviderPermissions, source:WorkerSourceBase, target_machine:String, project_id:Option<String>,
+        #[serde(default,skip_serializing_if="worker_is_false")]
+        return_context:bool},
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3070,8 +3073,20 @@ pub enum OriginProofResult {
     CommunicationProject {project:Option<CommunicationProject>},
     Attested {proof:OriginSessionProof},
     Sources {permission_digest:String, source_error:Option<String>},
-    ProjectPrepared {permission_digest:String, preparation_error:Option<String>},
+    ProjectPrepared {permission_digest:String, preparation_error:Option<String>,
+        #[serde(default,skip_serializing_if="Option::is_none")]
+        project:Option<PreparedOriginProject>},
     Rejected {reason:WorkerRefusal},
+}
+/// Contexte retourné par le worker d'origine après sa préparation authentifiée.
+/// Aucun de ces champs ne vient des arguments d'une mission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedOriginProject {
+    pub target:WorkerIdentity,
+    pub credential_fingerprint:String,
+    pub project_id:String,
+    pub mapping:serde_json::Value,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3098,7 +3113,7 @@ impl OriginProofRequest {
             OriginProofOperation::Attest {expected_thread,proof} => worker_require(
                 worker_atom(expected_thread,2048) && proof.endpoint.len()<=512
                 && proof.authorization.expose_for_attestation().len()<=300),
-            OriginProofOperation::PrepareProject {parent,source,target_machine,project_id} => {
+            OriginProofOperation::PrepareProject {parent,source,target_machine,project_id,..} => {
                 validate_permissions(parent,parent.source=="provider_turn").map_err(|_|WorkerRefusal::PermissionsChanged)?;
                 worker_require(worker_atom(target_machine,128) && target_machine != &self.worker.machine_id
                     && project_id.as_ref().is_none_or(|id| worker_atom(id,128))
@@ -3131,9 +3146,20 @@ impl OriginProofResponse {
             OriginProofResult::CommunicationProject {project} => worker_require(project.as_ref().is_none_or(|p|
                 p.host==self.worker.machine_id && worker_absolute_path(&p.root))),
             OriginProofResult::Attested {proof} => proof.validate(),
-            OriginProofResult::Sources {permission_digest,source_error}
-            | OriginProofResult::ProjectPrepared {permission_digest,preparation_error:source_error} => worker_require(worker_digest(permission_digest)
+            OriginProofResult::Sources {permission_digest,source_error} => worker_require(worker_digest(permission_digest)
                 && source_error.as_ref().is_none_or(|s| !s.is_empty() && s.len()<=128 && s.bytes().all(|b|b.is_ascii_lowercase()||b==b'_'))),
+            OriginProofResult::ProjectPrepared {permission_digest,preparation_error,project} => {
+                worker_require(worker_digest(permission_digest)
+                    && preparation_error.as_ref().is_none_or(|s| !s.is_empty() && s.len()<=128 && s.bytes().all(|b|b.is_ascii_lowercase()||b==b'_'))
+                    && (preparation_error.is_none() || project.is_none()))?;
+                if let Some(project)=project {
+                    project.target.validate()?;
+                    worker_require(worker_digest(&project.credential_fingerprint)
+                        && worker_atom(&project.project_id,128) && project.mapping.is_object())?;
+                    worker_serialized_size(project,16384)?;
+                }
+                Ok(())
+            },
             OriginProofResult::Rejected {..} => Ok(())
         }
     }

@@ -331,6 +331,30 @@ def publish_mapping(registry_path, request, key, mapping):
         mappings[key] = mapping
         atomic_json(registry_path, registry, raw)
 
+def publish_prepared(request):
+    """Publication locale du reçu d'origine, jamais un nouveau placement."""
+    path = absolute(request["registry"])
+    with locked(path.parent / "project-preparation.lock", wait=SOURCE_LOCK_WAIT_SECS):
+        _, registry = registry_read(path)
+        selected = machine(registry, request)
+        mapping, key = request["mapping"], request["project_id"]
+        previous = selected.get("mappings", {}).get(key)
+        require(mapping_matches(mapping, request["origin_host"], absolute(request["cwd"])),
+                "project_mapping_mismatch")
+        if previous is None:
+            # Le helper d'origine a vérifié le dépôt commun des worktrees.
+            # Le parent peut être un worktree dans cette racine ; ses droits
+            # restent bornés par son propre cwd lors de l'admission.
+            require(contained(absolute(request["source_root"]), absolute(mapping["source_root"])),
+                    "project_mapping_mismatch")
+            extra = mapping.get("additional_root")
+            require(extra is None or any(m.get("additional_root") == extra
+                    and m["source_host"] == request["origin_host"]
+                    for m in selected.get("mappings", {}).values()),
+                    "project_preparation_additional_root_changed")
+        publish_mapping(path, request, key, mapping)
+        return dict(project_id=key, mapping=mapping)
+
 def remote_receive(request, registry_path, bundle_stream):
     with locked(Path(registry_path).parent / "project-preparation.lock"):
         result = remote_inspect(request, registry_path)
@@ -638,7 +662,7 @@ def main():
                 result = remote_receive(request, registry_path, sys.stdin.buffer)
         else:
             request = json.loads(sys.stdin.buffer.read(MAX_JSON))
-            result = prepare(request)
+            result = publish_prepared(request) if request.get("operation") == "publish_prepared" else prepare(request)
         print(json.dumps(dict(ok=True, result=result)))
     except Refused as error:
         print(json.dumps(dict(ok=False, error=str(error))))

@@ -10,7 +10,7 @@ format AAAA-MM-JJ.
 
 ## 0.7.7 — 2026-11-03
 
-- Annoncer le type objet à la racine du schéma des spécialistes. Un client MCP strict peut ainsi découvrir le catalogue complet au démarrage, sans modifier les actions admises, les permissions ou les gardes.
+- Annoncer le type objet des spécialistes et présenter les schémas composés par des références locales complètes. Un client MCP strict peut ainsi découvrir les37outils au démarrage, sans modifier les actions admises, les permissions ou les gardes.
 
 ## 0.7.6 — 2026-11-02
 

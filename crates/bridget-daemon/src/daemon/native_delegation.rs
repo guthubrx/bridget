@@ -15089,6 +15089,15 @@ mod tests {
     }
 
     #[test]
+    fn spec229_reply_timeout_refusal_names_mission_duration_and_recovery() {
+        let view=failure("reply_timeout_out_of_range");
+        assert_eq!(view["code"],"reply_timeout_out_of_range");
+        assert!(view["message"].as_str().unwrap().contains("60 et 86400"));
+        assert!(view["detail"]["recovery"].as_str().unwrap().contains("pas l'attente"));
+        assert!(view["detail"]["recovery"].as_str().unwrap().contains("refus durable sans tâche"));
+        assert!(view.get("task_id").is_none());
+    }
+    #[test]
     fn spec224_project_preparation_link_refusal_names_only_the_failed_check() {
         let view = failure("project_preparation_link_missing");
         assert_eq!(view, origin_attestation_refusal("project_preparation_link_missing"));
