@@ -109,6 +109,18 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session239 — correction du catalogue de maintenance préparée, non appliquée.
+Mandat et rôle transversaux proposés, auto_start/durable restent false ; aucun
+nouvel accès aux données métier. Le port natif configure_mandate exige une
+décision humaine corrélée : question a80e8ab5-c21e-4247-acc9-68b700f6a85c
+en attente. Reprendre request_approval avec le canon exact conservé dans
+/Users/moi/.cache/bridget239-maintenance-transversale/approval-request.json.
+Après réponse native approuvée : appliquer une fois, déclarer le même rôle dans
+le périmètre accordé, vérifier search/get depuis Revue sans nouvelle mission.
+Ne pas répondre à la place de l'humain, modifier SQL ou forger une preuve.
+T3 reste ouvert ; aucune relance requise pour cette configuration.
+Détails : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/239-maintenance-transversale/validation.md.
+
 Session238 — placement Revue Mac qualifié, configuration native sans build.
 Le mapping existant attendait le miroirLinux au lieu du remoteGitHub réel.
 Révision2 maître/worker, seuls identitéGit et numéro modifiés sous verrou/CAS
