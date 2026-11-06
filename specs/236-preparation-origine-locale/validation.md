@@ -73,3 +73,21 @@ AndroidCartae :940fichiers retirés après comparaison des62sources à l’archi
 SYS :ancien234R3, source236 et cache de compilation conservés, faute de lecture privilégiée complète des usages ;installed refuse le nettoyage sans forcer. Revue236 terminée/ACK mais worktree natif encorekept/review_required, donc conservé ; aucune suppression manuelle de son dossier. Ancien227sale, lecteur234R0Mac/branche, vues et preuves indépendantes gardés. Aucun processus d’un autre travail arrêté pour nettoyer. Les dernières opérationsGit et de retrait de nos transferts sont consignées dans le bilan privé de livraison.
 
 Preuves privées et reçus :/Users/moi/.cache/bridget236-origin-local/. Source et documents intégrés surmain puis poussés ; alignement des quatremain et état de leurs racines vérifiés au bilan final.
+
+## Bilan finalGit et nettoyage
+
+Intégration235→236 par avance rapide, sources et documents poussés surmain ;
+quatremain alignés et racines propres, HEADdétachés SYS/KS conservés. Branche236
+locale et distante retirée après preuve d’intégration ; notre worktree Mac propre
+retiré après observation native complète des usages. Ses4943fichiers représentent
+111691778octets logiques. Un bytecode temporaire, une copie Linux et deux bundles
+de transfert retirés :4fichiers/88636564octets. Total final :5892fichiers et
+554556800octets logiques, hors entretien automatique Cargo compté séparément.
+Ce total décrit les fichiers, pas un gain physique APFS mesuré.
+
+Le dernier contrôle KS donne180781056octets disponibles. Ce manque d’espace
+reste local ; aucune capacité générale de revue sur cette machine n’est annoncée.
+Les sources/cache/ancienretour SYS et les dossiers de revue sous rétention
+restent conservés pour les raisons précises ci-dessus. Actif236 et retour235
+restent disponibles. Bilan et empreintes :
+/Users/moi/.cache/bridget236-origin-local/completion.json.

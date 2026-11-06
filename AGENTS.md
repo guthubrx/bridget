@@ -122,7 +122,7 @@ et APK8004/certificat/lignée vérifiés ; quatrehôtes0.8.4/up_to_date/fresh.
 Diagnostic propriétaire et19avis de reprise envoyés, reçus sans lecture inventée.
 CléMac03 nonrejouée ; SYS02 à ne PLUS reprendre, travail fait autrement. Tâches
 7024/77ba/702d strictement préservées, ancienne2fb et revues métier conservées.
-Retraits qualifiés Android940fichiers et cinqcopies obsolètes ; cacheMac9,82Gio
+Retraits qualifiés5892fichiers/554556800octetslogiques, branche/WT236 retirés ; cacheMac9,82Gio
 sous budget, SYSsource/cache/ancienretour gardés faute d’observation complète.
 Revue236kept/review_required, lecteur234Mac/branche, dirty227/vues/preuves conservés.
 Détails :/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/236-preparation-origine-locale/validation.md.
