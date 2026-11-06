@@ -14255,9 +14255,10 @@ mod tests {
     fn spec236_origin_field_refusal_preserves_not_recorded_and_sends_nothing() {
         let (state,config,rx,_reader,request,_root)=routing168_fixture(1);
         let result=routing_failure_admission("conn-1",&request,None,
-            failure("origin_request_invalid:workspace:invalid_envelope"),&state);
+            failure("origin_request_invalid:target_machine:same_machine_target"),&state);
         assert_eq!(result["code"],"origin_request_invalid");
-        assert_eq!(result["detail"]["field"],"workspace");
+        assert_eq!(result["detail"]["field"],"target_machine");
+        assert_eq!(result["detail"]["cause"],"same_machine_target");
         assert_eq!(result["detail"]["admission"]["state"],"not_recorded");
         assert!(result["detail"]["admission"]["task_id"].is_null());
         let st=state.lock().unwrap();

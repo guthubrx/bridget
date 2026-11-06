@@ -33,7 +33,7 @@ Sources en worktree dédié :/Users/moi/.cache/bridget236-origin-local/source.
 CacheMac du checkout réutilisé, wrapper de build obligatoire. L’entretien a
 retiré11,04Gio logiques lorsque le seuil10Gio a été dépassé ; sources et images
 installées conservées. Les contrôles suivants réutilisent le cache régénéré.
-Activation et revue indépendantes restent à faire ; aucun avis « corrigé » envoyé.
+Activation reste à faire ; revue indépendante acquise ; aucun avis « corrigé » envoyé.
 
 Le diagnostic conserve aussi la cause ferméeinvalid_envelope/permissions_changed/
 resource_limit/unobserved ; une borne connue est rendue pourenvelope128Kio ou
@@ -43,3 +43,13 @@ Revue prévue dans un worktree isolé pour lire le diff Git du commit exact ;
 aucun axe fournisseur/machine/modèle/effort imposé. Ce nouveau lot est distinct
 la revue235 annulée. Le dépôt suivi pèse111670213octets ; KSconserve peu d’espace,
 aucune disponibilité de cette machine ou réussite de revue n’est présumée.
+
+## Revue et complément ciblé
+
+Revue native05acfeaa-42a0-43be-adb9-0127246ae7f1 sur2fc708146048e91099850e8efa2e961d1f1a27c5, terminée/result_available, résultat intégral lu puis ACK acquis. Sélection automatiqueclaude-sysle2-haiku213/claude-haiku-5-5, aucun axe imposé. APPROVE_WITH_CHANGES, aucunP1. Le relecteur a lu les sources ; il n’a pas exécuté de tests ni vérifié le diff par shell. Le rapport natif confirmeHEADexact,0commit et arbre propre.
+
+P2 traité :source=cible pour une stratégie non prise en charge désigne désormaistarget_machine et causesame_machine_target, au lieu du champworkspace générique. Le diagnostic distingue cette cause d’une cible syntaxiquement invalide. Tests de champ, cause et absence d’admission renforcés. Dernier delta auto-relu, sans seconde mission.
+
+P3 :aucune nouvelle négociation de capacité ; les sept composants doivent être alignés avant de qualifier l’activation. Un ancien worker peut encore refuser pendant le passage. Le contrat et les formats conservés restent inchangés. La préparation locale a aussi été vérifiée par le test Python existanttest_spec221_commit_objects_local_worker_imports_without_loopback_ssh :vrai import d’un commit nonHEAD, aucunSSH/checkout, HEAD/index/registre conservés, PASS1,049s.
+
+Sept contrôles distincts utiles au total :Git réel177, diagnostic236, guidage211, attestation177, not_recorded236, cause locale236, helper Python221. Répétitions Mac/Linux non recomptées. APK8004 compilé/signé avec la lignée existante ; validation0.8.4 acquise. Aucun changement Android dans le delta de revue, donc pas de nouvelle compilation Android. Aucune mission métier rejouée.

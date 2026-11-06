@@ -43,6 +43,17 @@ pub(super) fn worker_is_current(st:&DaemonState,host:&str)->bool {
         && worker.last_contact.elapsed()<Duration::from_secs(WORKER_STALE_SECS as u64)
         && worker.capabilities.contains(&WorkerCapability::OriginProofV1))
 }
+fn shape_error(field:&'static str,reason:WorkerRefusal,same_machine:bool)->String {
+    let cause=match (field,reason,same_machine) {
+        ("target_machine",WorkerRefusal::InvalidEnvelope,true)=>"same_machine_target",
+        (_,WorkerRefusal::InvalidEnvelope,_)=>"invalid_envelope",
+        (_,WorkerRefusal::PermissionsChanged,_)=>"permissions_changed",
+        (_,WorkerRefusal::ResourceLimit,_)=>"resource_limit",
+        _=>"unobserved",
+    };
+    format!("origin_request_invalid:{field}:{cause}")
+}
+
 fn exchange(
     state: &Arc<Mutex<DaemonState>>,
     host: &str,
@@ -81,17 +92,10 @@ fn exchange(
             expires_at_ms: crate::origin_proof::now_ms().saturating_add(budget.as_millis() as i64),
             request: operation,
         };
-        request
-            .validate_shape_detailed()
-            .map_err(|(field,reason)| {
-                let cause=match reason {
-                    WorkerRefusal::InvalidEnvelope=>"invalid_envelope",
-                    WorkerRefusal::PermissionsChanged=>"permissions_changed",
-                    WorkerRefusal::ResourceLimit=>"resource_limit",
-                    _=>"unobserved",
-                };
-                format!("origin_request_invalid:{field}:{cause}")
-            })?;
+        let same_machine=matches!(&request.request,OriginProofOperation::PrepareProject {target_machine,..}
+            if target_machine==&request.worker.machine_id);
+        request.validate_shape_detailed()
+            .map_err(|(field,reason)|shape_error(field,reason,same_machine))?;
         let connection = worker.conn_id.clone();
         let writer = st
             .connections
@@ -155,6 +159,18 @@ fn checked_response(response: Option<OriginProofResult>, preparation: bool) -> R
 #[cfg(test)]
 mod capacity221_tests {
     use super::*;
+    #[test]
+    fn spec236_origin_refusal_cause_distinguishes_same_machine_and_invalid_values() {
+        assert_eq!(shape_error("target_machine",WorkerRefusal::InvalidEnvelope,true),
+            "origin_request_invalid:target_machine:same_machine_target");
+        assert_eq!(shape_error("target_machine",WorkerRefusal::InvalidEnvelope,false),
+            "origin_request_invalid:target_machine:invalid_envelope");
+        assert_eq!(shape_error("parent",WorkerRefusal::PermissionsChanged,true),
+            "origin_request_invalid:parent:permissions_changed");
+        assert_eq!(shape_error("envelope",WorkerRefusal::ResourceLimit,true),
+            "origin_request_invalid:envelope:resource_limit");
+    }
+
     #[test]
     fn spec221_origin_busy_is_capacity_not_a_permission_change() {
         assert_eq!(checked_response(Some(OriginProofResult::Rejected {

@@ -295,7 +295,7 @@ mod tests {
         if let OriginProofOperation::PrepareProject {target_machine,..}=&mut envelope.request {
             *target_machine="origin177".into();
         }
-        assert_eq!(envelope.validate_shape_detailed().unwrap_err().0,"workspace");
+        assert_eq!(envelope.validate_shape_detailed().unwrap_err().0,"target_machine");
         //236 : le helper prend déjà en charge objects_only sur la machine source.
         if let OriginProofOperation::PrepareProject {source,..}=&mut envelope.request {
             source.workspace=Some(WorkspaceRequest::CommitView {});
@@ -323,7 +323,7 @@ mod tests {
         for workspace in [WorkspaceRequest::Shared {},WorkspaceRequest::Worktree {branch:None,base_ref:None}] {
             let mut wrong=valid.clone();
             if let OriginProofOperation::PrepareProject {source,..}=&mut wrong.request {source.workspace=Some(workspace);}
-            assert_eq!(wrong.validate_shape_detailed().unwrap_err().0,"workspace");
+            assert_eq!(wrong.validate_shape_detailed().unwrap_err().0,"target_machine");
         }
         envelope.request=OriginProofOperation::Catalogue {parent:parent.clone(),blocked:vec![]};
         assert!(matches!(prove(&envelope),OriginProofResult::Rejected {reason:WorkerRefusal::Unauthorized}));

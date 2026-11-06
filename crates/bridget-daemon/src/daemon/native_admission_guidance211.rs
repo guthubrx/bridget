@@ -3,6 +3,7 @@ pub(super) fn refusal(code:&str)->Option<Value>{
     if let Some(detail)=code.strip_prefix("origin_request_invalid:") {
         let (field,cause)=detail.split_once(':').unwrap_or((detail,"unobserved"));
         let cause_text=match cause {
+            "same_machine_target"=>"la cible désigne la machine source pour une stratégie dont ce relais ne prend pas en charge la préparation locale",
             "invalid_envelope"=>"la forme de l’enveloppe est invalide",
             "permissions_changed"=>"le fait de permissions est invalide",
             "resource_limit"=>"la taille admise est dépassée",
@@ -217,6 +218,10 @@ mod tests {
             assert_eq!(view["detail"]["cause"],"resource_limit");
             assert_eq!(view["detail"]["limit_bytes"],limit);
         }
+        let same=refusal("origin_request_invalid:target_machine:same_machine_target").unwrap();
+        assert_eq!(same["detail"]["field"],"target_machine");
+        assert_eq!(same["detail"]["cause"],"same_machine_target");
+        assert!(same["detail"]["recovery"].as_str().unwrap().contains("cible désigne la machine source"));
         let view=refusal("origin_request_invalid:parent:permissions_changed").unwrap();
         assert_eq!(view["detail"]["cause"],"permissions_changed");
         for field in ["secret/path","cwd:PRIVATE","","parent\nPRIVATE"] {

@@ -3139,7 +3139,7 @@ impl OriginProofRequest {
                 // Le helper objects_only sait préparer une vue sur sa propre machine.
                 // Les autres stratégies conservent leur garde de destination distante.
                 require(target_machine!=&self.worker.machine_id
-                    || matches!(source.workspace,Some(WorkspaceRequest::CommitView {})),"workspace")?;
+                    || matches!(source.workspace,Some(WorkspaceRequest::CommitView {})),"target_machine")?;
                 require(project_id.as_ref().is_none_or(|id|worker_atom(id,128)),"project_id")?;
                 require(worker_absolute_path(&source.cwd)
                     && std::path::Path::new(&source.cwd).starts_with(&parent.cwd),"cwd")?;
