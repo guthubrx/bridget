@@ -19057,17 +19057,19 @@ fn handle_worker_message(
                     }
                     return None;
                 }
-                if !remote_worker_has_command(&st, &response.worker, Some(&response.command))
-                    || !st
-                        .delegation_store
-                        .get(&response.command.task_id)
-                        .is_ok_and(|task| {
-                            task.is_some_and(|task| {
-                                native_delegation::remote_command_identity(&st, &task)
-                                    .is_ok_and(|identity| identity == response.command)
-                            })
-                        })
-                {
+                if !remote_worker_has_command(&st, &response.worker, Some(&response.command)) {
+                    return refused(WorkerRefusal::CommandMismatch);
+                }
+                // Une commande gérée hors délégation porte son propre command_id
+                // comme task_id. Son tuple durable exact reste obligatoire ;
+                // une délégation existante garde son contrôle d’identité complet.
+                let command_matches = match st.delegation_store.get(&response.command.task_id) {
+                    Ok(Some(task)) => native_delegation::remote_command_identity(&st, &task)
+                        .is_ok_and(|identity| identity == response.command),
+                    Ok(None) => response.command.task_id == response.command.command_id,
+                    Err(_) => return refused(WorkerRefusal::StoreUnavailable),
+                };
+                if !command_matches {
                     return refused(WorkerRefusal::CommandMismatch);
                 }
                 if let Some(failure) = observation.startup_failure {
@@ -42711,6 +42713,61 @@ mod presence_tests {
             assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: response.clone() }).is_none());
             assert!(matches!(rx.try_recv().unwrap(), WorkerResponseOperation::Rejected { reason: actual } if actual == reason),
                 "a tracked refusal must still reach its caller");
+            let mut foreign = response.clone(); foreign.command.instance_id = Uuid::new_v4().to_string();
+            assert!(matches!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: foreign }),
+                Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::CommandMismatch })));
+            let mut stale = response; stale.connection_epoch = "old-epoch".into();
+            assert!(matches!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: stale }),
+                Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::StaleConnection })));
+        }
+        assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::Heartbeat).is_none());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec237_managed_observation_without_delegation_keeps_channel() {
+        use bridget_transport::protocol::*;
+        let (mut st, config) = state_with_registered_agent("worker237-managed-observation");
+        let worker = WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 };
+        let placement = RemotePlacement {
+            machine_id: worker.machine_id.clone(), worker_id: worker.worker_id.clone(), provisioning_revision: 1,
+            project_id: "project".into(), mapping_revision: 1, origin_host: "mac".into(), origin_cwd: "/source".into(),
+            source_root_identity: "/repo.git".into(), relative_cwd: ".".into(), execution_cwd: "/remote".into(),
+            base_commit: None, definition_digest: "a".repeat(64), permission_digest: "b".repeat(64),
+        };
+        let now = unix_timestamp();
+        let order = FleetSpawnOrder { remote_placement: Some(placement), posture: None, agent_type: "codex".into(),
+            project: None, requested_name: Some(Uuid::new_v4().to_string()), cwd: PathBuf::from("/remote"), persistent: true,
+            command_id: Uuid::new_v4().to_string(), issued_at: now, deadline_at: now + 300, ownership: None };
+        let crate::fleet::SpawnSubmission::Start(lease) = st.fleet.request_spawn(&order, now).unwrap() else { panic!("start expected") };
+        st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
+            epoch: "epoch".into(), capabilities: vec![], catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(), catalogue_refresh_at:None, last_contact: Instant::now(), last_contact_at: now,
+            contact: WorkerContactState::Connected });
+        let shared = Arc::new(Mutex::new(st));
+        let command = WorkerCommandIdentity { command_id: lease.command_id, task_id: order.command_id,
+            instance_id: lease.instance_id, generation: lease.generation };
+        for phase in [WorkerCommandPhase::Released, WorkerCommandPhase::Terminal, WorkerCommandPhase::Refused] {
+            let response = WorkerResponse { version: REMOTE_WORKER_VERSION, correlation_id: Uuid::new_v4().to_string(),
+                connection_epoch: "epoch".into(), worker: worker.clone(), command: command.clone(),
+                response: WorkerResponseOperation::Observation { observation: WorkerObservation {
+                    phase, native_ready:false, exit_code:None, observed_at:now, workspace:None,
+                    permission_digest:None, startup_failure:None } } };
+            assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: response.clone() }).is_none(),
+                "une observation gérée connue ne doit pas exiger une délégation");
+            let (tx, rx) = mpsc::sync_channel(1);
+            shared.lock().unwrap().pending_worker_responses.insert(response.correlation_id.clone(), PendingWorkerResponse {
+                conn_id: "worker".into(), epoch: "epoch".into(), worker: worker.clone(), command: command.clone(), reply: tx,
+            });
+            assert!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: response.clone() }).is_none());
+            assert!(matches!(rx.try_recv().unwrap(), WorkerResponseOperation::Observation { observation } if observation.phase == phase),
+                "la réponse corrélée doit encore parvenir à son lecteur");
+            assert!(shared.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+            for field in ["generation","task_id","command_id"] {
+                let mut bad=response.clone();
+                match field {"generation"=>bad.command.generation+=1,"task_id"=>bad.command.task_id=Uuid::new_v4().to_string(),_=>bad.command.command_id=Uuid::new_v4().to_string()}
+                assert!(matches!(handle_worker_message(&shared,"worker",WrapperToDaemon::WorkerResponse {response:bad}),
+                    Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CommandMismatch})));
+            }
             let mut foreign = response.clone(); foreign.command.instance_id = Uuid::new_v4().to_string();
             assert!(matches!(handle_worker_message(&shared, "worker", WrapperToDaemon::WorkerResponse { response: foreign }),
                 Some(DaemonToWrapper::WorkerRejected { reason: WorkerRefusal::CommandMismatch })));

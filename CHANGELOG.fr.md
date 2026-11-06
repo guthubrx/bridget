@@ -8,6 +8,11 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.5 — 2026-11-06
+
+- Réutiliser les racines locales d’un placement existant pendant la préparation sur sa machine cible, sans réécrire ce placement ni changer les droits.
+- Accepter les observations d’une commande gérée connue sans exiger une fiche de délégation. Garder le contrôle exact de la machine, de l’instance, de la génération et des réponses corrélées.
+
 ## 0.8.4 — 2026-11-06
 
 - Autoriser la préparation locale d’une copie du commit lorsque source et cible désignent la même machine provisionnée. Conserver les autres stratégies et les contrôles d’autorité.

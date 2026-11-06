@@ -6,6 +6,11 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.5 — 2026-11-06
+
+- Reuse the local roots of an existing placement while preparing its destination machine, without rewriting the provisioned mapping or changing permissions.
+- Accept observations for an exact known managed command without requiring a delegation record. Preserve worker, instance, generation and correlation checks.
+
 ## 0.8.4 — 2026-11-06
 
 - Admit origin-side commit-view preparation when the target is the same provisioned machine. Keep other workspace strategies and all authority checks unchanged.

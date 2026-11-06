@@ -571,6 +571,53 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(prep.git(remote, "show", expected + ":code.txt").stdout,
                          b"commit du worktree\n")
 
+    def test_spec237_local_projection_preserves_scope_and_additional_root(self):
+        mapping=dict(source_host="other",source_root="/other/source",remote_root=str(self.source),
+                     expected_git_identity="git",mapping_revision=3,additional_root=dict(
+                         source_root="/other/extra",remote_root=str(self.home),source_uid=42,
+                         source_mode=0o750,remote_uid=os.geteuid(),remote_mode=0o700,access="inherit"))
+        original=json.dumps(mapping,sort_keys=True)
+        local=prep.mapping_for_origin(mapping,"test","test")
+        self.assertEqual(local["source_root"],str(self.source))
+        self.assertEqual(local["additional_root"]["source_root"],str(self.home))
+        self.assertEqual(local["additional_root"]["source_uid"],os.geteuid())
+        self.assertEqual(local["additional_root"]["source_mode"],0o700)
+        self.assertEqual(json.dumps(mapping,sort_keys=True),original)
+        self.assertIsNone(prep.mapping_for_origin(mapping,"test","foreign"))
+        selected=dict(mappings=dict(known=mapping))
+        request=dict(self.request,origin_host="test",project_id="known")
+        self.assertEqual(prep.select_mapping(selected,request),("known",mapping))
+        for change in [dict(origin_host="foreign"),dict(cwd=str(self.base))]:
+            with self.subTest(change=change):
+                with self.assertRaisesRegex(prep.Refused,"project_mapping_mismatch"):
+                    prep.select_mapping(selected,dict(request,**change))
+        coordinator=self.home/"coordinator.json"
+        prep.atomic_json(coordinator,dict(machines=dict(test=dict(self.authority,enabled=True,mappings=dict(known=mapping)))))
+        before=coordinator.read_bytes()
+        publication=dict(request,registry=str(coordinator),authority=self.authority,mapping=mapping)
+        self.assertEqual(prep.publish_prepared(publication)["mapping"],mapping)
+        self.assertEqual(coordinator.read_bytes(),before)
+
+    def test_spec237_local_mapping_uses_provisioned_target_without_rewriting(self):
+        _, remote, target = self.mapped_linked_worktree()
+        self.request.update(origin_host="test", project_id="known", source_root=str(remote), cwd=str(remote),
+                            commit=prep.git(remote,"rev-parse","HEAD").stdout.decode().strip(),
+                            objects_only=True)
+        prep.atomic_json(self.registry, self.config)
+        old_registry=self.registry.read_bytes()
+        old_head=prep.git(remote,"rev-parse","HEAD").stdout
+        old_index=(remote/".git/index").read_bytes()
+        with patch.object(prep,"remote_registry",return_value=self.home/"namespace/agents.json"):
+            with patch.object(prep,"ssh",side_effect=AssertionError("pas de tunnel local")):
+                result,local,distant=self.prepare_via_federation()
+        self.assertEqual(result["project_id"],"known")
+        self.assertEqual(result["mapping"],self.config["machines"]["test"]["mappings"]["known"])
+        self.assertEqual(local,distant)
+        self.assertEqual(self.registry.read_bytes(),old_registry)
+        self.assertEqual(prep.git(remote,"rev-parse","HEAD").stdout,old_head)
+        self.assertEqual((remote/".git/index").read_bytes(),old_index)
+        self.assertFalse(target.exists())
+
     def test_spec221_commit_objects_root_disappears_after_inspect_without_creation(self):
         _, remote, _ = self.mapped_linked_worktree()
         prep.atomic_json(self.registry,self.config)

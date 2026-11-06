@@ -143,8 +143,23 @@ def registry_read(path):
     raw = private_read(path)
     return raw, json.loads(raw)
 
-def mapping_matches(mapping, host, cwd):
-    return mapping["source_host"] == host and contained(cwd, absolute(mapping["source_root"]))
+def mapping_for_origin(mapping, machine_id, origin_host):
+    # Même projection que ProjectMapping::for_origin : le placement provisionné
+    # reste inchangé ; seule sa lecture depuis la machine cible est adaptée.
+    if mapping["source_host"] == origin_host:
+        return mapping
+    if machine_id != origin_host:
+        return None
+    local = dict(mapping, source_host=origin_host, source_root=mapping["remote_root"])
+    if mapping.get("additional_root"):
+        extra = mapping["additional_root"]
+        local["additional_root"] = dict(extra, source_root=extra["remote_root"],
+                                        source_uid=extra["remote_uid"], source_mode=extra["remote_mode"])
+    return local
+
+def mapping_matches(mapping, host, cwd, machine_id=None):
+    local = mapping_for_origin(mapping, machine_id, host)
+    return local is not None and contained(cwd, absolute(local["source_root"]))
 
 # O(M+P) attendu : mappings/préférences bornés à64, aucune I/O dans le choix.
 def select_mapping(selected, request, registry=None):
@@ -157,7 +172,7 @@ def select_mapping(selected, request, registry=None):
         found = [(requested, mappings[requested])]
     else:
         found = [(key, value) for key, value in mappings.items()
-                 if mapping_matches(value, request["origin_host"], cwd)]
+                 if mapping_matches(value, request["origin_host"], cwd, request["machine_id"])]
     if not requested and len(found) > 1:
         preferred = set()
         section = (registry or {}).get("project_preferences")
@@ -175,15 +190,16 @@ def select_mapping(selected, request, registry=None):
             preferred = unique
         choices = [(key, value) for key, value in found if key in preferred]
         require(len(choices) == 1, "project_mapping_ambiguous")
-        chosen = choices[0][1]
-        require(all(all(value.get(field) == chosen.get(field) for field in
+        chosen = mapping_for_origin(choices[0][1], request["machine_id"], request["origin_host"])
+        require(all(all(mapping_for_origin(value, request["machine_id"], request["origin_host"]).get(field)
+                        == chosen.get(field) for field in
                         ("source_host", "source_root", "additional_root"))
                     for _, value in found), "project_mapping_ambiguous")
         found = choices
     require(len(found) <= 1, "project_mapping_ambiguous")
     if found:
         key, value = found[0]
-        require(mapping_matches(value, request["origin_host"], cwd),
+        require(mapping_matches(value, request["origin_host"], cwd, request["machine_id"]),
                 "project_mapping_mismatch")
         return key, value
     identity = digest((request["origin_host"] + "\0" + str(source)).encode())
@@ -339,7 +355,7 @@ def publish_prepared(request):
         selected = machine(registry, request)
         mapping, key = request["mapping"], request["project_id"]
         previous = selected.get("mappings", {}).get(key)
-        require(mapping_matches(mapping, request["origin_host"], absolute(request["cwd"])),
+        require(mapping_matches(mapping, request["origin_host"], absolute(request["cwd"]), request["machine_id"]),
                 "project_mapping_mismatch")
         if previous is None:
             # Le helper d'origine a vérifié le dépôt commun des worktrees.
@@ -523,8 +539,9 @@ def prepare(request):
         # La source additionnelle provient uniquement des correspondances déjà
         # approuvées pour cet hôte. Ses contenus ne sont pas transférés.
         extras = {json.dumps(m["additional_root"], sort_keys=True) for m in
-                  selected.get("mappings", {}).values()
-                  if m["source_host"] == request["origin_host"] and m.get("additional_root")}
+                  (mapping_for_origin(value, request["machine_id"], request["origin_host"])
+                   for value in selected.get("mappings", {}).values())
+                  if m is not None and m.get("additional_root")}
         if extras:
             roots = {json.loads(e)["source_root"] for e in extras}
             if len(roots) == 1:
@@ -545,7 +562,8 @@ def prepare(request):
         request.pop("checkout_root", None)
         if commit:
             request["checkout_root"] = str(source)
-        mapped_source = absolute(local_mapping["source_root"])
+        mapped_source = absolute(mapping_for_origin(local_mapping, request["machine_id"],
+                                                   request["origin_host"])["source_root"])
         if commit and source != mapped_source:
             # Comme T3, l'identite du depot est son repertoire Git commun.
             # Le chemin lexical seul confond un worktree lie et un autre depot.
