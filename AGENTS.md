@@ -109,6 +109,25 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session235 — canal worker livré en0.8.3/235-worker-channel-r3.
+Source93f32939 intégrée/poussée ; réponse tardive de conservation d’une ancienne
+revue annulée2fb96ec5 isolée, contrôle de connexion inchangé. Lectures ciblées
+1959commandes/335observations :20lectures2,24s→45ms pour deux lectures ciblées,
+environ50x ;7contrôles utiles verts. Revue4c789d7d non démarrée surKS/disk_full,
+annulée/conservée nativement ; ACKtask_not_ready sans résultat, pas de nouvelessai,
+aucunremplacement ; auto-audit déclaré. Sept composants/SHA vérifiés, coupure2,09s,
+superviseurCartae2500061 et registreMac conservés. Retour234R3 compatible/pointeurs
+atomiques. CinqanciensMCP retirés/troisfaçades235/SHA vérifiées, preuveV2 et lien
+natif revenus ; mêmeapp231 conservée. CanalSYS stable8h47min au contrôle ;02non
+rejouée/nonenregistrée,01refusdurable/tasknull. Avis propriétaire envoyé, lecture
+non attestée. Releasepublique0.8.3/sixactifs/SHA et APK8003/certificat/lignée
+vérifiés ; quatre rapports0.8.3/up_to_date/fresh. Nettoyage997345022octetslogiques/
+948fichiers +cacheMac0,52Gio ; branche235 retirée. Sources/cachesSYS sous observation
+incomplète, lecteurMac/branche234R0, dirty227/vues/preuves conservés. KSreste
+201728000octetslibres : revue indisponible locale, pas de faussedéclarationglobale.
+Aucune mission métier rejouée ;2fb etpreuves conservées sans fauxcleanup.
+Détails :/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/235-sondes-connexion/validation.md.
+
 Session234 — inventaires et récupération KS livrés en0.8.2/234-inventory-r3.
 Source exécutable aa3cbeb1 intégrée/poussée,7images/SHA vérifiés sur4hôtes ;
 coupure2,19s, superviseursCartae1978546/2500061 et registreMac conservés.
