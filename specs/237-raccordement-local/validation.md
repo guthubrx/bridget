@@ -56,3 +56,32 @@ in_flight ; lecture non attestée. Aucun rejeu03/05, aucunStart/Cancel métier.
 SYS02 à ne plus reprendre. Préserver7024/77ba/702d et anciennes revues.
 
 Revue, activation, publication et bilan final restent à faire.
+
+## Revue indépendante et complémentP3
+
+Revue native1390358e-9d27-4a3e-9f98-6b744a63d87f, source2475d88d5d89ef2f1b0aa737a9769af88306b5f0,
+sélectionclaude-sysle2-haiku213/claude-haiku-5-5 sans axe imposé. Terminée, résultat
+intégral lu et ACK acquis. AucunP1/P2 trouvé par lecture. Relecteur sansBash :
+pas de diff shell ni test indépendant ; le rapport natif confirmeHEADexact,
+0commit, arbre propre. La revue a réussi entre deux fermetures du canal ; cette
+indisponibilité est intermittente, pas un arrêt global.
+
+P3-1 :la conversion historique d’une erreur d’idempotence enfalse est confirmée
+sur la base151cb960, donc préexistante. Corrigée dans le parcours d’observation :
+remote_worker_command_known conserve son erreurStoreUnavailable ; la projection
+bool utilisée par les autres parcours garde sa sémantique. Une erreur de lecture
+d’identité d’une délégation existante est aussi rendueStoreUnavailable.
+
+P3-2 :environnement de test expliqué etTMPDIR canonique conservé, aucune
+modification de la garde des liens symboliques en production.
+
+P3-3 :deux contrôlesRust supplémentaires acquis. Une délégation existante réelle
+dans la fixture accepte sa bonne identité ; le changement d’instance dans la
+fiche est refusé. Deux pannes de schéma provoquées seulement dans SQLite
+temporaire (spawn_commands puis native_delegations) donnentStoreUnavailable,
+sans conversion enCommandMismatch. Les trois tests237 passent ensemble0,42s.
+Total55tests distincts :50Python et5Rust. Les répétitions ne sont pas ajoutées.
+Dernier delta de traitementP3 auto-relu, pas de seconde mission ni nouvelle ronde.
+APK8005 déjà compilé ; aucun changement Android entre la source revue et ce
+deltaRust, donc pas de seconde compilation Android. Nouveau build237-r2 requis
+pourMac/Linux ; aucune imageR1 installée ou activée.

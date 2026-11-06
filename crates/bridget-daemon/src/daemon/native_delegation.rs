@@ -28259,6 +28259,57 @@ for frame in frames: print(json.dumps(frame),flush=True)
         (st, config, task, result)
     }
 
+    fn observation_fixture237() -> (Arc<Mutex<DaemonState>>, DaemonConfig, bridget_transport::protocol::WorkerResponse) {
+        use bridget_transport::protocol::*;
+        let (mut st,config,_task,result)=remote162_capture_fixture();
+        let worker=result.worker;
+        st.registry=AgentRegistry::from_json(&json!({"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"a".repeat(64),"allowed_agent_types":["native-test"],"mappings":{}}}}).to_string(),
+            "/tmp/worker237-registry.json").unwrap();
+        st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+            identity:worker.clone(),conn_id:"worker237".into(),epoch:"epoch237".into(),
+            capabilities:vec![],catalogues:HashMap::new(),catalogue_refresh_id:"epoch237".into(),
+            catalogue_refresh_at:None,last_contact:Instant::now(),last_contact_at:unix_timestamp(),
+            contact:WorkerContactState::Connected });
+        let response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:Uuid::new_v4().to_string(),
+            connection_epoch:"epoch237".into(),worker,command:result.identity.command,
+            response:WorkerResponseOperation::Observation {observation:WorkerObservation {
+                phase:WorkerCommandPhase::Released,native_ready:false,exit_code:None,
+                observed_at:unix_timestamp(),workspace:None,permission_digest:None,startup_failure:None}}};
+        (Arc::new(Mutex::new(st)),config,response)
+    }
+
+    #[test]
+    fn spec237_existing_delegation_observation_keeps_exact_identity() {
+        use bridget_transport::protocol::*;
+        let (shared,config,response)=observation_fixture237();
+        assert_ne!(response.command.task_id,response.command.command_id);
+        assert!(super::super::handle_worker_message(&shared,"worker237",
+            WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
+        let mut task=shared.lock().unwrap().delegation_store.get(&response.command.task_id).unwrap().unwrap();
+        task.child_instance=Some(Uuid::new_v4().to_string());
+        shared.lock().unwrap().delegation_store.save(&task).unwrap();
+        assert!(matches!(super::super::handle_worker_message(&shared,"worker237",
+            WrapperToDaemon::WorkerResponse {response}),Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CommandMismatch})));
+        drop(shared);cleanup(&config);
+    }
+
+    #[test]
+    fn spec237_observation_store_errors_remain_store_unavailable() {
+        use bridget_transport::protocol::*;
+        for table in ["spawn_commands","native_delegations"] {
+            let (shared,config,response)=observation_fixture237();
+            // Panne de schéma uniquement dans le SQLite temporaire de la fixture.
+            let db=rusqlite::Connection::open(&config.db_path).unwrap();
+            db.execute_batch(&format!("ALTER TABLE {table} RENAME TO unavailable237")).unwrap();
+            assert!(matches!(super::super::handle_worker_message(&shared,"worker237",
+                WrapperToDaemon::WorkerResponse {response}),Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::StoreUnavailable})),"{table}");
+            db.execute_batch(&format!("ALTER TABLE unavailable237 RENAME TO {table}")).unwrap();
+            drop(db);drop(shared);cleanup(&config);
+        }
+    }
+
     #[test]
     fn spec172_remote_rate_limit_binds_only_current_managed_child_and_exact_definition() {
         use bridget_transport::protocol::RateLimitSource;

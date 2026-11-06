@@ -18743,17 +18743,26 @@ fn complete_remote_registration(st: &mut DaemonState, command_id: &str) {
     }
 }
 
+fn remote_worker_command_known(
+    st: &DaemonState,
+    worker: &bridget_transport::protocol::WorkerIdentity,
+    command: &bridget_transport::protocol::WorkerCommandIdentity,
+) -> Result<bool, bridget_transport::protocol::WorkerRefusal> {
+    st.idempotency.spawn_command(&st.fleet.supervisor_scope(), &command.command_id)
+        .map(|known| known.is_some_and(|known|
+            known.remote_placement.as_ref().is_some_and(|placement| placement.matches_worker(worker))
+                && known.generation == command.generation
+                && known.instance_id.as_deref() == Some(command.instance_id.as_str())))
+        .map_err(|_| bridget_transport::protocol::WorkerRefusal::StoreUnavailable)
+}
+
 fn remote_worker_has_command(
     st: &DaemonState,
     worker: &bridget_transport::protocol::WorkerIdentity,
     command: Option<&bridget_transport::protocol::WorkerCommandIdentity>,
 ) -> bool {
     if let Some(command) = command {
-        return st.idempotency.spawn_command(&st.fleet.supervisor_scope(), &command.command_id)
-            .is_ok_and(|known| known.is_some_and(|known|
-                known.remote_placement.as_ref().is_some_and(|placement|placement.matches_worker(worker))
-                    && known.generation == command.generation
-                    && known.instance_id.as_deref() == Some(command.instance_id.as_str())));
+        return remote_worker_command_known(st, worker, command).unwrap_or(false);
     }
     st.idempotency
         .spawn_commands(&st.fleet.supervisor_scope())
@@ -19057,15 +19066,20 @@ fn handle_worker_message(
                     }
                     return None;
                 }
-                if !remote_worker_has_command(&st, &response.worker, Some(&response.command)) {
-                    return refused(WorkerRefusal::CommandMismatch);
+                match remote_worker_command_known(&st, &response.worker, &response.command) {
+                    Ok(true) => {},
+                    Ok(false) => return refused(WorkerRefusal::CommandMismatch),
+                    Err(reason) => return refused(reason),
                 }
                 // Une commande gérée hors délégation porte son propre command_id
                 // comme task_id. Son tuple durable exact reste obligatoire ;
                 // une délégation existante garde son contrôle d’identité complet.
                 let command_matches = match st.delegation_store.get(&response.command.task_id) {
-                    Ok(Some(task)) => native_delegation::remote_command_identity(&st, &task)
-                        .is_ok_and(|identity| identity == response.command),
+                    Ok(Some(task)) => match native_delegation::remote_command_identity(&st, &task) {
+                        Ok(identity) => identity == response.command,
+                        Err(WorkerRefusal::StoreUnavailable) => return refused(WorkerRefusal::StoreUnavailable),
+                        Err(_) => false,
+                    },
                     Ok(None) => response.command.task_id == response.command.command_id,
                     Err(_) => return refused(WorkerRefusal::StoreUnavailable),
                 };
