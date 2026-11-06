@@ -79,6 +79,7 @@ mod tests {
     use bridget_transport::protocol::ProjectRelation;
     fn agents(n:usize,state:&str,size:usize)->Vec<ScopedAgentInfo>{
         (0..n).map(|i|ScopedAgentInfo{
+            tracking:None,
             agent:serde_json::from_value(json!({"agent_id":format!("{state}-{i:06}"),
                 "display_name":"x".repeat(size),"agent_type":"codex","connection_id":"conn",
                 "host":"fixture","transport":"codex_app_server","state":state,

@@ -6,6 +6,16 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.0 — 2026-11-03
+
+- Native sleeper agents: history, explicit wake-up and refusal of new direct, group and scheduled requests. Previously admitted work and its results are kept.
+- Classification actions sync both ways by default for linked clients, with a Bridget-only setting, durable receipts and the same command key while its outcome remains unknown.
+- Active/Sleeper views in the app, `agents sleep|wake` commands, CLI filters and caches respecting server classification. Retained state requires a reader that understands dormancy.
+
+## 0.7.8 — 2026-11-03
+
+- Atomically relay verified context for prepared projects, including linked checkouts and previously authorized additional roots.
+
 ## 0.7.7 — 2026-11-03
 
 - Declare the specialists input schema as an object and expose composed schemas through complete local references, so strict MCP clients can discover all37tools at startup. Accepted actions, permissions and guards are unchanged.

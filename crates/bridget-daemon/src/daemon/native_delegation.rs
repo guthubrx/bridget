@@ -3892,6 +3892,12 @@ fn routing_failure_admission(
 }
 
 fn failure(code: &str) -> Value {
+    if code=="agent_dormant" {
+        return json!({"version":1,"status":"refused","code":code,"scope":"this_request","message":crate::agent_tracking::DORMANT_MESSAGE});
+    }
+    if code=="tracking_storage_unavailable" {
+        return json!({"version":1,"status":"refused","code":code,"scope":"this_request","message":"Relisez la fiche de cet agent avant une nouvelle ronde. Son état de sommeil est illisible ; cette nouvelle ronde n'est pas admise. Conservez tâche et clé. Si la lecture reste indisponible, le responsable Bridget doit vérifier le stockage de cette fiche. Les travaux déjà acceptés et les autres travaux autorisés suivent leur propre état."});
+    }
     if let Some(encoded)=code.strip_prefix("routing_project_refused:") {
         return admission_guidance211::contextual_refusal(encoded);
     }
@@ -6059,6 +6065,7 @@ fn handle_with_fact(
             if !can_own_task(&st, &task, &owner, &instance)? {
                 return Err("task_unavailable".into());
             }
+            if crate::agent_tracking::dormant(st.store.connection(),&task.child).map_err(|_|"tracking_storage_unavailable")? { return Err("agent_dormant".into()); }
             let current = parent_fact(&st, &owner, &instance, Some(request_id), fact.as_ref())?;
             if !continuation_parent_matches(
                 task.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent),
@@ -9464,6 +9471,9 @@ fn handle_locked_with_remote_proof(
                 }
                 return current_task_view(st, &saved, true);
             }
+            // Seule une nouvelle ronde est une nouvelle sollicitation. Un rejeu
+            // d'une ronde déjà admise conserve son reçu, même pendant le sommeil.
+            if crate::agent_tracking::dormant(st.store.connection(),&saved.child).map_err(|_|"tracking_storage_unavailable")? { return Err("agent_dormant".into()); }
             let control = crate::referent_control::read(st.store.connection())
                 .map_err(|_| "control_state_unavailable")?;
             let halt = st
@@ -10180,7 +10190,7 @@ pub(super) fn capture_reply(
         // Une ancienne ronde est absorbée seulement sous l'identité courante
         // de cet enfant. Cette lecture ne répare aucun lien ni checkpoint.
         let Some(past) = past else {
-            return Ok(false);
+            return super::agent_tracking230::retain_classic_reply(st, conn, message);
         };
         return Ok(past.child == message.from
             && past.owner == message.to
@@ -15088,6 +15098,15 @@ mod tests {
         drop(state);cleanup(&config);
     }
 
+    #[test]
+    fn spec229_reply_timeout_refusal_names_mission_duration_and_recovery() {
+        let view=failure("reply_timeout_out_of_range");
+        assert_eq!(view["code"],"reply_timeout_out_of_range");
+        assert!(view["message"].as_str().unwrap().contains("60 et 86400"));
+        assert!(view["detail"]["recovery"].as_str().unwrap().contains("pas l'attente"));
+        assert!(view["detail"]["recovery"].as_str().unwrap().contains("refus durable sans tâche"));
+        assert!(view.get("task_id").is_none());
+    }
     #[test]
     fn spec224_project_preparation_link_refusal_names_only_the_failed_check() {
         let view = failure("project_preparation_link_missing");
@@ -22272,7 +22291,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
-    fn spec221_continuation_receipt_precedes_dispatch_and_replay_keeps_one_round() {
+    fn tracking230_continuation_refuse_nouvelle_ronde_dormante_et_conserve_rejeu_admis() {
         let mut payload = serde_json::to_value(request("receipt-first")).unwrap();
         payload["keep_alive_secs"] = json!(120);
         let (shared, config, id, _, _) =
@@ -22297,8 +22316,27 @@ for frame in frames: print(json.dumps(frame),flush=True)
             task_id: id.clone(), request_id: "receipt-round-2".into(),
             task: "suite de la même tâche".into(), brief: None,
         };
+        {
+            let mut st=shared.lock().unwrap();
+            let target=st.delegation_store.get(&id).unwrap().unwrap().child;
+            let agent=super::agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==target).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-before-round",&agent,true,Some(false),None,100).unwrap();
+        }
+        let DaemonToWrapper::NativeDelegationResult{result}=handle("conn-1",request.clone(),&shared) else {panic!("refus attendu")};
+        assert_eq!(result["code"],"agent_dormant");
+        {
+            let mut st=shared.lock().unwrap(); let original=st.delegation_store.get(&id).unwrap().unwrap();
+            assert!(original.rounds.is_empty()); assert_eq!(original.result.as_deref(),Some("résultat conservé"));
+            let agent=super::agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==original.child).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"wake-before-round",&agent,false,Some(false),None,101).unwrap();
+        }
         let mut mission = None;
-        for _ in 0..2 {
+        for index in 0..2 {
+            if index==1 {
+                let mut st=shared.lock().unwrap(); let target=st.delegation_store.get(&id).unwrap().unwrap().child;
+                let agent=super::agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==target).unwrap();
+                crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-after-admission",&agent,true,Some(false),None,102).unwrap();
+            }
             let DaemonToWrapper::NativeDelegationResult { result } =
                 handle("conn-1", request.clone(), &shared) else {panic!("reçu attendu")};
             assert_eq!(result["status"], "mission_pending", "le reçu précède le tick général");
@@ -31881,7 +31919,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 capabilities: vec![ClientCapability::SendIdempotent],
             },
         );
-        assert_eq!(admitted_mission_exchange(&st, &conn, &message), Ok(true));
+        let agent=super::agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==task.child).unwrap();
+        crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-admitted-child",&agent,true,Some(false),None,100).unwrap();
+        assert_eq!(admitted_mission_exchange(&st, &conn, &message), Ok(true),"seule la remise exacte déjà admise garde son autorité pendant le sommeil");
         let mut autre = message.clone();
         autre.body.push_str(" autre travail");
         assert!(admitted_mission_exchange(&st, &conn, &autre).is_err());

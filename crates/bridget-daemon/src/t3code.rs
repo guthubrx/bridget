@@ -6,6 +6,8 @@
 //! les messages par le protocole natif V1/V2 et renvoie à l'expéditeur la
 //! réponse du tour attesté. Tout l'état est sous `<BRIDGET_HOME>/t3code`.
 
+#[path="t3code_agent_tracking230.rs"]
+mod agent_tracking230;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, BufWriter};
 use std::os::unix::net::UnixStream;
@@ -1216,6 +1218,7 @@ fn serve(paths: &Paths) -> Result<(), String> {
         .ok()
         .zip(contract::read_runtime(&t3_base).ok());
     let mut last_snapshot_success = None;
+    let mut tracking_issue=None;
     loop {
         let expected_runtime = session.lock().runtime.clone();
         let snapshot_incarnation = runtime_incarnation(&t3_base)
@@ -1289,6 +1292,13 @@ fn serve(paths: &Paths) -> Result<(), String> {
             .filter(|incarnation| runtime_incarnation(&t3_base).as_ref() == Some(incarnation))
             .map(|(runtime, birth)| (snapshot_started, runtime, birth));
         let counts = relation_counts(&snapshot.threads);
+        match agent_tracking230::sync(paths,&session,&snapshot) {
+            Err(error)=>{
+                if tracking_issue.as_ref()!=Some(&error) {warn!("synchronisation des agents dormants en attente : {error}");}
+                tracking_issue=Some(error);
+            },
+            Ok(())=>tracking_issue=None,
+        }
         if last_relation_counts != Some(counts) {
             info!(
                 "inventaire T3 : {} racine(s), {} fork(s), {} sous-agent(s)",

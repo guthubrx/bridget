@@ -1,6 +1,22 @@
 use super::*;
 pub(super) fn refusal(code:&str)->Option<Value>{
     let (message,recovery,field)=match code {
+        "project_preparation_machine_mismatch"=>(
+            "Faire vérifier l'identité provisionnée de la machine cible dans les registres source, maître et worker.",
+            "Ces identités diffèrent, ou l'une a changé pendant la préparation. Ce refus concerne le raccordement de cette demande. Un dépôt peut déjà être préparé sur la cible ; le conserver, sans l'effacer ni rejouer une mission. Le responsable Bridget doit comparer worker_id, révision et empreinte à l'autorité native actuelle. Aucun changement de compte ou de droits n'est déduit. Lire l'admission durable avant une reprise ; les autres travaux autorisés suivent leur propre état. Demander une décision humaine seulement si l'identité cible voulue reste ambiguë.",
+            None),
+        "project_preparation_additional_root_changed"=>(
+            "Faire vérifier l'autorisation de la racine additionnelle déjà utilisée par ce projet.",
+            "La source, son propriétaire, son mode ou son accès diffère de l'autorisation connue, ou cette autorisation manque au maître. Une nouvelle destination privée seule ne change pas ce droit. Le responsable Bridget doit comparer ces champs dans les registres source et maître pour la même machine cible. Conserver les dépôts préparés, la clé et l'enveloppe. Ne pas ajouter un accès pour contourner le refus ; si un nouveau périmètre est réellement nécessaire, demander à l'utilisateur cette seule décision. Ce refus concerne cette admission ; les autres travaux autorisés suivent leur propre état.",
+            None),
+        "reply_timeout_out_of_range"=>(
+            "Fixez une durée de mission comprise entre 60 et 86400 secondes, ou omettez reply_timeout pour garder 3600 secondes.",
+            "reply_timeout borne la durée de la mission, pas l'attente de la réponse de cet outil. Ce refus concerne cette demande. Lire detail.admission : si un refus durable sans tâche est enregistré, corriger la durée dans une nouvelle demande identifiée ; un rejeu identique conserve ce refus. Une demande en cours ou d'issue inconnue garde sa clé et son enveloppe. Les autres travaux autorisés suivent leur propre état. Aucun changement de droits ni décision humaine n'est nécessaire pour corriger ce paramètre dans le périmètre déjà autorisé.",
+            Some("reply_timeout")),
+        "project_preparation_context_missing"=>(
+            "Faire charger la correction du raccordement de projet sur le worker source et le maître.",
+            "La préparation a répondu sans transmettre de correspondance utilisable au maître. Ce refus concerne cette admission ; l'identité et le projet ne sont pas déclarés inconnus. Le responsable Bridget doit vérifier les images chargées et le retour du contexte natif de préparation. Conserver la clé et l'enveloppe ; lire l'admission durable avant une reprise, sans mission de remplacement. Les autres travaux autorisés suivent leur propre état. Si la maintenance nécessaire n'est pas autorisée, demander seulement l'accord pour charger cette correction.",
+            None),
         "expected_base_commit_required"=>(
             "Fournissez expected_base_commit : le SHA Git source complet manque.",
             "Dans cwd sur la machine du parent, lire le commit résolu : HEAD en shared, workspace.base_ref (HEAD si absent) en worktree. Donner le SHA complet de 40 caractères sans changer la version demandée. Le champ est requis dans un dépôt Git et pour compilation/worktree ; hors Git en general/shared seulement il peut être omis. Consulter detail.admission avant correction de l’enveloppe : une demande en cours ou d’issue inconnue ne doit pas être dupliquée ; un refus durable ne se rouvre pas au rejeu.",

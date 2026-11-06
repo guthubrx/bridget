@@ -54,6 +54,97 @@ class PreparationTests(unittest.TestCase):
             with self.bundle.open("rb") as bundle:
                 return prep.remote_receive(self.request, self.registry, stream or bundle)
 
+    def prepared_publication229(self):
+        prepared = self.receive()
+        coordinator = self.home / "coordinator.json"
+        prep.atomic_json(coordinator, self.config)
+        request = dict(self.request, registry=str(coordinator),
+                       project_id=prepared["project_id"], mapping=prepared["mapping"])
+        return coordinator, request
+
+    def test_spec229_prepared_mapping_reaches_distinct_coordinator_and_replays(self):
+        coordinator, request = self.prepared_publication229()
+        before = json.loads(coordinator.read_text())
+        self.assertEqual(before["machines"]["test"]["mappings"], {})
+        result = prep.publish_prepared(request)
+        after = json.loads(coordinator.read_text())
+        self.assertEqual(after["machines"]["test"]["mappings"],
+                         {result["project_id"]: result["mapping"]})
+        after["machines"]["test"]["mappings"] = {}
+        self.assertEqual(before, after)
+        raw = coordinator.read_bytes()
+        self.assertEqual(prep.publish_prepared(request), result)
+        self.assertEqual(coordinator.read_bytes(), raw)
+        self.assertEqual(prep.git(Path(result["mapping"]["remote_root"]),
+                                    "rev-parse", "HEAD").stdout.decode().strip(), self.sha)
+
+    def test_spec229_publication_rejects_changed_authority_root_and_extra(self):
+        import copy
+        coordinator, request = self.prepared_publication229()
+        cases = []
+        wrong = copy.deepcopy(request)
+        wrong["authority"]["provisioning_revision"] += 1
+        cases.append((wrong, "project_preparation_machine_mismatch"))
+        wrong = copy.deepcopy(request)
+        wrong["mapping"]["source_host"] = "other"
+        cases.append((wrong, "project_mapping_mismatch"))
+        wrong = copy.deepcopy(request)
+        wrong["mapping"]["source_root"] = str(self.base / "unrelated")
+        cases.append((wrong, "project_mapping_mismatch"))
+        wrong = copy.deepcopy(request)
+        wrong["mapping"]["additional_root"] = {"source_root": "/unapproved"}
+        cases.append((wrong, "project_preparation_additional_root_changed"))
+        raw = coordinator.read_bytes()
+        for wrong, code in cases:
+            with self.subTest(code=code), self.assertRaisesRegex(prep.Refused, code):
+                prep.publish_prepared(wrong)
+            self.assertEqual(coordinator.read_bytes(), raw)
+
+    def test_spec229_publication_never_overwrites_existing_mapping(self):
+        import copy
+        coordinator, request = self.prepared_publication229()
+        prep.publish_prepared(request)
+        raw = coordinator.read_bytes()
+        wrong = copy.deepcopy(request)
+        wrong["mapping"]["remote_root"] += "-elsewhere"
+        with self.assertRaisesRegex(prep.Refused, "project_preparation_mapping_changed"):
+            prep.publish_prepared(wrong)
+        self.assertEqual(coordinator.read_bytes(), raw)
+
+    def test_spec229_publication_accepts_parent_in_verified_linked_worktree(self):
+        coordinator, request = self.prepared_publication229()
+        request["source_root"] = str(self.source / ".worktrees/child")
+        request["cwd"] = request["source_root"]
+        result = prep.publish_prepared(request)
+        self.assertEqual(result["mapping"]["source_root"], str(self.source))
+
+    def test_spec229_publication_reuses_approved_extra_with_new_private_destination(self):
+        extra_source = self.base / "approved-extra"
+        extra_source.mkdir(mode=0o700)
+        source_right = dict(source_root=str(extra_source), source_uid=os.geteuid(),
+                            source_mode=0o700, access="inherit")
+        self.request["additional_root"] = source_right
+        previous_extra = dict(source_right, remote_root=str(self.home / "old-extra"),
+                              remote_uid=os.geteuid(), remote_mode=0o700)
+        self.config["machines"]["test"]["mappings"]["previous"] = dict(
+            source_host="source", source_root=str(self.base / "previous-project"),
+            remote_root=str(self.home / "previous-repository"),
+            expected_git_identity="fixture:previous", mapping_revision=1,
+            additional_root=previous_extra)
+        prep.atomic_json(self.registry, self.config)
+        coordinator, request = self.prepared_publication229()
+        self.assertNotEqual(request["mapping"]["additional_root"]["remote_root"],
+                            previous_extra["remote_root"])
+        prep.publish_prepared(request)
+        self.assertEqual(len(json.loads(coordinator.read_text())["machines"]["test"]["mappings"]), 2)
+        # La même source avec un droit modifié ne devient pas approuvée.
+        fresh = json.loads(coordinator.read_text())
+        fresh["machines"]["test"]["mappings"].pop(request["project_id"])
+        prep.atomic_json(coordinator, fresh)
+        request["mapping"]["additional_root"]["source_mode"] = 0o750
+        with self.assertRaisesRegex(prep.Refused, "project_preparation_additional_root_changed"):
+            prep.publish_prepared(request)
+
     def test_spec221_future_preference_preserves_explicit_old_mapping(self):
         import copy
         selected=self.config["machines"]["test"]

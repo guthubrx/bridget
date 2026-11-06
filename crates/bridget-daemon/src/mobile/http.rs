@@ -657,6 +657,14 @@ fn execute(
         };
     }
     drop(store);
+    if method == Method::POST && path == "/v1/agents/tracking" {
+        let command:bridget_transport::agent_tracking::AgentTrackingRequest=match serde_json::from_slice(&bytes) {
+            Ok(command)=>command,Err(_)=>return failure("invalid_request"),
+        };
+        return match super::client::mobile_operation(&gateway.socket,key,bridget_transport::protocol::MobileOperation::AgentTracking{request:command}) {
+            Ok(value)=>result(value),Err(code)=>failure(code),
+        };
+    }
     if method == Method::POST && path == "/v1/specialists" {
         let command:bridget_transport::specialists::SpecialistRequest=match serde_json::from_slice(&bytes) {
             Ok(command)=>command,Err(_)=>return failure("invalid_request"),

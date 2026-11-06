@@ -9,6 +9,7 @@ pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
 mod mobile_admin;
 mod specialists222;
+mod agent_tracking230;
 mod origin_proof;
 mod mobile_operations;
 mod mobile_queue;
@@ -1911,11 +1912,15 @@ fn wake_target_guard(
 ) -> Result<(), &'static str> {
     use bridget_transport::protocol::{ThreadAction, ThreadRequest, WakeTarget};
     match target {
-        WakeTarget::SelfTarget {} => Ok(()),
+        WakeTarget::SelfTarget {} => {
+            if crate::agent_tracking::dormant(st.store.connection(),owner).map_err(|_|"tracking_storage_unavailable")? {return Err("agent_dormant");}
+            Ok(())
+        },
         WakeTarget::Agent { id } => {
             if crate::threads::canonical_uuid(id).as_deref() != Some(id.as_str()) {
                 return Err("invalid_request");
             }
+            if crate::agent_tracking::dormant(st.store.connection(),id).map_err(|_|"tracking_storage_unavailable")? {return Err("agent_dormant");}
             if !st.presences.values().any(|p| p.name == *id) && st.router.get_agent(id).is_none() {
                 return Err("target_unknown");
             }
@@ -2423,6 +2428,9 @@ fn deliver_frozen_wake(
             WakeTarget::Agent { id } => id.as_str(),
             _ => unreachable!(),
         };
+        if crate::agent_tracking::dormant(st.store.connection(),target).map_err(|_|"tracking_storage_unavailable")? {
+            return Ok(WakePhase::MissedBeforeDeparture);
+        }
         let route = st.router.get_agent(target).ok_or("target_unavailable")?;
         let conn = route.connection_id.clone();
         let instance = st
@@ -2776,9 +2784,9 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     continue;
                 }
                 if let Some(due) = calendar.due_at {
-                    if wake_target_guard(&st, &schedule.owner, &schedule.target).is_err() {
-                        continue;
-                    }
+                    let target_guard = wake_target_guard(&st, &schedule.owner, &schedule.target);
+                    let dormant = target_guard == Err("agent_dormant");
+                    if target_guard.is_err() && !dormant { continue; }
                     let mut wake = FrozenWake {
                         version: 1,
                         source: WakeSource::Scheduled,
@@ -2820,6 +2828,13 @@ fn scheduled_wakes_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                         ),
                         Ok(true)
                     ) {
+                        if dormant {
+                            // Pas de rattrapage au réveil : cette occurrence est close,
+                            // sans émission. La cadence suivante reste programmée.
+                            let _ = st.store.settle_wake_occurrence(&schedule.schedule_id,&wake.id,
+                                WakePhase::MissedBeforeDeparture,calendar.next_at,calendar.next_calendar_date.as_deref());
+                            continue;
+                        }
                         frozen = Some(wake);
                     }
                 } else if calendar.next_at != schedule.next_at
@@ -6269,6 +6284,7 @@ fn defer_idempotent_delivery(
 /// FR004 : cinq déclencheurs partagent State, route attestée et transaction.
 /// O(log N+G+B), G réservations, B enveloppe. Aucun verrou writer ici.
 fn schedule_held_release(st: &mut DaemonState, agent: &str, now: Instant) -> bool {
+    if crate::agent_tracking::dormant(st.store.connection(),agent).unwrap_or(true) {return false;}
     let Some(route) = st.router.get_agent(agent) else {
         return false;
     };
@@ -9399,10 +9415,14 @@ fn collect_reminder_actions(state: &mut DaemonState, now: Instant) -> Vec<Remind
         })
         .map(|(conn, _)| conn.clone())
         .collect();
+    let dormant=crate::agent_tracking::dormant_ids(state.store.connection()).unwrap_or_else(|_| {
+        // Une fiche illisible diffère son rappel ; les autres restent indépendantes.
+        state.presences.values().filter(|p|crate::agent_tracking::dormant(state.store.connection(),&p.name).unwrap_or(true)).map(|p|p.name.clone()).collect()
+    });
     let undisturbed: std::collections::HashSet<String> = state
         .presences
         .values()
-        .filter(|presence| presence.is_dnd())
+        .filter(|presence| presence.is_dnd()||dormant.contains(&presence.name))
         .map(|presence| presence.name.clone())
         .collect();
     // SPEC-087 : en pause, les paliers 1 et 2 sont différés comme pour un
@@ -10624,6 +10644,7 @@ fn dispatch_thread_wakes(
     for candidate in candidates {
         st.thread_wake_departures
             .retain(|departure| now.duration_since(*departure) < Duration::from_secs(1));
+        if crate::agent_tracking::dormant(st.store.connection(),&candidate.agent_id).unwrap_or(true) {continue;}
         if st.thread_wake_departures.len() >= crate::threads::WAKE_DEPARTURES_PER_SEC as usize {
             let _ = st.store.thread_wake_defer(
                 &candidate.thread_id,
@@ -10805,6 +10826,9 @@ fn project_thread_wake(
     departure: &ThreadWakeDeparture,
     controls: &mut Vec<DeferredControl>,
 ) -> Result<(), String> {
+    if crate::agent_tracking::dormant(st.store.connection(),&departure.agent_id).map_err(|_|"tracking_storage_unavailable")? {
+        return Err("agent_dormant".into());
+    }
     let issuer_scope = st
         .idempotency
         .supervisor_scope()
@@ -10956,6 +10980,7 @@ impl crate::threads::Directory for DaemonDirectory<'_> {
             .as_ref()
             .and_then(|conn| self.state.thread_notice_versions.get(conn).copied());
         crate::threads::MemberFacts {
+            dormant: crate::agent_tracking::dormant(self.state.store.connection(),agent_id).unwrap_or(true),
             connected,
             thread_notice_version,
         }
@@ -11992,6 +12017,12 @@ fn prepare_dispatch(
 ) -> Result<PreparedDispatch, (&'static str, String)> {
     let routing_from = routing_agent_id(&message.from).to_string();
     let routing_to = routing_agent_id(&message.to).to_string();
+    match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
+        Ok(true) if !native_task_exchange=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
+        Ok(true)=>{},
+        Err(_)=>return Err(("tracking_storage_unavailable","État de sommeil illisible. Conservez cette demande ; les lectures et les autres travaux autorisés peuvent continuer.".into())),
+        Ok(false)=>{},
+    }
     let reply_sender_conn = st
         .router
         .get_agent(&routing_from)
@@ -12356,7 +12387,10 @@ fn handle_idempotent_send_with_result_authority(
     // L'autorité de résultat a déjà été vérifiée ci-dessus. Sa notification
     // est une sortie du store canonique, jamais un nouvel ingress du wrapper.
     let capture = if authority.is_some() {
-        Ok(false)
+        // Le résultat canonique reste conservé, sans nouvelle notification au dormant.
+        if matches!(authority,Some(RetainedSendAuthority::Result(_))) {
+            crate::agent_tracking::dormant(st.store.connection(),&message.to).map_err(|e|e.to_string())
+        } else { Ok(false) }
     } else {
         native_delegation::capture_reply(st, conn_id, &message)
     };
@@ -12366,7 +12400,7 @@ fn handle_idempotent_send_with_result_authority(
             error!("capture native non persistée: {error}");
             return DaemonToWrapper::Nack {
                 id: message.id.clone(),
-                reason: if error == "remote_result_requires_worker" {
+                reason: if error == "remote_result_requires_worker" || error.starts_with("retained_reply_") {
                     error
                 } else {
                     "native_result_not_persisted".into()
@@ -14363,6 +14397,53 @@ mod spec099_classic_delivery_tests {
     const WITNESS: &str = "99000000-0000-4000-8000-000000000003";
 
     #[test]
+    fn tracking230_sommeil_refuse_envoi_classique_et_principal_agent() {
+        let (state,root,peers)=fixture();let _cleanup=FixtureRoot(root);
+        let request=bridget_transport::agent_tracking::AgentTrackingRequest::Set{request_id:Uuid::new_v4().to_string(),agent_id:TARGET.into(),dormant:true,synchronize:None,expected_revision:None};
+        let refused=agent_tracking230::human("sender",&request,&state);
+        assert!(matches!(refused,DaemonToWrapper::AgentTrackingResult{result} if result["code"]=="human_principal_required"));
+        {
+            let mut st=state.lock().unwrap();
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==TARGET).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-target",&agent,true,Some(false),None,100).unwrap();
+        }
+        let response=handle_wrapper_message("sender",WrapperToDaemon::Send(BridgetMessage::new(SENDER,TARGET,"demande nouvelle")),&state).unwrap();
+        assert!(matches!(response,DaemonToWrapper::Nack{reason,..} if reason.contains("Agent dormant")));
+        peers[1].set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(BufReader::new(peers[1].try_clone().unwrap()).read_line(&mut String::new()).is_err(),"aucune remise au dormant");
+        let st=state.lock().unwrap();
+        assert!(st.router.get_agent(TARGET).is_some(),"le sommeil n'arrête pas le processus");
+        assert_eq!(wake_target_guard(&st,SENDER,&bridget_transport::protocol::WakeTarget::Agent{id:TARGET.into()}),Err("agent_dormant"));
+    }
+
+    #[test]
+    fn tracking230_reponse_admise_conservee_sans_solliciter_parent_dormant() {
+        let (state,root,peers)=fixture(); let _cleanup=FixtureRoot(root);
+        let mut request=BridgetMessage::new(SENDER,TARGET,"travail déjà demandé");
+        request.id="230-admitted-request".into(); request.reply=true;
+        assert!(matches!(handle_wrapper_message("sender",WrapperToDaemon::Send(request),&state),Some(DaemonToWrapper::Ack{..})));
+        let mut reader=BufReader::new(peers[1].try_clone().unwrap());
+        assert!(matches!(presence_tests::read_control(&mut reader),DaemonToWrapper::Deliver{..}));
+        {
+            let mut st=state.lock().unwrap();
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==SENDER).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep-parent",&agent,true,Some(false),None,100).unwrap();
+        }
+        let mut forged=BridgetMessage::new(WITNESS,SENDER,"réponse étrangère"); forged.in_reply_to=Some("230-admitted-request".into());
+        assert!(matches!(handle_wrapper_message("witness",WrapperToDaemon::Send(forged),&state),Some(DaemonToWrapper::Nack{..})));
+        let mut reply=BridgetMessage::new(TARGET,SENDER,"résultat conservé"); reply.in_reply_to=Some("230-admitted-request".into());
+        for _ in 0..2 { assert!(matches!(handle_wrapper_message("target",WrapperToDaemon::Send(reply.clone()),&state),Some(DaemonToWrapper::Ack{..}))); }
+        let mut conflict=reply.clone(); conflict.body="autre résultat avec le même identifiant".into();
+        assert!(matches!(handle_wrapper_message("target",WrapperToDaemon::Send(conflict),&state),Some(DaemonToWrapper::Nack{..})));
+        let st=state.lock().unwrap();
+        assert_eq!(st.store.get_request("230-admitted-request").unwrap().unwrap().state,"answered");
+        let count:i64=st.store.connection().query_row("SELECT COUNT(*) FROM ledger WHERE id=?1 AND body=?2",rusqlite::params![reply.id,reply.body],|r|r.get(0)).unwrap();
+        assert_eq!(count,1,"le résultat est durable et son rejeu ne l'écrase pas");
+        peers[0].set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(BufReader::new(peers[0].try_clone().unwrap()).read_line(&mut String::new()).is_err(),"aucun nouveau tour au parent dormant");
+    }
+
+    #[test]
     fn spec099_notification_systeme_bornee_meme_si_writer_occupe() {
         let (socket, _peer) = UnixStream::pair().unwrap();
         let writer = Arc::new(Mutex::new(BufWriter::new(socket)));
@@ -15797,10 +15878,13 @@ mod spec145_human_view_tests {
                     Ok(("t3".into(), agent))
                 );
             }
+            let after = snapshot(&state);
+            let tracking = after.iter().find(|(name,_)|name=="agent_tracking").unwrap();
+            assert_eq!(tracking.1.len(),1,"la liaison conserve une seule fiche native");
             assert_eq!(
-                snapshot(&state),
-                before,
-                "le rattachement n'écrit aucune donnée métier"
+                after.into_iter().filter(|(name,_)|name!="agent_tracking").collect::<Vec<_>>(),
+                before.into_iter().filter(|(name,_)|name!="agent_tracking").collect::<Vec<_>>(),
+                "seule la métadonnée de liaison est persistée"
             );
         }
     }
@@ -18736,7 +18820,9 @@ fn handle_worker_message(
         WrapperToDaemon::WorkerHelloWithCapabilities { hello } => {
             let capabilities = hello.capabilities.clone();
             (!capabilities.is_empty()
-                && capabilities.len() <= 16
+                && capabilities.len() <= 32
+                && (!capabilities.contains(&WorkerCapability::OriginProjectContextV1)
+                    || capabilities.contains(&WorkerCapability::OriginProofV1))
                 && (!capabilities.contains(&WorkerCapability::ModelOptionsV1)
                     || capabilities.contains(&WorkerCapability::ProviderCatalogueV1))
                 && (!capabilities.contains(&WorkerCapability::WorkspaceViewCreateV1)
@@ -18744,7 +18830,7 @@ fn handle_worker_message(
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
                         && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
                 })
@@ -19673,6 +19759,9 @@ fn handle_wrapper_message_with_peer(
     if let WrapperToDaemon::Specialists { request } = &msg {
         return Some(specialists222::handle_human(conn_id, request, state));
     }
+    if let WrapperToDaemon::AgentTracking { request } = &msg {
+        return Some(agent_tracking230::human(conn_id, request, state));
+    }
     if let WrapperToDaemon::UserInput { request } = &msg {
         return Some(user_input::handle(conn_id, request, state, peer));
     }
@@ -19895,7 +19984,7 @@ fn handle_wrapper_message_with_peer(
         );
         match st.connection_roles.get(conn_id) {
             Some(ConnectionRole::Service) => match &msg {
-                WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
+                WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ServiceRefusal::MessageOutsideServiceRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
@@ -20180,7 +20269,7 @@ fn handle_wrapper_message_with_peer(
             }
             Some(ConnectionRole::Client) => match &msg {
                 WrapperToDaemon::UserInput { .. } => None,
-                WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
+                WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => Some(ClientRefusal::MessageOutsideClientRole),
                 WrapperToDaemon::WorkerHello { .. }
                 | WrapperToDaemon::WorkerHelloWithCapabilities { .. }
                 | WrapperToDaemon::WorkerResponse { .. }
@@ -20587,22 +20676,21 @@ fn handle_wrapper_message_with_peer(
             };
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let project = connection_communication_project(&st, conn_id);
-            let all = st.agent_infos();
+            let all = match agent_tracking230::directory(&mut st) {
+                Ok(all)=>all,
+                Err(reason)=>return Some(DaemonToWrapper::Nack{id:"directory".into(),reason:reason.into()}),
+            };
             let agents = all
                 .into_iter()
-                .filter_map(|agent| {
-                    let communication_project = agent_communication_project(&st, &agent.agent_id);
+                .filter_map(|mut scoped| {
+                    let communication_project = scoped.communication_project.clone();
                     let project_relation = crate::communication::project_relation(
                         project.as_ref(),
                         communication_project.as_ref(),
                     );
                     (scope == CommunicationDirectoryScope::Global
                         || project_relation == ProjectRelation::Same)
-                        .then_some(ScopedAgentInfo {
-                            agent,
-                            communication_project,
-                            project_relation,
-                        })
+                        .then(|| {scoped.project_relation=project_relation; scoped})
                 })
                 .collect();
             let project_warnings = if project.is_none() {
@@ -20698,6 +20786,9 @@ fn handle_wrapper_message_with_peer(
                 .get(conn_id)
                 .is_some_and(|prior| prior.as_deref() != Some(&t3_thread_id));
             let response = if valid && !contradictory {
+                if let Err(code)=agent_tracking230::bind_live(&mut st,&crate::t3code::stable_uuid(&t3_thread_id),&t3_thread_id) {
+                    warn!("liaison de classement non enregistrée ({code}) ; la liaison de communication reste attestée, les autres travaux peuvent continuer");
+                }
                 st.t3_thread_bindings
                     .insert(conn_id.into(), Some(t3_thread_id));
                 None
@@ -22082,6 +22173,7 @@ fn handle_wrapper_message_with_peer(
                             | ClientCapability::RoutingCatalogueV1
                             | ClientCapability::ProviderCatalogueV1
                             | ClientCapability::SpecialistsV1
+                            | ClientCapability::AgentTrackingV1
                     )
                 })
                 .collect();
@@ -23568,7 +23660,7 @@ fn handle_wrapper_message_with_peer(
                     error!("capture native non persistée: {error}");
                     return Some(DaemonToWrapper::Nack {
                         id: bridge_msg.id.clone(),
-                        reason: if error == "remote_result_requires_worker" {
+                        reason: if error == "remote_result_requires_worker" || error.starts_with("retained_reply_") {
                             error
                         } else {
                             "native_result_not_persisted".into()
@@ -24016,6 +24108,7 @@ fn handle_wrapper_message_with_peer(
                     "worker_result_slot_deadline_v1".to_string(),
                     "worker_workspace_diagnostics_v1".to_string(),
                     "worker_origin_proof_v1".to_string(),
+                    "worker_origin_project_context_v1".to_string(),
                     "worker_workspace_repair_v1".to_string(),
                     "task_workspace_repair_v1".to_string(),
                     "worker_start_recovery_v1".to_string(),
@@ -24616,7 +24709,7 @@ fn handle_wrapper_message_with_peer(
         }
 
         // Le contrôle de rôle mobile est exécuté avant cette matrice.
-        WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
+        WrapperToDaemon::AgentTracking { .. } | WrapperToDaemon::Specialists { .. } | WrapperToDaemon::MobileAdministration { .. } | WrapperToDaemon::MobileOperation { .. } => None,
         WrapperToDaemon::LedgerProjection { scope, limit } => {
             let st = state.lock().unwrap_or_else(|error| error.into_inner());
             match crate::ledger::read_projection(&st.store, scope, usize::from(limit)) {
@@ -29077,6 +29170,36 @@ mod presence_tests {
             },
         );
         (state, config)
+    }
+
+    #[test]
+    fn tracking230_echeance_dormante_close_sans_rattrapage() {
+        use bridget_transport::protocol::{WakeAction,WakeCadence,WakeRequest,WakeTarget};
+        use crate::wake_schedules::WakePhase;
+        let (mut st,_config)=state_with_registered_agent("tracking230-calendar");
+        let owner=st.presences["instance-1"].name.clone();
+        let (writer,mut reader)=control_socket("tracking230-calendar"); st.connections.insert("conn-1".into(),writer);
+        let state=Arc::new(Mutex::new(st)); let now=unix_now_secs(); let clock=Instant::now();
+        handle_wake_request("conn-1",WakeRequest{version:1,request:WakeAction::Schedule{target:WakeTarget::SelfTarget{},cadence:WakeCadence::Interval{seconds:60},label:None}},&state,now);
+        let id=state.lock().unwrap().store.list_wake_schedules(Some(&owner)).unwrap()[0].schedule_id.clone();
+        {
+            let mut st=state.lock().unwrap();
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==owner).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep",&agent,true,Some(false),None,now).unwrap();
+        }
+        scheduled_wakes_tick(&state,now+60,clock+Duration::from_secs(60));
+        {
+            let mut st=state.lock().unwrap(); let schedule=st.store.wake_schedule(&id).unwrap().unwrap();
+            assert_eq!(schedule.occurrence.unwrap().phase,WakePhase::MissedBeforeDeparture);
+            assert_eq!(schedule.next_at,now+120);
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==owner).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"wake",&agent,false,Some(false),None,now+61).unwrap();
+        }
+        scheduled_wakes_tick(&state,now+61,clock+Duration::from_secs(61));
+        reader.get_ref().set_read_timeout(Some(Duration::from_millis(30))).unwrap();
+        assert!(reader.read_line(&mut String::new()).is_err(),"pas de rattrapage après réveil");
+        let st=state.lock().unwrap(); let schedule=st.store.wake_schedule(&id).unwrap().unwrap();
+        assert_eq!(schedule.next_at,now+120,"la prochaine échéance reste programmée");
     }
 
     #[test]

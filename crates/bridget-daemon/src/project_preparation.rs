@@ -41,10 +41,14 @@ pub(crate) fn prepare(request: &Value) -> Result<(), String> {
 }
 
 pub(crate) fn prepare_until(request: &Value, deadline: Instant) -> Result<(), String> {
-    prepare_script(request, SCRIPT, deadline)
+    prepare_receipt_until(request,deadline).map(|_|())
 }
 
-fn prepare_script(request: &Value, script_content: &str, deadline: Instant) -> Result<(), String> {
+pub(crate) fn prepare_receipt_until(request: &Value, deadline: Instant) -> Result<Value,String> {
+    prepare_script(request,SCRIPT,deadline)
+}
+
+fn prepare_script(request: &Value, script_content: &str, deadline: Instant) -> Result<Value, String> {
     if Instant::now() >= deadline {
         return Err("project_preparation_timeout".into());
     }
@@ -130,7 +134,7 @@ fn prepare_script(request: &Value, script_content: &str, deadline: Instant) -> R
         let answer: Value =
             serde_json::from_slice(&data).map_err(|_| "project_preparation_failed")?;
         if answer["ok"] == true {
-            return Ok(());
+            return Ok(answer["result"].clone());
         }
         let code = answer["error"]
             .as_str()
@@ -157,6 +161,42 @@ fn prepare_script(request: &Value, script_content: &str, deadline: Instant) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn spec229_preparation_context_crosses_wire_and_reaches_coordinator_registry() {
+        use bridget_transport::protocol::*;
+        use serde_json::json;
+        let root=std::env::temp_dir().canonicalize().unwrap().join(format!("bridget229-{}",uuid::Uuid::new_v4()));
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        let path=root.join("agents.json");
+        let origin=root.join("source");
+        let target=WorkerIdentity {machine_id:"target229".into(),worker_id:"worker229".into(),provisioning_revision:1};
+        let authority=json!({"worker_id":target.worker_id,"provisioning_revision":1,"credential_fingerprint":"a".repeat(64)});
+        let mut machine=authority.clone();machine["enabled"]=json!(true);machine["mappings"]=json!({});
+        let config=json!({"machines":{"target229":machine}});
+        bridget_transport::fsutil::write_private_file_atomic(&path,&serde_json::to_vec(&config).unwrap()).unwrap();
+        assert!(crate::registry::AgentRegistry::load_from_path_quiet(path.clone()).unwrap()
+            .select_project_mapping("target229",None,"origin229",&origin).is_err());
+        let mapping=json!({"source_host":"origin229","source_root":origin,
+            "remote_root":"/tmp/target229/repository","expected_git_identity":"/tmp/target229/mirror.git","mapping_revision":1});
+        let reply=OriginProofResponse {version:1,correlation_id:"proof229".into(),connection_epoch:"epoch229".into(),
+            worker:WorkerIdentity {machine_id:"origin229".into(),worker_id:"origin-worker229".into(),provisioning_revision:1},
+            response:OriginProofResult::ProjectPrepared {permission_digest:"b".repeat(64),preparation_error:None,
+                project:Some(PreparedOriginProject {target,credential_fingerprint:"a".repeat(64),project_id:"project229".into(),mapping})}};
+        let wire=serde_json::to_vec(&reply).unwrap();
+        let decoded:OriginProofResponse=serde_json::from_slice(&wire).unwrap();decoded.validate_shape().unwrap();
+        let OriginProofResult::ProjectPrepared {project:Some(project),..}=decoded.response else {panic!("context lost")};
+        let returned=prepare_receipt_until(&json!({"operation":"publish_prepared","registry":path,
+            "machine_id":project.target.machine_id,"authority":authority,"origin_host":"origin229",
+            "source_root":origin,"cwd":origin,"project_id":project.project_id,"mapping":project.mapping}),
+            Instant::now()+Duration::from_secs(3)).unwrap();
+        assert_eq!(returned["project_id"],"project229");
+        let registry=crate::registry::AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+        assert_eq!(registry.select_project_mapping("target229",None,"origin229",&origin).unwrap().0,"project229");
+        let old:OriginProofResult=serde_json::from_value(json!({"operation":"project_prepared",
+            "permission_digest":"b".repeat(64),"preparation_error":null})).unwrap();
+        assert!(matches!(old,OriginProofResult::ProjectPrepared {project:None,..}));
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn spec191_storage_errno_and_helper_result_stay_closed() {
         for (errno, expected) in [

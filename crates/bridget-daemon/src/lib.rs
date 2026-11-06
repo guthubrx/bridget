@@ -63,6 +63,7 @@ pub mod reprise;
 pub mod runtime;
 mod service_limits;
 pub mod store;
+pub(crate) mod agent_tracking;
 pub mod store_schema;
 mod storage_compatibility;
 pub mod t3code;

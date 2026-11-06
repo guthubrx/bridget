@@ -124,6 +124,12 @@ class BridgetClient(private val store: LocalStore) {
         requireSessionOrigin(session, store.get("session"))
         return response
     }
+    suspend fun changeTracking(body: JSONObject): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val response = request(session.getString("endpoint"), "/v1/agents/tracking", "POST", session.getString("device_key"), body)
+        requireSessionOrigin(session, store.get("session"))
+        return response
+    }
     suspend fun requestUpdates(install: Boolean, version: String? = null): JSONObject {
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         val path = if (install) "/v1/updates/install" else "/v1/updates/check"

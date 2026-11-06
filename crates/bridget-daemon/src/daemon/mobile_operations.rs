@@ -195,6 +195,9 @@ pub(super) fn handle(
     if let MobileOperation::Specialists {request:command}=&request.operation {
         return super::specialists222::handle_mobile(conn_id,command,&device,state);
     }
+    if let MobileOperation::AgentTracking {request:command}=&request.operation {
+        return super::agent_tracking230::mobile(command,&device,state);
+    }
     if matches!(
         request.operation,
         MobileOperation::UpdatesStatus
@@ -281,6 +284,7 @@ pub(super) fn handle(
     }
     match request.operation {
         MobileOperation::Specialists { .. }
+        | MobileOperation::AgentTracking { .. }
         | MobileOperation::MessageQueue { .. }
         | MobileOperation::MessageQueueChange { .. }
         | MobileOperation::UpdatesStatus

@@ -1,5 +1,6 @@
 //! Relais d'origine sur le worker provisionné, corrélé à son époque actuelle.
 use super::*;
+use std::path::Path;
 use bridget_transport::protocol::{
     OriginProofOperation, OriginProofRequest, OriginProofResponse, OriginProofResult,
     WORKER_STALE_SECS, WorkerCapability, WorkerContactState, WorkerIdentity, WorkerRefusal,
@@ -45,7 +46,7 @@ pub(super) fn worker_is_current(st:&DaemonState,host:&str)->bool {
 fn exchange(
     state: &Arc<Mutex<DaemonState>>,
     host: &str,
-    operation: OriginProofOperation,
+    mut operation: OriginProofOperation,
     budget: Duration,
 ) -> Result<OriginProofResult, String> {
     let deadline = Instant::now() + budget;
@@ -54,6 +55,9 @@ fn exchange(
         let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
         if !worker_is_current(&st,host) {return Err("origin_worker_unavailable".into());}
         let worker=st.remote_workers.get(host).ok_or("origin_worker_unavailable")?;
+        if let OriginProofOperation::PrepareProject {return_context,..}=&mut operation {
+            *return_context=worker.capabilities.contains(&WorkerCapability::OriginProjectContextV1);
+        }
         let view_source=match &operation {
             OriginProofOperation::Sources {source,..}=>source.as_ref(),
             OriginProofOperation::PrepareProject {source,..}=>Some(source),
@@ -300,11 +304,47 @@ pub(super) fn prepare_project(
     source_in_parent211(parent,Some(&source))?;
     let budget=deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(595));
     if budget.is_zero() {return Err("project_preparation_timeout".into());}
+    let (registry_path,expected,origin_host)={
+        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let registry=AgentRegistry::load_from_path_quiet(st.registry.source().to_path_buf())?;
+        (registry.source().to_path_buf(),registry.machine(target_machine)?.clone(),host_for_owner(&st,owner)?)
+    };
+    // exchange choisit return_context sur la capacité négociée de la connexion
+    // réellement utilisée, pas sur un numéro de version ni un ancien snapshot.
     let result=parent_operation(state,owner,parent,OriginProofOperation::PrepareProject {
-        parent:parent.clone(),source,target_machine:target_machine.to_owned(),project_id:project_id.map(str::to_owned)
+        parent:parent.clone(),source:source.clone(),target_machine:target_machine.to_owned(),project_id:project_id.map(str::to_owned),return_context:false
     },budget)?.ok_or("origin_binding_unavailable")?;
-    match result {OriginProofResult::ProjectPrepared {preparation_error,..}=>preparation_error.map_or(Ok(()),Err),
-        _=>Err("origin_proof_unavailable".into())}
+    let OriginProofResult::ProjectPrepared {preparation_error,project,..}=result else {
+        return Err("origin_proof_unavailable".into());
+    };
+    if let Some(error)=preparation_error {return Err(error);}
+    let Some(project)=project else {
+        // Un ancien worker reste utilisable pour un mapping déjà connu. Son
+        // succès sans contexte ne prouve pas le raccordement d'un nouveau projet.
+        return AgentRegistry::load_from_path_quiet(registry_path)?
+            .select_project_mapping(target_machine,project_id,&origin_host,Path::new(&source.cwd))
+            .map(|_|()).map_err(|_|"project_preparation_context_missing".into());
+    };
+    if project.target.machine_id!=target_machine || project.target.worker_id!=expected.worker_id
+        || project.target.provisioning_revision!=expected.provisioning_revision
+        || project.credential_fingerprint!=expected.credential_fingerprint {
+        return Err("project_preparation_machine_mismatch".into());
+    }
+    if project_id.is_some_and(|id|id!=project.project_id) {
+        return Err("project_mapping_mismatch".into());
+    }
+    let mapping:crate::registry::ProjectMapping=serde_json::from_value(project.mapping.clone())
+        .map_err(|_|"project_mapping_invalid".to_owned())?;
+    let mut validated=expected.clone();
+    validated.mappings.insert(project.project_id.clone(),mapping);
+    crate::registry::validate_machines(&std::collections::BTreeMap::from([(target_machine.to_owned(),validated)]))?;
+    crate::project_preparation::prepare_until(&serde_json::json!({
+        "operation":"publish_prepared","registry":registry_path,"machine_id":target_machine,
+        "authority":{"worker_id":expected.worker_id,"provisioning_revision":expected.provisioning_revision,
+            "credential_fingerprint":expected.credential_fingerprint},
+        "origin_host":origin_host,"source_root":parent.cwd,"cwd":source.cwd,
+        "project_id":project.project_id,"mapping":project.mapping
+    }),deadline)
 }
 pub(super) fn catalogue(state:&Arc<Mutex<DaemonState>>,owner:&str,parent:&bridget_transport::protocol::ProviderPermissions,
     blocked:Vec<String>)->Result<Vec<serde_json::Value>,String>{
@@ -425,6 +465,77 @@ mod tests {
         (shared, root, identity)
     }
     #[test]
+    fn spec229_authenticated_origin_prepares_coordinator_without_task_and_rejects_mismatch() {
+        use std::io::BufRead;
+        use sha2::Digest;
+        use serde_json::json;
+        let (shared,root,_)=fixture();let canonical=root.canonicalize().unwrap();
+        let path=canonical.join("agents.json");
+        let owner=crate::t3code::stable_uuid("parent229");
+        let instance=crate::t3code::stable_uuid("parent-instance229");
+        let (primary,_primary_peer)=UnixStream::pair().unwrap();
+        {let mut st=shared.lock().unwrap();
+            st.connections.insert("primary229".into(),Arc::new(Mutex::new(BufWriter::new(primary))));
+            assert!(matches!(handle_register_with_channel("primary229",2,"parent229".into(),owner.clone(),
+                Some("origin177".into()),Some("t3code".into()),ChannelReport::Known("ssh-unix".into()),
+                Some(PresenceMode::Cli),None,Some("fixture".into()),Some(instance),None,false,Some(false),&mut st,false),
+                DaemonToWrapper::Registered {..}));
+        }
+        let target=WorkerIdentity {machine_id:"target229".into(),worker_id:"worker229".into(),provisioning_revision:1};
+        let parent=ProviderPermissions {version:1,source:"provider_turn".into(),run_id:"run229".into(),
+            provider_session_id:"session229".into(),provider_instance_id:"instance229".into(),revision:1,
+            driver:"codex_app_server".into(),cwd:canonical.to_string_lossy().into_owned(),runtime_mode:"full-access".into(),
+            interaction_mode:"default".into(),provider_policy:json!({"kind":"codex","approval_policy":"never",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})};
+        let digest=format!("{:x}",sha2::Sha256::digest(serde_json::to_vec(&parent).unwrap()));
+        let source=WorkerSourceBase {cwd:parent.cwd.clone(),expected_base_commit:Some("a".repeat(40)),
+            workspace:Some(WorkspaceRequest::Shared {}),workload:AutoDelegateWorkload::General};
+        let mapping=json!({"source_host":"origin177","source_root":canonical,
+            "remote_root":"/tmp/target229/repository","expected_git_identity":"fixture229","mapping_revision":1});
+        let project=PreparedOriginProject {target:target.clone(),credential_fingerprint:"a".repeat(64),
+            project_id:"project229".into(),mapping:mapping.clone()};
+        let (writer,peer)=UnixStream::pair().unwrap();
+        shared.lock().unwrap().connections.insert("worker177".into(),Arc::new(Mutex::new(BufWriter::new(writer))));
+        let worker_state=shared.clone();
+        let fake=std::thread::spawn(move||{
+            peer.set_read_timeout(Some(Duration::from_secs(10))).unwrap();let mut reader=std::io::BufReader::new(peer);
+            for case in 0..6 {
+                let mut line=String::new();reader.read_line(&mut line).unwrap();
+                let DaemonToWrapper::OriginProofRequest {request}=serde_json::from_str(&line).unwrap() else {panic!("origin request")};
+                request.validate_shape().unwrap();
+                assert!(matches!(request.request,OriginProofOperation::PrepareProject {return_context,..} if return_context==(case<4)));
+                let mut context=project.clone();
+                if case==1 {context.target.provisioning_revision+=1;}
+                if case==3 {context.mapping["remote_root"]=json!("relative");}
+                receive(&mut worker_state.lock().unwrap(),"worker177",OriginProofResponse {version:1,
+                    correlation_id:request.correlation_id,connection_epoch:request.connection_epoch,worker:request.worker,
+                    response:OriginProofResult::ProjectPrepared {permission_digest:digest.clone(),preparation_error:None,
+                        project:(case<4).then_some(context)}});
+            }
+        });
+        for (case,expected) in [Ok(()),Err("project_preparation_machine_mismatch"),Err("project_mapping_mismatch"),
+            Err("project_mapping_invalid"),Err("project_preparation_context_missing"),Ok(())].into_iter().enumerate() {
+            let config=json!({"machines":{
+                "origin177":{"enabled":true,"worker_id":"worker-origin177","provisioning_revision":1,
+                    "credential_fingerprint":format!("{:x}",sha2::Sha256::digest(b"fixture177-worker-key")),"mappings":{}},
+                "target229":{"enabled":true,"worker_id":target.worker_id,"provisioning_revision":1,
+                    "credential_fingerprint":"a".repeat(64),"mappings":if case==5 {json!({"project229":mapping})}else{json!({})}}
+            }});
+            bridget_transport::fsutil::write_private_file_atomic(&path,&serde_json::to_vec(&config).unwrap()).unwrap();
+            {let mut st=shared.lock().unwrap();st.registry=AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+                st.remote_workers.get_mut("origin177").unwrap().capabilities=if case<4 {
+                    vec![WorkerCapability::OriginProofV1,WorkerCapability::OriginProjectContextV1]
+                }else{vec![WorkerCapability::OriginProofV1]};}
+            let result=prepare_project(&shared,&owner,&parent,source.clone(),"target229",
+                (case==2).then_some("required229"),Instant::now()+Duration::from_secs(5));
+            assert_eq!(result.as_ref().map(|_|()).map_err(String::as_str),expected,"case {case}");
+            let registry=AgentRegistry::load_from_path_quiet(path.clone()).unwrap();
+            assert_eq!(registry.machine("target229").unwrap().mappings.len(),usize::from(case==0||case==5));
+            assert!(shared.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+        }
+        fake.join().unwrap();drop(shared);std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn spec221_c19_origin_reader_never_receives_creation_source_or_prepare() {
         let (shared,root,_identity)=fixture();
         let (writer,peer)=UnixStream::pair().unwrap();
@@ -444,7 +555,7 @@ mod tests {
         for operation in [
             OriginProofOperation::Sources {parent:parent.clone(),source:Some(source.clone())},
             OriginProofOperation::PrepareProject {parent:parent.clone(),source,
-                target_machine:"target".into(),project_id:Some("project".into())},
+                target_machine:"target".into(),project_id:Some("project".into()),return_context:false},
         ] {
             assert_eq!(exchange(&shared,"origin177",operation,Duration::from_secs(1)),
                 Err(if crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED {
@@ -719,7 +830,7 @@ mod tests {
                 source:WorkerSourceBase {cwd:parent.cwd.clone(),
                     expected_base_commit:Some(config["expected_base_commit"].as_str().unwrap().into()),
                     workspace:Some(WorkspaceRequest::Shared {}),workload:AutoDelegateWorkload::General},
-                target_machine:target.into(),project_id:Some("fixture177".into())};
+                target_machine:target.into(),project_id:Some("fixture177".into()),return_context:false};
             for _ in 0..2 {
                 let result=exchange(&shared,"origin177",prepare.clone(),Duration::from_secs(300)).unwrap();
                 assert!(matches!(result,OriginProofResult::ProjectPrepared {preparation_error:None,..}),

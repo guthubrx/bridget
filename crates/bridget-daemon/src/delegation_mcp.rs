@@ -31,6 +31,18 @@ pub(crate) const WAIT_TIMEOUT_DEFAULT_SECS: u64 = 600;
 pub(crate) const WAIT_TIMEOUT_MAX_SECS: u64 = 3600;
 
 /// Validation commune des deux outils d'attente : forme JSON puis bornes métier.
+fn pre_dispatch_failure(error:ClientError, stage:&str, args:&Value)->ClientError {
+    match error {
+        ClientError::Technical{code,message} if matches!(code,"daemon_unreachable"|"outcome_unknown") => {
+            let reference=args.get("task_id").and_then(Value::as_str).map(|id|format!("task_id={id}"))
+                .or_else(||args.get("request_id").and_then(Value::as_str).map(|id|format!("request_id={id}")))
+                .unwrap_or_else(||"les identifiants des tâches de cet appel".into());
+            ClientError::Technical{code,message:format!("{message} Étape : {stage}. La commande de cet appel n'a pas été transmise. Conservez {reference} et tout reçu antérieur. Vérifiez le lien natif depuis cette machine avant de reprendre exactement cet appel ; si la lecture reste indisponible, le responsable Bridget doit mesurer cette liaison. La cause précise du retard reste inconnue. Ce refus concerne cet appel ; les autres travaux autorisés suivent leur propre état.")}
+        }
+        other=>other,
+    }
+}
+
 pub(crate) fn parse_wait_timeout(
     args: &serde_json::Map<String, Value>,
 ) -> Result<u64, ClientError> {
@@ -526,7 +538,7 @@ fn execute_with_proof(
     if matches!(
         &request,
         NativeDelegationRequest::Wait { .. } | NativeDelegationRequest::Ack { .. }
-    ) && !daemon_supports_wait(socket)?
+    ) && !daemon_supports_wait(socket).map_err(|e|pre_dispatch_failure(e,"lecture des capacités d’attente",args))?
     {
         return Err(ClientError::Technical {
             code: "native_delegation_refused",
@@ -545,7 +557,7 @@ fn execute_with_proof(
         connection.set_deadline(deadline);
         connection
     } else {
-        registered_connection(&identity.name, &identity.instance_id, socket)?
+        registered_connection(&identity.name, &identity.instance_id, socket).map_err(|e|pre_dispatch_failure(e,"raccordement de cette session",args))?
     };
     if matches!(&request,NativeDelegationRequest::Specialists{..}) {
         let cap=bridget_transport::protocol::ClientCapability::SpecialistsV1;
@@ -2468,4 +2480,17 @@ fn specialists_schema222()->Value {
         "request_id":{"type":"string","format":"uuid"},"operation":{"oneOf":approved}},
         "required":["version","action","request_id","operation"],"additionalProperties":false}));
     json!({"type":"object","oneOf":branches})
+}
+
+#[cfg(test)]
+mod tracking230_preflight_tests {
+    use super::*;
+    #[test]
+    fn tracking230_refus_avant_depart_precise_etape_et_tache_sans_accuser_le_modele() {
+        let error=pre_dispatch_failure(ClientError::Technical{code:"daemon_unreachable",message:"budget JSONL dépassé".into()},"lecture des capacités d’attente",&json!({"task_id":"t230"}));
+        let ClientError::Technical{code,message}=error else {panic!()};
+        assert_eq!(code,"daemon_unreachable");
+        for text in ["task_id=t230","n'a pas été transmise","cause précise","cet appel","autres travaux autorisés"] {assert!(message.contains(text));}
+        assert!(matches!(pre_dispatch_failure(ClientError::InvalidParams("forme".into()),"test",&json!({})),ClientError::InvalidParams(_)));
+    }
 }

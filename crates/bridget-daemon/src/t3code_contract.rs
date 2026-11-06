@@ -71,6 +71,8 @@ pub enum ContractError {
         body: String,
     },
     Transport(String),
+    /// Preuve RPC typée d'un refus enregistré pour CETTE commande de classement.
+    CommandRejected { command_id:String },
     /// La commande `t3` est absente ou a échoué.
     Cli(String),
 }
@@ -87,6 +89,7 @@ impl fmt::Display for ContractError {
             Self::Unauthorized => write!(f, "t3code : jeton refusé (401)"),
             Self::Http { status, body } => write!(f, "t3code HTTP {status} : {body}"),
             Self::Transport(detail) => write!(f, "t3code injoignable : {detail}"),
+            Self::CommandRejected {command_id}=>write!(f,"t3code a confirmé le refus de la commande de classement {command_id} ; son motif détaillé n'est pas exposé par ce reçu"),
             Self::Cli(detail) => write!(f, "commande t3 : {detail}"),
         }
     }
@@ -775,6 +778,14 @@ impl Client {
         if !self.uses_v2() {return Err(shape("user_input","protocol_unavailable"));}
         let result=v2::rpc(&self.base_url,&self.token,"orchestration.dispatchCommand",&serde_json::json!({"type":"runtime-request.respond","commandId":command,"threadId":thread,"requestId":request,"answers":answers}))?;
         result["sequence"].as_u64().ok_or_else(||shape("runtime-request.respond","sequence"))?; Ok(())
+    }
+
+    pub(crate) fn organize_thread(&self, thread:&str, operation:&str, dormant:bool)->Result<u64,ContractError> {
+        if !self.uses_v2() {return Err(shape("agent_tracking","protocol_unavailable"));}
+        let mut command=serde_json::json!({"type":if dormant{"thread.settle"}else{"thread.unsettle"},"commandId":operation,"threadId":thread});
+        if !dormant {command["reason"]=serde_json::json!("user");}
+        let value=v2::rpc_agent_tracking(&self.base_url,&self.token,&command)?;
+        value["sequence"].as_u64().ok_or_else(||shape("agent_tracking","sequence"))
     }
 
     pub fn dispatch(

@@ -1,7 +1,7 @@
 //! Préflight partagé, lecture seule, avant les migrations des deux magasins.
 use rusqlite::{Connection, OptionalExtension};
 
-pub const MAX_IDEMPOTENCY_SCHEMA_VERSION: i64 = 7;
+pub const MAX_IDEMPOTENCY_SCHEMA_VERSION: i64 = 8;
 
 #[derive(Debug)]
 pub enum SchemaError {
@@ -60,7 +60,7 @@ pub(crate) fn validate(conn: &Connection) -> Result<(), SchemaError> {
 /// T003 : préflight en lecture seule ; l’ancien plafond6 devra refuser cette v7.
 #[cfg(test)]
 #[test]
-fn held159_migration_precontrole_accepte_7_refuse_8() {
+fn tracking230_migration_precontrole_accepte_7_et_8_refuse_9() {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(
         "CREATE TABLE idempotency_schema_migrations(version INTEGER PRIMARY KEY);
@@ -79,16 +79,18 @@ fn held159_migration_precontrole_accepte_7_refuse_8() {
     );
     conn.execute("UPDATE idempotency_schema_migrations SET version=8", [])
         .unwrap();
+    assert!(validate(&conn).is_ok(),"le lecteur du sommeil doit comprendre v8");
+    conn.execute("UPDATE idempotency_schema_migrations SET version=9", []).unwrap();
     let before = conn.total_changes();
     assert!(
         matches!(
             validate(&conn),
             Err(SchemaError::UnsupportedVersion {
-                found: 8,
-                supported: 7
+                found: 9,
+                supported: 8
             })
         ),
-        "v8 doit rester fermée ; elle ne doit être ni migrée ni réparée"
+        "v9 doit rester fermée ; elle ne doit être ni migrée ni réparée"
     );
     assert_eq!(conn.total_changes(), before);
     assert_eq!(
@@ -98,6 +100,6 @@ fn held159_migration_precontrole_accepte_7_refuse_8() {
             |row| row.get::<_, i64>(0)
         )
         .unwrap(),
-        8
+        9
     );
 }

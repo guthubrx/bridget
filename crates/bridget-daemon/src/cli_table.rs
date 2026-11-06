@@ -163,6 +163,9 @@ const FAMILIES: &[&str] = &[
     "delegate-grant",
 ];
 const BOOLEANS: &[&str] = &[
+    "--dormant",
+    "--local-only",
+    "--synchronize",
     "--all",
     "--global",
     "--include-stopped",
@@ -265,6 +268,7 @@ pub(crate) fn normalize(mut args: Vec<String>) -> Result<Arguments, String> {
     }
     let op = clean.get(2).cloned().unwrap_or_default();
     if (root == "worker" && op != "diagnose")
+        || (root == "agents" && matches!(op.as_str(),"sleep"|"wake"))
         || (root == "mobile" && matches!(op.as_str(), "pair" | "serve"))
         || (root == "updates" && matches!(op.as_str(), "watch" | "once" | "setup"))
         || (root == "thread" && op == "watch")
@@ -473,6 +477,7 @@ fn columns<'a>(family: &str, rows: &[&Value]) -> Vec<Column> {
             C("PROJET", "communication_project.root|project_id|project"),
             C("HÔTE", "agent.host|host"),
             C("ÉTAT", "@state"),
+            C("DORMANT", "tracking.dormant"),
         ],
         "task" | "control" | "auto-delegate" | "spawn" => vec![
             C("RÉFÉRENCE", "task_id|id|reference"),
@@ -1002,6 +1007,12 @@ pub(crate) fn render(family: &str, input: &str, width: usize, color: bool) -> St
 #[cfg(test)]
 mod tests225 {
     use super::*;
+    #[test]
+    fn tracking230_table_n_envoie_pas_une_mutation_et_accepte_historique() {
+        assert!(normalize(args(&["bridget","agents","sleep","23000000-0000-4000-8000-000000000001","--table"])).is_err());
+        let history=normalize(args(&["bridget","--table","agents","--dormant","--global"])).unwrap();
+        assert_eq!(history.args,args(&["bridget","agents","--dormant","--global","--json"]));
+    }
     fn args(s: &[&str]) -> Vec<String> {
         s.iter().map(|v| (*v).into()).collect()
     }
