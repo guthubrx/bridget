@@ -8,7 +8,7 @@ figures below describe the named release's evidence, not the current checkout.
 
 ## 0.8.7 — 2026-11-07
 
-- Keep the remote channel when a known initial preparation replies after its wait expires. Unknown tuples and stale epochs remain rejected; late replies cannot create tasks.
+- Keep the remote channel when a known initial preparation refusal arrives after its wait expires. Unknown tuples and stale epochs remain rejected; late refusals cannot create tasks.
 - Preserve capacity and connection failures during pre-release reattestation, and explain preparation timeouts without claiming a stopped server or changed permissions.
 
 ## 0.8.6 — 2026-11-07

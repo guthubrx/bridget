@@ -1,5 +1,4 @@
 //! Réponses tardives de préparation : corrélation éphémère, aucune autorité de tâche.
-use super::PendingWorkerResponse;
 use bridget_transport::protocol::{WorkerCommandIdentity, WorkerIdentity, WorkerRequestOperation,
     WorkerResponse, WorkerResponseOperation, MAX_WORKER_STORE_ENTRIES};
 use std::{collections::HashMap, time::Instant};
@@ -28,14 +27,15 @@ pub(super) fn initial_prepare(command: &WorkerCommandIdentity, operation: &Worke
 }
 
 impl Cache {
-    pub(super) fn remember(&mut self, correlation: String, pending: PendingWorkerResponse) {
+    pub(super) fn remember(&mut self, correlation: String, connection: &str, epoch: &str,
+        worker: &WorkerIdentity, command: &WorkerCommandIdentity) {
         if self.entries.len() >= MAX_WORKER_STORE_ENTRIES {
             if let Some(oldest) = self.entries.iter().min_by_key(|(_, e)| e.retired_at).map(|(k, _)| k.clone()) {
                 self.entries.remove(&oldest);
             }
         }
-        self.entries.insert(correlation, Retired { connection: pending.conn_id, epoch: pending.epoch,
-            worker: pending.worker, command: pending.command, retired_at: Instant::now() });
+        self.entries.insert(correlation, Retired { connection: connection.into(), epoch: epoch.into(),
+            worker: worker.clone(), command: command.clone(), retired_at: Instant::now() });
     }
 
     pub(super) fn forget_connection(&mut self, connection: &str) {
@@ -45,7 +45,7 @@ impl Cache {
     /// Appelé après validation de l'enveloppe et de l'époque active. Ne rend aucun résultat au demandeur.
     pub(super) fn ignores(&self, connection: &str, response: &WorkerResponse) -> bool {
         matches!(response.response, WorkerResponseOperation::Rejected { .. }
-            | WorkerResponseOperation::Prepared { .. } | WorkerResponseOperation::WorkspaceRejected { .. }
+            | WorkerResponseOperation::WorkspaceRejected { .. }
             | WorkerResponseOperation::CommitViewRejected { .. })
             && self.entries.get(&response.correlation_id).is_some_and(|e|
                 e.connection == connection && e.epoch == response.connection_epoch
@@ -57,7 +57,6 @@ impl Cache {
 mod tests {
     use super::*;
     use bridget_transport::protocol::{WorkerRefusal, REMOTE_WORKER_VERSION};
-    use std::sync::mpsc;
 
     fn response() -> WorkerResponse {
         WorkerResponse { version: REMOTE_WORKER_VERSION, correlation_id: "expired-prepare".into(),
@@ -72,9 +71,7 @@ mod tests {
     fn spec240_retired_prepare_requires_the_exact_issued_tuple() {
         let r = response(); let mut cache = Cache::default();
         assert!(!cache.ignores("worker", &r));
-        cache.remember(r.correlation_id.clone(), PendingWorkerResponse { conn_id: "worker".into(),
-            epoch: r.connection_epoch.clone(), worker: r.worker.clone(), command: r.command.clone(),
-            reply: mpsc::sync_channel(1).0 });
+        cache.remember(r.correlation_id.clone(), "worker", &r.connection_epoch, &r.worker, &r.command);
         assert!(cache.ignores("worker", &r));
         assert!(!cache.ignores("other", &r));
         for field in 0..6 {
@@ -98,9 +95,7 @@ mod tests {
     fn spec240_retired_prepare_history_is_bounded_and_keeps_newest() {
         let mut cache = Cache::default(); let r = response();
         for i in 0..=MAX_WORKER_STORE_ENTRIES {
-            cache.remember(i.to_string(), PendingWorkerResponse { conn_id: "worker".into(),
-                epoch: r.connection_epoch.clone(), worker: r.worker.clone(), command: r.command.clone(),
-                reply: mpsc::sync_channel(1).0 });
+            cache.remember(i.to_string(), "worker", &r.connection_epoch, &r.worker, &r.command);
         }
         assert_eq!(cache.entries.len(), MAX_WORKER_STORE_ENTRIES);
         assert!(!cache.entries.contains_key("0"));

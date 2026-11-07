@@ -3908,10 +3908,18 @@ mod incident240_tests {
             assert!(!message.contains("a refusé les droits"));
         }
         assert!(remote_start_error_message("remote_start_failed:unknown with secret").is_none());
+        let explicit=failure("origin_proof_rejected:permissions_changed");
+        assert_eq!(explicit["code"],"origin_proof_rejected:permissions_changed");
+        assert_eq!(explicit["detail"]["worker_refusal"],"permissions_changed");
+        assert_eq!(explicit["detail"]["cause"],"origin_explicit_refusal");
+        assert!(!explicit["message"].as_str().unwrap().contains("cause précise reste inconnue"));
     }
 }
 
 fn failure(code: &str) -> Value {
+    if super::origin_proof::rejected_reason(code).is_some() {
+        return origin_attestation_refusal(code);
+    }
     if code == "remote_prepare:WorkerUnavailable" {
         return json!({"version":1,"status":"refused","code":code,"scope":"this_request",
             "message":"Conservez cette clé et ses paramètres, puis faites vérifier le canal du worker choisi et la préparation en attente. La préparation n’a pas répondu dans son délai ; ce code ne prouve pas le serveur arrêté. Aucune nouvelle mission de remplacement. Les autres travaux autorisés suivent leur propre état.",
@@ -4657,6 +4665,9 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    if let Some(reason)=super::origin_proof::rejected_reason(error.strip_prefix("remote_start_failed:").unwrap_or(error)) {
+        return Some(super::origin_proof::rejection_message(reason));
+    }
     match error.strip_prefix("remote_start_failed:").unwrap_or(error) {
         "origin_proof_busy" | "origin_project_preparation_busy" => return Some(
             "Conservez cette tâche et sa clé, puis faites vérifier les contrôles d’origine déjà en cours. La capacité de contrôle était occupée avant la remise métier ; aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."),
@@ -5464,6 +5475,16 @@ pub(super) fn handle_with_peer(
 fn origin_attestation_refusal(code: &str) -> Value {
     let mut result=failure("permission_attestation_unavailable");
     result["detail"]["verification"]=json!("origin_session_reattest");
+    if let Some(reason)=super::origin_proof::rejected_reason(code) {
+        let message=super::origin_proof::rejection_message(reason);
+        result["code"]=json!(code);
+        result["message"]=json!(message);
+        result["detail"]["message"]=json!(message);
+        result["detail"]["cause"]=json!("origin_explicit_refusal");
+        result["detail"]["worker_refusal"]=json!(reason);
+        result["detail"]["scope"]=json!("this_attestation");
+        return result;
+    }
     if matches!(code,"origin_worker_unavailable"|"origin_proof_unavailable") {
         let message=if code=="origin_worker_unavailable" {
             "Le worker de l'hôte d'origine n'est pas disponible pour ce contrôle. Ce constat ne prouve pas un changement de droits."

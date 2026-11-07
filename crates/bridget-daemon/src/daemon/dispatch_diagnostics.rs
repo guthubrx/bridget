@@ -79,6 +79,7 @@ fn closed_code(code: &str) -> String {
     if code.len() > 128 {
         return "unclassified".into();
     }
+    if super::origin_proof::rejected_reason(code).is_some() { return code.into(); }
     if matches!(
         code,
         "workspace_repair_pending"

@@ -152,17 +152,35 @@ fn checked_response(response: Option<OriginProofResult>, preparation: bool) -> R
             Err(if preparation { "origin_project_preparation_busy" }
                 else { "origin_proof_busy" }.into())
         }
-        Some(OriginProofResult::Rejected { .. }) | None => Err("origin_proof_unavailable".into()),
+        Some(OriginProofResult::Rejected { reason }) => {
+            let reason = serde_json::to_value(reason).map_err(|_| "origin_proof_unavailable".to_owned())?;
+            Err(format!("origin_proof_rejected:{}", reason.as_str().ok_or("origin_proof_unavailable")?))
+        }
+        None => Err("origin_proof_unavailable".into()),
         Some(result) => Ok(result),
     }
 }
 
 /// Garder une capacité ou une liaison indisponible distincte d'un refus de preuve.
 pub(super) fn attestation_failure(code: String) -> String {
+    if rejected_reason(&code).is_some() { return code; }
     match code.as_str() {
         "origin_proof_busy" | "origin_project_preparation_busy" | "origin_proof_unavailable"
         | "origin_worker_unavailable" | "origin_binding_unavailable" => code,
         _ => "permission_attestation_unavailable".into(),
+    }
+}
+
+pub(super) fn rejected_reason(code: &str) -> Option<WorkerRefusal> {
+    serde_json::from_value(serde_json::json!(code.strip_prefix("origin_proof_rejected:")?)).ok()
+}
+
+pub(super) fn rejection_message(reason: WorkerRefusal) -> &'static str {
+    match reason {
+        WorkerRefusal::PermissionsChanged => "Conservez cette clé et la tâche éventuelle, puis vérifiez le tour actif et sa preuve de droits. L’hôte d’origine a refusé cette preuve ; elle peut ne plus appartenir au tour courant. Aucun droit nouveau n’est accordé. Relisez l’état natif avant toute reprise, sans mission de remplacement. Ce refus concerne cette opération ; les autres travaux autorisés suivent leur propre état.",
+        WorkerRefusal::Unauthorized => "Conservez cette clé et la tâche éventuelle, puis faites vérifier l’identité et le rattachement sur l’hôte d’origine. Cet hôte a explicitement refusé le contrôle. Aucun changement de droits ni rejeu ne résout ce seul constat. Les autres travaux autorisés suivent leur propre état.",
+        WorkerRefusal::PrepareExpired => "Conservez cette clé et la tâche éventuelle, puis faites vérifier l’échéance du contrôle sur l’hôte d’origine. Cet hôte a répondu que le contrôle était expiré. Relisez l’état natif avant toute reprise, sans mission de remplacement. Les autres travaux autorisés suivent leur propre état.",
+        _ => "Conservez cette clé et la tâche éventuelle, puis faites vérifier le motif technique renvoyé par l’hôte d’origine. Cet hôte a explicitement refusé le contrôle ; ce code seul ne prouve ni panne globale ni changement de droits. Relisez l’état natif avant toute reprise, sans mission de remplacement. Les autres travaux autorisés suivent leur propre état.",
     }
 }
 #[cfg(test)]
@@ -198,11 +216,15 @@ mod capacity221_tests {
         assert_eq!(checked_response(Some(OriginProofResult::Rejected {
             reason: WorkerRefusal::ResourceLimit
         }), true), Err("origin_project_preparation_busy".into()));
-        for response in [None, Some(OriginProofResult::Rejected {
-            reason: WorkerRefusal::PermissionsChanged
-        })] {
-            assert_eq!(checked_response(response, false), Err("origin_proof_unavailable".into()));
+        assert_eq!(checked_response(None, false), Err("origin_proof_unavailable".into()));
+        for (reason, label) in [(WorkerRefusal::PermissionsChanged,"permissions_changed"),
+            (WorkerRefusal::Unauthorized,"unauthorized"),(WorkerRefusal::PrepareExpired,"prepare_expired")] {
+            let code=format!("origin_proof_rejected:{label}");
+            assert_eq!(checked_response(Some(OriginProofResult::Rejected {reason}),false),Err(code.clone()));
+            assert_eq!(attestation_failure(code.clone()),code);
+            assert_eq!(rejected_reason(&code),Some(reason));
         }
+        assert!(rejected_reason("origin_proof_rejected:unknown secret").is_none());
         let ok=OriginProofResult::CommunicationProject { project: None };
         assert_eq!(checked_response(Some(ok.clone()), false), Ok(ok));
     }

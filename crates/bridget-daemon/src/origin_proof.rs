@@ -18,8 +18,33 @@ pub(crate) fn now_ms() -> i64 {
 }
 pub(crate) fn execute(request: &OriginProofRequest, registry: &std::path::Path) -> OriginProofResult {
     execute_with_context(request, now_ms, |proof| {
-        crate::t3code_mcp::reattest(proof).map_err(|_| WorkerRefusal::PermissionsChanged)
+        crate::t3code_mcp::reattest(proof).map_err(attestation_worker_refusal)
     }, Some(registry))
+}
+
+fn attestation_worker_refusal(error: crate::mcp_identity::IdentityError) -> WorkerRefusal {
+    use crate::mcp_identity::IdentityError;
+    match error {
+        IdentityError::T3SessionUnavailableAt(detail) if detail.starts_with("permission_attestation_unavailable :")
+            || detail.starts_with("parent_not_active :") => WorkerRefusal::PermissionsChanged,
+        IdentityError::T3SessionUnavailableAt(detail) if detail.starts_with("attestation_tool_refused :") => WorkerRefusal::Unauthorized,
+        _ => WorkerRefusal::WorkerUnavailable,
+    }
+}
+
+#[cfg(test)]
+mod attestation240_tests {
+    use super::*;
+    #[test]
+    fn spec240_typed_attestation_refusal_is_distinct_from_transport_failure() {
+        use crate::mcp_identity::IdentityError;
+        for detail in ["permission_attestation_unavailable : refus natif", "parent_not_active : tour terminé"] {
+            assert_eq!(attestation_worker_refusal(IdentityError::T3SessionUnavailableAt(detail)),WorkerRefusal::PermissionsChanged);
+        }
+        assert_eq!(attestation_worker_refusal(IdentityError::T3SessionUnavailableAt("attestation_tool_refused : motif inconnu")),WorkerRefusal::Unauthorized);
+        assert_eq!(attestation_worker_refusal(IdentityError::T3SessionUnavailable),WorkerRefusal::WorkerUnavailable);
+        assert_eq!(attestation_worker_refusal(IdentityError::T3SessionUnavailableAt("unrecognized detail")),WorkerRefusal::WorkerUnavailable);
+    }
 }
 #[cfg(test)]
 fn execute_with(

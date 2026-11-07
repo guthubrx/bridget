@@ -7686,6 +7686,7 @@ fn handle_connection(
         st.communication_projects.remove(&conn_id);
         st.conn_operating_systems.remove(&conn_id);
         st.connection_roles.remove(&conn_id);
+        st.late_worker_prepares.forget_connection(&conn_id);
         remote_worker_disconnected(&mut st, &conn_id);
         st.worker_probe_connections.remove(&conn_id);
         st.terminal_sessions.remove(&conn_id);
@@ -18781,7 +18782,6 @@ fn remote_worker_has_command(
 
 fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
     use bridget_transport::protocol::WorkerContactState;
-    st.late_worker_prepares.forget_connection(conn_id);
     for worker in st
         .remote_workers
         .values_mut()
@@ -18947,6 +18947,7 @@ fn handle_worker_message(
             .as_ref()
             .and_then(|id| st.connections.get(id).cloned());
         if let Some(previous) = &previous_conn {
+            st.late_worker_prepares.forget_connection(previous);
             st.pending_worker_responses
                 .retain(|_, pending| &pending.conn_id != previous);
             st.pending_origin_proofs.retain(|_,pending| &pending.conn_id != previous);
@@ -19519,10 +19520,13 @@ fn remote_worker_roundtrip_with_send_deadline(
         None
     };
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(pending) = st.pending_worker_responses.remove(&correlation_id) {
-        if written && initial_prepare {
-            st.late_worker_prepares.remember(correlation_id.clone(), pending);
-        }
+    st.pending_worker_responses.remove(&correlation_id);
+    // Un contact périmé peut avoir retiré l'attente sans fermer le socket.
+    // L'histoire exige toujours une requête écrite et la même connexion/époque.
+    if written && initial_prepare && response.is_none() && st.connections.contains_key(&conn_id)
+        && st.remote_workers.get(&worker.machine_id).is_some_and(|current|
+            current.conn_id == conn_id && current.epoch == epoch && current.identity == *worker) {
+        st.late_worker_prepares.remember(correlation_id.clone(), &conn_id, &epoch, worker, command);
     }
     if !st
         .remote_workers
@@ -42680,6 +42684,10 @@ mod presence_tests {
         assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
         allow_late.send(()).unwrap(); let response=server.join().unwrap();
         assert!(shared.lock().unwrap().delegation_store.get("prepare240").unwrap().is_none());
+        remote_worker_disconnected(&mut shared.lock().unwrap(),"worker");
+        assert!(handle_worker_message(&shared,"worker",WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
+        assert_eq!(shared.lock().unwrap().remote_workers["cartae"].contact,WorkerContactState::Stale,
+            "une réponse périmée ignorée ne rafraîchit pas le contact");
         let mut forged=response.clone(); forged.command.task_id="other".into();
         assert!(matches!(handle_worker_message(&shared,"worker",WrapperToDaemon::WorkerResponse {response:forged}),
             Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CommandMismatch})));
