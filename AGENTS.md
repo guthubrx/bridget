@@ -110,6 +110,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 <!-- SPECKIT START -->
 
 
+Session242 — carte de reprise corrigée et activée en0.8.9/242-resume-card-r1.
+Source7de2d695 poussée,12tests cartesMac PASS ; erreurGit distincte de l’accès
+aux fichiers, dossierlocal affiché/échappé, aucun droit/format/préparation changé.
+Revue380f non démarrée KS/disk_full, annulée/conservation native confirmée ;
+auto-relecture déclarée, aucun verdict indépendant inventé ni remplacement.
+Septcomposants/SHA chargés quatre hôtes, coupurecore3,31s ; retours241-r5/formats
+et pointeurs atomiques vérifiés. Septpayloads protégés et superviseur2500061
+inchangés, registreMac conservé ; T3 septprocessus inchangés, aucun restart.
+Releasepublique0.8.9/sixactifs téléchargés sansauth/SHA et APK8009/lignée8008
+vérifiés. Quatre rapports0.8.9/up_to_date/fresh. Cinqavis avant/après dont diagnostic
+Revue142 envoyés sans lecture inventée ; aucune mission métier rejouée.
+10851fichiers/741128493octets logiques de copies propres242 retirés ; caches
+historiques et travaux/vues étrangers conservés. Anciennes façades ouvertes et
+programmes en cours conservés ; nouvelle carte aux prochains démarrages.
+Défauttransporthistorique non expliqué ; ne pas relancerT3 ni redemandermaintenant.
+Preuves/bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/242-carte-espace/validation.md.
+Reçus privés : /Users/moi/.cache/bridget242-carte-espace/.
+
 Session241 — fiabilité des parcours activée en0.8.8/241-reliability-r5.
 Source exécutabledb43c142 intégrée/poussée ;25tests241Mac/Linux et suites utiles,
 Converge3CONVERGED, audit ciblé14/14pass avec limites explicites. R1/R2/R3/R4 et
