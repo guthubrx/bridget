@@ -98,3 +98,28 @@ docs/regles-chantier.md (pas de rouge « jalon absent »).
   sans `.git`, PASS 14/14 dans une copie Git.
 - Avertissements mécaniques communs corrigés (imports, mut, parenthèses).
   Code mort dépendant de la plateforme conservé : analyse séparée nécessaire.
+
+## Activation 243-tests-r1 (7 novembre 2026, 22:50 UTC)
+
+Source 094ceaad, version 0.8.9, build 243-tests-r1. Linux construit sur SYS
+(Debian 12, glibc 2.36) SHA 4efb38c53b6fc70f23d8ee6c7e629f9cbe063349101a236fc9c18879d3cec532 ;
+Mac signé ad hoc SHA 0b645ea63946b0cc88debeb61e8a3049a81bc95d0e3fe85fa4a95b477ad95515.
+Formats candidat→retour et retour→candidat compatibles sur les quatre hôtes.
+
+Sept composants chargés et empreintes vérifiées : cœur 3743706, mobile 3743773
+et worker 3744119 Cartae, worker SYS 2658217, worker KS 4056783, worker Mac
+20357, pont Mac 20981. Coupure du cœur 1,87 s. Pointeur `rollback` écrit par
+l'écrivain atomique natif sous verrou vers 242-resume-card-r1 sur les quatre
+hôtes ; aucun retour lancé. Quatre rapports 0.8.9 up_to_date/fresh.
+
+Préservation : sept charges protégées (7024, 77ba, 702d, 2fb, 218369de,
+5564cdf5, bb7d6237) identiques avant/après ; superviseur Cartae 2500061 et sa
+naissance conservés ; sept processus de l'application T3 inchangés, T3 non
+arrêté (consigne de François) ; registre Mac cacf9ba0 inchangé. Aucun rejeu
+ni mission métier. Pas d'avis diffusé aux agents : coupure de 1,87 s et
+processus de travail conservés ; à refaire si une bascule longue est prévue.
+
+KS : 85 Mo libres au départ. Retrait vérifié de deux copies Bridget sans
+processus, lien ni pointeur de retour (197-platform, 241-reliability-reader-r1,
+80 Mo) ; diagnostic 188 conservé. Le manque d'espace de KS reste distinct.
+Pas de publication publique : même version 0.8.9, aucun changement Android.

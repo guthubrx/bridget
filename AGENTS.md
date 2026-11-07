@@ -110,6 +110,16 @@ Ne pas décrire le produit par comparaison avec un client externe.
 <!-- SPECKIT START -->
 
 
+Session243 — suite complète réparée, activée en0.8.9/243-tests-r1.
+Source094ceaad : 65échecs Mac ramenés à0 hors bornes de3s sous charge.
+Défauts corrigés : entrée vide des contrôles post-réponse, profil rouvert
+sous verrou à chaque fin de tour (4,8s→<1s pour998), tour Codex fixé par le
+lecteur, attente5s du verrou accounts, inventaire des commandes. Tests périmés
+réalignés ; recettes159 marquées avec leurs prérequis (test-support). Dix
+ignorés171 retirés ou remplacés. Sept composants/SHA vérifiés, coupure1,87s,
+retour242 atomique quatre hôtes ; T3 non arrêté. Bilan :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/243-tests-171/spec.md.
+
 Session242 — carte de reprise corrigée et activée en0.8.9/242-resume-card-r1.
 Source7de2d695 poussée,12tests cartesMac PASS ; erreurGit distincte de l’accès
 aux fichiers, dossierlocal affiché/échappé, aucun droit/format/préparation changé.
