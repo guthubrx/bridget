@@ -29109,6 +29109,13 @@ mod presence_tests {
     }
 
     pub(super) fn state_with_registered_agent(_label: &str) -> (DaemonState, DaemonConfig) {
+        state_with_registered_agent_configured(_label, |_| {})
+    }
+
+    pub(super) fn state_with_registered_agent_configured(
+        _label: &str,
+        configure: impl FnOnce(&mut DaemonConfig),
+    ) -> (DaemonState, DaemonConfig) {
         let base = std::env::temp_dir().join(format!(
             "brt-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..12]
@@ -29136,7 +29143,7 @@ mod presence_tests {
         )
         .unwrap();
         std::fs::set_permissions(&registry_file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        let config = DaemonConfig {
+        let mut config = DaemonConfig {
             socket_path: base.with_extension("sock"),
             db_path: base.with_extension("db"),
             log_path: base.with_extension("log"),
@@ -29146,6 +29153,7 @@ mod presence_tests {
             quarantine_window: 3600,
             retention_days: 7,
         };
+        configure(&mut config);
         // Un test qui panique en tenant ce verrou ne doit pas empoisonner les
         // suivants : on relit le verrou empoisonné plutôt que de propager.
         let _home_lock = HOME_REGISTRY_LOCK

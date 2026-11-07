@@ -2882,7 +2882,11 @@ mod tests222 {
     #[test]
     fn spec239_legacy_mobile_admin_applies_only_the_recorded_human_decision() {
         use crate::mobile::store::{Scope,Store};
-        let (mut st,_)=super::super::presence_tests::state_with_registered_agent("239-legacy-approval");
+        let (mut st,_)=super::super::presence_tests::state_with_registered_agent_configured("239-legacy-approval",|config|{
+            let root=config.db_path.with_extension("private");
+            crate::environment::ensure_private_directory(&root).unwrap();
+            config.db_path=root.join("bridget.db");
+        });
         let (writer,_reader)=super::super::presence_tests::control_socket("239-legacy-approval");
         st.connections.insert("conn-1".into(),writer);
         let now=unix_timestamp();
