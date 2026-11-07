@@ -172,3 +172,11 @@ dans ce cache ; il reste au-dessus du budget de 10 Gio.
   (46 lancements isolés, 6 × 87 tests en parallèle) : l'assertion affiche
   désormais l'erreur exacte ; remote162 (refus StoreUnavailable sur Release,
   une fois sous charge) non reproduit au passage suivant.
+
+Activation 243-tests-r2 (source f47c366c, 7 novembre 2026, 23:50 UTC) : Linux
+SHA d2c61578db47ac42c9447d97cbc0bd7fb5f09414b6e001d47cc015bcec0d6c76, Mac signé
+SHA e733deffb34306c37ea7241067fcc4a6b5b43181afb32ffc5c6f4c125cd6568b, 0 avertissement.
+Sept composants chargés et vérifiés (cœur 4047099, mobile 4047167, worker
+Cartae 4047544, SYS 2665531, KS 4090508, worker Mac 76871, pont Mac 77105) ;
+coupure 1,92 s ; retour 243-tests-r1 écrit atomiquement sur les quatre hôtes.
+Tâches protégées, superviseur 2500061, sept processus T3 et registre Mac inchangés.
