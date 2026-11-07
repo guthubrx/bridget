@@ -130,7 +130,7 @@ Macmainseul ; sourcesmain4hôtes alignées ; WTSYS/historiques et WTmodifiéCart
 conservés. CachesMac12,46Gio/SYS21,40Gio gardés : observationglobale incomplète,
 processus vivants aveccwd/rtdillisibles etFD révoqués, aucunautretravail terminé
 pourleménage. T025resteouvert : liensessionV2/annuairerevenus, façades237/240encore
-chargées, effet d’une continuationnative de ce fil à constater. NEPASrelancerT3
+chargées, continuationnative804 sansrechargement : façades237/240 toujourschargées. NEPASrelancerT3
 ni redemander maintenant. Pasdenouveaubuild/revue/rejeu sansfaitnouveau.
 Preuves/bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/241-fiabilite-usage/validation.md.
 Repriseprivée : /Users/moi/.cache/bridget241-fiabilite-usage/resume.md.

@@ -330,3 +330,19 @@ prépare le MCP lors d’une reprise native de fil ; aucune commande de reload M
 n’est exposée par ses outils. Une continuation native de ce même fil, sans
 redémarrage d’app, est la dernière vérification prévue. Son effet n’est pas
 présenté comme acquis. Statut globalInProgress tant que cette porte reste ouverte.
+
+## Dernier contrôle natif — continuation804
+
+Une seule continuationnative effectuée. bridget_sessionV2/permissions présent et
+who same_project réussis, projetbridget et zéroavertissement. Le processus95234
+(parentCodex92608) charge toujours240-late-prepare-r2, confirmé par ps/lsof/SHA.
+Les autresfaçadesBridget de ce parent chargent237/240, aucune241. La résolution
+du lien actif vers241 n'a pas rechargé ces processus déjà montés. Les sept
+processus de l'appT3 sont strictement inchangés ; aucune injection, interruption
+de provider, nouvelle mission ou nouvelle tentative de reprise.
+T025 reste ouvert : activation des services0.8.8 acquise, activation du correctif
+client dans ces façades incomplète dans l'exclusion de redémarrage deT3. Les
+lectures natives réussies ne sont pas présentées comme une preuve de chargement241.
+Aucune autre continuation automatique n'est prévue. État globalInProgress avec
+cette seule porte d'activation ; les preuves de code/tests/livraison sont conservées.
+Preuve privée : /Users/moi/.cache/bridget241-fiabilite-usage/native-facade-final.json.

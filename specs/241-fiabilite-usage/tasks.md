@@ -85,5 +85,10 @@ incomplète conservés explicitement. Les corrections sont committées ; ce bila
 documentaire reçoit son commit final séparé.
 T025 reste ouvert : lien natif et services vérifiés, une façade MCP de ce fil
 reste240, d’autres237/240 existent. T3 reste ouvert selon l’exclusion utilisateur.
-Un passage natif de ce même fil sera tenté unefois pour constater son effet ;
+Un passage natif unique804 a été vérifié : façade240 toujours chargée ;
 aucune fermeture d’app ou interruption d’un autre travail n’est autorisée.
+
+Contrôle finalT025 : continuation804 sans rechargement MCP ; sessionV2 et annuaire
+réussis, images237/240 toujours chargées. Activationclient incomplète sous
+l'exclusion T3, aucune autre boucle de continuation. Vérification de ce blocage
+terminée, case conservée ouverte pour ne pas annoncer le chargement absent.
