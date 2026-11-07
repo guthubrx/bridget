@@ -30,7 +30,7 @@ mod read;
 #[path = "remote_worker_capacity234.rs"]
 mod capacity234;
 pub(crate) use capacity234::recover_view_capacity;
-pub(crate) use read::{diagnose_live_local, diagnostic_failure, live_worker_binding, LiveWorkerBinding};
+pub(crate) use read::{qualify_workload_tools,diagnose_live_local, diagnostic_failure, live_worker_binding, LiveWorkerBinding};
 #[cfg(test)]
 use read::diagnose_local;
 
@@ -3395,7 +3395,7 @@ fn worker_probe_refusal(inbound:&WorkerInbound,reason:CandidateProbeRefusal)->Wr
             worker:probe.worker.clone(),admission_id:probe.admission_id.clone(),policy_revision:probe.policy_revision,
             verdicts:probe.candidates.iter().map(|c|CandidateProbeVerdict::Ineligible{candidate_id:c.candidate_id.clone(),reason}).collect(),
         }},
-        WorkerInbound::CandidateProbeV2(probe)=>WrapperToDaemon::CandidateProbeResultV2{result:CandidateProbeV2Result {
+        WorkerInbound::CandidateProbeV2(probe)=>WrapperToDaemon::CandidateProbeResultV2{result:CandidateProbeV2Result { tool_observations:Vec::new(),
             version:probe.version,correlation_id:probe.correlation_id.clone(),connection_epoch:probe.connection_epoch.clone(),
             worker:probe.worker.clone(),admission_id:probe.admission_id.clone(),policy_revision:probe.policy_revision,
             resources:HostResourceSnapshotV1 {source_observed_at:worker_now(),received_at:worker_now(),cpu_percent:None,
@@ -3459,7 +3459,7 @@ fn worker_inbound_busy(inbound: WorkerInbound) -> WrapperToDaemon {
         WorkerInbound::CandidateProbeV2(probe) => {
             let now = worker_now();
             WrapperToDaemon::CandidateProbeResultV2 {
-                result: CandidateProbeV2Result {
+                result: CandidateProbeV2Result { tool_observations:Vec::new(),
                     version: probe.version,
                     correlation_id: probe.correlation_id,
                     connection_epoch: probe.connection_epoch,
@@ -6745,7 +6745,7 @@ fn dispatch_origin_proof(request: bridget_transport::protocol::OriginProofReques
 
 #[derive(Debug,Clone,Copy,Default)]
 struct MasterWorkerFeatures {
-    candidate_probe:bool,probe_v2:bool,release_lease:bool,source_proof:bool,
+    candidate_probe:bool,probe_v2:bool,workload_tools:bool,release_lease:bool,source_proof:bool,
     slot_deadline:bool,workspace_diagnostics:bool,origin_proof:bool,origin_project_context:bool,workspace_repair:bool,
     start_recovery:bool,workspace_failure:bool,provider_catalogue:bool,model_options:bool,provider_accounts:bool,workspace_view:bool,workspace_view_create:bool,execution_status:bool,program_compatibility:bool,
 }
@@ -6754,6 +6754,7 @@ impl MasterWorkerFeatures {
         match capability {
             WorkerCapability::CandidateProbeV1=>self.candidate_probe,
             WorkerCapability::CandidateProbeV2=>self.probe_v2,
+            WorkerCapability::WorkloadToolsV1=>self.workload_tools && self.probe_v2,
             WorkerCapability::ReleaseLeaseV2=>self.release_lease,
             WorkerCapability::ParentSourceProofV1=>self.source_proof,
             WorkerCapability::ResultSlotDeadlineV1=>self.slot_deadline,
@@ -6772,7 +6773,7 @@ impl MasterWorkerFeatures {
         }
     }
     fn capabilities(&self)->Vec<WorkerCapability> {
-        [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,
+        [WorkerCapability::CandidateProbeV1,WorkerCapability::CandidateProbeV2,WorkerCapability::WorkloadToolsV1,
             WorkerCapability::ReleaseLeaseV2,WorkerCapability::ParentSourceProofV1,
             WorkerCapability::ResultSlotDeadlineV1,WorkerCapability::OriginProofV1,WorkerCapability::OriginProjectContextV1,
             WorkerCapability::WorkspaceRepairV1,WorkerCapability::StartRecoveryV1,WorkerCapability::WorkspaceFailureV1, WorkerCapability::ProviderCatalogueV1, WorkerCapability::ModelOptionsV1, WorkerCapability::ProviderAccountsV1, WorkerCapability::WorkspaceViewV1,WorkerCapability::WorkspaceViewCreateV1,WorkerCapability::ExecutionStatusV1,WorkerCapability::ProgramCompatibilityV1]
@@ -6782,6 +6783,8 @@ impl MasterWorkerFeatures {
     }
     fn admits(&self,accepted:&[WorkerCapability])->bool {
         accepted.len()<=32
+            && (!accepted.contains(&WorkerCapability::WorkloadToolsV1)
+                || accepted.contains(&WorkerCapability::CandidateProbeV2))
             && (!accepted.contains(&WorkerCapability::OriginProjectContextV1)
                 || accepted.contains(&WorkerCapability::OriginProofV1))
             && (!accepted.contains(&WorkerCapability::ModelOptionsV1)
@@ -6794,6 +6797,17 @@ impl MasterWorkerFeatures {
 }
 
 #[cfg(test)]
+#[test]
+fn spec241_tool_contract_requires_probe_v2_and_explicit_feature() {
+    let old=MasterWorkerFeatures {probe_v2:true,..Default::default()};
+    let modern=MasterWorkerFeatures {probe_v2:true,workload_tools:true,..Default::default()};
+    assert!(!old.supports(WorkerCapability::WorkloadToolsV1));
+    assert!(!old.admits(&modern.capabilities()));
+    assert!(!modern.admits(&[WorkerCapability::WorkloadToolsV1]));
+    assert!(modern.admits(&modern.capabilities()));
+    assert!(!MasterWorkerFeatures {workload_tools:true,..Default::default()}.supports(WorkerCapability::WorkloadToolsV1));
+}
+
 #[test]
 fn spec229_origin_context_is_negotiated_without_build_number() {
     let old=MasterWorkerFeatures {origin_proof:true,..Default::default()};
@@ -6818,6 +6832,7 @@ fn probe_worker_capability(
             let has=|name:&str|features.iter().any(|v|v==name);
             Ok(MasterWorkerFeatures {
                 candidate_probe:has("worker_candidate_probe_v1"),probe_v2:has("worker_candidate_probe_v2"),
+                workload_tools:has("worker_workload_tools_v1"),
                 release_lease:has("worker_release_lease_v2"),source_proof:has("worker_parent_source_proof_v1"),
                 slot_deadline:has("worker_result_slot_deadline_v1"),
                 workspace_diagnostics:has("worker_workspace_diagnostics_v1"),
@@ -6970,6 +6985,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
         let mut catalogue_sent=BTreeMap::<String,(String,u64)>::new();
         let candidate_probe_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV1);
         let candidate_probe_v2_negotiated=negotiated.contains(&WorkerCapability::CandidateProbeV2);
+        let workload_tools_negotiated=negotiated.contains(&WorkerCapability::WorkloadToolsV1);
         let slot_deadline_negotiated=negotiated.contains(&WorkerCapability::ResultSlotDeadlineV1);
         let origin_proof_negotiated=negotiated.contains(&WorkerCapability::OriginProofV1);
         let origin_context_negotiated=negotiated.contains(&WorkerCapability::OriginProjectContextV1);
@@ -7066,6 +7082,7 @@ pub fn run_worker(config: WorkerRuntimeConfig) -> Result<(), String> {
                         }
                         Ok(DaemonToWrapper::CandidateProbeV2 { probe })
                             if candidate_probe_v2_negotiated
+                                && (probe.required_tools.is_empty() || workload_tools_negotiated)
                                 && probe.connection_epoch == read_epoch
                                 && probe.worker == read_worker
                                 && probe.validate_shape().is_ok() =>
@@ -8044,7 +8061,7 @@ while not stop.exists(): time.sleep(.01)
         assert_eq!(result.admission_id, probe.admission_id);
         assert_eq!(result.policy_revision, probe.policy_revision);
         assert!(matches!(result.verdicts[0], CandidateProbeVerdict::Ineligible { reason: CandidateProbeRefusal::ResourceLimit, .. }));
-        let probe = CandidateProbeV2 {
+        let probe = CandidateProbeV2 { requires_workspace_write:false, required_tools:Vec::new(),
             version: WORKER_CANDIDATE_PROBE_V2_VERSION, correlation_id: "probe-v2".into(),
             connection_epoch: "epoch".into(), worker: worker(), admission_id: "admission".into(),
             policy_revision: 1, parent,
@@ -8890,7 +8907,7 @@ while not stop.exists(): time.sleep(.01)
             request.effort.as_deref()).unwrap();
         let (child_policy,effective_posture)=crate::native_permissions::project_remote_permissions_in_operation(
             &request.parent,pinned.get(&request.agent_type).unwrap(),&mapping,&cwd,
-            &runtime.source,request.posture,&runtime.protected(),&mut operation,true).unwrap();
+            &runtime.source,request.posture,&runtime.protected(),&mut operation,true,false).unwrap();
         let scoped=pinned.for_inherited_delegation_in_operation(&request.agent_type,
             &request.model,request.effort.as_deref(),&child_policy,&mut operation).unwrap();
         let inspected=CandidateReadiness {
@@ -13957,4 +13974,29 @@ mod program_compatibility221_tests {
         let current=MasterWorkerFeatures{program_compatibility:true,..Default::default()};assert!(current.admits(&[WorkerCapability::ProgramCompatibilityV1]));
     }
 
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_tool_probe_distinguishes_presence_usability_and_timeout() {
+    use bridget_transport::protocol::{WorkloadTool as T,WorkloadToolState as S};
+    let root=std::env::temp_dir().join(format!("b241-tools-{}",uuid::Uuid::new_v4()));
+    fs::create_dir(&root).unwrap();
+    let mut env=crate::lifecycle::SourceEnvironment::new();env.insert("PATH".into(),root.clone().into_os_string());
+    let probe=|deadline|qualify_workload_tools(&env,&[T::Docker],&[],deadline)[0].state;
+    assert_eq!(probe(Instant::now()+Duration::from_secs(1)),S::Absent);
+    let script=root.join("docker");
+    fs::write(&script,"#!/bin/sh\nexit 23\n").unwrap();
+    fs::set_permissions(&script,fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(probe(Instant::now()+Duration::from_secs(1)),S::Unusable);
+    fs::write(&script,"#!/bin/sh\nexit 0\n").unwrap();
+    assert_eq!(probe(Instant::now()+Duration::from_secs(1)),S::Available);
+    assert_eq!(qualify_workload_tools(&env,&[T::Docker],&[root.canonicalize().unwrap()],Instant::now()+Duration::from_secs(1))[0].state,S::Absent);
+    fs::write(&script,"#!/bin/sh\n[ \"$RUSTUP_AUTO_INSTALL\" = 0 ] && [ \"$COREPACK_ENABLE_NETWORK\" = 0 ] && [ \"$COREPACK_ENV_FILE\" = 0 ]\n").unwrap();
+    assert_eq!(probe(Instant::now()+Duration::from_secs(1)),S::Available);
+    fs::write(&script,"#!/bin/sh\nwhile :; do :; done\n").unwrap();
+    let start=Instant::now();
+    assert_eq!(probe(start+Duration::from_millis(30)),S::Unknown);
+    assert!(start.elapsed()<Duration::from_millis(400));
+    fs::remove_dir_all(root).unwrap();
 }

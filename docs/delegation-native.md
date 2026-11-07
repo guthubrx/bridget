@@ -2,6 +2,31 @@
 
 [English](delegation-native.md) · [Français](delegation-native.fr.md) · [Documentation](README.md)
 
+## Continue admitted work — version 0.8.8
+
+A newly admitted mission keeps its authority after its originating conversation
+turn ends. Recovery uses the same task. Native cancellation and revocation still
+apply. New missions and new rounds require current authority; historical tasks
+are not promoted when read.
+
+Keep the exact request key and arguments after a disconnect. An early registration
+failure may recover within its original deadline. Once recorded, read the receipt
+of the same request. A new key can duplicate work. Task status and cancellation
+remain available by key independently of a large retained history.
+
+Placement checks tools in recognized commands and the effective child profile.
+A profile without a shell is not a broken model. Read commands may run under a
+read-only policy; known build writes require a profile that permits those writes.
+Explicit human constraints remain applied. Bridget does not install tools to
+satisfy them.
+
+Already authorized local folders need no second mirror. A non-Git source may serve
+a general/shared mission when native file authority covers it. Remote execution
+still requires a verifiable mapping. Views and worktrees no longer fail solely
+at 32 GiB or 128 folders. Physical storage and bounded metadata still matter;
+an available-space check does not reserve disk against concurrent writes.
+
+
 
 In bridget_capabilities, providers and their can_run verdicts describe only the origin machine named in providers_scope. A local refusal does not establish that a server lacks the program. For automatic remote delegation, read fleet.options and use its exact machine_id, engine and model. These options are declared and enabled; eligibility=not_checked means admission must still check permissions, preparation and access. Do not invent a machine alias for a missing option. Do not restart a task with an unknown outcome to refresh this catalogue.
 

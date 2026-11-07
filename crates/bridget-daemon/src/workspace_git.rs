@@ -47,7 +47,6 @@ const CREATE_TIMEOUT: Duration = Duration::from_secs(20);
 // Les bancs 154 simulent un Git bloqué : ils gardent l'ancienne borne de 20 s.
 pub(crate) const WORKTREE_ADD_TIMEOUT: Duration =
     Duration::from_secs(if cfg!(test) { 20 } else { 300 });
-pub(crate) const MAX_WORKTREES: usize = 128;
 const MAX_OUTPUT: usize = 1024 * 1024;
 const MAX_TREE_OUTPUT: usize = 64 * 1024 * 1024;
 const HOSTILE_CONFIG: &str = "^(filter\\..*\\.(smudge|clean|process)|include\\..*|includeif\\..*|extensions\\.partialclone|remote\\..*\\.promisor)$";
@@ -258,7 +257,7 @@ pub(crate) fn run_git(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Gi
 
 // Trois sorties d'erreur partagent cette récolte bornée. SIGTERM concerne
 // uniquement le Child attesté par spawn ; aucun groupe, aucun SIGKILL.
-fn stop_git(child: &mut Child) -> Result<(), String> {
+pub(crate) fn stop_git(child: &mut Child) -> Result<(), String> {
     if child
         .try_wait()
         .map_err(|error| error.to_string())?
@@ -829,9 +828,6 @@ fn preflight_on_host(cwd: &Path, base_ref: Option<&str>, branch: Option<&str>, r
         .map(PathBuf::from)
         .filter(|path| path.starts_with(&worktree_dir))
         .collect::<Vec<_>>();
-    if listed_paths.len() >= MAX_WORKTREES {
-        return Err(format!("workspace_limit: {MAX_WORKTREES} worktrees déjà enregistrés").into());
-    }
     Ok(WorkspacePreflight {
         toplevel,
         cwd,
@@ -858,6 +854,18 @@ fn worktree_failure_code(stderr: &str) -> &'static str {
         }
     }
     "workspace_create_failed"
+}
+
+/// Même lecture de capacité pour les worktrees et les vues de commit.
+/// Mesure instantanée, sans réservation ni quota par nombre de travaux.
+pub(super) fn available_space(directory: &fs::File) -> io::Result<(u128,u128)> {
+    use std::os::fd::AsRawFd;
+    let mut stat=std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    if unsafe {libc::fstatvfs(directory.as_raw_fd(),stat.as_mut_ptr())}!=0 {return Err(io::Error::last_os_error());}
+    let stat=unsafe{stat.assume_init()};
+    let block=if stat.f_frsize>0 {stat.f_frsize as u128} else {stat.f_bsize as u128};
+    if block==0 {return Err(io::Error::other("taille de bloc inconnue"));}
+    Ok(((stat.f_bavail as u128).saturating_mul(block),block))
 }
 
 /// O(f), f fichiers extraits par Git. Seule une extraction échouée retire sa
@@ -924,6 +932,34 @@ pub(crate) fn create(
     let compact = crate::workspace_failure210::stage(
         bridget_transport::protocol::WorkspacePrepareStage::CompactPlan,
         compact::plan(preflight))?;
+    // Git classe encore ENOSPC/EDQUOT pendant l'extraction : aucune prédiction
+    // ni réservation n'empêche un autre processus de consommer le disque.
+    let capacity_root=if preflight.worktree_dir.is_dir(){&preflight.worktree_dir}else{&preflight.cwd};
+    use std::os::unix::fs::OpenOptionsExt;
+    let directory=fs::OpenOptions::new().read(true)
+        .custom_flags(libc::O_NOFOLLOW|libc::O_DIRECTORY).open(capacity_root)
+        .map_err(|error|format!("workspace_storage_space_unavailable: {error}"))?;
+    let (available,_) = available_space(&directory)
+        .map_err(|error|format!("workspace_storage_space_unavailable: {error}"))?;
+    let needed=if let Some(plan)=compact.as_ref() {plan.selected_bytes as u128} else {
+        // Le Git déjà présent fournit les tailles sans extraire les objets.
+        // L'inventaire réutilise son budget 64 Mio / 60 s, pas le nombre de WT.
+        let listing=run_git(&preflight.cwd,&["ls-tree","--full-tree","-r","-l","-z",&preflight.base_commit],INVENTORY_TIMEOUT)?.complete()?;
+        let mut bytes=0u128;
+        for row in listing.split('\0').filter(|row|!row.is_empty()) {
+            let (metadata,_)=row.split_once('\t').ok_or("workspace_repo_unsupported: arbre Git illisible")?;
+            let fields:Vec<_>=metadata.split_whitespace().collect();
+            if fields.len()!=4 {return Err("workspace_repo_unsupported: arbre Git illisible".into());}
+            if fields[1]=="blob" {
+                bytes=bytes.checked_add(fields[3].parse::<u64>().map_err(|_|"workspace_repo_unsupported: taille Git illisible")? as u128)
+                    .ok_or("workspace_repo_unsupported: tailles Git excessives")?;
+            }
+        }
+        bytes
+    };
+    if available==0 || available<needed {
+        return Err(format!("workspace_disk_full: espace disponible {available} octets, fichiers prévus {needed} octets ; aucune réservation ni extraction effectuée"));
+    }
     let mut checkout_args = vec!["worktree", "add"];
     if compact.is_some() { checkout_args.push("--no-checkout"); }
     checkout_args.extend(["-b", &branch, "--", path_text, &preflight.base_commit]);

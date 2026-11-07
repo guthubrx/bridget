@@ -348,16 +348,52 @@ fn source_in_parent211(parent:&bridget_transport::protocol::ProviderPermissions,
     if source.is_some_and(|s|{
         let p=std::path::Path::new(&s.cwd);
         !p.is_absolute() || p.components().any(|c|matches!(c,std::path::Component::ParentDir))
-            || !p.starts_with(&parent.cwd)
+            || crate::lifecycle::source_root(parent,p).is_err()
     }) {return Err("cwd_outside_parent_project".into());}
     Ok(())
 }
 pub(super) fn sources(
     state:&Arc<Mutex<DaemonState>>,owner:&str,parent:&bridget_transport::protocol::ProviderPermissions,
     source:Option<bridget_transport::protocol::WorkerSourceBase>,
+    admitted:Option<&crate::delegation::Task>,
 )->Result<Option<(String,Option<String>)>,String>{
     source_in_parent211(parent,source.as_ref())?;
-    match parent_operation(state,owner,parent,OriginProofOperation::Sources {parent:parent.clone(),source},Duration::from_secs(30))? {
+    let operation = OriginProofOperation::Sources {parent:parent.clone(),source};
+    let result = if let Some(task) = admitted {
+        if task.owner != owner || task.admitted_parent()? != Some(parent) {
+            return Err("admission_authority_invalid".into());
+        }
+        let host = {
+            let st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let current = st.delegation_store.get(&task.task_id)?.ok_or("task_unavailable")?;
+            super::native_delegation::recheck_remote_dispatch(&st, &current, task)?;
+            if current.state != task.state || matches!(current.state.as_str(), "cancelled" | "failed")
+                || current.guard_released != task.guard_released {
+                return Err("remote_task_changed".into());
+            }
+            let host = &task.remote_placement.as_ref().ok_or("remote_placement_missing")?.origin_host;
+            if *host == st.host { return Ok(None); }
+            host.clone()
+        };
+        // L'hôte vient de la Task attestée. Aucune route de tour, ni credential,
+        // n'est nécessaire pour relire les mêmes fichiers sur cet hôte provisionné.
+        let response = exchange(state, &host, operation, Duration::from_secs(30))?;
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let current = st.delegation_store.get(&task.task_id)?.ok_or("task_unavailable")?;
+        super::native_delegation::recheck_remote_dispatch(&st, &current, task)?;
+        if current.state != task.state || current.guard_released != task.guard_released {
+            return Err("remote_task_changed".into());
+        }
+        if let OriginProofResult::Sources {permission_digest,..} = &response {
+            use sha2::Digest;
+            let expected=format!("{:x}",sha2::Sha256::digest(serde_json::to_vec(parent).map_err(|_|"origin_proof_unavailable")?));
+            if *permission_digest != expected { return Err("remote_parent_proof_changed".into()); }
+        }
+        Some(response)
+    } else {
+        parent_operation(state,owner,parent,operation,Duration::from_secs(30))?
+    };
+    match result {
         None=>Ok(None),Some(OriginProofResult::Sources {permission_digest,source_error})=>Ok(Some((permission_digest,source_error))),
         _=>Err("origin_proof_unavailable".into()),
     }

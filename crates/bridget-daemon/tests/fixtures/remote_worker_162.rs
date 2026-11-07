@@ -2489,7 +2489,7 @@ fn fixture168_routes(f: &RemoteFixture) -> (String, String) {
 }
 
 fn probe168(f: &RemoteFixture, epoch: &str, base: &str, head: &str) -> CandidateProbeV2 {
-    CandidateProbeV2 {
+    CandidateProbeV2 { requires_workspace_write:false, required_tools:Vec::new(),
         version: WORKER_CANDIDATE_PROBE_V2_VERSION,
         correlation_id: uuid::Uuid::new_v4().to_string(),
         connection_epoch: epoch.into(),

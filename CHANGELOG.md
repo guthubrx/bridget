@@ -6,6 +6,14 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.8 — 2026-11-07
+
+- Keep each newly admitted mission's authority after the originating turn ends. Continue to check its owner, native revocations, cancellation, source policy and frozen placement before launch.
+- Recover an early registration disconnect within the original deadline and move slow view cleanup outside ordinary replies. Preserve one request and one task after a lost response.
+- Reuse already authorized local folders, including non-Git sources, without a mirror or a second directory grant. Keep remote projection and control-store protections.
+- Remove the fixed 32 GiB view, 128 worktree and 64 project-mapping quotas. Check physical storage, checked counters and bounded metadata instead.
+- Qualify recognized command tools and the child profile before placement. Distinguish read commands from known build writes; do not add shell rights to read-only profiles.
+
 ## 0.8.7 — 2026-11-07
 
 - Keep the remote channel when a known initial preparation refusal arrives after its wait expires. Unknown tuples and stale epochs remain rejected; late refusals cannot create tasks.

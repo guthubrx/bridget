@@ -31,6 +31,8 @@ rusqlite = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 sha2 = { workspace = true }
+# Analyse lexicale seule ; version déjà verrouillée par cc, sans exécution shell.
+shlex = "=2.0.1"
 signal-hook = "0.3"
 libc.workspace = true
 # Le renderer doit compter les cellules du terminal (CJK/emoji), pas les scalaires Unicode.

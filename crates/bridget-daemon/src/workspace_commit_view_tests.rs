@@ -92,12 +92,7 @@ fn spec232_export_streams_more_than_512_mib_and_preserves_source() {
     let root=f.root.join("large-view");export(&f.repo,&manifest,&root).unwrap();audit(&manifest,&root).unwrap();
     assert_eq!(fs::metadata(root.join("large-79.rs")).unwrap().len(),bytes.len() as u64);
     assert_eq!(f.snapshot(),before);
-    let mut too_large=manifest.clone();
-    too_large.entries.iter_mut().find(|e|e.path=="large-00.rs").unwrap().bytes=MAX_BYTES+1;
-    let error=validate_manifest(&too_large).unwrap_err();
-    assert!(matches!(job::failure(&error),bridget_transport::protocol::CommitViewFailure::MeasuredLimit {
-        kind:bridget_transport::protocol::CommitViewLimitKind::SelectedBytes,observed,maximum
-    } if observed>MAX_BYTES && maximum==MAX_BYTES));
+
 }
 
 #[test]
@@ -255,7 +250,7 @@ fn spec221_c19_link_escape_cycles_names_and_budgets_refuse_before_export() {
         assert!(!f.root.join("invalid").exists());
     }
     let mut altered = manifest.clone();
-    altered.entries[0].bytes = MAX_BYTES + 1;
+    altered.entries[0].bytes = u64::MAX;
     altered.entries[0].selected = true;
     assert!(export(&f.repo, &altered, &f.root.join("invalid")).is_err());
     let mut links = BTreeMap::new();
@@ -326,10 +321,12 @@ fn spec221_c19_manifest_never_reads_an_unbounded_materialized_omission() {
     export(&f.repo, &manifest, &root).unwrap();
     let mut altered = manifest.clone();
     let entry = altered.entries.iter_mut().find(|e| !e.selected).unwrap();
-    entry.bytes = MAX_BYTES + 1;
+    entry.bytes = 33 * 1024 * 1024 * 1024;
     let file = fs::File::create(root.join(&entry.path)).unwrap();
     file.set_len(entry.bytes).unwrap();
+    let started=std::time::Instant::now();
     let error = audit(&altered, &root).unwrap_err();
+    assert!(started.elapsed()<std::time::Duration::from_secs(1));
     // La carte publique peut refuser d'abord ; aucun gros fichier n'est lu.
     assert!(error.contains("measured_limit") || error.contains("view_integrity_failed"));
 }
@@ -581,11 +578,8 @@ fn spec221_c19_implicit_directories_count_towards_entry_budget_before_writes() {
         })
         .collect();
     let root = f.root.join("view");
-    assert!(
-        export(&f.repo, &manifest, &root)
-            .unwrap_err()
-            .contains("entry_limit")
-    );
+    let error=export(&f.repo,&manifest,&root).unwrap_err();
+    assert!(error.contains("measured_limit") && error.contains("entries"),"{error}");
     assert!(!root.exists());
 }
 
@@ -1960,4 +1954,17 @@ fn spec234_large_notice_roundtrip_keeps_only_manifest_and_rejects_duplicate_bind
     let duplicate=format!("{{\"manifest\":{encoded},\"manifest\":{encoded}}}");
     assert!(notice_manifest(duplicate.as_bytes()).is_err());
     eprintln!("public notice roundtrip: {} bytes, {} entries",card.len(),restored.entries.len());
+}
+
+#[test]
+fn spec241_selected_volume_is_not_a_fixed_quota_but_overflow_still_refuses() {
+    let mut manifest=Manifest { version:1,base:"a".repeat(40),cwd:".".into(),entries:vec![
+        Entry {path:"source.rs".into(),mode:"100644".into(),oid:"b".repeat(40),
+            bytes:33*1024*1024*1024,selected:true}
+    ]};
+    validate_manifest(&manifest).expect("le disque et le flux bornent les données, pas un quota de 32 Gio");
+    manifest.entries[0].bytes=u64::MAX;
+    manifest.entries.push(Entry {path:"second.rs".into(),mode:"100644".into(),oid:"c".repeat(40),bytes:1,selected:true});
+    let overflow=validate_manifest(&manifest).unwrap_err();
+    assert_eq!(job::failure(&overflow),ExportFailure::ByteLimit,"le compteur reste fermé et sa cause reste classée");
 }

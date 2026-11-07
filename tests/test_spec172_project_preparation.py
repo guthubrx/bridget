@@ -36,6 +36,47 @@ class PreparationTests(unittest.TestCase):
         self.bundle = self.base / "source.bundle"
         prep.export_bundle(self.source, self.sha, self.bundle)
 
+    def test_spec241_local_non_git_directory_is_used_without_mirror_or_ssh(self):
+        source = self.base / "local-review"
+        source.mkdir(mode=0o700)
+        (source / "review.txt").write_text("conservé")
+        request = dict(self.request, registry=str(self.registry), origin_host="test",
+                       source_root=str(source), cwd=str(source), commit=None)
+        with patch.object(prep, "remote_registry", return_value=self.registry), \
+             patch.object(prep, "installed_links", side_effect=AssertionError("pas de SSH local")):
+            result = prep.prepare(request)
+            saved = self.registry.read_bytes()
+            self.assertEqual(prep.prepare(request), result)
+            self.assertEqual(self.registry.read_bytes(), saved)
+        self.assertEqual(result["mapping"]["remote_root"], str(source))
+        self.assertFalse(result["needs_bundle"])
+        self.assertFalse((source / ".git").exists())
+        self.assertEqual((source / "review.txt").read_text(), "conservé")
+
+    def test_spec241_local_alias_uses_physical_root_without_creating_git(self):
+        source = self.base / "local-physical"
+        source.mkdir(mode=0o700)
+        alias = self.base / "local-alias"
+        alias.symlink_to(source, target_is_directory=True)
+        request = dict(self.request, registry=str(self.registry), origin_host="test",
+                       source_root=str(alias), cwd=str(alias), commit=None)
+        with patch.object(prep, "remote_registry", return_value=self.registry):
+            result = prep.prepare(request)
+        self.assertEqual(result["mapping"]["remote_root"], str(source))
+        self.assertEqual(result["mapping"]["source_root"], str(alias))
+        self.assertFalse((source / ".git").exists())
+
+    def test_spec241_local_mapping_does_not_publish_control_root_or_home(self):
+        original = self.registry.read_bytes()
+        for source in [Path("/"), self.home, self.registry.parent]:
+            request = dict(self.request, registry=str(self.registry), origin_host="test",
+                           source_root=str(source), cwd=str(source), commit=None)
+            with patch.object(prep, "remote_registry", return_value=self.registry), \
+                 patch.object(Path, "home", return_value=self.home):
+                with self.assertRaisesRegex(prep.Refused, "project_preparation_path_protected"):
+                    prep.prepare(request)
+            self.assertEqual(self.registry.read_bytes(), original)
+
     def tearDown(self):
         self.tmp.cleanup()
 

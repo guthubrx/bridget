@@ -8,6 +8,14 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.8 — 2026-11-07
+
+- Conserver l’autorité d’une nouvelle mission admise après la fin du tour qui l’a créée. Vérifier encore propriétaire, révocations natives, annulation, sources de droits et placement avant lancement.
+- Reprendre une coupure précoce d’inscription dans le délai initial. Sortir la fermeture des vues lentes du chemin des réponses. Conserver une seule demande et une seule tâche après perte de réponse.
+- Réutiliser les dossiers locaux déjà autorisés, y compris hors Git, sans miroir ni seconde autorisation de dossier. Garder les contrôles distants et les protections des magasins de contrôle.
+- Retirer les quotas fixes de 32 Gio par vue, 128 worktrees et 64 correspondances de projets. Contrôler l’espace physique, les compteurs et les métadonnées bornées.
+- Qualifier les outils reconnus et le profil enfant avant placement. Distinguer commandes de lecture et compilation écrivaine ; ne pas ajouter de terminal aux profils qui l’excluent.
+
 ## 0.8.7 — 2026-11-07
 
 - Préserver le canal distant lorsqu'un refus de préparation initiale connue arrive après l'expiration de son attente. Les tuples inconnus et les époques périmées restent refusés ; aucune tâche n'est créée par ce refus tardif.

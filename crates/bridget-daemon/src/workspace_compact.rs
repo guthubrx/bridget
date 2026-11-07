@@ -15,7 +15,7 @@ pub(super) struct Plan {
     base: String,
     selected: Vec<String>,
     patterns_sha256: String,
-    selected_bytes: u64,
+    pub(super) selected_bytes: u64,
     total_bytes: u64,
 }
 fn hash(bytes: &[u8]) -> String {

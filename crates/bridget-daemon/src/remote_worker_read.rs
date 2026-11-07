@@ -2,6 +2,51 @@
 use super::*;
 use std::cell::{Cell, RefCell};
 
+/// Un relevé par lot, commandes fermées hors du dépôt. Aucun stdout/stderr
+/// retenu ; le résultat ne contient que l'outil et son état constaté.
+pub(crate) fn qualify_workload_tools(source:&crate::lifecycle::SourceEnvironment,
+    tools:&[bridget_transport::protocol::WorkloadTool],forbidden_roots:&[PathBuf],deadline:Instant)
+    ->Vec<bridget_transport::protocol::WorkloadToolObservation> {
+    use bridget_transport::protocol::{WorkloadTool as T,WorkloadToolState as S,WorkloadToolObservation};
+    tools.iter().map(|tool| {
+        let (name,args):(&str,&[&str])=match tool {
+            T::Git=>("git",&["--version"]),T::Cargo=>("cargo",&["--version"]),
+            T::Node=>("node",&["--version"]),T::Python=>("python3",&["--version"]),
+            T::Npm=>("npm",&["--version"]),T::Pnpm=>("pnpm",&["--version"]),
+            T::Make=>("make",&["--version"]),
+            T::Docker=>("docker",&["version","--format","{{.Server.Version}}"]),
+            T::DockerCompose=>("docker",&["compose","version"]),
+        };
+        let state=(|| {
+            if Instant::now()>=deadline {return S::Unknown;}
+            let Some(path)=source.get("PATH").and_then(|p|p.to_str()).into_iter()
+                .flat_map(|p|p.split(':')).map(Path::new).filter(|p|p.is_absolute())
+                .map(|p|p.join(name)).filter_map(|p|p.canonicalize().ok())
+                .filter(|p|!forbidden_roots.iter().any(|root|p.starts_with(root)))
+                .find(|p|p.metadata().is_ok_and(|m|m.is_file()&&m.mode()&0o111!=0))
+                else {return S::Absent;};
+            let mut child=match std::process::Command::new(path).args(args).current_dir("/")
+                .env_clear().envs(source)
+                // Les shims peuvent installer une version sur un simple --version.
+                // La qualification observe l'installation existante seulement.
+                .env("RUSTUP_AUTO_INSTALL","0").env("COREPACK_ENABLE_NETWORK","0")
+                .env("COREPACK_DEFAULT_TO_LATEST","0").env("COREPACK_ENV_FILE","0")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
+                Ok(child)=>child,Err(_)=>return S::Unusable,
+            };
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status))=>return if status.success(){S::Available}else{S::Unusable},
+                    Ok(None) if Instant::now()<deadline=>std::thread::sleep(Duration::from_millis(5)),
+                    _=>{let _=crate::workspace_git::stop_git(&mut child);return S::Unknown;}
+                }
+            }
+        })();
+        WorkloadToolObservation {tool:*tool,state}
+    }).collect()
+}
+
 pub(super) struct WorkerReadView<'a> {
     pub(super) config: &'a WorkerRuntimeConfig,
     pub(super) identity: &'a WorkerIdentity,
@@ -1194,6 +1239,7 @@ impl WorkerReadView<'_> {
                 request.posture,
                 &self.protected(), operation,
                 matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})),
+                request.origin_host == self.identity.machine_id,
             ));
         let (mut policy, effective_posture) = projection.map_err(|code|
             map_probe_projection_failure171(&code, diagnostics, projection_guard, &request.parent.provider_policy,
@@ -1375,6 +1421,7 @@ impl ProbeReadContext {
         candidate: &CandidateProbeCandidate,
         registry: &AgentRegistry,
         workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
+        command_write: Option<bool>,
         service_tier: Option<&str>,
         git_facts: Option<&mut ProbeGitFacts>,
         operation: &mut crate::native_permissions::PermissionReadOperation,
@@ -1482,6 +1529,12 @@ impl ProbeReadContext {
                 };
             }
         };
+        if command_write.is_some_and(|writes| !crate::native_permissions::permits_command_execution(&readiness.child_policy,writes)) {
+            return CandidateProbeVerdict::Ineligible {
+                candidate_id: candidate.candidate_id.clone(),
+                reason: CandidateProbeRefusal::CommandExecutionUnavailable,
+            };
+        }
         let permission_digest = match json_digest(&readiness.child_policy) {
             Ok(digest) => digest,
             Err(_) => {
@@ -1518,7 +1571,7 @@ impl ProbeReadContext {
             .map(|candidate| if (disconnected.load(Ordering::Acquire)||Instant::now()>=deadline) {
                 CandidateProbeVerdict::Ineligible{candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit}
             } else {match &registry {
-                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, None, &mut operation, None),
+                Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, None, None, &mut operation, None),
                 Err(_) => CandidateProbeVerdict::Ineligible {
                     candidate_id: candidate.candidate_id.clone(),
                     reason: CandidateProbeRefusal::CapabilityUnavailable,
@@ -1587,6 +1640,12 @@ impl ProbeReadContext {
                 )
             })
             .collect::<std::collections::HashMap<_, _>>();
+        let forbidden_roots=registry.machines().get(&self.identity.machine_id).into_iter()
+            .flat_map(|machine|machine.mappings.values()).map(|mapping|mapping.remote_root.clone()).collect::<Vec<_>>();
+        let tool_observations=qualify_workload_tools(&self.source,&probe.required_tools,&forbidden_roots,
+            deadline.min(Instant::now()+Duration::from_secs(3)));
+        let tools_available=tool_observations.iter().all(|fact|
+            fact.state==bridget_transport::protocol::WorkloadToolState::Available);
         let mut git_facts = ProbeGitFacts::new();
         let mut operation = crate::native_permissions::PermissionReadOperation::default();
         let diagnostics = ProbePermissionDiagnostics::new(&probe.correlation_id, &probe.admission_id);
@@ -1598,6 +1657,8 @@ impl ProbeReadContext {
                 if (disconnected.load(Ordering::Acquire)||Instant::now()>=deadline) {
                     return CandidateProbeV2Verdict::Ineligible {candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
                 }
+                if !tools_available {return CandidateProbeV2Verdict::Ineligible {
+                    candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::WorkloadToolUnavailable};}
                 let candidate_started=Instant::now();
                 let registered = enabled
                     && index
@@ -1655,6 +1716,7 @@ impl ProbeReadContext {
                     &legacy_probe.candidates[0],
                     &registry,
                     Some(candidate.workload),
+                    (!probe.required_tools.is_empty()).then_some(probe.requires_workspace_write),
                     candidate.service_tier.as_deref(),
                     Some(&mut git_facts), &mut operation,
                     Some((&diagnostics, candidate.candidate_id.as_str())),
@@ -1703,7 +1765,7 @@ impl ProbeReadContext {
                 *verdict=CandidateProbeV2Verdict::Ineligible{candidate_id:candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
             }}
         }
-        Ok(CandidateProbeV2Result {
+        Ok(CandidateProbeV2Result { tool_observations,
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: probe.correlation_id.clone(),
             connection_epoch: probe.connection_epoch.clone(),

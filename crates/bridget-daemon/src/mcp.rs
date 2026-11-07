@@ -4433,6 +4433,30 @@ mod tests {
     }
 
     #[test]
+    fn spec241_cancelled_registration_never_opens_a_recovery_connection() {
+        let socket=test_socket("241-cancel");let listener=UnixListener::bind(&socket).unwrap();
+        let owner="24100000-0000-4000-8000-000000000241";
+        crate::mcp_identity::mock_private_identity(&socket,owner,"i241");
+        let registry=Arc::new(Mutex::new(ToolCallRegistry::default()));
+        registry.lock().unwrap().reserve("c241".into(),true).unwrap();
+        let mut call=ToolCallGuard::new("c241".into(),registry.clone());
+        let remote=registry.clone();let (done_tx,done_rx)=mpsc::channel();
+        let server=thread::spawn(move || {
+            let (stream,_)=listener.accept().unwrap();let mut reader=BufReader::new(stream);
+            let mut line=String::new();reader.read_line(&mut line).unwrap();
+            remote.lock().unwrap().cancel("c241"); drop(reader);
+            done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+        });
+        let result=crate::communication::client::registered_connection_until(owner,"i241",&socket,
+            std::time::Instant::now()+Duration::from_secs(1));
+        assert!(matches!(result,Err(crate::communication::client::ClientError::Technical{code:"wait_cancelled",..})));
+        done_tx.send(()).unwrap();server.join().unwrap();call.finish();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[test]
     fn native151_facade_enregistrement_apres_eof_refuse() {
         use std::io::Read;
         for waiting in [true, false] {

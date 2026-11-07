@@ -2,6 +2,35 @@
 
 [English](delegation-native.md) · [Français](delegation-native.fr.md)
 
+## Continuer le travail confié — version 0.8.8
+
+Une nouvelle mission admise conserve son autorité après la fin du tour de
+conversation. Sa reprise utilise la même tâche. Une annulation ou une révocation
+native continue de s’appliquer. Une nouvelle mission et une nouvelle ronde
+exigent les droits courants ; une ancienne tâche n’obtient pas ce contrat par
+simple relecture.
+
+Après une coupure, garder la clé et les arguments exacts. Une inscription
+interrompue tôt peut être reprise dans le même délai. Après enregistrement,
+consulter le reçu de la même demande. Une nouvelle clé peut dupliquer le travail.
+L’état et l’annulation d’une tâche restent accessibles par sa clé, même avec un
+historique volumineux.
+
+Le placement vérifie les outils des commandes reconnues et le profil enfant.
+Un terminal absent du profil n’est pas une panne du modèle. Une commande de
+lecture peut fonctionner en lecture seule ; une compilation identifiée comme
+écrivaine exige un profil qui permet cette écriture. Une contrainte humaine
+reste appliquée. Bridget n’installe aucun outil pour la satisfaire.
+
+Les dossiers locaux déjà autorisés ne demandent pas un second miroir. Un dossier
+hors Git peut servir à une mission general/shared si l’autorité native couvre
+ce chemin. À distance, une correspondance vérifiable reste nécessaire.
+
+Les vues et worktrees ne sont plus refusés à cause des seuls seuils de 32 Gio ou
+128 dossiers. L’espace disque et les limites de métadonnées restent réels. Un
+contrôle d’espace ne réserve pas le disque contre les écritures concurrentes.
+
+
 
 Dans bridget_capabilities, providers et leurs verdicts can_run décrivent seulement la machine d’origine nommée dans providers_scope. Un refus local ne prouve pas qu’un serveur manque du programme. Pour une auto-délégation distante, consulter fleet.options et reprendre exactement machine_id, engine et model. Ces options sont déclarées et activées ; eligibility=not_checked signifie que les droits, la préparation et l’accès restent à vérifier par l’admission. Une option absente ne peut pas être créée en inventant un alias de machine. Ne pas relancer une mission d’issue inconnue pour rafraîchir ce catalogue.
 

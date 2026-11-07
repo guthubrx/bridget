@@ -39,7 +39,7 @@ pub(crate) fn failure(error: &str) -> ExportFailure {
         Some("view_integrity_failed" | "view_identity_changed" | "git_object_integrity_failed") => {
             ExportFailure::IntegrityFailed
         }
-        Some("byte_limit" | "view_entry_limit" | "link_metadata_limit" | "proof_byte_limit" | "tree_limit" | "entry_limit") => {
+        Some("byte_count_overflow" | "byte_limit" | "view_entry_limit" | "link_metadata_limit" | "proof_byte_limit" | "tree_limit" | "entry_limit") => {
             ExportFailure::ByteLimit
         }
         Some("export_busy") => ExportFailure::OperationCapacity,

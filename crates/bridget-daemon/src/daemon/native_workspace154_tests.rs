@@ -444,6 +444,13 @@ fn native154_creation_refus_avant_ecriture_par_cas() {
                 symlink(fixture.root.join("sub"), fixture.root.join(".worktrees")).unwrap();
             }
             "outside" => {
+                // Le parent complet autorise désormais réellement les autres
+                // dossiers. Ce témoin négatif doit porter une restriction réelle.
+                let mut st=fixture.state.lock().unwrap();
+                insert_fact(&mut st,codex_fact(fixture.root.to_str().unwrap(),
+                    json!({"type":"workspaceWrite","networkAccess":false,
+                        "writableRoots":[fixture.root],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true}),"never"),None);
+                drop(st);
                 if let NativeDelegationRequest::Delegate { cwd, .. } = &mut request {
                     *cwd = fixture
                         .root
@@ -880,7 +887,7 @@ fn native154_partage_discovery_termine_et_statut_compatibles150() {
     // une différence. FR019 : quota_wait est additif et vaut null sans attente quota.
     let expected = json!({"version":1,"task_id":task.task_id,"status":"queued", "child_agent_id":task.child,
         "message_id":task.mission,"agent_type":"native-test","model":"custom/model","effort":"high", "cwd":task.cwd,
-        "posture":"development","mission_deadline_at":null,"round":1,"idle_deadline_at":null,"continuable":false,
+        "posture":"development","mission_deadline_at":null,"mission_reply_timeout_secs":3600,"round":1,"idle_deadline_at":null,"continuable":false,
         "result":null,"error":null,"work_state":"working","summary":null,"summary_truncated":false,"result_bytes":null,
         "detail":null,"mailbox":null,"suspended":false,"resume_attempts":0,"pending_requests":[],"recent_requests":[],"substitution":null,"quota_wait":null});
     assert_eq!(
@@ -973,7 +980,7 @@ fn register_parent154(
 }
 
 #[test]
-fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
+fn spec241_retained_worktrees_do_not_replace_unique_admission_claims() {
     let fixture = fixture154("union128");
     let seed = seed_workspace154(&fixture); // Une même place dans Git et dans le store.
     for index in 0..126 {
@@ -1045,19 +1052,8 @@ fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
         call154(&fixture, request.clone())["code"],
         "workspace_creation_in_progress"
     );
-    let before = footprint154(&fixture);
-    assert_eq!(
-        call154(
-            &fixture,
-            request154(
-                &fixture.root,
-                "over128",
-                Some(json!({"strategy":"worktree"}))
-            )
-        )["code"],
-        "workspace_limit"
-    );
-    assert_eq!(footprint154(&fixture), before);
+    let extra=call154(&fixture,request154(&fixture.root,"over128",Some(json!({"strategy":"worktree"}))));
+    assert!(extra.get("task_id").is_some(),"une autre clé reste admissible : {extra}");
     let record = crate::workspace_git::create(&plan, &reserved.task_id).unwrap();
     let view = {
         let mut st = fixture.state.lock().unwrap();
@@ -1102,7 +1098,7 @@ fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
         git154(&fixture.root, &["worktree", "list", "--porcelain"])
             .matches("worktree ")
             .count(),
-        129
+        130
     );
     assert!(Path::new(&seed.cwd).is_dir());
     // Nettoyage humain de deux worktrees : les tâches restent retenues en base.
@@ -1110,7 +1106,7 @@ fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
     git154(&fixture.root, &["worktree", "remove", &record.path]);
     {
         let st = fixture.state.lock().unwrap();
-        assert_eq!(st.delegation_store.tasks().unwrap().len(), 2);
+        assert_eq!(st.delegation_store.tasks().unwrap().len(), 3);
         for task_id in [&seed.task_id, &id] {
             let retained = st.delegation_store.get(task_id).unwrap().unwrap();
             assert!(
@@ -1122,8 +1118,8 @@ fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
     let refreshed = crate::workspace_git::preflight(&fixture.root, None, None).unwrap();
     assert_eq!(
         refreshed.listed_paths.len(),
-        126,
-        "les 126 fixtures Git restent enregistrées"
+        127,
+        "les 126 fixtures et la mission supplémentaire restent enregistrées"
     );
     let next = call154(
         &fixture,
@@ -1157,7 +1153,7 @@ fn native174_creation_limite_union_et_propre_cent_vingt_huitieme_place() {
         git154(&fixture.root, &["worktree", "list", "--porcelain"])
             .matches("worktree ")
             .count(),
-        2
+        3
     );
     assert!(next_path.is_dir());
 }
@@ -1253,7 +1249,7 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
             ));
         }
     }
-    let prefilled = crate::workspace_git::MAX_WORKTREES - 8;
+    let prefilled = 120; // Plus de 128 checkouts après admissions : aucun quota de rétention.
     for index in 0..prefilled {
         let path = fixture.root.join(".worktrees").join(format!("prefilled-{index}"));
         git154(&fixture.root, &["worktree", "add", "--detach", path.to_str().unwrap(), "HEAD"]);
@@ -1291,7 +1287,7 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
             paths.insert(claim.path.to_string_lossy().into_owned());
         }
         assert!(
-            prefilled + paths.len() <= crate::workspace_git::MAX_WORKTREES,
+            paths.len() <= 40,
             "union durable et réservée observée en vol : {}",
             paths.len()
         );
@@ -1307,7 +1303,7 @@ fn native154_creation_quarante_appels_trois_proprietaires() {
         .filter(|value| value.get("task_id").is_some())
         .count();
     assert!(
-        (1..=8).contains(&accepted),
+        (1..=40).contains(&accepted),
         "admissions non vides et bornées : {results:?}"
     );
     for refused in results
@@ -2439,7 +2435,8 @@ fn native154_conservation_trace_git_sans_suppression() {
                         "config",
                         "rev-list",
                         "log",
-                        "status"
+                        "status",
+                        "ls-files"
                     ]
                     .contains(&arg.as_str())),
                     "liste blanche de rapport : {args:?}"

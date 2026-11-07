@@ -882,7 +882,7 @@ fn worktree172_stdout_flood_does_not_hide_stderr_reason() {
 }
 
 #[test]
-fn spec174_workspace_limit_128_counts_retained_and_nested_checkouts() {
+fn spec241_more_than_128_retained_and_nested_worktrees_do_not_block_preflight() {
     with_repo(|repo| {
         for n in 0..127 {
             let path = repo.join(format!(".worktrees/{n}"));
@@ -891,8 +891,7 @@ fn spec174_workspace_limit_128_counts_retained_and_nested_checkouts() {
         assert_eq!(preflight_remote(repo, None, None).unwrap().listed_paths.len(), 127);
         let nested = repo.join(".worktrees/0/.worktrees/nested");
         fixture_git(repo, &["worktree", "add", "--detach", nested.to_str().unwrap(), "HEAD"]);
-        let error = preflight_remote(repo, None, Some("new-mission")).unwrap_err();
-        assert!(error.starts_with("workspace_limit:"), "{error}");
+        assert_eq!(preflight_remote(repo, None, Some("new-mission")).unwrap().listed_paths.len(),128);
         assert!(!repo.join(".git/refs/heads/new-mission").exists());
     });
 }

@@ -15,6 +15,84 @@ mod native_permissions155_tests;
 
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+#[test]
+fn spec241_same_host_preserves_attested_extra_directory_without_remote_mapping() {
+    let (root,env,mut mapping,protected)=remote162_fixture("241-local-directory");
+    mapping.source_root=mapping.remote_root.clone();
+    let extra=root.join("attachments");fs::create_dir(&extra).unwrap();
+    let parent=codex_fact(mapping.source_root.to_str().unwrap(),json!({
+        "type":"workspaceWrite","networkAccess":false,
+        "writableRoots":[mapping.source_root,extra],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true
+    }),"never");
+    let before=serde_json::to_vec(&parent).unwrap();
+    let project=|fact:&ProviderPermissions,local| {
+        let mut operation=PermissionReadOperation::default();
+        project_remote_permissions_in_operation(fact,&codex_definition(),&mapping,
+            &mapping.remote_root,&env,Some(SpawnPosture::Development),&protected,&mut operation,false,local)
+    };
+    assert!(project(&parent,false).is_err(),"une autre machine exige sa correspondance explicite");
+    let (policy,posture)=project(&parent,true).expect("le dossier est déjà autorisé et local");
+    assert_eq!(posture,SpawnPosture::Development);
+    assert_eq!(policy["sandbox_policy"]["writableRoots"],parent.provider_policy["sandbox_policy"]["writableRoots"]);
+    assert_eq!(serde_json::to_vec(&parent).unwrap(),before);
+    assert!(mapping.additional_root.is_none(),"pas de mutation du registre");
+    // Même forme que le parent natif signalé : Claude, périmètre complet,
+    // pièces jointes autorisées, puis enfant Codex sur la même machine.
+    let mut native=parent.clone();native.driver="claude_stream_json".into();
+    native.source="provider_turn".into();
+    native.runtime_mode="full-access".into();
+    native.provider_policy=json!({"kind":"claude","permission_mode":"bypassPermissions",
+        "allow_dangerously_skip_permissions":true,"tools":{"type":"preset","preset":"claude_code"},
+        "allowed_tools":["mcp__t3-code__*"],"settings_sources":"provider_default",
+        "additional_directories":[mapping.source_root,extra],
+        "permission_callback":{"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"}});
+    let mut target=codex_definition();target.mcp.interactive="codex".into();
+    let mut operation=PermissionReadOperation::default();
+    let (native_policy,_)=project_remote_permissions_in_operation(&native,&target,&mapping,
+        &mapping.remote_root,&env,Some(SpawnPosture::Development),&protected,&mut operation,false,true)
+        .expect("les pièces jointes autorisées ne bloquent pas le parent natif");
+    assert_eq!(native_policy["sandbox_policy"]["type"],"dangerFullAccess");
+    let mut invalid=parent.clone();
+    invalid.provider_policy["sandbox_policy"]["writableRoots"]=json!([protected[0]]);
+    assert!(project(&invalid,true).is_err());
+    invalid.provider_policy["sandbox_policy"]["writableRoots"]=json!([root.join("missing")]);
+    assert!(project(&invalid,true).is_err());
+    let link=root.join("alias");std::os::unix::fs::symlink(&extra,&link).unwrap();
+    invalid.provider_policy["sandbox_policy"]["writableRoots"]=json!([link]);
+    assert!(project(&invalid,true).is_err(),"pas de nouvelle autorité via un alias");
+}
+
+#[test]
+fn spec241_non_git_source_uses_existing_file_authority_without_new_permissions() {
+    let (root,env,mut mapping,protected)=remote162_fixture("241-source");
+    let project=mapping.remote_root.clone();
+    // La fixture de permissions possède un .git sentinelle. La source hors Git
+    // est un dossier frère ; sa véritable absence de dépôt doit être vérifiée.
+    let external=root.parent().unwrap().join(format!("b241-review-{}",uuid::Uuid::new_v4()));
+    fs::create_dir(&external).unwrap();
+    let mut parent=codex_fact(project.to_str().unwrap(),json!({"type":"readOnly","networkAccess":false}),"never");
+    assert!(crate::lifecycle::source_root(&parent,&external).is_err(),"le libellé full-access ne suffit pas");
+    parent.provider_policy["sandbox_policy"]=json!({"type":"workspaceWrite","networkAccess":false,
+        "writableRoots":[project,external],"excludeSlashTmp":true,"excludeTmpdirEnvVar":true});
+    assert_eq!(crate::lifecycle::source_root(&parent,&external).unwrap(),external);
+    let source=bridget_transport::protocol::WorkerSourceBase {cwd:external.to_string_lossy().into_owned(),
+        expected_base_commit:None,workspace:Some(bridget_transport::protocol::WorkspaceRequest::Shared{}),
+        workload:bridget_transport::protocol::AutoDelegateWorkload::General};
+    crate::lifecycle::validate_parent_source_base(&parent,&source).unwrap();
+    mapping.source_root=external.clone();mapping.remote_root=external.clone();
+    let frozen=serde_json::to_vec(&parent).unwrap();
+    let mut operation=PermissionReadOperation::default();
+    let (_,posture)=project_remote_permissions_in_operation(&parent,&codex_definition(),&mapping,
+        &external,&env,Some(SpawnPosture::Discovery),&protected,&mut operation,false,true).unwrap();
+    assert_eq!(posture,SpawnPosture::Discovery);assert_eq!(serde_json::to_vec(&parent).unwrap(),frozen);
+    assert!(!external.join(".git").exists());
+    parent.provider_policy["sandbox_policy"]=json!({"type":"dangerFullAccess"});
+    assert_eq!(crate::lifecycle::source_root(&parent,&external).unwrap(),external,
+        "une permission explicite sur tout le système de fichiers couvre ce dossier");
+    assert!(crate::lifecycle::source_root(&parent,&external.join("../unrelated")).is_err());
+    fs::remove_dir_all(external).unwrap();
+}
+
 // 162 : ces fixtures précèdent l'implémentation ; aucune exécution fournisseur.
 fn remote162_fixture(
     label: &str,
@@ -52,7 +130,7 @@ fn spec221_c19_view_projects_linked_parent_without_creating_its_checkout_or_gain
     let project=|parent:&ProviderPermissions,view:bool,posture:SpawnPosture| {
         let mut operation=PermissionReadOperation::default();
         project_remote_permissions_in_operation(parent,&codex_definition(),&mapping,
-            &mapping.remote_root,&env,Some(posture),&protected,&mut operation,view)
+            &mapping.remote_root,&env,Some(posture),&protected,&mut operation,view,false)
     };
     assert!(project(&parent,false,SpawnPosture::Discovery).is_err(),
         "le mapping historique exige le dossier lié absent");
@@ -1946,7 +2024,7 @@ fn native171_real_captured_profile_closed_origin_target() {
     let nominal_started = std::time::Instant::now();
     let mut operation = PermissionReadOperation::default();
     let (mut policy, posture) = project_remote_permissions_in_operation(&parent, &definition, &mapping, &cwd, &source,
-        Some(SpawnPosture::Development), &protected, &mut operation, false).expect("complete real profile projection");
+        Some(SpawnPosture::Development), &protected, &mut operation, false,false).expect("complete real profile projection");
     assert_eq!(posture, SpawnPosture::Development);
     assert_eq!(policy["launch_context"]["hook_execution"], "native_remote_guarded");
     assert_eq!(policy["launch_context"]["source_equivalence"]["profile"], descriptor);
@@ -2203,7 +2281,7 @@ fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() 
     ]);
     let mut operation = PermissionReadOperation::default();
     let (actual_policy, actual_posture) = project_remote_permissions_in_operation(&parent,&definition,&mapping,
-        &mapping.remote_root,&source,Some(SpawnPosture::Development),&protected,&mut operation,false).unwrap();
+        &mapping.remote_root,&source,Some(SpawnPosture::Development),&protected,&mut operation,false,false).unwrap();
     assert_eq!(actual_posture,SpawnPosture::Development);
     assert_eq!(actual_policy["additional_directories"],json!([
         "/home/moi/10.Scripts/69.opus2D","/home/moi/.local/share/bridget-attachments/opus2d"]));
@@ -2217,7 +2295,7 @@ fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() 
         Some(&mapping),Some(&parent),&mut operation).unwrap();
     operation.finish().unwrap();
     let mut projected = parent.provider_policy.clone();
-    project_policy_directories171(&mut projected,&mapping,&protected,None).unwrap();
+    project_policy_directories171(&mut projected,&mapping,&protected,None,false).unwrap();
     assert_eq!(projected["additional_directories"],json!([
         "/home/moi/10.Scripts/69.opus2D","/home/moi/.local/share/bridget-attachments/opus2d"]));
     let mut expected = parent.provider_policy.clone();
@@ -2229,7 +2307,7 @@ fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() 
     }
     let mut absent = mapping.clone(); absent.additional_root=None;
     let mut refused=parent.provider_policy.clone();
-    assert_eq!(project_policy_directories171(&mut refused,&absent,&protected,None),Err("permission_mapping_unavailable".into()));
+    assert_eq!(project_policy_directories171(&mut refused,&absent,&protected,None,false),Err("permission_mapping_unavailable".into()));
     assert_eq!(refused,parent.provider_policy); // No partially translated parent on error.
     let mut overlapping=mapping.clone();overlapping.additional_root.as_mut().unwrap().source_root=mapping.source_root.join("sub");
     assert!(crate::registry::validate_additional_mapping171(&overlapping).is_err());
@@ -2528,4 +2606,23 @@ fn spec214_native_t3_codex_projection_preserves_ceiling_and_refuses_other_rules(
     // Sans origine attestée, l’exception ne s’applique jamais.
     assert_eq!(child_policy(&parent,&definition,&cwd,&env,Some(SpawnPosture::Development)).unwrap_err(),"permission_attestation_unavailable");
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn spec241_command_execution_follows_effective_profile_without_widening_rights() {
+    let read = json!({"kind":"claude","permission_mode":"plan",
+        "tools":["Read","Glob","Grep"],"disallowed_tools":["Bash","Edit","Write"]});
+    let before=read.clone();
+    assert!(!permits_command_execution(&read,false));
+    assert_eq!(read,before);
+    let mut shell = read.clone();
+    shell["tools"]=json!({"type":"preset","preset":"claude_code"});
+    assert!(!permits_command_execution(&shell,false));
+    shell["disallowed_tools"]=json!([]);
+    assert!(permits_command_execution(&shell,false));
+    shell["disallowed_tools"]=json!(["Bash(*)"]);
+    assert!(!permits_command_execution(&shell,false));
+    assert!(permits_command_execution(&json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),false));
+    assert!(!permits_command_execution(&json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}}),true));
+    assert!(!permits_command_execution(&json!({"kind":"unknown"}),false));
 }

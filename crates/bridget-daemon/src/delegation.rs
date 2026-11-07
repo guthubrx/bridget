@@ -1066,6 +1066,10 @@ pub(crate) struct Task {
     pub child_requests: Option<String>,
     #[serde(default)]
     pub permission_snapshot: Option<bridget_transport::protocol::NativePermissionSnapshot>,
+    /// Autorité d'une mission admise ; aucun effet sur une nouvelle demande.
+    /// Absence : contrat historique. Version inconnue : aucune remise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission_authority_version: Option<u16>,
     #[serde(default)]
     pub effective_posture: Option<SpawnPosture>,
     pub definition: ResolvedAgentDefinition,
@@ -1153,6 +1157,24 @@ pub(crate) struct Task {
 }
 
 impl Task {
+    pub(crate) fn admitted_parent(&self) -> Result<Option<&bridget_transport::protocol::ProviderPermissions>, String> {
+        match self.admission_authority_version {
+            None => Ok(None),
+            Some(1) => {
+                let snapshot = self.permission_snapshot.as_ref().ok_or("admission_authority_invalid")?;
+                if snapshot.version != 1 || snapshot.source != "provider_turn"
+                    || snapshot.owner_agent_id != self.owner
+                    || (snapshot.owner_instance_id != self.owner_instance
+                        && snapshot.owner_instance_id != self.origin_owner_instance)
+                    || snapshot.project_cwd != self.cwd
+                { return Err("admission_authority_invalid".into()); }
+                bridget_transport::protocol::validate_permissions(&snapshot.parent, true)?;
+                Ok(Some(&snapshot.parent))
+            }
+            Some(_) => Err("admission_authority_unsupported".into()),
+        }
+    }
+
     pub(crate) fn commit_view_binding(&self)->Option<&ViewBinding> {
         match self.workspace.as_ref() {
             Some(record) if matches!(record.strategy,WorkspaceStrategy::CommitView)=>{
@@ -2805,6 +2827,38 @@ mod tests {
     use super::*;
 
 
+
+    #[test]
+    fn spec241_task_authority_reopens_without_promoting_historical_records() {
+        let root=std::env::temp_dir().join(format!("b241-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap(); let path=root.join("s.db");
+        let store=DelegationStore::open(&path).unwrap();
+        let mut task=legacy_task151();
+        assert!(task.admitted_parent().unwrap().is_none());
+        assert!(serde_json::to_value(&task).unwrap().get("admission_authority_version").is_none());
+        let parent=serde_json::from_value(serde_json::json!({
+            "version":1,"source":"provider_turn","run_id":"r241","provider_session_id":"s241",
+            "provider_instance_id":"i241","revision":1,"driver":"codex_app_server",
+            "cwd":task.cwd,"runtime_mode":"full-access","interaction_mode":"default",
+            "provider_policy":{"kind":"codex","approval_policy":"never","approvals_reviewer":"user",
+                "sandbox_policy":{"type":"dangerFullAccess"}}
+        })).unwrap();
+        task.permission_snapshot=Some(crate::native_permissions::snapshot(&task.owner,
+            &task.owner_instance,parent,serde_json::json!({}),Path::new(&task.cwd)));
+        task.admission_authority_version=Some(1);
+        let canonical=serde_json::to_vec(&task.request).unwrap();
+        store.insert(&task,"authority241",&canonical).unwrap(); drop(store);
+        let store=DelegationStore::open(&path).unwrap();
+        let read=store.get(&task.task_id).unwrap().unwrap();
+        assert_eq!(read.admitted_parent().unwrap(),task.admitted_parent().unwrap());
+        let mut invalid=read.clone(); invalid.owner="foreign241".into();
+        assert!(invalid.admitted_parent().is_err());
+        invalid=read.clone();invalid.admission_authority_version=Some(99);
+        assert_eq!(invalid.admitted_parent().unwrap_err(),"admission_authority_unsupported");
+        invalid=read.clone();invalid.admission_authority_version=None;
+        assert!(invalid.admitted_parent().unwrap().is_none());
+        drop(store);std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn spec221_c19_reader_reopens_task_and_workspace_without_quarantine() {

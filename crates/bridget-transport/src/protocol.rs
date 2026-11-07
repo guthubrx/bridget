@@ -2896,6 +2896,7 @@ pub struct WorkerAccepted {
 pub enum WorkerCapability {
     CandidateProbeV1,
     CandidateProbeV2,
+    WorkloadToolsV1,
     ReleaseLeaseV2,
     WorkspaceRepairV1,
     ParentSourceProofV1,
@@ -3229,6 +3230,8 @@ pub struct CandidateProbe {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateProbeRefusal {
+    CommandExecutionUnavailable,
+    WorkloadToolUnavailable,
     ProgramUpgradeCheckPending,
     ProgramProtocolIncompatible,
     ProgramCheckUnavailable,
@@ -3316,11 +3319,27 @@ pub struct CandidateProbeV2Candidate {
     pub workspace: Option<WorkspaceRequest>,
 }
 
+/// Commandes identifiables ; aucun nom ou argument libre n'atteint le worker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum WorkloadTool { Git, Cargo, Node, Python, Npm, Pnpm, Make, Docker, DockerCompose }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum WorkloadToolState { Available, Absent, Unusable, Unknown }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkloadToolObservation { pub tool:WorkloadTool, pub state:WorkloadToolState }
+
 /// Sonde168 groupée : elle porte les mêmes corrélations que v1 et un seul
 /// relevé par machine. Elle ne constitue pas une réservation de capacité.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateProbeV2 {
+    /// Écriture identifiée : false ne certifie pas la lecture seule d’un programme inconnu.
+    #[serde(default,skip_serializing_if="std::ops::Not::not")]
+    pub requires_workspace_write: bool,
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    pub required_tools:Vec<WorkloadTool>,
     pub version: u16,
     pub correlation_id: String,
     pub connection_epoch: String,
@@ -3350,6 +3369,8 @@ pub enum CandidateProbeV2Verdict {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CandidateProbeV2Result {
+    #[serde(default,skip_serializing_if="Vec::is_empty")]
+    pub tool_observations:Vec<WorkloadToolObservation>,
     pub version: u16,
     pub correlation_id: String,
     pub connection_epoch: String,
@@ -3407,6 +3428,10 @@ impl CandidateProbeResult {
 
 impl CandidateProbeV2 {
     pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
+        if (self.requires_workspace_write && self.required_tools.is_empty()) || self.required_tools.len()>9 || self.required_tools.iter().enumerate()
+            .any(|(i,tool)|self.required_tools[..i].contains(tool)) {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
         if self.version != WORKER_CANDIDATE_PROBE_V2_VERSION
             || self.candidates.is_empty()
             || self.candidates.len() > MAX_CANDIDATE_PROBE_V2_CANDIDATES
@@ -3427,6 +3452,10 @@ impl CandidateProbeV2 {
 
 impl CandidateProbeV2Result {
     pub fn validate_shape(&self) -> Result<(), WorkerRefusal> {
+        if self.tool_observations.len()>9 || self.tool_observations.iter().enumerate()
+            .any(|(i,fact)|self.tool_observations[..i].iter().any(|old|old.tool==fact.tool)) {
+            return Err(WorkerRefusal::InvalidEnvelope);
+        }
         if self.version != WORKER_CANDIDATE_PROBE_V2_VERSION
             || self.verdicts.is_empty()
             || self.verdicts.len() > MAX_CANDIDATE_PROBE_V2_CANDIDATES
@@ -11883,7 +11912,7 @@ mod routing168_protocol_tests {
         assert!(is_routing_candidate_id("c128"));
         assert!(!is_routing_candidate_id("c01"));
         assert!(!is_routing_candidate_id("c129"));
-        let probe = CandidateProbeV2 {
+        let probe = CandidateProbeV2 { requires_workspace_write:false, required_tools:Vec::new(),
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: "r".into(),
             connection_epoch: "e".into(),
@@ -11930,6 +11959,20 @@ mod routing168_protocol_tests {
                 .collect(),
         };
         assert!(probe.validate_shape().is_ok());
+        let old=serde_json::to_value(&probe).unwrap();
+        assert!(old.get("required_tools").is_none());
+        assert!(old.get("requires_workspace_write").is_none());
+        assert_eq!(serde_json::from_value::<CandidateProbeV2>(old).unwrap(),probe);
+        let mut tools=probe.clone();tools.required_tools=vec![WorkloadTool::Docker];
+        assert!(tools.validate_shape().is_ok());
+        assert_eq!(serde_json::from_value::<CandidateProbeV2>(serde_json::to_value(&tools).unwrap()).unwrap(),tools);
+        tools.requires_workspace_write=true;
+        assert_eq!(serde_json::from_value::<CandidateProbeV2>(serde_json::to_value(&tools).unwrap()).unwrap(),tools);
+        let mut invalid_write=probe.clone();invalid_write.requires_workspace_write=true;
+        assert!(invalid_write.validate_shape().is_err());
+        tools.required_tools.push(WorkloadTool::Docker);
+        assert!(tools.validate_shape().is_err());
+        assert!(serde_json::from_value::<WorkloadTool>(serde_json::json!("arbitrary_command")).is_err());
         let mut too_many = probe.clone();
         too_many.candidates.push(probe.candidates[0].clone());
         assert_eq!(

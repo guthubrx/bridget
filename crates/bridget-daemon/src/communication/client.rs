@@ -1173,6 +1173,7 @@ impl DaemonConnection {
         command: &WrapperToDaemon,
         after_write: &'static str,
     ) -> Result<DaemonToWrapper, ClientError> {
+        let started = Instant::now();
         self.apply_remaining_timeout("daemon_unreachable")?;
         let json = encode(command).map_err(|error| ClientError::Technical {
             code: "daemon_protocol",
@@ -1220,7 +1221,20 @@ impl DaemonConnection {
             self.poison();
             return Err(error);
         }
-        self.read_response(after_write)
+        let response = self.read_response(after_write);
+        if let Err(ClientError::Technical { code, .. }) = &response {
+            // Libellés fermés : ni corps, ni credential, ni nom fourni par l'appelant.
+            let phase = match command {
+                WrapperToDaemon::RegisterAuxiliary { .. } => "auxiliary_registration",
+                WrapperToDaemon::DaemonIdentityRequest => "daemon_identity",
+                WrapperToDaemon::NativeDelegation { .. }
+                | WrapperToDaemon::NativeDelegationT3 { .. } => "native_operation",
+                _ => "operation_response",
+            };
+            eprintln!("bridget_client_exchange_failed phase={phase} code={code} elapsed_ms={}",
+                started.elapsed().as_millis());
+        }
+        response
     }
 
     pub(crate) fn read_response(
@@ -1358,9 +1372,26 @@ pub(crate) fn registered_connection_until(
     socket: &Path,
     deadline: Instant,
 ) -> Result<DaemonConnection, ClientError> {
-    let mut connection = DaemonConnection::connect_until(socket, deadline)?;
-    authenticate_auxiliary(&mut connection, identity, instance_id, socket)?;
-    Ok(connection)
+    // L'inscription n'émet aucune commande métier. Reprendre une coupure
+    // précoce une fois, dans l'échéance du caller, sans rejouer sa mutation.
+    // Un délai entièrement consommé ou un refus d'identité reste terminal.
+    let mut retried = false;
+    loop {
+        let result = (|| {
+            let mut connection = DaemonConnection::connect_until(socket, deadline)?;
+            authenticate_auxiliary(&mut connection, identity, instance_id, socket)?;
+            Ok(connection)
+        })();
+        match result {
+            Err(ClientError::Technical { code: "daemon_unreachable", .. })
+                if !retried && Instant::now() < deadline => retried = true,
+            Ok(connection) => {
+                if retried { eprintln!("bridget_registration_recovered attempts=2"); }
+                return Ok(connection);
+            }
+            other => return other,
+        }
+    }
 }
 
 pub(crate) fn authenticate_auxiliary(
@@ -1394,6 +1425,94 @@ pub(crate) fn unexpected_response<T>(_response: DaemonToWrapper) -> Result<T, Cl
 #[cfg(test)]
 mod security_tests {
     use super::*;
+
+    #[test]
+    fn spec241_registration_reply_lost_recovers_before_one_mutation() {
+        let identity = "24100000-0000-4000-8000-000000000241";
+        let path = crate::mcp_identity::mock_socket("241-register-reply");
+        let listener = UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(&path, identity, "instance-241");
+        let server = thread::spawn(move || {
+            let mut registrations = 0;
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::RegisterAuxiliary { agent_id, instance_id, .. }
+                    if agent_id == identity && instance_id == "instance-241"));
+                registrations += 1;
+                if attempt == 0 { continue; } // ACK d'inscription perdu, aucune mutation lue.
+                writeln!(stream, "{}", encode(&DaemonToWrapper::Registered {
+                    agent_id: identity.into(), credential: None }).unwrap()).unwrap();
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                assert!(matches!(decode::<WrapperToDaemon>(line.trim()).unwrap(),
+                    WrapperToDaemon::NativeDelegation { request: bridget_transport::protocol::NativeDelegationRequest::Cancel {task_id} }
+                    if task_id == "task-241"));
+                writeln!(stream, "{}", encode(&DaemonToWrapper::NativeDelegationResult {
+                    result: serde_json::json!({"status":"cancelled"}) }).unwrap()).unwrap();
+            }
+            registrations
+        });
+        let mut connection = registered_connection_until(identity, "instance-241", &path,
+            Instant::now()+Duration::from_secs(2)).expect("le raccordement doit récupérer son ACK perdu");
+        let response = connection.send_then_wait(&WrapperToDaemon::NativeDelegation {
+            request: bridget_transport::protocol::NativeDelegationRequest::Cancel {task_id:"task-241".into()}
+        }).unwrap();
+        assert!(matches!(response,DaemonToWrapper::NativeDelegationResult {result} if result["status"]=="cancelled"));
+        assert_eq!(server.join().unwrap(),2);
+        let _=std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec241_registration_identity_refusal_is_not_retried() {
+        let identity = "24100000-0000-4000-8000-000000000241";
+        let path = crate::mcp_identity::mock_socket("241-register-refused");
+        let listener=UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(&path,identity,"instance-241");
+        let (done_tx,done_rx)=mpsc::channel();
+        let server=thread::spawn(move || {
+            let (mut stream,_)=listener.accept().unwrap();
+            let mut line=String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            writeln!(stream,"{}",encode(&DaemonToWrapper::Nack {id:"register-auxiliary".into(),
+                reason:"auxiliary_identity_unproven : primary_not_live".into()}).unwrap()).unwrap();
+            done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+        });
+        let result=registered_connection_until(identity,"instance-241",&path,Instant::now()+Duration::from_secs(1));
+        assert!(matches!(result,Err(ClientError::Technical {code:"auxiliary_identity_unproven",..})));
+        done_tx.send(()).unwrap();server.join().unwrap();let _=std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn spec241_registration_never_renews_the_callers_deadline() {
+        let identity="24100000-0000-4000-8000-000000000241";
+        let path=crate::mcp_identity::mock_socket("241-register-deadline");
+        let listener=UnixListener::bind(&path).unwrap();
+        crate::mcp_identity::mock_private_identity(&path,identity,"instance-241");
+        let (done_tx,done_rx)=mpsc::channel();
+        let server=thread::spawn(move || {
+            let (stream,_)=listener.accept().unwrap();
+            let mut line=String::new();
+            let mut reader=BufReader::new(stream);
+            reader.read_line(&mut line).unwrap();
+            // Garder le pair vivant mais sans ACK jusqu'à expiration réelle.
+            done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            drop(reader);
+            listener.set_nonblocking(true).unwrap();
+            assert!(matches!(listener.accept(),Err(e) if e.kind()==io::ErrorKind::WouldBlock));
+        });
+        let start=Instant::now();
+        let response=registered_connection_until(identity,"instance-241",&path,start+Duration::from_millis(80));
+        assert!(matches!(response,Err(ClientError::Technical{code:"daemon_unreachable",..})));
+        assert!(start.elapsed()<Duration::from_millis(350));
+        done_tx.send(()).unwrap();server.join().unwrap();let _=std::fs::remove_file(path);
+    }
 
     #[test]
     fn native151_facade_sonde_attente_annonce_et_ancien_daemon() {

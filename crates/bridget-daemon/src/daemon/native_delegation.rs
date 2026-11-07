@@ -499,7 +499,7 @@ fn validate_routing_parent_source(
             let parent=parent_fact(&st,&owner,&instance,Some(&request.request_id),attested)?.ok_or("permission_attestation_unavailable")?;
             (owner,parent)
         };
-        if let Some((_,error))=super::origin_proof::sources(state,&owner,&parent,Some(routing_source_base(request)))? {
+        if let Some((_,error))=super::origin_proof::sources(state,&owner,&parent,Some(routing_source_base(request)),None)? {
             return error.map_or(Ok(()),Err);
         }
         return crate::lifecycle::validate_parent_source_base(&parent,&routing_source_base(request));
@@ -563,6 +563,7 @@ const MAX_ROUTING_PROBE_REFUSAL_NOTE_BYTES: usize = 512;
 enum RoutingProbeRefusalCode {
     Candidate(bridget_transport::protocol::CandidateProbeRefusal),
     Worker(bridget_transport::protocol::WorkerRefusal),
+    Tool(bridget_transport::protocol::WorkloadToolObservation),
 }
 
 // Only authenticated opaque IDs and closed wire enums enter this diagnostic.
@@ -587,6 +588,11 @@ fn record_routing_probe_refusal(
     let (kind, code) = match reason {
         RoutingProbeRefusalCode::Candidate(code) => ("candidate", serde_json::to_value(code)),
         RoutingProbeRefusalCode::Worker(code) => ("worker", serde_json::to_value(code)),
+        RoutingProbeRefusalCode::Tool(fact) => {
+            use bridget_transport::protocol::WorkloadToolState::*;
+            let kind=match fact.state {Absent=>"tool_absent",Unusable=>"tool_unusable",Unknown=>"tool_unknown",Available=>return false};
+            (kind,serde_json::to_value(fact.tool))
+        }
     };
     let Ok(code) = code else { return false; };
     let mut note = json!({"event":"routing_probe_refused","correlation_id":correlation_id,
@@ -623,6 +629,12 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
         let candidate = (reason["kind"] == "candidate").then(||
             serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone()).ok()).flatten();
         let (next_action, human_action) = match candidate {
+            Some(CandidateProbeRefusal::CommandExecutionUnavailable) => (
+                "Ce profil ne permet pas les commandes requises. Le placement automatique doit choisir un autre profil compatible avec les mêmes droits ; les autres candidats restent examinés.",
+                "Si le moteur et la posture imposés ne permettent aucune commande, demandez une décision ciblée sur ces contraintes. Ne donnez pas Bash à un profil de lecture seule pour contourner ce refus."),
+            Some(CandidateProbeRefusal::WorkloadToolUnavailable) => (
+                "La cible ne confirme pas un outil requis. Consultez les faits tool_absent, tool_unusable ou tool_unknown de cette machine avant de reprendre la même demande.",
+                "Si aucune cible autorisée ne possède cet outil, demandez l'installation ou la cible voulue ; aucune installation ni changement de machine imposée n'est automatique."),
             Some(CandidateProbeRefusal::InvalidRequest) => (
                 "Vérifiez la forme de la demande et la version du protocole de la cible. Le champ précis refusé n'a pas été conservé ; ne modifiez pas l'enveloppe d'une demande en cours.",
                 "Si le champ invalide reste inconnu, demandez à l'utilisateur de faire examiner la demande et le protocole corrélés ; ne lancez pas de remplacement."),
@@ -668,6 +680,9 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
             Some(CandidateProbeRefusal::ResourceLimit) => (
                 "Attendez le drainage des demandes natives en cours sur le worker puis vérifiez detail.admission avant un éventuel rejeu strict. Le worker n’a pas pu terminer ce contrôle dans sa capacité bornée ; ce code seul ne distingue pas une file pleine d’un délai de sonde épuisé. Son état actuel n’est pas établi.",
                 "Si la file reste saturée, demandez à l'utilisateur un arbitrage de priorité après inspection des demandes ; ne terminez pas les tâches d'autrui et ne redémarrez pas pour vider la file."),
+            None if reason["kind"].as_str().is_some_and(|kind|kind.starts_with("tool_")) => (
+                "Consultez l'outil et son état dans detail.reasons : absent signifie introuvable ; inutilisable signifie commande refusée ; inconnu signifie qualification non terminée. Bridget conserve la machine imposée et ne lance pas une compilation incompatible.",
+                "Si aucune autre cible déjà autorisée ne convient, demander une installation ciblée ou un changement de cible explicite. Ne pas installer, changer de compte ou supprimer une restriction automatiquement."),
             None => {
                 use bridget_transport::protocol::WorkerRefusal::*;
                 match serde_json::from_value::<bridget_transport::protocol::WorkerRefusal>(reason["code"].clone()).ok() {
@@ -719,7 +734,8 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 }
             },
         };
-        let underlying=if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable")) {reason["code"].clone()} else {json!("unobserved")};
+        let underlying=if reason["kind"].as_str().is_some_and(|kind|kind.starts_with("tool_")) {reason["kind"].clone()}
+        else if reason["kind"]=="candidate" && matches!(reason["code"].as_str(),Some("program_upgrade_check_pending"|"program_protocol_incompatible"|"program_check_unavailable")) {reason["code"].clone()} else {json!("unobserved")};
         json!({"kind":reason["kind"],"code":reason["code"],
             "scope":"candidate_subset","underlying_cause":underlying,
             "next_action":next_action,"human_action":human_action})
@@ -791,6 +807,7 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
         let valid = match kind {
             "candidate" => serde_json::from_value::<CandidateProbeRefusal>(value["code"].clone()).is_ok(),
             "worker" => serde_json::from_value::<WorkerRefusal>(value["code"].clone()).is_ok(),
+            "tool_absent"|"tool_unusable"|"tool_unknown" => serde_json::from_value::<bridget_transport::protocol::WorkloadTool>(value["code"].clone()).is_ok(),
             _ => false,
         };
         if valid && let Some(code) = value["code"].as_str() {
@@ -805,10 +822,8 @@ fn routing_probe_failure(plan: &RoutingAdmissionPlan) -> Value {
         let reasons = counts.into_iter().map(|((kind, code), candidates)| {
             let mut reason = json!({"kind":kind,"code":code,"candidates":candidates});
             if kind == "candidate" && code == "workspace_limit" {
-                reason["message"] = json!(format!(
-                    "Le plafond Bridget de {} worktrees enregistrés sous le dossier de travail est atteint. Les worktrees conservés et imbriqués comptent aussi. Aucune tâche créée par cette admission.",
-                    crate::workspace_git::MAX_WORKTREES));
-                reason["recovery"] = json!("Vérifier les missions terminées, conserver leurs résultats et retirer seulement les anciens worktrees inutilisés. Ne pas supprimer de travail actif ni changer la base ou la clé. Après nettoyage confirmé, rejouer la même enveloppe. Aucun nettoyage ni rejeu automatique.");
+                reason["message"] = json!("Un lecteur historique signale son plafond de worktrees enregistrés, conservés ou imbriqués. Le lecteur courant ne fixe plus de quota de worktrees. Aucune tâche créée par cette admission.");
+                reason["recovery"] = json!("Vérifier le composant réellement chargé sur cette machine et charger la version courante avant de rejouer la même enveloppe. Aucun nettoyage ni rejeu automatique ; préserver tous les travaux.");
             }
             reason
         }).collect::<Vec<_>>();
@@ -900,7 +915,7 @@ fn prepare_routing_projects(
             .ok_or("permission_attestation_unavailable")?;
         let source = Path::new(&request.cwd);
         if !source.is_absolute() || source.components().any(|c| matches!(c, std::path::Component::ParentDir))
-            || !source.starts_with(&parent.cwd) {
+            || crate::lifecycle::source_root(&parent,source).is_err() {
             return Err("cwd_outside_parent_project".into());
         }
         let control = crate::referent_control::read(st.store.connection())
@@ -926,7 +941,8 @@ fn prepare_routing_projects(
     if !has_link && !foreign && !is_view { return Ok(()); }
     let mut machines = std::collections::BTreeSet::new();
     for candidate in &plan.candidates {
-        if is_view || (candidate.machine_id!=origin_host && (foreign || !routing_is_local(&candidate.machine_id, &host))) {
+        if is_view || (foreign && candidate.machine_id==origin_host && request.expected_base_commit.is_none())
+            || (candidate.machine_id!=origin_host && (foreign || !routing_is_local(&candidate.machine_id, &host))) {
             machines.insert(candidate.machine_id.clone());
         }
     }
@@ -957,7 +973,7 @@ fn prepare_routing_projects(
         }
         let payload = json!({
             "registry":registry.source(), "machine_id":machine, "origin_host":host,
-            "source_root":parent.cwd, "cwd":request.cwd, "commit":request.expected_base_commit,
+            "source_root":crate::lifecycle::source_root(&parent,Path::new(&request.cwd))?, "cwd":request.cwd, "commit":request.expected_base_commit,
             "project_id":project_id,
             "objects_only":matches!(request.workspace,Some(WorkspaceRequest::CommitView {}))
         });
@@ -980,6 +996,108 @@ fn prepare_routing_projects(
     }
     st.registry = AgentRegistry::load_from_path(registry.source().to_path_buf())?;
     Ok(())
+}
+
+/// Sépare seulement les opérateurs hors quotes. Aucun shell ni développement.
+fn workload_command_segments(command: &str) -> Vec<&str> {
+    let (mut quote, mut escaped, mut start) = (None, false, 0);
+    let mut parts = Vec::new();
+    for (i, ch) in command.char_indices() {
+        if escaped { escaped = false; continue; }
+        if ch == '\\' && quote != Some('\'') { escaped = true; continue; }
+        if let Some(q) = quote { if ch == q { quote = None; } continue; }
+        if matches!(ch, '\'' | '"') { quote = Some(ch); }
+        else if matches!(ch, '&' | '|' | ';' | '\n') {
+            parts.push(&command[start..i]); start = i + ch.len_utf8();
+        }
+    }
+    parts.push(&command[start..]);
+    parts
+}
+
+/// Classification prudente des commandes connues ; un programme Python/Node
+/// arbitraire reste inconnu. Les sous-commandes inconnues ne sont pas des lectures.
+fn workload_command_writes(name: &str, args: &[String]) -> bool {
+    let any = |values: &[&str]| args.iter().any(|a| values.contains(&a.as_str()));
+    let read = |values: &[&str], op: &str| values.contains(&op);
+    let first = args.first().map(String::as_str).unwrap_or("");
+    match name {
+        "git" => {
+            let mut i = 0;
+            while let Some(arg) = args.get(i).map(String::as_str) {
+                match arg {
+                    "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => i += 2,
+                    "--no-pager" | "--paginate" | "--no-optional-locks" => i += 1,
+                    _ if ["--git-dir=", "--work-tree=", "--namespace="].iter().any(|p| arg.starts_with(p)) => i += 1,
+                    _ => break,
+                }
+            }
+            let op = args.get(i).map(String::as_str).unwrap_or("");
+            let next = args.get(i + 1).map(String::as_str).unwrap_or("");
+            if any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output=")) { return true; }
+            if matches!(op, "branch" | "tag") && any(&["-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy", "-a", "--annotate", "-s", "--sign", "-f", "--force"]) { return true; }
+            !read(&["status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "rev-list",
+                "describe", "grep", "for-each-ref", "version", "help", "--version", "-v"], op)
+                && !matches!((op, next), ("stash", "list" | "show") | ("worktree", "list")
+                    | ("remote", "-v" | "--verbose" | "get-url"))
+                && !(matches!(op, "branch" | "tag") && any(&["--list", "-l", "--show-current"]))
+        }
+        "cargo" => {
+            let op = args.iter().find(|a| !a.starts_with('+')).map(String::as_str).unwrap_or("");
+            !read(&["--version", "-V", "version", "help", "--help", "-h", "locate-project", "read-manifest"], op)
+                && !(op == "fmt" && any(&["--check"]))
+                && !(op == "metadata" && any(&["--locked", "--frozen"]))
+        }
+        "npm" | "pnpm" => !read(&["--version", "-v", "version", "help", "--help", "-h"], first)
+            || (first == "version" && args.len() > 1),
+        "make" => !any(&["-n", "--dry-run", "--just-print", "--recon"]),
+        "docker" => {
+            let op = if first == "compose" { args.get(1).map(String::as_str).unwrap_or("") } else { first };
+            !read(&["--version", "-v", "version", "help", "--help", "ps", "info", "inspect", "logs", "images", "top"], op)
+                && !(first == "compose" && op == "config" && !any(&["--output", "-o"]) && !args.iter().any(|a| a.starts_with("--output=")))
+        }
+        _ => false,
+    }
+}
+
+/// Exigences tirées uniquement de commandes, jamais d'une mention du produit.
+fn identified_workload_requirements(task: &str) -> (Vec<bridget_transport::protocol::WorkloadTool>, bool) {
+    use bridget_transport::protocol::WorkloadTool as T;
+    let tool = |name: &str| match name {
+        "git" => Some(T::Git), "cargo" => Some(T::Cargo), "node" => Some(T::Node),
+        "python3" => Some(T::Python), "npm" => Some(T::Npm), "pnpm" => Some(T::Pnpm),
+        "make" => Some(T::Make), "docker" => Some(T::Docker), _ => None,
+    };
+    let mut required = std::collections::BTreeSet::new();
+    let mut writes = false;
+    for line in task.lines() {
+        let parts: Vec<_> = line.split('`').collect();
+        // La prose contenant des backticks n'est pas une commande shell.
+        let commands: Vec<_> = if parts.len() == 1 { vec![(line.trim().trim_start_matches("$ "), "")] }
+            else { (1..parts.len()).step_by(2).map(|i| (parts[i], parts[i - 1])).collect() };
+        for (command, context) in commands {
+            let context = context.rsplit([';', '.', ',', '\n']).next().unwrap_or(context).to_lowercase();
+            let named: Vec<_> = context.split(|c: char| !c.is_alphanumeric()).filter(|name| tool(name).is_some()).collect();
+            for segment in workload_command_segments(command) {
+                let Some(words) = shlex::split(segment) else { continue; };
+                let assignment = |word: &str| word.split_once('=').is_some_and(|(key, _)|
+                    !key.is_empty() && key.chars().enumerate().all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())));
+                let mut i = usize::from(words.first().is_some_and(|w| w == "env"));
+                while words.get(i).is_some_and(|word| assignment(word)) { i += 1; }
+                let Some(name) = words.get(i).map(String::as_str) else { continue; };
+                let Some(kind) = tool(name) else { continue; };
+                let applies = named.is_empty() || named.contains(&name);
+                if ["sans ", "pas de ", "no "].iter().any(|prefix| context.contains(&format!("{prefix}{name}")))
+                    || (applies && ["facultatif", "facultative", "optional", "ne pas exécuter", "ne pas lancer", "do not run"]
+                        .iter().any(|word| context.contains(word))) { continue; }
+                let args = &words[i + 1..];
+                writes |= workload_command_writes(name, args);
+                required.insert(kind);
+                if kind == T::Docker && args.first().is_some_and(|a| a == "compose") { required.insert(T::DockerCompose); }
+            }
+        }
+    }
+    (required.into_iter().collect(), writes)
 }
 
 /// O(C+P) hors probes groupés et gardes natives ; aucune réservation ni Task.
@@ -1010,6 +1128,19 @@ fn observe_routing_candidates_for_project(
         .map_err(|error| error.to_string())?;
     let admission_id = auto_admission_id(&canonical);
     let now = unix_timestamp();
+    let (required_tools,requires_workspace_write)=identified_workload_requirements(&request.task);
+    let (source_env,has_local,source_root)={
+        let st=state.lock().unwrap_or_else(|e|e.into_inner());
+        let (owner,instance)=live_connection_identity(&st,conn).ok_or("identity_unavailable")?;
+        let parent=parent_fact(&st,&owner,&instance,Some(&request.request_id),attested)?
+            .ok_or("permission_attestation_unavailable")?;
+        let source_root=crate::lifecycle::source_root(&parent,Path::new(&request.cwd))?;
+        (st.source_env.clone(),plan.candidates.iter().any(|c|routing_is_local(&c.machine_id,&st.host)),source_root)
+    };
+    let local_tools=if has_local {crate::remote_worker::qualify_workload_tools(&source_env,&required_tools,&[source_root],
+        Instant::now()+Duration::from_secs(3))} else {Vec::new()};
+    let mut local_tool_refusals=Vec::new();
+    let mut local_profile_refusals=Vec::new();
     let mut mapping_refusals = BTreeMap::new();
     let mut option_accounts=HashMap::new();
     let mut option_refusals=Vec::new();
@@ -1024,7 +1155,7 @@ fn observe_routing_candidates_for_project(
             || source
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
-            || !source.starts_with(&parent.cwd)
+            || crate::lifecycle::source_root(&parent,source).is_err()
         {
             return Err("cwd_outside_parent_project".into());
         }
@@ -1077,6 +1208,10 @@ fn observe_routing_candidates_for_project(
             // Le chemin local historique ne porte ni reçu de vue ni lecteur durable.
             if origin_host==host && routing_is_local(&candidate.machine_id, &host)
                 && !matches!(request.workspace,Some(WorkspaceRequest::CommitView {})) {
+                if local_tools.iter().any(|fact|fact.state!=WorkloadToolState::Available) {
+                    local_tool_refusals.push(candidate_id.clone());
+                    continue;
+                }
                 if !declared_candidates.contains(&(
                     candidate.machine_id.clone(),
                     candidate.connection_id.clone(),
@@ -1139,6 +1274,10 @@ fn observe_routing_candidates_for_project(
                 let Some(snapshot) = snapshot else {
                     continue;
                 };
+                if !required_tools.is_empty() && !crate::native_permissions::permits_command_execution(&snapshot.child_policy,requires_workspace_write) {
+                    local_profile_refusals.push(candidate_id.clone());
+                    continue;
+                }
                 observations.insert(
                     candidate_id,
                     RoutingCandidateObservation {
@@ -1230,10 +1369,21 @@ fn observe_routing_candidates_for_project(
         }
         (parent, observations, batches, host)
     };
+    for candidate_id in local_tool_refusals {
+        let correlation=Uuid::new_v4().to_string();
+        for fact in local_tools.iter().filter(|fact|fact.state!=WorkloadToolState::Available) {
+            record_routing_probe_refusal(plan,&correlation,&admission_id,&candidate_id,
+                RoutingProbeRefusalCode::Tool(fact.clone()));
+        }
+    }
+    for candidate_id in local_profile_refusals {
+        record_routing_probe_refusal(plan,&Uuid::new_v4().to_string(),&admission_id,&candidate_id,
+            RoutingProbeRefusalCode::Candidate(bridget_transport::protocol::CandidateProbeRefusal::CommandExecutionUnavailable));
+    }
     let mut unsupported_worker = false;
     for (machine, (worker, candidates)) in batches {
         let wanted: HashSet<String> = candidates.iter().map(|c| c.candidate_id.clone()).collect();
-        let probe = CandidateProbeV2 {
+        let probe = CandidateProbeV2 { requires_workspace_write, required_tools:required_tools.clone(),
             version: WORKER_CANDIDATE_PROBE_V2_VERSION,
             correlation_id: Uuid::new_v4().to_string(),
             connection_epoch: String::new(),
@@ -1265,6 +1415,23 @@ fn observe_routing_candidates_for_project(
                 continue;
             }
         };
+        if (result.verdicts.iter().any(|v|matches!(v,CandidateProbeV2Verdict::Eligible{..}))
+            || !result.tool_observations.is_empty())
+            && result.tool_observations.iter().map(|fact|fact.tool).collect::<Vec<_>>() != required_tools {
+            for candidate_id in &wanted {record_routing_probe_refusal(plan,&correlation_id,&admission_id,
+                candidate_id,RoutingProbeRefusalCode::Worker(WorkerRefusal::InvalidEnvelope));}
+            continue;
+        }
+        let tools_available=result.tool_observations.iter().all(|fact|fact.state==WorkloadToolState::Available);
+        if !tools_available {
+            for candidate_id in &wanted {
+                for fact in result.tool_observations.iter().filter(|fact|fact.state!=WorkloadToolState::Available) {
+                    record_routing_probe_refusal(plan,&correlation_id,&admission_id,candidate_id,
+                        RoutingProbeRefusalCode::Tool(fact.clone()));
+                }
+            }
+            continue;
+        }
         let received_at = unix_timestamp();
         let ttl = routing_telemetry(plan, &machine).map_or(30, |policy| policy.max_age_secs);
         let mut resources = result.resources;
@@ -3223,7 +3390,7 @@ fn filter_auto_candidates(
             || source
                 .components()
                 .any(|component| matches!(component, std::path::Component::ParentDir))
-            || !source.starts_with(&parent.cwd)
+            || crate::lifecycle::source_root(&parent,source).is_err()
         {
             return Ok(Vec::new());
         }
@@ -4107,6 +4274,7 @@ fn failure(code: &str) -> Value {
                     && match reason["kind"].as_str() {
                         Some("candidate") => serde_json::from_value::<CandidateProbeRefusal>(reason["code"].clone()).is_ok(),
                         Some("worker") => serde_json::from_value::<WorkerRefusal>(reason["code"].clone()).is_ok(),
+                        Some("tool_absent"|"tool_unusable"|"tool_unknown") => serde_json::from_value::<bridget_transport::protocol::WorkloadTool>(reason["code"].clone()).is_ok(),
                         _ => false,
                     }
             }) {
@@ -6297,6 +6465,7 @@ fn remote_parent_proof(
     state: &Arc<Mutex<DaemonState>>,
     owner: &str,
     parent: &bridget_transport::protocol::ProviderPermissions,
+    admitted: Option<&Task>,
 ) -> Result<String, String> {
     use bridget_transport::protocol::*;
     let source = {
@@ -6340,7 +6509,7 @@ fn remote_parent_proof(
         }
         Ok(permission_digest)
     } else {
-        if let Some((digest,error))=super::origin_proof::sources(state,owner,parent,None)? {
+        if let Some((digest,error))=super::origin_proof::sources(state,owner,parent,None,admitted)? {
             if error.is_some(){return Err("remote_parent_proof_invalid".into());}
             return Ok(digest);
         }
@@ -6504,7 +6673,7 @@ fn delegate_remote_with_routing(
             || source
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
-            || !source.starts_with(&parent.cwd)
+            || crate::lifecycle::source_root(&parent,source).is_err()
         {
             return Err("cwd_outside_parent_project".into());
         }
@@ -6567,7 +6736,7 @@ fn delegate_remote_with_routing(
         };
         (owner, parent, worker, prepare, Uuid::new_v4().to_string())
     };
-    let proof = remote_parent_proof(state, &owner, &parent)?;
+    let proof = remote_parent_proof(state, &owner, &parent, None)?;
     let provisional = WorkerCommandIdentity {
         command_id: task_id.clone(),
         task_id: task_id.clone(),
@@ -6597,7 +6766,7 @@ fn delegate_remote_with_routing(
             ("permissions", prepared.placement.permission_digest != observation.permission_digest),
         ]) { return Err(code); }
     }
-    if remote_parent_proof(state, &owner, &parent)? != proof {
+    if remote_parent_proof(state, &owner, &parent, None)? != proof {
         return Err(permission_change::code("after_inspection", &["permission_sources"]));
     }
     {
@@ -6674,7 +6843,7 @@ fn delegate_remote_with_routing(
             };
             prepared = isolated;
         }
-        if remote_parent_proof(state, &owner, &parent)? != proof {
+        if remote_parent_proof(state, &owner, &parent, None)? != proof {
             return Err(permission_change::code("after_workspace", &["permission_sources"]));
         }
         {
@@ -6837,7 +7006,7 @@ pub(super) fn remote_dispatch_proof(
         state,
         task,
         Stage::ParentProof,
-        remote_parent_proof(state, &task.owner, &snapshot.parent),
+        remote_parent_proof(state, &task.owner, &snapshot.parent, task.admitted_parent()?.map(|_| task)),
     )?;
     let command_result = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
@@ -6969,6 +7138,8 @@ pub(super) fn recheck_remote_dispatch(
         || task.remote_placement != proof.remote_placement
         || task.definition != proof.definition
         || task.permission_snapshot != proof.permission_snapshot
+        || task.admission_authority_version != proof.admission_authority_version
+        || task.admitted_parent().is_err()
         || !provision.permits_agent_type(agent_type)
         || provision.worker_id != placement.worker_id
         || provision.provisioning_revision != placement.provisioning_revision
@@ -6978,6 +7149,7 @@ pub(super) fn recheck_remote_dispatch(
             .delegation_store
             .revoked_agent(&task.root_owner_agent_id)?
         || st.delegation_store.revoked(&task.owner_instance)?
+        || st.delegation_store.revoked(&task.origin_owner_instance)?
     {
         return Err("permission_not_inherited".into());
     }
@@ -7330,6 +7502,13 @@ fn start_remote_task_with(
     recovery: Option<&crate::delegation::StartRecovery>,
 ) -> Result<(), String> {
     use bridget_transport::protocol::*;
+    // La mission admise utilise son autorité figée, même si l'appelant fournit
+    // le fait d'un tour ultérieur. La tâche et les révocations sont relues ensuite.
+    let admitted_parent = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.delegation_store.get(task_id)?.ok_or("task_unavailable")?.admitted_parent()?.cloned()
+    };
+    let parent = admitted_parent.as_ref().unwrap_or(parent);
     // Une inspection n'acquiert jamais de slot ni d'identité de lancement.
     if prepared.token == WORKER_INSPECTION_TOKEN {
         return Err("remote_prepare_invalid".into());
@@ -7361,7 +7540,7 @@ fn start_remote_task_with(
             recheck_attested_thread(&st, conn, thread)?;
             let mut changes = permission_change::parent_changes(parent,
                 task.permission_snapshot.as_ref().map(|snapshot| &snapshot.parent));
-            if live_connection_identity(&st, conn)
+            if task.admitted_parent()?.is_none() && live_connection_identity(&st, conn)
                 != Some((task.owner.clone(), task.owner_instance.clone())) {
                 changes.push("connection_identity");
             }
@@ -7547,9 +7726,17 @@ fn start_remote_task_with(
         }
         return Err(reason);
     }
-    // La preuve HTTP reste sur la pile d'admission ; aucun secret n'est persisté.
-    // Réattester après Start, hors mutex, interdit un permis fondé sur un ancien tour.
-    let fresh_attested = match (thread, permission_proof) {
+    let authority_task = {
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
+        st.delegation_store.get(task_id)?.ok_or("task_unavailable")?
+    };
+    let admitted = authority_task.admitted_parent()?.is_some();
+    if authority_task.admitted_parent()?.cloned() != admitted_parent {
+        return Err("admission_authority_changed".into());
+    }
+    // Seul le contrat historique réatteste le tour. La version 1 conserve
+    // l'autorité de cette mission ; révocations et sources sont encore relues.
+    let fresh_attested = if admitted { None } else { match (thread, permission_proof) {
         (Some(expected_thread), Some(proof)) => {
             let fresh = super::origin_proof::reattest(conn, proof, state)
                 .map_err(super::origin_proof::attestation_failure)?;
@@ -7559,25 +7746,27 @@ fn start_remote_task_with(
         }
         (None, None) => None,
         _ => return Err("permission_attestation_unavailable".into()),
-    };
-    remote_parent_proof(state, &owner, parent)?;
+    }};
+    remote_parent_proof(state, &owner, parent, admitted.then_some(&authority_task))?;
     let permit = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let task = st
             .delegation_store
             .get(task_id)?
             .ok_or("task_unavailable")?;
-        recheck_attested_thread(&st, conn, thread)?;
-        if live_connection_identity(&st, conn)
-            != Some((task.owner.clone(), task.owner_instance.clone()))
-        {
-            return Err("permission_attestation_unavailable".into());
+        if !admitted {
+            recheck_attested_thread(&st, conn, thread)?;
+            if live_connection_identity(&st, conn)
+                != Some((task.owner.clone(), task.owner_instance.clone())) {
+                return Err("permission_attestation_unavailable".into());
+            }
         }
         let NativeDelegationRequest::Delegate { request_id, .. } = &task.request else {
             return Err("invalid_record".into());
         };
         let current = parent_fact(
-            &st, &task.owner, &task.owner_instance, Some(request_id), fresh_attested.as_ref(),
+            &st, &task.owner, &task.owner_instance, Some(request_id),
+            task.admitted_parent()?.or(fresh_attested.as_ref()),
         )?;
         permission_change::check_reattested_parent("before_release_parent", parent, current.as_ref(), false)?;
         let provision = st.registry.machine(&worker.machine_id)?;
@@ -7596,7 +7785,7 @@ fn start_remote_task_with(
         {
             return Err("remote_release_changed".into());
         }
-        recheck_remote_dispatch(&st, &task, &task)?;
+        recheck_remote_dispatch(&st, &task, &authority_task)?;
         recheck_task_model_option(&st,&task)?;
         let control = crate::referent_control::read(st.store.connection())
             .map_err(|_| "control_state_unavailable")?;
@@ -7943,41 +8132,6 @@ fn task_id_for_pass<'a>(pass: WorkspacePass<'a>) -> &'a str {
         | WorkspacePass::Commit { task_id, .. }
         | WorkspacePass::Remote { task_id, .. } => task_id,
         _ => "",
-    }
-}
-
-/// O(n+r), n <= 4096 tâches, r <= 128 réservations ; aucune commande Git.
-fn workspace_limit(
-    st: &DaemonState,
-    plan: &crate::workspace_git::WorkspacePreflight,
-    created: bool,
-) -> Result<(), String> {
-    let mut paths: HashSet<PathBuf> = plan.listed_paths.iter().cloned().collect();
-    for task in st.delegation_store.tasks()? {
-        if let Some(workspace) = task.workspace {
-            let path = PathBuf::from(workspace.path);
-            if path.starts_with(&plan.worktree_dir) {
-                // Un retrait humain libère la place, même si la tâche reste retenue.
-                match std::fs::symlink_metadata(&path) {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    _ => {
-                        paths.insert(path);
-                    }
-                }
-            }
-        }
-    }
-    let work = st.workspace_work.lock().unwrap_or_else(|e| e.into_inner());
-    for reservation in work.creations.values() {
-        if reservation.path.starts_with(&plan.worktree_dir) {
-            paths.insert(reservation.path.clone());
-        }
-    }
-    let limit = crate::workspace_git::MAX_WORKTREES;
-    if paths.len() > limit || (!created && paths.len() == limit) {
-        Err("workspace_limit".into())
-    } else {
-        Ok(())
     }
 }
 
@@ -8607,7 +8761,7 @@ fn admit_delegate(
                 mapping.source_root.to_string_lossy().into_owned()
             } else {cwd.clone()};
             if prepared.placement.origin_cwd != expected_origin
-                || !Path::new(cwd).starts_with(&parent.cwd)
+                || crate::lifecycle::source_root(parent,Path::new(cwd)).is_err()
                 || prepared.placement.machine_id
                     != *machine_id.as_ref().ok_or("remote_placement_invalid")?
                 || prepared.placement.project_id
@@ -8619,7 +8773,7 @@ fn admit_delegate(
         } else if let Some(fact) = &fact {
             let path =
                 std::fs::canonicalize(cwd).map_err(|error| path_error("cwd_unavailable", error))?;
-            let root = std::fs::canonicalize(&fact.cwd)
+            let root = std::fs::canonicalize(crate::lifecycle::source_root(fact,&path)?)
                 .map_err(|error| path_error("cwd_unavailable", error))?;
             if !path.is_dir() || !path.starts_with(&root) {
                 return Err("cwd_outside_parent_project".into());
@@ -8861,7 +9015,6 @@ fn admit_delegate(
                 if frozen_cwd != plan.cwd {
                     return Err("workspace_path_unsafe: dossier parent changé".into());
                 }
-                workspace_limit(st, plan, false)?;
                 (scoped, permission_snapshot, frozen_cwd)
             }
             WorkspacePass::Commit { plan, record, .. } => {
@@ -8881,7 +9034,6 @@ fn admit_delegate(
                 {
                     return Err("workspace_path_unsafe: chemin canonique inattendu".into());
                 }
-                workspace_limit(st, plan, true)?;
                 let fact = fact.ok_or("permission_attestation_unavailable")?;
                 let pinned = AgentRegistry::from_resolved(agent_type, &raw_definition)?;
                 let (scoped, snapshot, effective) = resolve_target(
@@ -9025,7 +9177,12 @@ fn admit_delegate(
         };
         let service_tier=auto_receipt.filter(|receipt|receipt.metadata_version==2)
             .map(recovered_routing_request).transpose()?.and_then(|auto|auto.service_tier);
-        let record = Task { service_tier,
+        // Une preuve fraîche, déjà vérifiée par le port natif, autorise cette
+        // mission seulement. Le marqueur ne provient jamais du canon appelant.
+        let admission_authority_version = attested.filter(|fact| fact.source == "provider_turn")
+            .filter(|fact| permission_snapshot.as_ref().is_some_and(|snapshot| snapshot.parent == **fact))
+            .map(|_| 1);
+        let record = Task { service_tier, admission_authority_version,
             remote_prepared: false,
             commit_view_prepare:None,
             start_recovery: None,
@@ -9417,6 +9574,7 @@ fn handle_locked_with_remote_proof(
                     .delegation_store
                     .revoked_agent(&task.root_owner_agent_id)?
                 || st.delegation_store.revoked(&task.owner_instance)?
+        || st.delegation_store.revoked(&task.origin_owner_instance)?
                 || st.delegation_store.revoked(&instance)?
             {
                 return Err("permission_not_inherited".into());
@@ -9696,11 +9854,13 @@ pub(super) fn native_launch_registry(
     st: &DaemonState,
     task: &Task,
 ) -> Result<AgentRegistry, String> {
+    task.admitted_parent()?;
     if st.delegation_store.revoked_agent(&task.owner)?
         || st
             .delegation_store
             .revoked_agent(&task.root_owner_agent_id)?
         || st.delegation_store.revoked(&task.owner_instance)?
+        || st.delegation_store.revoked(&task.origin_owner_instance)?
     {
         return Err("permission_not_inherited".into());
     }
@@ -10056,6 +10216,7 @@ pub(super) fn authorize_retained_result(
             .delegation_store
             .revoked_agent(&task.root_owner_agent_id)?
         || st.delegation_store.revoked(&task.owner_instance)?
+        || st.delegation_store.revoked(&task.origin_owner_instance)?
     {
         return Err("native_result_authority_revoked".into());
     }
@@ -14728,7 +14889,7 @@ mod tests {
                     definition_digest:"a".repeat(64),permission_digest:"b".repeat(64),observed_at:now
                 }}
             }).collect();
-            let result=CandidateProbeV2Result {
+            let result=CandidateProbeV2Result { tool_observations:Vec::new(),
                 version:WORKER_CANDIDATE_PROBE_V2_VERSION,correlation_id:probe.correlation_id,
                 connection_epoch:probe.connection_epoch,worker:probe.worker,
                 admission_id:probe.admission_id,policy_revision:probe.policy_revision,
@@ -15030,7 +15191,7 @@ mod tests {
             let now = unix_timestamp();
             let reasons = [CandidateProbeRefusal::MappingUnavailable,
                 CandidateProbeRefusal::PermissionsChanged, CandidateProbeRefusal::WorkspaceUnavailable];
-            let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+            let result = CandidateProbeV2Result { tool_observations:Vec::new(), version:WORKER_CANDIDATE_PROBE_V2_VERSION,
                 correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
                 worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
                 resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
@@ -15099,7 +15260,7 @@ mod tests {
         let limit = routing_probe_failure(&plan);
         let reason = &limit["detail"]["reasons"][0];
         assert_eq!(reason["code"], "workspace_limit");
-        assert!(reason["message"].as_str().unwrap().contains("128 worktrees"));
+        assert!(reason["message"].as_str().unwrap().contains("lecteur historique"));
         assert!(reason["message"].as_str().unwrap().contains("imbriqués"));
         assert!(reason["recovery"].as_str().unwrap().contains("rejouer la même enveloppe"));
         assert!(reason["recovery"].as_str().unwrap().contains("Aucun nettoyage ni rejeu automatique"));
@@ -15354,7 +15515,7 @@ mod tests {
             let reasons = [CandidateProbeRefusal::MappingUnavailable,
                 CandidateProbeRefusal::PermissionsChanged, CandidateProbeRefusal::WorkspaceUnavailable];
             let saved_probe = probe.clone();
-            let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+            let result = CandidateProbeV2Result { tool_observations:Vec::new(), version:WORKER_CANDIDATE_PROBE_V2_VERSION,
                 correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
                 worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
                 resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
@@ -15545,7 +15706,7 @@ mod tests {
                 assert_eq!(probe.candidates.len(), 3);
                 assert!(probe.candidates.iter().all(|c| c.project_id == "project171"));
                 let now = unix_timestamp();
-                let result = CandidateProbeV2Result { version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                let result = CandidateProbeV2Result { tool_observations:Vec::new(), version:WORKER_CANDIDATE_PROBE_V2_VERSION,
                     correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
                     worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
                     resources:HostResourceSnapshotV1 { source_observed_at:now,received_at:now,
@@ -17625,7 +17786,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 // Le premier lot a une horloge worker en avance. Son verdict
                 // corrélé reste frais ; ses métriques ne deviennent pas connues.
                 let source_at = now + if index == 0 { 60 } else { 0 };
-                let result = CandidateProbeV2Result {
+                let result = CandidateProbeV2Result { tool_observations:Vec::new(),
                     version: WORKER_CANDIDATE_PROBE_V2_VERSION,
                     correlation_id: probe.correlation_id,
                     connection_epoch: probe.connection_epoch,
@@ -18230,7 +18391,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                                 definition_digest:if low {"c"} else {"a"}.repeat(64),
                                 permission_digest:if low {"d"} else {"b"}.repeat(64),observed_at:now}
                         }).collect();
-                        let result=CandidateProbeV2Result {version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+                        let result=CandidateProbeV2Result { tool_observations:Vec::new(),version:WORKER_CANDIDATE_PROBE_V2_VERSION,
                             correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
                             worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
                             resources:HostResourceSnapshotV1 {source_observed_at:now,received_at:now,cpu_percent:None,
@@ -29860,6 +30021,84 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec241_real_sockets_lost_admission_and_concurrent_replays_keep_one_task() {
+        use std::io::{BufRead,Write};
+        use std::os::unix::net::UnixListener;
+        use crate::communication::client::registered_connection_until;
+        let (mut st,config,managed,_parent)=fixture("241");
+        st.conn_counter=1; // conn-1 est déjà la connexion primaire de la fixture.
+        let root=st.fixture_root.as_ref().unwrap().0.clone();let socket=root.join("s241");
+        let listener=UnixListener::bind(&socket).unwrap();
+        crate::mcp_identity::save_credential(&root,OWNER,"instance-1",
+            st.identity_credentials["conn-1"].clone()).unwrap();
+        let state=Arc::new(Mutex::new(st));let serving=state.clone();
+        let (first_tx,first_rx)=mpsc::channel();
+        let server=thread::spawn(move || {
+            let mut workers=Vec::new();
+            for ordinal in 0..4 {
+                let (peer,_)=listener.accept().unwrap();let serving=serving.clone();let first_tx=first_tx.clone();
+                workers.push(thread::spawn(move || {
+                    let _=super::super::handle_connection(peer,serving);
+                    if ordinal==0 {first_tx.send(()).unwrap();}
+                }));
+            }
+            for worker in workers {worker.join().unwrap();}
+        });
+        let supervisor=thread::spawn(move || {
+            let ManagedSupervisorCommand::Start {stop,..}=managed.recv_timeout(Duration::from_secs(4)).unwrap()
+                else {panic!("un lancement supervisé attendu")};
+            let deadline=Instant::now()+Duration::from_secs(6);
+            while !stop.is_requested() {assert!(Instant::now()<deadline);thread::sleep(Duration::from_millis(1));}
+            stop.complete(StopOutcome::Stopped);
+            assert!(!managed.try_iter().any(|cmd|matches!(cmd,ManagedSupervisorCommand::Start{..})),"aucun second lancement");
+        });
+        let command=WrapperToDaemon::NativeDelegation {request:request("lost241")};
+        let mut first=UnixStream::connect(&socket).unwrap();let mut reader=BufReader::new(first.try_clone().unwrap());
+        let registration=crate::mcp_identity::auxiliary_registration(OWNER,"instance-1",&socket).unwrap();
+        writeln!(first,"{}",bridget_transport::protocol::encode(&registration).unwrap()).unwrap();
+        let mut line=String::new();reader.read_line(&mut line).unwrap();
+        assert!(matches!(serde_json::from_str::<DaemonToWrapper>(&line).unwrap(),DaemonToWrapper::Registered{..}));
+        writeln!(first,"{}",bridget_transport::protocol::encode(&command).unwrap()).unwrap();
+        drop(reader);drop(first); // admission appliquée, réponse volontairement perdue.
+        first_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let mut replays=Vec::new();
+        for _ in 0..2 {let path=socket.clone();let command=command.clone();replays.push(thread::spawn(move || {
+            let mut conn=registered_connection_until(OWNER,"instance-1",&path,Instant::now()+Duration::from_secs(3)).unwrap();
+            let DaemonToWrapper::NativeDelegationResult{result}=conn.send_then_wait(&command).unwrap() else{panic!("reçu attendu")};result
+        }));}
+        let a=replays.remove(0).join().unwrap();let b=replays.remove(0).join().unwrap();
+        assert_eq!(a["task_id"],b["task_id"]);let id=a["task_id"].as_str().unwrap().to_owned();
+        // Historique conservé supérieur à l'ancienne borne : les contrôles
+        // de la tâche cible doivent rester indépendants de cette collection.
+        let mut archived=state.lock().unwrap().delegation_store.get(&id).unwrap().unwrap();
+        archived.owner=Uuid::new_v4().to_string();archived.root_owner_agent_id=archived.owner.clone();
+        archived.owner_instance=Uuid::new_v4().to_string();archived.origin_owner_instance=archived.owner_instance.clone();
+        archived.state="result_available".into();archived.cleanup_done=true;archived.result_sent=true;
+        archived.result=Some("archive".into());archived.started_at=Some(unix_timestamp());
+        archived.completed_at=Some(unix_timestamp());archived.delivery_acked=false;
+        let mut history=rusqlite::Connection::open(&config.db_path).unwrap();
+        let tx=history.transaction().unwrap();
+        for index in 0..=crate::delegation::MAX_RETAINED_TASKS {
+            archived.task_id=Uuid::new_v4().to_string();archived.child=Uuid::new_v4().to_string();archived.mission=Uuid::new_v4().to_string();
+            let key=format!("archived241-{index}");
+            let NativeDelegationRequest::Delegate{request_id,..}=&mut archived.request else{panic!("fixture")};
+            *request_id=key.clone();
+            tx.execute("INSERT INTO native_delegations(task_id,owner_instance,request_id,canonical,payload) VALUES(?1,?2,?3,?4,?5)",
+                rusqlite::params![archived.task_id,archived.owner_instance,key,serde_json::to_vec(&archived.request).unwrap(),serde_json::to_string(&archived).unwrap()]).unwrap();
+        }
+        tx.commit().unwrap();
+        let mut conn=registered_connection_until(OWNER,"instance-1",&socket,Instant::now()+Duration::from_secs(3)).unwrap();
+        assert!(matches!(conn.exchange(&WrapperToDaemon::NativeDelegation{request:NativeDelegationRequest::Status{task_id:id.clone()}}).unwrap(),DaemonToWrapper::NativeDelegationResult{result} if result["task_id"]==id));
+        conn.send_then_wait(&WrapperToDaemon::NativeDelegation{request:NativeDelegationRequest::Cancel{task_id:id.clone()}}).unwrap();
+        drop(conn);server.join().unwrap();supervisor.join().unwrap();
+        assert_eq!(history.query_row("SELECT count(*) FROM native_delegations WHERE json_extract(payload,'$.owner')=?1",[OWNER],|row|row.get::<_,usize>(0)).unwrap(),1);
+        assert!(history.query_row("SELECT count(*) FROM native_delegations",[],|row|row.get::<_,usize>(0)).unwrap()>crate::delegation::MAX_RETAINED_TASKS);
+        let st=state.lock().unwrap();
+        assert_eq!(st.delegation_store.get(&id).unwrap().unwrap().state,"cancelled");
+        drop(st);drop(state);cleanup(&config);
+    }
+
+    #[test]
     fn native148_retry_ten_times_one_task_and_one_spawn() {
         let (mut st, config, rx, _reader) = fixture("replay");
         let first = handle_locked("conn-1", request("stable"), &mut st).unwrap();
@@ -35133,7 +35372,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             let frame=super::super::presence_tests::read_control(&mut reader);
             let DaemonToWrapper::CandidateProbeV2 {probe}=frame else {panic!("sonde attendue")};
             let now=unix_timestamp();
-            let result=CandidateProbeV2Result {version:WORKER_CANDIDATE_PROBE_V2_VERSION,
+            let result=CandidateProbeV2Result { tool_observations:Vec::new(),version:WORKER_CANDIDATE_PROBE_V2_VERSION,
                 correlation_id:probe.correlation_id,connection_epoch:probe.connection_epoch,
                 worker:probe.worker,admission_id:probe.admission_id,policy_revision:probe.policy_revision,
                 resources:HostResourceSnapshotV1 {source_observed_at:now,received_at:now,cpu_percent:None,
@@ -37475,4 +37714,130 @@ mod commit_view_reader221_tests {
         drop(st);super::tests::cleanup(&config);
     }
 
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_tool_requirements_follow_commands_not_mentions() {
+    use bridget_transport::protocol::WorkloadTool as T;
+    assert_eq!(identified_workload_requirements("Exécute `docker compose build` puis `cargo test`.").0,vec![T::Cargo,T::Docker,T::DockerCompose]);
+    for task in ["Compiler sans Docker", "Pas de Docker : `docker build .`", "Docker est facultatif", "Analyse du Dockerfile"] {
+        assert!(identified_workload_requirements(task).0.is_empty(),"{task}");
+    }
+    assert_eq!(identified_workload_requirements("Lance `cargo test` ; ne pas toucher au Dockerfile").0,vec![T::Cargo]);
+    assert_eq!(identified_workload_requirements("`cargo test` ; Docker facultatif : `docker build .`").0,vec![T::Cargo]);
+    assert_eq!(identified_workload_requirements("```sh\ncargo build --release\n```").0,vec![T::Cargo]);
+    for task in ["Sans Docker, lance `cargo test`", "Build sans cache : `cargo build`", "Sans Docker lance `cargo test`"] {
+        assert_eq!(identified_workload_requirements(task),(vec![T::Cargo],true));
+    }
+    assert_eq!(identified_workload_requirements("Lis `git status`"),(vec![T::Git],false));
+    assert_eq!(identified_workload_requirements("Lis `cargo --version`"),(vec![T::Cargo],false));
+
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_chained_commands_and_tool_specific_reserves() {
+    use bridget_transport::protocol::WorkloadTool as T;
+    for task in ["Docker est facultatif et lance `cargo test`", "Lance `cd crate && cargo test`",
+        "`env RUST_LOG=info cargo test`", "`MODE=test cargo test`", "`git status; cargo test | cat`"] {
+        let (tools, writes) = identified_workload_requirements(task);
+        assert!(tools.contains(&T::Cargo) && writes, "{task}: {tools:?}, {writes}");
+    }
+    for task in ["`echo \"x; cargo test\"`", "`printf 'cargo test && docker build .'`", "Facultatif : `cargo test`",
+        "Ne pas lancer `cargo test`", "`echo cargo test`", "`echo \"x\" cargo test`"] {
+        assert_eq!(identified_workload_requirements(task), (vec![], false), "{task}");
+    }
+    assert_eq!(identified_workload_requirements("`git -C \"repo path\" status && docker compose ps`"),
+        (vec![T::Git, T::Docker, T::DockerCompose], false));
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_known_mutations_do_not_enter_read_only_profiles() {
+    for command in ["git stash", "git restore file", "git rm file", "git mv a b", "git tag v1", "git init",
+        "git apply change.patch", "git revert HEAD", "git -C repo restore file", "cargo doc", "cargo fetch",
+        "cargo bench", "cargo +stable test", "npm start", "npm lint", "pnpm lint", "npm version patch",
+        "docker build .", "docker compose up", "docker compose run app", "docker compose config --output out.yml",
+        "git diff --output=result.patch", "git log -o result"] {
+        assert!(identified_workload_requirements(&format!("`{command}`")).1, "{command}");
+    }
+    for command in ["git --no-pager log", "git -C repo -c core.pager=cat status", "git worktree list",
+        "git stash list", "git tag --list", "git branch --show-current", "cargo fmt -- --check", "cargo +stable --version",
+        "cargo metadata --locked", "npm --version", "pnpm help", "make --dry-run", "docker version", "docker compose config"] {
+        assert!(!identified_workload_requirements(&format!("`{command}`")).1, "{command}");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_unanalysed_program_is_not_a_read_only_certificate() {
+    use bridget_transport::protocol::WorkloadTool as T;
+    // false signifie aucune écriture identifiée, pas absence d'effets du programme.
+    assert_eq!(identified_workload_requirements("`python3 scripts/gen.py`"), (vec![T::Python], false));
+    assert_eq!(identified_workload_requirements("`node generator.js`"), (vec![T::Node], false));
+    for command in ["bash -c 'cargo build'", "env -i cargo test", "npx prettier --write ."] {
+        assert_eq!(identified_workload_requirements(&format!("`{command}`")), (vec![], false));
+    }
+    // La sélection ne réécrit jamais les permissions pour un besoin non analysé.
+    let policy = serde_json::json!({"kind":"codex","sandbox_policy":{"type":"readOnly"}});
+    assert!(crate::native_permissions::permits_command_execution(&policy, false));
+    assert!(!crate::native_permissions::permits_command_execution(&policy, true));
+    assert_eq!(policy["sandbox_policy"]["type"], "readOnly");
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_real_admission_marks_only_the_authenticated_turn_snapshot() {
+    for source in ["provider_turn","native_wrapper"] {
+        let (state,config,rx,_reader,auto,_root)=tests::routing168_fixture(1);
+        let mut st=state.lock().unwrap();
+        let mut parent=st.native_permission_facts["conn-1"].0.clone();parent.source=source.into();
+        st.native_permission_facts.insert("conn-1".into(),(parent.clone(),None));
+        let plan=routing_admission_plan(&st.registry,"local",&auto).unwrap();
+        let request=routing_delegate(&auto,&plan.candidates[0],Some("high".into()),"local",None);
+        let view=admit_delegate("conn-1",&request,None,Some(&parent),&mut st,WorkspacePass::Shared,None).unwrap();
+        let WorkspaceAdmission::View(view)=view else {panic!("admission durable attendue")};
+        let task=st.delegation_store.get(view["task_id"].as_str().unwrap()).unwrap().unwrap();
+        if source=="provider_turn" {
+            assert_eq!(task.admission_authority_version,Some(1));
+            assert_eq!(task.admitted_parent().unwrap(),Some(&parent));
+        } else {assert_eq!(task.admission_authority_version,None);}
+        assert!(rx.try_recv().is_err(),"aucun lancement de modèle dans l'admission seule");
+        drop(st);drop(state);tests::cleanup(&config);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn spec241_routing_qualifies_required_host_tool_before_selection_without_admission() {
+    use std::os::unix::fs::PermissionsExt;
+    let (state,config,rx,_reader,mut request,root)=tests::routing168_fixture(1);
+    let tools=root.join("qualified-tools");std::fs::create_dir(&tools).unwrap();
+    state.lock().unwrap().source_env.insert("PATH".into(),tools.clone().into_os_string());
+    request.task="Exécute `docker compose build`.".into();
+    request.machine_id=Some("local".into());
+    let registry=state.lock().unwrap().registry.clone();
+    let mut unavailable=routing_admission_plan(&registry,"local",&request).unwrap();
+    let axes=unavailable.candidates.clone();
+    assert_eq!(observe_routing_candidates("conn-1",&request,&mut unavailable,None,&state).unwrap_err(),"routing_candidate_unavailable");
+    assert!(unavailable.observations.is_empty());
+    assert!(unavailable.decision_notes.iter().any(|note|note.contains("tool_absent")&&note.contains("docker")));
+    assert!(unavailable.candidates.is_empty(),"la cible incompatible est écartée");
+    assert_eq!(request.machine_id.as_deref(),Some("local"));
+    let executable=tools.join("docker");std::fs::write(&executable,"#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&executable,std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut read_only=routing_admission_plan(&registry,"local",&request).unwrap();
+    assert_eq!(observe_routing_candidates("conn-1",&request,&mut read_only,None,&state).unwrap_err(),"routing_candidate_unavailable");
+    assert!(read_only.decision_notes.iter().any(|note|note.contains("command_execution_unavailable")),
+        "Docker présent ne rend pas une compilation admissible en lecture seule");
+    request.task="Lis `docker compose ps`.".into();
+    let mut available=routing_admission_plan(&registry,"local",&request).unwrap();
+    let observed=observe_routing_candidates("conn-1",&request,&mut available,None,&state);
+    assert!(observed.is_ok(),"{observed:?} ; faits={:?}",available.decision_notes);
+    assert!(available.candidates.iter().all(|candidate|candidate.machine_id==axes[0].machine_id));
+    assert_eq!(available.observations.len(),1,"outil hôte confirmé et profil Codex capable de commandes");
+    assert!(state.lock().unwrap().delegation_store.tasks().unwrap().is_empty());
+    assert!(rx.try_recv().is_err());
+    drop(state);tests::cleanup(&config);
 }

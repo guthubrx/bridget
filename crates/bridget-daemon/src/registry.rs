@@ -1949,8 +1949,7 @@ pub(crate) fn validate_machines(machines: &BTreeMap<String, MachineProvision>) -
         {
             return Err("machine_provision_invalid".into());
         }
-        if machine.mappings.len() > MAX_MACHINE_MAPPINGS
-            || machine.allowed_agent_types.len() > MAX_MACHINE_MAPPINGS
+        if machine.allowed_agent_types.len() > MAX_MACHINE_MAPPINGS
         {
             return Err("machine_mapping_limit".into());
         }
@@ -3498,7 +3497,8 @@ mod tests {
         }
         assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_ok());
         value["machines"]["cartae"]["mappings"]["extra"] = mapping;
-        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_err());
+        assert!(AgentRegistry::from_json(&value.to_string(), "/tmp/agents.json").is_ok(),
+            "les mappings sont bornés par les octets du registre, pas 64 projets");
     }
 
     #[test]

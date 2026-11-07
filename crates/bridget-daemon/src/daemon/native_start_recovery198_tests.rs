@@ -222,6 +222,40 @@ pub(super) fn saved(state: &Arc<Mutex<DaemonState>>, id: &str) -> Value {
 }
 
 #[test]
+fn spec241_admitted_mission_survives_turn_end_but_not_native_revocation() {
+    for revoke in ["none", "new_turn", "owner", "instance", "root", "cancel", "historical"] {
+        let (state, config, mut task, receipt, _parent) = fixture();
+        task.admission_authority_version = (revoke != "historical").then_some(1);
+        {
+            let mut st = state.lock().unwrap();
+            st.native_permission_facts.remove("conn-1");
+            st.delegation_store.save(&task).unwrap();
+            match revoke {
+                "owner" | "root" => {
+                    let agent = if revoke == "owner" { &task.owner } else { &task.root_owner_agent_id };
+                    st.delegation_store.grant_agent(agent, "revoked-other-instance241",
+                        Path::new(&task.cwd), SpawnPosture::Discovery, true).unwrap();
+                }
+                "instance" => st.delegation_store.grant(&task.owner_instance,
+                    Path::new(&task.cwd), SpawnPosture::Discovery, true).unwrap(),
+                "cancel" => { task.state = "cancelled".into(); st.delegation_store.save(&task).unwrap(); }
+                _ => {}
+            }
+        }
+        let mut next = task.permission_snapshot.as_ref().unwrap().parent.clone();
+        next.run_id = "next-turn241".into(); next.revision += 1;
+        let result = gather(&state, "conn-1", &task.task_id, &receipt,
+            (revoke == "new_turn").then_some(&next), None);
+        if matches!(revoke, "none" | "new_turn") {
+            assert!(matches!(result, Ok(Ok(_))), "tour fini : {:?}", result.err());
+        } else if revoke == "cancel" {
+            assert!(matches!(result, Ok(Err(_))), "l'annulation ne démarre aucune reprise");
+        } else { assert!(result.is_err(), "révocation ou ancien contrat : {revoke}"); }
+        drop(state); cleanup(&config);
+    }
+}
+
+#[test]
 fn spec198_gather_accepts_current_equivalent_parent_without_mutating() {
     let (state, config, task, receipt, mut parent) = fixture();
     let before = saved(&state, &task.task_id);
@@ -699,9 +733,9 @@ fn spec198_recovery_cannot_reuse_an_expired_new_lease_as_current_time() {
 }
 
 fn native_flow(cut_after_fleet: bool, old_plan: bool, local_quota: bool) {
-    native_flow_with_routing202(cut_after_fleet, old_plan, local_quota, false)
+    native_flow_with_routing202(cut_after_fleet, old_plan, local_quota, false, false)
 }
-fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quota: bool, selected_effort: bool) {
+fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quota: bool, selected_effort: bool, admitted:bool) {
     use bridget_transport::protocol::WorkerPrepared;
     let (state, config, mut task, mut receipt, parent) = fixture_guarded202(false, selected_effort);
     if selected_effort {
@@ -709,6 +743,11 @@ fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quot
         state.lock().unwrap().delegation_store.save(&task).unwrap();
         receipt = v2_receipt202(&task, receipt, true);
         state.lock().unwrap().delegation_store.save(&task).unwrap();
+    }
+    if admitted {
+        task.admission_authority_version=Some(1);
+        let mut st=state.lock().unwrap();st.native_permission_facts.clear();
+        st.delegation_store.save(&task).unwrap();
     }
     let original = saved(&state, &task.task_id);
     let old = remote_command_identity(&state.lock().unwrap(), &task).unwrap();
@@ -744,11 +783,13 @@ fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quot
             effective_posture: task.effective_posture.unwrap(),
             prepared_at: unix_timestamp(),
         };
+        let mut next_turn_parent=parent.clone();
+        if admitted {next_turn_parent.run_id="following-turn-241".into();next_turn_parent.revision+=1;}
         let result = start_remote_task_with(
             &state,
             &task.task_id,
             &prepared,
-            &parent,
+            &next_turn_parent,
             "conn-1",
             None,
             None,
@@ -838,6 +879,7 @@ fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quot
                 }
                 WorkerRequestOperation::StartDetailed { start } => {
                     calls.push("start");
+                    if admitted {responder.lock().unwrap().conn_instances.remove("conn-1");}
                     assert_ne!(request.command.command_id, old_for_listener.command_id);
                     assert_ne!(request.command.instance_id, old_for_listener.instance_id);
                     assert_eq!(request.command.task_id, old_for_listener.task_id);
@@ -897,10 +939,11 @@ fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quot
         "conn-1",
         &task.task_id,
         &receipt,
-        Some(&parent),
+        (!admitted).then_some(&parent),
         None,
         None,
     );
+    if admitted {state.lock().unwrap().conn_instances.insert("conn-1".into(),task.owner_instance.clone());}
     if let Err(code) = &result {
         eprintln!("refus de la fixture198 avant fin du parcours : {code}");
     }
@@ -1611,7 +1654,7 @@ fn spec202_real_definition_drift_and_effort_change_still_refuse_precisely() {
 
 #[test]
 fn spec202_inbound_queue_strict_recovery_keeps_task_and_selected_routing() {
-    native_flow_with_routing202(false, false, false, true);
+    native_flow_with_routing202(false, false, false, true, false);
 }
 
 
@@ -1657,4 +1700,14 @@ fn spec210_workspace_response_keeps_correlation_epoch_and_late_channel() {
         "une autre commande de préparation sans preuve n'est pas historique connue");
     assert_eq!(saved(&state,&task.task_id),before);
     drop(state);cleanup(&config);
+}
+
+#[test]
+fn spec241_admitted_recovery_reaches_release_after_parent_turn_and_connection_end() {
+    native_flow_with_routing202(false,false,false,false,true);
+}
+
+#[test]
+fn spec241_admitted_start_uses_task_authority_when_caller_has_next_turn_fact() {
+    native_flow_with_routing202(false,false,true,false,true);
 }

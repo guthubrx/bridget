@@ -372,7 +372,7 @@ pub(super) fn repair(
         .permission_snapshot
         .as_ref()
         .ok_or("permission_attestation_unavailable")?;
-    remote_parent_proof(state, &saved.owner, &snapshot.parent)?;
+    remote_parent_proof(state, &saved.owner, &snapshot.parent, saved.admitted_parent()?.map(|_| &saved))?;
     let prepared = remote_worker_roundtrip(
         state,
         &worker,
@@ -517,7 +517,7 @@ pub(super) fn repair(
             return Err(code);
         }
     }
-    remote_parent_proof(state, &saved.owner, &snapshot.parent)?;
+    remote_parent_proof(state, &saved.owner, &snapshot.parent, saved.admitted_parent()?.map(|_| &saved))?;
     {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let current = st

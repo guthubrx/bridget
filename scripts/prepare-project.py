@@ -19,7 +19,7 @@ import tempfile
 import time
 
 TIMEOUT = 300
-MAX_JSON = 1024 * 1024
+MAX_JSON = 16 * 1024 * 1024
 SOURCE_LOCK_WAIT_SECS = 30.0
 
 class Refused(Exception):
@@ -93,6 +93,7 @@ def locked(path, wait=0.0):
 def atomic_json(path, value, previous=None):
     path = Path(path)
     data = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode()
+    require(len(data) <= MAX_JSON, "project_preparation_registry_size")
     fd, name = tempfile.mkstemp(prefix=".project-prepare-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as output:
@@ -343,7 +344,6 @@ def publish_mapping(registry_path, request, key, mapping):
     previous = mappings.get(key)
     require(previous is None or previous == mapping, "project_preparation_mapping_changed")
     if previous is None:
-        require(len(mappings) < 64, "machine_mapping_limit")
         mappings[key] = mapping
         atomic_json(registry_path, registry, raw)
 
@@ -517,9 +517,14 @@ def prepare(request):
     registry_path = absolute(request["registry"])
     source = absolute(request["source_root"])
     cwd = absolute(request["cwd"])
-    require(source.resolve() == source and cwd.resolve() == cwd and contained(cwd, source),
-            "cwd_outside_parent_project")
     commit = request.get("commit")
+    local_directory = commit is None and request["machine_id"] == request["origin_host"]
+    require(contained(cwd, source) and (local_directory
+            or (source.resolve() == source and cwd.resolve() == cwd)),
+            "cwd_outside_parent_project")
+    if local_directory:
+        require(source.resolve().is_dir() and cwd.resolve().is_dir()
+                and contained(cwd.resolve(), source.resolve()), "cwd_outside_parent_project")
     if commit:
         require(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit) is not None,
                 "expected_base_commit_invalid")
@@ -575,6 +580,32 @@ def prepare(request):
                 request["linked_checkout"] = str(source.relative_to(mapped_source))
         if local_key in selected.get("mappings", {}):
             request["project_id"] = local_key
+        if commit is None and request["machine_id"] == request["origin_host"]:
+            # Dossier local déjà autorisé par le port d'origine. Aucun dépôt,
+            # copie ou tunnel vers soi-même ; ne pas modifier un mapping existant.
+            target_registry = remote_registry(request)
+            target_lock = target_registry.parent / "project-preparation.lock"
+            own_lock = registry_path.parent / "project-preparation.lock"
+            with (contextlib.nullcontext() if target_lock == own_lock else locked(target_lock)):
+                _, native = registry_read(target_registry)
+                native_machine = machine(native, request)
+                key, mapping = select_mapping(native_machine, request, native)
+                if key not in native_machine.get("mappings", {}):
+                    physical = source.resolve()
+                    home = Path.home().resolve()
+                    protected = [target_registry.parent.resolve(), registry_path.parent.resolve(),
+                                 home / ".cache/bridget-core", home / ".local/share/bridget-federation"]
+                    require(physical != Path("/") and physical != home and not any(
+                        contained(physical, root) or contained(root, physical) for root in protected),
+                        "project_preparation_path_protected")
+                    mapping = dict(mapping, remote_root=str(source.resolve()),
+                                   expected_git_identity="local-directory:" + digest(
+                                       (request["origin_host"] + "\0" + str(source)).encode()))
+                publish_mapping(target_registry, request, key, mapping)
+                result = remote_inspect(dict(request, project_id=key), target_registry)
+                require(not result["needs_bundle"], "project_preparation_destination_missing")
+            publish_mapping(registry_path, request, key, mapping)
+            return result
         if objects_only and request["machine_id"] == request["origin_host"]:
             # Même machine attestée : réutiliser le registre du worker natif,
             # sans exiger un tunnel SSH vers soi-même ni créer un checkout.

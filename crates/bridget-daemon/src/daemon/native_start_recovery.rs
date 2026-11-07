@@ -410,7 +410,8 @@ fn gather(
         .remote_placement
         .as_ref()
         .ok_or("remote_placement_missing")?;
-    let parent = parent_fact(&st, &owner, &instance, Some(request_id), attested)?
+    let parent = parent_fact(&st, &owner, &instance, Some(request_id),
+        task.admitted_parent()?.or(attested))?
         .ok_or("permission_attestation_unavailable")?;
     let snapshot = task
         .permission_snapshot
@@ -919,7 +920,10 @@ pub(super) fn resume(
     };
     // Preuve native fraîche hors mutex ; relue après chaque retour d'E/S.
     let attest = |ctx: &Context| -> Result<(), String> {
-        match (thread, permission_proof) {
+        let task = state.lock().unwrap_or_else(|e| e.into_inner()).delegation_store
+            .get(task_id)?.ok_or("task_unavailable")?;
+        let admitted = task.admitted_parent()?.is_some();
+        if !admitted { match (thread, permission_proof) {
             (Some(expected), Some(proof)) => {
                 let fresh = origin_proof::reattest(conn, proof, state)
                     .map_err(origin_proof::attestation_failure)?;
@@ -930,7 +934,8 @@ pub(super) fn resume(
             (None, None) => {}
             _ => return Err("permission_attestation_unavailable".into()),
         }
-        remote_parent_proof(state, &ctx.owner, &ctx.parent).map(|_| ())
+        }
+        remote_parent_proof(state, &ctx.owner, &ctx.parent, admitted.then_some(&task)).map(|_| ())
     };
     attest(&ctx)?;
     persist_plan(state, task_id)?;

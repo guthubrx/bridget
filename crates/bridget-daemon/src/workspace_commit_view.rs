@@ -11,7 +11,6 @@ use std::process::{ChildStderr, ChildStdin, ChildStdout};
 
 const NOTICE: &str = ".bridget-commit-view.json";
 const MAX_ENTRIES: usize = 65_536;
-const MAX_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const MAX_LINK: u64 = 4096;
 const DEADLINE: Duration = Duration::from_secs(30 * 60);
 
@@ -303,10 +302,7 @@ pub(super) fn plan(source: &Path, base: &str) -> Result<Manifest, String> {
         if selected {
             total = total
                 .checked_add(bytes)
-                .ok_or_else(|| refusal("byte_limit"))?;
-            if total > MAX_BYTES {
-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, total, MAX_BYTES));
-            }
+                .ok_or_else(|| refusal("byte_count_overflow"))?;
         }
         if fields[0] == "120000" && bytes > MAX_LINK {
             return Err(refusal("link_unsupported"));
@@ -997,10 +993,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         if entry.selected {
             total = total
                 .checked_add(entry.bytes)
-                .ok_or_else(|| refusal("byte_limit"))?;
-            if total > MAX_BYTES {
-                return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, total, MAX_BYTES));
-            }
+                .ok_or_else(|| refusal("byte_count_overflow"))?;
         }
     }
     manifest_paths(manifest)?;
@@ -1084,7 +1077,16 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
         if Instant::now() >= deadline {
             return Err(refusal("view_audit_timeout"));
         }
-        for name in directory.names()? {
+        let mut names=directory.names()?;
+        if prefix.is_empty() {
+            // La carte lie les tailles/objets au manifeste privé. La vérifier
+            // AVANT tout contenu évite de hacher un fichier volontairement
+            // gigantesque pour un manifeste déjà divergent.
+            let index=names.iter().position(|name|name==NOTICE)
+                .ok_or_else(||refusal("view_integrity_failed"))?;
+            names.swap(0,index);
+        }
+        for name in names {
             count += 1;
             if count > MAX_ENTRIES + 1 {
                 return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, count as u64, (MAX_ENTRIES + 1) as u64));
@@ -1130,10 +1132,7 @@ fn audit_inventory(manifest: &Manifest, root: &Path) -> Result<Audit, String> {
                 }
                 audited_bytes = audited_bytes
                     .checked_add(entry.bytes)
-                    .ok_or_else(|| refusal("byte_limit"))?;
-                if audited_bytes > MAX_BYTES {
-                    return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, audited_bytes, MAX_BYTES));
-                }
+                    .ok_or_else(|| refusal("byte_count_overflow"))?;
                 check_file(entry, &directory, &name, deadline)?;
             } else {
                 return Err(refusal("view_integrity_failed"));
@@ -1176,10 +1175,7 @@ pub(super) fn materialize(
     if entry.selected || entry.mode == "120000" {
         return Err(refusal("view_integrity_failed"));
     }
-    let selected_bytes = inventory.bytes.checked_add(entry.bytes).ok_or_else(||refusal("byte_limit"))?;
-    if selected_bytes > MAX_BYTES {
-        return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::SelectedBytes, selected_bytes, MAX_BYTES));
-    }
+    let _selected_bytes = inventory.bytes.checked_add(entry.bytes).ok_or_else(||refusal("byte_count_overflow"))?;
     let root = Directory::open(root)?;
     let mut objects = Objects::open(source)?;
     // Objet absent : aucun dossier ou fichier créé. Sa disparition ultérieure
@@ -1326,16 +1322,11 @@ impl ViewPlan {
         let metadata=data.0.metadata().map_err(compact::io_failure)?;
         if metadata.uid()!=unsafe{libc::geteuid()} || metadata.mode()&0o077!=0
             || metadata.dev()!=source_meta.dev() {return Err(refusal("destination_invalid"));}
-        let mut stat=std::mem::MaybeUninit::<libc::statvfs>::uninit();
-        if unsafe{libc::fstatvfs(data.0.as_raw_fd(),stat.as_mut_ptr())}!=0 {
-            return Err(refusal("storage_space_unavailable"));
-        }
-        let stat=unsafe{stat.assume_init()};
-        let block=if stat.f_frsize>0 {stat.f_frsize as u128} else {stat.f_bsize as u128};
-        if block==0 {return Err(refusal("storage_space_unavailable"));}
+        let (available,block)=super::available_space(&data.0)
+            .map_err(|_|refusal("storage_space_unavailable"))?;
         let needed=manifest.entries.iter().filter(|entry|entry.selected).map(|entry|entry.bytes as u128).sum::<u128>()
             +manifest.entries.len() as u128*block+MAX_INTENT as u128+MAX_NOTICE as u128+MAX_PLAN as u128;
-        if (stat.f_bavail as u128).saturating_mul(block)<needed {
+        if available<needed {
             return Err("workspace_disk_full: espace insuffisant pour cette vue".into());
         }
         self.live()?;

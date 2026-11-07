@@ -7057,6 +7057,26 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         warn!("entretien: thread détaché impossible: {error}");
     }
 
+    // Les vues possèdent leurs rédacteurs. Leur fermeture peut attendre une
+    // socket lente ; aucune inscription, lecture ou annulation n'en dépend.
+    // Un seul collecteur, sans file supplémentaire, et sans Arc gardé en veille.
+    let views_state = Arc::downgrade(&state);
+    thread::Builder::new().name("attach-cleanup".into()).spawn(move || {
+        loop {
+            if sleep_until_shutdown(Duration::from_millis(100)) { return; }
+            let Some(shared) = views_state.upgrade() else { return; };
+            let Some(_activity) = update_activity(&shared) else { continue; };
+            let (controls, views) = {
+                let mut st = shared.lock().unwrap_or_else(|e| e.into_inner());
+                collect_closed_attach_views(&mut st)
+            };
+            drop(_activity);
+            drop(shared);
+            let _ = execute_controls(controls);
+            for view in views { view.close_and_join(); }
+        }
+    })?;
+
     let st_reminder = state.clone();
     thread::spawn(move || {
         loop {
@@ -18870,7 +18890,7 @@ fn handle_worker_message(
                 && capabilities.iter().all(|capability| {
                     matches!(
                         capability,
-                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
+                        WorkerCapability::CandidateProbeV1 | WorkerCapability::CandidateProbeV2 | WorkerCapability::WorkloadToolsV1 | WorkerCapability::ReleaseLeaseV2 | WorkerCapability::ParentSourceProofV1 | WorkerCapability::ResultSlotDeadlineV1 | WorkerCapability::OriginProofV1 | WorkerCapability::OriginProjectContextV1 | WorkerCapability::WorkspaceRepairV1 | WorkerCapability::StartRecoveryV1 | WorkerCapability::WorkspaceFailureV1 | WorkerCapability::ProviderCatalogueV1 | WorkerCapability::ModelOptionsV1 | WorkerCapability::ProviderAccountsV1 | WorkerCapability::WorkspaceViewV1 | WorkerCapability::ExecutionStatusV1 | WorkerCapability::ProgramCompatibilityV1
                     ) || (crate::workspace_git::COMMIT_VIEW_LAUNCH_ENABLED
                         && matches!(capability,WorkerCapability::WorkspaceViewCreateV1))
                 })
@@ -19702,6 +19722,9 @@ fn remote_candidate_probe_v2(
             && !session.capabilities.contains(&WorkerCapability::ProviderAccountsV1) {
             return Err(WorkerRefusal::CapabilityRequired);
         }
+        if !probe.required_tools.is_empty() && !session.capabilities.contains(&WorkerCapability::WorkloadToolsV1) {
+            return Err(WorkerRefusal::CapabilityRequired);
+        }
         if probe.candidates.iter().any(|candidate|candidate.service_tier.is_some())
             && !session.capabilities.contains(&WorkerCapability::ModelOptionsV1) {
             return Err(WorkerRefusal::CapabilityRequired);
@@ -19853,40 +19876,6 @@ fn handle_wrapper_message_with_peer(
     }
     if let WrapperToDaemon::HumanThreadViewV1 { request } = &msg {
         return Some(handle_human_thread_view(conn_id, request, state));
-    }
-    let human_client_handshake = matches!(
-        &msg,
-        WrapperToDaemon::RoleHandshake {
-            role: ConnectionRole::Client
-        }
-    ) || matches!(&msg,WrapperToDaemon::ClientHello{capabilities,..}
-            if capabilities.as_slice()==[ClientCapability::HumanThreadViewV1]
-                || capabilities.as_slice()==[ClientCapability::HumanThreadViewRecentV1]
-                || capabilities.as_slice()==[ClientCapability::HumanThreadWatchV1]
-                || capabilities.as_slice()==[ClientCapability::HumanLineageViewV1]
-                || capabilities.as_slice()==[ClientCapability::HumanLineageWatchV1]
-                || capabilities.as_slice()==[ClientCapability::HumanLineageCancelV1]);
-    let human_client = {
-        let st = state.lock().unwrap_or_else(|e| e.into_inner());
-        st.connection_roles.get(conn_id) == Some(&ConnectionRole::Client)
-            && st.client_negotiations.get(conn_id).is_some_and(|n| {
-                n.capabilities.as_slice() == [ClientCapability::HumanThreadViewV1]
-                    || n.capabilities.as_slice() == [ClientCapability::HumanThreadViewRecentV1]
-                    || n.capabilities.as_slice() == [ClientCapability::HumanThreadWatchV1]
-                    || n.capabilities.as_slice() == [ClientCapability::HumanLineageViewV1]
-                    || n.capabilities.as_slice() == [ClientCapability::HumanLineageWatchV1]
-                    || n.capabilities.as_slice() == [ClientCapability::HumanLineageCancelV1]
-            })
-    };
-    if !human_client_handshake && !human_client {
-        let (controls, views) = {
-            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-            collect_closed_attach_views(&mut st)
-        };
-        let _ = execute_controls(controls);
-        for view in views {
-            view.close_and_join();
-        }
     }
     // Sonde seule : aucun principal n'est acquis par l'identité publique du daemon.
     if matches!(&msg, WrapperToDaemon::DaemonIdentityRequest) {
@@ -24176,6 +24165,7 @@ fn handle_wrapper_message_with_peer(
                     "auto_delegate_v1".to_string(),
                     "auto_delegate_v2".to_string(),
                     "worker_candidate_probe_v2".to_string(),
+                    "worker_workload_tools_v1".to_string(),
                     "worker_release_lease_v2".to_string(),
                     "worker_parent_source_proof_v1".to_string(),
                     "worker_result_slot_deadline_v1".to_string(),
@@ -44466,6 +44456,40 @@ mod presence_tests {
         }
         assert!(state.attach_subscriptions.is_empty());
         assert!(state.attach_views.is_empty());
+        let _ = std::fs::remove_file(config.db_path);
+    }
+
+    #[test]
+    fn spec241_identity_response_does_not_join_another_views_writer() {
+        let (mut state, config) = state_with_registered_agent("241");
+        let view = AttachView::suspended_with_sender("241-slow", state.view_closed_tx.clone());
+        let (release_tx, release_rx) = mpsc::channel();
+        *view.worker.lock().unwrap() = Some(thread::spawn(move || {
+            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        }));
+        state.attach_subscriptions.insert("241-slow".into(), AttachSubscription {
+            agent: "241-agent".into(), attach_conn: "241-attach".into(),
+            wrapper_conn: "241-wrapper".into(), caught_up: false,
+        });
+        state.attach_views.insert("241-slow".into(), view.clone());
+        view.close_and_notify();
+        let shared = Arc::new(Mutex::new(state));
+        let serving = shared.clone();
+        let (tx, rx) = mpsc::channel();
+        let handler = thread::spawn(move || {
+            tx.send(handle_wrapper_message("241-probe", WrapperToDaemon::DaemonIdentityRequest,
+                &serving)).unwrap();
+        });
+        let response = rx.recv_timeout(Duration::from_millis(150));
+        release_tx.send(()).unwrap();
+        handler.join().unwrap();
+        // La libération du rédacteur sert seulement à fermer proprement le test.
+        assert!(matches!(response, Ok(Some(DaemonToWrapper::DaemonIdentityReport { .. }))),
+            "une vue d'une autre session retient la réponse : {response:?}");
+        let (controls, views) = collect_closed_attach_views(&mut shared.lock().unwrap());
+        let _ = execute_controls(controls);
+        for view in views { view.close_and_join(); }
+        view.close_and_join();
         let _ = std::fs::remove_file(config.db_path);
     }
 

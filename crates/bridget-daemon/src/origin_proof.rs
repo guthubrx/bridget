@@ -107,9 +107,11 @@ fn execute_with_context(
                     .map_err(|_|WorkerRefusal::PermissionsChanged)?;
                 let registry = registry.ok_or(WorkerRefusal::Unauthorized)?;
                 let preparation = (|| {
-                    let root=std::fs::canonicalize(&parent.cwd).map_err(|_|"project_preparation_path".to_owned())?;
+                    let selected=crate::lifecycle::source_root(parent,std::path::Path::new(&source.cwd))?;
+                    let root=std::fs::canonicalize(&selected).map_err(|_|"project_preparation_path".to_owned())?;
                     let cwd=std::fs::canonicalize(&source.cwd).map_err(|_|"project_preparation_path".to_owned())?;
-                    if root.to_string_lossy()!=parent.cwd || cwd.to_string_lossy()!=source.cwd || !cwd.starts_with(&root) {
+                    if ((!crate::native_permissions::unrestricted_source_scope(parent))
+                        && (root!=selected || cwd.to_string_lossy()!=source.cwd)) || !cwd.starts_with(&root) {
                         return Err("cwd_outside_parent_project".to_owned());
                     }
                     crate::lifecycle::validate_parent_source_base(parent,source).map_err(closed_source_error)?;
@@ -122,7 +124,7 @@ fn execute_with_context(
                         .map_err(|_|"project_preparation_registry_changed".to_owned())?;
                     let expected=before.machine(target_machine)?;
                     let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,
-                        "origin_host":request.worker.machine_id,"source_root":parent.cwd,
+                        "origin_host":request.worker.machine_id,"source_root":selected,
                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
                         "objects_only":matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))});
                     let prepared=crate::project_preparation::prepare_receipt_until(&payload,
@@ -160,7 +162,7 @@ fn execute_with_context(
                         .map_err(|_| WorkerRefusal::PermissionsChanged)?;
                 let source_error = source.as_ref().and_then(|source| {
                     (|| {
-                        let root = std::fs::canonicalize(&parent.cwd)
+                        let root = std::fs::canonicalize(crate::lifecycle::source_root(parent,std::path::Path::new(&source.cwd))?)
                             .map_err(|_| "workspace_preflight_technical".to_owned())?;
                         let cwd = std::fs::canonicalize(&source.cwd)
                             .map_err(|_| "workspace_preflight_technical".to_owned())?;

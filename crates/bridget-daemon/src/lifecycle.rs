@@ -439,6 +439,24 @@ pub(crate) fn prepare_spawn_parts(
     })
 }
 
+/// Sélection logique dans les seules racines du parent déjà attestées.
+/// Aucune I/O : le maître ne doit pas ouvrir un chemin de la machine source.
+/// Les appelants physiques vérifient canonicalisation, existence et protections.
+pub(crate) fn source_root(parent:&bridget_transport::protocol::ProviderPermissions,cwd:&Path)
+    ->Result<PathBuf,String> {
+    let valid=|path:&Path|path.is_absolute() && !path.components().any(|c|matches!(c,std::path::Component::ParentDir));
+    if !valid(cwd) {return Err("cwd_outside_parent_project".into());}
+    let root=Path::new(&parent.cwd);
+    if valid(root) && cwd.starts_with(root) {return Ok(root.to_path_buf());}
+    let additional=[parent.provider_policy.get("additional_directories"),
+        parent.provider_policy.pointer("/sandbox_policy/writableRoots")];
+    additional.into_iter().flatten().filter_map(|v|v.as_array()).flatten()
+        .filter_map(|v|v.as_str()).map(Path::new).filter(|root|valid(root)&&cwd.starts_with(root))
+        .max_by_key(|root|root.components().count()).map(Path::to_path_buf)
+        .or_else(||crate::native_permissions::unrestricted_source_scope(parent).then(||cwd.to_path_buf()))
+        .ok_or_else(||"cwd_outside_parent_project".into())
+}
+
 /// Une vue exporte la racine de A, pas un sous-arbre hérité d'un cwd.
 /// La racine Git doit donc appartenir au périmètre du parent attesté.
 /// Git est lu sur la machine source et hors mutex du maître.
@@ -446,8 +464,13 @@ pub(crate) fn validate_parent_source_base(
     parent:&bridget_transport::protocol::ProviderPermissions,
     request:&bridget_transport::protocol::WorkerSourceBase,
 )->Result<(),String> {
+    let selected=source_root(parent,Path::new(&request.cwd))?;
+    if selected!=Path::new(&parent.cwd) && !crate::native_permissions::unrestricted_source_scope(parent)
+        && std::fs::canonicalize(&selected).ok().as_deref()!=Some(selected.as_path()) {
+        return Err("cwd_outside_parent_project".into());
+    }
     if matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})) {
-        let allowed=std::fs::canonicalize(&parent.cwd)
+        let allowed=std::fs::canonicalize(source_root(parent,Path::new(&request.cwd))?)
             .map_err(|_|"workspace_preflight_technical")?;
         let cwd=std::fs::canonicalize(&request.cwd)
             .map_err(|_|"workspace_preflight_technical")?;

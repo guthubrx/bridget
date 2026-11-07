@@ -5,6 +5,25 @@ use bridget_transport::protocol::{NativePermissionSnapshot, ProviderPermissions,
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
+/// Capacité du profil projeté, distincte de la présence d'un exécutable hôte.
+/// Aucun ajout de Bash aux profils de lecture seule.
+pub(crate) fn permits_command_execution(policy: &Value, requires_workspace_write: bool) -> bool {
+    match policy["kind"].as_str() {
+        Some("codex") => matches!(policy["sandbox_policy"]["type"].as_str(),
+            Some("workspaceWrite" | "dangerFullAccess"))
+            || (!requires_workspace_write && policy["sandbox_policy"]["type"]=="readOnly"),
+        Some("claude") => {
+            let tools = &policy["tools"];
+            let exposed = tools == &json!({"type":"preset","preset":"claude_code"})
+                || tools.as_array().is_some_and(|tools| tools.iter().any(|tool| tool == "Bash"));
+            exposed && (!requires_workspace_write || !matches!(policy["permission_mode"].as_str(),Some("default"|"plan")))
+                && policy["disallowed_tools"].as_array().is_none_or(|tools|
+                !tools.iter().any(|tool|tool.as_str().is_some_and(|name|name=="*" || name.starts_with("Bash"))))
+        }
+        _ => false,
+    }
+}
+
 /// Sources administrées du système réellement exécutant. Aucun chemin d'un
 /// autre OS ne constitue une preuve d'absence de politique sur cette machine.
 fn managed_settings_root(platform: &str) -> Result<PathBuf, String> {
@@ -97,10 +116,18 @@ fn authenticated_t3_tool_scope171(parent: &ProviderPermissions) -> bool {
 /// plan_exit=deny ne crée aucun droit Codex : ce moteur n’émet pas cet événement ;
 /// approval_policy=never refuse toute approbation au lieu d’ouvrir une médiation.
 fn native_t3_codex_scope214(parent: &ProviderPermissions, definition: &AgentDefinition) -> bool {
+    parent.driver == "claude_stream_json" && definition.protocol == "codex_app_server"
+        && definition.mcp.interactive == "codex" && unrestricted_source_scope(parent)
+}
+
+/// Portée de fichiers explicite, pas le seul libellé « full-access ».
+/// Les profils Claude avec règles/sources privées gardent leurs racines déclarées.
+pub(crate) fn unrestricted_source_scope(parent:&ProviderPermissions)->bool {
+    if bridget_transport::protocol::validate_permissions(parent,parent.source=="provider_turn").is_err() {return false;}
+    if parent.driver=="codex_app_server" && parent.runtime_mode=="full-access"
+        && parent.provider_policy["sandbox_policy"]["type"]=="dangerFullAccess" {return true;}
     let policy = &parent.provider_policy;
     authenticated_t3_tool_scope171(parent)
-        && definition.protocol == "codex_app_server"
-        && definition.mcp.interactive == "codex"
         && parent.runtime_mode == "full-access"
         && policy["permission_mode"] == "bypassPermissions"
         && policy["tools"] == json!({"type":"preset","preset":"claude_code"})
@@ -273,13 +300,26 @@ fn mapped_existing_permission_directory171(mapping: &crate::registry::ProjectMap
 }
 
 fn project_policy_directories171(policy: &mut Value, mapping: &crate::registry::ProjectMapping,
-    protected: &[PathBuf], working_alias:Option<&Path>) -> Result<(), String> {
+    protected: &[PathBuf], working_alias:Option<&Path>, same_host:bool) -> Result<(), String> {
     let mut projected = policy.clone();
     for pointer in ["/sandbox_policy/writableRoots", "/additional_directories"] {
         if let Some(paths) = projected.pointer_mut(pointer) {
             let mapped = paths.as_array().ok_or("permission_mapping_unavailable")?.iter()
-                .map(|path| mapped_existing_permission_directory171(mapping,
-                    Path::new(path.as_str().ok_or("permission_mapping_unavailable")?), protected, working_alias))
+                .map(|path| {
+                    let original=Path::new(path.as_str().ok_or("permission_mapping_unavailable")?);
+                    if same_host && !original.starts_with(&mapping.source_root)
+                        && !mapping.additional_root.as_ref().is_some_and(|extra|original.starts_with(&extra.source_root)) {
+                        // Origine=cible vient du worker authentifié, pas du chemin.
+                        // Ce chemin est déjà dans les droits attestés du parent ;
+                        // il n'a pas à être provisionné comme une copie distante.
+                        use std::os::unix::fs::MetadataExt;
+                        let canonical=crate::registry::validate_unprotected_local_path(original,protected)?;
+                        let meta=std::fs::symlink_metadata(original).map_err(|_|"permission_mapping_unavailable")?;
+                        verify_permission_directory171(original,meta.uid(),meta.mode()&0o7777,protected)?;
+                        return Ok(canonical);
+                    }
+                    mapped_existing_permission_directory171(mapping,original,protected,working_alias)
+                })
                 .collect::<Result<Vec<_>, String>>()?;
             *paths = serde_json::to_value(mapped).map_err(|_| unavailable())?;
         }
@@ -380,7 +420,7 @@ pub(crate) fn project_remote_permissions(
     protected: &[PathBuf],
 ) -> Result<(Value, SpawnPosture), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = project_remote_permissions_in_operation(parent, definition, mapping, execution_cwd, source, posture, protected, &mut operation, false)?;
+    let result = project_remote_permissions_in_operation(parent, definition, mapping, execution_cwd, source, posture, protected, &mut operation, false, false)?;
     operation.finish()?;
     Ok(result)
 }
@@ -395,6 +435,7 @@ pub(crate) fn project_remote_permissions_in_operation(
     protected: &[PathBuf],
     operation: &mut PermissionReadOperation,
     commit_view:bool,
+    same_host:bool,
 ) -> Result<(Value, SpawnPosture), String> {
     bridget_transport::protocol::validate_permissions(parent, parent.source == "provider_turn")?;
     let root = crate::registry::validate_unprotected_local_path(&mapping.remote_root, protected)?;
@@ -416,13 +457,15 @@ pub(crate) fn project_remote_permissions_in_operation(
     }
     let working_alias=commit_view.then(||Path::new(&parent.cwd));
     let project_path = |origin: &str| mapped_existing_permission_directory171(mapping, Path::new(origin), protected, working_alias);
-    mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;
+    let local_source=same_host && crate::lifecycle::source_root(parent,execution_cwd)
+        .is_ok_and(|selected|selected==root && execution_cwd.starts_with(&selected));
+    if !local_source {mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;}
     if let Some(extra) = &mapping.additional_root {
         crate::registry::validate_additional_mapping171(mapping)?;
         verify_permission_directory171(&extra.remote_root, extra.remote_uid, extra.remote_mode, protected)?;
     }
     let cwd = crate::registry::validate_unprotected_local_path(execution_cwd, protected)?;
-    if !cwd.starts_with(project_path(&parent.cwd)?) || !cwd.is_dir() {
+    if (!local_source && !cwd.starts_with(project_path(&parent.cwd)?)) || !cwd.is_dir() {
         return Err("permission_mapping_unavailable".into());
     }
     let mut translated = parent.clone();
@@ -439,7 +482,7 @@ pub(crate) fn project_remote_permissions_in_operation(
             require_isolated_claude_mount171(definition)?;
         }
     }
-    project_policy_directories171(&mut translated.provider_policy, mapping, protected, working_alias)?;
+    project_policy_directories171(&mut translated.provider_policy, mapping, protected, working_alias, same_host)?;
     let prepared = if definition.protocol == "claude_stream_json" {
         Some(capture_native_target_context(definition, &cwd, source)?)
     } else { None };

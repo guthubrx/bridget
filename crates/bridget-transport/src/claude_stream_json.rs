@@ -4072,9 +4072,17 @@ exit 0
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        // /usr/bin/python3 peut être le lanceur Xcode, qui ajoute CPATH/SDKROOT
+        // et consomme le budget avant l'entrée du faux programme. Tester le
+        // transport avec l'interpréteur réellement résolu, comme sur Linux.
+        let resolved=std::process::Command::new("/usr/bin/python3")
+            .args(["-c","import sys; print(sys.executable)"])
+            .env_clear().env("PATH","/usr/bin:/bin").output().unwrap();
+        assert!(resolved.status.success());
+        let interpreter=PathBuf::from(String::from_utf8(resolved.stdout).unwrap().trim()).canonicalize().unwrap();
         let options = ClaudeIsolatedDecisionOptions {
-            command: executable.to_string_lossy().into_owned(),
-            command_args: vec![],
+            command: interpreter.to_string_lossy().into_owned(),
+            command_args: vec![executable.to_string_lossy().into_owned()],
             model: "claude-fixture-168".into(),
             environment: vec![
                 ("HOME".into(), root.to_string_lossy().into_owned()),
@@ -4139,7 +4147,8 @@ sys.stdout.write((root/'trace.jsonl').read_text())"#,
         assert_eq!(environment["PATH"], "/usr/bin:/bin");
         for name in environment.keys() {
             assert!(
-                matches!(name.as_str(), "HOME" | "PATH" | "CLAUDE_CONFIG_DIR" | "LC_CTYPE"),
+                matches!(name.as_str(), "HOME" | "PATH" | "CLAUDE_CONFIG_DIR" | "LC_CTYPE")
+                    || (cfg!(target_os="macos") && name=="__CF_USER_TEXT_ENCODING"),
                 "variable inattendue chez l'enfant : {name}"
             );
         }
