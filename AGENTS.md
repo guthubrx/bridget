@@ -129,9 +129,11 @@ passage, CLIglobalmesurée séparément avecwarningprojetnonattesté.54copies/bi
 Macmainseul ; sourcesmain4hôtes alignées ; WTSYS/historiques et WTmodifiéCartae
 conservés. CachesMac12,46Gio/SYS21,40Gio gardés : observationglobale incomplète,
 processus vivants aveccwd/rtdillisibles etFD révoqués, aucunautretravail terminé
-pourleménage. T025resteouvert : liensessionV2/annuairerevenus, façades237/240encore
-chargées, continuationnative804 sansrechargement : façades237/240 toujourschargées. NEPASrelancerT3
-ni redemander maintenant. Pasdenouveaubuild/revue/rejeu sansfaitnouveau.
+pourleménage. T025clos pourcefil : aprèscontinuation804négative, nouveauMCP65273chargé241-r5/
+SHAconforme, identifiéparlemessagemcp-65273-6aef4704-1 ; sessionV2/annuaireréussis,
+septprocessusappT3inchangés. Déclencheurdurechargementnonétabli, aucuneautrereprise
+effectuée. D'autresfaçades237/240restentanciennes ; activationclientsglobalement
+incomplètesousl'exclusionT3. NEPASrelancerT3 ni redemandermaintenant. Pasdenouveaubuild/revue/rejeu sansfaitnouveau.
 Preuves/bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/241-fiabilite-usage/validation.md.
 Repriseprivée : /Users/moi/.cache/bridget241-fiabilite-usage/resume.md.
 

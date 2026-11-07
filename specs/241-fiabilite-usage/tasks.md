@@ -45,7 +45,7 @@ Cargo passent toutes par python3 scripts/build.py cargo. Une case exige sa preuv
 - [x] T022 Exécuter Converge après la dernière modification, demander la contre-revue adverse de l'implémentation et traiter les objections vérifiées ; consigner CONVERGED ou ajouter les tâches manquantes sans changer le périmètre.
 - [x] T023 Exécuter l'audit applicable sur le code final, ses chemins d'erreur, sa complexité et sa charge cognitive ; corriger les findings bloquants et conserver les preuves dans specs/241-fiabilite-usage/. Après toute correction, réexécuter T022/Converge et les contrôles affectés.
 - [x] T024 Intégrer sur main et pousser les seuls fichiers autorisés ; vérifier les refs distantes. Construire/publier la version et le retour compatibles, activer les sept composants sur les quatre hôtes avec préservation des registres, superviseurs, tâches et pointeurs natifs. FR-013, SC-007.
-- [ ] T025 Vérifier les images/processus réellement chargés, le lien natif, les façades et les scénarios réels autorisés sans redémarrer T3 ; informer les propriétaires concernés avec reçus, sans mission métier rejouée. Toute activation impossible reste nommée incomplète. FR-010, FR-013.
+- [x] T025 Vérifier les images/processus réellement chargés, le lien natif, les façades et les scénarios réels autorisés sans redémarrer T3 ; informer les propriétaires concernés avec reçus, sans mission métier rejouée. Toute activation impossible reste nommée incomplète. FR-010, FR-013.
 - [x] T026 Aligner les sources des quatre hôtes, retirer worktree/branche intégrés et caches/copies inutiles avec les outils existants ; conserver preuves, actif, retour, travaux modifiés/utilisés. Vérifier main propre, push et bilan réel dans validation.md.
 
 ## Dépendances et exécution
@@ -92,3 +92,14 @@ Contrôle finalT025 : continuation804 sans rechargement MCP ; sessionV2 et annua
 réussis, images237/240 toujours chargées. Activationclient incomplète sous
 l'exclusion T3, aucune autre boucle de continuation. Vérification de ce blocage
 terminée, case conservée ouverte pour ne pas annoncer le chargement absent.
+
+## ActualisationT025 — nouveau fait de chargement
+
+Le contrôle804 était négatif et reste conservé. Plus tard, le serveur MCP65273
+remplace95234 pour ce fil : id courantmcp-65273-6aef4704-1, ps/lsof et SHA241-r5
+concordants. SessionnativeV2 et annuaireprojet réussis ; septprocessusappT3
+inchangés. T025 est clos pour le fil de maintenance et les composants autorisés
+déjà qualifiés. Les autresfaçades237/240 restent une exclusion d'activation
+explicitement différée ; le statut globalInProgress est conservé pour ne pas
+annoncer une activation intégrale de tous les clients. Aucun nouveau test/build/
+mission, aucune nouvelle continuation ou fermeture d'app pour ce constat.

@@ -346,3 +346,27 @@ lectures natives réussies ne sont pas présentées comme une preuve de chargeme
 Aucune autre continuation automatique n'est prévue. État globalInProgress avec
 cette seule porte d'activation ; les preuves de code/tests/livraison sont conservées.
 Preuve privée : /Users/moi/.cache/bridget241-fiabilite-usage/native-facade-final.json.
+
+## Retour natif ultérieur — façade de ce fil chargée en241
+
+Un fait nouveau a été observé pendant le diagnostic des remises orphelines :
+95234 a disparu, et le nouveau message de ce fil porteid mcp-65273-6aef4704-1.
+new_message_id utilise std::process::id. LePID65273, parent92608, charge
+241-reliability-r5/bin/bridget, vérifié par ps/lsof et SHA
+3f1b7d5b1bbccbe2091e64d72fad134b005c8c9803b2685cd82bfd566132f3cc.
+bridget_sessionV2/permissions et who same_project réussissent, projetbridget,
+zérowarning. Les septprocessusappT3 sont identiques au relevé initial.
+Le déclencheur précis du rechargement n'est pas établi ; il n'est pas attribué
+à la continuation804 qui avait échoué à recharger. Aucun nouvel essai de reprise,
+arrêt ou remplacement d'app effectué. T025 clos pour CEfil ; les autresfaçades
+237/240 restent anciennes, explicitement conservées. Pas d'annonce d'activation
+intégrale de tous les clients. Preuve :
+/Users/moi/.cache/bridget241-fiabilite-usage/native-facade-after-return.json.
+
+Les quatreavis/diagnostics vers e418c3ba sont closorphaned/sansACK, purgés ensemble
+à1794065857 ; leurs anciennesclés ne sont pas rejouées. Annuaireensuitebusy/frais/
+non dormant : une seule synthèse utile a été émise avec une nouvelleclé. Son
+reçu mcp-65273-6aef4704-1/delivery983f6897-ed6b-4205-981b-212eb69f5666 reste
+dispatching/sansACK au contrôle ; remise et lecture non prétendues. La demande
+d'anciennelecturecatalogue n'est pas répétée. Causes historiques des délais
+toujours inconnues, aucune mission métier ni permission ni service modifié.
