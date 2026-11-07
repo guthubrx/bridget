@@ -42655,7 +42655,8 @@ mod presence_tests {
         let parent: ProviderPermissions = serde_json::from_value(serde_json::json!({"version":1,"source":"provider_turn",
             "run_id":"run240","provider_session_id":"session240","provider_instance_id":"codex","revision":1,
             "driver":"codex_app_server","cwd":"/source","runtime_mode":"full-access","interaction_mode":"default",
-            "provider_policy":{"kind":"codex","approval_policy":"never","sandbox_policy":{"type":"dangerFullAccess"}}})).unwrap();
+            "provider_policy":{"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}})).unwrap();
+        bridget_transport::protocol::validate_permissions(&parent,true).expect("preuve complète de la fixture, sans contourner le validateur réel");
         let prepare = WorkerPrepare { machine_id:"cartae".into(), project_id:"project".into(), provisioning_revision:1,
             mapping_revision:1, origin_host:"mac".into(), origin_cwd:"/source".into(), source_root:"/source".into(),
             remote_root:"/remote".into(), source_root_identity:"/repo.git".into(), relative_cwd:".".into(), base_commit:None,
