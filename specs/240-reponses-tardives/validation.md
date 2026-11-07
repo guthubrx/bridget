@@ -1,4 +1,4 @@
-# Validation 240 — correctifs activés, publication et bilan en cours
+# Validation 240 — correctifs activés, défaut de raccordement encore ouvert
 
 ## Résultats du signalement
 
@@ -66,6 +66,16 @@ l'absence définitive de ce défaut. Ni panne de compte ni lien causal avec la
 maintenance antérieure ne sont inventés. La prochaine preuve utile reste
 la phase et l'attente réelles pendant un raccordement qui dépasse son délai.
 
+Après activation, un avis a échoué sur un délai JSONL sans reçu. Le client
+MCP/send est identique à237 : après émission, send_then_wait rend toujours
+outcome_unknown avec id/issued_at. L'erreur générique observée précède donc
+SendIdempotent ; aucun message correspondant n'est enregistré dans le ledger.
+Cinq lectures natives concurrentes réussissent ensuite en2,225–3,426s pendant
+une observation système bornée, sans contenu de trame. Elle ne capture pas
+le défaut ; aucun appel non inactif observé ne dépasse0,539s. Le même corps
+est repris après ce contrôle, sans redoubler les destinataires déjà servis.
+Ce retour de liaison ne résout pas la cause intermittente.
+
 ## Tests et revue
 
 Source exécutable :188dd0298db7f77488f5483b6d17a272611d82f0.
@@ -128,15 +138,26 @@ fermer l'application.
 
 ## Publication et nettoyage
 
-Six actifs préparés. APK8007 signé, certificat de production et lignée
-comparés à8006 ; aucun changement UI ni test UI/FCM annoncé. Vérification
-publique, diagnostic au propriétaire et bilan Git final restent à inscrire.
+Release publique v0.8.7/id437391736. Six actifs téléchargés sans authentification,
+tailles et SHA vérifiés ; les exécutables des archives correspondent aux images
+chargées. APK8007 signé, certificat de production et lignée comparés à8006 ;
+aucun changement UI ni test UI/FCM annoncé. Sources exécutables et tests intégrés
+àmain et poussés. Le diagnostic des cinq signalements a été envoyé au
+propriétaire, reçu mcp-66590-6aeec7ad-33, sans demande de rejeu ni lecture inventée.
+Dix-sept préavis et seize avis de reprise généraux plus ce diagnostic ont un
+reçu. L'unique échec préparatoire d'avis a été qualifié puis repris après retour
+de liaison ; aucun message déjà servi n'est renvoyé.
 
 Entretien installed Mac : cache0,72Gio sous budget. SYS : nettoyage refusé
 par le contrôle natif, observation privilégiée des processus indisponible.
 Ses sources239/240 et caches sont conservés ; aucun contournement.
 Cartae : observation complète et zéro usage des deux sources Android239/240 ;
-1928 fichiers/283269445octets logiques retirés. Preuves et journaux conservés.
+1928 fichiers/283269445octets logiques retirés. Avec les transferts et doublons
+vérifiés, total1955fichiers/550148121octets logiques retirés sur les quatre hôtes.
+L'actif240, le retour239, les images encore chargées, les releases originales,
+les vues de revue sous rétention et le worktree Cartae1cc44f4d modifié/utilisé
+restent conservés. La raison précise de chaque conservation est dans les reçus.
+Preuves et journaux conservés.
 
 Preuves privées :
 /Users/moi/.cache/bridget240-orchestration-incidents.

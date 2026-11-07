@@ -4,5 +4,6 @@
 - [x] T002 Identifier la fermeture KS par la réponse PrepareExpired tardive.
 - [x] T003 Corriger et vérifier la corrélation tardive et les diagnostics.
 - [x] T004 Revue indépendante, assemblages et activation sans relance T3.
-- [ ] T005 Diagnostic propriétaire et qualification du raccordement restant.
-- [ ] T006 Publication, Git, alignement et nettoyage qualifié.
+- [x] T005 Diagnostic propriétaire et qualification de la portée du raccordement restant.
+- [x] T006 Publication, Git, alignement et nettoyage qualifié.
+- [ ] T007 Identifier la cause précise des délais de raccordement. Les sondes réussies ne la résolvent pas ; aucune nouvelle mission métier à créer pour cette investigation.

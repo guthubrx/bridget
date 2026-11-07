@@ -109,6 +109,31 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session240 — canal et diagnostics activés en0.8.7/240-late-prepare-r2.
+Source exécutable188dd029, delta70908ef6 uniquementcfg(test). Refus Prepare
+tardif exact conservé sans couper le canal ni créer uneTask ; cache4096 borné,
+purge fermeture/remplacement, pas simple vieillissement. Refus explicite,
+capacité et absence de réponse distincts ; aucune garde de droits réduite.
+Huit tests utiles acquis, test de contact retirant l'attente complété ; revues
+bd6babea et30b6c318 terminées/lues/ACK, R2acceptable sansP1/P2, P3documentées.
+C-jonction=737767cf, échec de preuve après fin du tour ; A2chosen/KS/tasknull,
+machine non imposée. Aucun rejeu ; clés et états inchangés,7024/77ba/702d intacts.
+Sept composants/SHA vérifiés, coupure2,26s, retour239 compatible/pointeurs natifs
+quatre hôtes. RegistreMac et superviseurCartae2500061/birth270585460 conservés.
+Port automatiquePrepare refusé car activité ; maintenance manuelle déjà
+autorisée avec sauvegardes/phases/births et unités natives, aucune barrière forcée.
+Releasepublique0.8.7/sixactifs téléchargés sansauth/SHA et APK8007/certificat/lignée
+vérifiés ; quatre rapports0.8.7/up_to_date/fresh. Diagnosticpropriétaire et17avis
+de fin ont des reçus, sans lecture inventée.1955fichiers/550148121octetslogiques
+retirés ; cacheMac0,72Gio, caches/WTSYS conservés car observationprivilégiée
+indisponible, vuesretenues et WTCartae1cc44f4d modifié/utilisé préservés.
+Le défaut de raccordement reste OUVERT : cause précise inconnue, même après
+cinqlecturesconcurrentes réussies et observation bornée. Aucun nouveau build ni
+rejeu métier sans fait nouveau. T007resteouvert. T3 septprocessus inchangés,
+rechargementcomplet explicitementreporté parFrançois ; NE PASrelancerT3 ni
+redemander maintenant. Détails :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/240-reponses-tardives/validation.md.
+
 Session239 — administration Android et catalogue livrés en0.8.6/239-mobile-admin-r2.
 Source exécutable1d7e1e14, quatre tests utiles verts, deux revues terminées/ACK ;
 dernière acceptable sans objection bloquante, limites de lecture documentées.
