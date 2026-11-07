@@ -270,3 +270,63 @@ Compatibilité CLI du dernier Mac : forward/retour/inverse/clients compatibles ;
 Audit ciblé :14contrôles/14 calculés, notes par axe et limites dans audit.md ;
 les résultats bruts n'ont pas été assimilés à une qualité100%. Converge3 final
 CONVERGED, aucune tâche de code ajoutée ; portes opérationnelles restent ouvertes.
+
+## Activation, publication et nettoyage constatés
+
+Source exécutabledb43c14254c2222c8ed82230c9a9f33392f37043 intégrée àmain et
+poussée/vérifiée. Actif0.8.8/241-reliability-r5 : MacSHA
+3f1b7d5b1bbccbe2091e64d72fad134b005c8c9803b2685cd82bfd566132f3cc ; LinuxSHA
+019a82a61e1e639694f855d40ef3009a383429d88b4e9587db9c4fc3157f0fdd.
+Sept composants/PID/images vérifiés : Cartae core2197363/mobile2197463/worker2200031 ;
+SYS2605890 ; KS3913518 ; Macworker5363/pont5805. Coupurecore2,03s.
+Retours241-reader-r1 compatibles sur lesquatre hôtes, pointeurs atomiques natifs
+sous verrou et sauvegardes ; les anciens239/240 sont interdits comme retours241.
+Cache de qualification des clients rafraîchi par le dernier binaire, sans modèle
+ni authentification fournisseur revendiquée. Quatrerapports0.8.8/up_to_date/fresh.
+Septpayloads protégés strictement identiques avant/après ; superviseurCartae
+2500061/birth270585460 conservé, registreMacSHAcacf9ba0 inchangé, septprocessus
+d’applicationT3 strictement inchangés. Aucune missionmétier rejouée.
+
+Releasepubliquev0.8.8/sixactifs téléchargés sansauth et SHA identiques. Android
+8008/certificat/filiation8007 vérifiés avant publication ; pas d’installation
+ni recette graphique sur téléphone revendiquée. Caddydistinct non modifié.
+Cinqavis avant et cinqavis après/diagnostics ont des reçus in_flight ; la lecture
+par les destinataires n’est pas déduite de ces reçus.
+DixlecturesMCPsame_project réussies après passage :1553–2207ms, aucun refus/avertissement.
+DixlecturesCLIglobal réussies :685–1007ms ; elles gardent l’avertissement
+project_unknown du client CLI sans identité de session. Ce n’est pas une preuve
+de qualification de projet ; le lien natif de ce fil rend bienbridget/sanswarning.
+Les essaisCLIwho--json puisupdatesstatus--json étaient des erreurs d’arguments
+de qualification ; usages corrigés, aucune mutation. La première tentative de
+rafraîchissement du cacheclientMac a rencontré le verrou avant fin du watcher ;
+aucun état écrit, arrêt natif confirmé puis writer exécuté unefois, autres champs
+strictement conservés. La cause de tous les anciens délaisJSONL reste ouverte.
+
+Nettoyage :54copies/binaires identifiés,1745159157octetslogiques retirés ; ce
+compte ne prétend pas mesurer des octets physiques libérés sur un volume à snapshots.
+Worktree/branche241Mac et source-build241SYS retirés, code intégré et usages ciblés
+vérifiés. Audit, anciennesrévisions, résultatsbruts, paquetsderevue et archive
+source sont conservés dans le cacheprivé241. Aucun fichier temporaire métier
+ni vue native sous garde n’a été retiré.
+Les caches de compilation restent conservés : Mactarget13060168Kio, SYS227cache
+22436132Kio. installed a été appelé via build.py ; le nettoyeur refuse car son
+observation globale est incomplète. MesureMac :25enregistrements non qualifiés,
+descripteursrévoqués et cwd/rtd indisponibles de processus encore vivants. Pas
+de conclusion erronée « processus terminés », pas de kill d’autretravail ni de
+contournement du nettoyeur. Les caches/repos/vues historiquesSYS et leWTmodifié
+Cartae1cc44f4d restent conservés pour leurs états/usages non clôturés/qualifiés.
+Le miroirKS gardait un origin pointant un ancienbundle/tmp absent : fetch
+explicite depuis leGitHub vérifié puis avance rapide, sans réécrire ses réglages.
+SYSrepo propre a rejointmain après vérification de l’absence de commande native
+active ; les anciensworktrees distincts restent intacts.
+
+## Client encore ouvert — T025
+
+Le lien natif est revenu : bridget_sessionV2/permissions provider_turn et
+who same_project réussis, projetbridget et aucun warning. La façade95234 de ce
+fil charge encore240, confirmée par ps/lsof ; d’autresfaçades237/240 sont utilisées
+et leurs images gardées. Aucun remplacement de l’appT3. Le code de son adaptateur
+prépare le MCP lors d’une reprise native de fil ; aucune commande de reload MCP
+n’est exposée par ses outils. Une continuation native de ce même fil, sans
+redémarrage d’app, est la dernière vérification prévue. Son effet n’est pas
+présenté comme acquis. Statut globalInProgress tant que cette porte reste ouverte.

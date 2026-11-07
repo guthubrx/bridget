@@ -12,6 +12,13 @@ Sources : commit 04ad641e85c8e131cef4fcd17c43a10980b15104 ; mode fix.
 Décision : **pass** ; note globale : A. Les notes de qualité par axe sont présentées ci-dessous ; le compteur de pénalités n'est pas une note de qualité.
 Contrôles vérifiés : 14/14.
 
+# Audit Code V15
+
+Périmètre : /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage
+Sources : commit 04ad641e85c8e131cef4fcd17c43a10980b15104 ; mode fix.
+Décision : **pass** ; note globale : A. Les notes de qualité par axe sont présentées ci-dessous ; le compteur de pénalités n'est pas une note de qualité.
+Contrôles vérifiés : 14/14.
+
 ## Notes par axe
 
 Qualité observée = somme des niveaux justifiés / maximum des critères notés. Niveaux ancrés de0 à4, poids figés. Le nombre de défauts ne donne plus la note : leurs pénalités restent un garde-fou. Couverture séparée. Note démontrée = points acquis / maximum de tous les critères applicables ; les inconnus ne rapportent aucun point. Aucun niveau justifié : non noté. Pas de moyenne globale des axes.
@@ -67,7 +74,7 @@ Qualité observée = somme des niveaux justifiés / maximum des critères notés
 |---|---|---|
 | Typage des sources et des tests | 3 | Assemblages Rust et tests des types/JSON ; Python53cas. Pas de nouveau TypeScript/Go applicatif. |
 | Analyse de style et erreurs statiques | 2 | Rust compile et Semgrep ; avertissements historiques conservés, aucun formatage général des grands modules pour gonfler le diff. |
-| Régressions et cas limites | 3 | 24cas241 finaux Mac/Linux, suites affectées et contre-exemples des revues ; tests non applicables/ignorés non comptés comme réussis. |
+| Régressions et cas limites | 3 | 25cas241 finaux Mac/Linux, suites affectées et contre-exemples des revues ; tests non applicables/ignorés non comptés comme réussis. |
 | Qualification du runtime livré | 3 | Binaire réel candidat et retour Mac : plan/export/matérialisation sans fournisseur ni workspaceGit, code/source inchangés ; images Linux qualifiées séparément avant installation. |
 | Tests interface et intégration des données | Non applicable | Aucun composant graphique Android modifié ; build/version/signature seulement. Pas de recette UI ni installation téléphone revendiquée. |
 
@@ -116,7 +123,7 @@ Qualité observée = somme des niveaux justifiés / maximum des critères notés
 |---|---|---|
 | Invariants et compromis expliqués | 3 | ADR autorité durable, limites et décisions de plafonds explicites ; maintien des révocations et absence de promotion historique. |
 | Périmètre et maintenabilité du changement | 2 | Pas de couche parallèle ; réutilisations recherchées avant édition. Extension importante sur gros modules, limite de maintenance conservée. |
-| Revue contradictoire et responsabilité | 3 | Plan puis trois rondes indépendantes ont produit des corrections concrètes ; R4 ciblée requise sur dernierdelta ; autoanalyse indépendante=false. |
+| Revue contradictoire et responsabilité | 3 | Plan puis trois rondes indépendantes ont produit des corrections concrètes ; R4 lue, objections disposées explicitement dans validation.md ; autoanalyse indépendante=false. |
 
 
 ### Minimalisme et frugalité
@@ -166,35 +173,35 @@ Qualité observée = somme des niveaux justifiés / maximum des critères notés
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/android/buildscript-gradle.lockfile:1 ; 51048ab9c3ce6c607110
   Guava appartient au classpath de build/instrumentation, pas releaseRuntimeClasspath ; aucun ObjectInputStream/readObject dans les sources Android. Réfutation pour APK241, pas réparation de l’outillage.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: Panic during CBC-HMAC processing
+- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: Panic during CBC-HMAC processing
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; 57b4e73d275f71003132
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] HIGH : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: DoS when parsing JWKs that contain RSA keys
+- [refuted] HIGH : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: DoS when parsing JWKs that contain RSA keys
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; 8236b1d29df167fbba26
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: Panics in JSON parsing
+- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: Panics in JSON parsing
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; ad3a1a690f21974f9018
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] HIGH : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: DoS when parsing JWKs that contain RSA keys
+- [refuted] HIGH : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Go JOSE: DoS when parsing JWKs that contain RSA keys
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; b0833d5a19c59a5e37b6
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Panic on two-block frames in github.com/klauspost/compress
+- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Panic on two-block frames in github.com/klauspost/compress
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; 5262d4a2eed3d3d3cfcd
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues
+- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design, and has known security issues
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; 3e3befc544bb49ed8c60
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net
+- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; 82adf7d7f0e032317d5f
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.
-- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net
+- [refuted] MEDIUM : [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] [Inclusion dans241 réfutée ; Caddy distinct reste ouvert] Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net
   /Users/moi/Nextcloud/10.Scripts/64.bridget/.worktrees/241-fiabilite-usage/deploy/caddy-security/go.mod:1 ; 641007b1a98249700b64
   Module Go distinct inchangé, non compilé ni livré dans241. Réfutation limitée à son inclusion dans ce candidat. Avis NON RÉFUTÉ pour le Caddy déployé ; qualification séparée encore ouverte.
   Action : Conserver la condition et le périmètre ; requalifier si les options du parseur, classpaths ou artefacts livrés changent. Caddy : qualification distincte du binaire actuel avant toute conclusion.

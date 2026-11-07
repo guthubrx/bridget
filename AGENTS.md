@@ -109,6 +109,32 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+
+Session241 — fiabilité des parcours activée en0.8.8/241-reliability-r5.
+Source exécutabledb43c142 intégrée/poussée ;25tests241Mac/Linux et suites utiles,
+Converge3CONVERGED, audit ciblé14/14pass avec limites explicites. R1/R2/R3/R4 et
+contre-revuedépendances terminées/lues/ACK, objections disposées dans validation.md.
+Admissiondurableprovider_turn distincte des droits d’un nouveau tour ; révocations,
+propriétaire et sources natifs conservés. Raccordement avant mutation repris dans
+un budgetunique, entretien des vues hors réponse ; causeJSONLhistoriqueglobale
+resteouverte. Dossierslocaux/horsGit déjà autorisés,32Gio/128WT/64mappings retirés,
+espace/rétention/métadonnées vérifiés ; outils identifiés qualifiés sansinstallation.
+Septcomposants/SHA chargés4hôtes, coupurecore2,03s ; retours241-reader-r1 et
+pointeurs atomiques compatibles,239/240 refusés comme retour241. Septpayloads
+7024/77ba/702d/2fb +troisRevue inchangés, wrapper2500061/birth270585460 et registre
+MacSHAcacf9ba0 conservés. Releasepublique0.8.8/sixactifs etAPK8008/certificat/lignée
+vérifiés ; quatrerapports0.8.8/up_to_date/fresh. DixlecturesMCPsansrefus après
+passage, CLIglobalmesurée séparément avecwarningprojetnonattesté.54copies/binaires/
+1745159157octetslogiques retirés ; WT/branche241Mac et source-buildSYS retirés.
+Macmainseul ; sourcesmain4hôtes alignées ; WTSYS/historiques et WTmodifiéCartae
+conservés. CachesMac12,46Gio/SYS21,40Gio gardés : observationglobale incomplète,
+processus vivants aveccwd/rtdillisibles etFD révoqués, aucunautretravail terminé
+pourleménage. T025resteouvert : liensessionV2/annuairerevenus, façades237/240encore
+chargées, effet d’une continuationnative de ce fil à constater. NEPASrelancerT3
+ni redemander maintenant. Pasdenouveaubuild/revue/rejeu sansfaitnouveau.
+Preuves/bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/241-fiabilite-usage/validation.md.
+Repriseprivée : /Users/moi/.cache/bridget241-fiabilite-usage/resume.md.
+
 Session240 — canal et diagnostics activés en0.8.7/240-late-prepare-r2.
 Source exécutable188dd029, delta70908ef6 uniquementcfg(test). Refus Prepare
 tardif exact conservé sans couper le canal ni créer uneTask ; cache4096 borné,
