@@ -353,6 +353,7 @@ pub(crate) fn calculate_cadence(
 mod tests {
     use super::*;
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_groupe1_domaine_ferme_et_bornes() {
         let mut s = WakeSchedule {
             schedule_id: uuid::Uuid::new_v4().to_string(),
@@ -421,6 +422,7 @@ mod tests {
         assert!(serde_json::from_value::<FrozenWake>(value).is_err());
     }
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
         if let Ok(case) = std::env::var("BRIDGET_WAKE_CALENDAR158B_CASE") {
             if case == "zone_identity" {

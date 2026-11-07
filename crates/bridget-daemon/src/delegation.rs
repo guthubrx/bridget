@@ -14,6 +14,7 @@ pub(crate) const MAX_AUTO_ADMISSION_METADATA_V1_BYTES: usize = 16 * 1024;
 /// Borne des snapshots de routage 168. Le canon reste volontairement séparé.
 pub(crate) const MAX_AUTO_ADMISSION_METADATA_V2_BYTES: usize = 128 * 1024;
 /// Alias conservé pour les appelants 163 : il ne doit jamais valider un reçu v2.
+#[cfg(test)]
 pub(crate) const MAX_AUTO_ADMISSION_METADATA_BYTES: usize = MAX_AUTO_ADMISSION_METADATA_V1_BYTES;
 pub(crate) const MAX_ACTIVE_ADMISSIONS: usize = 128;
 pub(crate) const MAX_ACTIVE_ADMISSIONS_PER_OWNER: usize = 16;
@@ -1680,6 +1681,7 @@ WHERE state='refused' AND task_id IS NULL;
     }
 
     /// O(log n+k+B), index state/deadline ; au plus 512 lignes par lecture.
+    #[cfg(test)]
     pub fn due_child_requests(&self, now: i64) -> Result<Vec<ChildRequest>, String> {
         let mut stmt = self.conn.prepare("SELECT * FROM native_child_requests WHERE state='open' AND deadline_at<=?1 ORDER BY deadline_at LIMIT 512")
             .map_err(|e| e.to_string())?;
@@ -2362,6 +2364,7 @@ WHERE state='refused' AND task_id IS NULL;
 
     /// Écriture initiale additive, avant toute décision ou création de Task.
     /// La transaction immédiate rend le canon immuable pour les rejouements.
+    #[cfg(test)]
     pub(crate) fn insert_auto_admission_receipt(
         &self,
         receipt: &AutoAdmissionReceipt,

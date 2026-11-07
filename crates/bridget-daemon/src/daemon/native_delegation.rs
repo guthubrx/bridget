@@ -3886,6 +3886,8 @@ pub(super) struct WorkspaceWork {
 struct WorkspaceReservation {
     task_id: String,
     owner_instance: String,
+    // Lu par le banc de capacité 154 (union des chemins réservés).
+    #[cfg_attr(not(test), allow(dead_code))]
     path: PathBuf,
 }
 

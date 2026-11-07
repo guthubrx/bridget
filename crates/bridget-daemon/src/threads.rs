@@ -1274,20 +1274,20 @@ mod tests {
         let agent:bridget_transport::protocol::ScopedAgentInfo=serde_json::from_value(json!({"agent_id":UUID_B,"display_name":"Dormant","agent_type":"fixture","connection_id":"test","host":"test","transport":"fixture","state":"busy","last_seen_secs":0,"reconnect_count":0,"communication_project":null,"project_relation":"unknown"})).unwrap();
         let sleep=|value:bool|crate::agent_tracking::set(f.store.connection(),"human",&uuid::Uuid::new_v4().to_string(),b"fixture",&agent,value,Some(false),None,10).unwrap();
         sleep(true);
-        struct NativeDirectory<'a>(&'a Store);
-        impl Directory for NativeDirectory<'_> {
+        struct NativeDirectory;
+        impl Directory for NativeDirectory {
             fn known_agent(&self,_:&str)->bool{true}
             fn member_facts(&self,_:&str)->MemberFacts{MemberFacts::default()}
         }
         let request=ThreadRequest{version:1,cross_project_reason:None,request:ThreadAction::Post{thread_id:UUID_T.into(),body:"Message conservé pour les lecteurs".into(),notify:ThreadNotify::All(bridget_transport::protocol::ThreadNotifyAll::All),operation_id:UUID_OP.into(),reply_to_seq:None,ack_receipt:None,kind:None,supersedes_seq:None}};
-        let first=handle_with_change(&f.store,&NativeDirectory(&f.store),UUID_A,request.clone(),20).0.result;
+        let first=handle_with_change(&f.store,&NativeDirectory,UUID_A,request.clone(),20).0.result;
         assert_eq!(first["status"],"posted","{first}");
         assert!(first.to_string().contains("dormant_members_ignored"),"{first}");
         let wakes=f.store.thread_wake_candidates(20,20).unwrap();
         assert!(!wakes.iter().any(|w|w.agent_id==UUID_B));
         assert!(wakes.iter().any(|w|w.agent_id==third),"les autres membres sont sollicités");
         sleep(false);
-        let replay=handle_with_change(&f.store,&NativeDirectory(&f.store),UUID_A,request,21).0.result;
+        let replay=handle_with_change(&f.store,&NativeDirectory,UUID_A,request,21).0.result;
         assert_eq!(replay,first);
         assert!(!f.store.thread_wake_candidates(21,20).unwrap().iter().any(|w|w.agent_id==UUID_B),"aucun rattrapage au réveil");
         assert_eq!(f.store.connection().query_row("SELECT body FROM discussion_entries WHERE thread_id=?1",[UUID_T],|r|r.get::<_,String>(0)).unwrap(),"Message conservé pour les lecteurs");

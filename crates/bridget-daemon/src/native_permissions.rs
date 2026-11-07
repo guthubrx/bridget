@@ -803,6 +803,7 @@ pub(crate) fn classify_request(
 
 /// O(b), b octets parcourus des64 premières valeurs ; sortie<=4096octets UTF-8.
 /// Affichage seulement : aucune permission, résolution ni lecture de chemin.
+#[cfg(test)]
 pub(crate) fn format_cited_paths(paths: &[String]) -> String {
     const LIMIT: usize = 4096;
     const TRUNCATED: &str = " ; … liste tronquée";
@@ -2369,6 +2370,10 @@ pub(crate) fn observed_fact(
 }
 
 // 171 private witness: unknown execution dependencies remain closed.
+// Numérotation stable des diagnostics : un code retiré n'est jamais réattribué.
+// G003, G072 et G078 (route gardée retirée en 243) ne sont plus produits ;
+// G001 sert de témoin aux bancs. ALL et code() gardent les 83 entrées.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectionGuard {
     G001,

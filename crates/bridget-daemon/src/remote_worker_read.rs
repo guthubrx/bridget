@@ -156,12 +156,6 @@ fn inputs_observed(
     Ok((identity, credential, source))
 }
 impl WorkerReadView<'_> {
-    fn workspace_path(&self, command: &WorkerCommandIdentity) -> PathBuf {
-        self.config
-            .state_root
-            .join("store/workspaces")
-            .join(format!("{}.json", marker_key(command)))
-    }
     pub(super) fn registry(&self) -> Result<AgentRegistry, WorkerRefusal> {
         let registry = if self.quiet {
             AgentRegistry::load_from_path_quiet(self.config.registry_path.clone())
@@ -644,6 +638,7 @@ pub(crate) fn diagnose_local(
     diagnose_local_observed(config, command, || {})
 }
 
+#[cfg(any(test, target_os = "linux"))]
 fn diagnostic_paths(
     config: &WorkerRuntimeConfig,
     command: &WorkerCommandIdentity,
@@ -679,6 +674,7 @@ fn diagnostic_paths(
         config.credential_path.clone(),
     ])
 }
+#[cfg(any(test, target_os = "linux"))]
 #[derive(PartialEq, Eq)]
 struct ReadStamp {
     dev: u64,
@@ -688,6 +684,7 @@ struct ReadStamp {
     mtime: (i64, i64),
     ctime: (i64, i64),
 }
+#[cfg(any(test, target_os = "linux"))]
 fn stamp(path: &Path) -> Result<Option<ReadStamp>, String> {
     match fs::symlink_metadata(path) {
         Ok(m) => Ok(Some(ReadStamp {
@@ -702,6 +699,7 @@ fn stamp(path: &Path) -> Result<Option<ReadStamp>, String> {
         Err(_) => Err("diagnostic_file_unavailable".into()),
     }
 }
+#[cfg(any(test, target_os = "linux"))]
 fn observe_stably(
     paths: &[PathBuf],
     read: impl FnOnce() -> Result<serde_json::Value, String>,
@@ -744,6 +742,7 @@ pub(super) fn diagnose_local_observed(
         after_check,
     )
 }
+#[cfg(any(test, target_os = "linux"))]
 fn diagnose_with_source(
     config: &WorkerRuntimeConfig,
     command: &WorkerCommandIdentity,
@@ -779,6 +778,7 @@ pub(super) fn diagnose_observed(
     let paths = diagnostic_paths(view.config, command)?;
     observe_stably(&paths, || diagnose_inner(view, command), after_check)
 }
+#[cfg(any(test, target_os = "linux"))]
 fn diagnose_inner(
     view: WorkerReadView<'_>,
     command: &WorkerCommandIdentity,

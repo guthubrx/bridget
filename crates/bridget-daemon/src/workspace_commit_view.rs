@@ -1461,6 +1461,7 @@ impl ViewIntent {
     pub(crate) fn base_commit(&self) -> &str {
         &self.manifest.base
     }
+    #[cfg(test)]
     pub(crate) fn plan(
         binding: ViewBinding,
         source: &Path,
@@ -1779,6 +1780,7 @@ impl ViewProofs {
     /// L'appelant natif a déjà figé le reçu sous son verrou. Le créneau de
     /// processus et l'audit empêchent la réduction d'une exportation en cours.
     /// O(n*d*log(n*d)) comme l'audit ; aucune écriture dans la vue.
+    #[cfg(test)]
     pub(crate) fn compact_closed(&self, intent: &ViewIntent) -> Result<u64, String> {
         let key = intent.binding.key()?;
         let _lease = self.lease(&key)?;

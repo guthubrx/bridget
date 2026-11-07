@@ -140,3 +140,35 @@ passes de test utilisaient le Python système 3.9, inférieur au 3.11 requis par
 l'entretien automatique : à lancer avec un Python ≥ 3.11. Cache Mac ramené de
 28 à 13 Gio par retrait des seuls fichiers incrémentaux de test, sans processus
 dans ce cache ; il reste au-dessus du budget de 10 Gio.
+
+## Complément : points restés ouverts après la première livraison
+
+- KS : 145 Mo libres. 15 worktrees opus2D intégrés au main, propres, sans
+  fichier ouvert ni tâche ouverte, retirés par `git worktree remove` après
+  archivage de leurs fichiers ignorés sur Cartae
+  (/home/moi/.local/share/bridget-maintenance/243-ks-worktrees-ignores, 938 Mo,
+  28 fichiers, empreintes vérifiées) : 103 Gio récupérés, 99 Gio libres.
+  Conservés : 158-fraicheur-pietons-r56 (tâche protégée 7024 en starting, avec
+  f37ed24c imbriqué), 158-reprise-rapide-r55 (revue R55 214f8726), et tous les
+  worktrees portant des commits non intégrés ou des modifications. Branches
+  conservées. Les fiches du worker restent des reçus (inventaire sans contrôle
+  d'existence du dossier).
+- Cache Mac : 28 → 1,5 Gio (target/debug régénérable retiré, sans processus).
+- Avertissements : 38 sur Mac, autant sur Linux, ramenés à 0 sur toutes les
+  cibles des deux systèmes. Code sans aucun usage supprimé (marker_name,
+  prepare, deux mapping_paths_and_git/workspace_path) ; code servant aux seuls
+  bancs sous `cfg(test)` ; chaîne de diagnostic de remote_worker_read sous
+  `cfg(any(test, target_os = "linux"))` ; champs lus par les bancs et
+  vocabulaire stable des gardes G001..G083 conservés avec justification ;
+  visibilité de deux fonctions réduite ; appel mach déprécié autorisé
+  localement (pas de dépendance mach2 pour un seul appel) ; noms de recettes
+  158B/159 documentés conservés.
+- Tests sensibles à la charge : faux worker spec202 sans battement de cœur
+  (jugé périmé après 30 s, comportement voulu), attente de vivacité du relais
+  portée à 10 s, borne spec_024 à 4,5 s sous le watchdog de 5 s, lecture des
+  arguments spec147 avant l'exec, échéances spec168 à 2 s sur macOS.
+- Linux dans un vrai dépôt Git : 3 624 PASS, 0 échec. Mac : 3 605 PASS, 0 échec,
+  0 avertissement. worker162 a échoué une fois sous charge sans se reproduire
+  (46 lancements isolés, 6 × 87 tests en parallèle) : l'assertion affiche
+  désormais l'erreur exacte ; remote162 (refus StoreUnavailable sur Release,
+  une fois sous charge) non reproduit au passage suivant.

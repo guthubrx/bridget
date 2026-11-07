@@ -188,6 +188,9 @@ struct HostPort(libc::mach_port_t);
 #[cfg(target_os = "macos")]
 impl HostPort {
     fn acquire() -> Option<Self> {
+        // libc le marque déprécié au profit du crate mach2 ; l'appel reste stable
+        // et évite une dépendance supplémentaire pour cette seule lecture.
+        #[allow(deprecated)]
         let port = unsafe { libc::mach_host_self() };
         (port != 0).then_some(Self(port))
     }

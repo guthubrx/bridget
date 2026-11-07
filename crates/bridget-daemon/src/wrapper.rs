@@ -8972,7 +8972,9 @@ mod reconnect_tests {
         );
         // Mutation : sans timeout le pair ne ferme qu'à son watchdog (5 s).
         // Sans invalidation, le flush de cleanup répéterait l'attente.
-        assert!(started.elapsed() < Duration::from_secs(3));
+        // Borne sous le watchdog : la sérialisation de 4 Mio sous charge en
+        // mode debug dépassait parfois 3 s, sans rien dire du délai d'écriture.
+        assert!(started.elapsed() < Duration::from_millis(4500), "{:?}", started.elapsed());
         assert!(writer.lock().unwrap().is_none());
         release.send(()).unwrap();
         server.join().unwrap();
@@ -10199,7 +10201,9 @@ mod reconnect_tests {
     }
 
     fn wait_for(condition: impl Fn() -> bool) {
-        for _ in 0..100 {
+        // Attente de vivacité seulement (aucun oracle de durée) : 10 s laissent
+        // le worker progresser quand toute la suite charge la machine.
+        for _ in 0..1000 {
             if condition() {
                 return;
             }

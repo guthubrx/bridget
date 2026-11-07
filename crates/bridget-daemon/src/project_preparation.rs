@@ -36,10 +36,6 @@ pub(crate) fn has_link(namespace: &Path) -> bool {
     })
 }
 
-pub(crate) fn prepare(request: &Value) -> Result<(), String> {
-    prepare_until(request, Instant::now() + Duration::from_secs(600))
-}
-
 pub(crate) fn prepare_until(request: &Value, deadline: Instant) -> Result<(), String> {
     prepare_receipt_until(request,deadline).map(|_|())
 }

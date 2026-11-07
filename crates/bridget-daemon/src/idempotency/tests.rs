@@ -4580,6 +4580,7 @@ fn edit159_reorder_before_inconnu_ou_autre_destinataire_not_held() {
 }
 
 #[test]
+#[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
 fn edit159_reorder_arrivee_concurrente_deplacement_valide_d_abord_donne_B_A_C() {
     let db = TempDbGuard::new("edit159-two-writers");
     let mut store = IdempotencyStore::open(db.path()).unwrap();
@@ -4669,6 +4670,7 @@ fn edit159_reorder_arrivee_concurrente_deplacement_valide_d_abord_donne_B_A_C() 
 }
 
 #[test]
+#[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
 fn edit159_reorder_arrivee_concurrente_arrivee_valide_d_abord_donne_B_C_A() {
     let db = TempDbGuard::new("edit159-two-writers");
     let mut store = IdempotencyStore::open(db.path()).unwrap();

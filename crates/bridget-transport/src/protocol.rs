@@ -11769,6 +11769,7 @@ mod wake158b_protocol_tests {
     use serde_json::json;
 
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_protocol_objets_fermes() {
         let schedule = json!({"version":1,"request":{"action":"schedule","target":{"kind":"self"},"cadence":{"kind":"interval","seconds":60}}});
         let parsed: WakeRequest = serde_json::from_value(schedule.clone()).unwrap();
@@ -11837,6 +11838,7 @@ mod wake158b_protocol_tests {
     }
 
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_protocol_legacy_octets_preserves() {
         assert_eq!(
             serde_json::to_string(&ObservationRequest::Types {}).unwrap(),

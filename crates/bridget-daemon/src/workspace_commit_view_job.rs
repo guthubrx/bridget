@@ -145,9 +145,6 @@ impl ViewProofs {
         Ok(identity)
     }
 }
-fn marker_name(intent: &ViewIntent) -> Result<String, String> {
-    Ok(format!("view-{}", intent.binding.key()?))
-}
 
 /// Le sous-mode refuse un appel ordinaire avant de lire une preuve. L'identité
 /// et le FD sont ceux du bootstrap ; aucune valeur de notice ne fait autorité.

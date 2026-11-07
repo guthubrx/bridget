@@ -1491,7 +1491,17 @@ mod spec101_identity {
         };
         let mut first = spawn();
         let pid = first.child.id();
-        let arguments = process_arguments(pid).unwrap_or_else(|| {
+        // Sous charge, la lecture juste après spawn peut précéder l'exec :
+        // attendre (5 s au plus) que le processus porte ses arguments réels.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut arguments = process_arguments(pid);
+        while arguments.as_ref().is_none_or(|args| args.first().map(String::as_str) != Some("claude"))
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+            arguments = process_arguments(pid);
+        }
+        let arguments = arguments.unwrap_or_else(|| {
             let child_status = first.child.try_wait();
             let birth = process_birth(pid);
             let parent = process_parent(pid);

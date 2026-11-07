@@ -4179,7 +4179,8 @@ sys.stdout.write((root/'trace.jsonl').read_text())"#,
             "",
         );
         options.request_json = "x".repeat(64 * 1024);
-        options.deadline = Instant::now() + Duration::from_millis(200);
+        // macOS : python3 démarre en ~300 ms ; l'échéance doit suivre l'écriture du pid.
+        options.deadline = Instant::now() + Duration::from_millis(2000);
         let started = Instant::now();
         let result = run_isolated_claude_decision(&options);
         let elapsed = started.elapsed();
@@ -4188,7 +4189,7 @@ sys.stdout.write((root/'trace.jsonl').read_text())"#,
             .parse()
             .unwrap();
         assert_eq!(result, Err(ClaudeIsolatedDecisionError::Timeout));
-        assert!(Instant::now() >= options.deadline && elapsed < Duration::from_secs(2));
+        assert!(Instant::now() >= options.deadline && elapsed < Duration::from_secs(4));
         assert!(unsafe { libc::kill(pid, 0) } < 0);
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),
@@ -4243,7 +4244,8 @@ else:
     sys.exit(0)"#,
             &trace,
         );
-        options.deadline = Instant::now() + Duration::from_millis(200);
+        // Échéance après le fork même quand python3 démarre lentement (macOS chargé).
+        options.deadline = Instant::now() + Duration::from_millis(2000);
         let result = run_isolated_claude_decision(&options);
         let leader: i32 = fs::read_to_string(root.join("leader"))
             .unwrap()

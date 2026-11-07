@@ -1608,6 +1608,7 @@ mod wake158b_tests {
     use super::*;
     use bridget_transport::protocol::WakeTarget;
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_groupe7_cli_quota_rejeu_collision_et_reprise() {
         let dir =
             std::env::temp_dir().join(format!("bridget-wake-cli158B-{}", uuid::Uuid::new_v4()));

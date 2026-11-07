@@ -812,6 +812,7 @@ impl DelegationStore {
         Ok(next)
     }
 
+    #[cfg(test)]
     pub fn lineage_page(
         &self,
         root: &str,
@@ -925,6 +926,7 @@ impl DelegationStore {
         )
     }
 
+    #[cfg(test)]
     pub fn lineage_show(
         &self,
         root: &str,

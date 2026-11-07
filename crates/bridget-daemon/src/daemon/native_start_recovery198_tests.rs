@@ -840,6 +840,13 @@ fn native_flow_with_routing202(cut_after_fleet: bool, old_plan: bool, local_quot
                 panic!("requête native198")
             };
             request.validate().unwrap();
+            // Un vrai worker entretient son contact ; sans cela, une suite chargée
+            // dépasse WORKER_STALE_SECS et Bridget le juge à raison périmé.
+            if let Some(peer) = responder.lock().unwrap().remote_workers.values_mut()
+                .find(|peer| peer.conn_id == "worker198") {
+                peer.last_contact = std::time::Instant::now();
+                peer.last_contact_at = unix_timestamp();
+            }
             let operation = match &request.request {
                 WorkerRequestOperation::FenceUnstarted { .. } => {
                     calls.push("fence");

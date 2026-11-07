@@ -302,6 +302,7 @@ mod tests {
     use crate::wake_schedules::{WakeSource, calculate_cadence};
     use bridget_transport::protocol::{WakeCadence, WakeTarget};
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_groupe1_sql_limites_physiques_et_annulees() {
         let dir =
             std::env::temp_dir().join(format!("bridget-wake-bounds158B-{}", uuid::Uuid::new_v4()));
@@ -413,6 +414,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    #[allow(non_snake_case)] // nom des filtres documentés de la recette 158B/159
     fn wake158B_groupe3_intervalle_gel_restart_et_frontieres() {
         let dir =
             std::env::temp_dir().join(format!("bridget-wake-freeze158B-{}", uuid::Uuid::new_v4()));

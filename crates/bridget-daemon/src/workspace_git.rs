@@ -88,6 +88,8 @@ pub(crate) struct WorkspacePreflight {
     pub worktree_dir: PathBuf,
     pub branch: Option<String>,
     pub base_commit: String,
+    // Lu par les bancs d'inventaire (bornes de 127 chemins) ; non utilisé en production.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub listed_paths: Vec<PathBuf>,
 }
 
@@ -291,7 +293,7 @@ pub(crate) fn stop_git(child: &mut Child) -> Result<(), String> {
 thread_local! {
     static STATUS_READS193: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn take_status_reads193() -> usize {
     STATUS_READS193.with(|count| count.replace(0))
 }
@@ -721,6 +723,7 @@ pub(crate) fn preflight_remote(cwd: &Path, base_ref: Option<&str>, branch: Optio
 }
 
 /// O(B+w), B configuration/sorties bornées, w worktrees listés. Aucune écriture.
+#[cfg(test)]
 pub(crate) fn preflight(
     cwd: &Path,
     base_ref: Option<&str>,

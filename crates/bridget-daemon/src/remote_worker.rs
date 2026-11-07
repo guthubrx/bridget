@@ -1843,6 +1843,7 @@ impl WorkerStore {
 
     /// Primitive interne encore non branchée à l'admission. Le reçu garde le
     /// budget avant les fichiers et le processus, y compris après coupure.
+    #[cfg(test)]
     fn reserve_view_intent(
         &self, command: &WorkerCommandIdentity, request: &WorkerPrepare,
         intent: &crate::workspace_git::ViewIntent,
@@ -1978,6 +1979,7 @@ impl WorkerStore {
 
 
 
+    #[cfg(test)]
     fn mark_view_source_attempt(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
         ->Result<(),WorkerStoreError> {
         self.checked_view_receipt(command,intent)?;
@@ -2018,6 +2020,7 @@ impl WorkerStore {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn authorize_view_source(
         &self, command:&WorkerCommandIdentity, intent:&crate::workspace_git::ViewIntent,
         marker:&ManagedMarker,
@@ -2490,6 +2493,7 @@ impl WorkerStore {
 
     /// O(c+s) reçus bornés. Cette garde prouve seulement la clôture native,
     /// jamais l'absence de lecteur externe ni une autorisation de supprimer.
+    #[cfg(test)]
     fn check_view_native_closure(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
         ->Result<(),WorkerStoreError> {
         let _guard=self.transition.lock().map_err(|_|WorkerStoreError::Quarantined)?;
@@ -2562,6 +2566,7 @@ impl WorkerStore {
     /// Arrêts natifs prouvés, mais données conservées : pas de déplacement,
     /// retrait ou nouveau droit. Une coupure garde la réservation pleine jusqu'à
     /// ce que la petite preuve soit durable. L'ancre close reste sans expiration.
+    #[cfg(test)]
     fn compact_closed_view(&self,command:&WorkerCommandIdentity,intent:&crate::workspace_git::ViewIntent)
         ->Result<(),WorkerStoreError> {
         self.freeze_view(command,intent)?;
@@ -3754,6 +3759,7 @@ impl WorkerRuntime {
 
     /// Begin ne fait aucune attente de fin d'export. Le port natif conserve
     /// le petit jeton et revient au prochain tick ; aucune mission n'est créée.
+    #[cfg(test)]
     fn begin_view_source(
         &mut self, command:&WorkerCommandIdentity, request:&WorkerPrepare,
         intent:crate::workspace_git::ViewIntent,
@@ -4917,15 +4923,6 @@ impl WorkerRuntime {
         self.read_view().mapping_authority(request, registry)
     }
 
-    fn mapping_paths_and_git(
-        &self,
-        request: &WorkerPrepare,
-        mapping: ProjectMapping,
-        workload: Option<bridget_transport::protocol::AutoDelegateWorkload>,
-    ) -> Result<(ProjectMapping, PathBuf), WorkerRefusal> {
-        self.read_view().mapping_paths_and_git(request, mapping, workload)
-    }
-
     /// O(h), h<=256 ancêtres ; une erreur ou un marqueur ambigu reste un refus.
     /// Aucun stderr/code Git ne sert à déduire l'absence de dépôt.
 
@@ -5496,10 +5493,12 @@ impl WorkerRuntime {
         Ok(prepared)
     }
 
+    #[cfg(test)]
     fn recheck(&self, prepared: &PreparedRuntime) -> Result<AgentRegistry, WorkerRefusal> {
         self.recheck_at(prepared, true)
     }
 
+    #[cfg(test)]
     fn recheck_at(
         &self,
         prepared: &PreparedRuntime,

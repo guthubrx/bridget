@@ -2094,7 +2094,7 @@ while True: time.sleep(.02)
                 Err(error) => error,
                 Ok(_) => panic!("aucune ready attendue"),
             };
-            assert!(matches!(error, ManagedProcessError::InvalidStatus(_)));
+            assert!(matches!(error, ManagedProcessError::InvalidStatus(_)), "{mode}: {error:?}");
             assert_eq!(child.id(), pid);
             assert!(
                 child.try_wait().unwrap().is_some(),

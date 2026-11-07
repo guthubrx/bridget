@@ -2953,6 +2953,7 @@ fn deliver_to_agent(
 
 // Le worker de notification existant reste unique. Aucun accès Store ici.
 enum ObservationJob {
+    #[cfg(test)]
     Control(Instant, DeferredControl),
     Notice {
         deadline: Instant,
@@ -2977,6 +2978,7 @@ fn observation_output() -> (
     thread::spawn(move || {
         while let Ok(job) = rx.recv() {
             let (deadline, control, reply) = match job {
+                #[cfg(test)]
                 ObservationJob::Control(deadline, control) => (deadline, control, None),
                 ObservationJob::Notice {
                     deadline,
@@ -6684,7 +6686,7 @@ impl From<crate::idempotency::IdempotencyError> for ReconstructedDeliveryError {
 /// T019 : O(log E+log D+log X+B), E ledger, D remises, X exécutions, B octets ; mémoire O(B).
 /// Le caller garde State et les gardes jusqu’à la gravure. Les contrôles sont différés hors State.
 /// Ordinary=false n’accepte que Prepared ; quota=true fige issued_at et ne repousse pas au rejeu.
-pub(super) fn deliver_reconstructed(
+fn deliver_reconstructed(
     state: &mut DaemonState,
     conn_id: &str,
     instance_id: &str,
@@ -19572,7 +19574,7 @@ fn remote_worker_roundtrip_with_send_deadline(
 /// Une lecture groupée163 attend un seul résultat corrélé. Elle n'emprunte ni
 /// `WorkerPrepare` ni le canal de commandes : aucun worktree, fournisseur,
 /// slot ou Task ne peut donc être créé avant la décision durable.
-pub(super) fn remote_candidate_probe(
+fn remote_candidate_probe(
     state: &Arc<Mutex<DaemonState>>,
     mut probe: bridget_transport::protocol::CandidateProbe,
     deadline: Instant,

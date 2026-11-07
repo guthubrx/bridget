@@ -164,6 +164,7 @@ pub(super) fn projects_page(
     Ok(json!({"items":selected.iter().map(|(_,p)|p).collect::<Vec<_>>(),"next_cursor":after}))
 }
 
+#[cfg(test)]
 pub(super) fn authorized_agent<'a>(
     device: &Device,
     agents: &'a [ScopedAgentInfo],
