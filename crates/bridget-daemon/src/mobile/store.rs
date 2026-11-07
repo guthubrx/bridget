@@ -36,6 +36,25 @@ pub(crate) struct Scope {
 }
 
 impl Scope {
+    /// L'ancien --all accordait exactement ces sept opérations globales.
+    /// Conserver son administration complète après ajout des spécialistes,
+    /// sans promouvoir un appareil partiel ou un seul droit DevicesManage.
+    fn legacy_global_administrator(&self) -> bool {
+        const LEGACY: [Operation; 7] = [Operation::Read, Operation::Message,
+            Operation::TaskRead, Operation::TaskContinue, Operation::TaskCancel,
+            Operation::TaskRespond, Operation::DevicesManage];
+        self.all_machines && self.all_projects
+            && self.machines.is_empty() && self.projects.is_empty()
+            && self.operations.len() == LEGACY.len()
+            && LEGACY.iter().all(|op| self.operations.contains(op))
+    }
+
+    pub(crate) fn permits_specialists_management(&self) -> bool {
+        self.all_machines
+            && (self.operations.contains(&Operation::SpecialistsManage)
+                || self.legacy_global_administrator())
+    }
+
     /// Les historiques ne portent pas encore de partition fine attestée.
     pub fn permits_federation(&self, op: Operation) -> bool {
         self.all_machines && self.all_projects && self.operations.contains(&op)
@@ -598,6 +617,31 @@ mod tests {
     }
     fn attempt() -> String {
         Uuid::new_v4().to_string()
+    }
+
+    #[test]
+    fn spec239_specialists_accepts_exact_legacy_global_administrator_only() {
+        let full = Scope { all_machines:true,machines:vec![],all_projects:true,projects:vec![],
+            operations:vec![Operation::Read,Operation::Message,Operation::TaskRead,
+                Operation::TaskContinue,Operation::TaskCancel,Operation::TaskRespond,
+                Operation::DevicesManage] };
+        assert!(full.permits_specialists_management());
+        let mut restricted=full.clone();restricted.all_machines=false;
+        assert!(!restricted.permits_specialists_management());
+        restricted=full.clone();restricted.all_projects=false;
+        assert!(!restricted.permits_specialists_management());
+        restricted=full.clone();restricted.operations=vec![Operation::Read,Operation::DevicesManage];
+        assert!(!restricted.permits_specialists_management());
+        for op in full.operations.iter() {
+            restricted=full.clone();restricted.operations.retain(|value|value!=op);
+            assert!(!restricted.permits_specialists_management(),"missing {op:?}");
+        }
+        restricted=full.clone();restricted.operations[0]=Operation::Message;
+        assert!(!restricted.permits_specialists_management(),"duplicate is not the complete scope");
+        restricted=scope();restricted.all_machines=true;
+        restricted.operations.push(Operation::SpecialistsManage);
+        restricted.all_projects=false;
+        assert!(restricted.permits_specialists_management(),"explicit administration retains its project boundary");
     }
 
     #[test]

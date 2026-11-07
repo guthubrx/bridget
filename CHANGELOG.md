@@ -6,6 +6,11 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.6 — 2026-11-07
+
+- Preserve specialist administration for devices paired with the exact legacy global administrator scope. Partial scopes, expired credentials and revoked devices remain denied.
+- Apply an already recorded human decision with its original key and exact operation, without asking the user to answer again. Explain how to resolve an administrative scope refusal.
+
 ## 0.8.5 — 2026-11-06
 
 - Reuse the local roots of an existing placement while preparing its destination machine, without rewriting the provisioned mapping or changing permissions.

@@ -5,3 +5,5 @@
 - [ ] T003 Vérifier la visibilité interprojets et la conservation des travaux.
 - [x] T004 Documenter et pousser la proposition et son état en attente.
 - [ ] T005 Finaliser le bilan après application et vérification interprojets.
+- [ ] T006 Corriger/tester la compatibilité administrative globale historique.
+- [ ] T007 Revue indépendante et activation du correctif sans relance de T3.

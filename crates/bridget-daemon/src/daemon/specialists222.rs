@@ -152,8 +152,8 @@ pub(super) fn failure(code: &str) -> Value {
         ),
         "specialists_admin_scope_required" => (
             code,
-            "Utiliser un appareil explicitement autorisé à gérer les spécialistes.",
-            "L'utilisateur doit autoriser specialists_manage pour cet appareil ; une simple lecture ne vaut pas ce droit.",
+            "Conserver la réponse existante et sa clé. Faire vérifier l'autorisation actuelle de cet appareil pour l'administration des spécialistes.",
+            "Un appareil administrateur actuel ou le terminal humain du maître peut appliquer cette opération. Répondre encore à la même carte ne corrige pas les droits de l'appareil ; ce refus ne demande aucun redémarrage des clients.",
         ),
         "specialists_machine_scope_unverified" => (
             code,
@@ -537,7 +537,16 @@ fn apply(
             request_id,
             operation,
             ..
-        } => request_approval(st, conn, p, request_id, operation, controls),
+        } => match request_approval(st, conn, p, request_id, operation, controls) {
+            Err(code) if code=="specialists_admin_scope_required" => {
+                let mut value=failure(&code);
+                value["request_id"]=json!(request_id);
+                value["question_id"]=json!(request_id);
+                value["decision_retained"]=json!(true);
+                Ok(value)
+            }
+            result=>result,
+        },
         SpecialistRequest::RequestRole {
             request_id,
             role_id,
@@ -843,11 +852,7 @@ fn decision_projects(st: &DaemonState, row: &Value) -> Result<Vec<String>, Strin
                 .ok_or("human_approval_unavailable")?;
             if device.revoked_at.is_some()
                 || device.expires_at <= unix_timestamp()
-                || !device.scope.all_machines
-                || !device
-                    .scope
-                    .operations
-                    .contains(&crate::mobile::store::Operation::SpecialistsManage)
+                || !device.scope.permits_specialists_management()
             {
                 return Err("specialists_admin_scope_required".into());
             }
@@ -1776,9 +1781,8 @@ pub(super) fn handle_mobile(
                 result: failure("forbidden_scope"),
             };
         }
-    } else if !device
-        .scope
-        .permits_federation(Operation::SpecialistsManage)
+    } else if !device.scope.all_projects
+        || !device.scope.permits_specialists_management()
     {
         return DaemonToWrapper::MobileOperationResult {
             result: failure("specialists_admin_scope_required"),
@@ -2873,6 +2877,48 @@ mod tests222 {
         assert!(
             request_approval(&mut st, "conn-1", &principal, &key, &changed, &mut controls).is_err()
         );
+    }
+
+    #[test]
+    fn spec239_legacy_mobile_admin_applies_only_the_recorded_human_decision() {
+        use crate::mobile::store::{Scope,Store};
+        let (mut st,_)=super::super::presence_tests::state_with_registered_agent("239-legacy-approval");
+        let (writer,_reader)=super::super::presence_tests::control_socket("239-legacy-approval");
+        st.connections.insert("conn-1".into(),writer);
+        let now=unix_timestamp();
+        let mut devices=Store::open(&st.db_path.parent().unwrap().join("mobile-devices.db")).unwrap();
+        let scope:Scope=serde_json::from_value(json!({"all_machines":true,"machines":[],"all_projects":true,"projects":[],
+            "operations":["read","message","task_read","task_continue","task_cancel","task_respond","devices_manage"]})).unwrap();
+        let pairing=devices.issue_pairing(&scope,now).unwrap();
+        let device=devices.pair(&pairing.credential,&Uuid::new_v4().to_string(),
+            &format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),"Legacy administrator",now).unwrap();
+        let actor=format!("mobile181:{}",device.device_id);
+        let id=Uuid::new_v4().to_string();
+        profiles(&st).unwrap().specialist_apply(&profile(&id),&human(),now).unwrap();
+        let operation=serde_json::from_value(json!({"version":1,"action":"approve_revision",
+            "request_id":Uuid::new_v4().to_string(),"profile_id":id,"revision":1})).unwrap();
+        let principal=SpecialistPrincipal{agent_id:Some(AGENT.into()),human_approval_ref:None,allowed_projects:vec!["project".into()]};
+        let key=Uuid::new_v4().to_string();let mut controls=Vec::new();
+        assert_eq!(request_approval(&mut st,"conn-1",&principal,&key,&operation,&mut controls).unwrap()["status"],"awaiting_human");
+        assert!(profiles(&st).unwrap().get_definition(&id,1).unwrap().unwrap().approved_ref.is_none());
+        let question=crate::user_input::get(st.store.connection(),&key).unwrap().unwrap();
+        crate::user_input::respond(st.store.connection(),&key,question["revision"].as_str().unwrap(),
+            &Uuid::new_v4().to_string(),&actor,&json!({"specialist_approval":{"selected":["approve"],"text":""}}),now).unwrap();
+        assert_eq!(request_approval(&mut st,"conn-1",&principal,&key,&operation,&mut controls).unwrap()["status"],"ok");
+        let approved=profiles(&st).unwrap().get_definition(&id,1).unwrap().unwrap().approved_ref;
+        assert!(approved.is_some());
+        assert_eq!(crate::user_input::get(st.store.connection(),&key).unwrap().unwrap()["state"],"applied");
+        assert_eq!(request_approval(&mut st,"conn-1",&principal,&key,&operation,&mut controls).unwrap()["status"],"ok");
+        assert_eq!(profiles(&st).unwrap().get_definition(&id,1).unwrap().unwrap().approved_ref,approved);
+        devices.revoke(&device.device_id,now).unwrap();
+        assert_eq!(decision_projects(&st,&json!({"actor":actor})),Err("specialists_admin_scope_required".into()));
+        let earlier=now-31*86_400;
+        let pairing=devices.issue_pairing(&scope,earlier).unwrap();
+        let expired=devices.pair(&pairing.credential,&Uuid::new_v4().to_string(),
+            &format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),"Expired administrator",earlier).unwrap();
+        assert_eq!(decision_projects(&st,&json!({"actor":format!("mobile181:{}",expired.device_id)})),Err("specialists_admin_scope_required".into()));
+        assert!(controls.is_empty());
+        assert!(st.managed_by_instance.is_empty());
     }
     #[test]
     fn spec222_contact_is_idempotent_without_durable_activation_and_status_is_scoped() {

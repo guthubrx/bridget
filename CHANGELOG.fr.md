@@ -8,6 +8,11 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.6 — 2026-11-07
+
+- Conserver l'administration des spécialistes pour les appareils associés avec l'ancienne portée administrative globale complète. Les appareils partiels et les autorisations expirées ou révoquées restent refusés.
+- Appliquer une décision humaine déjà enregistrée avec sa clé et son opération exactes, sans refaire répondre l'utilisateur. Préciser la résolution d'un refus de portée administrative.
+
 ## 0.8.5 — 2026-11-06
 
 - Réutiliser les racines locales d’un placement existant pendant la préparation sur sa machine cible, sans réécrire ce placement ni changer les droits.
