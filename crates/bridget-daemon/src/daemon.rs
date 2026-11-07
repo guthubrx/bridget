@@ -42642,6 +42642,7 @@ mod presence_tests {
     #[test]
     fn spec240_late_prepare_expiry_preserves_worker_without_creating_a_task() {
         use bridget_transport::protocol::*;
+        for stale_before_reply in [false,true] {
         let (mut st, config) = state_with_registered_agent("worker240-late-prepare");
         let worker = WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 };
         st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
@@ -42672,6 +42673,11 @@ mod presence_tests {
         let server = std::thread::spawn(move || {
             let mut line=String::new(); reader.read_line(&mut line).unwrap();
             let DaemonToWrapper::WorkerRequest {request}=decode(line.trim()).unwrap() else {panic!("prepare attendu")};
+            if stale_before_reply {
+                remote_worker_disconnected(&mut responder.lock().unwrap(),"worker");
+                assert!(responder.lock().unwrap().pending_worker_responses.is_empty(),
+                    "le tick de contact a retiré l'attente avant le retour du roundtrip");
+            }
             wait_late.recv().unwrap();
             let response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:request.correlation_id,
                 connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
@@ -42696,6 +42702,7 @@ mod presence_tests {
             Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::StaleConnection})));
         assert!(handle_worker_message(&shared,"worker",WrapperToDaemon::Heartbeat).is_none());
         let _=std::fs::remove_file(config.db_path);
+        }
     }
 
     #[test]
