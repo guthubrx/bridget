@@ -109,16 +109,25 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
-Session239 — correction du catalogue de maintenance préparée, non appliquée.
-Mandat et rôle transversaux proposés, auto_start/durable restent false ; aucun
-nouvel accès aux données métier. Le port natif configure_mandate exige une
-décision humaine corrélée : question a80e8ab5-c21e-4247-acc9-68b700f6a85c
-en attente. Reprendre request_approval avec le canon exact conservé dans
-/Users/moi/.cache/bridget239-maintenance-transversale/approval-request.json.
-Après réponse native approuvée : appliquer une fois, déclarer le même rôle dans
-le périmètre accordé, vérifier search/get depuis Revue sans nouvelle mission.
-Ne pas répondre à la place de l'humain, modifier SQL ou forger une preuve.
-T3 reste ouvert ; aucune relance requise pour cette configuration.
+Session239 — administration Android et catalogue livrés en0.8.6/239-mobile-admin-r2.
+Source exécutable1d7e1e14, quatre tests utiles verts, deux revues terminées/ACK ;
+dernière acceptable sans objection bloquante, limites de lecture documentées.
+Anciennes associations administratives globales complètes reconnues avant le
+bornage chronologique ; nouvelles/partielles refusées, preuve humaine conservée.
+Accord Android questiona80e8ab5 appliqué nativement, sans nouvelle question :
+grant7a6df19e/révision2, mandat puis rôle transversaux, fiche révision3.
+Search/get réussis depuis Codex Revue/caller auto-5c29175617db400dab394fa74bc97948 ;
+aucun nouvel accès métier, auto_start/durable false. Aucun rejeu métier.
+Sept composants/SHA vérifiés, coupure1,97s ; retour237 compatible/pointeurs
+natifs quatre hôtes, registreMac et superviseurCartae2500061 conservés.
+Releasepublique0.8.6/sixactifs téléchargés/SHA et APK8006/certificat/lignée vérifiés ;
+quatre rapports0.8.6/up_to_date/fresh. Payloads7024/77ba/702d strictement inchangés.
+Transport transitoire du pont rétabli, cause précise non prouvée ; ports natifs
+et19avis reprise réussis, reçus sans lecture inventée.19fichiers/260843356octets
+retirés ; cacheMac0,52Gio. WT/cachesSYS et vues sous observation incomplète gardés,
+WTCartae1cc44f4d modifié/utilisé conservé. T3 sept processus inchangés ; façades237
+encore ouvertes, rechargement complet manuel à la demande explicite de François.
+NE PAS relancer T3 automatiquement ni redemander l'accord de mandat déjà appliqué.
 Détails : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/239-maintenance-transversale/validation.md.
 
 Session238 — placement Revue Mac qualifié, configuration native sans build.
