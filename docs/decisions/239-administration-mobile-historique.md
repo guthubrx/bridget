@@ -43,3 +43,10 @@ Les décisions de mandat gardent leur projection par projets quand l'autorisatio
 spécialistes est explicite. Les mutations directes mobiles conservent leur garde
 préexistante de tous les projets. Le correctif n'élargit pas cette seconde voie
 aux appareils administrateurs limités à certains projets.
+
+La date de création repose sur l'horloge du maître. Un administrateur de cet
+hôte peut la modifier ; cet accès dépasse le modèle de menace d'un appareil
+mobile. L'inventaire des appareils éligibles est relu avant activation.
+Lors d'un remplacement ou d'une réassociation choisie par l'utilisateur,
+utiliser l'opération explicite actuelle. Aucun nouvel appairage n'est imposé
+pour chaque approbation ou pour terminer la décision déjà enregistrée.
