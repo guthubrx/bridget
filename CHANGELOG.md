@@ -6,6 +6,10 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.9 — 2026-11-07
+
+- Show the current local folder in recovery cards. An unavailable Git check no longer declares a usable commit view unavailable.
+
 ## 0.8.8 — 2026-11-07
 
 - Keep each newly admitted mission's authority after the originating turn ends. Continue to check its owner, native revocations, cancellation, source policy and frozen placement before launch.

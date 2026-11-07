@@ -8,6 +8,10 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.9 — 2026-11-07
+
+- Afficher le dossier local courant dans les cartes de reprise. Un contrôle Git indisponible ne déclare plus une vue de lecture utilisable indisponible.
+
 ## 0.8.8 — 2026-11-07
 
 - Conserver l’autorité d’une nouvelle mission admise après la fin du tour qui l’a créée. Vérifier encore propriétaire, révocations natives, annulation, sources de droits et placement avant lancement.

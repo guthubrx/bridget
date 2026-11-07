@@ -348,6 +348,7 @@ fn managed_resume_context(
         format!(
             "Identité figée : nom={agent}; type={agent_type}; protocole={protocol}; definition_digest={definition_digest}."
         ),
+        format!("Dossier courant : {}.", resume_card_external_text(&worktree.display().to_string())),
     ];
     match managed_resume_worktree(worktree) {
         Ok(attested) => {
@@ -387,7 +388,7 @@ fn managed_resume_context(
             }
         }
         Err(error) => lines.push(format!(
-            "Worktree : indisponible ({}).",
+            "État Git : indisponible ({}). Ce contrôle ne mesure pas la disponibilité des fichiers. Une vue de lecture de commit ne contient pas de dépôt Git : poursuivez la lecture dans l’espace attesté de la mission si les fichiers sont accessibles. Ne remplacez pas ce chemin par celui d’une autre machine.",
             resume_card_external_text(&error)
         )),
     }
@@ -8296,10 +8297,25 @@ mod prompt_tests {
             "acp",
             "fixture-digest",
         );
-        assert!(context.contains("Worktree : indisponible"));
+        assert!(context.contains("État Git : indisponible"));
+        assert!(context.contains(&root.join("absent").display().to_string()));
         assert!(context.contains("Identité figée"));
         assert!(!context.contains("branche="));
         assert!(!context.contains("Mission service compagnon"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec242_carte_sans_git_ne_declare_pas_les_fichiers_indisponibles() {
+        let root = resume_root("242-without-git");
+        fs::write(root.join("document.txt"), "lecture disponible").unwrap();
+        let context = managed_resume_context(&root, "agent", "fixture", "acp", "digest");
+        assert!(context.contains(&format!("Dossier courant : {}.", root.display())));
+        assert!(context.contains("État Git : indisponible"));
+        assert!(context.contains("poursuivez la lecture dans l’espace attesté"));
+        assert!(!context.contains("Worktree : indisponible"));
+        assert!(!context.contains("branche="));
+        assert_eq!(fs::read_to_string(root.join("document.txt")).unwrap(), "lecture disponible");
         fs::remove_dir_all(root).unwrap();
     }
 
