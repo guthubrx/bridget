@@ -42641,7 +42641,7 @@ mod presence_tests {
         let (mut st, config) = state_with_registered_agent("worker240-late-prepare");
         let worker = WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 };
         st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
-            epoch: "epoch".into(), capabilities: vec![], catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),
+            epoch: "epoch".into(), capabilities: vec![WorkerCapability::WorkspaceFailureV1], catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),
             catalogue_refresh_at:None, last_contact:Instant::now(), last_contact_at:unix_timestamp(), contact:WorkerContactState::Connected });
         let (writer, mut reader) = control_socket("late240");
         reader.get_ref().set_read_timeout(Some(Duration::from_secs(2))).unwrap();
