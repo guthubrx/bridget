@@ -8882,7 +8882,11 @@ fn handle_register_with_channel(
             state.restore_pending_for_agent(&final_agent_id, conn_id);
             let mut specialist_controls=Vec::new();
             specialists222::resume_for_registered(state,&final_agent_id,&mut specialist_controls);
-            state.pending_post_response_controls.entry(conn_id.into()).or_default().extend(specialist_controls);
+            // Une entrée vide ferait croire à une activité en attente
+            // (contrôle de maintenance) jusqu'à la vidange après réponse.
+            if !specialist_controls.is_empty() {
+                state.pending_post_response_controls.entry(conn_id.into()).or_default().extend(specialist_controls);
+            }
             info!("agent '{}' enregistré ({})", final_agent_id, conn_id);
             state.revoke_identity_authorizations(conn_id);
             let credential = state.conn_instances.contains_key(conn_id).then(|| {
@@ -15409,7 +15413,7 @@ mod spec099_classic_delivery_tests {
         );
         assert!(
             started.elapsed() < Duration::from_secs(1),
-            "writer occupé ne bloque pas le dispatch"
+            "writer occupé ne bloque pas le dispatch : {:?}", started.elapsed()
         );
         // Un client auxiliaire ne peut inventer un fait pour son agent.
         state
@@ -16655,7 +16659,9 @@ mod spec145_human_view_tests {
                     Ok(0) => panic!("MCP privé a fermé stdout avant sa réponse"),
                     Ok(count) => {
                         line.extend_from_slice(&bytes[..count]);
-                        assert!(line.len() <= 64 * 1024, "réponse MCP non bornée");
+                        // Borne du banc : le catalogue complet tools/list pèse
+                        // environ 88 Kio depuis la session 228 (schémas complets).
+                        assert!(line.len() <= 256 * 1024, "réponse MCP non bornée");
                         if line.ends_with(b"\n") {
                             return serde_json::from_slice(&line).unwrap();
                         }
@@ -20734,7 +20740,7 @@ fn handle_wrapper_message_with_peer(
         )),
         WrapperToDaemon::DirectoryScoped { scope } => {
             use bridget_transport::protocol::{
-                CommunicationDirectoryScope, ProjectRelation, ScopedAgentInfo,
+                CommunicationDirectoryScope, ProjectRelation,
             };
             let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
             let project = connection_communication_project(&st, conn_id);
@@ -41049,7 +41055,8 @@ mod presence_tests {
             fixture_with_reader, mission_native,
         };
         let (mut st, config, commands, _parent_reader) = fixture_with_reader("h159-nm");
-        let task = mission_native(&mut st, &commands, "held-native159", "working");
+        // d5af84f8 : une mission passe par son échange admis (mission_pending).
+        let task = mission_native(&mut st, &commands, "held-native159", "mission_pending");
         st.registry = crate::registry::AgentRegistry::from_json(
             &serde_json::json!({"agents":{"native-test":{"command":"/bin/sh","args":["app-server"],
                 "protocol":"codex_app_server","forbidden_env":[],"held_queue":true,
@@ -41103,16 +41110,17 @@ mod presence_tests {
                 .task_id,
             task.task_id
         );
-        let body = match &task.request {
-            bridget_transport::protocol::NativeDelegationRequest::Delegate { task, .. } => {
-                task.as_str()
-            }
-            _ => panic!("vraie délégation attendue"),
-        };
-        let mut message = BridgetMessage::new(&task.owner, &task.child, body);
-        message.id = task.mission.clone();
-        // Sans intention pour isoler la preuve for_mission, identité dérivée par send_as.
-        assert!(message.intent.is_none());
+        // La preuve for_mission seule : sans intention, seule la mission connue
+        // échappe à la rétention (should_hold), toutes autres conditions égales.
+        let mut passive = BridgetMessage::new(&task.owner, &task.child, "passif");
+        passive.id = task.mission.clone();
+        assert!(passive.intent.is_none());
+        let definition = st.registry.get("native-test").unwrap();
+        let child_presence = &st.presences[task.child_instance.as_ref().unwrap()];
+        assert!(should_hold(definition, child_presence, &passive, false, false));
+        assert!(!should_hold(definition, child_presence, &passive, false, true));
+        // Depuis d5af84f8, l'échange natif n'accepte que la mission canonique admise.
+        let message = super::native_delegation::remote_mission_message(&task).unwrap();
         let mut controls = Vec::new();
         let response = super::native_delegation::send_as(
             &mut st,
@@ -44904,7 +44912,13 @@ mod presence_tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            handle_wrapper_message("conn-1", WrapperToDaemon::Heartbeat, &shared);
+            // Session 241 (db43c142) : le collecteur attach-cleanup récolte les
+            // vues hors du traitement des messages ; même appel que lui ici.
+            let (controls, views) = collect_closed_attach_views(&mut shared.lock().unwrap());
+            let _ = execute_controls(controls);
+            for view in views {
+                view.close_and_join();
+            }
             if !shared
                 .lock()
                 .unwrap()

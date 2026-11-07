@@ -3585,7 +3585,9 @@ fn spawn_reader(lines: SourceLines, context: ReaderContext) -> thread::JoinHandl
                 // Le vrai résultat turn/start établit le tour avant de rendre
                 // le waiter : les callbacks qui le suivent ne gagnent pas une
                 // course artificielle contre le worker, et aucun id n'est deviné.
-                if forward_child_requests
+                // Hors mode natif aussi (le worker le refixe ensuite à l'identique) :
+                // sinon un compactage immédiat perdait son fait « running » (macOS).
+                if (forward_child_requests || !interactive)
                     && let Some(turn_id) = value.pointer("/result/turn/id").and_then(Value::as_str)
                 {
                     let message_id = queue

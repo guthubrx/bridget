@@ -1622,7 +1622,7 @@ fn v2_receipt202(task: &Task, mut receipt: AutoAdmissionReceipt, distinct: bool)
 
 #[test]
 fn spec202_selected_effort_uses_admitted_execution_digest() {
-    let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
+    let (state, config, task, receipt, _) = fixture_guarded202(false, true);
     let receipt = v2_receipt202(&task, receipt, true);
     let before = saved(&state, &task.task_id);
     let selected = frozen_start_routing(&task, &receipt).expect("low→high n'est pas une dérive").unwrap();
@@ -1635,7 +1635,7 @@ fn spec202_selected_effort_uses_admitted_execution_digest() {
 
 #[test]
 fn spec202_real_definition_drift_and_effort_change_still_refuse_precisely() {
-    let (state, config, mut task, receipt, _) = fixture_guarded202(false, true);
+    let (state, config, task, receipt, _) = fixture_guarded202(false, true);
     for distinct in [false, true] {
         let receipt = v2_receipt202(&task, receipt.clone(), distinct);
         let mut changed = task.clone(); changed.definition.digest = "f".repeat(64);

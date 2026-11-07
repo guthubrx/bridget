@@ -8341,7 +8341,9 @@ while not stop.exists(): time.sleep(.01)
             let until = Instant::now()+Duration::from_secs(4);
             loop {
                 match listener.accept() {
-                    Ok((stream,_)) => return Some(stream),
+                    // macOS : la connexion acceptée hérite du mode non bloquant
+                    // de l'écoute ; Linux non. Le banc lit ensuite avec délai.
+                    Ok((stream,_)) => { stream.set_nonblocking(false).unwrap(); return Some(stream) },
                     Err(error) if error.kind()==std::io::ErrorKind::WouldBlock => {},
                     Err(error) => panic!("accept: {error}"),
                 }
@@ -9559,7 +9561,7 @@ while not stop.exists(): time.sleep(.01)
         {
             use std::io::Write;
             use std::os::unix::process::CommandExt;
-            let fixture=Fixture::new();let mut runtime=runtime_fixture(&fixture);
+            let fixture=Fixture::new();let runtime=runtime_fixture(&fixture);
             reserve(&runtime.store);
             let mut child=std::process::Command::new("sh").args(["-c","read line"])
                 .stdin(std::process::Stdio::piped()).process_group(0).spawn().unwrap();

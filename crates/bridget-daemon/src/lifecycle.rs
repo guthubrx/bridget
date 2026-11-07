@@ -1359,8 +1359,10 @@ mod tests {
         );
         assert!(matches!(
             refusal,
+            // Session 221 (a83186df) : une empreinte bien formée mais différente
+            // désigne un programme modifié, requalifié seulement pour Codex.
             SpawnRefusal::UnsupportedCapability { ref capability, .. }
-                if capability == "empreinte du binaire fournisseur observé"
+                if capability == "compatibilité du programme modifié non vérifiée"
         ));
         assert!(!supervisor.knows_command(&order.command_id));
         assert_eq!(supervisor.active_count(), 0);

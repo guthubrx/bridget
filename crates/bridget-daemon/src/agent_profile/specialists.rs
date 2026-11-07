@@ -218,6 +218,15 @@ impl AgentProfileStore {
             issuer TEXT NOT NULL,request_id TEXT NOT NULL,canonical BLOB NOT NULL,response TEXT NOT NULL,PRIMARY KEY(issuer,request_id));")
             .map_err(AgentProfileError::Sqlite)
     }
+    /// Fin de tour : lit par la connexion déjà ouverte du daemon, sans ouvrir
+    /// un fichier ni rejouer le schéma (~4,5 ms sous le verrou par tour avant).
+    /// Table absente ou fiche illisible : pas de capture, comme avant.
+    pub(crate) fn captures_history(conn: &rusqlite::Connection, id: &str) -> bool {
+        conn.query_row("SELECT record_json FROM specialists WHERE agent_id=?1", [id], |r| r.get::<_, String>(0))
+            .ok()
+            .and_then(|json| serde_json::from_str::<SpecialistRecord>(&json).ok())
+            .is_some_and(|record| record.capture_history)
+    }
     pub fn get_specialist(&self, id: &str) -> Result<Option<SpecialistRecord>, SpecialistError> {
         let row: Option<String> = self
             .conn

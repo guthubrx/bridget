@@ -237,9 +237,10 @@ fn daemon_et_cli_reels_transmettent_et_comparent_le_build_id() {
     // Le daemon de ce banc est local mais indépendant du service historique.
     // L'oracle fixe le texte sans rappeler son producteur.
     let ici = BANC_HOST;
-    let remediation = "relancer manuellement le daemon Bridget communication du namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié — ne pas relancer le service historique";
+    // Mises à jour vérifiées (9fcd0bc2) : un écart de build ne prouve pas une version ancienne.
+    let remediation = "consulter bridget updates status dans le namespace BRIDGET_HOME/BRIDGET_SOCKET vérifié ; un écart de build ne prouve pas une version ancienne ; ne pas relancer le service historique";
     let expected = format!(
-        "daemon périmé sur {ici} (daemon-build-test) — client client-build-avance sur {ici} : {remediation}\n"
+        "build du daemon différent sur {ici} (daemon-build-test) — client client-build-avance sur {ici} : {remediation}\n"
     );
     let stderr = String::from_utf8_lossy(&different_build.stderr);
     let disk_suffix = stderr

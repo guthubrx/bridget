@@ -383,6 +383,8 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         .collect::<BTreeSet<_>>();
     let expected = [
         "bridget_who",
+        // Session222 : catalogue des spécialistes en lecture.
+        "bridget_specialists",
         "bridget_send",
         "bridget_ledger",
         "bridget_cancel",
@@ -400,6 +402,9 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         "bridget_handoff",
         // Session148 : outils natifs de délégation (commit 347d7885).
         "bridget_capabilities",
+        // Sessions220-221 : observation des modèles et fichier omis d'une vue.
+        "bridget_refresh_models",
+        "bridget_read_commit_file",
         "bridget_delegate",
         "bridget_auto_delegate",
         "bridget_task_status",
@@ -408,6 +413,8 @@ fn spec094_claude_recoit_la_liste_fermee_des_outils_bridget_autorises() {
         "bridget_request_wait",
         "bridget_task_ack",
         "bridget_task_continue",
+        // Session185 : réparation explicite du dossier déplacé.
+        "bridget_task_repair_workspace",
         "bridget_task_respond",
     ]
     .map(|name| format!("mcp__bridget__{name}"))

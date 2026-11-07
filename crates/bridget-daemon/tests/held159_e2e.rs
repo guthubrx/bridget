@@ -808,10 +808,12 @@ fn bootstrap159(
 }
 
 #[test]
+#[ignore = "recette 159 : --features test-support, BRIDGET_T010_DAEMON_TEST_BINARY et rapports BRIDGET_LATENCY159_REPORT / _AFTER_REPORT"]
 fn held159_latency_baseline_codex_simule() {
     measure_latency159(false);
 }
 #[test]
+#[ignore = "recette 159 : --features test-support, BRIDGET_T010_DAEMON_TEST_BINARY et rapports BRIDGET_LATENCY159_REPORT / _AFTER_REPORT"]
 fn held159_latency_retenue_codex_simule() {
     measure_latency159(true);
 }
@@ -966,6 +968,7 @@ fn measure_latency159(held_queue: bool) {
 }
 
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn held159_daemon_arrete_apres_retention_conserve_la_remise() {
     use rusqlite::OptionalExtension;
     use std::os::unix::process::ExitStatusExt;
@@ -1065,11 +1068,13 @@ fn held159_daemon_arrete_apres_retention_conserve_la_remise() {
 
 // Point21 T007 couvert ici seulement : FIFO observée après COMMIT, jamais ouverte après TERM.
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_release_panne_entre_transaction_et_push_relivree_par_la_reprise() {
     held_crash_after_release159("after_held_release_commit");
 }
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_daemon_arrete_apres_push_reprise_dans_l_ordre() {
     // R17 : ce banc bloque Seen avant injection. Il ne promet pas exactly-once après tout push.
@@ -1077,6 +1082,7 @@ fn held159_daemon_arrete_apres_push_reprise_dans_l_ordre() {
 }
 
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_daemon_arrete_apres_accuse_ne_reinjecte_pas() {
     held_crash_after_release159("after_delivery_acked");
@@ -1694,6 +1700,7 @@ fn bootstrap_carrier159(busy: bool) -> (Fixture, support::Client, support::Clien
 }
 
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn held159_porteur_arrete_sans_message_en_cours() {
     let (mut f, mut primary, _sender, child, instance) = bootstrap_carrier159(false);
     primary.send(WrapperToDaemon::ListAgents);
@@ -1725,6 +1732,7 @@ fn held159_porteur_arrete_sans_message_en_cours() {
 }
 
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn held159_porteur_arrete_avec_message_en_cours_preserve_ordre() {
     let (mut f, mut primary, mut sender, child, instance) = bootstrap_carrier159(true);
     let db = rusqlite::Connection::open_with_flags(
@@ -1799,6 +1807,7 @@ fn held159_porteur_arrete_avec_message_en_cours_preserve_ordre() {
 // T010 : vraie interruption du porteur après Seen durable et avant toute injection.
 // La reconstruction physique reprend l'identité exacte, jamais une nouvelle mission.
 #[test]
+#[cfg_attr(not(target_os = "linux"), ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md")]
 #[cfg_attr(target_os = "linux", ignore = "watch_marker exige kqueue Darwin/BSD")]
 fn held159_porteur_arrete_apres_seen_reprise_meme_instance_indeterminee() {
     use bridget_daemon::managed_process::{

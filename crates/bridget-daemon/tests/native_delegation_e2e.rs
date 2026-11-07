@@ -2449,6 +2449,12 @@ fn native148_sans_t3_retry_reponse_correllee_annulation_et_reprise_durable() {
     // La boîte reflète maintenant l'ACK reçu entre les deux lectures ; les autres clés restent stables.
     recovered_stable.as_object_mut().unwrap().remove("mailbox");
     finished_stable.as_object_mut().unwrap().remove("mailbox");
+    // Session 221 : l'éligibilité de reprise porte l'heure de sa propre lecture.
+    for stable in [&mut recovered_stable, &mut finished_stable] {
+        if let Some(continuation) = stable["continuation"].as_object_mut() {
+            continuation.remove("observed_at");
+        }
+    }
     assert_eq!(recovered_stable, finished_stable);
     assert_eq!(recovered["mailbox"]["state"], "delivered");
     let cancelled = f.request(

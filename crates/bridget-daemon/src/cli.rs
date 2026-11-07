@@ -9390,7 +9390,7 @@ mod hook_tests {
             .expect("un refus d'identité est expliqué");
         assert!(indice.contains("identity_not_found"));
         assert!(indice.contains("rend son résultat à son parent Bridget"));
-        assert!(indice.contains("agent Bridget enregistré"));
+        assert!(indice.contains("lancez l'agent avec bridget codex ou bridget claude"));
         assert!(
             unattested_hint(
                 "human",
@@ -11599,7 +11599,7 @@ pub(crate) mod idempotency_projection_tests {
         // qui vérifierait seulement la présence d'un hôte passerait aussi avec
         // le mauvais.
         assert!(
-            warning.contains("daemon périmé sur monordinateur"),
+            warning.contains("build du daemon différent sur monordinateur"),
             "{warning}"
         );
         // Machine non attestée : le message le dit, il ne suppose pas la mienne.
@@ -11609,7 +11609,7 @@ pub(crate) mod idempotency_projection_tests {
             "{sans_hote}"
         );
         assert!(
-            !sans_hote.contains(&format!("daemon périmé sur {ici}")),
+            !sans_hote.contains(&format!("build du daemon différent sur {ici}")),
             "{sans_hote}"
         );
     }

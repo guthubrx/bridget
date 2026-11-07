@@ -1006,9 +1006,10 @@ mod tests {
         // Le scan refuse à juste titre /tmp quand le chemin réel est /private/tmp.
         let root = fs::canonicalize(std::env::temp_dir())
             .unwrap()
+            // Nom court : la socket doit rester sous 104 octets (SUN_LEN de macOS).
             .join(format!(
-                "bridget-mcp-identity-{label}-{}",
-                uuid::Uuid::new_v4()
+                "bmi-{label}-{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..12]
             ));
         private_dir(&root);
         root

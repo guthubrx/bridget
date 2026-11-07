@@ -994,14 +994,17 @@ fn edit159_reconnect(f: &mut Fixture) -> (support::Client, support::Client) {
     (primary, sender)
 }
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn edit159_e2e_cancel_arret_avant_transaction() {
     edit159_cancel_boundary("before_queue_cancel_transaction");
 }
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn edit159_e2e_cancel_echec_interne_transaction() {
     edit159_cancel_boundary("after_queue_cancel_delivery_write");
 }
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn edit159_e2e_cancel_arret_apres_commit() {
     edit159_cancel_boundary("after_queue_cancel_commit");
 }
@@ -1209,6 +1212,7 @@ fn edit159_cancel_boundary(point: &str) {
     assert_eq!(edit159_row(&db, "edit159-cancel-target").0, "cancelled");
 }
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn edit159_e2e_recette_complete_reglage_ouvert() {
     let (f, _parent, mut sender, child, instance, _state, _pid) = bootstrap159(Some(true), true);
     let db = edit159_db(&f);
@@ -1583,6 +1587,7 @@ fn edit159_e2e_recette_complete_reglage_ouvert() {
     assert_eq!(count, 3);
 }
 #[test]
+#[ignore = "recette 159 : --features test-support et BRIDGET_T010_DAEMON_TEST_BINARY (binaire libtest) ; voir specs/159-edition-file/quickstart.md"]
 fn edit159_e2e_recette_reglage_ferme_not_held() {
     let (f, mut parent, mut sender, child, _instance, _state, _pid) =
         bootstrap159(Some(false), true);

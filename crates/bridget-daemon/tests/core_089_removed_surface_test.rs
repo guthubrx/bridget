@@ -122,11 +122,32 @@ fn le_noyau_ne_compile_plus_de_serveur_http_ni_de_renderer() {
         assert!(!modules.contains(forbidden));
     }
     let manifest = include_str!("../Cargo.toml");
-    for dependency in ["reqwest", "tauri", "axum", "hyper"] {
+    for dependency in ["reqwest", "tauri", "hyper"] {
         assert!(
             !manifest
                 .lines()
                 .any(|line| line.trim_start().starts_with(&format!("{dependency} =")))
         );
     }
+    // Session 177 : axum sert uniquement le compagnon mobile authentifié et borné.
+    // L'ancienne interface web retirée en 089 ne doit pas revenir par ce biais.
+    fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, found);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                found.push(path);
+            }
+        }
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    sources(&src, &mut files);
+    let outside: Vec<_> = files
+        .iter()
+        .filter(|path| !path.starts_with(src.join("mobile")))
+        .filter(|path| fs::read_to_string(path).unwrap().contains("axum::"))
+        .collect();
+    assert!(outside.is_empty(), "axum hors du compagnon mobile : {outside:?}");
 }

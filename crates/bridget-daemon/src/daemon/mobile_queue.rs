@@ -100,7 +100,7 @@ pub(super) fn handle(conn: &str, operation: &MobileOperation, device: &Device, s
                         let _=st.idempotency.mark_delivery_indeterminate(&d.delivery_id,&d.recipient_instance_id,d.delivery_generation);
                     }
                 }
-                st.pending_post_response_controls.entry(conn.into()).or_default().extend(controls);
+                if !controls.is_empty() {st.pending_post_response_controls.entry(conn.into()).or_default().extend(controls);}
             }
             response(json!({"status":"ok","request_id":request_id,"state":receipt.state,"refusal":receipt.refusal,"effect":receipt.effect}))
         },

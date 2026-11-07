@@ -9617,6 +9617,7 @@ mod reconnect_tests {
                 "env={HOME=\"/tmp/home\",BRIDGET_HOME=\"/tmp/state\",BRIDGET_SOCKET=\"/tmp/state/bridget.sock\"},",
                 "tool_timeout_sec=3700,default_tools_approval_mode=\"prompt\",tools={",
                 "bridget_who={approval_mode=\"approve\"},",
+                "bridget_specialists={approval_mode=\"approve\"},",
                 "bridget_send={approval_mode=\"approve\"},",
                 "bridget_ledger={approval_mode=\"approve\"},",
                 "bridget_journal={approval_mode=\"approve\"},",
@@ -9633,6 +9634,8 @@ mod reconnect_tests {
                 "bridget_status={approval_mode=\"approve\"},",
                 "bridget_control_status={approval_mode=\"approve\"},",
                 "bridget_capabilities={approval_mode=\"approve\"},",
+                "bridget_refresh_models={approval_mode=\"approve\"},",
+                "bridget_read_commit_file={approval_mode=\"approve\"},",
                 "bridget_delegate={approval_mode=\"approve\"},",
                 "bridget_auto_delegate={approval_mode=\"approve\"},",
                 "bridget_task_status={approval_mode=\"approve\"},",
@@ -9641,6 +9644,7 @@ mod reconnect_tests {
                 "bridget_request_wait={approval_mode=\"approve\"},",
                 "bridget_task_ack={approval_mode=\"approve\"},",
                 "bridget_task_continue={approval_mode=\"approve\"},",
+                "bridget_task_repair_workspace={approval_mode=\"approve\"},",
                 "bridget_task_respond={approval_mode=\"approve\"}}}"
             )
         );
@@ -9721,7 +9725,7 @@ mod reconnect_tests {
         append_claude_allowed_tools(&mut args);
         assert_eq!(args[0], "--allowedTools");
         let permitted: Vec<_> = args[1].split(',').collect();
-        assert_eq!(permitted.len(), 26);
+        assert_eq!(permitted.len(), 30);
         for tool in [
             "bridget_capabilities",
             "bridget_delegate",

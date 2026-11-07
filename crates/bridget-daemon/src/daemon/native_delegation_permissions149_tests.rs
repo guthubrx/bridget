@@ -3059,8 +3059,10 @@ fn native149_f2_message_externe_au_meme_format_ne_recoit_aucune_capacite_privee(
         task.created_at,
         &mut controles,
     );
-    assert!(
-        refus(&defaut).is_some_and(|raison| raison.contains("non attestée")),
+    // Session 221 (e948eef5) : même garde, diagnostic précis de la route absente.
+    assert_eq!(
+        refus(&defaut),
+        Some("native_sender_primary_absent"),
         "garde par défaut inchangé: {defaut:?}"
     );
 

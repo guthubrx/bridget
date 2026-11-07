@@ -424,7 +424,7 @@ for line in sys.stdin:
             "permissions":"deny","forbidden_env":[],
             "capabilities":{"execution_paths":["codex_app_server"],"models":{"fixture185":{"efforts":["high"]}},
                 "observed":{"binary_path":"/usr/bin/python3","binary_version":"fixture185",
-                    "binary_digest":"0".repeat(64),"contract_version":"codex-app-server-fixture-v1",
+                    "binary_digest":crate::provider_program_compat::program_digest(Path::new("/usr/bin/python3")).unwrap(),"contract_version":"codex-app-server-fixture-v1",
                     "operations":["resume"]}}
         }}}).to_string(),&root.join("registry.json")).unwrap();
         let definition = registry.get("repair185").unwrap();

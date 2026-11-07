@@ -595,13 +595,14 @@ fn remote162_release_relit_droits_parent_apres_start_et_refuse_preuve_t3_indispo
             (change == "t3_unavailable").then_some(&proof),
         );
         let reason = result.unwrap_err();
+        // 84988ab7 : un changement constaté porte son étape et ses champs fermés.
         assert!(
             matches!(
                 reason.as_str(),
                 "permission_changed"
                     | "permission_source_unavailable"
                     | "permission_attestation_unavailable"
-            ),
+            ) || reason.starts_with("permission_changed:before_release_parent:"),
             "{reason}"
         );
         let mut reader = server.join().unwrap();

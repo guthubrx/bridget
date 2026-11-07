@@ -3078,6 +3078,7 @@ fn held159_migration_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::typ
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_sans_perte() {
     let (db, conn) = held159_migration_fixture();
     let counts = held159_migration_rows(
@@ -3146,6 +3147,7 @@ fn held159_migration_sans_perte() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_ordre_preserve() {
     let (db, conn) = held159_migration_fixture();
     let before = held159_migration_rows(
@@ -3214,6 +3216,7 @@ fn held159_migration_ordre_preserve() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_recipient_agent_rempli() {
     let (db, conn) = held159_migration_fixture();
     conn.execute(
@@ -3265,6 +3268,7 @@ fn held159_migration_recipient_agent_rempli() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_liens_execution_conserves() {
     let (db, conn) = held159_migration_fixture();
     let before = held159_migration_rows(
@@ -3306,6 +3310,7 @@ fn held159_migration_liens_execution_conserves() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_phases_held_et_cancelled_admises() {
     let (db, conn) = held159_migration_fixture();
     drop(conn);
@@ -3346,6 +3351,7 @@ fn held159_migration_phases_held_et_cancelled_admises() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_turn_gate_defaut_zero() {
     let (db, conn) = held159_migration_fixture();
     drop(conn);
@@ -3387,6 +3393,7 @@ fn held159_migration_turn_gate_defaut_zero() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_rejeu_sans_effet() {
     let (db, conn) = held159_migration_fixture();
     drop(conn);
@@ -3452,6 +3459,7 @@ fn held159_migration_rejeu_sans_effet() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_rollback_si_echec() {
     let (db, mut conn) = held159_migration_fixture();
     conn.execute_batch(
@@ -3516,6 +3524,7 @@ fn held159_migration_rollback_si_echec() {
 }
 
 #[test]
+#[ignore = "recette sur sauvegarde réelle privée : fournir BRIDGET_MIGRATION159_SNAPSHOT"]
 fn held159_migration_fantomes_ecartes_avec_warn() {
     let (db, conn) = held159_migration_fixture();
     // Simulation EXTERNE comme le témoinv4 existant : FK OFF sur cette seule copie,

@@ -1466,424 +1466,6 @@ fn native149_entrees_claude_sans_regles_sont_classees() {
     assert_eq!(claude_inputs_without_rules(&cli_context).unwrap(), true);
 }
 
-/// 171 structural inheritance fixture: real files and a fake CLI binary only.
-/// No Claude process, model, Git mutation or proof of native hook application.
-fn native171_remote_fixture(
-    label: &str,
-) -> (
-    PathBuf,
-    ProviderPermissions,
-    AgentDefinition,
-    SourceEnvironment,
-    crate::registry::ProjectMapping,
-    Vec<PathBuf>,
-) {
-    let (root, mut env) = fixture_root(label);
-    let origin = root.join("origin");
-    let target = root.join("target");
-    let a = root.join("profile-a");
-    let b = root.join("profile-b");
-    for path in [&origin, &target, &a, &b] {
-        fs::create_dir_all(path).unwrap();
-    }
-    for profile in [&a, &b] {
-        fs::set_permissions(profile, fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let project_hooks = json!({"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{
-        "type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/guard.sh avant","timeout":10}]}]}});
-    let user_hooks = json!({"hooks":{"Stop":[{"hooks":[{
-        "type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/guard.sh","timeout":10}]}]}});
-    for path in [&origin, &target] {
-        fs::create_dir_all(path.join(".git")).unwrap();
-        fs::create_dir_all(path.join(".claude")).unwrap();
-        fs::write(
-            path.join(".claude/settings.json"),
-            serde_json::to_vec(&project_hooks).unwrap(),
-        )
-        .unwrap();
-        fs::write(path.join("guard.sh"), b"#!/bin/sh\nexit 2\n").unwrap();
-        fs::set_permissions(path.join("guard.sh"), fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    for path in [&a, &b] {
-        fs::write(
-            path.join("settings.json"),
-            serde_json::to_vec(&user_hooks).unwrap(),
-        )
-        .unwrap();
-    }
-    env.insert("CLAUDE_CONFIG_DIR".into(), a.as_os_str().to_owned());
-    let mut parent = claude_fact(
-        &a,
-        &origin,
-        &env,
-        "bypassPermissions",
-        "native_wrapper",
-        "allow",
-        false,
-    );
-    parent.provider_policy["disallowed_tools"] = json!(["Write"]);
-    assert!(
-        parent.provider_policy["launch_context"]
-            .get("source_equivalence")
-            .is_some()
-    );
-    env.insert("CLAUDE_CONFIG_DIR".into(), b.as_os_str().to_owned());
-    let mapping = crate::registry::ProjectMapping {
-        additional_root: None,
-        source_host: "origin171".into(),
-        source_root: origin,
-        remote_root: target,
-        expected_git_identity: "fixture171-git-identity".into(),
-        mapping_revision: 7,
-    };
-    let private = root.join("worker-private");
-    fs::create_dir(&private).unwrap();
-    (
-        root,
-        parent,
-        claude_definition(&b, &[]),
-        env,
-        mapping,
-        vec![private],
-    )
-}
-
-#[test]
-#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
-fn native171_remote_sources_project_and_user_bound_before_and_after_recapture() {
-    let (_root, parent, mut definition, env, mapping, protected) =
-        native171_remote_fixture("remote171-positive");
-    assert_eq!(
-        prove_parent_permissions(&parent, parent.revision)
-            .unwrap()
-            .len(),
-        64
-    );
-    let (mut policy, posture) = project_remote_permissions(
-        &parent,
-        &definition,
-        &mapping,
-        &mapping.remote_root,
-        &env,
-        None,
-        &protected,
-    )
-    .unwrap();
-    assert_eq!(posture, SpawnPosture::Development);
-    assert_eq!(policy["permission_mode"], "bypassPermissions");
-    assert_eq!(policy["disallowed_tools"], json!(["Write"]));
-    assert_eq!(
-        policy["launch_context"]["hook_execution"],
-        "native_remote_equivalent"
-    );
-    let witness = &policy["launch_context"]["source_equivalence"];
-    assert_eq!(witness["binding"]["parent_revision"], parent.revision);
-    assert_eq!(witness["binding"]["mapping_revision"], 7);
-    let origin_rows = witness["origin"]["rows"].as_array().unwrap();
-    assert!(
-        origin_rows
-            .iter()
-            .any(|r| r["kind"] == "user" && r["revision"] != "absent")
-    );
-    assert!(
-        origin_rows
-            .iter()
-            .any(|r| r["kind"] == "project" && r["revision"] != "absent")
-    );
-    let pairs = witness["pairs"].as_array().unwrap();
-    for i in 0..origin_rows.len() {
-        assert_eq!(
-            pairs
-                .iter()
-                .filter(|p| p["origin"].as_u64() == Some(i as u64))
-                .count(),
-            1
-        );
-    }
-    apply_child_arguments("claude_stream_json", &policy, &mut definition.args).unwrap();
-    refresh_remote_permissions_context(
-        &mut policy,
-        &definition,
-        &mapping.remote_root,
-        &env,
-        &mapping,
-    )
-    .unwrap();
-    assert_eq!(
-        policy["launch_context"]["hook_execution"],
-        "native_remote_equivalent"
-    );
-    recheck_remote_child_permissions(
-        &policy,
-        &definition,
-        &mapping.remote_root,
-        &env,
-        &protected,
-        Some(&mapping),
-        Some(&parent),
-    )
-    .unwrap();
-}
-
-#[test]
-#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
-fn native171_remote_witness_omission_partial_source_and_local_marker_are_refused() {
-    let (_root, mut parent, definition, env, mapping, protected) =
-        native171_remote_fixture("remote171-coverage");
-    let good = parent.clone();
-    parent.provider_policy["launch_context"]
-        .as_object_mut()
-        .unwrap()
-        .remove("source_equivalence");
-    assert!(
-        project_remote_permissions(
-            &parent,
-            &definition,
-            &mapping,
-            &mapping.remote_root,
-            &env,
-            None,
-            &protected
-        )
-        .is_err()
-    );
-    parent = good.clone();
-    parent.provider_policy["launch_context"]["source_equivalence"]["manifest"]["rows"]
-        .as_array_mut()
-        .unwrap()
-        .pop();
-    assert!(
-        project_remote_permissions(
-            &parent,
-            &definition,
-            &mapping,
-            &mapping.remote_root,
-            &env,
-            None,
-            &protected
-        )
-        .is_err()
-    );
-    let (mut policy, _) = project_remote_permissions(
-        &good,
-        &definition,
-        &mapping,
-        &mapping.remote_root,
-        &env,
-        None,
-        &protected,
-    )
-    .unwrap();
-    policy["launch_context"]["hook_execution"] = json!("native_same_host");
-    assert!(
-        recheck_remote_child_permissions(
-            &policy,
-            &definition,
-            &mapping.remote_root,
-            &env,
-            &protected,
-            Some(&mapping),
-            Some(&good)
-        )
-        .is_err()
-    );
-}
-
-#[test]
-#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
-fn native171_remote_recheck_rejects_mapping_parent_revision_and_mode_or_deny_change() {
-    let (_root, parent, definition, env, mapping, protected) =
-        native171_remote_fixture("remote171-binding");
-    let (policy, _) = project_remote_permissions(
-        &parent,
-        &definition,
-        &mapping,
-        &mapping.remote_root,
-        &env,
-        None,
-        &protected,
-    )
-    .unwrap();
-    let mut other_mapping = mapping.clone();
-    other_mapping.mapping_revision += 1;
-    assert!(
-        recheck_remote_child_permissions(
-            &policy,
-            &definition,
-            &mapping.remote_root,
-            &env,
-            &protected,
-            Some(&other_mapping),
-            Some(&parent)
-        )
-        .is_err()
-    );
-    let mut other_parent = parent.clone();
-    other_parent.revision += 1;
-    assert!(
-        recheck_remote_child_permissions(
-            &policy,
-            &definition,
-            &mapping.remote_root,
-            &env,
-            &protected,
-            Some(&mapping),
-            Some(&other_parent)
-        )
-        .is_err()
-    );
-    for field in ["permission_mode", "disallowed_tools"] {
-        let mut other = policy.clone();
-        other[field] = if field == "permission_mode" {
-            json!("auto")
-        } else {
-            json!([])
-        };
-        assert!(
-            recheck_remote_child_permissions(
-                &other,
-                &definition,
-                &mapping.remote_root,
-                &env,
-                &protected,
-                Some(&mapping),
-                Some(&parent)
-            )
-            .is_err()
-        );
-    }
-}
-
-#[test]
-#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
-fn native171_remote_script_dependency_and_profile_mutations_are_not_ignored() {
-    let (_root, parent, definition, env, mapping, protected) =
-        native171_remote_fixture("remote171-mutation");
-    let (policy, _) = project_remote_permissions(
-        &parent,
-        &definition,
-        &mapping,
-        &mapping.remote_root,
-        &env,
-        None,
-        &protected,
-    )
-    .unwrap();
-    fs::set_permissions(
-        mapping.remote_root.join("guard.sh"),
-        fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
-    assert!(
-        recheck_remote_child_permissions(
-            &policy,
-            &definition,
-            &mapping.remote_root,
-            &env,
-            &protected,
-            Some(&mapping),
-            Some(&parent)
-        )
-        .is_err()
-    );
-    fs::set_permissions(
-        mapping.remote_root.join("guard.sh"),
-        fs::Permissions::from_mode(0o755),
-    )
-    .unwrap();
-    fs::write(
-        mapping.remote_root.join("guard.sh"),
-        b"#!/bin/sh\nuname -s\nexit 2\n",
-    )
-    .unwrap();
-    let local = capture_context(&definition, &mapping.remote_root, &env).unwrap();
-    assert_eq!(local["hook_execution"], "native_same_host");
-    assert!(
-        local.get("source_equivalence").is_none(),
-        "unknown dependencies do not erase local hooks"
-    );
-    assert!(
-        project_remote_permissions(
-            &parent,
-            &definition,
-            &mapping,
-            &mapping.remote_root,
-            &env,
-            None,
-            &protected
-        )
-        .is_err()
-    );
-}
-
-#[test]
-#[ignore = "conception 171 de transplantation remplacée par la configuration de destination ; contrat actuel : native171_remote_uses_destination_configuration_without_cloning_origin"]
-fn native171_remote_user_hook_not_ported_and_script_bytes_changed_are_refused() {
-    let (root, parent, definition, env, mapping, protected) =
-        native171_remote_fixture("remote171-user-and-bytes");
-    let (valid, _) = project_remote_permissions(
-        &parent,
-        &definition,
-        &mapping,
-        &mapping.remote_root,
-        &env,
-        None,
-        &protected,
-    )
-    .expect("projection valide avant retrait du hook utilisateur");
-    assert_eq!(
-        valid["launch_context"]["hook_execution"],
-        "native_remote_equivalent"
-    );
-    fs::write(root.join("profile-b/settings.json"), b"{}").unwrap();
-    assert_eq!(
-        project_remote_permissions(
-            &parent,
-            &definition,
-            &mapping,
-            &mapping.remote_root,
-            &env,
-            None,
-            &protected
-        )
-        .unwrap_err(),
-        "permission_mapping_unavailable"
-    );
-    fs::copy(
-        root.join("profile-a/settings.json"),
-        root.join("profile-b/settings.json"),
-    )
-    .unwrap();
-    let (restored, _) = project_remote_permissions(
-        &parent,
-        &definition,
-        &mapping,
-        &mapping.remote_root,
-        &env,
-        None,
-        &protected,
-    )
-    .expect("projection valide avant changement des octets du script");
-    assert_eq!(
-        restored["launch_context"]["hook_execution"],
-        "native_remote_equivalent"
-    );
-    fs::write(mapping.remote_root.join("guard.sh"), b"#!/bin/sh\nexit 0\n").unwrap();
-    assert_eq!(
-        project_remote_permissions(
-            &parent,
-            &definition,
-            &mapping,
-            &mapping.remote_root,
-            &env,
-            None,
-            &protected
-        )
-        .unwrap_err(),
-        "permission_mapping_unavailable"
-    );
-}
-
 // Un nom de fichier seul ne qualifie pas une dépendance ni son bootstrap.
 #[test]
 fn native171_session_start_sdk_namesake_does_not_change_permission_refusal() {
@@ -1974,364 +1556,87 @@ fn native171_manifestless_plugin_and_hook_revision_recheck() {
     );
 }
 
-/// One affected case over the complete actual captured profile. No Claude,
-/// model, business command, SDK import or admission is started by this case.
-#[cfg(target_os = "linux")]
+/// Racine additionnelle (pièces jointes) sur dossiers synthétiques : traduction
+/// vers la cible, refus hors des deux racines, aucune traduction partielle.
 #[test]
-#[ignore = "recette sur données réelles privées : fournir BRIDGET_REAL_HOOK_PROFILE171"]
-fn native171_real_captured_profile_closed_origin_target() {
-    use bridget_transport::protocol::ProviderPermissions;
-    use sha2::{Digest, Sha256};
-    let root = PathBuf::from(std::env::var("BRIDGET_REAL_HOOK_PROFILE171").expect("private profile root required"));
-    let descriptor: Value = serde_json::from_slice(&fs::read(root.join("descriptor171.json")).unwrap()).unwrap();
-    let origin: Value = serde_json::from_slice(&fs::read(root.join("origin-context171.json")).unwrap()).unwrap();
-    let manifest: Value = serde_json::from_slice(&fs::read(descriptor["target_path"].as_str().unwrap()).unwrap()).unwrap();
-    assert_eq!(manifest["origin_sources"].as_array().unwrap().len(), 74);
-    assert_eq!(manifest["entries"].as_array().unwrap().len(), 17);
-    assert_eq!(manifest["entries"].as_array().unwrap().iter().filter(|e| e["origin"]["hook"]["type"] == "prompt").count(), 2);
-    assert_eq!(manifest["hosts"]["target"]["versions"]["sdk"], "0.1.68");
-    assert_eq!(manifest["target_controls"]["plugins"].as_array().unwrap().len(), 4);
-    assert_eq!(manifest["target_entries"].as_array().unwrap().len(), 3);
-    assert!(manifest["target_controls"]["plugins"].as_array().unwrap().iter().all(|p| !p["source_files"].as_array().unwrap().is_empty()));
-    let cwd = PathBuf::from(manifest["mapping"]["remote_root"].as_str().unwrap());
+fn native171_additional_root_mapping_translates_and_refuses_without_private_inputs() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let (root, _) = fixture_root("additional-root171");
+    let remote = root.join("project");
+    fs::create_dir(&remote).unwrap();
+    let extra_remote = root.join("attachments-target");
+    fs::create_dir(&extra_remote).unwrap();
+    fs::set_permissions(&extra_remote, fs::Permissions::from_mode(0o700)).unwrap();
+    let private = root.join("worker-private");
+    fs::create_dir(&private).unwrap();
+    let protected = vec![private];
+    let uid = unsafe { libc::geteuid() };
     let mapping = crate::registry::ProjectMapping {
-        additional_root: None,
-        source_host: manifest["mapping"]["source_host"].as_str().unwrap().into(),
-        source_root: PathBuf::from(manifest["mapping"]["source_root"].as_str().unwrap()),
-        remote_root: cwd.clone(),
-        expected_git_identity: manifest["mapping"]["source_identity"].as_str().unwrap().into(),
+        additional_root: Some(crate::registry::AdditionalDirectoryMapping171 {
+            source_root: PathBuf::from("/origin171/attachments"),
+            remote_root: extra_remote.clone(),
+            source_uid: 501,
+            source_mode: 0o755,
+            remote_uid: uid,
+            remote_mode: 0o700,
+            access: "inherit".into(),
+        }),
+        source_host: "origin171".into(),
+        source_root: PathBuf::from("/origin171/project"),
+        remote_root: remote.clone(),
+        expected_git_identity: "project171".into(),
         mapping_revision: 1,
     };
-    let mut provider_policy = claude_policy("bypassPermissions", "t3_runtime", "allow", true);
-    provider_policy["launch_context"] = origin;
-    let parent = ProviderPermissions {
-        version:1, source:"provider_turn".into(), run_id:"run-real-profile171-fixture".into(),
-        provider_session_id:"session-real-profile171-fixture".into(), provider_instance_id:"instance-real-profile171-fixture".into(),
-        revision:1, driver:"claude_stream_json".into(), cwd:mapping.source_root.to_string_lossy().into_owned(),
-        runtime_mode:"full-access".into(), interaction_mode:"default".into(), provider_policy,
-    };
-    let mut definition = claude_definition(Path::new("/home/moi/.claude"), &[]);
-    definition.claude_config_dir = None;
-    let source = SourceEnvironment::from([
-        ("HOME".into(), "/home/moi".into()),
-        ("PATH".into(), "/home/moi/.local/bin:/home/moi/.local/lib/bridget-tools/git-2.56.0/bin:/usr/bin:/bin".into()),
-    ]);
-    let protected = vec![
-        PathBuf::from("/home/moi/.config/bridget/worker-cartae.credential"),
-        PathBuf::from("/home/moi/.config/bridget"),
-        PathBuf::from("/home/moi/.local/share/bridget-worker/cartae"),
-    ];
-    let nominal_started = std::time::Instant::now();
-    let mut operation = PermissionReadOperation::default();
-    let (mut policy, posture) = project_remote_permissions_in_operation(&parent, &definition, &mapping, &cwd, &source,
-        Some(SpawnPosture::Development), &protected, &mut operation, false,false).expect("complete real profile projection");
-    assert_eq!(posture, SpawnPosture::Development);
-    assert_eq!(policy["launch_context"]["hook_execution"], "native_remote_guarded");
-    assert_eq!(policy["launch_context"]["source_equivalence"]["profile"], descriptor);
-    assert_eq!(policy["permission_mode"], parent.provider_policy["permission_mode"]);
-    assert_eq!(policy["tools"], parent.provider_policy["tools"]);
-    let mut scoped = definition.clone();
-    apply_child_arguments_in_operation(&scoped.protocol, &policy, &mut scoped.args, &mut operation).unwrap();
-    assert_eq!(scoped.args.iter().filter(|a| a.as_str() == "--settings").count(), 1);
-    assert_eq!(scoped.args.iter().filter(|a| a.as_str() == "--plugin-dir").count(), 4);
-    refresh_remote_permissions_context_in_operation(&mut policy, &scoped, &cwd, &source, &mapping, &mut operation).unwrap();
-    recheck_remote_child_permissions_in_operation(&policy, &scoped, &cwd, &source, &protected, Some(&mapping), Some(&parent), &mut operation).unwrap();
-    operation.finish().unwrap();
-    let nominal_ms = nominal_started.elapsed().as_millis();
-    fs::write(root.join("nominal-cost171.json"), serde_json::to_vec(&json!({
-        "nominal_projection_arguments_refresh_recheck_ms": nominal_ms,
-        "includes_fresh_operation_finish": true,
-        "negative_scenarios_included": false
-    })).unwrap()).unwrap();
-    println!("native171_nominal_projection_arguments_refresh_recheck_ms={nominal_ms}");
-    // Binding substitution cannot acquire another parent/mapping identity.
-    let mut other_mapping = mapping.clone(); other_mapping.mapping_revision += 1;
-    assert_eq!(recheck_remote_child_permissions(&policy, &scoped, &cwd, &source, &protected, Some(&other_mapping), Some(&parent)),
-               Err("permission_hook_equivalence_unavailable".into()));
-    // All negative mutations are private copies, never a source/target hook.
-    let negative_dir = root.join("negative-profile-case"); fs::create_dir(&negative_dir).unwrap();
-    let mut missing = manifest.clone(); missing["entries"].as_array_mut().unwrap().pop();
-    let bytes = serde_json::to_vec(&missing).unwrap();
-    let negative = negative_dir.join("missing-hook.json"); fs::write(&negative, &bytes).unwrap();
-    fs::set_permissions(&negative, fs::Permissions::from_mode(0o600)).unwrap();
-    let mut context = policy["launch_context"].clone();
-    context["source_equivalence"]["profile"]["target_path"] = json!(negative);
-    context["source_equivalence"]["profile"]["revision"] = json!(format!("sha256:{:x}", Sha256::digest(&bytes)));
-    assert_eq!(bridget_transport::protocol::recheck_guarded_hook_profile(&context),
-               Err("permission_hook_profile_incomplete".into()));
-    // No provider process or deployment call occurs in this test.
-}
-
-/// One new affected origin recheck case over the actual 74-source profile.
-/// No provider, model, admission or runtime profile mutation is performed.
-#[cfg(target_os = "macos")]
-#[test]
-#[ignore = "recette sur données réelles privées : fournir BRIDGET_REAL_ORIGIN_RECHECK171"]
-fn native171_origin_v2_recheck_reconstructs_verified_witness_exact_sources() {
-    use sha2::{Digest, Sha256};
-    let root = PathBuf::from(std::env::var("BRIDGET_REAL_ORIGIN_RECHECK171").expect("private inputs required"));
-    let context: Value = serde_json::from_slice(&fs::read(root.join("origin-context171.json")).unwrap()).unwrap();
-    let descriptor: Value = serde_json::from_slice(&fs::read(root.join("descriptor171.json")).unwrap()).unwrap();
-    let manifest: Value = serde_json::from_slice(&fs::read(descriptor["origin_path"].as_str().unwrap()).unwrap()).unwrap();
-    assert_eq!(descriptor["revision"], "sha256:526d56069ccfa07286a69469676bd7d43c2d9bb7f2aa2bb4946696780cd90e50");
-    assert_eq!(context["permission_sources"], manifest["origin_sources"]);
-    assert_eq!(context["permission_sources"].as_array().unwrap().len(), 74);
-    let cwd = PathBuf::from(manifest["mapping"]["source_root"].as_str().unwrap());
-    let mut definition = claude_definition(Path::new(context["config_dir"].as_str().unwrap()), &[]);
-    definition.claude_config_dir = None;
-    definition.command = context["cli_path"].as_str().unwrap().into();
-    let env = SourceEnvironment::from([
-        ("HOME".into(), manifest["hosts"]["origin"]["home"].as_str().unwrap().into()),
-        ("PATH".into(), "/Users/moi/.local/bin:/opt/homebrew/bin:/usr/bin:/bin".into()),
-        ("CLAUDE_CONFIG_DIR".into(), context["config_dir"].as_str().unwrap().into()),
-        ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into()),
-    ]);
-    // The unchanged native capture is legacy: this is the mechanical mismatch
-    // previously compared directly with the valid origin-v2 witness.
-    let legacy = capture_context_with_env(&definition, &cwd, &env).unwrap();
-    assert_ne!(legacy["source_equivalence"], context["source_equivalence"]);
-    assert_eq!(legacy["permission_sources"], context["permission_sources"]);
-    let mut operation = PermissionReadOperation::default();
-    recheck_context_with_env_in_operation(&context, &definition, &cwd, &env, &mut operation).unwrap();
-    let verified = operation.profile(&context).unwrap();
-    let environment = json!({"TMUX":null,"TMUX_PANE":null,"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":"1"});
-    let mut rebuilt = legacy.clone();
-    rebuilt["source_equivalence"] = verified.origin_witness_for(&rebuilt, &cwd, &environment).unwrap();
-    assert_eq!(rebuilt, context);
-    assert_eq!(rebuilt["source_equivalence"]["version"], 2);
-    // Same token, same operation: negatives cannot acquire different sources,
-    // environment, mapping or witness authority.
-    let mut bad_source = context.clone();
-    bad_source["permission_sources"][0]["revision"] = json!(format!("sha256:{}", "0".repeat(64)));
-    assert_eq!(recheck_context_with_env_in_operation(&bad_source, &definition, &cwd, &env, &mut operation),
-        Err("permission_hook_profile_unavailable".into()));
-    let mut bad_env = env.clone(); bad_env.insert("TMUX".into(), "unattested171".into());
-    assert_eq!(recheck_context_with_env_in_operation(&context, &definition, &cwd, &bad_env, &mut operation),
-        Err("permission_hook_environment_unavailable".into()));
-    assert_eq!(verified.origin_witness_for(&legacy, &cwd.join("unmapped171"), &environment),
-        Err("permission_hook_equivalence_unavailable".into()));
-    let mut bad_witness = context.clone(); bad_witness["source_equivalence"]["version"] = json!(999);
-    assert_eq!(recheck_context_with_env_in_operation(&bad_witness, &definition, &cwd, &env, &mut operation),
-        Err("settings_revision_changed".into()));
-    operation.finish().unwrap(); // Fresh complete recheck at the operation boundary.
-    // A dependency mutation is only in a private manifest copy; no real file is changed.
-    let negatives = root.join("negative-origin-case"); fs::create_dir(&negatives).unwrap();
-    let mut bad_profile = manifest.clone();
-    let row = bad_profile["files"].as_array_mut().unwrap().iter_mut()
-        .find(|f| f["variants"].get("origin").is_some()).unwrap();
-    row["variants"]["origin"]["revision"] = json!(format!("sha256:{}", "0".repeat(64)));
-    let bytes = serde_json::to_vec(&bad_profile).unwrap();
-    let path = negatives.join("dependency-changed.json"); fs::write(&path, &bytes).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    let mut dependency = context.clone();
-    dependency["source_equivalence"]["profile"]["origin_path"] = json!(path);
-    dependency["source_equivalence"]["profile"]["revision"] = json!(format!("sha256:{:x}", Sha256::digest(&bytes)));
-    assert_eq!(recheck_context_with_env(&dependency, &definition, &cwd, &env),
-        Err("permission_hook_dependency_changed".into()));
-    recheck_context_with_env(&legacy, &definition, &cwd, &env).unwrap(); // Legacy behavior unchanged.
-}
-
-
-/// The real T3 run492 has SDK settings, a scoped T3 MCP rule and TWO roots.
-/// The SDK port is checked here; the unmapped attachments root stays refused.
-#[cfg(target_os = "macos")]
-#[test]
-#[ignore = "recette sur données réelles privées : fournir BRIDGET_SDK_PERMISSIONS171_INPUTS"]
-fn native171_authenticated_sdk_rules_recheck_preserves_owner_and_unmapped_root() {
-    let root = PathBuf::from(std::env::var("BRIDGET_SDK_PERMISSIONS171_INPUTS").expect("private inputs required"));
-    let parent: bridget_transport::protocol::ProviderPermissions = serde_json::from_slice(
-        &fs::read(root.join("parent-permissions492.json")).unwrap()).unwrap();
-    let definition: AgentDefinition = serde_json::from_slice(
-        &fs::read(root.join("definition-origin492.json")).unwrap()).unwrap();
-    let context = &parent.provider_policy["launch_context"];
-    assert_eq!(parent.revision, 6);
-    assert_eq!(parent.provider_policy["allowed_tools"], json!(["mcp__t3-code__*"]));
-    assert_eq!(context["settings_overrides"], sdk_settings171());
-    assert_eq!(context["permission_sources"].as_array().unwrap().len(), 74);
-    assert_eq!(parent.provider_policy["additional_directories"], json!([
-        "/Users/moi/Nextcloud/10.Scripts/69.opus2D", "/Users/moi/.t3/userdata/attachments"]));
-    assert!(!definition.args.iter().any(|arg| arg.starts_with("--settings")));
-    let cwd = Path::new(&parent.cwd);
-    let source = SourceEnvironment::from([
-        ("HOME".into(), "/Users/moi".into()),
-        ("PATH".into(), "/Users/moi/.local/bin:/opt/homebrew/bin:/usr/bin:/bin".into()),
-    ]);
-    let environment = build_environment(&definition, &source).unwrap();
-    let recaptured = capture_context_with_env(&definition, cwd, &environment).unwrap();
-    assert!(recaptured.get("settings_overrides").is_none());
-    assert_eq!(recaptured["permission_sources"], context["permission_sources"]);
-    for key in ["cli_path","cli_revision","resolved_cli_path","resolved_cli_revision","config_dir","settings_sources"] {
-        assert_eq!(recaptured.get(key), context.get(key), "native field {key}");
-    }
-    // The actual catalogue port reads the authenticated SDK fact separately
-    // from registry args. It does not add the fact to a registry or global file.
-    recheck_parent_context171(&parent, &definition, cwd, &source).unwrap();
-    let (policy, posture) = child_policy_reader(&parent, &definition, cwd, &source)(Some(SpawnPosture::Development)).unwrap();
-    assert_eq!(posture, SpawnPosture::Development);
-    assert_eq!(policy["launch_context"], *context);
-    assert_eq!(policy["allowed_tools"], parent.provider_policy["allowed_tools"]);
-    assert_eq!(policy["additional_directories"], parent.provider_policy["additional_directories"]);
-    assert!(portable_claude_rules(&parent));
-    let mut local_args = definition.args.clone();
-    apply_child_arguments("claude_stream_json", &policy, &mut local_args).unwrap();
-    let sdk_arg = local_args.windows(2).find(|p| p[0] == "--settings").unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&sdk_arg[1]).unwrap(), sdk_settings171());
-    let allowed = local_args.windows(2).find(|p| p[0] == "--allowedTools").unwrap();
-    assert_eq!(allowed[1], "mcp__t3-code__*");
-
-    // Every SDK form is closed; no third rule, alternate server, mode, missing
-    // owner fact or unauthenticated source can acquire this reconciliation.
-    for bad_value in [json!({"permissions":{"allow":["mcp__bridget__*"]}}),
-                      json!({"permissions":{"allow":["mcp__bridget__bridget_capabilities","mcp__bridget__bridget_task_status","Bash"]}}),
-                      json!({"permissions":{"allow":["mcp__bridget__bridget_capabilities","mcp__bridget__bridget_task_status"],"defaultMode":"bypassPermissions"}})] {
-        let mut altered = parent.clone(); altered.provider_policy["launch_context"]["settings_overrides"] = bad_value;
-        assert!(AuthenticatedSdkInputs171::from_parent(&altered).is_err());
-        assert!(!portable_claude_rules(&altered));
-    }
-    let mut foreign = parent.clone(); foreign.source = "human_grant".into();
-    assert!(AuthenticatedSdkInputs171::from_parent(&foreign).is_err());
-    let mut no_owner = parent.clone(); no_owner.provider_session_id.clear();
-    assert!(AuthenticatedSdkInputs171::from_parent(&no_owner).is_err());
-    let mut prefix = parent.clone(); prefix.provider_policy["allowed_tools"] = json!(["mcp__*"]);
-    assert!(AuthenticatedSdkInputs171::from_parent(&prefix).is_err());
-    let mut cli_override = definition.clone(); cli_override.args.extend(["--settings".into(), sdk_settings171().to_string()]);
-    assert_eq!(recheck_parent_context171(&parent, &cli_override, cwd, &source), Err("settings_revision_changed".into()));
-    let mut changed = parent.clone(); changed.provider_policy["launch_context"]["permission_sources"][0]["revision"] = json!(format!("sha256:{}","0".repeat(64)));
-    assert!(recheck_parent_context171(&changed, &definition, cwd, &source).is_err());
-    let mut wrong_env = parent.clone(); wrong_env.provider_policy["launch_context"]["source_equivalence"]["profile"]["origin_environment"]["TMUX"] = json!("other-owner");
-    assert!(recheck_parent_context171(&wrong_env, &definition, cwd, &source).is_err());
-
-    // Exact native target settings copy: keep all hooks, asks, denies and mode.
-    let base: Value = serde_json::from_slice(&fs::read(root.join("target-settings171.json")).unwrap()).unwrap();
-    let merged = compose_sdk_settings171(&base, &context["settings_overrides"]).unwrap();
-    let mut expected = base.clone();
-    for rule in sdk_settings171()["permissions"]["allow"].as_array().unwrap() {
-        expected["permissions"]["allow"].as_array_mut().unwrap().push(rule.clone());
-    }
-    assert_eq!(merged, expected);
-    assert_eq!(merged["hooks"], base["hooks"]);
-    for key in ["ask","deny","defaultMode","disableBypassPermissionsMode","additionalDirectories"] {
-        assert_eq!(merged["permissions"].get(key), base["permissions"].get(key));
-    }
-    let mut target = definition.clone(); target.mcp.interactive = "claude".into();
-    require_sdk_native_mount171(context, &target).unwrap();
-    let mut uncontrolled = target.clone(); uncontrolled.mcp.interactive = "none".into();
-    assert_eq!(require_sdk_native_mount171(context, &uncontrolled), Err("permission_mapping_unavailable".into()));
-    let mut server_override = target.clone(); server_override.args.extend(["--mcp-config".into(), "other-server.json".into()]);
-    assert_eq!(require_sdk_native_mount171(context, &server_override), Err("permission_mapping_unavailable".into()));
-    let mut selected_profile = json!({"settings":{"target":{"path":root.join("target-settings171.json")}}});
-    let mut selected_context = context.clone(); selected_context["hook_execution"] = json!("native_remote_guarded");
-    let mut selected = target.clone(); selected.args.extend(["--settings".into(), merged.to_string()]);
-    validate_guarded_settings_args171(&selected, &selected_profile, &selected_context).unwrap();
-    let mut altered = merged.clone(); altered["permissions"]["allow"].as_array_mut().unwrap().push(json!("Bash"));
-    *selected.args.last_mut().unwrap() = altered.to_string();
-    assert_eq!(validate_guarded_settings_args171(&selected, &selected_profile, &selected_context), Err("settings_revision_changed".into()));
-    // Mapping is still exact and single-root. The real second root is retained,
-    // and is explicitly refused rather than omitted to make the test nominal.
-    let project = Path::new("/Users/moi/Nextcloud/10.Scripts/69.opus2D");
-    assert_eq!(mapped_permission_suffix171(project, project).unwrap(), Path::new(""));
-    assert_eq!(mapped_permission_suffix171(Path::new("/Users/moi/.t3/userdata/attachments"), project), Err("permission_mapping_unavailable".into()));
-    assert_eq!(mapped_permission_suffix171(&project.join("../outside"), project), Err("permission_mapping_unavailable".into()));
-    selected_profile["settings"]["target"]["path"] = json!("/unavailable-sdk-settings171");
-    assert!(guarded_sdk_settings171(&selected_profile, &selected_context).is_err());
-}
-
-
-/// Mapping-only case. Uses the complete real run492 parent, without replaying
-/// its already-passed SDK recheck. Real target directory must be provisioned
-/// separately before this test; it never creates the provisioned directory.
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "recette sur données réelles privées : fournir BRIDGET_ADDITIONAL_ROOT171_INPUTS"]
-fn native171_additional_root_real_parent_closed_mapping_preserves_permissions() {
-    use std::os::unix::fs::{symlink, PermissionsExt};
-    let input = PathBuf::from(std::env::var("BRIDGET_ADDITIONAL_ROOT171_INPUTS").expect("private inputs required"));
-    let parent: bridget_transport::protocol::ProviderPermissions = serde_json::from_slice(
-        &fs::read(input.join("parent-permissions492.json")).unwrap()).unwrap();
-    let encoded: Value = serde_json::from_slice(&fs::read(input.join("mapping171.json")).unwrap()).unwrap();
-    let mapping: crate::registry::ProjectMapping = serde_json::from_value(encoded.clone()).unwrap();
-    let profile: Value = serde_json::from_slice(&fs::read(input.join("complete-profile171.json")).unwrap()).unwrap();
-    let extra = mapping.additional_root.as_ref().unwrap();
-    assert_eq!(extra.source_root, Path::new("/Users/moi/.t3/userdata/attachments"));
-    assert_eq!(extra.remote_root, Path::new("/home/moi/.local/share/bridget-attachments/opus2d"));
-    assert_eq!((extra.source_uid,extra.source_mode,extra.remote_uid,extra.remote_mode),(501,0o755,1002,0o700));
-    assert_eq!(extra.access, "inherit");
-    assert_eq!(parent.provider_policy["additional_directories"],json!([
-        "/Users/moi/Nextcloud/10.Scripts/69.opus2D","/Users/moi/.t3/userdata/attachments"]));
-    assert_eq!(parent.provider_policy["launch_context"]["permission_sources"].as_array().unwrap().len(),74);
-    let protected = vec![PathBuf::from("/home/moi/.config/bridget/worker-cartae.credential"),
-        PathBuf::from("/home/moi/.config/bridget"),PathBuf::from("/home/moi/.local/share/bridget-worker/cartae")];
     crate::registry::validate_additional_mapping171(&mapping).unwrap();
-    check_profile_additional_root171(&profile,&mapping).unwrap();
-    check_parent_additional_root171(&parent,&profile).unwrap();
-    let registry = crate::registry::AgentRegistry::from_json(
-        &fs::read_to_string(input.join("registry-target171.json")).unwrap(), input.join("registry-target171.json")).unwrap();
-    check_additional_registry_authority171(&profile,&registry).unwrap();
-    let mut wrong_authority: Value = serde_json::from_slice(&fs::read(input.join("registry-target171.json")).unwrap()).unwrap();
-    wrong_authority["machines"]["cartae"]["mappings"]["opus2d"]["additional_root"]["remote_root"] = json!("/home/moi/unknown-root171");
-    let wrong_authority = crate::registry::AgentRegistry::from_json(&wrong_authority.to_string(), input.join("registry-target171.json")).unwrap();
-    assert_eq!(check_additional_registry_authority171(&profile,&wrong_authority),Err("permission_hook_equivalence_unavailable".into()));
-    verify_permission_directory171(&extra.remote_root,1002,0o700,&protected).unwrap();
-    // One nominal pass through the real target projection/recheck boundary.
-    // This is the new mapping case, not the old SDK test being replayed.
-    let definition: AgentDefinition = serde_json::from_slice(&fs::read(input.join("definition-target171.json")).unwrap()).unwrap();
-    let source = SourceEnvironment::from([
-        ("HOME".into(), "/home/moi".into()),
-        ("PATH".into(), "/home/moi/.local/bin:/usr/local/bin:/usr/bin:/bin".into()),
-    ]);
-    let mut operation = PermissionReadOperation::default();
-    let (actual_policy, actual_posture) = project_remote_permissions_in_operation(&parent,&definition,&mapping,
-        &mapping.remote_root,&source,Some(SpawnPosture::Development),&protected,&mut operation,false,false).unwrap();
-    assert_eq!(actual_posture,SpawnPosture::Development);
-    assert_eq!(actual_policy["additional_directories"],json!([
-        "/home/moi/10.Scripts/69.opus2D","/home/moi/.local/share/bridget-attachments/opus2d"]));
-    for field in ["permission_mode","tools","allowed_tools","disallowed_tools"] {
-        assert_eq!(actual_policy.get(field),parent.provider_policy.get(field));
+    let parent = json!({"permission_mode": "default", "tools": ["Read"],
+        "additional_directories": ["/origin171/project", "/origin171/attachments"]});
+    let mut projected = parent.clone();
+    project_policy_directories171(&mut projected, &mapping, &protected, None, false).unwrap();
+    let mut expected = parent.clone();
+    expected["additional_directories"] = json!([remote, extra_remote]);
+    assert_eq!(projected, expected); // Seuls les dossiers changent.
+    assert_eq!(
+        mapped_permission_directory171(&mapping, Path::new("/origin171/attachments/sub")).unwrap(),
+        extra_remote.join("sub")
+    );
+    for outside in ["/origin171", "/origin171/attachments-other", "/origin171/attachments/../outside"] {
+        assert_eq!(
+            mapped_permission_directory171(&mapping, Path::new(outside)),
+            Err("permission_mapping_unavailable".into())
+        );
     }
-    assert_eq!(actual_policy["launch_context"]["settings_overrides"],parent.provider_policy["launch_context"]["settings_overrides"]);
-    let mut scoped = definition.clone();
-    apply_child_arguments_in_operation(&scoped.protocol,&actual_policy,&mut scoped.args,&mut operation).unwrap();
-    recheck_remote_child_permissions_in_operation(&actual_policy,&scoped,&mapping.remote_root,&source,&protected,
-        Some(&mapping),Some(&parent),&mut operation).unwrap();
-    operation.finish().unwrap();
-    let mut projected = parent.provider_policy.clone();
-    project_policy_directories171(&mut projected,&mapping,&protected,None,false).unwrap();
-    assert_eq!(projected["additional_directories"],json!([
-        "/home/moi/10.Scripts/69.opus2D","/home/moi/.local/share/bridget-attachments/opus2d"]));
-    let mut expected = parent.provider_policy.clone();
-    expected["additional_directories"] = projected["additional_directories"].clone();
-    assert_eq!(projected,expected); // No other rule, tool, mode, source or SDK field changed.
-    assert_eq!(mapped_permission_directory171(&mapping,Path::new("/Users/moi/.t3/userdata/attachments")).unwrap(),extra.remote_root);
-    for outside in ["/Users/moi", "/Users/moi/.t3/userdata", "/Users/moi/.t3/userdata/attachments-other", "/Users/moi/.t3/userdata/attachments/../outside"] {
-        assert_eq!(mapped_permission_directory171(&mapping,Path::new(outside)),Err("permission_mapping_unavailable".into()));
+    let mut absent = mapping.clone();
+    absent.additional_root = None;
+    let mut refused = parent.clone();
+    assert_eq!(
+        project_policy_directories171(&mut refused, &absent, &protected, None, false),
+        Err("permission_mapping_unavailable".into())
+    );
+    assert_eq!(refused, parent); // Aucun parent partiellement traduit.
+    let invalid: [fn(&mut crate::registry::AdditionalDirectoryMapping171); 4] = [
+        |extra| extra.source_root = PathBuf::from("/origin171/project/sub"),
+        |extra| extra.source_root = PathBuf::from("/origin171/../attachments"),
+        |extra| extra.access = "all".into(),
+        |extra| extra.remote_mode = 0o755,
+    ];
+    for change in invalid {
+        let mut bad = mapping.clone();
+        change(bad.additional_root.as_mut().unwrap());
+        assert!(crate::registry::validate_additional_mapping171(&bad).is_err());
     }
-    let mut absent = mapping.clone(); absent.additional_root=None;
-    let mut refused=parent.provider_policy.clone();
-    assert_eq!(project_policy_directories171(&mut refused,&absent,&protected,None,false),Err("permission_mapping_unavailable".into()));
-    assert_eq!(refused,parent.provider_policy); // No partially translated parent on error.
-    let mut overlapping=mapping.clone();overlapping.additional_root.as_mut().unwrap().source_root=mapping.source_root.join("sub");
+    let mut overlapping = mapping.clone();
+    overlapping.additional_root.as_mut().unwrap().remote_root = remote.clone();
     assert!(crate::registry::validate_additional_mapping171(&overlapping).is_err());
-    let mut overlapping=mapping.clone();overlapping.additional_root.as_mut().unwrap().remote_root=mapping.remote_root.clone();
-    assert!(crate::registry::validate_additional_mapping171(&overlapping).is_err());
-    let mut traversal=mapping.clone();traversal.additional_root.as_mut().unwrap().source_root=PathBuf::from("/Users/moi/.t3/../attachments");
-    assert!(crate::registry::validate_additional_mapping171(&traversal).is_err());
-    let mut unknown=encoded.clone();unknown["additional_root"]["extra_permission"]=json!(true);
-    assert!(serde_json::from_value::<crate::registry::ProjectMapping>(unknown).is_err());
-    let mut unknown=mapping.clone();unknown.additional_root.as_mut().unwrap().access="all".into();
-    assert!(crate::registry::validate_additional_mapping171(&unknown).is_err());
-    let mut revision=mapping.clone();revision.mapping_revision+=1;
-    assert_eq!(check_profile_additional_root171(&profile,&revision),Err("permission_hook_equivalence_unavailable".into()));
-    let mut wrong_pair=profile.clone();wrong_pair["mapping"]["additional_root"]["remote_root"]=json!("/home/moi/other");
-    assert_eq!(check_profile_additional_root171(&wrong_pair,&mapping),Err("permission_hook_equivalence_unavailable".into()));
-    assert_eq!(verify_permission_directory171(&extra.remote_root,1003,0o700,&protected),Err("permission_mapping_unavailable".into()));
-    assert_eq!(verify_permission_directory171(&extra.remote_root,1002,0o755,&protected),Err("permission_mapping_unavailable".into()));
-    assert_eq!(verify_permission_directory171(&extra.remote_root.join("absent-root171"),1002,0o700,&protected),Err("machine_path_unverifiable".into()));
-    let mut blocked=protected.clone();blocked.push(extra.remote_root.clone());
-    assert_eq!(verify_permission_directory171(&extra.remote_root,1002,0o700,&blocked),Err("machine_path_protected".into()));
-    let link=input.join("negative-root-link");symlink(&extra.remote_root,&link).unwrap();
-    assert_eq!(verify_permission_directory171(&link,1002,0o700,&protected),Err("permission_mapping_unavailable".into()));
-    fs::remove_file(link).unwrap();
-    // No attachment contents are read, listed, copied or synchronized here.
+    verify_permission_directory171(&extra_remote, uid, 0o700, &protected).unwrap();
+    assert!(verify_permission_directory171(&extra_remote, uid + 1, 0o700, &protected).is_err());
+    assert!(verify_permission_directory171(&extra_remote, uid, 0o755, &protected).is_err());
+    assert!(verify_permission_directory171(&extra_remote.join("absent171"), uid, 0o700, &protected).is_err());
+    let mut blocked = protected.clone();
+    blocked.push(extra_remote.clone());
+    assert!(verify_permission_directory171(&extra_remote, uid, 0o700, &blocked).is_err());
+    let link = root.join("attachments-link");
+    symlink(&extra_remote, &link).unwrap();
+    assert!(verify_permission_directory171(&link, uid, 0o700, &protected).is_err());
 }
 
 #[test]

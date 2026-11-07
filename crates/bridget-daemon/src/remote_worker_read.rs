@@ -1568,7 +1568,7 @@ impl ProbeReadContext {
         let mut verdicts: Vec<CandidateProbeVerdict> = probe
             .candidates
             .iter()
-            .map(|candidate| if (disconnected.load(Ordering::Acquire)||Instant::now()>=deadline) {
+            .map(|candidate| if disconnected.load(Ordering::Acquire)||Instant::now()>=deadline {
                 CandidateProbeVerdict::Ineligible{candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit}
             } else {match &registry {
                 Ok(registry) => self.probe_one_candidate_for(probe, candidate, registry, None, None, None, None, &mut operation, None),
@@ -1654,7 +1654,7 @@ impl ProbeReadContext {
             .candidates
             .iter()
             .map(|candidate| {
-                if (disconnected.load(Ordering::Acquire)||Instant::now()>=deadline) {
+                if disconnected.load(Ordering::Acquire)||Instant::now()>=deadline {
                     return CandidateProbeV2Verdict::Ineligible {candidate_id:candidate.candidate_id.clone(),reason:CandidateProbeRefusal::ResourceLimit};
                 }
                 if !tools_available {return CandidateProbeV2Verdict::Ineligible {

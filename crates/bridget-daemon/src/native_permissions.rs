@@ -357,18 +357,6 @@ fn check_profile_additional_root171(profile: &Value, mapping: &crate::registry::
     Ok(())
 }
 
-fn check_additional_registry_authority171(profile: &Value, registry: &crate::registry::AgentRegistry) -> Result<(), String> {
-    let matches: Vec<_> = registry.machines().values().filter(|machine| machine.enabled)
-        .flat_map(|machine| machine.mappings.values())
-        .filter(|mapping| profile["mapping"]["source_host"] == mapping.source_host
-            && profile["mapping"]["source_root"] == json!(mapping.source_root)
-            && profile["mapping"]["remote_root"] == json!(mapping.remote_root)
-            && profile["mapping"]["source_identity"] == mapping.expected_git_identity
-            && profile["mapping"]["mapping_revision"] == mapping.mapping_revision).collect();
-    if matches.len() != 1 { return Err("permission_hook_equivalence_unavailable".into()); }
-    check_profile_additional_root171(profile, matches[0])
-}
-
 fn check_parent_additional_root171(parent: &ProviderPermissions, profile: &Value) -> Result<(), String> {
     if let Some(extra) = profile["mapping"].get("additional_root") {
         let root = extra["source_root"].as_str().ok_or_else(|| "permission_hook_equivalence_unavailable".to_owned())?;
@@ -433,7 +421,7 @@ pub(crate) fn project_remote_permissions_in_operation(
     source: &SourceEnvironment,
     posture: Option<SpawnPosture>,
     protected: &[PathBuf],
-    operation: &mut PermissionReadOperation,
+    _operation: &mut PermissionReadOperation,
     commit_view:bool,
     same_host:bool,
 ) -> Result<(Value, SpawnPosture), String> {
@@ -3106,36 +3094,6 @@ fn guarded_profile_definition(definition: &AgentDefinition, profile: &Value, con
     Ok(scoped)
 }
 
-fn prepare_guarded_remote_context(
-    parent: &ProviderPermissions, policy: &Value, definition: &AgentDefinition,
-    mapping: &crate::registry::ProjectMapping, cwd: &Path, source: &SourceEnvironment,
-    operation: &mut PermissionReadOperation,
-) -> Result<Value, String> {
-    // A registry-provided source selector is not silently replaced. This
-    // route only accepts the default native selection captured in its proof.
-    if definition.args.iter().any(|a| matches!(a.split('=').next(),
-        Some("--settings" | "--setting-sources" | "--plugin-dir" | "--agent" | "--agents"))) {
-        return Err(equivalence_fail_at(ProjectionGuard::G072));
-    }
-    let origin = &parent.provider_policy["launch_context"];
-    let mut context = origin.clone();
-    context["hook_execution"] = json!("native_remote_guarded");
-    context["settings_sources"] = json!([]);
-    context["source_equivalence"] = json!({"version":2,"scope":"remote",
-        "profile":origin["source_equivalence"]["profile"],
-        "origin_sources":origin["permission_sources"],
-        "binding":mapping_equivalence_binding(parent, policy, mapping)?});
-    let profile = bridget_transport::protocol::read_guarded_hook_profile_manifest(&context)?;
-    check_profile_additional_root171(&profile, mapping)?;
-    check_parent_additional_root171(parent, &profile)?;
-    context["permission_sources"] = profile["target_controls"]["sources"].clone();
-    // Reads actual target declarations and every privately reconstructed
-    // native plugin, before any target permission context is captured.
-    operation.profile(&context)?;
-    let environment = build_environment(definition, source).map_err(|_| unavailable())?;
-    capture_guarded_context(definition, &context, cwd, &environment, operation)
-}
-
 fn capture_guarded_context(
     definition: &AgentDefinition, context: &Value, cwd: &Path,
     environment: &SourceEnvironment,
@@ -3191,40 +3149,6 @@ fn capture_guarded_context(
     Ok(captured)
 }
 
-fn attach_guarded_remote_profile(
-    parent: &ProviderPermissions, policy: &mut Value, definition: &AgentDefinition,
-    mapping: &crate::registry::ProjectMapping, cwd: &Path, source: &SourceEnvironment,
-    operation: &mut PermissionReadOperation,
-) -> Result<(), String> {
-    let origin = &parent.provider_policy["launch_context"];
-    bridget_transport::protocol::validate_guarded_hook_witness(origin)?;
-    let descriptor = origin["source_equivalence"]["profile"].clone();
-    let binding = mapping_equivalence_binding(parent, policy, mapping)?;
-    let mut context = policy["launch_context"].clone();
-    context["hook_execution"] = json!("native_remote_guarded");
-    context["source_equivalence"] = json!({"version":2,"scope":"remote","profile":descriptor,
-        "binding":binding,"origin_sources":origin["permission_sources"]});
-    // This independent target check is required before settings may be passed
-    // to the native CLI. No origin file is opened on the target.
-    let verified = operation.profile(&context)?;
-    let profile = verified.profile(&context)?;
-    check_profile_additional_root171(profile, mapping)?;
-    check_parent_additional_root171(parent, profile)?;
-    if profile["mapping"]["remote_root"] != json!(mapping.remote_root)
-        || profile["mapping"]["source_root"] != json!(mapping.source_root) { return Err(equivalence_fail_at(ProjectionGuard::G078)); }
-    context["settings_sources"] = json!([]);
-    policy["launch_context"] = context;
-    // Capture the exact --settings file and --setting-sources reduction that
-    // the native child will receive. Discovery tools/modes are unchanged.
-    let mut scoped = definition.clone();
-    apply_child_arguments_in_operation(&scoped.protocol, policy, &mut scoped.args, operation)?;
-    let environment = build_environment(&scoped, source).map_err(|_| unavailable())?;
-    let mut actual = capture_guarded_context(&scoped, &policy["launch_context"], cwd, &environment, operation)?;
-    actual["hook_execution"] = json!("native_remote_guarded");
-    actual["source_equivalence"] = policy["launch_context"]["source_equivalence"].clone();
-    policy["launch_context"] = actual;
-    Ok(())
-}
 fn attach_remote_equivalence(
     context: &mut Value,
     origin: &Value,
@@ -3248,19 +3172,6 @@ fn attach_remote_equivalence(
     }
     bridget_transport::protocol::validate_permission_source_equivalence(context)
 }
-pub(crate) fn refresh_remote_permissions_context(
-    policy: &mut Value,
-    definition: &AgentDefinition,
-    cwd: &Path,
-    source: &SourceEnvironment,
-    mapping: &crate::registry::ProjectMapping,
-) -> Result<(), String> {
-    let mut operation = PermissionReadOperation::default();
-    let result = refresh_remote_permissions_context_in_operation(policy, definition, cwd, source, mapping, &mut operation)?;
-    operation.finish()?;
-    Ok(result)
-}
-
 pub(crate) fn refresh_remote_permissions_context_in_operation(
     policy: &mut Value,
     definition: &AgentDefinition,

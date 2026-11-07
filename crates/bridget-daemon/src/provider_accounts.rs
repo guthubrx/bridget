@@ -420,8 +420,17 @@ fn apply(
     {
         return Err("account_registry_lock_unavailable");
     }
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("account_registry_busy");
+    // Attente bornée : une préparation brève ou un fork→exec voisin qui hérite
+    // un instant du descripteur ne doit pas refuser l'opération. Au-delà, le
+    // refus reste explicite. O(5 s / 20 ms) tentatives au plus.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK)
+            || std::time::Instant::now() >= deadline
+        {
+            return Err("account_registry_busy");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
     let original =
         crate::registry::read_private_registry(path).map_err(|_| "account_registry_unsafe")?;
@@ -691,6 +700,36 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn spec243_verrou_bref_attendu_puis_occupation_durable_refusee() {
+        use std::thread;
+        use std::time::{Duration, Instant};
+        let f = Fixture::new();
+        let raw = f.registry();
+        write_new(&f.path(), raw.as_bytes()).unwrap();
+        let hold = |duration: Duration| {
+            let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false)
+                .mode(0o600).open(f.0.join("project-preparation.lock")).unwrap();
+            assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+            thread::spawn(move || { thread::sleep(duration); drop(lock); })
+        };
+        // Détention brève (préparation courte, fork→exec voisin) : attendue.
+        let brief = hold(Duration::from_millis(300));
+        let started = Instant::now();
+        apply(&f.path(), &digest(raw.as_bytes()), "prepare", "work", Some("main"), "local").unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(250));
+        brief.join().unwrap();
+        // Occupation durable : refus explicite après la borne, registre inchangé.
+        let current = crate::registry::read_private_registry(&f.path()).unwrap();
+        let durable = hold(Duration::from_secs(7));
+        assert_eq!(
+            apply(&f.path(), &digest(current.as_bytes()), "remove", "work", None, "local"),
+            Err("account_registry_busy")
+        );
+        assert_eq!(crate::registry::read_private_registry(&f.path()).unwrap(), current);
+        durable.join().unwrap();
     }
 
     #[test]

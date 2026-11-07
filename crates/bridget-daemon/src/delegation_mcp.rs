@@ -1727,7 +1727,8 @@ mod tests {
             .find(|tool| tool["name"] == "bridget_handoff")
             .unwrap()["inputSchema"]["properties"]["draft"];
         let native_tools = tools(brief_schema);
-        assert_eq!(native_tools.len(), 12);
+        assert_eq!(native_tools.len(), 13);
+        assert!(native_tools.iter().any(|tool| tool["name"] == "bridget_specialists"));
         assert!(native_tools.iter().any(|tool| tool["name"] == "bridget_refresh_models"));
         assert!(native_tools.iter().any(|tool| tool["name"] == "bridget_read_commit_file"));
     }

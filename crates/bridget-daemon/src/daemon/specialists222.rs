@@ -2481,7 +2481,7 @@ fn capture_history_in_lane(
         return failure("invalid_request");
     }
     let context = (|| -> Result<_, String> {
-        let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+        let st = state.lock().unwrap_or_else(|e| e.into_inner());
         request.validate().map_err(str::to_owned)?;
         if p.agent_id.as_deref() != Some(agent) && p.human_approval_ref.is_none() {
             return Err("role_scope_denied".into());
@@ -2626,10 +2626,7 @@ pub(super) fn observe_history(
         if st.specialist_capture_active.contains(agent) || st.specialist_capture_active.len() >= 8 {
             return;
         }
-        let Ok(store) = profiles(&st) else {
-            return;
-        };
-        if !matches!(store.get_specialist(agent),Ok(Some(record)) if record.capture_history) {
+        if !crate::agent_profile::AgentProfileStore::captures_history(st.store.connection(), agent) {
             return;
         }
         agent_principal(&st, agent, agent_communication_project(&st, agent).as_ref())

@@ -78,6 +78,15 @@ de couverture.
 | `reprise` | CLI humain | Aucun outil MCP global | Agrège Git, pin, chemins locaux et repli base, et peut écrire une carte avec `--write`. Les observations sûres séparées restent `who`, `ledger`, `status` et `control_status`. |
 | `reaper` | CLI humain | Aucun outil MCP | `reaper report` lit processus, fichiers et descripteurs locaux, puis écrit `observations.jsonl`; malgré son nom, ce n'est pas une simple lecture daemon. Il n'effectue aucun kill. |
 | `version` | CLI humain | Aucun | Affiche la version du binaire invoqué ; ne prouve pas la version d'un serveur MCP déjà vivant. |
+| `questions` | CLI humain (181) ; MCP exposé pour poser | `bridget_ask_user` pose la question ; aucune réponse par MCP | `list`/`show` lisent les questions en attente ; `answer` exige un terminal humain, la révision et une clé de commande. Le modèle ne répond pas à la place de l'utilisateur. |
+| `specialists` | Équivalence MCP (222) | `bridget_specialists` | `list` lit les rôles et spécialistes durables ; `request --file` transmet une commande version1. Les mutations exigent un terminal humain. |
+| `updates` | CLI humain | Aucun outil MCP de mise à jour | `status`/`check` observent la fédération ; `auto`, `install`, `setup`, `once` et `watch` restent des décisions de maintenance humaines. |
+| `clients` | CLI humain (209) | Aucun | `check` contrôle localement les versions des programmes fournisseurs avant une bascule ; ne met rien à jour et ne change ni compte ni droits. |
+| `accounts` | CLI humain (221) | Aucun | `prepare`, `pin` et `remove` gèrent les profils de comptes fournisseurs isolés ; aucun fichier d'authentification n'est lu ; la connexion reste une action humaine. |
+| `formats` | Interne (221) | Aucun | `report`, `validate-report` et `policy` qualifient la compatibilité des formats conservés avant un retour de version ; appelé par l'outil de mise à jour. |
+| `workspace-view-plan` | Interne (221) | Aucun | Tâche de préparation de vue de commit lancée par le daemon dans un processus géré ; jamais appelée par un agent. |
+| `workspace-view-export` | Interne (221) | Aucun | Export borné d'une vue de commit par le processus géré du daemon ; jamais appelé par un agent. |
+| `workspace-view-materialize` | Interne (221) | Aucun | Matérialisation d'une vue de commit préparée, par le processus géré du daemon ; jamais appelée par un agent. |
 | `help` | CLI humain | Aucun | Affiche l'aide locale du binaire invoqué. |
 | `managed-bootstrap` | Interne | Aucun | Couture de démarrage des processus gérés, appelée par le superviseur ; ce n'est pas une promesse de commande utilisateur. |
 | `managed-wrapper` | Interne | Aucun | Lance un pilote géré depuis une définition figée fournie par le superviseur ; ne pas l'appeler directement. |

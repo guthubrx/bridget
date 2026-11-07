@@ -4960,7 +4960,7 @@ mod tests {
                         .as_array()
                         .unwrap()
                         .len(),
-                    32
+                    37
                 ),
                 "tools_twice" => assert_eq!(responses[1]["result"], responses[2]["result"]),
                 "ping" => assert_eq!(responses.last().unwrap()["result"], json!({})),
@@ -5262,6 +5262,7 @@ mod tests {
             "bridget_rename",
             "bridget_runtime",
             "bridget_send",
+            "bridget_specialists",
             "bridget_status",
             "bridget_thread",
             "bridget_wake",

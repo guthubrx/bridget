@@ -103,69 +103,83 @@ fn who_agents_et_status_refusent_un_inventaire_non_atteste_sans_sortie_trompeuse
                     }
                 }
             };
-            let mut stream = accept();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for response in [
-                DaemonToWrapper::RoleAccepted {
-                    role: ConnectionRole::Client,
-                },
-                DaemonToWrapper::ClientWelcome {
-                    version: CLIENT_CONTRACT_VERSION,
-                    build_id: "fixture".into(),
-                    horizon_secs: 60,
-                    issued_at_tolerance_secs: 5,
-                    capabilities: vec![],
-                },
-                DaemonToWrapper::DaemonIdentityReport {
-                    host: "fixture".into(),
-                    db_path: "/fixture".into(),
-                    instance_id: "fixture".into(),
-                    features: Vec::new(),
-                },
-            ] {
-                let mut line = String::new();
-                assert!(reader.read_line(&mut line).unwrap() > 0);
-                decode::<WrapperToDaemon>(line.trim()).unwrap();
-                writeln!(stream, "{}", encode(&response).unwrap()).unwrap();
-            }
-            drop(reader);
-            drop(stream);
-            let mut stream = accept();
+            // 15e3de35 : `agents` lit directement l'annuaire, sans sonde de
+            // statut ni d'inventaire ; who et status gardent leurs sondes.
+            let probes = args[0] != "agents";
             let mut line = String::new();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            reader.read_line(&mut line).unwrap();
-            let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
-                panic!("sonde d'inventaire attendue")
-            };
-            if scoped {
-                // L'inventaire diagnostic préalable est valide. Le refus doit
-                // venir du nouvel annuaire, pas d'une sonde ou capacité absente.
-                writeln!(
-                    stream,
-                    "{}",
-                    encode(&DaemonToWrapper::Registered {
-                        credential: None,
-                        agent_id,
-                    })
-                    .unwrap()
-                )
-                .unwrap();
-                line.clear();
-                reader.read_line(&mut line).unwrap();
-                assert!(matches!(
-                    decode(line.trim()).unwrap(),
-                    WrapperToDaemon::ListAgents
-                ));
-                writeln!(
-                    stream,
-                    "{}",
-                    encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
-                )
-                .unwrap();
+            let (mut stream, mut reader) = if probes {
+                let mut stream = accept();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                for response in [
+                    DaemonToWrapper::RoleAccepted {
+                        role: ConnectionRole::Client,
+                    },
+                    DaemonToWrapper::ClientWelcome {
+                        version: CLIENT_CONTRACT_VERSION,
+                        build_id: "fixture".into(),
+                        horizon_secs: 60,
+                        issued_at_tolerance_secs: 5,
+                        capabilities: vec![],
+                    },
+                    DaemonToWrapper::DaemonIdentityReport {
+                        host: "fixture".into(),
+                        db_path: "/fixture".into(),
+                        instance_id: "fixture".into(),
+                        features: Vec::new(),
+                    },
+                ] {
+                    let mut line = String::new();
+                    assert!(reader.read_line(&mut line).unwrap() > 0);
+                    decode::<WrapperToDaemon>(line.trim()).unwrap();
+                    writeln!(stream, "{}", encode(&response).unwrap()).unwrap();
+                }
                 drop(reader);
                 drop(stream);
-                stream = accept();
-                reader = BufReader::new(stream.try_clone().unwrap());
+                let mut stream = accept();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                reader.read_line(&mut line).unwrap();
+                let WrapperToDaemon::Register { agent_id, .. } = decode(line.trim()).unwrap() else {
+                    panic!("sonde d'inventaire attendue")
+                };
+                if scoped {
+                    // L'inventaire diagnostic préalable est valide. Le refus doit
+                    // venir du nouvel annuaire, pas d'une sonde ou capacité absente.
+                    writeln!(
+                        stream,
+                        "{}",
+                        encode(&DaemonToWrapper::Registered {
+                            credential: None,
+                            agent_id,
+                        })
+                        .unwrap()
+                    )
+                    .unwrap();
+                    line.clear();
+                    reader.read_line(&mut line).unwrap();
+                    assert!(matches!(
+                        decode(line.trim()).unwrap(),
+                        WrapperToDaemon::ListAgents
+                    ));
+                    writeln!(
+                        stream,
+                        "{}",
+                        encode(&DaemonToWrapper::AgentList { agents: vec![] }).unwrap()
+                    )
+                    .unwrap();
+                    drop(reader);
+                    drop(stream);
+                    let stream = accept();
+                    let reader = BufReader::new(stream.try_clone().unwrap());
+                    (stream, reader)
+                } else {
+                    (stream, reader)
+                }
+            } else {
+                let stream = accept();
+                let reader = BufReader::new(stream.try_clone().unwrap());
+                (stream, reader)
+            };
+            if scoped {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
                 assert!(matches!(

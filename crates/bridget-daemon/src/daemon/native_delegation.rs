@@ -7156,7 +7156,7 @@ pub(super) fn recheck_remote_dispatch(
     Ok(())
 }
 
-fn remote_mission_message(task: &Task) -> Result<bridget_core::BridgetMessage, String> {
+pub(super) fn remote_mission_message(task: &Task) -> Result<bridget_core::BridgetMessage, String> {
     let NativeDelegationRequest::Delegate { task: body, .. } = &task.request else {
         return Err("invalid_record".into());
     };
@@ -14364,7 +14364,11 @@ mod tests {
         let code = crate::lifecycle::validate_source_base(&source).unwrap_err();
         assert!(code.starts_with("workspace_preflight_technical:"));
         assert_eq!(failure(&code), expected);
-        assert!(failure("workspace_preflight_technical_other").get("detail").is_none());
+        // Un code voisin ne reprend pas ce conseil : il reçoit le guidage générique
+        // qui déclare la cause inconnue (refus guidés, consigne du 24 octobre).
+        let other = failure("workspace_preflight_technical_other");
+        assert_ne!(other["detail"], expected["detail"]);
+        assert!(other["detail"]["recovery"].as_str().unwrap().contains("La cause précise reste inconnue"));
     }
 
     #[test]
@@ -14400,7 +14404,11 @@ mod tests {
             assert!(code.starts_with("workspace_base_preflight_failed:"));
             assert_eq!(failure(&code), expected);
         }
-        assert!(failure("workspace_base_preflight_failed_other").get("detail").is_none());
+        // Un code voisin ne reprend pas ce conseil : il reçoit le guidage générique
+        // qui déclare la cause inconnue (refus guidés, consigne du 24 octobre).
+        let other = failure("workspace_base_preflight_failed_other");
+        assert_ne!(other["detail"], expected["detail"]);
+        assert!(other["detail"]["recovery"].as_str().unwrap().contains("La cause précise reste inconnue"));
     }
 
     #[test]
@@ -14646,121 +14654,6 @@ mod tests {
             "task":"Compiler le composant demandé","cwd":cwd,"posture":"discovery"}))
         .unwrap();
         (Arc::new(Mutex::new(st)), config, rx, reader, request, root)
-    }
-
-    /// One affected catalogue case: real SDK parent, both roots and 74 sources.
-    /// It uses the actual Catalogue handler; it never delegates or starts a model.
-    #[cfg(target_os = "macos")]
-    #[test]
-    #[ignore = "recette sur données réelles privées : fournir BRIDGET_CATALOGUE_OPERATION171_INPUTS"]
-    fn delivery171_catalogue_operation_real_parent_closed_finish_and_request_scope() {
-        use std::fs;
-        use sha2::{Digest, Sha256};
-        use crate::native_permissions::{CataloguePermissionRead171, child_policy_reader_for_catalogue171};
-        use bridget_transport::protocol::ProviderPermissions;
-        let input = PathBuf::from(std::env::var("BRIDGET_CATALOGUE_OPERATION171_INPUTS").expect("private inputs required"));
-        let mut parent: ProviderPermissions = serde_json::from_slice(&fs::read(input.join("parent-permissions171.json")).unwrap()).unwrap();
-        let registry: Value = serde_json::from_slice(&fs::read(input.join("registry-origin171.json")).unwrap()).unwrap();
-        let source: std::collections::BTreeMap<String, String> = serde_json::from_slice(&fs::read(input.join("source-environment171.json")).unwrap()).unwrap();
-        let profile_bytes = fs::read(input.join("profile171.json")).unwrap();
-        let profile: Value = serde_json::from_slice(&profile_bytes).unwrap();
-        assert_eq!(parent.provider_policy["launch_context"]["permission_sources"], profile["origin_sources"]);
-        assert_eq!(profile["origin_sources"].as_array().unwrap().len(), 74);
-        assert_eq!(parent.provider_policy["allowed_tools"], json!(["mcp__t3-code__*"]));
-        assert_eq!(parent.provider_policy["launch_context"]["settings_overrides"],
-            json!({"permissions":{"allow":["mcp__bridget__bridget_capabilities","mcp__bridget__bridget_task_status"]}}));
-        assert!(parent.provider_policy["additional_directories"].as_array().unwrap()
-            .iter().any(|p| p == "/Users/moi/.t3/userdata/attachments"));
-        let (mut st, config, rx, _reader) = fixture("c171");
-        let scratch = fs::canonicalize(&st.fixture_root.as_ref().unwrap().0).unwrap();
-        let private_profile = scratch.join("catalogue-profile171.json");
-        fs::write(&private_profile, &profile_bytes).unwrap();
-        fs::set_permissions(&private_profile, fs::Permissions::from_mode(0o600)).unwrap();
-        parent.provider_policy["launch_context"]["source_equivalence"]["profile"]["origin_path"] = json!(private_profile);
-        let registry_path = scratch.join("catalogue-registry171.json");
-        fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
-        fs::set_permissions(&registry_path, fs::Permissions::from_mode(0o600)).unwrap();
-        st.registry = AgentRegistry::load_from_path(registry_path.clone()).unwrap();
-        st.source_env = source.iter().map(|(k,v)| (k.clone(), v.clone().into())).collect();
-        st.native_permission_facts.clear();
-        let cwd = PathBuf::from(&parent.cwd);
-        fn catalogue(st: &mut DaemonState, parent: &ProviderPermissions) -> Value {
-            handle_locked_with_project("conn-1", NativeDelegationRequest::Catalogue, None, Some(parent), st).unwrap()
-        }
-        fn refused(value: &Value, name: &str) {
-            let entry = value["providers"].as_array().unwrap().iter().find(|v| v["agent_type"]==name).unwrap();
-            assert_eq!(entry["can_run"], false, "{name}");
-            assert_eq!(entry["inherit"], false, "{name}");
-            assert_eq!(entry["development"], false, "{name}");
-            assert_eq!(entry["discovery"], false, "{name}");
-            assert!(!entry["constraints"].as_array().unwrap().is_empty());
-        }
-        let started = std::time::Instant::now();
-        let nominal = catalogue(&mut st, &parent);
-        println!("catalogue171_nominal_ms={} providers={}", started.elapsed().as_millis(), nominal["providers"].as_array().unwrap().len());
-        assert!(nominal["providers"].as_array().unwrap().len() >= 2);
-        for name in ["claude", "project-discovery-claude"] {
-            let entry = nominal["providers"].as_array().unwrap().iter().find(|v| v["agent_type"]==name).unwrap();
-            assert_eq!(entry["can_run"], true, "{name}");
-            assert_eq!(entry["development"], true, "{name}");
-            assert_eq!(entry["inherit"], true, "{name}");
-        }
-        // A parent/source change is never admitted using another entry's token.
-        let mut changed_source = parent.clone();
-        changed_source.provider_policy["launch_context"]["permission_sources"][0]["revision"] = json!(format!("sha256:{}", "0".repeat(64)));
-        let sources_refused = catalogue(&mut st, &changed_source);
-        for name in ["claude", "project-discovery-claude"] { refused(&sources_refused, name); }
-        // Effective environments are separate bindings; HOME changes the native
-        // settings selection and cannot reuse the original parent's recheck.
-        let previous_home = st.source_env.get("HOME").unwrap().clone();
-        let other_home = scratch.join("different-home");fs::create_dir(&other_home).unwrap();
-        fs::set_permissions(&other_home, fs::Permissions::from_mode(0o700)).unwrap();
-        st.source_env.insert("HOME".into(), other_home.into_os_string());
-        let environment_refused = catalogue(&mut st, &parent);
-        for name in ["claude", "project-discovery-claude"] { refused(&environment_refused, name); }
-        st.source_env.insert("HOME".into(), previous_home);
-        // A foreign configured executable remains refused, including its
-        // project-discovery variant; no Ok is shared between definitions.
-        let mut foreign = registry.clone();foreign["agents"]["claude"]["command"] = json!("/usr/bin/true");
-        fs::write(&registry_path, serde_json::to_vec(&foreign).unwrap()).unwrap();
-        st.registry = AgentRegistry::load_from_path(registry_path.clone()).unwrap();
-        let definition_refused = catalogue(&mut st, &parent);
-        for name in ["claude", "project-discovery-claude"] { refused(&definition_refused, name); }
-        fs::write(&registry_path, serde_json::to_vec(&registry).unwrap()).unwrap();
-        st.registry = AgentRegistry::load_from_path(registry_path.clone()).unwrap();
-        let definition = st.registry.get("claude").unwrap().clone();
-        let scope = std::cell::RefCell::new(CataloguePermissionRead171::new(Some(&parent), Some(&cwd)));
-        let (policy, posture) = child_policy_reader_for_catalogue171(&parent, &definition, &cwd, &st.source_env, Some(&scope))(Some(SpawnPosture::Development)).unwrap();
-        assert_eq!(posture, SpawnPosture::Development);
-        assert_eq!(policy["allowed_tools"], parent.provider_policy["allowed_tools"]);
-        assert_eq!(policy["additional_directories"], parent.provider_policy["additional_directories"]);
-        assert_eq!(policy["launch_context"], parent.provider_policy["launch_context"]);
-        let mut other_definition = definition.clone();other_definition.command = "/usr/bin/true".into();
-        assert!(child_policy_reader_for_catalogue171(&parent, &other_definition, &cwd, &st.source_env, Some(&scope))(Some(SpawnPosture::Development)).is_err());
-        let mut other_owner = parent.clone();other_owner.revision += 1;
-        assert!(child_policy_reader_for_catalogue171(&other_owner, &definition, &cwd, &st.source_env, Some(&scope))(Some(SpawnPosture::Development)).is_err());
-        // Publication must fail if the actual private manifest changes AFTER
-        // the entry result, even while the earlier policy was favourable.
-        let mut changed_bytes = profile_bytes.clone();changed_bytes.push(b' ');
-        fs::write(&private_profile, &changed_bytes).unwrap();
-        assert!(scope.into_inner().finish(json!({"can_run":true})).is_err());
-        // A second Catalogue request has no token from the first request.
-        let second_request = catalogue(&mut st, &parent);
-        for name in ["claude", "project-discovery-claude"] { refused(&second_request, name); }
-        // A changed declared dependency is refused even with a matching new
-        // private-manifest digest; no live dependency is modified by the case.
-        let mut dependency = profile.clone();
-        let row = dependency["files"].as_array_mut().unwrap().iter_mut().find(|r| r["variants"].get("origin").is_some()).unwrap();
-        row["variants"]["origin"]["revision"] = json!(format!("sha256:{}", "0".repeat(64)));
-        let dependency_bytes = serde_json::to_vec(&dependency).unwrap();fs::write(&private_profile, &dependency_bytes).unwrap();
-        let mut changed_dependency = parent.clone();
-        changed_dependency.provider_policy["launch_context"]["source_equivalence"]["profile"]["revision"] = json!(format!("sha256:{:x}", Sha256::digest(&dependency_bytes)));
-        let dependency_refused = catalogue(&mut st, &changed_dependency);
-        for name in ["claude", "project-discovery-claude"] { refused(&dependency_refused, name); }
-        fs::write(&private_profile, &profile_bytes).unwrap();
-        assert!(st.delegation_store.tasks().unwrap().is_empty());
-        assert!(rx.try_recv().is_err(), "no child/model/admission launched");
-        cleanup(&config);
     }
 
     fn routing168_update(state: &Arc<Mutex<DaemonState>>, change: impl FnOnce(&mut Value)) {
@@ -20687,7 +20580,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
     fn native160_rouge_gel_cumule() {
         let (state, config, mut task, _parent, _child) = native160_mission(true);
         let now = unix_timestamp();
-        let mut st = state.lock().unwrap();
+        let st = state.lock().unwrap();
         task.reply_timeout = Some(3600);
         task.mission_deadline_at = Some(now + 1800);
         let mut value = serde_json::to_value(&task).unwrap();
@@ -23214,12 +23107,15 @@ for frame in frames: print(json.dumps(frame),flush=True)
                     panic!("ronde suivante attendue")
                 };
                 assert_eq!(result["status"], "mission_pending");
+                // Session 221 (377f647e) : le reçu précède la remise ; la
+                // cadence native ordinaire envoie ensuite la ronde suivante.
+                tick(&shared);
                 let mut raw = String::new();
                 child.read_line(&mut raw).unwrap();
                 let DaemonToWrapper::DeliverIdempotent { message, .. } =
                     decode(raw.trim()).unwrap()
                 else {
-                    panic!("nouvelle mission envoyée sans tick ajouté : {raw}")
+                    panic!("nouvelle mission attendue après un tick ordinaire : {raw}")
                 };
                 assert_eq!(message.body, "nouvelle consigne");
                 assert_ne!(message.id, task.mission);
@@ -27544,7 +27440,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
 
     #[test]
     fn spec172_continuation_rotated_session_cannot_take_another_owner_task() {
-        let (mut st,config,mut task,_result) = remote162_capture_fixture();
+        let (st,config,mut task,_result) = remote162_capture_fixture();
         let mut parent = continuation172_parent();
         parent.cwd.clone_from(&task.cwd);
         task.permission_snapshot = Some(crate::native_permissions::snapshot(
@@ -27635,7 +27531,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
 
     #[test]
     fn spec172_continuation_renewed_turn_reaches_worker_proof_without_mutating_task() {
-        let (mut st,config,mut task,_result) = remote162_capture_fixture();
+        let (st,config,mut task,_result) = remote162_capture_fixture();
         let mut parent = continuation172_parent();
         parent.cwd.clone_from(&task.cwd);
         task.permission_snapshot = Some(crate::native_permissions::snapshot(
@@ -27835,7 +27731,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
             ("WorkspacePrepareFailed", "cause précise reste inconnue"),
             ("WorkspacePrepareIncomplete", "lecture corrélée du reçu"),
             ("StoreUnavailable", "n’a pas fourni de cause précise"),
-            ("ResourceLimit", "capacité réservée par Bridget"),
+            // Session 221 (e948eef5) : nomme les lectures manquantes, sans drainage supposé.
+            ("ResourceLimit", "sans sous-cause conservée"),
             ("DiskFull:private-secret", "n’a pas fourni de cause précise"),
         ] {
             let code = format!("remote_workspace_prepare:{reason}");
@@ -28345,7 +28242,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(result["task_id"], task_id);
         assert_eq!(result["status"], "starting");
         assert_eq!(result["error"], "remote_start_failed:remote_result_slot:ResourceLimit");
-        assert_eq!(result["detail"]["result_capacity"]["budget_after_worker_upgrade_bytes"],256*1024*1024);
+        assert_eq!(result["detail"]["result_capacity"]["budget_after_worker_upgrade_bytes"],bridget_transport::protocol::MAX_WORKER_STORE_BYTES);
+        assert_eq!(bridget_transport::protocol::MAX_WORKER_STORE_BYTES,2*1024*1024*1024);
         assert_eq!(result["detail"]["result_capacity"]["current_occupancy"],"not_observed");
         assert!(result["detail"]["result_capacity"]["guaranteed_parallel_admissions"].is_null());
         assert!(result["error_human_action"].as_str().unwrap().contains("propriétaire"));
@@ -35559,7 +35457,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         task.state="starting".into();task.remote_prepared=false;task.mission_issued_at=None;
         st.delegation_store.save(&task).unwrap();
         let worker=remote_worker_identity(task.remote_placement.as_ref().unwrap());
-        let (writer,mut reader)=super::super::presence_tests::control_socket("probe205");
+        let (writer,reader)=super::super::presence_tests::control_socket("probe205");
         st.connections.insert("worker205".into(),writer);
         st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection { catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),catalogue_refresh_at:None,
             identity:worker,conn_id:"worker205".into(),epoch:"epoch205".into(),capabilities:vec![],
@@ -36367,7 +36265,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
 
     #[test]
     fn spec208_api_error_guidance_is_owned_unknown_and_read_only() {
-        let (mut st,config,mut task,_) = remote162_capture_fixture();
+        let (st,config,mut task,_) = remote162_capture_fixture();
         task.state="failed".into();task.error=Some("api_error".into());task.result=None;
         let before=serde_json::to_vec(&task).unwrap();
         let view=current_task_view(&st,&task,true).unwrap();
@@ -37161,7 +37059,7 @@ mod commit_view_reader221_tests {
     use super::*;
     fn c19_master_file_fixture()->(DaemonState,DaemonConfig,Task,bridget_transport::protocol::RemoteResultEnvelope) {
         use crate::delegation::{WorkspaceRecord,WorkspaceStrategy,WorkspaceState,ViewBinding,CommitViewRecord};
-        let (mut state,config,mut task,result)=super::tests::remote162_capture_fixture();
+        let (state,config,mut task,result)=super::tests::remote162_capture_fixture();
         let mut prepare=result.identity.command.clone();prepare.instance_id.clear();prepare.generation=0;
         let binding=ViewBinding{worker:result.worker.clone(),command:prepare,prepare_digest:"a".repeat(64)};
         task.commit_view_prepare=Some(binding.clone());

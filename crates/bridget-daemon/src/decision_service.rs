@@ -1645,8 +1645,12 @@ else:
             environment: vec![],
             request_json:
                 "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"choisir\"}}".into(),
-            deadline: Instant::now() + Duration::from_millis(100),
+            // macOS : /usr/bin/python3 démarre en ~300 ms. Une échéance plus
+            // courte tuait le leader avant qu'il ignore TERM ; le banc ne testait
+            // alors plus le drain. L'échéance doit expirer APRÈS le fork.
+            deadline: Instant::now() + Duration::from_millis(1500),
         };
+        let deadline = options.deadline;
         let client = DecisionServiceClient::new();
         let permit = client.acquire_routing_permit().unwrap();
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -1656,10 +1660,13 @@ else:
             let _ = sender.send(result);
         });
         let started = Instant::now();
-        while !root.join("descendant").exists() && started.elapsed() < Duration::from_secs(2) {
+        while !root.join("descendant").exists() && started.elapsed() < Duration::from_secs(3) {
             thread::sleep(Duration::from_millis(5));
         }
         let ready = root.join("descendant").exists();
+        // Laisser expirer l'échéance du demandeur pendant que les deux
+        // processus ignorent TERM : c'est la situation à prouver.
+        thread::sleep(deadline.saturating_duration_since(Instant::now()) + Duration::from_millis(300));
         let caller_timed_out = matches!(
             receiver.recv_timeout(Duration::from_millis(200)),
             Err(mpsc::RecvTimeoutError::Timeout)

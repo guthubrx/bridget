@@ -2,7 +2,7 @@
 use super::store::{Device, Operation};
 use bridget_transport::{
     DaemonToWrapper,
-    protocol::{CommunicationDirectoryScope, CommunicationProject, ScopedAgentInfo},
+    protocol::{CommunicationDirectoryScope, ScopedAgentInfo},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -238,6 +238,7 @@ pub(crate) fn mobile_operation(
 mod tests {
     use super::super::store::Scope;
     use super::*;
+    use bridget_transport::protocol::CommunicationProject;
     fn agent(id: &str, host: &str, root: &str) -> ScopedAgentInfo {
         serde_json::from_value(json!({
             "agent_id":id,"display_name":id,"agent_type":"custom","connection_id":"private-connection",
