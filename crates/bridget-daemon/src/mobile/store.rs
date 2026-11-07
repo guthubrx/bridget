@@ -49,12 +49,6 @@ impl Scope {
             && LEGACY.iter().all(|op| self.operations.contains(op))
     }
 
-    pub(crate) fn permits_specialists_management(&self) -> bool {
-        self.all_machines
-            && (self.operations.contains(&Operation::SpecialistsManage)
-                || self.legacy_global_administrator())
-    }
-
     /// Les historiques ne portent pas encore de partition fine attestée.
     pub fn permits_federation(&self, op: Operation) -> bool {
         self.all_machines && self.all_projects && self.operations.contains(&op)
@@ -104,6 +98,22 @@ pub(crate) struct Device {
     pub created_at: i64,
     pub expires_at: i64,
     pub revoked_at: Option<i64>,
+}
+
+// Introduction de SpecialistsManage, commit dadca5d0 (1 novembre 2026).
+pub(crate) const SPECIALISTS_MANAGEMENT_INTRODUCED_AT: i64 = 1_793_532_131;
+
+impl Device {
+    /// Compatibilité accordée aux seules associations administratives complètes
+    /// antérieures aux spécialistes. La portée stockée reste inchangée : cette
+    /// administration effective est une extension explicite de compatibilité.
+    /// Les contrôles d'expiration/révocation appartiennent aux frontières appelantes.
+    pub(crate) fn permits_specialists_management(&self) -> bool {
+        self.scope.all_machines
+            && (self.scope.operations.contains(&Operation::SpecialistsManage)
+                || ((1..SPECIALISTS_MANAGEMENT_INTRODUCED_AT).contains(&self.created_at)
+                    && self.scope.legacy_global_administrator()))
+    }
 }
 
 // Le QR est une autorisation temporaire : pas de Debug/Serialize implicite.
@@ -625,23 +635,28 @@ mod tests {
             operations:vec![Operation::Read,Operation::Message,Operation::TaskRead,
                 Operation::TaskContinue,Operation::TaskCancel,Operation::TaskRespond,
                 Operation::DevicesManage] };
-        assert!(full.permits_specialists_management());
+        let device=|scope:Scope,created_at|Device{device_id:Uuid::new_v4().to_string(),
+            label:"Test".into(),scope,created_at,expires_at:i64::MAX,revoked_at:None};
+        let allows=|scope:Scope|device(scope,SPECIALISTS_MANAGEMENT_INTRODUCED_AT-1).permits_specialists_management();
+        assert!(allows(full.clone()));
+        assert!(!device(full.clone(),SPECIALISTS_MANAGEMENT_INTRODUCED_AT).permits_specialists_management());
+        assert!(!device(full.clone(),0).permits_specialists_management());
         let mut restricted=full.clone();restricted.all_machines=false;
-        assert!(!restricted.permits_specialists_management());
+        assert!(!allows(restricted));
         restricted=full.clone();restricted.all_projects=false;
-        assert!(!restricted.permits_specialists_management());
+        assert!(!allows(restricted));
         restricted=full.clone();restricted.operations=vec![Operation::Read,Operation::DevicesManage];
-        assert!(!restricted.permits_specialists_management());
+        assert!(!allows(restricted));
         for op in full.operations.iter() {
             restricted=full.clone();restricted.operations.retain(|value|value!=op);
-            assert!(!restricted.permits_specialists_management(),"missing {op:?}");
+            assert!(!allows(restricted),"missing {op:?}");
         }
         restricted=full.clone();restricted.operations[0]=Operation::Message;
-        assert!(!restricted.permits_specialists_management(),"duplicate is not the complete scope");
+        assert!(!allows(restricted),"duplicate is not the complete scope");
         restricted=scope();restricted.all_machines=true;
         restricted.operations.push(Operation::SpecialistsManage);
         restricted.all_projects=false;
-        assert!(restricted.permits_specialists_management(),"explicit administration retains its project boundary");
+        assert!(device(restricted,SPECIALISTS_MANAGEMENT_INTRODUCED_AT+1).permits_specialists_management(),"explicit approval retains its project boundary after the cutoff");
     }
 
     #[test]

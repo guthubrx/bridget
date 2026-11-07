@@ -852,7 +852,7 @@ fn decision_projects(st: &DaemonState, row: &Value) -> Result<Vec<String>, Strin
                 .ok_or("human_approval_unavailable")?;
             if device.revoked_at.is_some()
                 || device.expires_at <= unix_timestamp()
-                || !device.scope.permits_specialists_management()
+                || !device.permits_specialists_management()
             {
                 return Err("specialists_admin_scope_required".into());
             }
@@ -1782,7 +1782,7 @@ pub(super) fn handle_mobile(
             };
         }
     } else if !device.scope.all_projects
-        || !device.scope.permits_specialists_management()
+        || !device.permits_specialists_management()
     {
         return DaemonToWrapper::MobileOperationResult {
             result: failure("specialists_admin_scope_required"),
@@ -2896,6 +2896,11 @@ mod tests222 {
         let pairing=devices.issue_pairing(&scope,now).unwrap();
         let device=devices.pair(&pairing.credential,&Uuid::new_v4().to_string(),
             &format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),"Legacy administrator",now).unwrap();
+        // La fixture émule une association ancienne renouvelée : sa naissance
+        // précède la capacité, son expiration reste actuelle. Aucune base réelle.
+        rusqlite::Connection::open(st.db_path.parent().unwrap().join("mobile-devices.db")).unwrap()
+            .execute("UPDATE mobile_devices SET created_at=?1 WHERE device_id=?2",
+                rusqlite::params![crate::mobile::store::SPECIALISTS_MANAGEMENT_INTRODUCED_AT-1,device.device_id]).unwrap();
         let actor=format!("mobile181:{}",device.device_id);
         let id=Uuid::new_v4().to_string();
         profiles(&st).unwrap().specialist_apply(&profile(&id),&human(),now).unwrap();
@@ -2922,6 +2927,36 @@ mod tests222 {
             &format!("{}{}",Uuid::new_v4().simple(),Uuid::new_v4().simple()),"Expired administrator",earlier).unwrap();
         assert_eq!(decision_projects(&st,&json!({"actor":format!("mobile181:{}",expired.device_id)})),Err("specialists_admin_scope_required".into()));
         assert!(controls.is_empty());
+        assert!(st.managed_by_instance.is_empty());
+    }
+
+    #[test]
+    fn spec239_mobile_command_keeps_partial_and_new_associations_restricted() {
+        use crate::mobile::store::{Device,Scope,SPECIALISTS_MANAGEMENT_INTRODUCED_AT};
+        let (mut st,_)=super::super::presence_tests::state_with_registered_agent("239-mobile-boundary");
+        st.client_negotiations.insert("mobile".into(),NegotiatedClient{version:CLIENT_CONTRACT_VERSION,
+            issuer_scope:"test239".into(),capabilities:vec![ClientCapability::SpecialistsV1]});
+        let profile_id=Uuid::new_v4().to_string();let record=prepare(&st,&profile_id,false);
+        let command:SpecialistRequest=serde_json::from_value(json!({"version":1,"action":"configure_mandate",
+            "request_id":Uuid::new_v4().to_string(),"specialist_agent_id":AGENT,"expected_revision":record.revision,
+            "mandate":"Test","scope":{"projects":["project"],"transversal":false},"auto_start":false})).unwrap();
+        let scope:Scope=serde_json::from_value(json!({"all_machines":true,"machines":[],"all_projects":true,"projects":[],
+            "operations":["read","message","task_read","task_continue","task_cancel","task_respond","devices_manage"]})).unwrap();
+        let legacy=Device{device_id:Uuid::new_v4().to_string(),label:"Legacy".into(),scope,
+            created_at:SPECIALISTS_MANAGEMENT_INTRODUCED_AT-1,expires_at:i64::MAX,revoked_at:None};
+        let shared=Arc::new(Mutex::new(st));
+        let result=|device:&Device|match handle_mobile("mobile",&command,device,&shared){
+            DaemonToWrapper::MobileOperationResult{result}=>result,_=>panic!("mobile result expected")};
+        let mut restricted=legacy.clone();restricted.scope.all_projects=false;
+        assert_eq!(result(&restricted)["code"],"specialists_admin_scope_required");
+        restricted.scope.operations.push(crate::mobile::store::Operation::SpecialistsManage);
+        assert_eq!(result(&restricted)["code"],"specialists_admin_scope_required","explicit mobile mutations retain the existing global-project guard");
+        restricted=legacy.clone();restricted.created_at=SPECIALISTS_MANAGEMENT_INTRODUCED_AT;
+        assert_eq!(result(&restricted)["code"],"specialists_admin_scope_required");
+        assert_eq!(result(&legacy)["status"],"ok");
+        let st=shared.lock().unwrap();
+        let after=profiles(&st).unwrap().get_specialist(AGENT).unwrap().unwrap();
+        assert_eq!(after.revision,record.revision+1);assert!(!after.auto_start);
         assert!(st.managed_by_instance.is_empty());
     }
     #[test]
