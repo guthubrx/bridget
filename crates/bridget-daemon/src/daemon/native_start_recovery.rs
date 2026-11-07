@@ -922,8 +922,7 @@ pub(super) fn resume(
         match (thread, permission_proof) {
             (Some(expected), Some(proof)) => {
                 let fresh = origin_proof::reattest(conn, proof, state)
-                    .map_err(|code| if matches!(code.as_str(),"origin_proof_busy"|"origin_project_preparation_busy") { code }
-                        else { "permission_attestation_unavailable".into() })?;
+                    .map_err(origin_proof::attestation_failure)?;
                 if fresh.thread_id != expected || fresh.permissions.as_ref() != Some(&ctx.parent) {
                     return Err("permission_changed".into());
                 }

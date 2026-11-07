@@ -156,9 +156,28 @@ fn checked_response(response: Option<OriginProofResult>, preparation: bool) -> R
         Some(result) => Ok(result),
     }
 }
+
+/// Garder une capacité ou une liaison indisponible distincte d'un refus de preuve.
+pub(super) fn attestation_failure(code: String) -> String {
+    match code.as_str() {
+        "origin_proof_busy" | "origin_project_preparation_busy" | "origin_proof_unavailable"
+        | "origin_worker_unavailable" | "origin_binding_unavailable" => code,
+        _ => "permission_attestation_unavailable".into(),
+    }
+}
 #[cfg(test)]
 mod capacity221_tests {
     use super::*;
+    #[test]
+    fn spec240_attestation_preserves_transient_causes_and_still_refuses_unknown() {
+        for code in ["origin_proof_busy", "origin_project_preparation_busy", "origin_proof_unavailable",
+            "origin_worker_unavailable", "origin_binding_unavailable"] {
+            assert_eq!(attestation_failure(code.into()), code);
+        }
+        for code in ["permission_attestation_unavailable", "unauthorized", "unknown with secret"] {
+            assert_eq!(attestation_failure(code.into()), "permission_attestation_unavailable");
+        }
+    }
     #[test]
     fn spec236_origin_refusal_cause_distinguishes_same_machine_and_invalid_values() {
         assert_eq!(shape_error("target_machine",WorkerRefusal::InvalidEnvelope,true),

@@ -8,6 +8,11 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.7 — 2026-11-07
+
+- Préserver le canal distant lorsqu'une préparation initiale connue répond après l'expiration de son attente. Les tuples inconnus et les époques périmées restent refusés ; aucune tâche n'est créée par la réponse tardive.
+- Conserver les causes de capacité ou de liaison pendant la réattestation avant remise, et expliquer un délai de préparation sans annoncer à tort un serveur arrêté ou un changement de droits.
+
 ## 0.8.6 — 2026-11-07
 
 - Conserver l'administration des spécialistes pour les appareils associés avec l'ancienne portée administrative globale complète. Les appareils partiels et les autorisations expirées ou révoquées restent refusés.

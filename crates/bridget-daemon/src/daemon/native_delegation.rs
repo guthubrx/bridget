@@ -3891,7 +3891,34 @@ fn routing_failure_admission(
     result
 }
 
+#[cfg(test)]
+mod incident240_tests {
+    use super::*;
+    #[test]
+    fn spec240_preparation_timeout_and_origin_capacity_keep_actionable_causes() {
+        let result=failure("remote_prepare:WorkerUnavailable");
+        assert_eq!(result["code"],"remote_prepare:WorkerUnavailable");
+        assert_eq!(result["scope"],"this_request");
+        assert_eq!(result["detail"]["cause"],"reply_unavailable");
+        assert!(result["detail"]["recovery"].as_str().unwrap().contains("même clé"));
+        for code in ["origin_proof_busy","origin_proof_unavailable","origin_worker_unavailable","origin_binding_unavailable"] {
+            let error=format!("remote_start_failed:{code}");
+            let message=remote_start_error_message(&error).expect("conduite pour cet échec avant Release");
+            assert!(message.contains("cette tâche et sa clé") && message.contains("autres travaux"));
+            assert!(!message.contains("a refusé les droits"));
+        }
+        assert!(remote_start_error_message("remote_start_failed:unknown with secret").is_none());
+    }
+}
+
 fn failure(code: &str) -> Value {
+    if code == "remote_prepare:WorkerUnavailable" {
+        return json!({"version":1,"status":"refused","code":code,"scope":"this_request",
+            "message":"Conservez cette clé et ses paramètres, puis faites vérifier le canal du worker choisi et la préparation en attente. La préparation n’a pas répondu dans son délai ; ce code ne prouve pas le serveur arrêté. Aucune nouvelle mission de remplacement. Les autres travaux autorisés suivent leur propre état.",
+            "detail":{"stage":"remote_prepare","cause":"reply_unavailable","verification":"selected_worker_channel_and_pending_prepare",
+                "recovery":"Lire le reçu durable avec la même clé avant toute reprise. Si une tâche existe, conserver son task_id et suivre son état ; ne pas changer de clé, de machine ou de permissions pour contourner l’incertitude.",
+                "human_action":"Si la liaison ou le sort de la préparation reste inconnu, demander au responsable Bridget de le qualifier avant de reprendre."}});
+    }
     if code=="agent_dormant" {
         return json!({"version":1,"status":"refused","code":code,"scope":"this_request","message":crate::agent_tracking::DORMANT_MESSAGE});
     }
@@ -4630,6 +4657,13 @@ fn remote_result_slot_error_reason(error: &str) -> Option<&str> {
 
 // Texte fermé : conserver le code technique et ne jamais recopier stderr.
 fn remote_start_error_message(error: &str) -> Option<&'static str> {
+    match error.strip_prefix("remote_start_failed:").unwrap_or(error) {
+        "origin_proof_busy" | "origin_project_preparation_busy" => return Some(
+            "Conservez cette tâche et sa clé, puis faites vérifier les contrôles d’origine déjà en cours. La capacité de contrôle était occupée avant la remise métier ; aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."),
+        "origin_proof_unavailable" | "origin_worker_unavailable" | "origin_binding_unavailable" => return Some(
+            "Conservez cette tâche et sa clé, puis faites vérifier le lien vers l’hôte d’origine. Le contrôle d’origine n’a pas été confirmé avant la remise métier ; la cause précise reste inconnue et aucun changement de droits n’est établi. Lisez son état natif avant toute reprise, sans nouvelle mission de remplacement. Ce refus concerne cette tâche ; les autres travaux autorisés suivent leur propre état."),
+        _ => {},
+    }
     if matches!(error.strip_prefix("remote_start_failed:").unwrap_or(error),
         "model_options_account_changed"|"model_options_observation_unavailable"
         |"model_options_not_announced"|"model_options_not_permitted"|"model_options_account_unidentified"
@@ -7497,7 +7531,7 @@ fn start_remote_task_with(
     let fresh_attested = match (thread, permission_proof) {
         (Some(expected_thread), Some(proof)) => {
             let fresh = super::origin_proof::reattest(conn, proof, state)
-                .map_err(|_| "permission_attestation_unavailable")?;
+                .map_err(super::origin_proof::attestation_failure)?;
             permission_change::check_reattested_parent("before_release_attestation", parent,
                 fresh.permissions.as_ref(), fresh.thread_id != expected_thread)?;
             fresh.permissions

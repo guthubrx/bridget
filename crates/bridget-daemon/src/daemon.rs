@@ -5,6 +5,7 @@ mod native_child_requests;
 mod native_delegation;
 mod native_provider_catalogue220;
 mod dispatch_diagnostics;
+mod late_worker_prepares240;
 pub(crate) use native_delegation::catalogue_entries177;
 mod native_lineage;
 mod mobile_admin;
@@ -1131,6 +1132,7 @@ struct DaemonState {
     remote_result_reservation: Option<Receiver<Result<Option<crate::delegation::Task>, String>>>,
     worker_probe_connections: HashSet<String>,
     pending_worker_responses: HashMap<String, PendingWorkerResponse>,
+    late_worker_prepares: late_worker_prepares240::Cache,
     pending_workspace_repairs: HashMap<String,native_delegation::workspace_repair::Pending>,
     pending_origin_proofs: HashMap<String,origin_proof::Pending>,
     user_input_dispatch_after: Option<(i64,String)>,
@@ -5097,6 +5099,7 @@ impl DaemonState {
             remote_result_reservation: None,
             worker_probe_connections: HashSet::new(),
             pending_worker_responses: HashMap::new(),
+            late_worker_prepares: Default::default(),
             pending_workspace_repairs: HashMap::new(),
             pending_origin_proofs: HashMap::new(),
             user_input_dispatch_after: None,
@@ -18778,6 +18781,7 @@ fn remote_worker_has_command(
 
 fn remote_worker_disconnected(st: &mut DaemonState, conn_id: &str) {
     use bridget_transport::protocol::WorkerContactState;
+    st.late_worker_prepares.forget_connection(conn_id);
     for worker in st
         .remote_workers
         .values_mut()
@@ -19142,6 +19146,13 @@ fn handle_worker_message(
                 return refused(WorkerRefusal::CapabilityRequired);
             }
             let Some(pending) = st.pending_worker_responses.get(&response.correlation_id) else {
+                if st.late_worker_prepares.ignores(conn_id, &response) {
+                    eprintln!("bridget_late_prepare240 {}", serde_json::json!({
+                        "machine_id": response.worker.machine_id,
+                        "correlation_id": response.correlation_id,
+                        "event": "expired_prepare_response_ignored"}));
+                    return None;
+                }
                 // Une réponse de préparation tardive n'est pas une commande Fleet.
                 // Identité et forme sont déjà vérifiées ; aucun effet de tâche.
                 // PrepareDiagnosed exclut PrepareFenced. L'unique Prepare initial
@@ -19494,6 +19505,7 @@ fn remote_worker_roundtrip_with_send_deadline(
         (writer, request, conn_id)
     };
     let epoch = request.connection_epoch.clone();
+    let initial_prepare = late_worker_prepares240::initial_prepare(command, &request.request);
     let written = push_control_message_until(
         &writer,
         &DaemonToWrapper::WorkerRequest { request },
@@ -19507,7 +19519,11 @@ fn remote_worker_roundtrip_with_send_deadline(
         None
     };
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-    st.pending_worker_responses.remove(&correlation_id);
+    if let Some(pending) = st.pending_worker_responses.remove(&correlation_id) {
+        if written && initial_prepare {
+            st.late_worker_prepares.remember(correlation_id.clone(), pending);
+        }
+    }
     if !st
         .remote_workers
         .get(&worker.machine_id)
@@ -42619,6 +42635,60 @@ mod presence_tests {
     /// Sans la séparation : un wrapper vivant / shell mort garde `capacity_seen`
     /// frais et who / bridget-idle le comptent LIBRE. busy doit rester busy ;
     /// `capacity_seen` (capacité) ne bouge pas sous heartbeat seul.
+    #[test]
+    fn spec240_late_prepare_expiry_preserves_worker_without_creating_a_task() {
+        use bridget_transport::protocol::*;
+        let (mut st, config) = state_with_registered_agent("worker240-late-prepare");
+        let worker = WorkerIdentity { machine_id: "cartae".into(), worker_id: "worker-cartae".into(), provisioning_revision: 1 };
+        st.remote_workers.insert("cartae".into(), RemoteWorkerConnection { identity: worker.clone(), conn_id: "worker".into(),
+            epoch: "epoch".into(), capabilities: vec![], catalogues:HashMap::new(), catalogue_refresh_id:"epoch".into(),
+            catalogue_refresh_at:None, last_contact:Instant::now(), last_contact_at:unix_timestamp(), contact:WorkerContactState::Connected });
+        let (writer, mut reader) = control_socket("late240");
+        reader.get_ref().set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        st.connections.insert("worker".into(), writer);
+        st.registry = AgentRegistry::from_json(&serde_json::json!({"machines":{"cartae":{
+            "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+            "credential_fingerprint":"a".repeat(64),"allowed_agent_types":["codex"],"mappings":{}
+        }}}).to_string(), "/tmp/worker240-registry.json").unwrap();
+        let shared = Arc::new(Mutex::new(st));
+        let command = WorkerCommandIdentity { command_id:"prepare240".into(), task_id:"prepare240".into(), instance_id:String::new(), generation:0 };
+        let parent: ProviderPermissions = serde_json::from_value(serde_json::json!({"version":1,"source":"provider_turn",
+            "run_id":"run240","provider_session_id":"session240","provider_instance_id":"codex","revision":1,
+            "driver":"codex_app_server","cwd":"/source","runtime_mode":"full-access","interaction_mode":"default",
+            "provider_policy":{"kind":"codex","approval_policy":"never","sandbox_policy":{"type":"dangerFullAccess"}}})).unwrap();
+        let prepare = WorkerPrepare { machine_id:"cartae".into(), project_id:"project".into(), provisioning_revision:1,
+            mapping_revision:1, origin_host:"mac".into(), origin_cwd:"/source".into(), source_root:"/source".into(),
+            remote_root:"/remote".into(), source_root_identity:"/repo.git".into(), relative_cwd:".".into(), base_commit:None,
+            agent_type:"codex".into(), model:"model".into(), effort:None, service_tier:None, posture:Some(SpawnPosture::Discovery), parent, workspace:None };
+        let operation = WorkerRequestOperation::PrepareDiagnosed { prepare:Box::new(WorkerRequestOperation::Prepare {prepare}) };
+        assert!(late_worker_prepares240::initial_prepare(&command,&operation));
+        assert!(!late_worker_prepares240::initial_prepare(&command,&WorkerRequestOperation::Cancel { target:WorkerCancelScope::Command {} }));
+        let (allow_late, wait_late) = mpsc::sync_channel(1); let responder = shared.clone();
+        let server = std::thread::spawn(move || {
+            let mut line=String::new(); reader.read_line(&mut line).unwrap();
+            let DaemonToWrapper::WorkerRequest {request}=decode(line.trim()).unwrap() else {panic!("prepare attendu")};
+            wait_late.recv().unwrap();
+            let response=WorkerResponse {version:REMOTE_WORKER_VERSION,correlation_id:request.correlation_id,
+                connection_epoch:request.connection_epoch,worker:request.worker,command:request.command,
+                response:WorkerResponseOperation::Rejected {reason:WorkerRefusal::PrepareExpired}};
+            assert!(handle_worker_message(&responder,"worker",WrapperToDaemon::WorkerResponse {response:response.clone()}).is_none());
+            response
+        });
+        let outcome=remote_worker_roundtrip(&shared,&worker,&command,operation,Instant::now()+Duration::from_millis(30));
+        assert_eq!(outcome.unwrap_err(),WorkerRefusal::WorkerUnavailable);
+        assert!(shared.lock().unwrap().pending_worker_responses.is_empty());
+        allow_late.send(()).unwrap(); let response=server.join().unwrap();
+        assert!(shared.lock().unwrap().delegation_store.get("prepare240").unwrap().is_none());
+        let mut forged=response.clone(); forged.command.task_id="other".into();
+        assert!(matches!(handle_worker_message(&shared,"worker",WrapperToDaemon::WorkerResponse {response:forged}),
+            Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::CommandMismatch})));
+        let mut stale=response; stale.connection_epoch="old".into();
+        assert!(matches!(handle_worker_message(&shared,"worker",WrapperToDaemon::WorkerResponse {response:stale}),
+            Some(DaemonToWrapper::WorkerRejected {reason:WorkerRefusal::StaleConnection})));
+        assert!(handle_worker_message(&shared,"worker",WrapperToDaemon::Heartbeat).is_none());
+        let _=std::fs::remove_file(config.db_path);
+    }
+
     #[test]
     fn spec184_late_release_reply_preserves_worker_connection() {
         use bridget_transport::protocol::*;

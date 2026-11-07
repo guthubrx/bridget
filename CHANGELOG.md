@@ -6,6 +6,11 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.7 — 2026-11-07
+
+- Keep the remote channel when a known initial preparation replies after its wait expires. Unknown tuples and stale epochs remain rejected; late replies cannot create tasks.
+- Preserve capacity and connection failures during pre-release reattestation, and explain preparation timeouts without claiming a stopped server or changed permissions.
+
 ## 0.8.6 — 2026-11-07
 
 - Preserve specialist administration for devices paired with the exact legacy global administrator scope. Partial scopes, expired credentials and revoked devices remain denied.
