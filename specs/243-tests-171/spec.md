@@ -180,3 +180,10 @@ Sept composants chargés et vérifiés (cœur 4047099, mobile 4047167, worker
 Cartae 4047544, SYS 2665531, KS 4090508, worker Mac 76871, pont Mac 77105) ;
 coupure 1,92 s ; retour 243-tests-r1 écrit atomiquement sur les quatre hôtes.
 Tâches protégées, superviseur 2500061, sept processus T3 et registre Mac inchangés.
+
+Nettoyage r2 : worktrees 243-avertissements (Mac) et b243-avert-wt (Cartae)
+retirés, cache de test Linux 23 Gio retiré ; copie 242 retirée sur Cartae, SYS
+et KS (actif r2, retour r1), conservée sur le Mac car encore ouverte par des
+façades MCP de T3 (T3 non redémarré). Caches de compilation : Mac 1,5 Gio, SYS
+3,7 Gio après retrait de 18 Gio de debug du 5 novembre et de cinq caches de
+sessions closes (SYS 25 Gio libres au lieu de 1,8 Gio), Cartae < 1 Gio.
