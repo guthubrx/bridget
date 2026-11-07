@@ -123,3 +123,20 @@ KS : 85 Mo libres au départ. Retrait vérifié de deux copies Bridget sans
 processus, lien ni pointeur de retour (197-platform, 241-reliability-reader-r1,
 80 Mo) ; diagnostic 188 conservé. Le manque d'espace de KS reste distinct.
 Pas de publication publique : même version 0.8.9, aucun changement Android.
+
+## Git et entretien
+
+main 9c4a4fce poussé et aligné sur les quatre hôtes ; worktree et branche 243
+retirés après intégration (propres, aucun fichier ouvert). Copies de binaires
+sans usage (ni lien, retour, processus ou unité) retirées : Cartae 5 (200 Mo),
+SYS 12 (510 Mo), KS 1 (43 Mo, 145 Mo libres), Mac 2 (71 Mo). Conservés : actif
+243, retour 242, 183 du superviseur Cartae, 237/242 encore chargés par des
+façades MCP ouvertes sur le Mac, diagnostic 188, petits dossiers de liens.
+Sources, transferts et cache de test Linux (23 Gio sur Cartae) retirés.
+
+Entretien Cargo : `installed` refusé sur Mac et SYS, observation des processus
+incomplète (descripteurs révoqués, cwd illisibles) ; garde conservée. Les
+passes de test utilisaient le Python système 3.9, inférieur au 3.11 requis par
+l'entretien automatique : à lancer avec un Python ≥ 3.11. Cache Mac ramené de
+28 à 13 Gio par retrait des seuls fichiers incrémentaux de test, sans processus
+dans ce cache ; il reste au-dessus du budget de 10 Gio.
