@@ -25,7 +25,12 @@ La fiche révision 3, le mandat complet, le rôle transversal et la présence
 observée sont visibles. Preuves natives du journal aux séquences 891 et 895.
 Le premier appel de ce vérificateur omettait version=1 ; son refus -32602
 était une erreur de paramètres, corrigée une fois. Aucun refus de droits.
-La demande distincte au contexte Claude Revue reste remise dans son fil occupé.
+Le contexte Claude Revue a ensuite confirmé les mêmes deux lectures sans
+refus : search retourne un résultat, get retourne la fiche révision 3 et le
+même caller_projects. Rôle et fiche transversaux, mandat et présence
+connected/observed/monordinateur constatés. Message reçu
+mcp-64071-6aeebbe0-1 ; aucun auto_delegate ni rejeu. La qualification
+interprojets est donc acquise depuis les deux moteurs existants.
 
 ## Défaut Android et correction livrée
 

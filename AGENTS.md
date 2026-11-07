@@ -116,7 +116,7 @@ Anciennes associations administratives globales complètes reconnues avant le
 bornage chronologique ; nouvelles/partielles refusées, preuve humaine conservée.
 Accord Android questiona80e8ab5 appliqué nativement, sans nouvelle question :
 grant7a6df19e/révision2, mandat puis rôle transversaux, fiche révision3.
-Search/get réussis depuis Codex Revue/caller auto-5c29175617db400dab394fa74bc97948 ;
+Search/get réussis depuis Codex et Claude Revue/caller auto-5c29175617db400dab394fa74bc97948 ;
 aucun nouvel accès métier, auto_start/durable false. Aucun rejeu métier.
 Sept composants/SHA vérifiés, coupure1,97s ; retour237 compatible/pointeurs
 natifs quatre hôtes, registreMac et superviseurCartae2500061 conservés.
