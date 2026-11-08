@@ -39,6 +39,13 @@ class Sentinel244(unittest.TestCase):
         self.task["guard_released"]=False;self.write()
         self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"pending")
 
+    def test_provider_usage_limit_is_capacity_not_a_product_failure(self):
+        self.task.update(state="failed",error="usage_limit",acknowledged_at=123,guarded=False,cleanup_done=True)
+        self.write()
+        result=sentinel.observe(self.db,self.case,"parent")
+        self.assertEqual(result["status"],"deferred")
+        self.assertEqual(result["code"],"usage_limit")
+
     def test_wrong_owner_machine_or_workspace_never_passes(self):
         self.task.update(acknowledged_at=123,guarded=False,cleanup_done=True)
         self.write()

@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 TOKEN = "SENTINELLE244OK"
 COMMUNICATION_TOKEN = "COMMUNICATION244OK"
 TERMINAL = {"result_available", "failed", "cancelled"}
-CAPACITY = {"resource_saturated", "provider_quota_exhausted", "referent_paused", "delegations_halted"}
+CAPACITY = {"resource_saturated", "provider_quota_exhausted", "referent_paused", "delegations_halted", "usage_limit"}
 
 
 def private(path, limit=1024 * 1024):
@@ -357,7 +357,7 @@ def observe(connection, case, parent):
             passed=passed and all(communication.values())
         closed=bool(task.get("cleanup_done") and (not task.get("guarded") or task.get("guard_released")))
         return dict(case, task_id=task["task_id"], state=task["state"], closed=closed,
-                    status="passed" if passed else "failed" if task["state"] in TERMINAL and closed else "pending",
+                    status="passed" if passed else ("deferred" if (task.get("error") or "").split(":")[0] in CAPACITY else "failed") if task["state"] in TERMINAL and closed else "pending",
                     communication_evidence=communication,
                     code=task.get("error") or ("sentinel_communication_unconfirmed" if closed and communication and not all(communication.values()) else None))
     receipt = connection.execute("SELECT state,refusal_code FROM auto_admission_receipts WHERE owner=? AND request_id=?",
@@ -392,8 +392,8 @@ def prompt(fixture, selected, sha):
             "Ferme ensuite sa garde par bridget_task_cancel si elle reste ouverte, puis vérifie son arrêt. "
             "Conserve toute issue inconnue : aucune nouvelle clé, autre cible ou mission de remplacement. "
             "Continue les demandes indépendantes après un refus. Ne lance aucun shell, build ou service. "
-            "Rapporte les task_id et les codes réels. Demandes : " + json.dumps(requests, ensure_ascii=False)
-            + " Contrôles de communication : " + json.dumps([c for c in selected if c.get("communication")],ensure_ascii=False))
+            "Rapporte les task_id et les codes réels. Demandes : " + json.dumps(requests, ensure_ascii=False,separators=(",",":"))
+            + " Contrôles de communication : " + json.dumps([{k:c[k] for k in ("request_id","direct_id","direct_issued_at","thread_create","thread_post","thread_close")} for c in selected if c.get("communication")],ensure_ascii=False,separators=(",",":")))
 
 
 def run(binary, state, reason):
@@ -428,7 +428,9 @@ def run(binary, state, reason):
     if manifest is None:
         catalogue = json.loads(checked(binary, ["delegate", "--catalogue", "--json"]))
         run_id = uuid.uuid4().hex[:16]
-        root = state / "sentinel-fixtures"
+        root = Path(config.get("fixture_root",str(Path.home()/".local/share/bridget-sentinel/fixtures")))
+        if not root.is_absolute() or root.resolve() != root or root.is_relative_to(state):
+            raise ValueError("sentinel_source_invalid")
         root.mkdir(mode=0o700, exist_ok=True)
         new = root / run_id
         captured(["git","init","--initial-branch=main",str(new)]).check_returncode()

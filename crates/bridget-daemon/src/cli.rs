@@ -38,7 +38,8 @@ fn launch_agent_wrapper(binary: &str, agent_type: &str, args: &[String]) -> ! {
 }
 
 // Constantes de validation (H-001)
-const MAX_MESSAGE_LENGTH: usize = 10000;
+// Corps compatible avec un argument natif Linux, sous la trame JSONL16Mio.
+const MAX_MESSAGE_LENGTH: usize = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IdempotentSendOptions {
@@ -56,7 +57,7 @@ const RUNTIME_REPLY_TIMEOUT_SECS: u64 = 2;
 fn validate_message_body(body: &str) -> Result<(), String> {
     if body.len() > MAX_MESSAGE_LENGTH {
         return Err(format!(
-            "message trop long (max {} caractères)",
+            "Message de plus de {} octets : joindre les fichiers de détail et garder le texte utile dans le message.",
             MAX_MESSAGE_LENGTH
         ));
     }
@@ -12718,5 +12719,15 @@ mod table225_parser_tests {
         assert!(parse_ledger_args(&table_args(&["ledger","--limit","8","--table"])).is_ok());
         assert!(parse_events_args(&table_args(&["events","missed","--table"])).is_ok());
         assert!(validate_zero_arity_command("status",&table_args(&["status","--table"])).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod message244_tests {
+    #[test]
+    fn spec244_message_de_coordination_depasse_dix_mille_sans_refus_artificiel() {
+        assert!(super::validate_message_body(&"é".repeat(10_000)).is_ok());
+        assert!(super::validate_message_body("texte\0interdit").is_err());
+        assert!(super::validate_message_body(&"x".repeat(65_537)).unwrap_err().contains("octets"));
     }
 }

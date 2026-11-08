@@ -13,6 +13,7 @@ fn public_code(value: &Value) -> Value {
     }
     match code {
         "resource_saturated"
+        | "usage_limit"
         | "provider_quota_exhausted"
         | "referent_paused"
         | "delegations_halted"
