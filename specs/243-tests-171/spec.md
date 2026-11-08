@@ -413,3 +413,37 @@ r4 (21a16236) et de main. Le binaire chargé sur Cartae
 Cartae depuis 947d1dc1 avec `scripts/build.py` : 1 passed, marqueur
 `SPEC221_FOREIGN_UID_REAP_OK`. Elle montre qu'un descendant d'un autre UID refuse
 le signal, puis est récolté sans zombie restant. Dossier temporaire retiré.
+
+## Correctif r5 (8 novembre 2026) : qualification Codex et refus de périmètre
+
+Constat : depuis la mise à jour Codex 0.163 → 0.166 du 1er novembre sur
+Cartae, toute mission Codex y était refusée avec `program_upgrade_check_pending`.
+L'observateur lançait la qualification par `bridget managed-bootstrap` avec
+`HOME` = dossier de travail `.../catalogue/compat-<32 hex>` (94 caractères).
+Le bootstrap préparait le namespace Bridget sous ce HOME ; la socket dépassait
+la limite système et il sortait en code 2 (« bridget socket trop longue »),
+sous stderr fermé. Aucune preuve n'était écrite : `program_unavailable` au
+catalogue, `program_upgrade_check_pending` à l'admission, sans fin. Observé par
+strace (exit_group(2)) puis reproduit à la main avec un HOME de même longueur.
+
+Correction (5c731211) : `managed-bootstrap` ne prépare plus de namespace ; il
+transmet ses canaux puis exec son programme, et le wrapper lancé prépare
+toujours le sien. Test `spec243_bootstrap_gere_ne_prepare_pas_de_namespace`.
+
+Signalement « refonte monde » : un `cwd` hors du dossier attesté du parent était
+classé `origin_request_invalid:cwd:invalid_envelope`. Il rend désormais
+`cwd_outside_parent_project` et son guidage existant. Test
+`spec243_cwd_hors_du_parent_est_un_refus_de_perimetre`.
+
+Tests ciblés : Mac 45 PASS, Linux 46 PASS. Build r5 sans avertissement : Linux
+86a3855c…, Mac signé 5515503a…. Activé sur sept composants, coupure 2,31 s,
+retour r4 sur quatre hôtes, tâches protégées et T3 inchangés. Après activation :
+preuve Cartae écrite à 06:31:41 UTC (compatible, vérifiée), et le motif
+`program_upgrade_check_pending` a disparu de l'admission.
+
+Limite constatée : une délégation distante depuis cette session Claude du Mac
+reste refusée (`permission_mapping_unavailable`, site projection). Ses
+réglages Claude déclarent des crochets que Cartae ne reproduit pas ; seul
+opus2D dispose d'un profil gardé, figé le 17 octobre. Protection conservée,
+aucun droit élargi. L'essai réel de récolte root n'a donc pas pu être lancé
+depuis ce parent.
