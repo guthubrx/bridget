@@ -1,0 +1,11 @@
+[Unit]
+Description=Vérifier quotidiennement Bridget et les changements de programmes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=bridget-sentinel.service
+
+[Install]
+WantedBy=timers.target

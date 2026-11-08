@@ -20219,6 +20219,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::Heartbeat
                 // Sonde d'identité : lecture seule, aucune écriture durable. Le
                 // greffe en a besoin pour savoir SUR QUELLE MACHINE il écrirait.
+                | WrapperToDaemon::SentinelStatusRead
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ChildRequest { .. }
@@ -20527,6 +20528,7 @@ fn handle_wrapper_message_with_peer(
                 | WrapperToDaemon::ProjectRoundDispatch { .. }
                 // Sonde d'identité : lecture seule, aucune écriture durable, et
                 // c'est le rôle Client qui l'emprunte (`daemon_identity`).
+                | WrapperToDaemon::SentinelStatusRead
                 | WrapperToDaemon::DaemonIdentityRequest => None,
                 WrapperToDaemon::RoleHandshake { .. }
                 | WrapperToDaemon::ChildRequest { .. }
@@ -24214,6 +24216,7 @@ fn handle_wrapper_message_with_peer(
                 instance_id: st.instance_id.clone(),
                 features: {
                     let mut features=vec![
+                    "sentinel_status_v1".to_string(),
                     "native_reply_outbox_v1".to_string(),
                     "wait_v1".to_string(),
                     "user_input_v1".to_string(),
@@ -24252,6 +24255,11 @@ fn handle_wrapper_message_with_peer(
                     features
                 },
             })
+        }
+
+        WrapperToDaemon::SentinelStatusRead => {
+            let path={state.lock().unwrap_or_else(|e|e.into_inner()).db_path.clone()};
+            Some(DaemonToWrapper::SentinelStatus { report:crate::sentinel244::status(path.parent().unwrap()) })
         }
 
         WrapperToDaemon::ListAgents => {

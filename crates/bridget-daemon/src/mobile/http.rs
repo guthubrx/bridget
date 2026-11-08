@@ -585,6 +585,13 @@ fn execute(
     if method == Method::GET && path == "/v1/session" {
         return result(json!(device));
     }
+    if method == Method::GET && path == "/v1/sentinel" {
+        if !device.scope.permits_federation(Operation::Read) { return failure("forbidden_scope"); }
+        drop(store);
+        return match crate::sentinel244::read_remote(&gateway.socket) {
+            Ok(report)=>result(report),Err(_)=>failure("endpoint_unavailable"),
+        };
+    }
     if path == "/v1/notifications" && matches!(method, Method::GET | Method::PUT) {
         if !device.scope.permits_federation(Operation::Read)
             || !device.scope.permits_federation(Operation::TaskRead)

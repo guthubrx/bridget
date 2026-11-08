@@ -64,6 +64,7 @@ pub mod remote_worker;
 pub mod reprise;
 pub mod runtime;
 mod service_limits;
+pub(crate) mod sentinel244;
 pub mod store;
 pub(crate) mod agent_tracking;
 pub mod store_schema;

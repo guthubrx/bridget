@@ -1,0 +1,11 @@
+[Unit]
+Description=Contrôles natifs de Bridget sans client externe
+After=bridget-core.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/bridget sentinel tick
+TimeoutStartSec=7500
+KillMode=process
+SendSIGKILL=no
+UMask=0077

@@ -5798,6 +5798,7 @@ pub enum WrapperToDaemon {
     },
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
+    SentinelStatusRead,
     JournalReady {
         /// Lecture de reçu seulement ; un ancien daemon ignore ce champ.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -6837,6 +6838,7 @@ pub enum DaemonToWrapper {
     },
     /// Recherche d'une preuve déjà persistée. Ne donne jamais l'ordre
     /// d'injecter, ni celui de transformer Seen en Acked.
+    SentinelStatus { report: serde_json::Value },
     DeliveryReceiptQuery {
         delivery_id: String,
         recipient_instance_id: String,

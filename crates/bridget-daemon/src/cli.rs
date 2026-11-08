@@ -389,6 +389,23 @@ fn run_with_args(args: Vec<String>) {
         "agents" => cmd_agents(&args[2..]),
         "discover" => cmd_discover(),
         "status" => cmd_status(),
+        "sentinel" => {
+            match args.get(2).map(String::as_str) {
+                Some("status") if args.len()==3 => {
+                    match crate::sentinel244::read_remote(&socket_path()) {
+                        Ok(report)=>println!("{report}"),
+                        other=>{eprintln!("sentinel status indisponible : {other:?}");crate::cli_table::exit(1);}
+                    }
+                }
+                Some(action @ ("run"|"tick"|"activation")) if args.len()==3 => {
+                    let config=DaemonConfig::default();
+                    let result=std::env::current_exe().map_err(|e|e.to_string()).and_then(|binary|
+                        crate::sentinel244::run(&binary,config.db_path.parent().unwrap(),if action=="run"{"manual"}else{action}));
+                    match result {Ok(code)=>crate::cli_table::exit(code),Err(e)=>{eprintln!("sentinel : {e}");crate::cli_table::exit(1);}}
+                }
+                _=>exit_argument_error("sentinel : run | status | tick | activation"),
+            }
+        }
         "ledger" => cmd_ledger(&args[2..]),
         "reprise" => cmd_reprise(&args[2..]),
         "reaper" => cmd_reaper(&args[2..]),
