@@ -376,3 +376,13 @@ après la fin de ces processus, avec une nouvelle vérification au moment du ret
 
 Chaque gardien journalise son issue puis se retire. En cas d'écart, il conserve
 l'élément et note le motif dans son journal.
+
+Issue Cartae (8 novembre 2026, 05:59 UTC) : arrêt de 2500061 confirmé par
+l'utilisateur. Le wrapper 183 n'avait plus ni connexion ni base ouverte, et son
+dernier journal datait du 28 octobre 13:16. Après SIGTERM, son enfant Codex
+s'est arrêté, mais le wrapper a gardé le signal sans terminer pendant plus d'une
+minute. SIGHUP, non géré, l'a arrêté ; aucun SIGKILL. Le gardien a ensuite retiré
+le worktree 1cc44f4d et la branche `bridget198-worker-start`, puis s'est
+désinstallé. L'archive `archive/243-1cc44f4d-brouillon198` (bfe9f01a) reste
+conservée. La boucle de l'image 183 qui ignorait la demande d'arrêt n'est pas
+identifiée. Le lien Mac 242 attend toujours le redémarrage de T3.
