@@ -289,7 +289,7 @@ fn spec101_real_daemon_journal_share_collision_and_restart() {
         });
         peer.barrier();
     }
-    source.send(WrapperToDaemon::JournalReady);
+    source.send(WrapperToDaemon::JournalReady { receipt_probe: false });
     source.barrier();
     let types = owner.events(Request::Types {});
     assert_eq!(types["events"][0]["available"], true);

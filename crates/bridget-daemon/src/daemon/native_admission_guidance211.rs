@@ -79,6 +79,34 @@ pub(super) fn refusal(code:&str)->Option<Value>{
             "Utilisez l’identifiant réel renvoyé par l’admission, depuis son parent propriétaire.",
             "Ce parent ne peut pas lire cette tâche avec cet identifiant. Ce refus ne distingue pas une tâche absente d’une tâche hors de ses droits. Vérifier l’identifiant et la session propriétaire ; ne pas utiliser un identifiant fictif et ne pas demander à un autre agent de contourner la propriété. Ne pas relancer une mission pour tester la lecture.",
             Some("task_id")),
+        "agent_type_unknown"=>("Faire vérifier le profil de programme enregistré pour cette cible.",
+            "Le type choisi n’existe pas dans le registre lu. Comparer le reçu, la machine et les profils déclarés avec le responsable Bridget ; ne pas inventer un type ou choisir un autre moteur pour contourner le refus.",None),
+        "auto_admission_invalid" | "invalid_request"=>("Vérifier les champs de cette demande avec le schéma natif.",
+            "Conserver l’enveloppe et le reçu. Comparer ses champs et leurs types au schéma de bridget_auto_delegate ; consulter detail.field et detail.cause s’ils sont fournis. Si le champ fautif n’est pas nommé, transmettre le reçu au mainteneur Bridget pour corriger ce diagnostic, sans multiplier les essais.",None),
+        "child_requests_reviewer_unsupported"=>("Conserver child_requests=deny pour une revue indépendante.",
+            "Le profil de revue choisi ne prend pas en charge le transfert des questions de l’enfant. Ne pas changer son rôle ou ses droits. Vérifier l’absence d’admission avant de corriger ce seul paramètre ; garder toute mission déjà connue.",Some("child_requests")),
+        "cwd_unavailable"=>("Vérifier le dossier cwd sur la machine du parent.",
+            "Le chemin source n’a pas pu être ouvert comme dossier. Vérifier son existence, sa lisibilité et sa forme absolue sur la machine appelante ; le dossier de destination ne le remplace pas. Conserver tous les fichiers et faire rétablir l’accès existant si nécessaire.",Some("cwd")),
+        "delegations_halted"=>("Attendre la levée de l’arrêt des nouvelles délégations par son propriétaire humain.",
+            "Lire l’état natif des contrôles. L’arrêt concerne les nouvelles admissions ; consulter et conserver les missions déjà admises. Un agent ne lève pas cet arrêt et ne le contourne pas avec une autre clé ou une autre machine.",None),
+        "referent_paused"=>("Attendre la reprise décidée par le propriétaire humain.",
+            "Lire le contrôle de pause et conserver cette demande. Ne pas lever une pause humaine ni fabriquer une nouvelle mission pour la contourner. Les lectures et les travaux hors de cette pause suivent leur propre état.",None),
+        "effort_unavailable" | "model_unavailable"=>("Comparer le modèle et le niveau demandés au catalogue de cette connexion.",
+            "Lire fleet.options pour la machine et le moteur imposés. Faire qualifier une observation manquante ; un modèle absent n’est pas une preuve de déconnexion du compte. Un choix humain explicite reste inchangé ; demander son choix si aucune option autorisée ne le satisfait.",Some("model/effort")),
+        "expected_base_commit_outside_git" | "workspace_git_required"=>("Utiliser comme cwd le dépôt source contenant le commit demandé.",
+            "La stratégie ou le SHA demandé exige Git, mais ce dossier n’a pas été reconnu comme dépôt source. Vérifier git rev-parse --show-toplevel dans cwd sur la machine du parent. Ne pas inventer un dépôt, changer le SHA ou déplacer un dossier pour passer le contrôle. Un travail réellement hors Git exige de confirmer ce besoin avant de corriger ses paramètres.",Some("cwd")),
+        "keep_alive_out_of_range"=>("Donner keep_alive_secs entre60et7200secondes, ou omettre ce champ.",
+            "Ce paramètre borne la disponibilité conservée de l’enfant ; il ne règle ni l’attente d’un appel ni la durée de sa mission. Corriger le champ seulement après lecture du sort de l’admission ; ne pas remplacer une tâche connue ou d’issue inconnue.",Some("keep_alive_secs")),
+        "provider_quota_exhausted"=>("Lire la fenêtre de quota et le retour annoncés pour le compte choisi.",
+            "Conserver la mission et son reçu. Attendre le retour attesté si une heure est connue ; sinon faire préciser cette observation. Ne pas transposer le quota d’un autre compte, changer la connexion ou lancer une mission de remplacement sans choix autorisé.",None),
+        "retention_saturated" | "task_limit"=>("Faire vérifier les missions et les conservations qui occupent les places de cette admission.",
+            "Lire les tâches et leurs états de clôture avec le responsable Bridget. Libérer seulement les conservations réellement terminées et vérifiées par le parcours natif. Ne pas supprimer de fichiers, de reçus ou de travaux vivants pour récupérer une place ; signaler un plafond sans lien avec la capacité réelle.",None),
+        "workspace_path_unsafe"=>("Faire vérifier le chemin de travail demandé et son identité physique.",
+            "Comparer le chemin absolu, ses liens, son propriétaire et les racines protégées avec le placement approuvé. Conserver le dossier existant ; ne pas le remplacer ou modifier ses permissions pour passer le contrôle. Toute nouvelle destination doit être confirmée si elle dépasse le mandat.",Some("workspace")),
+        "workspace_repo_unsupported"=>("Faire qualifier les options Git particulières du dépôt source.",
+            "Le dépôt utilise une forme que la préparation n’a pas confirmée : filtre, inclusion, clone partiel ou worktreeConfig selon le détail reçu. Transmettre ce détail et le SHA au mainteneur Bridget. Ne pas réécrire la configuration Git, recopier le projet ou changer de stratégie sans vérifier les travaux conservés.",Some("workspace")),
+        "workspace_requires_development"=>("Faire confirmer la posture nécessaire à ce dossier de travail.",
+            "La stratégie demandée ne correspond pas à la posture effective admise. Une revue en lecture conserve discovery ; un développement exige l’autorisation déjà accordée au parent. Ne pas augmenter les droits d’un enfant pour contourner le refus. Vérifier les paramètres puis demander seulement la décision manquante si nécessaire.",Some("posture")),
         _=>return None
     };
     Some(json!({"status":"refused","code":code,
@@ -284,6 +312,20 @@ pub(super) fn worker_start_action(error: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod exhaustive244_tests {
     use super::*;
+    use std::collections::BTreeSet;
+    #[test]
+    fn spec244_refus_terminaux_admission_sans_repli_opaque() {
+        let source=include_str!("native_delegation.rs");
+        let function=source.split("fn auto_terminal_refusal_code(").nth(1).unwrap().split("fn close_auto_admission_error(").next().unwrap();
+        let codes= function.split('"').skip(1).step_by(2).filter(|s|s.contains('_'))
+            .map(|s|s.split(':').next().unwrap()).collect::<BTreeSet<_>>();
+        let missing=codes.iter().filter(|code| {
+            let r=failure(code);
+            r["message"].as_str().is_none_or(|m|m.contains("sans fournir de diagnostic"))
+                || r["detail"]["recovery"].as_str().is_none_or(|m|m.len()<40)
+        }).copied().collect::<Vec<_>>();
+        assert!(missing.is_empty(),"guidages d’admission absents : {missing:?}");
+    }
     #[test]
     fn spec244_chaque_refus_worker_a_une_action() {
         let source = include_str!("../../../bridget-transport/src/protocol.rs");

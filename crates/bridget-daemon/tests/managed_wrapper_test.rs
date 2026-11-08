@@ -194,7 +194,7 @@ done
             reader.read_line(&mut line).unwrap();
             if matches!(
                 decode(line.trim_end()).unwrap(),
-                WrapperToDaemon::JournalReady
+                WrapperToDaemon::JournalReady { .. }
             ) {
                 break;
             }
@@ -340,7 +340,7 @@ while IFS= read -r line; do :; done
             reader.read_line(&mut line).unwrap();
             if matches!(
                 decode(line.trim_end()).unwrap(),
-                WrapperToDaemon::JournalReady
+                WrapperToDaemon::JournalReady { .. }
             ) {
                 writeln!(writer, "{}", encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
                 writer.flush().unwrap();
@@ -689,7 +689,7 @@ while IFS= read -r line; do :; done
             reader.read_line(&mut line).unwrap();
             if matches!(
                 decode::<WrapperToDaemon>(line.trim_end()).unwrap(),
-                WrapperToDaemon::JournalReady
+                WrapperToDaemon::JournalReady { .. }
             ) {
                 break;
             }

@@ -1902,6 +1902,7 @@ struct LinkWorker {
     detail_page_cap: Option<u32>,
     turn_wait: Duration,
     queue: VecDeque<(DaemonToWrapper, Instant)>,
+    overflow: crate::delivery_spool244::DeliverySpool,
     requests: BTreeMap<String, RequestInfo>,
     daemon_alive: Arc<AtomicBool>,
     cancelled: Arc<Mutex<BTreeMap<String, Instant>>>,
@@ -1983,7 +1984,7 @@ impl LinkWorker {
             .map_err(|e| format!("journal du fil : {e}"))?,
         );
         let writer = Arc::new(Mutex::new(Some(writer)));
-        send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
+        send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
         // Nom humain = titre du fil, pour que `who` et `send --to` parlent
         // la langue de t3code ; un refus (doublon) garde le nom attribué.
         let title = display_title(&summary.title);
@@ -1995,6 +1996,8 @@ impl LinkWorker {
             Arc::new(move |message| send_wrapper_message(&relay_writer, message)),
         );
         let state_path = paths.thread_state(&summary.id);
+        let overflow = crate::delivery_spool244::DeliverySpool::open(
+            &state_path.with_extension(format!("inbox-{instance_id}.sqlite")), &instance_id)?;
         let state = paths.load_thread_state(&summary.id);
         let mut worker = Self {
             thread_id: summary.id.clone(),
@@ -2017,6 +2020,7 @@ impl LinkWorker {
             detail_page_cap: None,
             turn_wait: turn_wait(),
             queue: VecDeque::new(),
+            overflow,
             requests: BTreeMap::new(),
             daemon_alive: Arc::new(AtomicBool::new(true)),
             cancelled: Arc::new(Mutex::new(BTreeMap::new())),
@@ -2084,6 +2088,7 @@ impl LinkWorker {
                 self.publish_drain_state(false);
                 break;
             }
+            self.refill_deliveries();
             if !self.queue.is_empty() && Instant::now() >= self.next_dispatch_check {
                 self.next_dispatch_check = Instant::now() + Duration::from_millis(500);
                 self.drive_queue(&inbox);
@@ -2190,6 +2195,7 @@ impl LinkWorker {
             && !self.last_key.is_empty()
             && self.awaiting_snapshot_change.is_none()
             && self.queue.is_empty()
+            && !self.overflow.has_pending()
             && self.journal_inflight.is_empty()
             && self.journal_caught_up
             && !self.journal_dirty
@@ -2257,6 +2263,12 @@ impl LinkWorker {
 
     fn handle_frame(&mut self, frame: DaemonToWrapper) {
         match frame {
+            DaemonToWrapper::DeliveryReceiptQuery { delivery_id,recipient_instance_id,delivery_generation } => {
+                if let Some(report)=self.tracker.as_ref().and_then(|tracker|
+                    tracker.receipt_report(delivery_id,&recipient_instance_id,delivery_generation,unix_now() as i64)) {
+                    send_wrapper_message(&self.writer,report);
+                }
+            }
             // Verdict de l'annonce propriétaire, pas une livraison ni une
             // réponse de mission. Aucun texte n'est injecté dans le fil.
             DaemonToWrapper::ProjectContextResult { .. } => {}
@@ -2273,12 +2285,7 @@ impl LinkWorker {
 
             delivery @ (DaemonToWrapper::Deliver { .. }
             | DaemonToWrapper::DeliverIdempotent { .. }) => {
-                if self.queue.len() >= QUEUE_BOUND
-                    && let Some((oldest, _)) = self.queue.pop_front()
-                {
-                    self.report_discard(&oldest, Discard::Saturated);
-                }
-                self.queue.push_back((delivery, Instant::now()));
+                self.enqueue_delivery(delivery);
                 *self
                     .drained_key
                     .lock()
@@ -2291,6 +2298,10 @@ impl LinkWorker {
                 self.request_status();
             }
             DaemonToWrapper::CancelDelivery { id, reason, .. } => {
+                if let Err(error) = self.overflow.cancel(&id) {
+                    error!("annulation en file durable impossible : {error} ; aucune nouvelle injection");
+                    self.daemon_alive.store(false,Ordering::SeqCst);
+                }
                 self.cancelled
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -2414,6 +2425,51 @@ impl LinkWorker {
                 warn!("daemon a demandé la déconnexion du fil {}", self.thread_id);
             }
             _ => {}
+        }
+    }
+
+    fn enqueue_delivery(&mut self, delivery: DaemonToWrapper) {
+        if let DaemonToWrapper::DeliverIdempotent { delivery_id, .. } = &delivery {
+            if let Some((queued, _)) = self.queue.iter().find(|(frame,_)|
+                matches!(frame,DaemonToWrapper::DeliverIdempotent{delivery_id:id,..} if id==delivery_id)) {
+                if serde_json::to_vec(queued).ok() != serde_json::to_vec(&delivery).ok() {
+                    error!("remise {delivery_id} divergente : lien fermé, copie maître conservée");
+                    self.daemon_alive.store(false, Ordering::SeqCst);
+                }
+                return;
+            }
+            if self.queue.len() >= QUEUE_BOUND || self.overflow.has_pending() {
+                if let Err(error) = self.overflow.defer(&delivery) {
+                    error!("file durable indisponible : {error} ; copie maître conservée, reprise au raccordement");
+                    self.daemon_alive.store(false, Ordering::SeqCst);
+                }
+                return;
+            }
+        }
+        if self.queue.len() >= QUEUE_BOUND {
+            // Une trame historique n'a pas de copie durable. Elle ne peut
+            // évincer une remise idempotente conservée pour le destinataire.
+            if matches!(self.queue.front(),Some((DaemonToWrapper::DeliverIdempotent{..},_))) {
+                self.report_discard(&delivery, Discard::Saturated);
+                return;
+            }
+            if let Some((oldest,_))=self.queue.pop_front() { self.report_discard(&oldest,Discard::Saturated); }
+        }
+        self.queue.push_back((delivery, Instant::now()));
+    }
+
+    fn refill_deliveries(&mut self) {
+        if !self.queue.is_empty() { return; }
+        while self.queue.len() < QUEUE_BOUND {
+            match self.overflow.next() {
+                Ok(Some(frame)) => self.queue.push_back((frame,Instant::now())),
+                Ok(None) => break,
+                Err(error) => {
+                    error!("relecture de file impossible : {error} ; aucune injection, copie maître conservée");
+                    self.daemon_alive.store(false,Ordering::SeqCst);
+                    break;
+                }
+            }
         }
     }
 
@@ -2617,6 +2673,7 @@ impl LinkWorker {
     }
 
     fn drive_queue(&mut self, inbox: &Receiver<LinkEvent>) {
+        self.refill_deliveries();
         let now = unix_now();
         self.cancelled
             .lock()
@@ -6013,10 +6070,9 @@ mod tests {
         })
     }
 
-    /// Une remise poussée hors de la file par saturation n'est plus « en vol » :
-    /// la saga est close et l'expéditeur d'une demande suivie est prévenu.
+    /// La saturation historique ne doit pas évincer une remise durable.
     #[test]
-    fn spec113_saturation_signale_la_remise_ecartee_au_daemon() {
+    fn spec244_saturation_ne_clot_pas_la_remise_idempotente() {
         let (mut worker, peer) = worker099();
         worker.handle_frame(idempotent113("premiere"));
         for index in 0..QUEUE_BOUND {
@@ -6029,11 +6085,35 @@ mod tests {
         }
         assert_eq!(worker.queue.len(), QUEUE_BOUND);
         let frames = frames113(peer);
-        assert!(saga_closed113(&frames, "d-premiere"), "saga close");
-        assert!(
-            rejection113(&frames, "premiere").is_some_and(|reason| reason.contains("saturée")),
-            "expéditeur prévenu avec le motif"
-        );
+        assert!(!saga_closed113(&frames, "d-premiere"));
+        assert!(rejection113(&frames,"premiere").is_none());
+        assert_eq!(delivery_message(&worker.queue[0].0).id,"premiere");
+    }
+
+    #[test]
+    fn spec244_saturation_passe_sur_disque_et_reprend_dans_l_ordre() {
+        let (mut worker,peer)=worker099();
+        let mut frames=Vec::new();
+        for i in 0..200 {
+            worker.handle_frame(idempotent113(&format!("m-{i}")));
+            frames.extend(frames113(peer.try_clone().unwrap()));
+        }
+        worker.handle_frame(idempotent113("m-199"));
+        assert_eq!(worker.queue.len(),QUEUE_BOUND);
+        assert!(worker.overflow.has_pending());
+        frames.extend(frames113(peer));
+        assert!(frames.iter().all(|f|!matches!(f,WrapperToDaemon::DeliveryIndeterminate{..}|WrapperToDaemon::DeliveryRejected{..})));
+        worker.queue.clear();
+        worker.refill_deliveries();
+        assert_eq!(delivery_message(&worker.queue[0].0).id,format!("m-{QUEUE_BOUND}"));
+        worker.handle_frame(DaemonToWrapper::CancelDelivery{id:"m-199".into(),reason:"test".into(),interrupt_active:None});
+        let mut count=QUEUE_BOUND*2;
+        while worker.overflow.has_pending() {
+            worker.queue.clear(); worker.refill_deliveries();
+            for (frame,_) in &worker.queue { assert_ne!(delivery_message(frame).id,"m-199"); }
+            count+=worker.queue.len();
+        }
+        assert_eq!(count,199);
     }
 
     /// Une échéance passée avant démarrage vaut refus explicite : le motif

@@ -8,7 +8,7 @@ use bridget_transport::provider_catalogue::*;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -591,21 +591,80 @@ impl Rpc {
 
 /// Même propriétaire et même marqueur que la sonde métadonnée ; jamais deux
 /// processus simultanés, ni libération du créneau après un arrêt incertain.
+struct BoundedCheckStderr {
+    stop: Arc<AtomicBool>,
+    reader: std::thread::JoinHandle<Vec<u8>>,
+}
+impl BoundedCheckStderr {
+    fn open() -> std::io::Result<(Self, std::process::Stdio)> {
+        let (mut input, output) = UnixStream::pair()?;
+        input.set_read_timeout(Some(Duration::from_millis(20)))?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let reader = std::thread::Builder::new().name("compat-stderr".into()).spawn(move || {
+            let mut excerpt = Vec::with_capacity(512);
+            let mut buffer = [0u8; 8192];
+            loop {
+                if done.load(Ordering::Acquire) && excerpt.len() == 512 { break; }
+                match input.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let keep = n.min(512 - excerpt.len());
+                        excerpt.extend_from_slice(&buffer[..keep]);
+                    }
+                    Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                        if done.load(Ordering::Acquire) { break; }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            excerpt
+        })?;
+        use std::os::fd::OwnedFd;
+        Ok((Self { stop, reader }, std::process::Stdio::from(OwnedFd::from(output))))
+    }
+    fn finish(self) -> Vec<u8> {
+        self.stop.store(true, Ordering::Release);
+        self.reader.join().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod bounded_stderr244_tests {
+    use super::*;
+    #[test]
+    fn spec244_stderr_bruyant_est_draine_sans_fichier_et_sans_croissance() {
+        let (capture, stderr) = BoundedCheckStderr::open().unwrap();
+        // Un processus réel écrit bien plus que la capacité du socket : la
+        // capture doit drainer le surplus sans bloquer ce processus.
+        assert!(std::process::Command::new("/usr/bin/head")
+            .args(["-c", "1048576", "/dev/zero"]).stdout(stderr).status().unwrap().success());
+        let excerpt = capture.finish();
+        assert_eq!(excerpt.len(), 512);
+        assert!(excerpt.iter().all(|byte| *byte == 0));
+    }
+    #[test]
+    fn spec244_stderr_court_reste_lisible_apres_la_fin_du_processus() {
+        let (capture, stderr) = BoundedCheckStderr::open().unwrap();
+        std::process::Command::new("/usr/bin/printf").arg("cause courte")
+            .stdout(stderr).status().unwrap();
+        assert_eq!(capture.finish(), b"cause courte");
+    }
+}
+
 fn check_program_schema(
     directory:&Path,markers:&ManagedMarkerStore,def:&crate::registry::AgentDefinition,
     source:&crate::lifecycle::SourceEnvironment,digest:&str,stopping:&AtomicBool,
 )->Result<crate::provider_program_compat::CheckedContract,(CatalogueCause,Option<RunningManagedChild>)> {
     // E3 (244) : la sortie d'erreur du bootstrap est gardée, bornée, et
     // rattachée à une fiche d'échec ; un succès efface cette fiche.
-    let stderr_path=directory.join(format!("compat-stderr-{}",uuid::Uuid::new_v4().simple()));
-    let stderr=std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW).open(&stderr_path).ok();
+    // Le surplus est drainé, jamais écrit sur disque ni gardé en mémoire.
+    // Cela ne coupe pas le fournisseur et ne bloque pas son tube stderr.
+    let (capture, stderr) = BoundedCheckStderr::open()
+        .map_err(|_| (CatalogueCause::SourceUnavailable, None))?;
     let result=check_program_schema_inner(directory,markers,def,source,digest,stopping,stderr);
-    let mut captured = Vec::new();
-    if let Ok(file) = std::fs::File::open(&stderr_path) {
-        let _ = file.take(512).read_to_end(&mut captured);
-    }
-    let _=std::fs::remove_file(&stderr_path);
+    let captured = capture.finish();
     match &result {
         Ok(_)=>crate::provider_program_compat::clear_check_failure(source,&def.command),
         Err((cause,_))=>{
@@ -620,7 +679,7 @@ fn check_program_schema(
 fn check_program_schema_inner(
     directory:&Path,markers:&ManagedMarkerStore,def:&crate::registry::AgentDefinition,
     source:&crate::lifecycle::SourceEnvironment,digest:&str,stopping:&AtomicBool,
-    stderr:Option<std::fs::File>,
+    stderr:std::process::Stdio,
 )->Result<crate::provider_program_compat::CheckedContract,(CatalogueCause,Option<RunningManagedChild>)> {
     let plain=|cause|(cause,None);
     let job=directory.join(format!("compat-{}",uuid::Uuid::new_v4().simple()));
@@ -636,11 +695,10 @@ fn check_program_schema_inner(
         identity:ManagedIdentity{instance_id:uuid::Uuid::new_v4().to_string(),command_id:"catalogue220".into(),generation:1},
         wrapper_executable:def.command.clone().into(),wrapper_args:vec!["app-server".into(),"generate-json-schema".into(),"--experimental".into(),"--out".into(),output.to_string_lossy().into_owned()],cwd:job.clone(),env};
     #[cfg(not(test))]
-    let mut bootstrap=crate::managed_process::spawn_managed_bootstrap_with_stderr(&launch,
-        stderr.map(std::process::Stdio::from).unwrap_or_else(std::process::Stdio::null))
+    let mut bootstrap=crate::managed_process::spawn_managed_bootstrap_with_stderr(&launch, stderr)
         .map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
     #[cfg(test)]
-    let mut bootstrap={drop(stderr);crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch)};
+    let mut bootstrap=crate::managed_process::tests::spawn_catalogue_test_bootstrap_with_stderr(&launch,stderr);
     bootstrap.set_ready_timeout(Duration::from_secs(2)).map_err(|_|plain(CatalogueCause::SourceUnavailable))?;
     let ready=bootstrap.wait_ready().map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
     let marked=ready.persist_marker(markers,"probe").map_err(|_|plain(CatalogueCause::SourceUnavailable))?;

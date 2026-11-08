@@ -201,6 +201,14 @@ impl ReceiptStore {
         }
     }
 
+    pub(crate) fn is_acknowledged(&self, delivery_id: &str, now: i64) -> bool {
+        let _transition = self.transition_lock.lock().unwrap_or_else(|p|p.into_inner());
+        if validate_token(delivery_id).is_err() || !self.directory_is_healthy()
+            || self.is_quarantined(now).unwrap_or(true) { return false; }
+        matches!(fs::read(self.entry_path(delivery_id)).ok().and_then(|bytes|parse_entry(&bytes).ok()),
+            Some(ReceiptEntry::Acked { expires_at }) if expires_at > now)
+    }
+
     pub fn purge_expired(&self, now: i64) -> Result<usize, ReceiptError> {
         let _transition = self
             .transition_lock

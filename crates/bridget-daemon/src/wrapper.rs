@@ -836,6 +836,11 @@ impl DeferredNativeMissionContext {
 /// La carte accompagne seulement la mission ciblée. Le suivi durable reçoit
 /// toujours l'enveloppe d'origine ; seul le texte remis au fournisseur change.
 /// Un échec garde la carte pour la prochaine tentative d'injection.
+fn defer_ordinary_delivery(frame: &DaemonToWrapper, busy: bool) -> bool {
+    busy && matches!(frame,DaemonToWrapper::DeliverIdempotent{message,..}
+        if !matches!(message.intent,Some(bridget_core::MessageIntent::SteerCurrent|bridget_core::MessageIntent::InterruptAndStart)))
+}
+
 fn deliver_provider_message<S: Transport + ?Sized>(
     transport: &mut S,
     message: &bridget_core::BridgetMessage,
@@ -1052,6 +1057,10 @@ enum IdempotentDeliveryAction {
 }
 
 impl IdempotentDeliveryTracker {
+    pub(crate) fn receipt_report(&self, delivery_id: String, instance: &str, generation: u64, now: i64) -> Option<WrapperToDaemon> {
+        (instance == self.instance_id && self.receipts.is_acknowledged(&delivery_id,now))
+            .then_some(WrapperToDaemon::DeliverAcked { delivery_id, delivery_generation:generation })
+    }
     pub(crate) fn open(home: &std::path::Path, instance_id: &str) -> Result<Self, String> {
         let state_home = crate::environment::root_for_home(home)?.join("state");
         crate::environment::validate_existing_tree(&state_home)?;
@@ -2501,7 +2510,7 @@ pub fn launch(
         )
         .map_err(|error| format!("activation du journal interactif impossible: {error}"))?,
     );
-    send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
+    send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
         journal_root.join(&my_name),
@@ -2892,7 +2901,7 @@ pub fn launch(
                             relay.reset_generation();
                             send_wrapper_message(
                                 &writer_for_listener,
-                                WrapperToDaemon::JournalReady,
+                                WrapperToDaemon::JournalReady { receipt_probe: true },
                             );
                             // La présence runtime a disparu avec le daemon :
                             // republier modèle/effort même s'ils n'ont pas changé.
@@ -2976,6 +2985,11 @@ pub fn launch(
                         }
                     } else {
                         warn!("livraison ignorée : aucun pane tmux pour {}", bm.id);
+                    }
+                }
+                DaemonToWrapper::DeliveryReceiptQuery { delivery_id,recipient_instance_id,delivery_generation } => {
+                    if let Some(report)=idempotent_deliveries.receipt_report(delivery_id,&recipient_instance_id,delivery_generation,unix_now_secs()) {
+                        send_wrapper_message(&writer_for_listener,report);
                     }
                 }
                 DaemonToWrapper::DeliverIdempotent {
@@ -3087,7 +3101,7 @@ pub fn launch(
                                 relay.reset_generation();
                                 send_wrapper_message(
                                     &writer_for_listener,
-                                    WrapperToDaemon::JournalReady,
+                                    WrapperToDaemon::JournalReady { receipt_probe: true },
                                 );
                                 if let Some(probe) = runtime_probe.as_mut() {
                                     probe.invalidate_after_reconnect();
@@ -4724,6 +4738,11 @@ fn launch_session_with_status(
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
     let mut execution_bindings = HashMap::new();
+    let inbox_path=crate::environment::root_for_home(home)?.join("state")
+        .join(format!("native-inbox-{instance_id}.sqlite"));
+    let mut durable_inbox=if inbox_path.exists() {
+        Some(crate::delivery_spool244::DeliverySpool::open(&inbox_path,&instance_id)?)
+    } else { None };
     let child_requests = Mutex::new(ManagedChildRequests::default());
     let forward_child_requests =
         std::env::var(NATIVE_CHILD_REQUESTS_ENV).as_deref() == Ok("forward");
@@ -4747,7 +4766,7 @@ fn launch_session_with_status(
         }
     }
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
-    send_wrapper_message(&writer, WrapperToDaemon::JournalReady);
+    send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
     send_wrapper_message(
         &writer,
         WrapperToDaemon::ObservationCapabilities {
@@ -4965,7 +4984,25 @@ fn launch_session_with_status(
             break;
         }
         let mut line = String::new();
-        let read_result = reader.read_line(&mut line);
+        let mut from_durable_inbox=false;
+        let mut read_result = reader.read_line(&mut line);
+        // Les contrôles du socket passent avant la file différée. Une remise
+        // ordinaire attend la fin du tour sans remplir la file du fournisseur.
+        if matches!(&read_result,Err(e) if matches!(e.kind(),std::io::ErrorKind::WouldBlock|std::io::ErrorKind::TimedOut))
+            && !transport.is_busy() && workspace_repair_barrier.is_none()
+        {
+            if let Some(inbox)=durable_inbox.as_mut() {
+                match inbox.next() {
+                    Ok(Some(frame)) => {
+                        line=serde_json::to_string(&frame)?;
+                        from_durable_inbox=true;
+                        read_result=Ok(line.len());
+                    }
+                    Ok(None) => {},
+                    Err(error) => {error!("file native illisible : {error} ; copie maître conservée");break;}
+                }
+            }
+        }
         if native_termination
             .as_ref()
             .is_some_and(NativeTerminationSignal::requested)
@@ -5128,6 +5165,24 @@ fn launch_session_with_status(
                             "provider_unavailable",
                         );
                         send_wrapper_message(&writer, rejection);
+                    }
+                }
+                Ok(DaemonToWrapper::DeliveryReceiptQuery { delivery_id,recipient_instance_id,delivery_generation }) => {
+                    if let Some(report)=idempotent_deliveries.receipt_report(delivery_id,&recipient_instance_id,delivery_generation,unix_now_secs()) {
+                        send_wrapper_message(&writer,report);
+                    }
+                }
+                Ok(frame @ DaemonToWrapper::DeliverIdempotent { .. })
+                    if !from_durable_inbox && defer_ordinary_delivery(&frame,
+                        transport.is_busy() || durable_inbox.as_ref().is_some_and(|inbox|inbox.has_pending())) => {
+                    if durable_inbox.is_none() {
+                        match crate::delivery_spool244::DeliverySpool::open(&inbox_path,&instance_id) {
+                            Ok(inbox)=>durable_inbox=Some(inbox),
+                            Err(error)=>{error!("file native indisponible : {error} ; copie maître conservée");break;}
+                        }
+                    }
+                    if let Err(error)=durable_inbox.as_ref().unwrap().defer(&frame) {
+                        error!("file native indisponible : {error} ; copie maître conservée");break;
                     }
                 }
                 Ok(DaemonToWrapper::DeliverIdempotent {
@@ -5318,6 +5373,11 @@ fn launch_session_with_status(
                     reason,
                     interrupt_active,
                 }) => {
+                    if let Some(inbox)=durable_inbox.as_ref() {
+                        if let Err(error)=inbox.cancel(&id) {
+                            error!("annulation en file native impossible : {error}");break;
+                        }
+                    }
                     if interrupt_active.unwrap_or(false) {
                         transport.cancel_delivery(&id, &reason);
                     } else {
@@ -6286,7 +6346,7 @@ fn reconnect_managed_session(
                 // Register réinitialise l'attestation au niveau du daemon : le
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
-                send_wrapper_message(writer, WrapperToDaemon::JournalReady);
+                send_wrapper_message(writer, WrapperToDaemon::JournalReady { receipt_probe: true });
                 send_wrapper_message(
                     writer,
                     WrapperToDaemon::ObservationCapabilities {
@@ -9883,6 +9943,23 @@ mod reconnect_tests {
             IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate { .. })));
         drop(tracker);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec244_sonde_de_recu_ne_modifie_pas_seen_et_ne_cree_pas_de_prompt() {
+        let root=receipt_root("probe244");
+        let instance="instance_probe244";
+        let mut tracker=IdempotentDeliveryTracker::open_at(&root,instance).unwrap();
+        assert!(tracker.receipt_report("absent".into(),instance,1,100).is_none());
+        assert!(matches!(tracker.receive("d244".into(),instance.into(),7,500,idempotent_message("m244"),100),IdempotentDeliveryAction::Inject{..}));
+        assert!(tracker.receipt_report("d244".into(),instance,7,101).is_none());
+        assert!(matches!(tracker.prompt_dispatched("m244",102),Some(WrapperToDaemon::DeliverAcked{..})));
+        drop(tracker);
+        let tracker=IdempotentDeliveryTracker::open_at(&root,instance).unwrap();
+        assert!(tracker.receipt_report("d244".into(),"foreign",7,103).is_none());
+        assert!(matches!(tracker.receipt_report("d244".into(),instance,7,103),Some(WrapperToDaemon::DeliverAcked{delivery_generation:7,..})));
+        assert!(tracker.receipt_report("d244".into(),instance,7,501).is_none());
+        drop(tracker);std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -177,7 +177,7 @@ def repaired_mapping(selected, request, key, mapping):
         return mapping
     # Une même source avec des droits ou identités cibles différents reste ambiguë.
     candidates = [json.loads(value) for value in sorted(allowed)]
-    require(len({(e["remote_uid"], e["remote_mode"]) for e in candidates}) == 1,
+    require(len({(e["remote_root"], e["remote_uid"], e["remote_mode"]) for e in candidates}) == 1,
             "project_preparation_additional_root_changed")
     revision = mapping.get("mapping_revision")
     require(type(revision) is int and revision > 0, "project_preparation_mapping_changed")

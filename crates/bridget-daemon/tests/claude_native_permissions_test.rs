@@ -202,7 +202,7 @@ fn run_mission_with(
             }
             if matches!(
                 decode(line.trim_end()).unwrap(),
-                WrapperToDaemon::JournalReady
+                WrapperToDaemon::JournalReady { .. }
             ) {
                 break;
             }

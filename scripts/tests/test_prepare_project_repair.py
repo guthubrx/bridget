@@ -42,6 +42,13 @@ class Repair244(unittest.TestCase):
         self.assertFalse(prep.is_additional_root_repair(old, dict(repaired, remote_root="/elsewhere")))
         self.assertFalse(prep.is_additional_root_repair(old, dict(repaired, mapping_revision=3)))
 
+    def test_two_approved_destinations_are_ambiguous(self):
+        old, extra, selected, request = self.fixture()
+        selected["mappings"]["other"] = dict(old, additional_root=dict(extra, remote_root="/other/attachments"))
+        with self.assertRaisesRegex(Exception, "project_preparation_additional_root_changed"):
+            prep.repaired_mapping(selected, request, "old", old)
+        self.assertNotIn("additional_root", old)
+
     def test_publication_backs_up_and_checks_authority_under_existing_lock(self):
         old, extra, selected, request = self.fixture()
         with tempfile.TemporaryDirectory() as directory:

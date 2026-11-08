@@ -1032,6 +1032,13 @@ impl IdempotencyStore {
     ///
     /// O(log N+K log K+B), K remises de cette instance, B enveloppes ; index156
     /// recipient/phase puis tri delivery_id, reclassement groupé.
+    pub(crate) fn unknown_delivery_receipts(&self, instance: &str, now: i64) -> Result<Vec<(String,u64)>,IdempotencyError> {
+        Ok(self.conn.prepare("SELECT delivery_id,delivery_generation FROM send_deliveries
+            WHERE recipient_instance_id=?1 AND phase='indeterminate' AND expires_at>?2 ORDER BY queue_rank")?
+            .query_map(params![instance,now],|r|Ok((r.get(0)?,r.get(1)?)))?
+            .collect::<Result<Vec<_>,_>>()?)
+    }
+
     pub fn dispatching_deliveries_for_instance(
         &mut self,
         recipient_instance_id: &str,
@@ -1400,7 +1407,10 @@ impl IdempotencyStore {
             tx.commit()?;
             return Ok(None);
         }
-        if row.4 != "dispatching" {
+        if !matches!(row.4.as_str(), "dispatching" | "indeterminate") {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
+        if row.4 == "indeterminate" && row.5.is_none() {
             return Err(IdempotencyError::InvalidDelivery);
         }
         let envelope_missing = row.5.is_none();
@@ -1408,7 +1418,7 @@ impl IdempotencyStore {
             .5
             .as_deref()
             .and_then(|bytes| serde_json::from_slice::<bridget_core::BridgetMessage>(bytes).ok());
-        let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked', acked_at = COALESCE(acked_at, ?2) WHERE delivery_id = ?1 AND phase = 'dispatching'", params![delivery_id, now])?;
+        let delivery = tx.execute("UPDATE send_deliveries SET phase = 'acked', acked_at = COALESCE(acked_at, ?2) WHERE delivery_id = ?1 AND phase IN ('dispatching','indeterminate')", params![delivery_id, now])?;
         let record = tx.execute(
             "UPDATE idempotency_records SET state = 'terminal', public_result_kind = 'accepted', public_result_category = NULL, public_result_reason = NULL
              WHERE issuer_scope = ?1 AND operation_kind = 'send' AND idempotency_key = ?2 AND state = 'dispatching'",

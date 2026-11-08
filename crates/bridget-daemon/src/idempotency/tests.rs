@@ -1806,6 +1806,25 @@ fn une_remise_en_quarantaine_ne_remonte_plus_comme_une_remise_en_vol() {
     );
 }
 
+#[test]
+fn spec244_accuse_positif_resout_l_incertitude_sans_rejouer() {
+    let mut store=IdempotencyStore::open_in_memory().unwrap();
+    assert!(matches!(reserve(&store,b"canon"),Reservation::Prepared{..}));
+    let delivery=SendDelivery {delivery_id:"preuve-244".into(),recipient_instance_id:"instance-1".into(),
+        delivery_generation:4,expires_at:NOW+HORIZON,message_bytes:sample_message_bytes("message-1","peer-1")};
+    store.begin_send_delivery(&key(),&delivery).unwrap();
+    store.mark_delivery_indeterminate("preuve-244","instance-1",4).unwrap();
+    assert!(store.dispatching_deliveries_for_instance("instance-1",NOW).unwrap().is_empty());
+    assert_eq!(store.unknown_delivery_receipts("instance-1",NOW).unwrap(),vec![("preuve-244".into(),4)]);
+    assert!(store.unknown_delivery_receipts("foreign",NOW).unwrap().is_empty());
+    assert!(store.acknowledge_send_delivery_at("preuve-244","foreign",4,NOW).is_err());
+    assert!(store.acknowledge_send_delivery_at("preuve-244","instance-1",5,NOW).is_err());
+    store.acknowledge_send_delivery_at("preuve-244","instance-1",4,NOW).unwrap();
+    assert_eq!(delivery_phase(&store,"preuve-244"),"acked");
+    assert!(matches!(store.lookup(&key(),NOW).unwrap(),LookupResult::Accepted{..}));
+    store.acknowledge_send_delivery_at("preuve-244","instance-1",4,NOW).unwrap();
+}
+
 /// ORACLE C1 — chemin MIGRATION, enveloppe ABSENTE.
 ///
 /// La seconde porte vers la quarantaine, et la plus large : la migration v2

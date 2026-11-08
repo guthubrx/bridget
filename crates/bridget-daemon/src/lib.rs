@@ -16,6 +16,7 @@ mod connection_channel;
 pub mod daemon;
 pub(crate) mod decision_service;
 pub mod desired_state;
+mod delivery_spool244;
 pub mod disk_hygiene;
 pub mod environment;
 pub mod execution_store;

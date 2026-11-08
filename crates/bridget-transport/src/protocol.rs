@@ -5798,7 +5798,11 @@ pub enum WrapperToDaemon {
     },
     /// Le pilote a ouvert son journal append-only pour cette connexion. Ce
     /// signal distinct du Register évite de déduire attach du mode ACP.
-    JournalReady,
+    JournalReady {
+        /// Lecture de reçu seulement ; un ancien daemon ignore ce champ.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        receipt_probe: bool,
+    },
     /// La session native a démarré dans un terminal qui possède son cycle de
     /// vie. Fait lié à la connexion, à réannoncer après chaque reconnexion.
     /// Ne se déduit ni du protocole fournisseur ni de la présence d'un journal.
@@ -6830,6 +6834,13 @@ pub enum DaemonToWrapper {
             deserialize_with = "deserialize_present_optional"
         )]
         interrupt_active: Option<bool>,
+    },
+    /// Recherche d'une preuve déjà persistée. Ne donne jamais l'ordre
+    /// d'injecter, ni celui de transformer Seen en Acked.
+    DeliveryReceiptQuery {
+        delivery_id: String,
+        recipient_instance_id: String,
+        delivery_generation: u64,
     },
     /// Acquittement d'un envoi.
     Ack {
@@ -9958,17 +9969,27 @@ mod tests {
 
     #[test]
     fn journal_ready_est_un_signal_wrapper_hors_du_role_attach() {
-        let signal = WrapperToDaemon::JournalReady;
+        let signal = WrapperToDaemon::JournalReady { receipt_probe: false };
         let json = encode(&signal).unwrap();
         assert_eq!(json, r#"{"type":"JournalReady"}"#);
         assert!(matches!(
             decode(&json).unwrap(),
-            WrapperToDaemon::JournalReady
+            WrapperToDaemon::JournalReady { .. }
         ));
         assert_eq!(
             signal.attach_refusal(),
             Some(AttachRefusal::MessageOutsideAttachRole)
         );
+    }
+
+    #[test]
+    fn spec244_sonde_recu_est_annoncee_sans_casser_journal_ready_historique() {
+        #[derive(serde::Deserialize)]
+        #[serde(tag="type")]
+        enum Legacy { JournalReady }
+        let wire=encode(&WrapperToDaemon::JournalReady{receipt_probe:true}).unwrap();
+        assert!(matches!(serde_json::from_str::<Legacy>(&wire).unwrap(),Legacy::JournalReady));
+        assert!(matches!(decode(r#"{"type":"JournalReady"}"#).unwrap(),WrapperToDaemon::JournalReady{receipt_probe:false}));
     }
 
     #[test]
