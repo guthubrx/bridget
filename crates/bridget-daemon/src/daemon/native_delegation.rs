@@ -28900,7 +28900,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             &mut controls,
         );
         assert!(
-            matches!(response, DaemonToWrapper::Nack { reason, .. } if reason == "remote_result_requires_worker")
+            matches!(response, DaemonToWrapper::IdempotencyResult { issue:IdempotencyIssue::Rejected { category,.. },.. } if category == "remote_result_requires_worker")
         );
         assert!(controls.is_empty());
         let shared = Arc::new(Mutex::new(st));
