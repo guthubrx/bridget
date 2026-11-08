@@ -341,3 +341,13 @@ le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllo
 Résultat final sur 21a16236 : Mac 3 609 PASS, 0 échec, 0 avertissement ;
 Linux (worktree Git réel) 3 626 PASS, 0 échec, 0 avertissement. Binaire actif
 243-tests-r4 inchangé (corrections de bancs seulement depuis b44c0e3b).
+- Brouillon 1cc44f4d committé sur la branche archive/243-1cc44f4d-brouillon198
+  du dépôt Cartae (bfe9f01a), identique au contenu vivant ; le worktree actif
+  de l'agent n'est pas modifié.
+
+Restent, par règle explicite et non par défaut : le worktree 1cc44f4d est le
+cwd de l'agent Codex du superviseur 2500061 (« ne pas terminer les processus
+d'un autre travail pour faire le ménage », checklist kill avec confirmation
+utilisateur) ; les liens 242 et 243-r1 du Mac servent à trois façades MCP de
+sessions T3 ouvertes (T3 ne doit pas être arrêté). Leur retrait suit l'arrêt
+de ces processus par l'utilisateur.
