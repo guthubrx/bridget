@@ -136,6 +136,11 @@ class BridgetClient(private val store: LocalStore) {
         val response = request(session.getString("endpoint"), path, "POST", session.getString("device_key"), if (install) JSONObject().put("version", version) else JSONObject())
         requireSessionOrigin(session, store.get("session")); return response
     }
+    suspend fun sentinelStatus(): JSONObject {
+        val session = store.get("session") ?: throw MobileFailure("authorization_required")
+        val response = request(session.getString("endpoint"), "/v1/sentinel", "GET", session.getString("device_key"))
+        requireSessionOrigin(session, store.get("session")); return response
+    }
     suspend fun configureUpdates(automatic: Boolean): JSONObject {
         val session = store.get("session") ?: throw MobileFailure("authorization_required")
         val response = request(session.getString("endpoint"), "/v1/updates", "PUT", session.getString("device_key"), JSONObject().put("automatic", automatic))

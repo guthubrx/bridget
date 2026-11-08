@@ -861,7 +861,7 @@ private fun Outbox(vm: MobileViewModel) {
 @Composable
 private fun Settings(vm: MobileViewModel, onRevoke: () -> Unit, onForget: () -> Unit, onNotifications: () -> Unit) {
     LaunchedEffect(vm.associated) {
-        while (true) { vm.refreshUpdateStatus(); kotlinx.coroutines.delay(30_000) }
+        while (true) { vm.refreshUpdateStatus(); vm.refreshSentinelStatus(); kotlinx.coroutines.delay(30_000) }
     }
     var revokeDevice by remember { mutableStateOf<JSONObject?>(null) }
     val quietLabel = stringResource(R.string.quiet_hours)
@@ -869,6 +869,30 @@ private fun Settings(vm: MobileViewModel, onRevoke: () -> Unit, onForget: () -> 
     var quietStart by remember(vm.quietSettings) { mutableStateOf(vm.quietSettings.optString("start", "22:00")) }
     var quietEnd by remember(vm.quietSettings) { mutableStateOf(vm.quietSettings.optString("end", "08:00")) }
     LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            var expanded by remember { mutableStateOf(false) }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.sentinel_title), style = MaterialTheme.typography.titleMedium)
+                    Text(sentinelStage(if (vm.sentinelUnavailable) "unavailable" else vm.sentinelReport.optString("status")))
+                    val observed = vm.sentinelReport.optLong("finished_at")
+                    if (observed > 0) Text(stringResource(R.string.update_last_check, dateText(observed)), style = MaterialTheme.typography.bodySmall)
+                    val rows = vm.sentinelReport.optJSONArray("cases")
+                    if (rows != null && rows.length() > 0) {
+                        TextButton(onClick = { expanded = !expanded }, modifier = Modifier.semantics { contentDescription = "sentinel-details" }) {
+                            Text(stringResource(if (expanded) R.string.sentinel_hide else R.string.sentinel_details))
+                        }
+                        if (expanded) for (index in 0 until rows.length()) {
+                            val row = rows.getJSONObject(index)
+                            Text(row.optString("machine") + " · " + row.optString("engine") + " : " + sentinelStage(row.optString("status")), style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(if (row.optString("fixture") == "new") R.string.sentinel_new_project else R.string.sentinel_existing_project)
+                                + " · " + stringResource(if (row.optString("strategy") == "worktree") R.string.sentinel_worktree else R.string.sentinel_commit_view), style = MaterialTheme.typography.bodySmall)
+                            if (!row.isNull("code")) Text(sentinelReason(row.optString("code")), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
         item {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -969,6 +993,25 @@ private fun Settings(vm: MobileViewModel, onRevoke: () -> Unit, onForget: () -> 
     revokeDevice?.let { device -> Confirm(stringResource(R.string.revoke_device), device.getString("label"),
         onDismiss = { revokeDevice = null }) { revokeDevice = null; vm.revokeDevice(device.getString("device_id")) } }
 }
+
+@Composable
+private fun sentinelReason(code: String): String = stringResource(when (code.substringBefore(':')) {
+    "usage_limit", "provider_quota_exhausted" -> R.string.sentinel_quota_reason
+    "resource_saturated" -> R.string.sentinel_capacity_reason
+    "project_mapping_unknown", "project_mapping_mismatch", "project_preparation_link_unavailable" -> R.string.sentinel_project_reason
+    "sentinel_communication_unconfirmed" -> R.string.sentinel_message_reason
+    else -> R.string.sentinel_unknown_reason
+})
+
+@Composable
+private fun sentinelStage(state: String): String = stringResource(when (state) {
+    "passed" -> R.string.sentinel_passed
+    "deferred" -> R.string.sentinel_deferred
+    "failed", "unknown" -> R.string.sentinel_failed
+    "pending", "not_started", "running" -> R.string.sentinel_running
+    "unavailable" -> R.string.sentinel_unavailable
+    else -> R.string.sentinel_not_observed
+})
 
 @Composable
 private fun Confirm(title: String, message: String, onDismiss: () -> Unit, onConfirm: () -> Unit) {

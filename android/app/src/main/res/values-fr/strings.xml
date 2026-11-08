@@ -1,4 +1,17 @@
 <resources>
+ <string name="sentinel_title">Contrôles de Bridget</string>
+ <string name="sentinel_details">Voir les contrôles</string>
+ <string name="sentinel_hide">Masquer les contrôles</string>
+ <string name="sentinel_passed">Contrôles réussis</string>
+ <string name="sentinel_deferred">Reporté par une limite active ou un contrôle humain</string>
+ <string name="sentinel_failed">Un contrôle demande une vérification</string>
+ <string name="sentinel_running">Contrôles en cours</string>
+ <string name="sentinel_unavailable">Contrôles actuels indisponibles ; tout résultat daté vient d’une observation précédente</string>
+ <string name="sentinel_not_observed">Aucun contrôle encore observé</string>
+ <string name="sentinel_new_project">Nouveau projet</string>
+ <string name="sentinel_existing_project">Projet existant</string>
+ <string name="sentinel_worktree">Copie de travail</string>
+ <string name="sentinel_commit_view">Vue de lecture</string>
  <string name="agents_active">Actifs</string>
  <string name="agents_dormant">Agents dormants</string>
  <string name="agent_sleep">Mettre en sommeil</string>
@@ -403,4 +416,9 @@
  <string name="host_update_stale">État ancien. Vérifier le service de mise à jour et sa connexion.</string>
  <string name="host_update_version_unknown">Version non observée</string>
  <string name="host_update_service_inactive">Service arrêté ou état non confirmé. Demander au responsable de cette machine avant sa remise en route.</string>
+    <string name="sentinel_quota_reason">Le fournisseur indique une limite d’utilisation.</string>
+    <string name="sentinel_capacity_reason">La machine manque de ressources disponibles.</string>
+    <string name="sentinel_project_reason">La préparation de ce projet reste à vérifier.</string>
+    <string name="sentinel_message_reason">La remise de la réponse reste à confirmer.</string>
+    <string name="sentinel_unknown_reason">Le résultat de ce contrôle reste à confirmer.</string>
 </resources>

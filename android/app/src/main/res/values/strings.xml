@@ -1,4 +1,17 @@
 <resources>
+ <string name="sentinel_title">Bridget checks</string>
+ <string name="sentinel_details">Show checks</string>
+ <string name="sentinel_hide">Hide checks</string>
+ <string name="sentinel_passed">Checks passed</string>
+ <string name="sentinel_deferred">Deferred by an active limit or human control</string>
+ <string name="sentinel_failed">A check needs attention</string>
+ <string name="sentinel_running">Checks in progress</string>
+ <string name="sentinel_unavailable">Current checks unavailable; any dated result is from an earlier observation</string>
+ <string name="sentinel_not_observed">No checks observed yet</string>
+ <string name="sentinel_new_project">New project</string>
+ <string name="sentinel_existing_project">Existing project</string>
+ <string name="sentinel_worktree">Working copy</string>
+ <string name="sentinel_commit_view">Read view</string>
  <string name="agents_active">Active</string>
  <string name="agents_dormant">Sleeper agents</string>
  <string name="agent_sleep">Put to sleep</string>
@@ -403,4 +416,9 @@
  <string name="host_update_stale">Old report. Check the update service and its connection.</string>
  <string name="host_update_version_unknown">Version not observed</string>
  <string name="host_update_service_inactive">Service stopped or unconfirmed. Ask this machine’s administrator before restarting it.</string>
+    <string name="sentinel_quota_reason">The provider reported a usage limit.</string>
+    <string name="sentinel_capacity_reason">The machine has insufficient available resources.</string>
+    <string name="sentinel_project_reason">Project preparation needs verification.</string>
+    <string name="sentinel_message_reason">Reply delivery still needs confirmation.</string>
+    <string name="sentinel_unknown_reason">The result of this check still needs confirmation.</string>
 </resources>

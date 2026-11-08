@@ -4061,6 +4061,12 @@ fn routing_failure_admission(
         result["detail"]["workspace_tasks"]=json!({"status":"unavailable",
             "next_action":"Faire vérifier la projection des tâches par le responsable Bridget ; une absence de diagnostic ne prouve pas le dossier libre. Conserver demande, clé et autres travaux sans libérer de garde."});
     }
+    if let Some((owner,_))=live_connection_identity(&st,conn) {
+        if let Err(_)=crate::sentinel244::record_admission_observation(st.store.connection(),&owner,&request.request_id,admission,
+            result["code"].as_str().unwrap_or("unobserved"),unix_timestamp()) {
+            warn!("observation du refus d'admission indisponible ; reçu courant conservé");
+        }
+    }
     result
 }
 

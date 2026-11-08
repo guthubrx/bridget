@@ -120,6 +120,8 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
     var updateChecked by mutableStateOf(false); private set
     var hostUpdates by mutableStateOf(JSONObject()); private set
     var hostUpdatesPending by mutableStateOf(false); private set
+    var sentinelReport by mutableStateOf(JSONObject()); private set
+    var sentinelUnavailable by mutableStateOf(false); private set
     var updateState by mutableStateOf(JSONObject()); private set
     var notificationsPending by mutableStateOf(false); private set
     var notificationsEnabled by mutableStateOf(false); private set
@@ -265,6 +267,17 @@ class MobileViewModel(app: Application) : AndroidViewModel(app) {
             try { hostUpdates = MobileUpdates.syncHosts(getApplication()) }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* Le dernier état reste daté ; aucun succès inventé. */ }
+        }
+    }
+    suspend fun refreshSentinelStatus() {
+        if (associated && !busy) {
+            try { sentinelReport = client.sentinelStatus(); sentinelUnavailable = false }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                sentinelUnavailable = true
+                val code = (e as? MobileFailure)?.code?.takeIf { it.matches(Regex("[a-z_]{1,64}")) } ?: "outcome_unknown"
+                android.util.Log.w("BridgetSentinel", "status_code=$code")
+            }
         }
     }
     fun installUpdate() { MobileUpdates.confirm(getApplication()) }

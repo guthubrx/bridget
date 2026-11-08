@@ -330,13 +330,13 @@ def observe(connection, case, parent):
         request = task["request"]
         workspace = request.get("workspace") or {}
         engine={"codex_app_server":"codex","claude_stream_json":"claude"}.get((task.get("definition") or {}).get("protocol"))
-        base=(task.get("workspace") or {}).get("base_commit")
+        base=(task.get("workspace") or {}).get("base_commit") or request.get("expected_base_commit")
         if (request.get("machine_id") != case["machine"] or workspace.get("strategy") != case["strategy"]
                 or (case.get("base_commit") is not None and base != case["base_commit"])
                 or engine != case["engine"]):
             return dict(case, status="failed", code="sentinel_contract_changed")
         result = task.get("result") or ""
-        passed = (task["state"] == "result_available" and result.splitlines()[0:1] == [TOKEN]
+        passed = (task["state"] == "result_available" and result.rstrip().endswith(TOKEN)
                   and task.get("acknowledged_at") is not None and (not task.get("guarded") or task.get("guard_released"))
                   and task.get("cleanup_done") is True)
         communication = None
@@ -346,7 +346,7 @@ def observe(connection, case, parent):
             reply_ok=False
             if request_row and request_row[0]=="answered":
                 summary=json.loads(request_row[1] or "{}")
-                reply_ok=summary.get("from")==task["child"] and summary.get("summary")==COMMUNICATION_TOKEN
+                reply_ok=summary.get("from")==task["child"] and str(summary.get("summary","")).rstrip().endswith(COMMUNICATION_TOKEN)
             thread=connection.execute("SELECT thread_id FROM thread_operations WHERE actor_id=? AND operation_id=? AND action='create'",
                 (parent,case["thread_create"])).fetchone()
             thread_ok=False
@@ -365,12 +365,43 @@ def observe(connection, case, parent):
     if receipt and receipt[0] == "refused":
         code = (receipt[1] or "unobserved").split(":")[0]
         return dict(case, status="deferred" if code in CAPACITY else "failed", code=code)
+    if receipt:
+        return dict(case,status="pending",code=None)
+    try:
+        fact=connection.execute("SELECT admission,code,observed_at FROM admission_observations244 WHERE owner=? AND request_id=?",(parent,case["request_id"])).fetchone()
+    except sqlite3.OperationalError:
+        fact=None  # Image ancienne : aucune observation fabriquée.
+    if fact and fact[0] in {"not_recorded","refused"}:
+        return dict(case,status="deferred" if fact[1] in CAPACITY else "failed",code=fact[1],
+                    code_source="native_admission_observation",observed_at=fact[2])
     return case
+
+
+def controllers_finished(state, db, manifest):
+    """Fin native des propres tours, pas absence supposée d'une mission."""
+    for controller in manifest["controllers"].values():
+        if controller.get("phase") != "observing": return False
+        files=sorted((state/"sessions"/controller["agent"]).glob("*.jsonl"))
+        if not files:return False
+        try:
+            with os.fdopen(os.open(files[-1],os.O_RDONLY|os.O_NOFOLLOW),"rb") as stream:
+                meta=os.fstat(stream.fileno())
+                if meta.st_uid!=os.geteuid() or not stat.S_ISREG(meta.st_mode):return False
+                offset=max(0,meta.st_size-2*1024*1024);stream.seek(offset)
+                if offset:stream.readline()
+                events=[json.loads(line) for line in stream if line.strip()]
+        except (OSError,ValueError):return False
+        if not events or events[-1].get("event")!="turn_end":return False
+        if not any(e.get("event")=="turn_end" and e.get("message_id")==controller["command"]+"-prompt" for e in events):return False
+        for (body,) in db.execute("SELECT payload FROM native_delegations WHERE json_extract(payload,'$.owner')=?",(controller["agent"],)):
+            task=json.loads(body)
+            if task["state"] not in TERMINAL or not task.get("cleanup_done") or (task.get("guarded") and not task.get("guard_released")):return False
+    return True
 
 
 def prompt(fixture, selected, sha):
     requests = [dict(request_id=c["request_id"], machine_id=c["machine"], engine=c["engine"],
-                     cwd=str(fixture), expected_base_commit=sha, posture="discovery",
+                     cwd=str(fixture), expected_base_commit=sha, posture="development" if c["strategy"]=="worktree" else "discovery",
                      workspace=dict(strategy=c["strategy"], **({"base_ref":sha} if c["strategy"] == "worktree" else {})),
                      child_requests="deny", reply_timeout=180,
                      **({"keep_alive_secs":300} if c.get("communication") else {})) for c in selected]
@@ -387,7 +418,7 @@ def prompt(fixture, selected, sha):
             "Puis bridget_send au même child_agent_id, reply=true, reply_timeout=120, id=direct_id, issued_at=direct_issued_at. "
             "Corps : Lis le fil <thread_id réel> avec bridget_thread read, confirme chaque page par ack et son receipt ; "
             "réponds exactement COMMUNICATION244OK, sans envoi MCP séparé. "
-            "Attends la réponse corrélée avec bridget_request_wait sur direct_id. Ferme ton fil par bridget_thread close, operation_id=thread_close. "
+            "Attends la réponse corrélée avec bridget_request_wait sur direct_id. Si cet appel expire, relis la même demande : seul son état natif answered/timed_out tranche ; open ne ferme pas la garde. Ferme ton fil par bridget_thread close, operation_id=thread_close. "
             "Ne confonds pas un reçu d'envoi avec la réponse de l'enfant. Si une réponse manque, conserve son état exact. "
             "Ferme ensuite sa garde par bridget_task_cancel si elle reste ouverte, puis vérifie son arrêt. "
             "Conserve toute issue inconnue : aucune nouvelle clé, autre cible ou mission de remplacement. "
@@ -461,7 +492,7 @@ def run(binary, state, reason):
             controller["phase"] = "spawn_submitted"
             save(manifest_path, manifest)
             receipt = call(binary, ["spawn", "codex", "--persistent", "--agent-id", controller["agent"],
-                                   "--cwd",controller["cwd"],"--posture","discovery","--timeout","90",
+                                   "--cwd",controller["cwd"],"--posture","development","--timeout","90",
                                    "--command-id",controller["command"]])
             controller["spawn_receipt"] = receipt
             controller["phase"] = "connected" if receipt["exit"] == 0 else "spawn_unknown"
@@ -489,6 +520,10 @@ def run(binary, state, reason):
                 save(manifest_path, manifest)
                 save(report_path,dict(version=1,status="running",started_at=manifest["started_at"],cases=observed))
             if manifest["cases"] and all(c["status"] in {"passed","failed","deferred"} for c in manifest["cases"]):
+                break
+            if controllers_finished(state,db,manifest):
+                # Les refus antérieurs à admission n'ont parfois pas de ligne
+                # durable. Ils restent non confirmés, sans attente vide de2h.
                 break
             time.sleep(2)
     finally:

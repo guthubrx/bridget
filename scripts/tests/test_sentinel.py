@@ -32,6 +32,13 @@ class Sentinel244(unittest.TestCase):
         self.write()
         self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"passed")
 
+    def test_progress_text_does_not_hide_a_completed_reply_marker(self):
+        self.task.update(result="Je vérifie le contrôle.\n"+sentinel.TOKEN,acknowledged_at=123,guarded=False,cleanup_done=True)
+        self.write()
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"passed")
+        self.task["result"]="Aucun résultat"; self.write()
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"failed")
+
     def test_guarded_is_admission_policy_not_current_open_guard(self):
         self.task.update(acknowledged_at=123,guarded=True,guard_released=True,cleanup_done=True)
         self.write()
@@ -54,11 +61,20 @@ class Sentinel244(unittest.TestCase):
             self.task["request"].update(change);self.write()
             self.assertEqual(sentinel.observe(self.db,self.case,"parent")["code"],"sentinel_contract_changed")
 
+    def test_native_pre_admission_refusal_is_visible_without_reserving_a_task(self):
+        self.db.execute("CREATE TABLE admission_observations244(owner TEXT,request_id TEXT,admission TEXT,code TEXT,observed_at INTEGER)")
+        self.db.execute("INSERT INTO admission_observations244 VALUES(?,?,?,?,?)",("parent","sentinel-test","not_recorded","project_mapping_unknown",123))
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["code"],"project_mapping_unknown")
+        self.assertEqual(sentinel.observe(self.db,self.case,"foreign"),self.case)
+        self.db.execute("INSERT INTO auto_admission_receipts VALUES(?,?,?,?)",("parent","sentinel-test","pending",None))
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"pending")
+        self.assertEqual(self.db.execute("SELECT count(*) FROM native_delegations").fetchone()[0],0)
+
     def test_capacity_is_deferred_and_unknown_admission_is_not_absent(self):
         self.db.execute("INSERT INTO auto_admission_receipts VALUES(?,?,?,?)",("parent","sentinel-test","refused","resource_saturated"))
         self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"deferred")
         self.db.execute("UPDATE auto_admission_receipts SET state='pending'")
-        self.assertEqual(sentinel.observe(self.db,self.case,"parent"),self.case)
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"pending")
 
     def test_communication_requires_reply_thread_ack_and_notification(self):
         self.db.executescript("CREATE TABLE tracked_requests(id TEXT,sender TEXT,target TEXT,state TEXT,reply_summary TEXT); CREATE TABLE thread_operations(actor_id TEXT,operation_id TEXT,action TEXT,thread_id TEXT); CREATE TABLE discussion_threads(thread_id TEXT,creator_id TEXT,closed_at INTEGER); CREATE TABLE discussion_members(thread_id TEXT,agent_id TEXT,acked_seq INTEGER); CREATE TABLE discussion_entries(thread_id TEXT,seq INTEGER,author_id TEXT,body TEXT);")
