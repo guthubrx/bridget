@@ -109,6 +109,25 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session248 — comptes rendus pendant tourCodex, activés0.8.14/248-messages-en-cours-r2.
+Sourceexécutabled96e1ec4 intégrée/poussée. Relationparent↔enfantactive reconnue
+sansdonnerSteer/Interruptàl’enfant ; comptesrendussansréponseCodexV2remispendanttour,
+demandesreplytruegardentcorrélation/échéance. Ancienmessage545efd04ACK16:06:11UTC
+après2461senfileAVANTactivation ; second1abftimed_out/indeterminate, aucunrejeu.
+DéfautR1pendantmaintenance : spool_envelope_changed suravisdifféré/datecalculée,
+wrapperParixquitte/Taska3a311f9failed16:08:59UTC ; fichiersconservésaucunerelance.
+R2gardepriorframe/délai,comparecontenu/autoritéstricts,conflitdefernefermeplusprovider.
+DixcontrôlesMac/septLinuxdistinctsverts ; deuxrevueslues/ACKsansP1/P2confirmé.
+Septcomposants/SHA/R2vérifiés4hôtes,retour247compatible/pointeursatomiques ; coupure1,79s.
+T3nonarrêté,13PID/birthinitiauxconservés,2renderersajoutés,registreMac/7payloadsintacts.
+Publicv0.8.14/sixactifsanonymesSHA,APK8014/certificat/lignée8013vérifiés.
+WT/branche248MacetpropresWTSYS/Androidretirés ;134306426octetstransferts+36780384imageR1Macretirés.
+R1SYSencoreutilisée,R1Cartae/KSusagespartiellementillisibles,anciensMCP/wrappers/preuvesconservés.
+PasderepriseT3niquotaagentprincipalimplémenté. Sources/limites :
+/Users/moi/Nextcloud/10.Scripts/64.bridget/specs/248-messages-en-cours/validation.md.
+Repriseprivée : /Users/moi/.cache/bridget248-messages-en-cours/resume.md.
+
+
 Session247 — coordination et annulation livrées sur les services en0.8.13/247-coordination-r1, sourceb784e71b, retour246-r2 compatible/pointeurs atomiques quatre hôtes. Parent authentifié/enfant actif distant : relation admise et deux instances, pas égalité de chemins ; sommeil/révocations/guidage conservés et remise exacte de mission exclue. Annulation : refus tardif classé sans faux échec, suivi logique ouvert clôturé via la transition canonique seulement si cancelled et propriétaire/enfant concordants. Suivi réelParix60f8 devenu cancelled, sans replay650c. Douze contrôles distincts247/174 acquis, revuef577 sansP1/P2 lue/ACK. Sept composants/SHA, session nativeV2, quatre rapportsfrais0.8.13, release/six actifs anonymes/SHA etAPK8013/lignée8012 vérifiés ; coupurecore1,86s. Septpayloads protégés/registreMac/T3PID82837 et14674 conservés. Aucun arrêtT3 : assentiment explicite requis. Revue148b28c estcancelled/errornull ; ancienprimary_absent rétabli, causehistorique inconnue. Messagecoordination4c2a indeterminate avec suivitimed_out distinct ; aucune réception ni absence d’injection inventée. Invalid_envelope historique245 reste non expliqué, revue ancienne non rejouée. Nettoyage des propresWT/transferts247 ; preuves/anciennesimages utilisées/travaux étrangers conservés. Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/247-coordination/validation.md.
 
 
