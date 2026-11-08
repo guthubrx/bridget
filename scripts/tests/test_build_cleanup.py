@@ -485,6 +485,19 @@ class WorktreePruneTests(unittest.TestCase):
             kept = build.drop_session_helpers(data)
         self.assertEqual(kept, b"p999999992\nf2\ntREG\nn/y\n")
 
+    def test_montage_alias_suivi_au_lieu_de_refuser(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            info = root.stat()
+            device = f"{os.major(info.st_dev)}:{os.minor(info.st_dev)}"
+            mounts = {root: [(device, Path("/srv/projets"), "ext4")],
+                      Path("/alias-projets"): [(device, Path("/srv"), "ext4")]}
+            with self.assertRaises(ValueError):
+                build.validate_mount_scopes((root,), mounts)
+            aliases = []
+            build.validate_mount_scopes((root,), mounts, aliases)
+            self.assertEqual(aliases, [(Path("/alias-projets/projets"), root)])
+
     def test_incomplete_process_inventory_preserves_worktree(self):
         real_run = build.observed_run
         for returncode, stderr in ((1, b""), (0, b"WARNING: inaccessible filesystem")):

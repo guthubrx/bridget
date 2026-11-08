@@ -303,3 +303,11 @@ le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllo
   sans root). Dans le seul mode de repli, ils sont écartés par leur nom
   système exact ; tout autre processus illisible garde la garde entière.
   67 tests du script PASS ; simulation SYS : 0,57 Gio (profil de 10,5 jours).
+- Inventaire des worktrees SYS : `~/.local/share/bridget-projects` est un
+  montage lié de /mnt/data ; l'outil refusait (« alias mount may hide usage »)
+  car un fichier pouvait être ouvert par le second chemin. Il suit désormais
+  les chemins alias du même périphérique et ramène chaque fichier ouvert à son
+  chemin canonique ; sans liste d'alias le refus reste. Test ajouté, 68 tests
+  PASS. Copies de sessions anciennes de ~/.cache rendues privées (700).
+  Observation SYS complète ; 91 worktrees de revues fusionnés, 41 tâches liées
+  toutes closes, aucune commande worker active : retirés par l'outil.

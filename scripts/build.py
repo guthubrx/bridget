@@ -441,7 +441,10 @@ def mount_snapshot():
     return data, mounts
 
 
-def validate_mount_scopes(scopes, mounts):
+def validate_mount_scopes(scopes, mounts, aliases=None):
+    """Sans liste `aliases`, un second montage du même contenu reste refusé.
+    Avec une liste, chaque chemin alias y est ajouté avec son chemin canonique
+    pour que les fichiers ouverts par l'alias restent comptés."""
     protected = set()
     roots = [path.resolve(strict=True) for path in scopes]
     for root in roots:
@@ -461,7 +464,14 @@ def validate_mount_scopes(scopes, mounts):
                 raise ValueError("nested mount in observed scope")
             for dev, source, _kind in layers:
                 if dev == device and (identity == source or identity in source.parents or source in identity.parents):
-                    raise ValueError("alias mount may hide usage")
+                    if aliases is None:
+                        raise ValueError("alias mount may hide usage")
+                    if identity == source:
+                        aliases.append((other, root))
+                    elif identity in source.parents:
+                        aliases.append((other, root / source.relative_to(identity)))
+                    else:
+                        aliases.append((other / identity.relative_to(source), root))
         protected.add(device)
     return roots, protected
 
@@ -563,14 +573,26 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
             budget.exempt_mounts = len(exempt)
         elif not process_output_complete(result.stdout, fuse):
             raise ValueError("incomplete process records")
+        aliases = []
         if before is not None and scopes:
-            validate_mount_scopes(scopes, mounts)
+            validate_mount_scopes(scopes, mounts, aliases)
         if before is not None and mount_snapshot()[0] != before:
             raise ValueError("mount inventory changed")
         if not budget.remaining():
             raise ValueError("observation expired")
         paths = parse_open_paths(result.stdout, ignore_own)
         budget.process_reader = "system_lsof" if before is None else "linux_system_lsof"
+        if aliases:
+            # Un fichier ouvert par un second montage du même contenu compte
+            # sous son chemin canonique.
+            translated = []
+            for path in paths:
+                for alias, canonical in aliases:
+                    if path == alias or alias in path.parents:
+                        path = canonical / path.relative_to(alias)
+                        break
+                translated.append(path)
+            paths = translated
         if scopes:
             roots = {path.resolve() for path in scopes}
             paths = [path for path in paths if path in roots or not roots.isdisjoint(path.parents)]
