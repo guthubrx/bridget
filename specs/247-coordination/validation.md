@@ -27,4 +27,8 @@ Le suivi réel60f8 est devenu cancelled à1794150474, cancel_reason=mission_nati
 
 APK8013 signé/certificat et lignée8012 vérifiés ; SHA88f3d027bef69506775e31f2f2e5731f2391300d03cff772b77f296d18493133. Aucun changement visuel d’interface, aucun diaporama technique imposé. Diagnostics et avis de reprise envoyés aux deux demandeurs ; reçus privés conservés sans lecture affirmée.
 
-Publication et clôtureGit/nettoyage à consigner après leurs reçus.
+Publicationv0.8.13 : six actifs vérifiés par SHA/taille GitHub puis téléchargement anonyme. Quatre rapports natifs installed0.8.13/up_to_date/fresh. Code et bilan intégrés àmain et poussés ; alignement final quatre hôtes et retrait du checkout Mac dans le reçu de clôture privé.
+
+Worktrees247 AndroidCartae et compilationSYS retirés après intégration, propreté, inventaire des ignorés et usages ;870 fichiersAndroidbuild avec le checkout. Quatre copies de transfert retirées :138168132 octets logiques. Le nettoyageCargo automatique a retiré les intermédiaires dépassant le budget ; caches partagés finauxMac2,03Gio/SYS5,51Gio sous10Gio. Conserver version active247 et retour246-r2 qualifié, anciennes images encore chargées, preuves, APK de référence, vues et travaux étrangers. Le dernier checkout/branche247 est retiré après le dernier commit ; pas de suppression de tâche ou de reçu pour faire le ménage.
+
+Preuves et reçus privés : /Users/moi/.cache/bridget247-coordination/. Aucun redémarrageT3 autorisé ni effectué.

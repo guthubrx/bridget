@@ -1384,3 +1384,11 @@ Un accord humain explicite déjà donné pour cette reprise peut être déclaré
 La question et sa réponse sont conservées dans le magasin natif des questions. Elles ne déclenchent aucun lancement. Avant de reprendre le travail restant, le parent vérifie l’arrêt physique et le dossier de l’exécution précédente. Il conserve l’ancienne tâche, sa clé et ses résultats. Un accord antérieur applicable dispense de redemander la décision ; une question devenue sans objet peut être fermée sans fabriquer une réponse humaine. Les anciens échecs déjà signalés ne créent pas de questions rétroactives.
 
 Une sonde peut aussi constater un quota avant l’admission. La question est alors liée à la même enveloppe et au propriétaire, sans tâche, réservation ou consommation de clé. Une erreur réseau, une saturation ou une erreur fournisseur générique n’est pas transformée en quota.
+
+### Coordination native distante et annulation (247)
+
+Le parent authentifié peut coordonner son propre enfant natif actif sur une autre machine. Les instances et la relation admise prouvent ce périmètre ; les chemins physiques Mac et Linux peuvent différer. Aucun motif inter-projets n’est exigé pour cette seule différence. Le sommeil, les révocations, la pause et les contrôles de guidage restent applicables. Une remise exacte de mission ne peut pas emprunter cette autorité ordinaire. Les échanges avec des agents étrangers gardent leur motif explicite.
+
+Un motif ajouté change l’enveloppe d’un message identifié. Ne pas modifier une clé close : après refus définitif attesté sans remise, préparer une demande corrigée avec sa propre clé si l’échange reste autorisé. Une issue inconnue conserve sa clé et son enveloppe. Ne pas rejouer un ancien message ou une mission par automatisme.
+
+Une annulation native confirmée clôt aussi le suivi logique ouvert correspondant à la mission, au propriétaire et à l’enfant. Un refus fournisseur tardif conserve son diagnostic sans notifier un nouvel échec de la mission annulée. Le statut logique ne fabrique ni accusé de livraison ni preuve d’arrêt physique. Les fichiers et résultats restent conservés.
