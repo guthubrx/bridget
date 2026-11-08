@@ -337,3 +337,7 @@ le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllo
   dossier gardé car cwd de l'agent Codex vivant du superviseur 2500061.
 - Reçus anciens archivés dans ~/.local/share/bridget-maintenance/243-recus-anciens
   (31 dossiers sans exécutable) ; docs, skills et credits de Cartae restaurés.
+
+Résultat final sur 21a16236 : Mac 3 609 PASS, 0 échec, 0 avertissement ;
+Linux (worktree Git réel) 3 626 PASS, 0 échec, 0 avertissement. Binaire actif
+243-tests-r4 inchangé (corrections de bancs seulement depuis b44c0e3b).
