@@ -473,6 +473,12 @@ fn remote_result_for_delivery(
     if !message.reply || message.origin == Some(bridget_core::MessageOrigin::System) {
         return Ok(None);
     }
+    // Un message ordinaire corrélé n'est pas une nouvelle ronde de la tâche.
+    // Les missions natives portent TriggerTurn et leur contexte d'exécution ;
+    // leur réservation de résultat reste obligatoire, y compris après reprise.
+    if execution.is_none() && ordinary_queue_message(message) && !bindings.contains_key(&message.id) {
+        return Ok(None);
+    }
     let (execution_id, generation) = execution.ok_or("remote_result_slot_required")?;
     if bindings.get(&message.id).is_some_and(|binding| {
         (binding.execution_id != execution_id || binding.generation != generation)
@@ -841,6 +847,10 @@ fn defer_ordinary_delivery(frame: &DaemonToWrapper, busy: bool) -> bool {
         if !matches!(message.intent,Some(bridget_core::MessageIntent::SteerCurrent|bridget_core::MessageIntent::InterruptAndStart)))
 }
 
+fn ordinary_queue_message(message: &bridget_core::BridgetMessage) -> bool {
+    matches!(message.intent,None|Some(bridget_core::MessageIntent::QueueOnly))
+}
+
 fn deliver_provider_message<S: Transport + ?Sized>(
     transport: &mut S,
     message: &bridget_core::BridgetMessage,
@@ -1044,6 +1054,11 @@ pub(crate) struct IdempotentDeliveryTracker {
     instance_id: String,
     receipts: ReceiptStore,
     pending: BTreeMap<String, VecDeque<PendingAcpDispatch>>,
+    ordinary: BTreeMap<String,usize>,
+    reply_outbox: Option<crate::reply_outbox244::ReplyOutbox>,
+    reply_state_home: std::path::PathBuf,
+    modern_reply_core: bool,
+    last_reply_retry: Instant,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -1074,7 +1089,38 @@ impl IdempotentDeliveryTracker {
             instance_id: instance_id.to_string(),
             receipts,
             pending: BTreeMap::new(),
+            ordinary: BTreeMap::new(),
+            reply_outbox: if state_home.join("native-replies244").exists() {Some(crate::reply_outbox244::ReplyOutbox::open(state_home,instance_id)?)} else {None},
+            reply_state_home: state_home.to_owned(),
+            modern_reply_core:false,
+            last_reply_retry:Instant::now(),
         })
+    }
+
+    fn retain_reply(&mut self,original:&bridget_core::BridgetMessage,reply:bridget_core::BridgetMessage)->Result<bridget_core::BridgetMessage,String> {
+        if self.reply_outbox.is_none(){self.reply_outbox=Some(crate::reply_outbox244::ReplyOutbox::open(&self.reply_state_home,&self.instance_id)?);}
+        self.reply_outbox.as_ref().unwrap().retain(original,reply,unix_now_secs())
+    }
+    fn acknowledge_reply(&self,id:&str)->Result<(),String> {
+        if let Some(outbox)=&self.reply_outbox {outbox.acknowledged(id)?;} Ok(())
+    }
+    fn retry_reply(&mut self,writer:&Arc<Mutex<Option<BufWriter<UnixStream>>>>)->Result<(),String> {
+        if !self.modern_reply_core || self.last_reply_retry.elapsed()<Duration::from_secs(5){return Ok(());}
+        self.last_reply_retry=Instant::now();
+        if let Some(outbox)=&self.reply_outbox && let Some(message)=outbox.pending(unix_now_secs())? {
+            send_wrapper_message(writer,WrapperToDaemon::Send(message));
+        }
+        Ok(())
+    }
+
+    fn admit_ordinary(&mut self,message: &bridget_core::BridgetMessage) {
+        *self.ordinary.entry(message.id.clone()).or_default()+=1;
+    }
+    fn ordinary_active(&self,id: &str) -> bool { self.ordinary.get(id).is_some_and(|n|*n>0) }
+    fn finish_ordinary(&mut self,id: &str) {
+        if let Some(count)=self.ordinary.get_mut(id) {
+            if *count>1 {*count-=1;}else{self.ordinary.remove(id);}
+        }
     }
 
     fn receive(
@@ -2511,6 +2557,7 @@ pub fn launch(
         .map_err(|error| format!("activation du journal interactif impossible: {error}"))?,
     );
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+    send_wrapper_message(&writer, WrapperToDaemon::DaemonIdentityRequest);
     let relay_writer = writer.clone();
     let mut relay = AttachRelayWorker::start(
         journal_root.join(&my_name),
@@ -4767,6 +4814,7 @@ fn launch_session_with_status(
     }
     apply_pending_profile_instructions(socket, transport.as_mut(), &my_name, &instance_id);
     send_wrapper_message(&writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+    send_wrapper_message(&writer, WrapperToDaemon::DaemonIdentityRequest);
     send_wrapper_message(
         &writer,
         WrapperToDaemon::ObservationCapabilities {
@@ -4968,6 +5016,9 @@ fn launch_session_with_status(
             consecutive_fast_failures = 0;
         }
         let events = transport.drain_events();
+        if let Err(error)=idempotent_deliveries.retry_reply(&writer) {
+            error!("réponse conservée, reprise non confirmée : {error}");break;
+        }
         let journal_failed = forward_managed_events_with_redaction(
             &writer,
             &my_name,
@@ -5040,6 +5091,7 @@ fn launch_session_with_status(
                 ) else {
                     break;
                 };
+                idempotent_deliveries.modern_reply_core=false;
                 reader = new_reader;
                 my_name = registered_name;
                 last_permission_fact = None;
@@ -5066,6 +5118,19 @@ fn launch_session_with_status(
                 continue;
             }
             Ok(_) => match decode(line.trim()) {
+                Ok(DaemonToWrapper::DaemonIdentityReport{features,..})=>{
+                    idempotent_deliveries.modern_reply_core=features.iter().any(|f|f=="native_reply_outbox_v1");
+                }
+                Ok(DaemonToWrapper::Nack{id,reason}) if id.starts_with("reply244-")=>{
+                    if let Some(outbox)=&idempotent_deliveries.reply_outbox
+                        && let Err(error)=outbox.refused(&id){error!("refus de réponse non conservé : {error}");break;}
+                    warn!("réponse conservée sans nouvelle tentative : {}",reason.chars().take(256).collect::<String>());
+                }
+                Ok(DaemonToWrapper::Ack{id,..})=>{
+                    if let Err(error)=idempotent_deliveries.acknowledge_reply(&id){
+                        error!("accusé de réponse non conservé : {error}");break;
+                    }
+                }
                 Ok(DaemonToWrapper::Deliver {message,..}
                     | DaemonToWrapper::DeliverExecution {message,..}
                     | DaemonToWrapper::DeliverIdempotent {message,..}) if workspace_repair_barrier.is_some() => {
@@ -5086,12 +5151,15 @@ fn launch_session_with_status(
                         continue;
                     }
                     idempotent_deliveries.record_historic(&message.id);
+                    let ordinary=!execution_bindings.contains_key(&message.id) && ordinary_queue_message(&message);
+                    if ordinary { idempotent_deliveries.admit_ordinary(&message); }
                     if let Err(error) = deliver_provider_message(
                         transport.as_mut(),
                         &message,
                         &mut deferred_native_context,
                     ) {
                         idempotent_deliveries.historic_injection_failed(&message.id);
+                        if ordinary { idempotent_deliveries.finish_ordinary(&message.id); }
                         send_wrapper_message(
                             &writer,
                             bound_delivery_rejection(
@@ -5271,6 +5339,8 @@ fn launch_session_with_status(
                             delivery_id,
                         } => {
                             let message_id = message.id.clone();
+                            let ordinary=execution_bindings.get(&message_id).is_none() && ordinary_queue_message(&message);
+                            if ordinary {idempotent_deliveries.admit_ordinary(&message);}
                             // Seen est durable ; aucun PromptDispatched/ACK d’injection encore.
                             #[cfg(feature = "test-support")]
                             crate::test_sync::checkpoint("after_receipt_seen_before_injection");
@@ -5279,6 +5349,7 @@ fn launch_session_with_status(
                                 &message,
                                 &mut deferred_native_context,
                             ) {
+                                if ordinary {idempotent_deliveries.finish_ordinary(&message_id);}
                                 send_wrapper_message(
                                     &writer,
                                     bound_delivery_rejection(
@@ -5451,6 +5522,7 @@ fn launch_session_with_status(
                 ) else {
                     break;
                 };
+                idempotent_deliveries.modern_reply_core=false;
                 reader = new_reader;
                 my_name = registered_name;
                 last_permission_fact = None;
@@ -6347,6 +6419,7 @@ fn reconnect_managed_session(
                 // même journal local reste actif, il doit donc être annoncé de
                 // nouveau sur la nouvelle connexion.
                 send_wrapper_message(writer, WrapperToDaemon::JournalReady { receipt_probe: true });
+                send_wrapper_message(writer, WrapperToDaemon::DaemonIdentityRequest);
                 send_wrapper_message(
                     writer,
                     WrapperToDaemon::ObservationCapabilities {
@@ -7309,7 +7382,7 @@ fn forward_managed_events_with_redaction(
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress });
             }
             ManagedEventKind::TurnStarted { message_id } => {
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("événement de tour ignoré: message hors exécution active");
                     continue;
                 }
@@ -7339,7 +7412,7 @@ fn forward_managed_events_with_redaction(
                         redact_managed_text(redaction, "provider_error", std::mem::take(detail));
                 }
                 let message_id = message.id.clone();
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7382,7 +7455,7 @@ fn forward_managed_events_with_redaction(
                         send_wrapper_message(writer,WrapperToDaemon::ChildRequestClosed {request_id,state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply});
                     }
                 }
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7465,18 +7538,26 @@ fn forward_managed_events_with_redaction(
                     {
                         let mut reply =
                             bridget_core::BridgetMessage::new(my_name, &message.from, response);
-                        reply.in_reply_to = Some(message.id);
-                        send_wrapper_message(writer, WrapperToDaemon::Send(reply));
+                        reply.in_reply_to = Some(message.id.clone());
+                        if idempotent_deliveries.modern_reply_core {
+                            match idempotent_deliveries.retain_reply(&message,reply) {
+                                Ok(reply)=>send_wrapper_message(writer,WrapperToDaemon::Send(reply)),
+                                Err(error)=>{error!("réponse non déposée, conservation impossible : {error}");return true;}
+                            }
+                        }else{
+                            send_wrapper_message(writer, WrapperToDaemon::Send(reply));
+                        }
                     }
                     _ => {}
                 }
                 if let Some(rejection) = rejection {
                     send_wrapper_message(writer, rejection);
                 }
+                idempotent_deliveries.finish_ordinary(&message_id);
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
                 let reason = redact_managed_text(redaction, "provider_rejection", reason);
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) {
+                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("refus fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7518,6 +7599,7 @@ fn forward_managed_events_with_redaction(
                     send_wrapper_message(writer, report);
                 }
                 send_wrapper_message(writer, rejection);
+                idempotent_deliveries.finish_ordinary(&message_id);
             }
             ManagedEventKind::JournalFailed { detail } => {
                 journal_failed = true;
@@ -13242,6 +13324,7 @@ mod remote162_result_tests {
             let mut message = bridget_core::BridgetMessage::new("parent", "child", "mission");
             message.id = "mission162".into();
             message.reply = true;
+            message.intent=Some(bridget_core::MessageIntent::TriggerTurn);
             message
         }
         fn binding(&self) -> ManagedExecutionBinding {
@@ -13303,6 +13386,29 @@ mod remote162_result_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn spec244_message_direct_distant_ne_demande_pas_le_slot_de_la_mission() {
+        let fixture=Fixture::new();
+        let mut direct=fixture.message();
+        direct.id="direct244".into();direct.intent=None;
+        let mut bindings=HashMap::from([("mission162".into(),fixture.binding())]);
+        assert!(remote_result_for_delivery(Some(&fixture.context),&direct,None,&bindings).unwrap().is_none());
+        let (stream,peer)=UnixStream::pair().unwrap();
+        let writer=Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        let mut tracker=IdempotentDeliveryTracker::open_at(&fixture.root.join("receipts"),"instance162").unwrap();
+        tracker.admit_ordinary(&direct);
+        let event=ManagedEvent::internal(bridget_transport::ManagedEventSource::CodexAppServer,vec![],
+            ManagedEventKind::TurnFinished{message:direct,response:"DIRECT244OK".into(),terminal:ManagedTerminal::Completed});
+        assert!(!forward_managed_events(&writer,"child",vec![event],&mut tracker,&mut bindings));
+        assert_eq!(bindings["mission162"].state,"running");
+        assert!(!tracker.ordinary_active("direct244"));
+        drop(writer);
+        let frames=BufReader::new(peer).lines().map(|line|decode(&line.unwrap()).unwrap()).collect::<Vec<_>>();
+        assert_eq!(frames.iter().filter(|f|matches!(f,WrapperToDaemon::Send(m) if m.in_reply_to.as_deref()==Some("direct244") && m.body=="DIRECT244OK")).count(),1);
+        assert!(WorkerStore::open(&fixture.context.store_root,fixture.context.worker.clone()).unwrap()
+            .read_result(&fixture.reservation.slot.identity).unwrap().is_none(),"la réponse ordinaire ne devient pas le résultat de la tâche");
     }
 
     #[test]

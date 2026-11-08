@@ -2286,11 +2286,13 @@ fn two_concurrent_reservations_have_one_winner() {
     let _ = std::fs::remove_file(&db_path);
     let barrier = Arc::new(Barrier::new(2));
     let mut handles = Vec::new();
-    for _ in 0..2 {
-        let path = db_path.clone();
+    // Le contrat testé est la réservation concurrente, pas l'ouverture du
+    // schéma. Une erreur d'ouverture dans un thread avant barrier.wait()
+    // laissait l'autre attendre sans fin, sans rendre le panic du test.
+    let stores = [IdempotencyStore::open(&db_path).unwrap(), IdempotencyStore::open(&db_path).unwrap()];
+    for store in stores {
         let barrier = barrier.clone();
         handles.push(thread::spawn(move || {
-            let store = IdempotencyStore::open(&path).unwrap();
             barrier.wait();
             reserve(&store, b"canon")
         }));

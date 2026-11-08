@@ -1202,6 +1202,11 @@ impl IdempotencyStore {
         self.conn.query_row("SELECT EXISTS(SELECT 1 FROM send_deliveries WHERE delivery_id=?1 AND operation_kind='send' AND issuer_scope IN (?2,?3,?4))",params![delivery_id,crate::wake_schedules::CLI_WAKE_SCOPE,crate::wake_schedules::SCHEDULED_WAKE_SCOPE,crate::wake_schedules::MISSED_SUMMARY_SCOPE],|r|r.get(0)).map_err(Into::into)
     }
 
+    pub(crate) fn original_issued_at(&self,key:&IdempotencyKey)->Result<Option<i64>,IdempotencyError> {
+        self.conn.query_row("SELECT issued_at FROM idempotency_records WHERE issuer_scope=?1 AND operation_kind=?2 AND idempotency_key=?3",
+            params![key.issuer_scope,key.operation_kind.as_str(),key.idempotency_key],|r|r.get(0)).optional().map_err(Into::into)
+    }
+
     pub fn reserve(
         &self,
         key: &IdempotencyKey,

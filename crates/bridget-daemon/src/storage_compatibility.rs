@@ -25,7 +25,7 @@ const WORKER_CAPACITY: &str = "worker.store.capacity.v2";
 const SPECIALIST_REQUESTS: &str = "specialists.requests.v1";
 // Les prepared222 ne peuvent être remis que par leur autorité épinglée.
 // Un ancien drain qui ignore cette garde ne constitue pas un lecteur compatible.
-const FORMATS: &[&str] = &["delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1","workspace.commit_view.notice.v2","worker.view.reservation.v2","workspace.commit_view.large.v2","worker.store.capacity.v3","agents.dormancy.v1",SPECIALIST_REQUESTS,WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
+const FORMATS: &[&str] = &["wrapper.delivery_spool.v1","wrapper.reply_outbox.v1","delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1","workspace.commit_view.notice.v2","worker.view.reservation.v2","workspace.commit_view.large.v2","worker.store.capacity.v3","agents.dormancy.v1",SPECIALIST_REQUESTS,WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +151,14 @@ mod tests {
         serde_json::json!({"version":1,"nonce":"a".repeat(32),"image_sha256":"b".repeat(64),
             "reads":FORMATS,"writes":FORMATS})
     }
+    #[test]
+    fn spec244_retour_exige_les_deux_files_durables() {
+        for format in ["wrapper.delivery_spool.v1","wrapper.reply_outbox.v1"] {
+            let mut old=fixture();old["reads"].as_array_mut().unwrap().retain(|v|v!=format);old["writes"]=old["reads"].clone();
+            assert!(!validate(&serde_json::to_vec(&old).unwrap(),&"a".repeat(32),&"b".repeat(64)));
+        }
+    }
+
     #[test]
     fn spec241_return_requires_authority_resource_and_tool_contracts() {
         for format in ["delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1"] {

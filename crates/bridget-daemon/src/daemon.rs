@@ -12225,8 +12225,52 @@ fn handle_idempotent_send(
 
 #[derive(Clone,Copy)]
 enum RetainedSendAuthority<'a> {
+    WrapperReply(&'a str),
     Result(&'a native_delegation::RetainedResultAuthority),
     Specialist(&'a specialists222::SpecialistSendAuthority),
+}
+
+/// Une réponse automatique ordinaire garde les droits de sa connexion primaire.
+/// Ce chemin ne transporte jamais le résultat courant ou passé d'une mission.
+fn authorize_wrapper_reply(st:&DaemonState,conn:&str,message:&bridget_core::BridgetMessage,instance:&str)->Result<(),String> {
+    if st.auxiliary_connections.contains(conn)
+        || st.connection_roles.get(conn)==Some(&ConnectionRole::Attach)
+        || live_connection_identity(st,conn)!=Some((message.from.clone(),instance.to_owned()))
+        || message.reply || !matches!(message.intent,None|Some(bridget_core::MessageIntent::QueueOnly)) {
+        return Err("wrapper_reply_identity_required".into());
+    }
+    let correlation=message.in_reply_to.as_deref().ok_or("wrapper_reply_correlation_required")?;
+    let request=st.store.get_request(correlation).map_err(|_|"wrapper_reply_request_unavailable")?
+        .ok_or("wrapper_reply_request_unavailable")?;
+    if request.sender!=message.to || request.target!=message.from {return Err("wrapper_reply_correlation_mismatch".into());}
+    if st.delegation_store.for_mission(correlation)?.is_some() || st.delegation_store.past_mission_task(correlation)?.is_some() {
+        return Err("remote_result_requires_worker".into());
+    }
+    Ok(())
+}
+
+fn retain_wrapper_reply(conn:&str,message:bridget_core::BridgetMessage,instance:&str,st:&mut DaemonState)->DaemonToWrapper {
+    let id=message.id.clone();
+    let scope=crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"));
+    let key=match IdempotencyKey::new(scope,OperationKind::Send,id.clone()) {
+        Ok(key)=>key,Err(_)=>return DaemonToWrapper::Nack{id,reason:"wrapper_reply_id_invalid".into()}
+    };
+    let issued_at=match st.idempotency.original_issued_at(&key) {
+        Ok(stored)=>stored.unwrap_or_else(unix_now_secs),
+        Err(_)=>return DaemonToWrapper::Nack{id,reason:"wrapper_reply_store_unavailable".into()}
+    };
+    let mut controls=Vec::new();
+    let response=handle_idempotent_send_with_result_authority(conn,message,id.clone(),issued_at,
+        IdempotentSendAdmission{project:None,issued_at_tolerance_secs:CLIENT_ISSUED_AT_TOLERANCE_SECS},st,&mut controls,
+        Some(RetainedSendAuthority::WrapperReply(instance)),false);
+    st.pending_post_response_controls.entry(conn.into()).or_default().extend(controls);
+    match response {
+        DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Accepted{..},project_warnings,..}
+        | DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::OutcomeUnknown{delivery_id:Some(_),..},project_warnings,..}
+            =>DaemonToWrapper::Ack{id,project_warnings},
+        DaemonToWrapper::IdempotencyResult{issue,..}=>DaemonToWrapper::Nack{id,reason:format!("wrapper_reply_not_deposited:{issue:?}")},
+        other=>other,
+    }
 }
 
 fn handle_idempotent_send_with_result_authority(
@@ -12261,6 +12305,7 @@ fn handle_idempotent_send_with_result_authority(
         let verified=match authority {
             RetainedSendAuthority::Result(authority)=>native_delegation::authorize_retained_result(st,authority,conn_id,&message),
             RetainedSendAuthority::Specialist(authority)=>specialists222::authorize_prepared_send(st,authority,&message),
+            RetainedSendAuthority::WrapperReply(instance)=>authorize_wrapper_reply(st,conn_id,&message,instance),
         };
         if let Err(reason)=verified {
             return DaemonToWrapper::Nack {
@@ -12274,16 +12319,16 @@ fn handle_idempotent_send_with_result_authority(
             reason: "identité expéditeur non attestée : rattachement auxiliaire requis".into(),
         };
     }
-    let negotiated=if let Some(RetainedSendAuthority::Specialist(authority))=authority {
-        NegotiatedClient{version:CLIENT_CONTRACT_VERSION,
-            issuer_scope:crate::communication::issuer_scope(&format!("specialist:{}",authority.issuer_scope)),
-            capabilities:vec![ClientCapability::SendIdempotent,ClientCapability::SpecialistsV1]}
-    }else if let Some(negotiated)=st.client_negotiations.get(conn_id).cloned() {negotiated}
+    let issuer_scope=if let Some(RetainedSendAuthority::Specialist(authority))=authority {
+        crate::communication::issuer_scope(&format!("specialist:{}",authority.issuer_scope))
+    }else if let Some(RetainedSendAuthority::WrapperReply(instance))=authority {
+        crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"))
+    }else if let Some(negotiated)=st.client_negotiations.get(conn_id) {negotiated.issuer_scope.clone()}
     else{return DaemonToWrapper::ClientRejected{reason:ClientRefusal::NegotiationRequired};};
     // L'identifiant métier est l'autorité publique ; l'ancien champ `id` de
     // Bridget est donc normalisé avant toute comparaison ou garde mutable.
     message.id = message_id.clone();
-    let key = match IdempotencyKey::new(negotiated.issuer_scope, OperationKind::Send, message_id) {
+    let key = match IdempotencyKey::new(issuer_scope, OperationKind::Send, message_id) {
         Ok(key) => key,
         Err(_error) => {
             return DaemonToWrapper::ClientRejected {
@@ -12377,7 +12422,7 @@ fn handle_idempotent_send_with_result_authority(
     };
     // L'autorité de résultat a déjà été vérifiée ci-dessus. Sa notification
     // est une sortie du store canonique, jamais un nouvel ingress du wrapper.
-    let capture = if authority.is_some() {
+    let capture = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_))) {
         // Le résultat canonique reste conservé, sans nouvelle notification au dormant.
         if matches!(authority,Some(RetainedSendAuthority::Result(_))) {
             crate::agent_tracking::dormant(st.store.connection(),&message.to).map_err(|e|e.to_string())
@@ -12440,7 +12485,7 @@ fn handle_idempotent_send_with_result_authority(
         }
         _ => None,
     };
-    let native_task_exchange = if authority.is_some() {
+    let native_task_exchange = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_))) {
         // authorize_retained_result a déjà contrôlé le résultat canonique.
         true
     } else {
@@ -14386,6 +14431,26 @@ mod spec099_classic_delivery_tests {
     const SENDER: &str = "99000000-0000-4000-8000-000000000001";
     const TARGET: &str = "99000000-0000-4000-8000-000000000002";
     const WITNESS: &str = "99000000-0000-4000-8000-000000000003";
+
+    #[test]
+    fn spec244_reponse_wrapper_deposee_une_fois_et_identite_correlee() {
+        let (state,root,_peers)=fixture();let _cleanup=FixtureRoot(root);
+        let mut st=state.lock().unwrap();
+        st.store.create_request("direct244",SENDER,TARGET,120).unwrap();
+        let mut reply=BridgetMessage::new(TARGET,SENDER,"réponse directe");
+        reply.id="reply244-exact".into();reply.in_reply_to=Some("direct244".into());
+        let bad=retain_wrapper_reply("witness",reply.clone(),"spec099-witness",&mut st);
+        assert!(matches!(bad,DaemonToWrapper::Nack{reason,..} if reason=="wrapper_reply_identity_required"));
+        let result=retain_wrapper_reply("target",reply.clone(),"spec099-target",&mut st);
+        assert!(matches!(result,DaemonToWrapper::Ack{..}),"{result:?}");
+        let key=IdempotencyKey::new(crate::communication::issuer_scope("wrapper-reply:spec099-target"),OperationKind::Send,&reply.id).unwrap();
+        let first=st.idempotency.stored_send_delivery(&key).unwrap().unwrap();
+        let repeated=retain_wrapper_reply("target",reply.clone(),"spec099-target",&mut st);
+        assert!(matches!(repeated,DaemonToWrapper::Ack{..}),"{repeated:?}");
+        assert_eq!(st.idempotency.stored_send_delivery(&key).unwrap().unwrap().delivery_id,first.delivery_id);
+        reply.body="autre corps".into();
+        assert!(matches!(retain_wrapper_reply("target",reply,"spec099-target",&mut st),DaemonToWrapper::Nack{reason,..} if reason.contains("EnvelopeMismatch")));
+    }
 
     #[test]
     fn tracking230_sommeil_refuse_envoi_classique_et_principal_agent() {
@@ -23702,6 +23767,11 @@ fn handle_wrapper_message_with_peer(
                     reason: "invalid_intent".into(),
                 });
             }
+            if bridge_msg.id.starts_with("reply244-") && bridge_msg.in_reply_to.is_some()
+                && let Some((_,instance))=live_connection_identity(&st,conn_id)
+            {
+                return Some(retain_wrapper_reply(conn_id,bridge_msg,&instance,&mut st));
+            }
             let logical_sender = bridge_msg.from.clone();
             let captured = match native_delegation::capture_reply(&mut st, conn_id, &bridge_msg) {
                 Ok(captured) => captured,
@@ -24144,6 +24214,7 @@ fn handle_wrapper_message_with_peer(
                 instance_id: st.instance_id.clone(),
                 features: {
                     let mut features=vec![
+                    "native_reply_outbox_v1".to_string(),
                     "wait_v1".to_string(),
                     "user_input_v1".to_string(),
                     "specialists_v1".to_string(),
