@@ -2476,6 +2476,16 @@ impl LinkWorker {
     /// et l'expéditeur d'une demande suivie attendrait pour rien.
     fn report_discard(&self, frame: &DaemonToWrapper, why: Discard) {
         let message = delivery_message(frame);
+        // La file précède le tracker et tout dispatch fournisseur. À la
+        // fermeture, ces remises idempotentes restent dans le magasin maître ;
+        // elles ne sont ni rejetées ni déclarées injectées. Le Register suivant
+        // reprend exactement leurs IDs, jamais une mission sous une autre clé.
+        if matches!(why, Discard::LinkClosing)
+            && matches!(frame, DaemonToWrapper::DeliverIdempotent { .. })
+        {
+            info!("remise {} conservée au maître pendant la coupure", message.id);
+            return;
+        }
         let reason = match why {
             Discard::Saturated => {
                 format!("file du fil saturée à {QUEUE_BOUND}, remise écartée")
@@ -7024,7 +7034,7 @@ mod tests {
     }
 
     #[test]
-    fn spec165_fermeture_rapporte_une_remise_restant_en_file() {
+    fn spec244_fermeture_conserve_la_remise_non_injectee() {
         let (mut worker, peer) = worker099();
         worker.handle_frame(idempotent113("fermeture"));
         assert_eq!(worker.queue.len(), 1);
@@ -7035,9 +7045,9 @@ mod tests {
         worker.relay.shutdown();
 
         let frames = frames113(peer);
-        assert!(saga_closed113(&frames, "d-fermeture"));
+        assert!(!saga_closed113(&frames, "d-fermeture"));
         assert!(
-            rejection113(&frames, "fermeture").is_some_and(|reason| reason.contains("lien fermé"))
+            rejection113(&frames, "fermeture").is_none()
         );
         assert!(
             frames

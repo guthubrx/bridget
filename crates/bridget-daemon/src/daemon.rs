@@ -5367,35 +5367,6 @@ impl DaemonState {
         }
     }
 
-    /// Après purge de présence(s) : orpheliner les remises `dispatching` et
-    /// prévenir l'émetteur. Ne décide PAS de purger — seulement les suites.
-    fn orphan_deliveries_after_presence_purge(&mut self, purged_instance_ids: &[String]) {
-        const REASON: &str = "destinataire purgé — présence absente ; remise orpheline";
-        for instance_id in purged_instance_ids {
-            match self
-                .idempotency
-                .orphan_dispatching_for_instance(instance_id, REASON)
-            {
-                Ok(notices) => {
-                    for notice in &notices {
-                        info!(
-                            "remise orpheline delivery={} msg={} {}→{} ({})",
-                            notice.delivery_id,
-                            notice.message_id,
-                            notice.sender,
-                            notice.target,
-                            notice.reason
-                        );
-                    }
-                }
-                Err(error) => {
-                    error!("orphelinage des remises de {instance_id}: {error}");
-                }
-            }
-        }
-        self.flush_pending_orphan_emitter_notices();
-    }
-
     /// Pousse les signaux ORPHELIN encore non notifiés (y compris après crash).
     ///
     /// Décision (écrite — charge jury) : rejouer au **Register de l'émetteur**,
@@ -5556,24 +5527,14 @@ impl DaemonState {
         self.release_stale_busy_turns();
         // Lot B (déjà sur main) : exemption `connected` levée — retain =
         // horloge lien seule via `presence_within_retention`.
-        // Ce lot (purge/orphan) : capturer les IDs purgés pour orpheliner les
-        // remises `dispatching` — sans réintroduire l'exemption connected.
-        let before: HashSet<String> = self.presences.keys().cloned().collect();
+        // Une présence n'est qu'une route temporaire. Sa purge ne clôt pas
+        // les remises durables : la même instance attestée les récupère au
+        // Register, avec le même delivery_id et la déduplication du récepteur.
         self.presences
             .retain(|_, presence| presence_within_retention(presence));
-        let purged: Vec<String> = before
-            .into_iter()
-            .filter(|id| !self.presences.contains_key(id))
-            .collect();
-        // Présence expirée + nom encore au routeur = fantôme. On coupe le lien.
         self.release_router_for_dangling_instances();
-        // APRÈS la décision de purger (pas la politique de purge) : rendre
-        // visibles les remises qui ne partiront plus.
-        self.orphan_deliveries_after_presence_purge(&purged);
-        // Rejeu des notices dont le Deliver a échoué / crashé après orphan.
-        if purged.is_empty() {
-            self.flush_pending_orphan_emitter_notices();
-        }
+        // Les notices historiques déjà closes restent consultables/remises.
+        self.flush_pending_orphan_emitter_notices();
         // Une seule lecture du roster pour tout l'annuaire : la persistance se
         // résout ensuite par nom, sans E/S par agent.
         let persistence = self.fleet.named_persistence();
@@ -42180,7 +42141,7 @@ mod presence_tests {
     /// Lot A : le retain lit `link_seen`. Stalifier seulement `capacity_seen`
     /// laisserait le lien frais → présence non purgée → faux vert / faux rouge.
     #[test]
-    fn purge_presence_orpheline_les_remises_dispatching() {
+    fn spec244_purge_presence_conserve_les_remises_pour_la_meme_instance() {
         use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
 
         let (mut state, config) = state_with_registered_agent("purge-orphelin");
@@ -42237,8 +42198,8 @@ mod presence_tests {
                 .dispatching_deliveries_for_instance("instance-1", 1_000_000)
                 .unwrap()
                 .len(),
-            0,
-            "plus de dispatching après purge"
+            1,
+            "la remise durable attend le retour de la même instance"
         );
         assert_eq!(
             state
@@ -42246,14 +42207,11 @@ mod presence_tests {
                 .orphaned_delivery_id(&key)
                 .unwrap()
                 .as_deref(),
-            Some("delivery-jury")
+            None
         );
         assert_eq!(
             state.idempotency.lookup(&key, 1_000_000).unwrap(),
-            crate::idempotency::LookupResult::Orphaned {
-                expires_at: 1_000_000 + 3600,
-                reason: "destinataire purgé — présence absente ; remise orpheline".to_string(),
-            }
+            crate::idempotency::LookupResult::OutcomeUnknown { expires_at: 1_000_000 + 3600 }
         );
         let _ = std::fs::remove_file(config.db_path);
     }
@@ -42261,7 +42219,7 @@ mod presence_tests {
     /// ORACLE — moitié « pas en silence » : un Deliver ORPHELIN atteint l'émetteur.
     /// Meurt si l'on retire le push (ou la notice durable) tout en gardant la phase.
     #[test]
-    fn purge_presence_delivre_un_orphelin_a_l_emetteur() {
+    fn spec244_purge_presence_ne_fabrique_pas_un_echec_de_remise() {
         use crate::idempotency::{IdempotencyKey, OperationKind, Reservation, SendDelivery};
         use std::io::Read;
         use std::os::unix::net::UnixStream;
@@ -42359,26 +42317,17 @@ mod presence_tests {
 
         let _ = state.agent_infos();
 
+        peer.set_nonblocking(true).unwrap();
         let mut buf = [0u8; 4096];
-        let n = peer
-            .read(&mut buf)
-            .expect("Deliver ORPHELIN attendu sur la socket émetteur");
-        let received = String::from_utf8_lossy(&buf[..n]);
-        assert!(
-            received.contains("ORPHELIN") && received.contains("msg-a-notifier"),
-            "la moitié « pas en silence » exige un Deliver lisible: {received}"
-        );
-        assert!(
-            received.contains("clé est close") && received.contains("Change de destinataire"),
-            "le signal doit porter la conduite (pas seulement le constat): {received}"
-        );
+        assert!(matches!(peer.read(&mut buf), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock));
+        assert_eq!(state.idempotency.dispatching_deliveries_for_instance("instance-1", 1_000_000).unwrap().len(), 1);
         assert!(
             state
                 .idempotency
                 .pending_orphan_emitter_notices()
                 .unwrap()
                 .is_empty(),
-            "après Deliver réussi, plus aucune notice en attente"
+            "aucune notice orpheline créée pour une simple absence de route"
         );
         let _ = std::fs::remove_file(config.db_path);
     }

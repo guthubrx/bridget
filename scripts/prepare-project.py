@@ -162,6 +162,40 @@ def mapping_matches(mapping, host, cwd, machine_id=None):
     local = mapping_for_origin(mapping, machine_id, host)
     return local is not None and contained(cwd, absolute(local["source_root"]))
 
+def repaired_mapping(selected, request, key, mapping):
+    """Compléter seulement une autorisation additionnelle déjà approuvée."""
+    if mapping.get("additional_root") is not None or mapping["source_host"] != request["origin_host"]:
+        return mapping
+    requested = request.get("additional_root")
+    if not requested:
+        return mapping
+    fields = ("source_root", "source_uid", "source_mode", "access")
+    allowed = {json.dumps(m["additional_root"], sort_keys=True) for m in selected.get("mappings", {}).values()
+               if m["source_host"] == mapping["source_host"] and m.get("additional_root")
+               and all(m["additional_root"].get(k) == requested.get(k) for k in fields)}
+    if not allowed:
+        return mapping
+    # Une même source avec des droits ou identités cibles différents reste ambiguë.
+    candidates = [json.loads(value) for value in sorted(allowed)]
+    require(len({(e["remote_uid"], e["remote_mode"]) for e in candidates}) == 1,
+            "project_preparation_additional_root_changed")
+    revision = mapping.get("mapping_revision")
+    require(type(revision) is int and revision > 0, "project_preparation_mapping_changed")
+    # Reprendre exactement une destination déjà approuvée sur cette machine,
+    # sans créer une racine ni élargir un chemin à partir du nom du projet.
+    extra = dict(candidates[0])
+    return dict(mapping, additional_root=extra, mapping_revision=revision + 1)
+
+
+def is_additional_root_repair(previous, mapping):
+    return (previous is not None and previous.get("additional_root") is None
+            and isinstance(mapping.get("additional_root"), dict)
+            and type(previous.get("mapping_revision")) is int
+            and mapping.get("mapping_revision") == previous["mapping_revision"] + 1
+            and mapping == dict(previous, additional_root=mapping["additional_root"],
+                                mapping_revision=mapping["mapping_revision"]))
+
+
 # O(M+P) attendu : mappings/préférences bornés à64, aucune I/O dans le choix.
 def select_mapping(selected, request, registry=None):
     mappings = selected.get("mappings", {})
@@ -202,7 +236,7 @@ def select_mapping(selected, request, registry=None):
         key, value = found[0]
         require(mapping_matches(value, request["origin_host"], cwd, request["machine_id"]),
                 "project_mapping_mismatch")
-        return key, value
+        return key, repaired_mapping(selected, request, key, value)
     identity = digest((request["origin_host"] + "\0" + str(source)).encode())
     key = "auto-" + identity[:32]
     base = Path.home() / ".local/share/bridget-projects" / key
@@ -347,8 +381,24 @@ def publish_mapping(registry_path, request, key, mapping):
     selected = machine(registry, request)
     mappings = selected.setdefault("mappings", {})
     previous = mappings.get(key)
-    require(previous is None or previous == mapping, "project_preparation_mapping_changed")
-    if previous is None:
+    repair = is_additional_root_repair(previous, mapping)
+    require(previous is None or previous == mapping or repair, "project_preparation_mapping_changed")
+    if repair:
+        fields = ("source_root", "source_uid", "source_mode", "access", "remote_root", "remote_uid", "remote_mode")
+        extra = mapping["additional_root"]
+        require(any(m.get("additional_root") and m["source_host"] == mapping["source_host"]
+                    and all(m["additional_root"].get(k) == extra.get(k) for k in fields)
+                    for m in mappings.values()), "project_preparation_additional_root_changed")
+        backup = Path(registry_path).with_name(Path(registry_path).name + ".avant-244-" + digest(raw)[:16])
+        if backup.exists():
+            require(private_read(backup) == raw, "project_preparation_registry_changed")
+        else:
+            fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as out:
+                out.write(raw)
+                out.flush()
+                os.fsync(out.fileno())
+    if previous is None or repair:
         mappings[key] = mapping
         atomic_json(registry_path, registry, raw)
 
@@ -644,7 +694,9 @@ def prepare(request):
         link, result = matches[0]
         # Le maître et le worker doivent déjà partager toute correspondance explicite.
         local = selected.get("mappings", {}).get(result["project_id"])
-        require(local is None or local == result["mapping"], "project_preparation_mapping_changed")
+        require(local is None or local == result["mapping"]
+                or is_additional_root_repair(local, result["mapping"]),
+                "project_preparation_mapping_changed")
         request.update(mapping=result["mapping"], resolved_project_id=result["project_id"])
         have = result.get("have_commit")
         if result["needs_bundle"] and have and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", have) and commit_present(source, have):

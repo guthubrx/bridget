@@ -25,3 +25,12 @@
 
 Preuve préalable (8 novembre 2026) : `bridget spawn claude --no-persistent`
 lancé sur Cartae crée un agent attesté sans T3 (c39bc322, claude_stream_json).
+
+Reprise OpenAI : sous-tâches explicites sans réduction du périmètre.
+- [x] T009a Conservation dispatching/held après purge et fermeture avant injection ; doublon vivant attend son ACK unique (testsMac).
+- [ ] T009b Réconciliation positive après disparition du tracker ; aucun renvoi d’une injection ambiguë.
+- [ ] T009c File durable sous saturation et réception différée sans boucle ni quota arbitraire.
+- [x] T004a Guidages exhaustifs des23refus worker, texte source fermé (testMac).
+- [ ] T004b Compléter l’inventaire des refus d’admission et leurs guidages manquants.
+- [x] T005a Copie stricte d’une racine additionnelle déjà approuvée, révision+1, sauvegarde/CAS et7testsPython.
+- [ ] T005b Qualification Linux et publication réelle des copies source/maître/worker dans le parcours natif.

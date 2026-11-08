@@ -245,3 +245,55 @@ mod tests {
         assert!(refusal("unknown:private").is_none());
     }
 }
+
+/// Guidage fermé et exhaustif du protocole worker ; un nouveau refus doit
+/// recevoir son action ici avant de compiler. Aucun texte distant n'est repris.
+pub(super) fn worker_action(reason: bridget_transport::protocol::WorkerRefusal) -> &'static str {
+    use bridget_transport::protocol::WorkerRefusal::*;
+    match reason {
+        UnsupportedVersion | CapabilityRequired => "Faites charger une version Bridget compatible sur les deux composants de cette machine ; conservez la tâche et son reçu.",
+        InvalidEnvelope => "Faites vérifier le champ invalide du reçu par le mainteneur Bridget, sans changer la clé ni les droits.",
+        Unauthorized | PermissionsChanged => "Vérifiez la session propriétaire et les droits déjà accordés ; une extension de droits exige une décision humaine ciblée.",
+        StaleConnection | WorkerUnavailable | ProbeExpired => "Vérifiez le retour du lien natif de cette machine, puis relisez la même tâche ; ne créez pas de remplacement d'issue inconnue.",
+        PlacementMismatch | CommandMismatch | DefinitionChanged => "Faites comparer le placement, la commande et la définition enregistrés avec le reçu de cette tâche ; conservez ses fichiers.",
+        PrepareExpired | ReleaseExpired | ResultSlotExpired => "Relisez l'échéance et l'arrêt natif de cette tâche avant toute nouvelle admission autorisée ; le rejeu ne redémarre pas une tâche close.",
+        ResourceLimit => "Faites lire l'occupation du budget nommé sur cette machine ; conservez les travaux actifs et demandez une décision humaine seulement si la capacité autorisée doit changer.",
+        StoreUnavailable => "Faites vérifier le journal et l'accès au magasin natif de cette machine ; ne supprimez ni reçu ni tâche pour le rouvrir.",
+        DiskFull => "Faites vérifier l'espace libre sur le volume de cette tâche et retirez seulement les copies dont les usages et la clôture sont établis.",
+        FilesystemAccessDenied => "Faites vérifier le propriétaire et le mode du dossier visé ; un accès nouveau exige une décision humaine, pas un contournement.",
+        WorkspacePrepareFailed | WorkspacePrepareIncomplete => "Faites lire la cause et l'étape de préparation dans ce reçu, puis vérifiez le dossier conservé avant toute reprise.",
+        JournalUnavailable => "Conservez la tâche et faites vérifier son journal sur le worker ; un journal indisponible ne prouve pas l'arrêt du travail.",
+        ResultConflict => "Conservez les deux références de résultat et faites comparer leurs empreintes ; aucun résultat ne doit être écrasé.",
+        UnknownExecution => "Relisez l'identifiant d'exécution de la tâche auprès de son propriétaire ; ne démarrez pas une nouvelle exécution pour retrouver l'ancienne.",
+    }
+}
+
+pub(super) fn worker_start_action(error: &str) -> Option<&'static str> {
+    let error = error.strip_prefix("remote_start_failed:").unwrap_or(error);
+    let reason = error.strip_prefix("remote_prepare:")
+        .or_else(|| error.strip_prefix("remote_workspace_prepare:"))?;
+    let mut snake = String::new();
+    for (i, c) in reason.chars().enumerate() {
+        if !c.is_ascii_alphabetic() { return None; }
+        if i > 0 && c.is_ascii_uppercase() { snake.push('_'); }
+        snake.push(c.to_ascii_lowercase());
+    }
+    serde_json::from_value::<bridget_transport::protocol::WorkerRefusal>(json!(snake)).ok().map(worker_action)
+}
+
+#[cfg(test)]
+mod exhaustive244_tests {
+    use super::*;
+    #[test]
+    fn spec244_chaque_refus_worker_a_une_action() {
+        let source = include_str!("../../../bridget-transport/src/protocol.rs");
+        let body = source.split("pub enum WorkerRefusal {").nth(1).unwrap().split('}').next().unwrap();
+        for line in body.lines().map(str::trim).filter(|s| !s.is_empty()) {
+            let variant = line.strip_suffix(',').expect("énumération worker unitaire fermée");
+            let error = format!("remote_start_failed:remote_prepare:{variant}");
+            let action = worker_start_action(&error).unwrap_or_else(|| panic!("guidage manquant : {variant}"));
+            assert!(action.len() > 40, "action absente : {variant}");
+        }
+        assert!(worker_start_action("remote_prepare:texte libre secret").is_none());
+    }
+}

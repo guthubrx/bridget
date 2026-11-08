@@ -62,3 +62,15 @@ Chaque lot : tests ciblés, build, activation quatre hôtes, essai réel, push.
 - Faux positifs sous charge : refus de capacité consigné, pas une alerte.
 - La sentinelle ne doit jamais rejouer une mission métier ni toucher aux tâches
   d'autrui.
+
+## Reprise OpenAI du 8 novembre — frontières de la remise
+
+La présence est une route temporaire, pas l'autorité de rétention. Sa purge ne transforme plus les remises dispatching/held en orphaned. La reprise conserve la même instance attestée, delivery_id, génération, enveloppe et échéance existante. Aucun transfert automatique vers une nouvelle instance, aucune réouverture des anciens orphaned/indeterminate, et aucune mission native réexécutée. Une réinjection sur une nouvelle identité n'est pas une réparation de transport.
+
+Une fermeture du pont avant retrait de sa file locale précède tout appel au tracker et au fournisseur : la copie durable au maître reste disponible. Un doublon sur un tracker encore vivant attend son observable PromptDispatched unique ; il ne provoque ni second prompt ni faux indeterminate. Après disparition réelle du tracker, Seen seul reste ambigu. Sa réconciliation doit s'appuyer sur une preuve fournisseur, jamais sur l'absence d'un événement. Cette dernière fenêtre reste à traiter ; aucune promesse exactly-once des effets métier n'est faite.
+
+E2 réutilise exactement une racine source ET destination déjà approuvée pour cette machine et cette origine. Il ne fabrique pas de nouvelle destination. Seuls additional_root manquant et mapping_revision+1 peuvent changer, sous le verrou/CAS existant, avec sauvegarde privée. Une autorisation absente du maître n'est pas inventée depuis un autre serveur. Les racines existantes et les autres champs restent inchangés.
+
+L'essai c39bc322 est terminé, vivant mais inactif : son mode plan a refusé auto_delegate avant admission. Ce n'est ni un succès de sentinelle ni une panne de quota. Le contrôleur de sentinelle doit pouvoir exercer la délégation ; ses enfants restent en lecture seule. Un moteur fournisseur nécessaire à l'exécution n'est pas une dépendance à T3. La sentinelle ne doit appeler aucun port T3 pour ses contrôles.
+
+Contre-revue Codex c43ac59a terminée/lue/ACK : objections de rétention et de preuve prises en compte. Proposition de transfert vers une autre instance non retenue sans preuve de continuité des reçus. Les chiffres 251/193 décrivent des issues non confirmées, pas des pertes prouvées ni une cause mesurée de chaque redémarrage. Aucune suite de la semaine n'est déjà attestée.

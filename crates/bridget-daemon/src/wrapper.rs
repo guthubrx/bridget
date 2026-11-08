@@ -1043,6 +1043,7 @@ pub(crate) struct IdempotentDeliveryTracker {
 
 #[allow(clippy::large_enum_variant)]
 enum IdempotentDeliveryAction {
+    Pending,
     Inject {
         message: bridget_core::BridgetMessage,
         delivery_id: String,
@@ -1103,6 +1104,12 @@ impl IdempotentDeliveryTracker {
                 }
             }
             Ok(ReceiptDecision::Acked) => IdempotentDeliveryAction::Report(acked()),
+            // Un doublon sur le tracker encore vivant attend le même dispatch.
+            // Aucun second prompt, ni faux échec avant son observable réel.
+            Ok(ReceiptDecision::Indeterminate) if self.pending.get(&message.id).is_some_and(|items| {
+                items.iter().any(|item| matches!(item, PendingAcpDispatch::Idempotent(pending)
+                    if pending.delivery_id == delivery_id && pending.delivery_generation == delivery_generation))
+            }) => IdempotentDeliveryAction::Pending,
             Ok(ReceiptDecision::Indeterminate | ReceiptDecision::RejectedQuota) | Err(_) => {
                 IdempotentDeliveryAction::Report(indeterminate())
             }
@@ -1286,6 +1293,7 @@ pub(crate) fn deliver_batch_to_interactive(
                 message,
                 now,
             ) {
+                IdempotentDeliveryAction::Pending => {},
                 IdempotentDeliveryAction::Report(report) => reports.push(report),
                 IdempotentDeliveryAction::Inject {
                     message,
@@ -5199,6 +5207,7 @@ fn launch_session_with_status(
                         message,
                         unix_now_secs(),
                     ) {
+                        IdempotentDeliveryAction::Pending => {},
                         IdempotentDeliveryAction::Report(report) => {
                             send_wrapper_message(&writer, report);
                         }
@@ -9865,13 +9874,13 @@ mod reconnect_tests {
             idempotent_message("prompt-unique"),
             101,
         );
-        assert!(matches!(
-            redelivery,
-            IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate {
-                delivery_id,
-                delivery_generation: 17,
-            }) if delivery_id == "delivery_seen"
-        ));
+        assert!(matches!(redelivery, IdempotentDeliveryAction::Pending));
+        drop(tracker);
+        // Si le wrapper a réellement disparu, Seen seul reste ambigu.
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance_id).unwrap();
+        assert!(matches!(tracker.receive("delivery_seen".into(), instance_id.into(), 17,
+            500, idempotent_message("prompt-unique"), 102),
+            IdempotentDeliveryAction::Report(WrapperToDaemon::DeliveryIndeterminate { .. })));
         drop(tracker);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -9896,6 +9905,25 @@ mod reconnect_tests {
                 delivery_generation: 29,
             }) if delivery_id == "delivery_replaced"
         ));
+        drop(tracker);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spec244_doublon_en_cours_attend_le_dispatch_unique() {
+        let root = receipt_root("244-pending");
+        let instance = "instance_244_pending";
+        let mut tracker = IdempotentDeliveryTracker::open_at(&root, instance).unwrap();
+        let receive = |tracker: &mut IdempotentDeliveryTracker| tracker.receive(
+            "delivery_pending".into(), instance.into(), 1, 500,
+            idempotent_message("message_pending"), 100,
+        );
+        assert!(matches!(receive(&mut tracker), IdempotentDeliveryAction::Inject { .. }));
+        assert!(matches!(receive(&mut tracker), IdempotentDeliveryAction::Pending));
+        assert!(matches!(tracker.prompt_dispatched("message_pending", 101),
+            Some(WrapperToDaemon::DeliverAcked { delivery_generation: 1, .. })));
+        assert!(tracker.prompt_dispatched("message_pending", 102).is_none());
+        assert!(matches!(receive(&mut tracker), IdempotentDeliveryAction::Report(WrapperToDaemon::DeliverAcked { .. })));
         drop(tracker);
         std::fs::remove_dir_all(root).unwrap();
     }

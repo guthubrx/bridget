@@ -4867,6 +4867,9 @@ fn remote_start_error_message(error: &str) -> Option<&'static str> {
             _ => "Le retour du résultat n’a pas pu être réservé. Le service distant n’a pas fourni de cause précise.",
         });
     }
+    if let Some(action) = admission_guidance211::worker_start_action(error) {
+        return Some(action);
+    }
     let reason = error.strip_prefix("remote_start_failed:remote_workspace_prepare:")?;
     Some(match reason {
         "DiskFull" => "Préparation distante impossible : espace disque insuffisant sur la machine cible. La tâche reste enregistrée.",

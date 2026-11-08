@@ -601,7 +601,10 @@ fn check_program_schema(
     let stderr=std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
         .custom_flags(libc::O_NOFOLLOW).open(&stderr_path).ok();
     let result=check_program_schema_inner(directory,markers,def,source,digest,stopping,stderr);
-    let captured=std::fs::read(&stderr_path).unwrap_or_default();
+    let mut captured = Vec::new();
+    if let Ok(file) = std::fs::File::open(&stderr_path) {
+        let _ = file.take(512).read_to_end(&mut captured);
+    }
     let _=std::fs::remove_file(&stderr_path);
     match &result {
         Ok(_)=>crate::provider_program_compat::clear_check_failure(source,&def.command),
