@@ -284,6 +284,7 @@ class ObservationBudget:
         self.facts = {}
         self.process_reader = "unavailable"
         self.exempt_mounts = 0
+        self.owner_private_scope = False
 
     def remaining(self):
         return max(0, self.deadline - time.monotonic())
@@ -486,6 +487,22 @@ def foreign_mount_exemptions(stderr, scopes, mounts):
     return sorted(set(exempt))
 
 
+def owner_private_scope(scope):
+    """Seuls ce compte et root peuvent atteindre ce dossier : un ancêtre réel lui
+    appartient et ne laisse ni groupe ni autres le traverser."""
+    try:
+        path = Path(scope)
+        if path.is_symlink() or path.resolve() != path.absolute():
+            return False
+        for item in (path, *path.parents):
+            info = os.lstat(item)
+            if stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o011:
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def busy_paths(scopes=(), budget=None, ignore_own=()):
     budget = budget or ObservationBudget()
     command = LSOF_OPEN_FILES
@@ -502,6 +519,14 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
             if os.geteuid() != 0:
                 command = ["sudo", "-n", "--", *command]
         result = observed_run(command, budget, timeout=30)
+        if (result.returncode and command[0] == "sudo" and scopes
+                and all(owner_private_scope(scope) for scope in scopes)):
+            # Sans sudo : un dossier privé n'est accessible qu'à ce compte (et à
+            # root). Les processus de ce compte sont entièrement lisibles sans
+            # privilège ; hors de ce cas, la garde reste entière.
+            command = ["/usr/bin/lsof", "-u", str(os.geteuid()), "-n", "-P", "-F", "pftDn"]
+            result = observed_run(command, budget, timeout=30)
+            budget.owner_private_scope = True
         if result.returncode:
             budget.failures.add("process_access_unavailable")
             return None

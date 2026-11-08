@@ -468,6 +468,17 @@ class WorktreePruneTests(unittest.TestCase):
             self.assertEqual(build.prune_merged_worktrees(self.repo), [])
         self.assertEqual((evidence / "receipt.json").read_text(), '{"kept": true}')
 
+    def test_dossier_prive_au_compte_seul_admis_sans_sudo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            private = Path(tmp).resolve() / "prive"
+            private.mkdir(mode=0o700)
+            os.chmod(private, 0o700)
+            self.assertTrue(build.owner_private_scope(private))
+            link = Path(tmp).resolve() / "lien"
+            link.symlink_to(private)
+            self.assertFalse(build.owner_private_scope(link))
+            self.assertFalse(build.owner_private_scope(Path(tmp).resolve() / "absent"))
+
     def test_incomplete_process_inventory_preserves_worktree(self):
         real_run = build.observed_run
         for returncode, stderr in ((1, b""), (0, b"WARNING: inaccessible filesystem")):

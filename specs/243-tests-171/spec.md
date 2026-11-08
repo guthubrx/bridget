@@ -279,3 +279,22 @@ car `sudo -n lsof` exige un mot de passe — garde volontaire, la lever demande
 un droit sudo sans mot de passe que l'utilisateur doit décider ; cache SYS
 3,7 Gio, sous le budget. Push GitHub fait depuis Cartae (compte guthubrx) :
 le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllowed).
+
+## Clôture des derniers points (8 novembre 2026)
+
+- glm-mac : `gclaude --version` lisait la clé GLM avant même de lancer
+  claude ; au trousseau verrouillé (veille), la sonde échouait. Une demande de
+  version seule n'appelle pas l'API : elle n'exige plus la clé (sauvegarde du
+  script conservée). Recontrôle de la r4 : quatre clients compatibles,
+  exception retirée du reçu.
+- Copie 237 du Mac retirée (aucun utilisateur). 242 et 243-r1 ne sont plus des
+  copies : des liens vides vers ~/.local/bin/bridget, gardés tant que trois
+  façades MCP de sessions T3 ouvertes (PID 18554, 21774, 2305) peuvent se
+  relancer depuis ces chemins ; les retirer couperait ces sessions.
+  Reçus d'installation anciens (quelques octets) conservés comme preuves.
+- Cache SYS : sans sudo sans mot de passe, l'observation était refusée.
+  Repli strict : si sudo échoue et que chaque dossier observé n'est atteignable
+  que par ce compte (ancêtre à lui, sans traversée groupe/autres), lsof
+  observe les seuls processus de ce compte. Le cache bridget-build-227 de SYS
+  est rendu privé (700). Hors de ce cas, la garde reste entière. Test ajouté,
+  66 tests du script PASS.
