@@ -269,3 +269,13 @@ probe_failed car le Mac était en dark wake (trousseau illisible) ; exception
 bornée et consignée au reçu, ce client vérifié deux heures plus tôt (r3) avec
 la même politique et le même claude 2.1.317, toute autre non-compatibilité
 restant bloquante. Préservation inchangée.
+
+Nettoyage r4 : copie 243-tests-r2 retirée sur les quatre hôtes (actif r4,
+retour r3). Sur le Mac, les exécutables 237, 242 et 243-r1, encore référencés
+par des façades MCP de sessions T3 ouvertes, mènent au lien stable
+~/.local/bin/bridget, donc toujours à la version active. Entretien Cargo :
+Mac, Cartae et KS observent complètement et simulent sans refus ; SYS refuse
+car `sudo -n lsof` exige un mot de passe — garde volontaire, la lever demande
+un droit sudo sans mot de passe que l'utilisateur doit décider ; cache SYS
+3,7 Gio, sous le budget. Push GitHub fait depuis Cartae (compte guthubrx) :
+le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllowed).
