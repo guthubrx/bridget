@@ -2838,7 +2838,14 @@ mod tests {
                 if libc::setpgid(0, 0) != 0 {
                     return Err(io::Error::last_os_error());
                 }
-                if libc::dup2(child_barrier.as_raw_fd(), CRASH_BARRIER_FD) < 0 {
+                let source = child_barrier.as_raw_fd();
+                if source == CRASH_BARRIER_FD {
+                    // dup2 sur lui-même ne retire pas FD_CLOEXEC : le faire ici.
+                    let flags = libc::fcntl(source, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(source, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                } else if libc::dup2(source, CRASH_BARRIER_FD) < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 Ok(())

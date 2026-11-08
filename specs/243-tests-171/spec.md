@@ -323,3 +323,17 @@ le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllo
 - Conservés pour un usage réel : worktree Cartae 1cc44f4d (cwd du superviseur
   2500061, une modification) ; liens 242 et 243-r1 du Mac (façades MCP vivantes
   18554, 21774, 2305 de sessions T3 ouvertes) ; reçus d'installation anciens.
+- Suite Linux sur 5eb2956f : 1 échec crash_after_rename (EPIPE à la
+  libération). Les extrémités de tube étaient passées à l'enfant aux numéros
+  fixes 110/111 par dup2 direct : une extrémité déjà numérotée 110 ou 111
+  était écrasée. Copie préalable au-dessus des cibles (F_DUPFD), comme le code
+  de production ; banc fleet : dup2 sur lui-même laissait FD_CLOEXEC, retiré.
+  Preuve : test qui force la collision, échec identique (ligne 666, -1) sans
+  correctif, PASS avec.
+- Suite Mac sur 5eb2956f : 1 échec spec185 (réparation) : « occupé » est une
+  réponse passagère sous charge ; le banc réessaie jusqu'à une réponse stable.
+- Brouillon du worktree Cartae 1cc44f4d (session 198, ne s'applique plus à
+  main) sauvegardé dans ~/.local/share/bridget-maintenance/243-cartae-1cc44f4d ;
+  dossier gardé car cwd de l'agent Codex vivant du superviseur 2500061.
+- Reçus anciens archivés dans ~/.local/share/bridget-maintenance/243-recus-anciens
+  (31 dossiers sans exécutable) ; docs, skills et credits de Cartae restaurés.

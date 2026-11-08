@@ -10163,6 +10163,24 @@ for line in sys.stdin:
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    /// « Occupé » est une réponse passagère : des événements de démarrage
+    /// peuvent encore arriver sous charge. Réessayer jusqu'à une réponse stable.
+    fn repair185_settled(transport: &mut CodexAppServerTransport, budget: Duration)
+        -> Result<ManagedProviderIdentity, TransportError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            transport.drain_events();
+            match transport.stop_for_workspace_repair(budget) {
+                Err(TransportError::DeliveryFailed(code))
+                    if code == "workspace_repair_busy" && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                result => return result,
+            }
+        }
+    }
+
     #[test]
     fn spec185_workspace_repair_stops_exact_idle_provider_and_keeps_thread() {
         let root = root("repair185-idle");
@@ -10173,7 +10191,7 @@ for line in sys.stdin:
         ).unwrap();
         transport.drain_events();
         let pid = transport.process_id();
-        let identity = transport.stop_for_workspace_repair(Duration::from_secs(2)).unwrap();
+        let identity = repair185_settled(&mut transport, Duration::from_secs(2)).unwrap();
         assert_eq!(identity.provider_thread_id.as_deref(), Some("thread-native"));
         assert!(transport.child.lock().unwrap().try_wait().unwrap().is_some());
         assert!(unsafe { libc::kill(-(pid as i32), 0) } < 0);
@@ -10192,7 +10210,7 @@ for line in sys.stdin:
             &[("BRIDGET_CODEX_TRACE".into(), trace.to_string_lossy().into_owned())], false,
         ).unwrap();
         transport.drain_events();
-        assert!(matches!(transport.stop_for_workspace_repair(Duration::from_secs(1)),
+        assert!(matches!(repair185_settled(&mut transport, Duration::from_secs(1)),
             Err(TransportError::DeliveryFailed(ref code)) if code == "workspace_repair_resume_unattested"));
         assert!(transport.alive.load(Ordering::SeqCst));
         assert!(!transport.queue.0.lock().unwrap().closed);

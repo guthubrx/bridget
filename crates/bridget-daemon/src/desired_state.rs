@@ -704,12 +704,19 @@ mod tests {
             .stderr(Stdio::null());
         unsafe {
             command.pre_exec(move || {
-                if libc::dup2(ready_pipe[1], BARRIER_READY_FD) < 0
-                    || libc::dup2(release_pipe[0], BARRIER_RELEASE_FD) < 0
+                // Copier d'abord au-dessus des numéros cibles : une extrémité
+                // déjà numérotée 110 ou 111 serait sinon écrasée par le premier
+                // dup2 (vu sous charge : EPIPE à la libération).
+                let ready = libc::fcntl(ready_pipe[1], libc::F_DUPFD, BARRIER_RELEASE_FD + 1);
+                let release = libc::fcntl(release_pipe[0], libc::F_DUPFD, BARRIER_RELEASE_FD + 1);
+                if ready < 0
+                    || release < 0
+                    || libc::dup2(ready, BARRIER_READY_FD) < 0
+                    || libc::dup2(release, BARRIER_RELEASE_FD) < 0
                 {
                     return Err(io::Error::last_os_error());
                 }
-                for fd in ready_pipe.into_iter().chain(release_pipe) {
+                for fd in ready_pipe.into_iter().chain(release_pipe).chain([ready, release]) {
                     if fd != BARRIER_READY_FD && fd != BARRIER_RELEASE_FD {
                         libc::close(fd);
                     }
@@ -1121,6 +1128,26 @@ mod tests {
         );
         assert_eq!(loaded.equipiers["codex-1"].generation, 2);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Collision forcée : le tube de libération reçoit les numéros 110/111,
+    /// cibles mêmes du passage à l'enfant (cas vu sous charge, EPIPE).
+    #[test]
+    fn spec243_barriere_resiste_aux_numeros_cibles() {
+        let mut fillers = Vec::new();
+        loop {
+            let fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+            assert!(fd >= 0);
+            if fd >= 108 {
+                unsafe { libc::close(fd) };
+                break;
+            }
+            fillers.push(fd);
+        }
+        crash_after_rename_exposes_the_new_fleet_on_reopen();
+        for fd in fillers {
+            unsafe { libc::close(fd) };
+        }
     }
 
     #[test]
