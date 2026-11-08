@@ -479,6 +479,12 @@ class WorktreePruneTests(unittest.TestCase):
             self.assertFalse(build.owner_private_scope(link))
             self.assertFalse(build.owner_private_scope(Path(tmp).resolve() / "absent"))
 
+    def test_gardiens_de_session_retires_du_seul_repli(self):
+        data = b"p999999991\nf1\ntREG\nn/x\np999999992\nf2\ntREG\nn/y\n"
+        with patch.object(build.Path, "read_text", side_effect=["sshd\n", "cargo\n"]):
+            kept = build.drop_session_helpers(data)
+        self.assertEqual(kept, b"p999999992\nf2\ntREG\nn/y\n")
+
     def test_incomplete_process_inventory_preserves_worktree(self):
         real_run = build.observed_run
         for returncode, stderr in ((1, b""), (0, b"WARNING: inaccessible filesystem")):

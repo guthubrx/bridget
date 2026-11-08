@@ -298,3 +298,8 @@ le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllo
   observe les seuls processus de ce compte. Le cache bridget-build-227 de SYS
   est rendu privé (700). Hors de ce cas, la garde reste entière. Test ajouté,
   66 tests du script PASS.
+- Repli SYS : les gardiens de session `sshd: moi` et `(sd-pam)` tournent sous
+  le compte mais restent protégés par le système (fichiers ouverts illisibles
+  sans root). Dans le seul mode de repli, ils sont écartés par leur nom
+  système exact ; tout autre processus illisible garde la garde entière.
+  67 tests du script PASS ; simulation SYS : 0,57 Gio (profil de 10,5 jours).

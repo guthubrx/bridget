@@ -503,6 +503,27 @@ def owner_private_scope(scope):
     return False
 
 
+# Gardiens de session protégés par le système (non inspectables sans root) :
+# ils tiennent la session SSH ou PAM et n'ouvrent jamais de cache de compilation.
+SESSION_HELPERS = {"sshd", "(sd-pam)"}
+
+
+def drop_session_helpers(stdout):
+    """Mode de repli seulement : retirer les blocs des gardiens de session."""
+    kept, skip = [], False
+    for raw in stdout.splitlines(keepends=True):
+        if raw.startswith(b"p"):
+            pid = raw[1:].strip().decode(errors="replace")
+            try:
+                comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            except OSError:
+                comm = ""
+            skip = comm in SESSION_HELPERS
+        if not skip:
+            kept.append(raw)
+    return b"".join(kept)
+
+
 def busy_paths(scopes=(), budget=None, ignore_own=()):
     budget = budget or ObservationBudget()
     command = LSOF_OPEN_FILES
@@ -526,6 +547,7 @@ def busy_paths(scopes=(), budget=None, ignore_own=()):
             # privilège ; hors de ce cas, la garde reste entière.
             command = ["/usr/bin/lsof", "-u", str(os.geteuid()), "-n", "-P", "-F", "pftDn"]
             result = observed_run(command, budget, timeout=30)
+            result.stdout = drop_session_helpers(result.stdout)
             budget.owner_private_scope = True
         if result.returncode:
             budget.failures.add("process_access_unavailable")
