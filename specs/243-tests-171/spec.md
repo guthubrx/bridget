@@ -476,3 +476,13 @@ Verrou natif `project-preparation.lock`, sauvegarde privée
 copies sont identiques (empreinte 00bbf83c6c5996f7). Rejeu réel : le refus de
 droits a disparu ; la demande suivante a reçu un refus de capacité, légitime
 (Cartae à 100 % de charge pendant les calculs opus2D).
+
+Essai réel sur un superviseur en service (8 novembre 2026, ~06:52 UTC), accepté
+par l'utilisateur : tâche d9400941 (Claude Haiku sur Cartae, worktree), admise
+après la correction des mappings. La mission a lancé `setsid sudo -n sleep 150`
+(sudo root, PID 1397535), rattaché au superviseur r5 1396412. Après annulation,
+le superviseur est resté présent tant que ce descendant root vivait, sans aucun
+zombie (contrôle toutes les 15 s) ; à la fin du sleep, il a tout récolté et
+s'est terminé (~136 s), sans orphelin. Statut remote_execution_ended, résultat
+lu et accusé, worktree propre retiré avec sa branche. Le sudo 3584579
+préexistant, étranger à l'essai, n'a pas été touché.
