@@ -12249,6 +12249,23 @@ fn authorize_wrapper_reply(st:&DaemonState,conn:&str,message:&bridget_core::Brid
     Ok(())
 }
 
+/// Une réponse après clôture reste consultable, sans rouvrir l'attente ni
+/// injecter un nouveau prompt. La réservation idempotente précède ce dépôt.
+fn retain_closed_wrapper_reply(st:&mut DaemonState,message:&bridget_core::BridgetMessage)->Result<bool,String> {
+    use rusqlite::{OptionalExtension,params};
+    let correlation=message.in_reply_to.as_deref().ok_or("retained_reply_correlation_required")?;
+    let request=st.store.get_request(correlation).map_err(|_|"retained_reply_request_unavailable")?.ok_or("retained_reply_request_unavailable")?;
+    if request.state=="open" {return Ok(false);}
+    if request.sender!=message.to || request.target!=message.from {return Err("retained_reply_correlation_mismatch".into());}
+    let tx=st.store.connection().unchecked_transaction().map_err(|e|e.to_string())?;
+    let previous:Option<(String,String)>=tx.query_row("SELECT sender,body FROM ledger WHERE id=?1 AND target=?2",
+        params![message.id,message.to],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
+    if previous.as_ref().is_some_and(|(sender,body)|sender!=&message.from || body!=&message.body){return Err("retained_reply_conflict".into());}
+    if previous.is_none(){crate::store::record_message_in_transaction(&tx,message,&format!("{}|{}",message.from,message.to)).map_err(|e|e.to_string())?;}
+    tx.commit().map_err(|e|e.to_string())?;
+    Ok(true)
+}
+
 fn retain_wrapper_reply(conn:&str,message:bridget_core::BridgetMessage,instance:&str,st:&mut DaemonState)->DaemonToWrapper {
     let id=message.id.clone();
     let scope=crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"));
@@ -12427,6 +12444,8 @@ fn handle_idempotent_send_with_result_authority(
         if matches!(authority,Some(RetainedSendAuthority::Result(_))) {
             crate::agent_tracking::dormant(st.store.connection(),&message.to).map_err(|e|e.to_string())
         } else { Ok(false) }
+    } else if matches!(authority,Some(RetainedSendAuthority::WrapperReply(_))) {
+        retain_closed_wrapper_reply(st,&message).and_then(|retained|if retained {Ok(true)}else{native_delegation::capture_reply(st,conn_id,&message)})
     } else {
         native_delegation::capture_reply(st, conn_id, &message)
     };
@@ -14431,6 +14450,21 @@ mod spec099_classic_delivery_tests {
     const SENDER: &str = "99000000-0000-4000-8000-000000000001";
     const TARGET: &str = "99000000-0000-4000-8000-000000000002";
     const WITNESS: &str = "99000000-0000-4000-8000-000000000003";
+
+    #[test]
+    fn spec244_reponse_tardive_conservee_sans_reveil_ni_reouverture() {
+        let (state,root,_peers)=fixture();let _cleanup=FixtureRoot(root);let mut st=state.lock().unwrap();
+        for closed in ["timed_out","cancelled"] {
+            let id=format!("closed244-{closed}");st.store.create_request(&id,SENDER,TARGET,120).unwrap();
+            st.store.connection().execute("UPDATE tracked_requests SET state=?1 WHERE id=?2",rusqlite::params![closed,id]).unwrap();
+            let mut reply=BridgetMessage::new(TARGET,SENDER,"réponse conservée après clôture");reply.id=format!("reply244-{closed}");reply.in_reply_to=Some(id.clone());
+            for _ in 0..2 {assert!(matches!(retain_wrapper_reply("target",reply.clone(),"spec099-target",&mut st),DaemonToWrapper::Ack{..}));}
+            assert_eq!(st.store.get_request(&id).unwrap().unwrap().state,closed);
+            let deliveries:i64=st.store.connection().query_row("SELECT count(*) FROM send_deliveries WHERE idempotency_key=?1",[&reply.id],|r|r.get(0)).unwrap();
+            let saved:i64=st.store.connection().query_row("SELECT count(*) FROM ledger WHERE id=?1 AND sender=?2 AND target=?3 AND body=?4",rusqlite::params![reply.id,TARGET,SENDER,reply.body],|r|r.get(0)).unwrap();
+            assert_eq!(deliveries,0,"aucune injection après la clôture");assert_eq!(saved,1,"la réponse reste consultable une fois");
+        }
+    }
 
     #[test]
     fn spec244_reponse_wrapper_deposee_une_fois_et_identite_correlee() {
