@@ -109,6 +109,27 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session250 — refus des résultats manuels livré en0.8.16/250-resultat-natif-r1.
+Source exécutable27b402eb, source finalea3dbea6b (delta test seulement), intégrée et poussée.
+remote_result_requires_worker renvoie un refus idempotent durable et corrélé,
+sans capture ni envoi ; le guidage demande la réponse finale normale et la
+lecture du même task_id. N2d467f589 : résultat natif4017octets accepté sans conflit,
+result_available ; envoi manuel distinct restéPrepared, sans remise, pas de rejeu.
+Trois contrôles ciblésMac/Linux PASS ; ancien attendu send_as réaligné,
+Send legacy inchangé. Revue3880e68c lue/ACK sansP1/P2 confirmé.
+ContrôleMCP réel sur propre revue : refus explicite reçu, terminal/rejected,
+zéro remise, aucune ronde ; pas de nouvelle mission de qualification.
+Sept composants/SHA vérifiés4hôtes ; retour249 compatible/pointeurs atomiques,
+coupure1,80s. WrappersCartae3162719/2995359/3113948 préservés avec birth.
+T3 non arrêté ; quatre PID principaux/birth, registreMac et7payloads inchangés.
+Un renderer2669 a disparu entre observations, cause non attribuée.
+Publicv0.8.16/six actifs anonymes/SHA ; APK8016/certificat/lignée8015 vérifiés.
+Avis parent/enfant envoyés avec reçus, pas de lecture inventée. Propres3WT/branche250
+retirés, Macmain seul ; cachesMac7,65Gio/SYS3,14Gio, images utilisées et preuves conservées.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/250-resultat-natif/validation.md.
+Reprise privée : /Users/moi/.cache/bridget250-resultat-natif/resume.md.
+
+
 Session249 — guidagebrief activé0.8.15/249-guidage-brief-r1.
 Sourceb459180d intégrée/poussée ; brief_invalid conservechamp/cause dans detail
 lisibleanciennesfaçades,schémafilehost/pathobligatoires ; validateur/droitsinchangés.
