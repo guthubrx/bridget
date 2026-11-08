@@ -1,0 +1,4 @@
+- [x] T001 Résultat natif N2 retrouvé et cause exacte du message diagnostiquée.
+- [x] T002 Refus durable corrélé et guidage de la réponse finale.
+- [ ] T003 Tests ciblés, revue, activation et publication.
+- [ ] T004 Bilan Git et nettoyage.

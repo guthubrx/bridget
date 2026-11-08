@@ -12445,6 +12445,13 @@ fn handle_idempotent_send_with_result_authority(
     };
     let captured = match capture {
         Ok(captured) => captured,
+        Err(error) if error == "remote_result_requires_worker" => {
+            // Refus métier constaté avant capture, pas perte d'accusé.
+            // La réponse corrélée clôt aussi une ancienne réservation Prepared.
+            let reason = "Ce résultat de mission distante se publie par le worker. Donnez votre réponse finale normale : le worker conserve et remet le résultat natif au parent. N'utilisez pas bridget_send avec in_reply_to pour remplacer cette publication et ne rejouez pas ce message refusé. Le parent lit le résultat avec bridget_task_status et le task_id existant ; une remise en vol distincte ne prouve pas la perte de ce résultat. Ce refus concerne cet envoi manuel, sans nouvelle mission ni changement de droits. Les autres travaux autorisés suivent leur propre état.";
+            return reject_idempotent_send(st, &key, error, reason)
+                .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
+        }
         Err(error) => {
             error!("capture native non persistée: {error}");
             return DaemonToWrapper::Nack {

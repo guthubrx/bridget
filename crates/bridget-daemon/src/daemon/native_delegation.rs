@@ -28851,6 +28851,39 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec250_resultat_manuel_refuse_corrige_prepared_sans_capture_ni_remise() {
+        for prepared in [false,true] {
+            let (mut st,config,task,_)=remote162_capture_fixture();
+            let mut message=bridget_core::BridgetMessage::new(&task.owner,&task.owner,"résultat manuel");
+            message.id="send250".into();message.in_reply_to=Some(task.mission.clone());
+            let scope=crate::communication::issuer_scope("spec250");
+            st.client_negotiations.insert("conn-1".into(),NegotiatedClient {
+                version:CLIENT_CONTRACT_VERSION,issuer_scope:scope.clone(),
+                capabilities:vec![ClientCapability::SendIdempotent]});
+            let now=unix_timestamp();
+            let key=crate::idempotency::IdempotencyKey::new(scope.clone(),crate::idempotency::OperationKind::Send,message.id.clone()).unwrap();
+            if prepared {
+                let canonical=super::super::canonical_send(&scope,&message.id,&message,now);
+                st.idempotency.reserve(&key,&canonical,now,super::super::CLIENT_IDEMPOTENCY_HORIZON_SECS,now,i64::MAX).unwrap();
+            }
+            let before=serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap();
+            let mut controls=Vec::new();let mut responses=Vec::new();
+            for _ in 0..2 {
+                let response=handle_idempotent_send("conn-1",message.clone(),message.id.clone(),now,
+                    IdempotentSendAdmission {project:None,issued_at_tolerance_secs:i64::MAX},&mut st,&mut controls);
+                assert!(matches!(&response,DaemonToWrapper::IdempotencyResult {issue:IdempotencyIssue::Rejected {category,reason,..},..}
+                    if category=="remote_result_requires_worker" && reason.contains("réponse finale normale")),"{response:?}");
+                responses.push(serde_json::to_value(response).unwrap());
+            }
+            assert_eq!(responses[0],responses[1]);assert!(controls.is_empty());
+            assert!(st.idempotency.stored_send_delivery(&key).unwrap().is_none());
+            assert_eq!(serde_json::to_value(st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+            assert_eq!(st.store.get_request(&task.mission).unwrap().unwrap().state,"open");
+            cleanup(&config);
+        }
+    }
+
+    #[test]
     fn remote162_callers_send_refus_legacy_exact_sans_ack() {
         let (mut st, config, task, _) = remote162_capture_fixture();
         let mut message =
