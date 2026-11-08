@@ -224,3 +224,7 @@ spec221_journal_saturation (le fil du relais peut retirer une commande puis
 bloquer sur le writer tenu par le banc, libérant une place : pause puis second
 remplissage jusqu'au refus ; événement reçu affiché en cas d'échec). Tests
 seuls, binaire actif inchangé.
+Passage suivant sur 97bba61e : 3 606 PASS, 1 échec spec104_s27_s29 (deux
+appels à now() séparés par un changement de seconde rendaient deux
+horodatages égaux et inversaient l'ordre attendu ; une seule lecture
+d'horloge). Test seul.

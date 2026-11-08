@@ -1976,8 +1976,12 @@ fn spec104_s25_s26_performance_archive_gros_corps_et_memoire() {
 fn spec104_s27_s29_parite_cli_mcp_ancien_contrat_et_injection() {
     let hostile = "cible \u{1b}[31mROUGE\u{1b}[0m '; DROP TABLE ledger; -- voir /etc/passwd et https://exemple.invalid/x";
     let mut trio = Trio::start("spec104-s27", |conn| {
-        insert(conn, "h1", now(), AGENT_B, AGENT_A, hostile);
-        insert(conn, "h2", now() - 1, AGENT_A, AGENT_B, "seconde cible");
+        // Une seule lecture d'horloge : deux appels à now() séparés par un
+        // changement de seconde donnaient le même horodatage et inversaient
+        // l'ordre attendu des résultats (vu sous charge).
+        let at = now();
+        insert(conn, "h1", at, AGENT_B, AGENT_A, hostile);
+        insert(conn, "h2", at - 1, AGENT_A, AGENT_B, "seconde cible");
     });
     // MCP : catalogue inchangé (pas de nouvel outil), schéma fermé, action=search.
     let mut mcp = McpProcess::start(&trio.root, AGENT_A, "spec104-a");
