@@ -62,7 +62,7 @@ fn valid_row(task: &Task, row: &Value) -> bool {
 }
 
 pub(super) fn ensure(st: &DaemonState, task: &Task) -> Result<(), String> {
-    if !failure(task) || authorized(task) {
+    if !failure(task) || authorized(task) || task.failure_sent {
         return Ok(());
     }
     let db = st.store.connection();
@@ -119,6 +119,10 @@ pub(super) fn attach(st: &DaemonState, task: &Task, view: &mut Value) {
             .ok()
             .flatten()
             .filter(|row| valid_row(task, row));
+        if row.is_none() && task.failure_sent {
+            return;
+        }
+
         view["quota_recovery"] = json!({"state":if row.is_some(){"human_question"}else{"question_pending"},"request_id":question,"scope":"this_mission","automatic_restart":false,
             "question":row.map(crate::user_input::projection),
             "next_action":"Attendre la réponse humaine avec bridget_ask_user action wait et le request_id indiqué, sans recréer la question. Le choix initial automatique ne vaut pas accord de bascule. Un accord explicite antérieur dans le fil reste applicable dans son périmètre : le parent peut fermer cette question devenue sans objet, sans fabriquer de réponse humaine. Avant toute reprise, vérifier la clôture physique et le dossier, conserver l’ancienne tâche et sa clé, puis ne reprendre que le travail restant. Aucun nouvel accès ni budget déduit."});
@@ -312,6 +316,23 @@ mod tests {
         assert_eq!(view["admission"]["state"], "not_recorded");
         assert!(st.delegation_store.tasks().unwrap().is_empty());
     }
+    #[test]
+    fn spec246_echec_deja_signale_ne_cree_pas_de_question_retroactive() {
+        let (st, mut task, _peer) = fixture();
+        task.failure_sent = true;
+        let before = serde_json::to_vec(&task).unwrap();
+        ensure(&st, &task).unwrap();
+        assert!(
+            crate::user_input::get(st.store.connection(), &id(&task))
+                .unwrap()
+                .is_none()
+        );
+        let mut view = json!({});
+        attach(&st, &task, &mut view);
+        assert!(view.get("quota_recovery").is_none());
+        assert_eq!(serde_json::to_vec(&task).unwrap(), before);
+    }
+
     #[test]
     fn spec246_question_etrangere_ne_fuit_pas_vers_la_tache() {
         let (st, task, _peer) = fixture();
