@@ -352,3 +352,27 @@ utilisateur) ; les liens 242 et 243-r1 du Mac servent à trois façades MCP de
 sessions T3 ouvertes (T3 ne doit pas être arrêté). Leur retrait suit l'arrêt
 de ces processus par l'utilisateur.
 - Lien 243-tests-r1 du Mac retiré dès la fin de sa dernière façade (2305).
+
+## Retraits différés (8 novembre 2026)
+
+Deux éléments restent conservés car des processus vivants les utilisent. Aucun
+processus n'est arrêté pour le ménage. Deux gardiens persistants les retirent
+après la fin de ces processus, avec une nouvelle vérification au moment du retrait.
+
+- Mac : dossier `/Users/moi/.local/lib/bridget-communication/242-resume-card-r1`,
+  utilisé par les façades MCP 18554 et 21774 des sessions T3. Gardien
+  `com.bridget.nettoyage243.lien242` (LaunchAgent), script
+  `/Users/moi/.cache/bridget243-tests-r4/differe/retirer-242.sh`. Toutes les
+  5 min, il vérifie qu'aucun processus n'ouvre ce dossier et que l'état de mise
+  à jour ne le référence pas. La version de retour reste 243-tests-r3.
+- Cartae : worktree `/home/moi/10.Scripts/64.bridget/.worktrees/1cc44f4d`,
+  dossier courant du superviseur 2500061. Gardien utilisateur systemd
+  `bridget-nettoyage243-1cc44f4d.service`, script
+  `/home/moi/.local/share/bridget-maintenance/243-cartae-1cc44f4d/retirer-1cc44f4d.sh`.
+  Il retire le worktree seulement si plus aucun processus n'y travaille, si le
+  contenu égale l'archive `archive/243-1cc44f4d-brouillon198` (bfe9f01a) et si
+  aucun fichier non suivi n'existe. La branche `bridget198-worker-start` est
+  ensuite retirée, car l'archive la contient.
+
+Chaque gardien journalise son issue puis se retire. En cas d'écart, il conserve
+l'élément et note le motif dans son journal.
