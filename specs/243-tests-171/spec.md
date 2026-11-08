@@ -351,3 +351,4 @@ d'un autre travail pour faire le ménage », checklist kill avec confirmation
 utilisateur) ; les liens 242 et 243-r1 du Mac servent à trois façades MCP de
 sessions T3 ouvertes (T3 ne doit pas être arrêté). Leur retrait suit l'arrêt
 de ces processus par l'utilisateur.
+- Lien 243-tests-r1 du Mac retiré dès la fin de sa dernière façade (2305).
