@@ -247,3 +247,13 @@ commit 12721b3c, bancs de charge revérifiés sur Linux ensuite). Binaire actif
   chemin et ne peut ouvrir aucun fichier du cache : accepté seul ; chemins
   illisibles et refus d'accès restent bloquants. 65 tests du script PASS ;
   `clean` et `installed` s'exécutent désormais sur le Mac.
+- Suite Linux sur a556789d : 3 625 PASS, 1 échec claude_gere_avec_bypass
+  (corps de réponse vide). Défaut réel de l'adaptateur Claude : quand le
+  fournisseur sort aussitôt après son résultat, le lecteur atteignait EOF et
+  retirait le tour actif (« stdout Claude fermé ») après avoir déjà signalé
+  Completed ; le fil de la mission ne retrouvait plus la réponse et publiait
+  « réponse vide ». Le tour dont l'issue est signalée n'est plus repris, ni
+  à EOF ni à l'arrêt. Preuve : test de 40 sorties immédiates, Ok("") au 5e tour
+  sans correctif, 40/40 avec ; banc Claude géré 10/10 (environ 1 échec sur 8
+  avant) ; 407 tests transport PASS. Codex et ACP ne reprennent pas le tour à
+  EOF : non concernés.

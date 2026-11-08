@@ -169,6 +169,9 @@ struct ActiveTurn {
     latest_assistant_rate_limited: bool,
     structured_rate_limit_observed: bool,
     background_tasks: BackgroundTasks,
+    /// Issue déjà signalée au fil de la mission : sa réponse lui appartient.
+    /// Une fin de flux ou un arrêt qui suit ne doit plus reprendre ce tour.
+    terminal_sent: bool,
 }
 
 struct QueueState {
@@ -353,7 +356,9 @@ impl ClaudeStreamJsonTransport {
                 reason: "équipier Claude arrêté".to_string(),
             });
         }
-        if let Some(active) = queue.active.take() {
+        if queue.active.as_ref().is_some_and(|active| !active.terminal_sent)
+            && let Some(active) = queue.active.take()
+        {
             let _ = active.completion.send(ManagedTerminal::Cancelled);
         }
         wake.notify_all();
@@ -1243,6 +1248,7 @@ fn spawn_worker(
                 latest_assistant_rate_limited: false,
                 structured_rate_limit_observed: false,
                 background_tasks: BackgroundTasks::default(),
+                terminal_sent: false,
             });
             busy.store(true, Ordering::SeqCst);
             push_internal(
@@ -2003,6 +2009,7 @@ fn spawn_reader(
                         active.stop_reason = None;
                     } else {
                         let _ = active.completion.send(terminal);
+                        active.terminal_sent = true;
                     }
                 }
             }
@@ -2045,7 +2052,11 @@ fn spawn_reader(
         }
         alive.store(false, Ordering::SeqCst);
         let mut state = queue.0.lock().unwrap_or_else(|poison| poison.into_inner());
-        if let Some(active) = state.active.take() {
+        // Un fournisseur qui sort juste après son résultat ferme stdout avant
+        // que le fil de la mission ne relève sa réponse : la lui laisser.
+        if state.active.as_ref().is_some_and(|active| !active.terminal_sent)
+            && let Some(active) = state.active.take()
+        {
             let _ = active.completion.send(ManagedTerminal::Failed {
                 detail: "stdout Claude fermé".to_string(),
             });
@@ -3062,6 +3073,36 @@ sys.stdin.readline()
             Some("claude-abc-1"),
             "même message_id, reçu {tools:?}"
         );
+    }
+
+    /// Un fournisseur qui sort aussitôt après son résultat ferme stdout avant
+    /// que le fil de la mission ne relève sa réponse : elle ne doit pas se perdre.
+    #[test]
+    fn spec243_sortie_immediate_apres_resultat_garde_la_reponse() {
+        for round in 0..40 {
+            let mut configured = options();
+            configured.command = "/bin/sh".into();
+            configured.args = vec!["-c".into(), concat!(
+                "IFS= read -r _; ",
+                "printf '%s\\n' '{\"type\":\"result\",\"is_error\":false,",
+                "\"terminal_reason\":\"completed\",\"result\":\"fin-243\"}'"
+            ).into()];
+            configured.notify_timeout_secs = 10;
+            let mut transport = ClaudeStreamJsonTransport::spawn(configured).unwrap();
+            transport.deliver(&message("sortie-243")).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let response = loop {
+                let found = transport.drain_events().into_iter().find_map(|event| match event.kind {
+                    ManagedEventKind::TurnFinished { response, .. } => Some(Ok(response)),
+                    ManagedEventKind::DeliveryRejected { reason, .. } => Some(Err(reason)),
+                    _ => None,
+                });
+                if let Some(found) = found { break found; }
+                assert!(Instant::now() < deadline, "fin de tour absente, tour {round}");
+                thread::sleep(Duration::from_millis(2));
+            };
+            assert_eq!(response, Ok("fin-243".to_string()), "tour {round}");
+        }
     }
 
     fn journal_fixture_deltas() -> Vec<Value> {
