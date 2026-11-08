@@ -228,3 +228,8 @@ Passage suivant sur 97bba61e : 3 606 PASS, 1 échec spec104_s27_s29 (deux
 appels à now() séparés par un changement de seconde rendaient deux
 horodatages égaux et inversaient l'ordre attendu ; une seule lecture
 d'horloge). Test seul.
+
+Résultat final sur d5bd55c3 : suite complète Mac 3 607 PASS, 0 échec, 0
+avertissement ; Linux 3 626 PASS, 0 échec, 0 avertissement (dépôt Git réel,
+commit 12721b3c, bancs de charge revérifiés sur Linux ensuite). Binaire actif
+243-tests-r3 inchangé par ces corrections de tests.
