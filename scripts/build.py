@@ -355,6 +355,10 @@ def process_output_complete(stdout, exempt=()):
             return False
         if kind in nonfiles:
             return True
+        # macOS : un descripteur révoqué (revoke(2), terminal fermé) désigne un
+        # nœud mort sans chemin ; il ne peut ouvrir aucun fichier du cache.
+        if kind is None and name == "(revoked)":
+            return True
         if kind == "FIFO" and name == "pipe":
             return True
         if kind == "REG" and name in {"net", "mnt", "pid", "user", "uts", "ipc", "cgroup", "time"}:

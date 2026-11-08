@@ -233,3 +233,17 @@ Résultat final sur d5bd55c3 : suite complète Mac 3 607 PASS, 0 échec, 0
 avertissement ; Linux 3 626 PASS, 0 échec, 0 avertissement (dépôt Git réel,
 commit 12721b3c, bancs de charge revérifiés sur Linux ensuite). Binaire actif
 243-tests-r3 inchangé par ces corrections de tests.
+
+## Derniers points (8 novembre 2026)
+
+- Copies 242, 243-r1 et 237 du Mac : encore exécutées par des façades MCP de
+  sessions T3 ouvertes, relancées depuis leur chemin résolu. Chaque
+  exécutable remplacé atomiquement par un lien vers 243-tests-r3 : les
+  processus en cours gardent leur inode, une relance démarre la version
+  active, 108 Mo libérés, aucune session coupée, T3 non arrêté. Le Mac ne
+  garde que l'actif r3 et le retour r2.
+- Entretien Cargo sur Mac : seuls des descripteurs « (revoked) » rendaient
+  l'observation incomplète. Un descripteur révoqué désigne un nœud mort sans
+  chemin et ne peut ouvrir aucun fichier du cache : accepté seul ; chemins
+  illisibles et refus d'accès restent bloquants. 65 tests du script PASS ;
+  `clean` et `installed` s'exécutent désormais sur le Mac.

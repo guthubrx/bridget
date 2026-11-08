@@ -746,6 +746,11 @@ class Observation176Tests(unittest.TestCase):
 
     def test_erreur_d_acces_dans_stdout_interdit_absence(self):
         self.assertFalse(build.process_output_complete(b"p1\nf1\ntREG\nn/proc/1/fd (opendir: Permission denied)\n"))
+        # macOS : descripteur révoqué sans type ni chemin, accepté seul ;
+        # un chemin illisible ou un type absent avec un autre nom reste refusé.
+        self.assertTrue(build.process_output_complete(b"p1\nf664\nn(revoked)\n"))
+        self.assertFalse(build.process_output_complete(b"p1\nf664\nncwd|rtd info error: Permission denied\n"))
+        self.assertFalse(build.process_output_complete(b"p1\nf664\nn/tmp/x (revoked)\n"))
         self.assertTrue(build.process_output_complete(b"p1\nf1\ntREG\nn/tmp/fichier avec espaces\n"))
 
     def test_index_imbrication_conserve_ancetres_et_descendants(self):
