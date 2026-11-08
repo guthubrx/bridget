@@ -1,0 +1,4 @@
+- [ ] T001 Vérifier les faits et corriger la coordination parent/enfant distante.
+- [ ] T002 Distinguer annulation et refus tardif, guider les autres refus.
+- [ ] T003 Contrôles ciblés, revue, activation et diagnostics utiles.
+- [ ] T004 Publication, Git aligné et nettoyage.

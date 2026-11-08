@@ -11380,7 +11380,8 @@ fn guidance_facts(
     let cross_project = conn
         .and_then(|c| connection_communication_project(st, c))
         .zip(agent_communication_project(st, target))
-        .is_some_and(|(from, to)| from != to);
+        .is_some_and(|(from, to)| from != to)
+        && !conn.is_some_and(|conn| native_delegation::admitted_parent_communication247(st, conn, target, None));
     let control =
         crate::referent_control::read(st.store.connection()).map_err(|e| e.to_string())?;
     let paused = matches!(
@@ -12063,10 +12064,11 @@ fn prepare_dispatch(
         None
     };
     let scope_reason = explicit_reason.or(inherited_reason);
-    // La relation parent/enfant est déjà admise et le message interne exact
-    // est vérifié. Ne pas confondre ses deux emplacements avec deux projets.
-    // Les envois ordinaires ne disposent jamais de cette autorité.
-    let project_warnings = if native_task_exchange {
+    // La remise interne exacte et la coordination par le parent attesté ne
+    // confondent pas les emplacements d’une même mission avec deux projets.
+    // La coordination ordinaire ne gagne ni autorité de mission ni exception au sommeil.
+    let project_warnings = if native_task_exchange
+        || native_delegation::admitted_parent_communication247(st, conn_id, &routing_to, Some(&message.id)) {
         Vec::new()
     } else {
         crate::communication::project_scope(

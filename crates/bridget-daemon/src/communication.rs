@@ -42,7 +42,7 @@ pub(crate) fn project_scope(
     let reason = validate_cross_project_reason(reason)?;
     let relation = project_relation(sender, recipient);
     if relation == ProjectRelation::Other && reason.is_none() {
-        return Err("cross_project_reason_required : autre projet, préciser --cross-project-reason avec un motif volontaire".into());
+        return Err("cross_project_reason_required : autre projet, préciser --cross-project-reason avec un motif volontaire. Ne modifiez pas le contenu d’un envoi déjà identifié sous la même clé. Si le reçu atteste un refus définitif sans remise, le motif corrigé appartient à une nouvelle demande avec sa propre clé. Une issue inconnue se relit avec la même clé et la même enveloppe.".into());
     }
     if relation == ProjectRelation::Same {
         return Ok(Vec::new());
@@ -551,5 +551,19 @@ mod tests {
         ] {
             assert!(!source.contains("crate::mcp::issuer_scope"));
         }
+    }
+}
+
+#[cfg(test)]
+mod coordination247_tests {
+    use super::*;
+    #[test]
+    fn spec247_motif_manquant_explique_la_cle_close_sans_casser_le_code() {
+        let from=CommunicationProject{host:"mac".into(),root:"/a".into()};
+        let to=CommunicationProject{host:"sys".into(),root:"/b".into()};
+        let error=project_scope(Some(&from),Some(&to),"dest",None).unwrap_err();
+        assert!(error.starts_with("cross_project_reason_required :"));
+        assert!(error.contains("nouvelle demande") && error.contains("même enveloppe"));
+        assert!(project_scope(Some(&from),Some(&to),"dest",Some("coordination autorisée")).is_ok());
     }
 }

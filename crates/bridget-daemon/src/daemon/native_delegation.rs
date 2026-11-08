@@ -659,8 +659,8 @@ fn project_probe_constraints(result: &mut Value, reasons: &[Value]) {
                 "Inspectez les modifications du dossier avec son propriétaire. Préservez les fichiers, les commits et les sorties avant de décider de son utilisation ; aucun reset ni nettoyage automatique.",
                 "Si les modifications ne vous appartiennent pas, demandez à leur propriétaire ou à l'utilisateur quelle conservation et quelle préparation autoriser."),
             Some(CandidateProbeRefusal::WorkspaceBusy) => (
-                "Consultez detail.workspace_tasks si présent, puis bridget_task_status avec les identifiants indiqués. Shared peut devoir changer le HEAD de la racine ; une tâche dans un worktree descendant peut aussi l’interdire. Les références du maître sont des pistes, pas une preuve de réservation worker. Si elles manquent, demandez au responsable une corrélation ciblée des préparations et reçus du worker sur cette machine. Ne libérez aucune garde à la main.",
-                "Si la garde persiste après la clôture demandée par son propriétaire, demandez à l'utilisateur une vérification ciblée de l'arrêt ; n'interrompez pas les autres travaux."),
+                "Conservez les tâches actives. Shared doit parfois changer le HEAD de la racine ; une exécution dans un worktree descendant protège aussi cette opération. Pour une contre-revue limitée à un commit, une vue commit_view isolée évite ce changement si ce choix est autorisé. Vérifiez d’abord detail.admission : aucune nouvelle clé pendant une admission en attente ou inconnue. Après refus confirmé sans tâche, un changement autorisé de workspace exige une nouvelle demande et sa propre clé. detail.workspace_tasks donne des pistes du maître, pas le détenteur attesté de la garde worker. Demandez sa corrélation ciblée au mainteneur si nécessaire, sans libérer de garde ni arrêter autrui.",
+                "Demandez une décision seulement si le même dossier partagé est indispensable et reste occupé : attendre son propriétaire ou autoriser une vue isolée compatible. Ne demandez pas l’arrêt d’un travail indépendant pour une simple contre-revue."),
             Some(CandidateProbeRefusal::WorkspaceDiverged) => (
                 "Comparez la base attendue avec le HEAD du dossier cible, pas seulement le HEAD source. Shared refuse lorsque ce HEAD cible n'est pas un ancêtre de la base demandée ; ne reculez ni ne remplacez son histoire. Pour revoir un commit publié sans déplacer ce dossier, le parcours natif commit_view en discovery peut convenir si ses outils sont chargés. Il ne contient pas les modifications non commitées : publier le travail à revoir avant une revue distante. Toute autre enveloppe exige une nouvelle demande autorisée après clarification de l'ancienne issue et fin de ses appels.",
                 "Si la divergence exige de modifier un dossier partagé, demandez à son propriétaire ou à l'utilisateur quelle préparation autoriser après conservation du travail."),
@@ -10301,6 +10301,31 @@ pub(super) fn authorize_retained_result(
     Ok(())
 }
 
+/// Un parent coordonne la même mission sur une autre machine : la relation
+/// admise et les deux instances, pas l’égalité des chemins, fixent ce périmètre.
+/// Ne donne aucune autorité de remise de mission ni d’exception au sommeil.
+pub(super) fn admitted_parent_communication247(
+    st: &DaemonState, conn: &str, target: &str, message_id: Option<&str>,
+) -> bool {
+    let Some((sender, instance)) = live_connection_identity(st, conn) else {return false;};
+    let Ok(Some(task)) = st.delegation_store.for_child(target) else {return false;};
+    if task.owner != sender || task.owner_instance != instance
+        || task.terminal() || task.state == "cancelling"
+        || task.cleanup_done || task.guard_released
+        || message_id.is_some_and(|id| id == task.mission)
+    {return false;}
+    let Some(child_instance) = task.child_instance.as_ref() else {return false;};
+    let Some(route) = st.router.get_agent(target) else {return false;};
+    if live_connection_identity(st, &route.connection_id) != Some((task.child.clone(), child_instance.clone())) {
+        return false;
+    }
+    for value in [task.owner.as_str(), task.owner_instance.as_str(), task.child.as_str(), child_instance.as_str(), task.root_owner()] {
+        if st.delegation_store.revoked(value).unwrap_or(true)
+            || st.delegation_store.revoked_agent(value).unwrap_or(true) {return false;}
+    }
+    true
+}
+
 /// Reconnaît uniquement la remise interne de la mission exacte déjà admise.
 /// Les emplacements physiques du parent et de l'enfant peuvent être différents.
 /// Aucun client ne possède cette connexion éphémère ; les contrôles de lancement,
@@ -10788,6 +10813,10 @@ pub(super) fn rejected(
     let Some(mut task) = st.delegation_store.for_mission(mission)? else {
         return Ok(NativeRejection::Pass);
     };
+    if matches!(task.state.as_str(), "cancelled" | "cancelling") {
+        info!("refus fournisseur tardif après annulation native conservée : {}", task.task_id);
+        return Ok(NativeRejection::StaleIgnored);
+    }
     let opt_in = quota_enabled(&task);
     if task.child_instance.as_deref() != st.conn_instances.get(conn).map(String::as_str) {
         return Ok(if opt_in {
@@ -12697,10 +12726,14 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
         // worker qui retourne tôt sur un reçu Accepted.
         if let Ok(open_requests) = st.store.open_requests() {
             for request in open_requests {
-                if let Ok(Some(task)) = st.delegation_store.for_mission(&request.id)
-                    && task.remote_placement.is_some()
-                    && task.result.is_some()
-                {
+                if let Ok(Some(task)) = st.delegation_store.for_mission(&request.id) {
+                    if task.state == "cancelled" {
+                        if let Err(error)=settle_cancelled_tracked_request247(&mut st,&task) {
+                            warn!("suivi de mission annulée non clôturé : {error}");
+                        }
+                        continue;
+                    }
+                    if task.remote_placement.is_none() || task.result.is_none() {continue;}
                     if let Err(error) = settle_remote_tracked_request(&mut st, &task) {
                         warn!(
                             "suivi de mission distante {} non clôturé pendant la reprise des demandes ouvertes: {}",
@@ -14116,6 +14149,16 @@ fn align_request_deadline(st: &DaemonState, task: &Task) {
             task.mission
         ),
     }
+}
+
+/// Une annulation native confirmée clôt aussi le suivi logique de la mission.
+/// La preuve d’arrêt, les fichiers et les accusés de livraison restent séparés.
+fn settle_cancelled_tracked_request247(st: &mut DaemonState, task: &Task) -> Result<bool,String> {
+    if task.state != "cancelled" {return Ok(false);}
+    let Some(request)=st.store.get_request(&task.mission).map_err(|e|e.to_string())? else {return Ok(false);};
+    if request.state != "open" || request.sender != task.owner || request.target != task.child {return Ok(false);}
+    st.store.cancel_request(&task.mission,&task.owner,Some("mission_native_cancelled"))
+        .map(|closed|closed.is_some_and(|r|r.state=="cancelled")).map_err(|e|e.to_string())
 }
 
 /// Clôture le suivi de la mission avec la transition canonique du guichet.
@@ -32192,6 +32235,71 @@ for frame in frames: print(json.dumps(frame),flush=True)
         assert_eq!(st.delegation_store.tasks().unwrap().len(), 1);
         drop(st);
         cleanup(&config);
+    }
+
+    #[test]
+    fn spec247_parent_coordonne_enfant_distant_sans_faux_autre_projet() {
+        let (shared, config, task_id, _, _) =
+            parent_en_cours_avec_projets_174(request("coord247"), 0, true);
+        let mut st = shared.lock().unwrap();
+        let task = st.delegation_store.get(&task_id).unwrap().unwrap();
+        let before=serde_json::to_vec(&task).unwrap();
+        let mut message=bridget_core::BridgetMessage::new(&task.owner,&task.child,"complément autorisé");
+        message.intent=Some(bridget_core::MessageIntent::SteerCurrent);
+        assert!(admitted_parent_communication247(&st,"conn-1",&task.child,Some(&message.id)));
+        let prepared=prepare_dispatch(&mut st,&mut message,"conn-1",task.owner.clone(),"unique247".into(),"message247".into(),false);
+        assert!(prepared.is_ok(),"{:?}",prepared.err());
+        assert!(message.cross_project_reason.is_none());
+        assert!(check_guidance(&st,Some("conn-1"),&task.child,crate::guidance::GuidanceAction::Steer,crate::guidance::GuidancePath::SendIdempotent,None,false,"message247").is_ok());
+        assert_eq!(serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap(),before);
+        let agent=super::agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==task.child).unwrap();
+        crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"coord247-sleep",&agent,true,Some(false),None,unix_timestamp()).unwrap();
+        let mut sleeping=bridget_core::BridgetMessage::new(&task.owner,&task.child,"reste dormant");
+        assert!(matches!(prepare_dispatch(&mut st,&mut sleeping,"conn-1",task.owner.clone(),"other247".into(),"sleep247".into(),false),Err(("agent_dormant",_))));
+        drop(st);cleanup(&config);
+    }
+
+    #[test]
+    fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
+        let (shared, config, task_id, _, _) =
+            parent_en_cours_avec_projets_174(request("coord247-gardes"), 0, true);
+        let mut st=shared.lock().unwrap();let mut task=st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,Some(&task.mission)));
+        assert!(!admitted_parent_communication247(&st,"child-conn",&task.owner,None));
+        let instance=st.conn_instances.insert("conn-1".into(),"autre-instance".into()).unwrap();
+        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        st.conn_instances.insert("conn-1".into(),instance);
+        st.delegation_store.grant(&task.owner_instance,Path::new(&task.cwd),SpawnPosture::Discovery,true).unwrap();
+        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        st.delegation_store.grant(&task.owner_instance,Path::new(&task.cwd),SpawnPosture::Discovery,false).unwrap();
+        assert!(admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        task.state="cancelled".into();st.delegation_store.save(&task).unwrap();
+        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        drop(st);cleanup(&config);
+    }
+
+    #[test]
+    fn spec247_refus_tardif_annulation_ne_devient_pas_echec() {
+        let (shared, config, task_id, _, _) = parent_en_cours_150(request("cancel247"),0);
+        let mut st=shared.lock().unwrap();let mut task=st.delegation_store.get(&task_id).unwrap().unwrap();
+        for state in ["cancelling","cancelled"] {
+            task.state=state.into();task.error=None;st.delegation_store.save(&task).unwrap();
+            let before=serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap();
+            assert_eq!(rejected(&mut st,"child-conn",&task.mission,"stdout Codex fermé pendant le tour",None,None).unwrap(),NativeRejection::StaleIgnored);
+            assert_eq!(serde_json::to_vec(&st.delegation_store.get(&task_id).unwrap().unwrap()).unwrap(),before);
+            if state=="cancelled" {
+                let mut foreign=task.clone();foreign.owner=Uuid::new_v4().to_string();
+                assert!(!settle_cancelled_tracked_request247(&mut st,&foreign).unwrap());
+                assert_eq!(st.store.get_request(&task.mission).unwrap().unwrap().state,"open");
+                assert!(settle_cancelled_tracked_request247(&mut st,&task).unwrap());
+                assert_eq!(st.store.get_request(&task.mission).unwrap().unwrap().state,"cancelled");
+                assert!(!settle_cancelled_tracked_request247(&mut st,&task).unwrap());
+            } else {
+                assert!(!settle_cancelled_tracked_request247(&mut st,&task).unwrap());
+                assert_eq!(st.store.get_request(&task.mission).unwrap().unwrap().state,"open");
+            }
+        }
+        drop(st);cleanup(&config);
     }
 
     #[test]
