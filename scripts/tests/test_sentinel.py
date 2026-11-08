@@ -30,6 +30,13 @@ class Sentinel244(unittest.TestCase):
         self.write()
         self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"passed")
 
+    def test_guarded_is_admission_policy_not_current_open_guard(self):
+        self.task.update(acknowledged_at=123,guarded=True,guard_released=True,cleanup_done=True)
+        self.write()
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"passed")
+        self.task["guard_released"]=False;self.write()
+        self.assertEqual(sentinel.observe(self.db,self.case,"parent")["status"],"pending")
+
     def test_wrong_owner_machine_or_workspace_never_passes(self):
         self.task.update(acknowledged_at=123,guarded=False,cleanup_done=True)
         self.write()
@@ -77,17 +84,37 @@ class Sentinel244(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"private_file"):
                 sentinel.private(path)
 
+    def test_command_output_is_drained_bounded_and_secrets_masked(self):
+        result=sentinel.captured(["/usr/bin/python3","-c","import sys;sys.stdout.write('x'*1048576);sys.stderr.write('password=secret-value '+('e'*1048576))"],stdout_limit=4096)
+        self.assertEqual(result.returncode,74)
+        self.assertEqual(len(result.stdout),4096)
+        result=sentinel.captured(["/usr/bin/python3","-c","import sys;sys.stderr.write('password=secret-value '+('e'*1048576))"])
+        self.assertLessEqual(len(result.stderr),512)
+        self.assertNotIn("secret-value",result.stderr)
+
+    def test_alert_unknown_resolves_same_envelope_without_new_notification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state=Path(directory)
+            incident=dict(target="maintainer",id="stable-id",issued_at=123,scope="stable-scope",body="incident",reason="mandat",state="unknown")
+            incidents={"key":incident}
+            with patch.object(sentinel,"call",return_value=dict(exit=0,stdout="OK: accepted id=stable-id",stderr="")) as call:
+                sentinel.resolve_alert("bridget",state,incidents,"key")
+                args=call.call_args.args[1]
+                self.assertIn("stable-id",args);self.assertIn("123",args)
+                self.assertEqual(incident["state"],"confirmed")
+            self.assertEqual(sentinel.private(state/"sentinel-incidents.json")["key"]["id"],"stable-id")
+
     def test_repair_starts_only_a_failed_owned_component_with_no_pid(self):
         class Result:
             returncode=0
             stdout="LoadState=loaded\nActiveState=failed\nMainPID=0\n"
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(sentinel.subprocess,"run",return_value=Result()) as call:
+            with patch.object(sentinel,"captured",return_value=Result()) as call:
                 rows=sentinel.repair_components(Path(directory),dict(repair_units=["bridget-core.service"]))
                 self.assertEqual(rows["bridget-core.service"]["action"],"start_requested")
                 self.assertEqual(call.call_count,2)
             Result.stdout="LoadState=loaded\nActiveState=active\nMainPID=123\n"
-            with patch.object(sentinel.subprocess,"run",return_value=Result()) as call:
+            with patch.object(sentinel,"captured",return_value=Result()) as call:
                 sentinel.repair_components(Path(directory),dict(repair_units=["bridget-core.service"]))
                 self.assertEqual(call.call_count,1)
             with self.assertRaisesRegex(ValueError,"component_not_owned"):

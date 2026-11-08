@@ -13,6 +13,8 @@ import sys
 import time
 import uuid
 import base64
+import selectors
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 TOKEN = "SENTINELLE244OK"
@@ -50,10 +52,55 @@ def save(path, value):
         temporary.unlink(missing_ok=True)
 
 
+def captured(arguments, timeout=120, env=None, stdout_limit=16*1024*1024):
+    """Drainer les deux tubes. La réponse garde la borne de trame native16Mio."""
+    process=subprocess.Popen(arguments,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
+    streams=selectors.DefaultSelector()
+    for stream in [process.stdout,process.stderr]:
+        os.set_blocking(stream.fileno(),False)
+        streams.register(stream,selectors.EVENT_READ)
+    outputs={process.stdout:bytearray(),process.stderr:bytearray()}
+    limits={process.stdout:stdout_limit,process.stderr:512}
+    truncated=False
+    deadline=time.monotonic()+timeout
+    timed_out=False
+    try:
+        while streams.get_map():
+            if time.monotonic()>=deadline:
+                timed_out=True
+                if process.poll() is None:
+                    # Notre enfant exact seulement. Aucun groupe de processus,
+                    # aucune mise à mort forcée ou reprise d'un fournisseur.
+                    identity=subprocess.check_output(["ps","-p",str(process.pid),"-o","comm="],text=True,timeout=3).strip()
+                    if "firefox" not in identity.lower():
+                        process.terminate()
+                        try: process.wait(timeout=3)
+                        except subprocess.TimeoutExpired: pass
+                break
+            for key,_ in streams.select(min(.2,max(0,deadline-time.monotonic()))):
+                body=os.read(key.fileobj.fileno(),65536)
+                if not body:
+                    streams.unregister(key.fileobj)
+                    continue
+                room=max(0,limits[key.fileobj]-len(outputs[key.fileobj]))
+                outputs[key.fileobj].extend(body[:room])
+                if key.fileobj is process.stdout and len(body)>room:truncated=True
+        if not timed_out:
+            process.wait(timeout=max(.1,deadline-time.monotonic()))
+    finally:
+        streams.close();process.stdout.close();process.stderr.close()
+    stderr=outputs[process.stderr].decode("utf8",errors="replace")
+    stderr=re.sub(r"(?i)(token|api[_-]?key|password|secret)(\s*[:=]\s*)[^\s]+",r"\1\2[masqué]",stderr)
+    stderr=stderr.encode("utf8")[:512].decode("utf8",errors="ignore")
+    result=subprocess.CompletedProcess(arguments,124 if timed_out else 74 if truncated else process.returncode,
+        outputs[process.stdout].decode("utf8",errors="replace"),
+        "sentinel_command_timeout" if timed_out else "sentinel_command_output_truncated" if truncated else stderr)
+    return result
+
+
 def call(binary, arguments, timeout=120):
-    p = subprocess.run([str(binary), *arguments], capture_output=True, text=True, timeout=timeout)
-    # Les reçus conservés sont privés. Ne jamais recopier l'environnement.
-    return dict(exit=p.returncode, stdout=p.stdout, stderr=p.stderr)
+    p=captured([str(binary),*arguments],timeout)
+    return dict(exit=p.returncode,stdout=p.stdout,stderr=p.stderr)
 
 
 def checked(binary, args, timeout=120):
@@ -101,7 +148,7 @@ print(hashlib.sha256(json.dumps(facts).encode()).hexdigest())'''
                   "-o","IdentitiesOnly=yes","-o","UserKnownHostsFile="+link["known_hosts"],"-i",link["identity"],
                   "-p",link["port"],link["user"]+"@"+link["host"],command]
             try:
-                p=subprocess.run(args,capture_output=True,text=True,timeout=15)
+                p=captured(args,timeout=15)
                 value=p.stdout.strip()
                 return (link["host"],value if p.returncode==0 and len(value)==64 and all(c in "0123456789abcdef" for c in value) else "unobserved")
             except subprocess.TimeoutExpired:
@@ -109,6 +156,25 @@ print(hashlib.sha256(json.dumps(facts).encode()).hexdigest())'''
         with ThreadPoolExecutor(max_workers=4) as pool:
             facts.extend(sorted(pool.map(remote,links)))
     return hashlib.sha256(json.dumps(facts).encode()).hexdigest()
+
+
+def resolve_alert(binary,state,incidents,key):
+    incident=incidents[key]
+    if int(time.time())<incident.get("next_check_at",0):return
+    incident.update(last_checked_at=int(time.time()),next_check_at=int(time.time())+300)
+    save(state/"sentinel-incidents.json",incidents)
+    receipt=call(binary,["send","--to",incident["target"],"--id",incident["id"],"--issued-at",str(incident["issued_at"]),
+        "--issuer-scope",incident["scope"],"--cross-project-reason",incident["reason"],"--",incident["body"]])
+    incident["receipt"]=receipt
+    if receipt["stdout"].startswith("OK: accepted "):
+        incident["state"]="confirmed"
+    elif "in_flight" in receipt["stdout"] and receipt["exit"]==0:
+        incident["state"]="submitted"
+    elif any(code in receipt["stderr"] for code in ["orphaned","idempotency_expired","envelope_mismatch","REJET:"]):
+        incident.update(state="terminal",action="maintainer_delivery_requires_diagnosis")
+    else:
+        incident.update(state="unknown",action="same_envelope_status_at_next_check")
+    save(state/"sentinel-incidents.json",incidents)
 
 
 def alert(binary, state, report):
@@ -126,7 +192,14 @@ def alert(binary, state, report):
     incident=incidents.setdefault(key,{"observed_at":report["finished_at"],"state":"pending"})
     if incident.get("state") == "resolved":
         incident.update(state="pending",observed_at=report["finished_at"])
+    if incident.get("state") in {"confirmed","terminal"}:
+        report["maintenance_alert"]={k:incident.get(k) for k in ["state","observed_at","last_checked_at","next_check_at","action"]}
+        save(state/"sentinel.json",report)
+        return
     if incident.get("state") in {"submitted","unknown"}:
+        resolve_alert(binary,state,incidents,key)
+        report["maintenance_alert"]={k:incident.get(k) for k in ["state","observed_at","last_checked_at","next_check_at","action"]}
+        save(state/"sentinel.json",report)
         return
     command=state/"sentinel-maintainer-search.json"
     save(command,dict(version=1,action="search",role_id="mainteneur-bridget"))
@@ -152,16 +225,16 @@ def alert(binary, state, report):
             raise ValueError("maintainer_mandate_or_presence_unconfirmed")
         incident.update(state="submitted",target=target,id="sentinel244-alert-"+uuid.uuid4().hex,
                         issued_at=int(time.time()),scope="sentinel244_"+uuid.uuid4().hex,
+                        reason="Incident des contrôles natifs de Bridget ; mandat de maintenance vérifié.",
                         body="Incident sentinelle Bridget. Contrôles échoués : "+json.dumps(failed,ensure_ascii=False)+
                              ". Rapport natif : bridget sentinel status. Aucune mission métier rejouée. Diagnostic de maintenance demandé ; aucune décision humaine supplémentaire déduite.")
         save(incidents_path,incidents)
-        receipt=call(binary,["send","--to",target,"--id",incident["id"],"--issued-at",str(incident["issued_at"]),
-                             "--issuer-scope",incident["scope"],"--cross-project-reason","Incident des contrôles natifs de Bridget ; mandat de maintenance vérifié.","--",incident["body"]])
-        incident["receipt"]=receipt
-        incident["state"]="submitted" if receipt["exit"]==0 else "unknown"
+        resolve_alert(binary,state,incidents,key)
     except (ValueError,RuntimeError,KeyError,TypeError) as error:
         incident["blocked"] = str(error).split(":")[0]
     save(incidents_path,incidents)
+    report["maintenance_alert"]={k:incident.get(k) for k in ["state","observed_at","last_checked_at","next_check_at","action"]}
+    save(state/"sentinel.json",report)
 
 
 def repair_components(state, config):
@@ -173,7 +246,7 @@ def repair_components(state, config):
     for unit in config.get("repair_units",[]):
         if unit not in allowed:
             raise ValueError("sentinel_component_not_owned")
-        p=subprocess.run(["systemctl","--user","show",unit,"-p","LoadState","-p","ActiveState","-p","MainPID"],capture_output=True,text=True,timeout=10)
+        p=captured(["systemctl","--user","show",unit,"-p","LoadState","-p","ActiveState","-p","MainPID"],timeout=10)
         facts=dict(line.split("=",1) for line in p.stdout.splitlines() if "=" in line)
         row=dict(state=facts.get("ActiveState","unobserved"),observed_at=int(time.time()))
         if p.returncode==0 and facts.get("LoadState")=="loaded" and facts.get("ActiveState")=="failed" and facts.get("MainPID")=="0":
@@ -184,7 +257,7 @@ def repair_components(state, config):
             if int(time.time()) < (previous.get(unit) or {}).get("retry_after",0):
                 observed[unit]=dict(previous[unit],state=row["state"],observed_at=row["observed_at"])
                 continue
-            repair=subprocess.run(["systemctl","--user","start",unit],capture_output=True,text=True,timeout=30)
+            repair=captured(["systemctl","--user","start",unit],timeout=30)
             row["action"]="start_requested" if repair.returncode==0 else "start_unconfirmed"
         observed[unit]=row
     save(path,observed)
@@ -220,7 +293,7 @@ def observe(connection, case, parent):
             return dict(case, status="failed", code="sentinel_contract_changed")
         result = task.get("result") or ""
         passed = (task["state"] == "result_available" and result.splitlines()[0:1] == [TOKEN]
-                  and task.get("acknowledged_at") is not None and not task.get("guarded")
+                  and task.get("acknowledged_at") is not None and (not task.get("guarded") or task.get("guard_released"))
                   and task.get("cleanup_done") is True)
         communication = None
         if case.get("communication"):
@@ -238,7 +311,7 @@ def observe(connection, case, parent):
                     (thread[0],parent,task["child"],parent,COMMUNICATION_TOKEN)).fetchone())
             communication=dict(direct_reply=reply_ok,shared_thread=thread_ok,result_notification=task.get("delivery_acked") is True)
             passed=passed and all(communication.values())
-        closed=bool(task.get("cleanup_done") and not task.get("guarded"))
+        closed=bool(task.get("cleanup_done") and (not task.get("guarded") or task.get("guard_released")))
         return dict(case, task_id=task["task_id"], state=task["state"], closed=closed,
                     status="passed" if passed else "failed" if task["state"] in TERMINAL and closed else "pending",
                     communication_evidence=communication,
@@ -312,22 +385,22 @@ def run(binary, state, reason):
         root = state / "sentinel-fixtures"
         root.mkdir(mode=0o700, exist_ok=True)
         new = root / run_id
-        subprocess.run(["git","init","--initial-branch=main",str(new)],check=True,capture_output=True)
+        captured(["git","init","--initial-branch=main",str(new)]).check_returncode()
         (new/"README.md").write_text("# Contrôle natif Bridget\nProjet minimal sans donnée métier.\n",encoding="utf8")
         # Reprendre l'identité existante de l'utilisateur, sans modifier aucune
         # configuration Git ni ajouter de signature ou de compte technique.
-        identity={key:subprocess.check_output(["git","-C",str(repo),"config","user."+key],text=True).strip() for key in ["name","email"]}
+        identity={key:checked("git",["-C",str(repo),"config","user."+key]).strip() for key in ["name","email"]}
         env=dict(os.environ,GIT_AUTHOR_NAME=identity["name"],GIT_AUTHOR_EMAIL=identity["email"],
                  GIT_COMMITTER_NAME=identity["name"],GIT_COMMITTER_EMAIL=identity["email"])
-        subprocess.run(["git","-C",str(new),"add","README.md"],check=True,capture_output=True)
-        subprocess.run(["git","-C",str(new),"commit","-m","test(sentinel): Initialiser le projet de contrôle"],env=env,check=True,capture_output=True)
-        sha = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        captured(["git","-C",str(new),"add","README.md"]).check_returncode()
+        captured(["git","-C",str(new),"commit","-m","test(sentinel): Initialiser le projet de contrôle"],env=env).check_returncode()
+        sha = checked("git",["-C",str(repo),"rev-parse","HEAD"]).strip()
         manifest = dict(version=1, run_id=run_id, started_at=int(time.time()), fingerprint=stamp,
                         reason=reason, base_commit=sha, cases=cases(catalogue["options"], run_id),
                         controllers={f:dict(agent=str(uuid.uuid4()), command=f"sentinel244-{run_id}-{f}",
                                             cwd=str(p), phase="prepared", issued_at=int(time.time()),
                                             scope="sentinel244_"+uuid.uuid4().hex,
-                                            base_commit=subprocess.check_output(["git","-C",str(p),"rev-parse","HEAD"],text=True).strip())
+                                            base_commit=checked("git",["-C",str(p),"rev-parse","HEAD"]).strip())
                                      for f,p in [("existing",repo),("new",new)]})
         save(manifest_path, manifest)
         for case in manifest["cases"]:

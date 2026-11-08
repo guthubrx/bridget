@@ -13392,6 +13392,27 @@ mod remote162_result_tests {
     }
 
     #[test]
+    fn spec244_reprise_reponse_wrapper_sans_nouveau_tour_fournisseur() {
+        let fixture=Fixture::new();let state=fixture.root.join("receipts");
+        let mut tracker=IdempotentDeliveryTracker::open_at(&state,"instance162").unwrap();
+        tracker.requires_binding=true;tracker.modern_reply_core=true;
+        let mut direct=fixture.message();direct.id="direct244-durable".into();direct.intent=None;tracker.admit_ordinary(&direct);
+        let (stream,peer)=UnixStream::pair().unwrap();let writer=Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        let event=ManagedEvent::internal(bridget_transport::ManagedEventSource::CodexAppServer,vec![],
+            ManagedEventKind::TurnFinished{message:direct,response:"DIRECT244OK".into(),terminal:ManagedTerminal::Completed});
+        let mut bindings=HashMap::new();assert!(!forward_managed_events(&writer,"child",vec![event],&mut tracker,&mut bindings));
+        let stored=tracker.reply_outbox.as_ref().unwrap().pending(unix_now_secs()).unwrap().unwrap();drop(tracker);drop(writer);drop(peer);
+        let mut tracker=IdempotentDeliveryTracker::open_at(&state,"instance162").unwrap();
+        tracker.modern_reply_core=true;tracker.last_reply_retry=Instant::now()-Duration::from_secs(6);
+        let (stream,peer)=UnixStream::pair().unwrap();let writer=Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        tracker.retry_reply(&writer).unwrap();drop(writer);
+        let frames=BufReader::new(peer).lines().map(|line|decode(&line.unwrap()).unwrap()).collect::<Vec<_>>();
+        assert!(matches!(frames.as_slice(),[WrapperToDaemon::Send(m)] if m.id==stored.id && m.body==stored.body));
+        tracker.acknowledge_reply(&stored.id).unwrap();
+        assert!(tracker.reply_outbox.as_ref().unwrap().pending(unix_now_secs()).unwrap().is_none());
+    }
+
+    #[test]
     fn spec244_terminal_distant_sans_binding_ne_devient_pas_une_reponse_ordinaire() {
         let fixture=Fixture::new();let (stream,peer)=UnixStream::pair().unwrap();
         let writer=Arc::new(Mutex::new(Some(BufWriter::new(stream))));

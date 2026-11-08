@@ -90,8 +90,21 @@ pub(crate) fn status(state: &Path) -> Value {
     }).collect::<Vec<_>>()
             })
             .unwrap_or_default();
+    let alert = &report["maintenance_alert"];
+    let alert_state = alert["state"].as_str().filter(|s| {
+        matches!(
+            *s,
+            "pending" | "submitted" | "unknown" | "confirmed" | "terminal" | "resolved"
+        )
+    });
+    let maintenance_alert=alert_state.map(|state|json!({"state":state,
+        "observed_at":alert["observed_at"].as_i64(),"last_checked_at":alert["last_checked_at"].as_i64(),
+        "next_check_at":alert["next_check_at"].as_i64(),
+        "next_action":if state=="unknown" || state=="submitted" {"Bridget relit le sort du même envoi au prochain contrôle, sans nouvelle notification."}
+            else if state=="confirmed" {"Le mainteneur a reçu le signalement ; les autres travaux autorisés peuvent continuer."}
+            else {"Le signalement est conservé pour diagnostic de maintenance ; aucun remplacement de mission n’est créé."}}));
     json!({"version":1,"status":report["status"],"started_at":report["started_at"],
-        "finished_at":report["finished_at"],"scope":report["scope"],"code":public_code(&report["code"]),"cases":cases})
+        "finished_at":report["finished_at"],"scope":report["scope"],"code":public_code(&report["code"]),"cases":cases,"maintenance_alert":maintenance_alert})
 }
 
 pub(crate) fn run(binary: &Path, state: &Path, reason: &str) -> Result<i32, String> {
