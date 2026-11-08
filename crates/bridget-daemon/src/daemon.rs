@@ -5018,11 +5018,19 @@ impl DaemonState {
         // Allocation durable monotone : un timestamp d'admission ou un UUID
         // aléatoire ne permettrait pas le prédicat SQL « époque antérieure ».
         let coordinator_epoch = delegation_store.next_auto_coordinator_epoch()?;
+        let mut provider_limits=crate::provider_limits::ProviderLimits::restore_routing244(store.connection(),unix_timestamp());
+        for connection in registry.routing_policy().into_iter().flat_map(|policy|&policy.connections) {
+            if let (Some(old),Some(new))=(registry.routing_account_scope_legacy245(&connection.connection_id),registry.routing_account_scope244(&connection.connection_id)) {
+                if provider_limits.migrate_account_scope245(store.connection(),&old,&new).is_err() {
+                    warn!("reclassement du cache de quota indisponible ; observations originales conservées");
+                }
+            }
+        }
         Ok(DaemonState {
             update_gate: crate::updates::Gate::open(
                 config.db_path.parent().ok_or("update_root_missing")?,
             )?,
-            provider_limits: crate::provider_limits::ProviderLimits::restore_routing244(store.connection(), unix_timestamp()),
+            provider_limits,
             host_resources: Default::default(),
             held_ids,
             human_thread_watches: HashMap::new(),

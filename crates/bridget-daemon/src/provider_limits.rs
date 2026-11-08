@@ -72,6 +72,32 @@ impl ProviderLimits {
         limits
     }
 
+    /// Changement de clé de cache uniquement : mêmes faits et mêmes dates.
+    /// Le déplacement atomique empêche de ressusciter un ancien refus après
+    /// une réponse positive reçue ensuite sous la clé canonique.
+    pub(crate) fn migrate_account_scope245(&mut self, db:&rusqlite::Connection, old:&str, new:&str)->rusqlite::Result<()> {
+        if old==new {return Ok(());}
+        let Some(previous)=self.account_refusals244.get(old).cloned() else {return Ok(());};
+        let mut merged=self.account_refusals244.get(new).cloned().unwrap_or_default();
+        for (window,seen) in previous {
+            if merged.get(&window).is_none_or(|current|current.observed_at < seen.observed_at) {
+                merged.insert(window,seen);
+            }
+        }
+        // La mémoire garde le fait même si le cache disque est indisponible.
+        self.account_refusals244.insert(new.into(),merged.clone());
+        let tx=db.unchecked_transaction()?;
+        for (window,seen) in merged {
+            let body=serde_json::to_string(&seen).expect("fait de quota sérialisable");
+            tx.execute("INSERT INTO provider_refusals244(scope,window,fact,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(scope,window) DO UPDATE SET fact=excluded.fact,expires_at=excluded.expires_at",
+                rusqlite::params![new,window,body,Self::refusal_until244(&seen)])?;
+        }
+        tx.execute("DELETE FROM provider_refusals244 WHERE scope=?1",[old])?;
+        tx.commit()?;
+        self.account_refusals244.remove(old);
+        Ok(())
+    }
+
     fn shared_claude_window244(window: &str) -> bool {
         // Les fenêtres spécifiques à Opus/Sonnet restent propres à la connexion.
         matches!(window, "unknown" | "five_hour" | "seven_day")
@@ -433,6 +459,56 @@ impl ProviderLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec245_quota_migration_preserve_dates_et_reponse_positive() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let old = "a".repeat(64);
+        let alias = "b".repeat(64);
+        let canonical = "c".repeat(64);
+        let other = "d".repeat(64);
+        let mut limits = ProviderLimits::restore_routing244(&db,100);
+        let mut fact = RateLimitFact { window:"seven_day".into(),status:"rejected".into(),resets_at:Some(1000),used_percent:None,credits:None };
+        limits.record_account244(&db,&old,&fact,RateLimitSource::ClaudeStreamJson,110);
+        limits.record_account244(&db,&alias,&fact,RateLimitSource::ClaudeStreamJson,120);
+        fact.window="five_hour".into();fact.resets_at=Some(900);
+        limits.record_account244(&db,&canonical,&fact,RateLimitSource::ClaudeStreamJson,130);
+        limits.migrate_account_scope245(&db,&alias,&canonical).unwrap();
+        limits.migrate_account_scope245(&db,&old,&canonical).unwrap();
+        limits.migrate_account_scope245(&db,&canonical,&canonical).unwrap();
+        let mut restored = ProviderLimits::restore_routing244(&db,200);
+        let seen = &restored.account_refusals244[&canonical]["seven_day"];
+        assert_eq!((seen.observed_at,seen.fact.resets_at),(120,Some(1000)));
+        assert_eq!(restored.account_refusals244[&canonical]["five_hour"].observed_at,130);
+        assert!(restored.account_quota244(None,Some(&canonical),200).unwrap().launch_blocked);
+        for absent in [&old,&alias,&other] {
+            assert!(restored.account_quota244(None,Some(absent),200).is_none());
+        }
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM provider_refusals244 WHERE scope IN (?1,?2)",rusqlite::params![old,alias],|r|r.get::<_,i64>(0)).unwrap(),0);
+        fact.status="allowed".into();
+        restored.record_account244(&db,&canonical,&fact,RateLimitSource::ClaudeStreamJson,210);
+        fact.window="seven_day".into();
+        restored.record_account244(&db,&canonical,&fact,RateLimitSource::ClaudeStreamJson,211);
+        let mut restored = ProviderLimits::restore_routing244(&db,220);
+        restored.migrate_account_scope245(&db,&old,&canonical).unwrap();
+        restored.migrate_account_scope245(&db,&alias,&canonical).unwrap();
+        assert!(restored.account_quota244(None,Some(&canonical),220).is_none());
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name!='provider_refusals244'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
+
+    #[test]
+    fn spec245_quota_migration_echec_disque_garde_fait_original() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let old = "a".repeat(64);let canonical = "c".repeat(64);
+        let mut limits = ProviderLimits::restore_routing244(&db,100);
+        let fact = RateLimitFact { window:"seven_day".into(),status:"rejected".into(),resets_at:Some(1000),used_percent:None,credits:None };
+        limits.record_account244(&db,&old,&fact,RateLimitSource::ClaudeStreamJson,110);
+        db.execute_batch("CREATE TRIGGER refuse245 BEFORE DELETE ON provider_refusals244 BEGIN SELECT RAISE(ABORT,'test'); END;").unwrap();
+        assert!(limits.migrate_account_scope245(&db,&old,&canonical).is_err());
+        assert!(limits.account_quota244(None,Some(&canonical),200).unwrap().launch_blocked);
+        assert!(ProviderLimits::restore_routing244(&db,200).account_quota244(None,Some(&old),200).unwrap().launch_blocked);
+        assert_eq!(db.query_row("SELECT COUNT(*) FROM provider_refusals244 WHERE scope=?1",[canonical],|r|r.get::<_,i64>(0)).unwrap(),0);
+    }
 
     #[test]
     fn spec244_quota_alias_reprise_compte_et_date_inconnue() {

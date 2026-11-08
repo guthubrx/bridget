@@ -788,8 +788,16 @@ impl AgentRegistry {
     }
 
     /// Identité du compte Claude sur un worker. Deux alias ne partagent un refus
-    /// que si tout le lanceur est identique, sauf le modèle explicite.
+    /// que si le lanceur est identique, hors modèle et catalogue de modèles.
     pub(crate) fn routing_account_scope244(&self, connection_id: &str) -> Option<String> {
+        self.routing_account_scope245(connection_id, false)
+    }
+    // Ancienne empreinte : sert seulement à reprendre les observations déjà
+    // enregistrées avec le catalogue de modèles. Aucun appel fournisseur.
+    pub(crate) fn routing_account_scope_legacy245(&self, connection_id: &str) -> Option<String> {
+        self.routing_account_scope245(connection_id, true)
+    }
+    fn routing_account_scope245(&self, connection_id: &str, legacy_models: bool) -> Option<String> {
         let policy = self.routing_policy()?;
         let connection = policy.connections.iter().find(|c| c.enabled && c.connection_id == connection_id)?;
         if connection.engine != "claude" { return None; }
@@ -803,6 +811,8 @@ impl AgentRegistry {
         }
         definition.args = args;
         definition.digest.clear();
+        // Une liste de modèles ne choisit pas un compte de facturation.
+        if !legacy_models { definition.capabilities.models.clear(); }
         let worker = self.machines.get(&connection.machine_id).map(|m|
             (&m.worker_id, m.provisioning_revision, &m.credential_fingerprint));
         let bytes = serde_json::to_vec(&(&connection.machine_id, definition, policy.revision, worker)).ok()?;
@@ -3038,7 +3048,10 @@ mod tests {
         let connection = serde_json::json!({"connection_id":"claude-alias", "machine_id":"local", "engine":"claude", "agent_type":"claude-alias", "enabled":true});
         value["routing_policy"]["connections"].as_array_mut().unwrap().push(connection);
         value["routing_policy"]["model_catalog"]["claude-alias"] = value["routing_policy"]["model_catalog"]["claude-local"].clone();
+        value["agents"]["claude"]["capabilities"] = serde_json::json!({"models":{"claude-opus-4-5":{"efforts":["high"]}}});
+        value["agents"]["claude-alias"]["capabilities"] = serde_json::json!({"models":{"claude-haiku-4-5":{"efforts":[]}}});
         let registry = AgentRegistry::from_json(&value.to_string(),"/tmp/agents.json").unwrap();
+        assert_ne!(registry.routing_account_scope_legacy245("claude-local"),registry.routing_account_scope_legacy245("claude-alias"));
         assert!(registry.routing_account_scope244("claude-local").is_some());
         assert_eq!(registry.routing_account_scope244("claude-local"),registry.routing_account_scope244("claude-alias"));
         assert_ne!(registry.routing_account_scope244("claude-local"),registry.routing_account_scope244("claude-cartae"));
