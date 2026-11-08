@@ -441,25 +441,22 @@ retour r4 sur quatre hôtes, tâches protégées et T3 inchangés. Après activa
 preuve Cartae écrite à 06:31:41 UTC (compatible, vérifiée), et le motif
 `program_upgrade_check_pending` a disparu de l'admission.
 
-Limite constatée : une délégation distante depuis cette session Claude du Mac
-reste refusée (`permission_mapping_unavailable`, site projection). Ses
-réglages Claude déclarent des crochets que Cartae ne reproduit pas ; seul
-opus2D dispose d'un profil gardé, figé le 17 octobre. Protection conservée,
-aucun droit élargi. L'essai réel de récolte root n'a donc pas pu être lancé
-depuis ce parent.
+Refus suivant observé : une délégation distante depuis cette session Claude du
+Mac restait refusée (`permission_mapping_unavailable`, site projection). Cause
+établie et corrigée plus bas (racine additionnelle des anciens mappings).
+L'hypothèse initiale, des crochets Claude non reproductibles, était fausse.
 
 Refus de ce matin identifié : « Bridget a refusé la mission » vient du fil
 « refonte monde » (opus2D), 06:17 UTC, clé parix-ecarts-teleoperator-20261108-a.
 C'est le refus de périmètre cwd corrigé en r5 ; l'agent a reçu la cause et la
 marche à suivre.
 
-Suite prévisible, signalée sans correctif : une session Claude du Mac dans un
-projet sans profil gardé (Parix, Bridget) est refusée pour une mission distante
-(`permission_mapping_unavailable`, site projection), car Cartae ne reproduit pas
-les crochets de ses réglages utilisateur. Seul opus2D a un profil gardé (session
-171, `~/.cache/bridget-core/permission-profiles171.json`). Créer un profil pour
-Parix est un chantier distinct, soumis à décision. Le message public dit
-« cause non observée » et renvoie au diagnostic worker, qui nomme ce code.
+Hypothèse écartée : un profil gardé (session 171) n'est pas nécessaire pour
+déléguer depuis une session Claude du Mac qui a des crochets. Preuve : la tâche
+d9400941 (projet bridget, aucun profil gardé) a été admise vers Cartae et
+terminée. L'avertissement envoyé à « refonte monde » sur ce point a été
+rectifié par un second message. Le message public de ce refus dit « cause non
+observée » et renvoie au diagnostic worker, qui nomme le code exact.
 
 Cause réelle du refus `permission_mapping_unavailable` (8 novembre 2026) : ce
 n'étaient pas les crochets. Chaque session T3 reçoit le dossier

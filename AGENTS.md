@@ -119,6 +119,12 @@ réalignés ; recettes159 marquées avec leurs prérequis (test-support). Dix
 ignorés171 retirés ou remplacés. Sept composants/SHA vérifiés, coupure1,87s,
 retour242 atomique quatre hôtes ; T3 non arrêté. Bilan :
 /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/243-tests-171/spec.md.
+Actif ensuite 243-tests-r5 (5c731211), retour r4 : qualification Codex
+réparée (managed-bootstrap sans namespace, HOME long), refus cwd nommé
+cwd_outside_parent_project. Mappings cartae/bridget et cartae/roadie
+complétés de la racine pièces jointes T3 (révision 2, cinq registres) :
+cause réelle de permission_mapping_unavailable, pas les crochets Claude.
+Essai réel d9400941 : récolte root par superviseur r5 vérifiée.
 
 Session242 — carte de reprise corrigée et activée en0.8.9/242-resume-card-r1.
 Source7de2d695 poussée,12tests cartesMac PASS ; erreurGit distincte de l’accès
