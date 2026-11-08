@@ -110,6 +110,27 @@ Ne pas décrire le produit par comparaison avec un client externe.
 <!-- SPECKIT START -->
 
 
+Session244 — corrections actives en0.8.10/244-reference-r5.
+Source exécutable9ce5b697 poussée ; sept composants/SHA vérifiés quatre hôtes,
+retourtransport244-r3 compatible (sourcea44de849, tagcompat-244-return-r3),
+ancien243 refusé comme retour. Coupures maître1,92s puis2,13s ; T3 non redémarré.
+Parix : portée source déjà complète respectée dans transport/projection ; quota :
+refus Claude partagés entre alias du même lanceur et conservés au redémarrage,
+sans inventer une date de retour. Avis de reprise aux propriétairescb896/599
+ACKés par le transport ; lecture métier non affirmée. Claude reste soumis à son
+quota externe ; aucun nouvel essai Claude après la consigne du8novembre.
+Messages conservés avant ACK, réponses durables, réconciliation positive ;
+réponse directe SYS réellement answered, fil lu/ACKé. Revues propres terminées,
+finale35ddbd0a sansP1/P2, ACK acquis. Releasepublique0.8.10/sixactifs téléchargés
+sansauth/SHA, APK8010/lignée8009 et preuveAndroidHTML vérifiés. RegistreMac et
+sept payloads protégés inchangés. Contrôles étendus volontairement arrêtés :
+campagne initiale conservée avec ses échecs/limites, deux parents propres arrêtés
+nativement, minuteur quotidien NON activé ; T006/T007/T008 restent ouverts.
+Lien de préparation Cartae→Mac non configuré : aucun accès SSH ajouté.
+Macmainseul, deux WT/deux branches propres retirés ; source de retour conservée
+par tag. Autres retraits/bilan dans specs/244-bridget-reference/validation.md.
+NE PAS relancer T3 ni reprendre des essais Claude sans demande utile nouvelle.
+
 Session243 — suite complète réparée, activée en0.8.9/243-tests-r1.
 Source094ceaad : 65échecs Mac ramenés à0 hors bornes de3s sous charge.
 Défauts corrigés : entrée vide des contrôles post-réponse, profil rouvert

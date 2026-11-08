@@ -1,6 +1,6 @@
 # Session 244 — Bridget de référence : déléguer sans solliciter l'utilisateur
 
-Statut : In Progress. Ouverte le 8 novembre 2026, à la demande de François.
+Statut : corrections prioritaires et exécutables livrés en0.8.10/R5 ; qualification étendue partielle, minuteur non activé. Ouverte le 8 novembre 2026, à la demande de François.
 
 ## Besoin
 
