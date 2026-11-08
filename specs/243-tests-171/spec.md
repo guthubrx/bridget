@@ -386,3 +386,9 @@ le worktree 1cc44f4d et la branche `bridget198-worker-start`, puis s'est
 désinstallé. L'archive `archive/243-1cc44f4d-brouillon198` (bfe9f01a) reste
 conservée. La boucle de l'image 183 qui ignorait la demande d'arrêt n'est pas
 identifiée. Le lien Mac 242 attend toujours le redémarrage de T3.
+
+Issue Mac : les façades 18554 et 21774 se sont terminées d'elles-mêmes. Le
+gardien a retiré `242-resume-card-r1` le 8 novembre 2026 à 04:14 UTC, après ses
+vérifications. Il est ensuite désinscrit de launchd. Restent `243-tests-r4`
+(actif) et `243-tests-r3` (retour). Toutes les façades MCP observées chargent r4.
+Les deux retraits différés sont soldés.
