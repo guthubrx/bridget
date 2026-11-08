@@ -1,0 +1,4 @@
+- [ ] T001 Preuves de file et correction enfant vers parent.
+- [ ] T002 Comptes rendusCodex pendant le tour et libellé d’expiration.
+- [ ] T003 Contrôles ciblés, revue et activation native sansT3.
+- [ ] T004 Remises originales vérifiées, publication, Git et nettoyage.

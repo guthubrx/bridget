@@ -2306,7 +2306,7 @@ impl LinkWorker {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(id.clone(), Instant::now());
-                self.discard_by_id(&id, Discard::RequestClosed("annulée"));
+                self.discard_by_id(&id, if reason=="échéance de la demande dépassée" {Discard::Expired("de demande")} else {Discard::RequestClosed("annulée")});
                 info!("demande {id} retirée avant démarrage : {reason}");
             }
             DaemonToWrapper::Ack { id, .. } => {
@@ -3987,16 +3987,16 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
 /// reçu d'un coup treize messages qui attendaient sa fin. L'attente du repos
 /// sert à relier une réponse à sa demande ; un message sans réponse attendue
 /// n'a rien à relier. Chez les fournisseurs dont T3 pilote le tour en cours
-/// (Claude, donc GLM), il est remis aussitôt si mid_turn_ok vaut true.
-/// Cursor149, Codex, les demandes suivies, les sollicitations de fil et les
-/// notifications attendent la fin du tour. Cursor149 sait seulement relancer.
+/// (Claude, donc GLM, et Codex enV2), il est remis aussitôt si mid_turn_ok vaut true.
+/// Les demandes suivies, sollicitations de fil et notifications non groupables
+/// attendent la fin du tour. Cursor149 sait seulement relancer.
 // Le guidage explicite V2 est distinct du regroupement automatique des notifications.
 fn explicit_steering_supported(provider: Option<&str>) -> bool {
     matches!(provider, Some("claude" | "codex"))
 }
 
 fn deliverable_while_busy(provider: Option<&str>, groupable_front: bool) -> bool {
-    groupable_front && matches!(provider, Some("claude"))
+    groupable_front && matches!(provider, Some("claude" | "codex"))
 }
 
 /// Famille de regroupement : seuls des membres d'une même famille partagent un
@@ -7882,8 +7882,8 @@ mod tests {
             "Cursor149 ne guide pas nativement"
         );
         assert!(
-            !deliverable_while_busy(Some("codex"), true),
-            "Codex attend la fin du tour"
+            deliverable_while_busy(Some("codex"), true),
+            "CodexV2 sait guider le tour actif"
         );
         assert!(!deliverable_while_busy(None, true));
         assert!(
@@ -8270,6 +8270,31 @@ mod tests {
     }
 
     #[test]
+    fn spec248_compte_rendu_codex_v2_pendant_tour_sans_reponse_ni_redemarrage() {
+        for (v2,allowed,reply,expected) in [(true,Some(true),false,Some(0)),(true,None,false,None),(false,Some(true),false,None),(true,Some(true),true,None)] {
+            let (mut worker,_peer)=worker099();
+            worker.session.inner.lock().unwrap().client.set_test_protocol(v2);
+            let mut message=plain114("compte-rendu248");message.reply=reply;
+            worker.handle_frame(DaemonToWrapper::Deliver{message,mid_turn_ok:allowed});
+            let mut thread=summary(Some(("actif248","running")));thread.provider_instance_id=Some("codex".into());
+            thread.session=Some(contract::SessionSummary{provider_name:"codex".into(),provider_instance_id:None,status:"running".into(),active_turn_id:Some("actif248".into())});
+            assert_eq!(worker.next_delivery_index(&thread),expected,"v2={v2},allowed={allowed:?},reply={reply}");
+            assert_eq!(worker.queue.len(),1,"aucune remise écartée ni doublée");
+            if expected.is_some() {
+                let message=delivery_message(&worker.queue[0].0).clone();
+                let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                {let mut inner=worker.session.lock();inner.runtime.port=listener.local_addr().unwrap().port();inner.client=Client::for_base_url(&format!("http://127.0.0.1:{}",inner.runtime.port),"fixture");inner.client.set_test_protocol(true);}
+                let server=std::thread::spawn(move ||crate::t3code_contract_v2::tests::rpc_reply(&listener,"orchestration.dispatchCommand",Some(json!({"sequence":1}))));
+                worker.dispatch_batch(&[message],&thread,Some("steer")).unwrap();
+                let request=server.join().unwrap();
+                assert_eq!(request["deliveryIntent"],"steer");
+                assert_eq!(request["commandId"],"compte-rendu248");
+            }
+            worker.journal.stop();worker.relay.shutdown();
+        }
+    }
+
+    #[test]
     fn mobile180_t3_codex_explicit_guidance_keeps_intent_while_busy() {
         let (mut worker,_peer)=worker099();
         worker.session.inner.lock().unwrap().client.set_test_protocol(true);
@@ -8285,7 +8310,7 @@ mod tests {
         thread.session=Some(contract::SessionSummary {provider_name:"codex".into(),provider_instance_id:None,status:"running".into(),active_turn_id:Some("active".into())});
         assert_eq!(worker.next_delivery_index(&thread),Some(0));
         assert_eq!(delivery_message(&worker.queue[0].0).intent,Some(bridget_core::MessageIntent::SteerCurrent));
-        assert!(!deliverable_while_busy(Some("codex"),true),"automatic notifications remain queued");
+        assert!(deliverable_while_busy(Some("codex"),true),"comptes rendus autorisés pendant le tourV2");
         worker.journal.stop();worker.relay.shutdown();
     }
 

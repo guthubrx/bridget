@@ -10301,25 +10301,29 @@ pub(super) fn authorize_retained_result(
     Ok(())
 }
 
-/// Un parent coordonne la même mission sur une autre machine : la relation
-/// admise et les deux instances, pas l’égalité des chemins, fixent ce périmètre.
-/// Ne donne aucune autorité de remise de mission ni d’exception au sommeil.
-pub(super) fn admitted_parent_communication247(
+/// La relation admise et les deux instances fixent le projet logique d’une
+/// mission. La direction du guidage reste évaluée séparément par guidance.
+pub(super) fn admitted_task_communication248(
     st: &DaemonState, conn: &str, target: &str, message_id: Option<&str>,
 ) -> bool {
     let Some((sender, instance)) = live_connection_identity(st, conn) else {return false;};
-    let Ok(Some(task)) = st.delegation_store.for_child(target) else {return false;};
-    if task.owner != sender || task.owner_instance != instance
-        || task.terminal() || task.state == "cancelling"
-        || task.cleanup_done || task.guard_released
-        || message_id.is_some_and(|id| id == task.mission)
-    {return false;}
-    let Some(child_instance) = task.child_instance.as_ref() else {return false;};
-    let Some(route) = st.router.get_agent(target) else {return false;};
-    if live_connection_identity(st, &route.connection_id) != Some((task.child.clone(), child_instance.clone())) {
-        return false;
+    let Ok(candidate)=st.delegation_store.for_child(target) else {return false;};
+    let task=match candidate {
+        Some(task) if task.owner==sender && task.owner_instance==instance=>task,
+        _=> {
+            let Ok(Some(task))=st.delegation_store.for_child(&sender) else {return false;};
+            if task.owner!=target || task.child_instance.as_deref()!=Some(instance.as_str()) {return false;}
+            task
+        }
+    };
+    if task.terminal() || task.state == "cancelling" || task.cleanup_done || task.guard_released
+        || message_id.is_some_and(|id| id == task.mission) {return false;}
+    let Some(child_instance)=task.child_instance.as_ref() else {return false;};
+    for (agent, instance) in [(&task.owner,&task.owner_instance),(&task.child,child_instance)] {
+        let Some(route)=st.router.get_agent(agent) else {return false;};
+        if live_connection_identity(st,&route.connection_id)!=Some((agent.clone(),instance.clone())) {return false;}
     }
-    for value in [task.owner.as_str(), task.owner_instance.as_str(), task.child.as_str(), child_instance.as_str(), task.root_owner()] {
+    for value in [task.owner.as_str(),task.owner_instance.as_str(),task.child.as_str(),child_instance.as_str(),task.root_owner()] {
         if st.delegation_store.revoked(value).unwrap_or(true)
             || st.delegation_store.revoked_agent(value).unwrap_or(true) {return false;}
     }
@@ -32246,7 +32250,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let before=serde_json::to_vec(&task).unwrap();
         let mut message=bridget_core::BridgetMessage::new(&task.owner,&task.child,"complément autorisé");
         message.intent=Some(bridget_core::MessageIntent::SteerCurrent);
-        assert!(admitted_parent_communication247(&st,"conn-1",&task.child,Some(&message.id)));
+        assert!(admitted_task_communication248(&st,"conn-1",&task.child,Some(&message.id)));
         let prepared=prepare_dispatch(&mut st,&mut message,"conn-1",task.owner.clone(),"unique247".into(),"message247".into(),false);
         assert!(prepared.is_ok(),"{:?}",prepared.err());
         assert!(message.cross_project_reason.is_none());
@@ -32260,21 +32264,37 @@ for frame in frames: print(json.dumps(frame),flush=True)
     }
 
     #[test]
+    fn spec248_enfant_distant_peut_informer_parent_sans_devenir_pilote() {
+        let (shared,config,task_id,_,_)=parent_en_cours_avec_projets_174(request("rapport248"),0,true);
+        let st=shared.lock().unwrap();let task=st.delegation_store.get(&task_id).unwrap().unwrap();
+        assert!(admitted_task_communication248(&st,"child-conn",&task.owner,Some("rapport248")));
+        let facts=guidance_facts(&st,Some("child-conn"),&task.owner,crate::guidance::GuidanceAction::MidTurnDelivery,crate::guidance::GuidancePath::SendIdempotent,None,false,unix_timestamp()).unwrap();
+        assert!(facts.actor_is_child && !facts.actor_is_parent && !facts.cross_project);
+        assert!(crate::guidance::authorize(&facts).is_ok());
+        for action in [crate::guidance::GuidanceAction::Steer,crate::guidance::GuidanceAction::Interrupt] {
+            let mut altered=facts.clone();altered.action=action;
+            assert!(crate::guidance::authorize(&altered).is_err(),"enfant devenu pilote");
+        }
+        assert!(!admitted_task_communication248(&st,"child-conn","agent-etranger",None));
+        drop(st);cleanup(&config);
+    }
+
+    #[test]
     fn spec247_relation_ne_passe_ni_instance_etrangere_ni_mission_ni_cloture() {
         let (shared, config, task_id, _, _) =
             parent_en_cours_avec_projets_174(request("coord247-gardes"), 0, true);
         let mut st=shared.lock().unwrap();let mut task=st.delegation_store.get(&task_id).unwrap().unwrap();
-        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,Some(&task.mission)));
-        assert!(!admitted_parent_communication247(&st,"child-conn",&task.owner,None));
+        assert!(!admitted_task_communication248(&st,"conn-1",&task.child,Some(&task.mission)));
+        assert!(admitted_task_communication248(&st,"child-conn",&task.owner,None));
         let instance=st.conn_instances.insert("conn-1".into(),"autre-instance".into()).unwrap();
-        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        assert!(!admitted_task_communication248(&st,"conn-1",&task.child,None));
         st.conn_instances.insert("conn-1".into(),instance);
         st.delegation_store.grant(&task.owner_instance,Path::new(&task.cwd),SpawnPosture::Discovery,true).unwrap();
-        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        assert!(!admitted_task_communication248(&st,"conn-1",&task.child,None));
         st.delegation_store.grant(&task.owner_instance,Path::new(&task.cwd),SpawnPosture::Discovery,false).unwrap();
-        assert!(admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        assert!(admitted_task_communication248(&st,"conn-1",&task.child,None));
         task.state="cancelled".into();st.delegation_store.save(&task).unwrap();
-        assert!(!admitted_parent_communication247(&st,"conn-1",&task.child,None));
+        assert!(!admitted_task_communication248(&st,"conn-1",&task.child,None));
         drop(st);cleanup(&config);
     }
 
