@@ -392,3 +392,15 @@ gardien a retiré `242-resume-card-r1` le 8 novembre 2026 à 04:14 UTC, après s
 vérifications. Il est ensuite désinscrit de launchd. Restent `243-tests-r4`
 (actif) et `243-tests-r3` (retour). Toutes les façades MCP observées chargent r4.
 Les deux retraits différés sont soldés.
+
+Cause de l'arrêt ignoré par 2500061 (image 183) : sa clôture distante
+(`RemoteDrainGuard::drop`) ne récoltait les descendants que si SIGTERM avait
+atteint chacun d'eux. Un descendant `sudo`, sous l'UID root, refusait ce signal ;
+la boucle reprenait toutes les 100 ms sans récolte ni diagnostic. Cela explique
+la pause observée et les zombies conservés. Le défaut est corrigé depuis
+86a88e3f (session 221, 30 octobre 2026) : un refus de signal n'interdit plus
+`waitid`, et `native_drain_stop_unconfirmed` est journalisé. Test existant :
+`spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal`. Les
+versions actives 243-tests-r4 et de retour r3 incluent ce correctif. Aucun
+nouveau code. Limite conservée par conception : tant qu'un descendant vivant ne
+peut pas être arrêté, le superviseur reste présent et le signale ; aucun SIGKILL.
