@@ -257,8 +257,8 @@ pub struct WorkerCommandReceipt {
     pub worker: WorkerIdentity,
     pub identity: WorkerCommandIdentity,
     pub command_digest: String,
-    /// Empreinte fermée du fence pré-Start. Un reçu historique n'a jamais ce champ.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Marqueur dérivé du digest ; jamais écrit dans le format lu par worker183.
+    #[serde(skip)]
     pub pre_start_fence: Option<String>,
     pub placement: RemotePlacement,
     pub deadline_at: i64,
@@ -505,17 +505,37 @@ fn same_workspace_anchor(record: &crate::delegation::WorkspaceRecord,
         && record.base_commit == sent.base_commit
 }
 
+/// Le préfixe encode le délai historique ; 192 bits ferment son tuple.
+/// Aucun champ nouveau n'est écrit dans WorkerCommandReceipt : le lecteur183
+/// refuse les champs inconnus et exige deadline_at > created_at.
+fn pre_start_fence_digest(worker: &WorkerIdentity, identity: &WorkerCommandIdentity,
+    placement: &RemotePlacement, historical_deadline: i64) -> Result<String, WorkerStoreError> {
+    if historical_deadline <= 0 { return Err(WorkerRefusal::InvalidEnvelope.into()); }
+    let hash = json_digest(&("pre_start_fence_v2", worker, identity,
+        placement, historical_deadline))?;
+    Ok(format!("{historical_deadline:016x}{}", &hash[..48]))
+}
+
+fn pre_start_fence_deadline(receipt: &WorkerCommandReceipt) -> Option<i64> {
+    if !valid_digest(&receipt.command_digest) { return None; }
+    let historical_deadline = i64::from_str_radix(&receipt.command_digest[..16], 16).ok()?;
+    let expected = pre_start_fence_digest(&receipt.worker, &receipt.identity,
+        &receipt.placement, historical_deadline).ok()?;
+    (receipt.command_digest == expected).then_some(historical_deadline)
+}
+
 fn exact_fence_at(root: &Path, worker: &WorkerIdentity,
     previous: &WorkerCommandIdentity, placement: &RemotePlacement) -> Result<(), WorkerStoreError> {
     let path = root.join("commands").join(format!("{}.json", marker_key(previous)));
     let receipt: WorkerCommandReceipt = read_optional(&path, MAX_METADATA_BYTES)?
         .ok_or(WorkerStoreError::Unknown)?;
-    let digest = json_digest(&("pre_start_fence_v1", worker, previous,
-        &receipt.placement, receipt.deadline_at))?;
+    let historical_deadline = pre_start_fence_deadline(&receipt)
+        .ok_or(WorkerStoreError::Conflict)?;
+    let digest = pre_start_fence_digest(worker, previous,
+        &receipt.placement, historical_deadline)?;
     if receipt.version != STORE_VERSION || receipt.worker != *worker
         || receipt.identity != *previous || receipt.placement != *placement
-        || receipt.deadline_at <= 0 || receipt.created_at < 0
-        || receipt.pre_start_fence.as_deref() != Some(digest.as_str())
+        || receipt.deadline_at <= receipt.created_at || receipt.created_at < 0
         || receipt.command_digest != digest || receipt.phase != WorkerCommandPhase::Refused
         || receipt.marker.is_some() || receipt.permit.is_some() || receipt.child_id.is_some()
         || receipt.preparation.is_some() || receipt.routing.is_some()
@@ -718,12 +738,12 @@ impl WorkerStore {
         if !placement.matches_worker(&self.worker) || deadline_at <= 0 || now < 0 {
             return Err(WorkerRefusal::InvalidEnvelope.into());
         }
-        let digest = json_digest(&("pre_start_fence_v1", &self.worker, identity, placement, deadline_at))?;
+        let digest = pre_start_fence_digest(&self.worker, identity, placement, deadline_at)?;
         if let Some(receipt) = self.read_command(identity)? {
             return if receipt.pre_start_fence.as_deref() == Some(digest.as_str())
                 && receipt.command_digest == digest
                 && receipt.placement == *placement
-                && receipt.deadline_at == deadline_at
+                && pre_start_fence_deadline(&receipt) == Some(deadline_at)
                 && receipt.phase == WorkerCommandPhase::Refused
             {
                 Ok(())
@@ -739,6 +759,8 @@ impl WorkerStore {
             Err(error) => return Err(error.into()),
         }
         self.admit(MAX_METADATA_BYTES as u64 * 2 + DRAIN_PROOF_RESERVATION, 1)?;
+        let closure_deadline = now.checked_add(1)
+            .ok_or(WorkerRefusal::InvalidEnvelope)?;
         let receipt = WorkerCommandReceipt {
             version: STORE_VERSION,
             worker: self.worker.clone(),
@@ -746,7 +768,7 @@ impl WorkerStore {
             command_digest: digest.clone(),
             pre_start_fence: Some(digest),
             placement: placement.clone(),
-            deadline_at,
+            deadline_at: closure_deadline,
             phase: WorkerCommandPhase::Refused,
             marker: None,
             permit: None,
@@ -1393,9 +1415,9 @@ impl WorkerStore {
         identity: &WorkerCommandIdentity,
     ) -> Result<Option<WorkerCommandReceipt>, WorkerStoreError> {
         identity.validate()?;
-        let result: Option<WorkerCommandReceipt> =
+        let mut result: Option<WorkerCommandReceipt> =
             read_optional(&self.command_path(identity), MAX_METADATA_BYTES)?;
-        if let Some(receipt) = &result {
+        if let Some(receipt) = &mut result {
             if receipt.worker != self.worker
                 || receipt.version != STORE_VERSION
                 || receipt.identity != *identity
@@ -1403,17 +1425,14 @@ impl WorkerStore {
                 return Err(WorkerStoreError::Conflict);
             }
             receipt.placement.validate()?;
-            let expected_fence = receipt.pre_start_fence.as_ref().map(|_| {
-                json_digest(&("pre_start_fence_v1", &self.worker, identity,
-                    &receipt.placement, receipt.deadline_at))
-            }).transpose()?;
+            receipt.pre_start_fence = pre_start_fence_deadline(receipt)
+                .map(|_| receipt.command_digest.clone());
             if !receipt.placement.matches_worker(&self.worker)
                 || !valid_digest(&receipt.command_digest)
                 || receipt.created_at < 0
-                || (receipt.pre_start_fence.is_none() && receipt.deadline_at <= receipt.created_at)
+                || receipt.deadline_at <= receipt.created_at
                 || receipt.pre_start_fence.as_ref().is_some_and(|digest|
-                    !valid_digest(digest) || Some(digest) != expected_fence.as_ref()
-                    || *digest != receipt.command_digest
+                    *digest != receipt.command_digest
                     || receipt.phase != WorkerCommandPhase::Refused
                     || receipt.marker.is_some() || receipt.permit.is_some()
                     || receipt.child_id.is_some() || receipt.preparation.is_some()
@@ -7913,6 +7932,42 @@ while not stop.exists(): time.sleep(.01)
 
     #[test]
     fn spec198_fence_durable_replay_divergence_et_start_tardif() {
+        // Schéma exact du reçu lu par worker183 : les champs inconnus sont interdits.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        #[allow(dead_code)]
+        struct Receipt183 {
+            version: u16,
+            worker: WorkerIdentity,
+            identity: WorkerCommandIdentity,
+            command_digest: String,
+            placement: RemotePlacement,
+            deadline_at: i64,
+            phase: WorkerCommandPhase,
+            marker: Option<ManagedMarker>,
+            permit: Option<WorkerReleasePermit>,
+            release_epoch: Option<String>,
+            #[serde(default)]
+            child_id: Option<String>,
+            #[serde(default)]
+            native_ready: bool,
+            #[serde(default)]
+            workspace_repair: Option<bridget_transport::protocol::WorkspaceRepairStatusV1>,
+            #[serde(default)]
+            workspace_repair_history: Vec<bridget_transport::protocol::WorkspaceRepairStatusV1>,
+            #[serde(default)]
+            startup_failed: bool,
+            #[serde(default)]
+            startup_failure: Option<bridget_transport::protocol::WorkerStartupFailure>,
+            #[serde(default)]
+            terminal_exit_code: Option<i32>,
+            #[serde(default)]
+            preparation: Option<(WorkerPrepare, WorkerPrepared)>,
+            #[serde(default)]
+            routing: Option<RoutingPreparation>,
+            created_at: i64,
+            updated_at: i64,
+        }
         let fixture = Fixture::new();
         let mut runtime = runtime_fixture(&fixture);
         let deadline = worker_now() - 1;
@@ -7920,14 +7975,22 @@ while not stop.exists(): time.sleep(.01)
             WorkerResponseOperation::StartFenced {});
         let receipt = runtime.store.command(&command()).unwrap();
         assert_eq!(receipt.phase, WorkerCommandPhase::Refused);
-        assert!(receipt.deadline_at < receipt.created_at,
-            "le fence conserve le délai historique, même déjà expiré");
+        assert_eq!(receipt.deadline_at, receipt.created_at + 1);
+        assert_eq!(pre_start_fence_deadline(&receipt), Some(deadline),
+            "le digest conserve le délai historique, même déjà expiré");
         assert!(receipt.pre_start_fence.is_some());
         assert!(receipt.marker.is_none() && receipt.permit.is_none() && receipt.child_id.is_none());
         assert!(runtime.held.is_empty() && runtime.running.is_empty() && runtime.abandoned.is_empty());
         assert!(!runtime.store.root.join("markers").join(format!("{}.json", marker_key(&command()))).exists());
         let path = runtime.store.command_path(&command());
         let bytes = fs::read(&path).unwrap();
+        let old: Receipt183 = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(old.deadline_at, old.created_at + 1);
+        assert_eq!(old.phase, WorkerCommandPhase::Refused);
+        assert_ne!(old.command_digest,
+            worker_command_digest(&worker(), &command(), &start198(deadline)).unwrap());
+        assert!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()
+            .get("pre_start_fence").is_none());
         assert_eq!(runtime.fence_unstarted(&command(), &placement(), deadline).unwrap(),
             WorkerResponseOperation::StartFenced {});
         assert_eq!(fs::read(&path).unwrap(), bytes);
