@@ -208,3 +208,11 @@ sessions closes (SYS 25 Gio libres au lieu de 1,8 Gio), Cartae < 1 Gio.
 
 Suites complètes : Linux (worktree Git Cartae) 3 626 PASS, 0 échec, 0
 avertissement ; Mac 3 606 PASS, 1 échec spec147 corrigé ensuite (72/72 trois fois).
+
+Activation 243-tests-r3 (source 12721b3c, 8 novembre 2026) : Linux SHA
+28f3f038ba46d8e14e784bd5392c83615417626f8048a68519e40b86f9dfbdc6, Mac signé SHA
+c9998713531cb437cf0864143d236e620756ab16061346a20a0a3d519bd9547d, 0 avertissement.
+Sept composants vérifiés (cœur 118423, mobile 118440, worker Cartae 118566,
+SYS 2669259, KS 4100806, worker Mac 52268, pont Mac 52898), coupure 1,83 s,
+retour 243-tests-r2 sur les quatre hôtes. Tâches protégées, superviseur
+2500061, sept processus T3 et registre Mac inchangés.
