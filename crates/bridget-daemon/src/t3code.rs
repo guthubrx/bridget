@@ -6928,7 +6928,15 @@ mod tests {
             if worker.relay.subscribe(format!("full-{n}"),AttachWindow::Tail(1)).is_err() {break;}
             accepted+=1;
         }
-        assert!(accepted>0 && accepted<128);
+        // Le fil du relais peut retirer une commande puis bloquer sur le writer
+        // tenu ici : une place se libère. Le laisser se poser, puis remplir de
+        // nouveau jusqu'au refus, pour une file réellement saturée.
+        thread::sleep(Duration::from_millis(200));
+        for n in 128..256 {
+            if worker.relay.subscribe(format!("full-{n}"),AttachWindow::Tail(1)).is_err() {break;}
+            accepted+=1;
+        }
+        assert!(accepted>0 && accepted<256);
         let (input,mut daemon)=UnixStream::pair().unwrap();
         let (events,inbox)=mpsc::channel();
         let reader=spawn_reader(BufReader::new(input),events,worker.daemon_alive.clone(),
@@ -6938,8 +6946,12 @@ mod tests {
             subscription_id:"rejected".into(),agent:worker.agent_id.clone(),window:AttachWindow::Tail(1),
         }).unwrap()).unwrap();
         writeln!(daemon,"{}",bridget_transport::protocol::encode(&DaemonToWrapper::Disconnect).unwrap()).unwrap();
-        assert!(matches!(inbox.recv_timeout(Duration::from_secs(1)).unwrap(),
-            LinkEvent::JournalRejected {reason:AttachRefusal::CommandQueueSaturated,..}));
+        let first=inbox.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(&first,
+            LinkEvent::JournalRejected {reason:AttachRefusal::CommandQueueSaturated,..}),"{}",match &first {
+            LinkEvent::Frame(frame)=>format!("trame {}",bridget_transport::protocol::encode(frame.as_ref()).unwrap_or_default()),
+            LinkEvent::JournalRejected{..}=>"refus d'une autre cause".into(),
+            _=>"autre événement".into()});
         assert!(matches!(inbox.recv_timeout(Duration::from_secs(1)).unwrap(),
             LinkEvent::Frame(frame) if matches!(*frame,DaemonToWrapper::Disconnect)));
         drop(daemon);reader.join().unwrap();

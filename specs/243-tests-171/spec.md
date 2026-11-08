@@ -216,3 +216,11 @@ Sept composants vérifiés (cœur 118423, mobile 118440, worker Cartae 118566,
 SYS 2669259, KS 4100806, worker Mac 52268, pont Mac 52898), coupure 1,83 s,
 retour 243-tests-r2 sur les quatre hôtes. Tâches protégées, superviseur
 2500061, sept processus T3 et registre Mac inchangés.
+
+Passage final Mac sur 8fb9964b : 3 605 PASS, 2 bancs sous charge. native154
+(faux Git 25 s contre un délai de 20 s : marge de 5 s dépassée par la
+préparation sous charge ; faux Git porté à 90 s, borne < 60 s) et
+spec221_journal_saturation (le fil du relais peut retirer une commande puis
+bloquer sur le writer tenu par le banc, libérant une place : pause puis second
+remplissage jusqu'au refus ; événement reçu affiché en cas d'échec). Tests
+seuls, binaire actif inchangé.

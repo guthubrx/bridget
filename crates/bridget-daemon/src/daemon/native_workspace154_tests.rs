@@ -1959,7 +1959,8 @@ fn isolated154(case: &str, test: &str, check: impl FnOnce(&Path)) {
     let git = resolve("git");
     let python = resolve("python3");
     let delay = match case {
-        "timeout" => 25,
+        // Bien au-delà du délai Git de 20 s : la borne reste lisible sous charge.
+        "timeout" => 90,
         "create" | "same-key" | "report" => 2,
         "trace" | "old" => 0,
         _ => panic!("cas privé inconnu"),
@@ -1994,7 +1995,7 @@ fn isolated154(case: &str, test: &str, check: impl FnOnce(&Path)) {
         .stderr(output)
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let deadline = Instant::now() + Duration::from_secs(150);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break Some(status);
@@ -2316,9 +2317,12 @@ fn native154_creation_delai_git_refus_borne_sans_tache() {
                 ),
             );
             assert_eq!(refused["code"], "workspace_create_failed", "{refused}");
+            // Refus porté par le délai de 20 s, et non par la fin du Git
+            // simulé (90 s) : la marge absorbe la préparation sous charge.
+            let elapsed = started.elapsed();
             assert!(
-                started.elapsed() >= Duration::from_secs(19)
-                    && started.elapsed() < Duration::from_secs(25)
+                elapsed >= Duration::from_secs(19) && elapsed < Duration::from_secs(60),
+                "{elapsed:?}"
             );
             assert_eq!(footprint154(&fixture), before);
             assert!(
