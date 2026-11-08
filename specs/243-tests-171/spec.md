@@ -311,3 +311,15 @@ le trousseau du Mac est illisible pendant le dark wake (errSecInteractionNotAllo
   PASS. Copies de sessions anciennes de ~/.cache rendues privées (700).
   Observation SYS complète ; 91 worktrees de revues fusionnés, 41 tâches liées
   toutes closes, aucune commande worker active : retirés par l'outil.
+- SYS : 91 worktrees de revues fusionnés retirés par l'outil (branches
+  conservées), puis huit copies de sources de sessions 227-240 et la copie
+  197-distribution, intégrées, propres et inutilisées, retirées ; la copie 227
+  portait 56 modifications non committées, conservées en patch, liste et
+  archive des fichiers non suivis dans
+  ~/.local/share/bridget-maintenance/243-sys-sources (reconstitution vérifiée
+  identique). Deux binaires candidats 234 inutilisés retirés. SYS : dépôt
+  principal seul, entretien sans refus, 26 Gio libres.
+- Copie 237 du Mac retirée ; Mac, Cartae, KS et SYS observent complètement.
+- Conservés pour un usage réel : worktree Cartae 1cc44f4d (cwd du superviseur
+  2500061, une modification) ; liens 242 et 243-r1 du Mac (façades MCP vivantes
+  18554, 21774, 2305 de sessions T3 ouvertes) ; reçus d'installation anciens.
