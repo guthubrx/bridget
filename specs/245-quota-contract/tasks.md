@@ -1,4 +1,4 @@
-- [ ] Corriger empreinte et reprise du cache existant.
-- [ ] Clarifier contrat spécialistes et contrôler les cas ciblés sans fournisseur.
-- [ ] Revue ciblée puis activation quatre hôtes sans T3.
-- [ ] Avis aux deux émetteurs, publication, Git/main et nettoyage.
+- [x] Corriger empreinte et reprise du cache existant.
+- [x] Clarifier contrat spécialistes et contrôler les cas ciblés sans fournisseur.
+- [x] Revue ciblée puis activation quatre hôtes sans T3.
+- [x] Avis aux deux émetteurs, publication, Git/main et nettoyage.

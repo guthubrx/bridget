@@ -110,6 +110,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 <!-- SPECKIT START -->
 
 
+Session245 — quota et contrat MCP corrigés en0.8.11/245-quota-r1.
+Sourcebc8b9d6d intégrée/poussée ; matrice de modèles retirée de la clé du même
+compte, six empreintes réelles regroupées en trois comptes avec dates conservées.
+Cinq contrôles ciblés distincts Mac/Linux PASS, aucun essai Claude. R1P2 traité
+avec régression positive après erreur SQLite ; R2 non concluante (lecture contrôlée
+invalid_envelope), auto-relecture déclarée, aucun verdict indépendant inventé.
+Sept composants/SHA chargés quatre hôtes, coupure maître1,82s ; retours244-r5 et
+pointeurs natifs compatibles. SessionV2/annuaire réussis, quatre rapports frais.
+Sept payloads protégés, registreMac et neuf processusT3 inchangés ; aucun rejeu.
+Releasepublique0.8.11/sixactifs téléchargés sansauth/SHA, APK8011/lignée8010 vérifiés.
+Avis Revue/Parix envoyés, reçus conservés sans lecture métier affirmée. Guidage
+spécialistes corrigé dans le binaire ; anciennes façades à leur prochain chargement.
+Ne pas redémarrer T3, ne pas reprendre les campagnes Claude/sentinelle244 arrêtées.
+Bilan et limites : specs/245-quota-contract/validation.md.
+
 Session244 — corrections actives en0.8.10/244-reference-r5.
 Source exécutable9ce5b697 poussée ; sept composants/SHA vérifiés quatre hôtes,
 retourtransport244-r3 compatible (sourcea44de849, tagcompat-244-return-r3),

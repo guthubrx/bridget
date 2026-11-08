@@ -8,6 +8,11 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.11 — 2026-11-08
+
+- Partager les refus de quota Claude constatés entre les catalogues de modèles du même compte. Conserver leurs dates originales après migration du cache. Garder les autres comptes et machines distincts.
+- Indiquer la version et les actions de lecture dans la description MCP des spécialistes et dans le guidage des appels invalides.
+
 ## 0.8.9 — 2026-11-07
 
 - Afficher le dossier local courant dans les cartes de reprise. Un contrôle Git indisponible ne déclare plus une vue de lecture utilisable indisponible.

@@ -6,6 +6,11 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.11 — 2026-11-08
+
+- Share observed Claude account quota refusals across model catalogues using the same launcher. Preserve their original observation and reset dates across the cache-key migration. Keep other accounts and machines separate.
+- Explain the required version and read actions in the specialists MCP description and invalid-call guidance.
+
 ## 0.8.9 — 2026-11-07
 
 - Show the current local folder in recovery cards. An unavailable Git check no longer declares a usable commit view unavailable.
