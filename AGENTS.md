@@ -109,6 +109,21 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session249 — guidagebrief activé0.8.15/249-guidage-brief-r1.
+Sourceb459180d intégrée/poussée ; brief_invalid conservechamp/cause dans detail
+lisibleanciennesfaçades,schémafilehost/pathobligatoires ; validateur/droitsinchangés.
+Parix :deuxhostcartaeabsents,dossieraccepté,aucunerondeb7admiseaucontrôle ; aucunecontinuationlancée.
+40testsMac/41Linuxverts,revue1a26601fterminée/lue/ACKsansP1/P2 ; contrôleMCPsurproprerevue
+terminéebloquéremote_execution_endedavantvalidateur,aucunerondecréée,nopreuveruntimeinventée.
+Septcomposants/SHA4hôtes,retour248R2/pointeursatomiquescompatibles,coupure1,83s.
+T3nonarrêté,processus/birthinitiaux/registreMac/7payloadsintacts,wrappersétrangersconservés.
+Publicv0.8.15/sixactifsanonymesSHA,APK8015/certificat/lignée8014vérifiés.
+AvisParixreçusconservés,lectureencoreenattente ;propresWT3/branche249retirés,Macmainseul.
+CachesMac5,53Gio/SYS9,56Gio ;anciennesimagesutilisées/observationsincomplètesconservées.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/249-guidage-brief/validation.md.
+Repriseprivée : /Users/moi/.cache/bridget249-guidage-brief/resume.md.
+
+
 Session248 — comptes rendus pendant tourCodex, activés0.8.14/248-messages-en-cours-r2.
 Sourceexécutabled96e1ec4 intégrée/poussée. Relationparent↔enfantactive reconnue
 sansdonnerSteer/Interruptàl’enfant ; comptesrendussansréponseCodexV2remispendanttour,

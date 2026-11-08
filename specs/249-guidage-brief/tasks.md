@@ -1,4 +1,4 @@
 - [x] T001 Diagnostic exact et avis de résolution au parent.
 - [x] T002 Guidage serveur compatible et schéma file aligné.
-- [ ] T003 Contrôles ciblés, revue, activation et publication.
-- [ ] T004 Bilan Git, alignement et nettoyage.
+- [x] T003 Contrôles ciblés, revue, activation et publication.
+- [x] T004 Bilan Git, alignement et nettoyage.
