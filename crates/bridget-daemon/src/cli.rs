@@ -110,6 +110,17 @@ fn validate_communication_entry(command: &str, args: &[String]) -> Result<(), St
     Ok(())
 }
 
+/// Le bootstrap géré transmet ses canaux puis exec son programme : il n'ouvre
+/// aucun namespace. Le préparer sous un HOME de travail long refusait le
+/// contrôle de compatibilité Codex (socket trop longue) ; le wrapper lancé
+/// prépare toujours le sien.
+fn command_initializes_namespace(command: &str) -> bool {
+    !matches!(
+        command,
+        "federate" | "managed-bootstrap" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
+    )
+}
+
 /// Un sous-agent interne accède à Bridget par la façade MCP bornée. Toute
 /// commande CLI qui agit au nom d'un agent doit donc s'arrêter avant effet.
 fn command_requires_principal(command: &str) -> bool {
@@ -276,10 +287,8 @@ fn run_with_args(args: Vec<String>) {
         );
     }
 
-    if !matches!(
-        cmd.as_str(),
-        "federate" | "version" | "--version" | "-v" | "help" | "--help" | "-h"
-    ) && let Err(error) = crate::environment::initialize_process()
+    if command_initializes_namespace(cmd)
+        && let Err(error) = crate::environment::initialize_process()
     {
         exit_argument_error(&error);
     }
@@ -522,6 +531,17 @@ fn cmd_artifact(args: &[String]) {
         }
     ) {
         crate::cli_table::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod namespace243_tests {
+    #[test]
+    fn spec243_bootstrap_gere_ne_prepare_pas_de_namespace() {
+        assert!(!super::command_initializes_namespace("managed-bootstrap"));
+        for command in ["managed-wrapper", "daemon", "worker", "mcp", "status"] {
+            assert!(super::command_initializes_namespace(command), "{command}");
+        }
     }
 }
 

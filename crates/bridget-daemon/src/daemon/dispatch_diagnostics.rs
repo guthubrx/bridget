@@ -88,6 +88,7 @@ fn closed_code(code: &str) -> String {
             | "origin_binding_unavailable"
             | "origin_worker_unavailable"
             | "origin_request_invalid"
+            | "cwd_outside_parent_project"
             | "origin_proof_unavailable"
             | "origin_proof_busy"
             | "remote_parent_proof_invalid"

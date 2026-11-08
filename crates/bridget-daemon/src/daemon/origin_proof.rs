@@ -53,6 +53,15 @@ fn shape_error(field:&'static str,reason:WorkerRefusal,same_machine:bool)->Strin
     };
     format!("origin_request_invalid:{field}:{cause}")
 }
+/// Un cwd hors du dossier attesté du parent est un refus de périmètre, pas de forme.
+fn cwd_outside_parent(operation:&OriginProofOperation)->bool {
+    match operation {
+        OriginProofOperation::PrepareProject {parent,source,..}
+        | OriginProofOperation::Sources {parent,source:Some(source)} =>
+            !Path::new(&source.cwd).starts_with(&parent.cwd),
+        _=>false,
+    }
+}
 
 fn exchange(
     state: &Arc<Mutex<DaemonState>>,
@@ -94,8 +103,11 @@ fn exchange(
         };
         let same_machine=matches!(&request.request,OriginProofOperation::PrepareProject {target_machine,..}
             if target_machine==&request.worker.machine_id);
+        let outside_parent=cwd_outside_parent(&request.request);
         request.validate_shape_detailed()
-            .map_err(|(field,reason)|shape_error(field,reason,same_machine))?;
+            .map_err(|(field,reason)| if field=="cwd" && outside_parent {
+                "cwd_outside_parent_project".to_owned()
+            } else {shape_error(field,reason,same_machine)})?;
         let connection = worker.conn_id.clone();
         let writer = st
             .connections
@@ -196,6 +208,26 @@ mod capacity221_tests {
             assert_eq!(attestation_failure(code.into()), "permission_attestation_unavailable");
         }
     }
+    #[test]
+    fn spec243_cwd_hors_du_parent_est_un_refus_de_perimetre() {
+        let parent:bridget_transport::protocol::ProviderPermissions=serde_json::from_value(serde_json::json!({
+            "version":1,"source":"provider_turn","run_id":"run:243","provider_session_id":"session-243",
+            "provider_instance_id":"codex","revision":1,"driver":"codex_app_server","cwd":"/source/project",
+            "runtime_mode":"full-access","interaction_mode":"default",
+            "provider_policy":{"kind":"codex","approval_policy":"never",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}
+        })).unwrap();
+        let source=|cwd:&str|bridget_transport::protocol::WorkerSourceBase {cwd:cwd.into(),
+            expected_base_commit:None,workspace:None,
+            workload:bridget_transport::protocol::AutoDelegateWorkload::General};
+        let sources=|cwd:&str|OriginProofOperation::Sources {parent:parent.clone(),source:Some(source(cwd))};
+        assert!(cwd_outside_parent(&sources("/source/autre")));
+        assert!(cwd_outside_parent(&sources("/source/project-voisin")));
+        assert!(!cwd_outside_parent(&sources("/source/project")));
+        assert!(!cwd_outside_parent(&sources("/source/project/sous-dossier")));
+        assert!(!cwd_outside_parent(&OriginProofOperation::Sources {parent:parent.clone(),source:None}));
+    }
+
     #[test]
     fn spec236_origin_refusal_cause_distinguishes_same_machine_and_invalid_values() {
         assert_eq!(shape_error("target_machine",WorkerRefusal::InvalidEnvelope,true),
