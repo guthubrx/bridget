@@ -325,9 +325,12 @@ def prepare_linked_checkout(root, mapping, request, registry_path):
     atomic_json(receipt, dict(identity=identity, ready=True), previous)
 
 def first_view_prepares_project(objects_only, local_key, selected, request):
-    """Vrai pour la première vue d'un projet sans mapping, vers une autre machine."""
-    return (objects_only and local_key not in selected.get("mappings", {})
-            and request["machine_id"] != request["origin_host"])
+    """Vrai pour la première vue d'un projet sans mapping géré."""
+    # Un worker distinct peut partager l'hôte du maître. L'identité de la
+    # destination est alors celle du registre sélectionné, pas seulement son
+    # nom d'hôte. Refuser ce cas laisse la vue neuve bloquée sur
+    # project_mapping_unknown avant toute préparation native.
+    return objects_only and local_key not in selected.get("mappings", {})
 
 def remote_inspect(request, registry_path):
     require(type(request.get("objects_only", False)) is bool,

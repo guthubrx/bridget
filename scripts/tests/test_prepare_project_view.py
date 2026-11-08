@@ -19,9 +19,9 @@ class PremiereVue(unittest.TestCase):
         selected = {"mappings": {"auto-x": {}}}
         self.assertFalse(prep.first_view_prepares_project(True, "auto-x", selected, request))
 
-    def test_meme_machine_et_worktree_inchanges(self):
+    def test_meme_machine_et_worker_distinct_prepare_la_vue_neuve(self):
         local = {"machine_id": "monordinateur", "origin_host": "monordinateur"}
-        self.assertFalse(prep.first_view_prepares_project(True, "auto-x", {"mappings": {}}, local))
+        self.assertTrue(prep.first_view_prepares_project(True, "auto-x", {"mappings": {}}, local))
         remote = {"machine_id": "cartae", "origin_host": "monordinateur"}
         self.assertFalse(prep.first_view_prepares_project(False, "auto-x", {"mappings": {}}, remote))
 
