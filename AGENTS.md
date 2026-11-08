@@ -125,6 +125,9 @@ cwd_outside_parent_project. Mappings cartae/bridget et cartae/roadie
 complétés de la racine pièces jointes T3 (révision 2, cinq registres) :
 cause réelle de permission_mapping_unavailable, pas les crochets Claude.
 Essai réel d9400941 : récolte root par superviseur r5 vérifiée.
+Actif désormais 243-tests-r6 (c22b9d03), retour r5 : la première vue
+commit_view d'un projet neuf vers une autre machine prépare son dépôt géré
+(avant : project_mapping_unknown). Parix prouvé sur Cartae et SYS.
 
 Session242 — carte de reprise corrigée et activée en0.8.9/242-resume-card-r1.
 Source7de2d695 poussée,12tests cartesMac PASS ; erreurGit distincte de l’accès
