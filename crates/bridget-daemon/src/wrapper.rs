@@ -1058,6 +1058,7 @@ pub(crate) struct IdempotentDeliveryTracker {
     reply_outbox: Option<crate::reply_outbox244::ReplyOutbox>,
     reply_state_home: std::path::PathBuf,
     modern_reply_core: bool,
+    requires_binding: bool,
     last_reply_retry: Instant,
 }
 
@@ -1093,6 +1094,7 @@ impl IdempotentDeliveryTracker {
             reply_outbox: if state_home.join("native-replies244").exists() {Some(crate::reply_outbox244::ReplyOutbox::open(state_home,instance_id)?)} else {None},
             reply_state_home: state_home.to_owned(),
             modern_reply_core:false,
+            requires_binding:false,
             last_reply_retry:Instant::now(),
         })
     }
@@ -4784,6 +4786,7 @@ fn launch_session_with_status(
     };
     let writer = Arc::new(Mutex::new(Some(initial_writer)));
     let mut idempotent_deliveries = IdempotentDeliveryTracker::open(home, &instance_id)?;
+    idempotent_deliveries.requires_binding=native_bootstrap.is_some() || remote_result_context.is_some();
     let mut execution_bindings = HashMap::new();
     let inbox_path=crate::environment::root_for_home(home)?.join("state")
         .join(format!("native-inbox-{instance_id}.sqlite"));
@@ -7382,7 +7385,7 @@ fn forward_managed_events_with_redaction(
                 send_wrapper_message(writer, WrapperToDaemon::TurnState { in_progress });
             }
             ManagedEventKind::TurnStarted { message_id } => {
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("événement de tour ignoré: message hors exécution active");
                     continue;
                 }
@@ -7412,7 +7415,7 @@ fn forward_managed_events_with_redaction(
                         redact_managed_text(redaction, "provider_error", std::mem::take(detail));
                 }
                 let message_id = message.id.clone();
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7455,7 +7458,7 @@ fn forward_managed_events_with_redaction(
                         send_wrapper_message(writer,WrapperToDaemon::ChildRequestClosed {request_id,state:bridget_transport::protocol::ChildRequestClosedState::ClosedBeforeApply});
                     }
                 }
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("terminal fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -7557,7 +7560,7 @@ fn forward_managed_events_with_redaction(
             }
             ManagedEventKind::DeliveryRejected { message_id, reason } => {
                 let reason = redact_managed_text(redaction, "provider_rejection", reason);
-                if !bindings.is_empty() && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
+                if (!bindings.is_empty() || idempotent_deliveries.requires_binding) && !bindings.contains_key(&message_id) && !idempotent_deliveries.ordinary_active(&message_id) {
                     warn!("refus fournisseur ignoré: message hors exécution active");
                     continue;
                 }
@@ -13386,6 +13389,22 @@ mod remote162_result_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn spec244_terminal_distant_sans_binding_ne_devient_pas_une_reponse_ordinaire() {
+        let fixture=Fixture::new();let (stream,peer)=UnixStream::pair().unwrap();
+        let writer=Arc::new(Mutex::new(Some(BufWriter::new(stream))));
+        let mut tracker=IdempotentDeliveryTracker::open_at(&fixture.root.join("receipts"),"instance162").unwrap();
+        tracker.requires_binding=true;tracker.modern_reply_core=true;
+        let mut bindings=HashMap::new();
+        let event=ManagedEvent::internal(bridget_transport::ManagedEventSource::CodexAppServer,vec![],
+            ManagedEventKind::TurnFinished{message:fixture.message(),response:"ancien résultat".into(),terminal:ManagedTerminal::Completed});
+        assert!(!forward_managed_events(&writer,"child",vec![event],&mut tracker,&mut bindings));
+        assert!(tracker.reply_outbox.is_none());drop(writer);
+        assert!(BufReader::new(peer).lines().next().is_none());
+        assert!(WorkerStore::open(&fixture.context.store_root,fixture.context.worker.clone()).unwrap()
+            .read_result(&fixture.reservation.slot.identity).unwrap().is_none());
     }
 
     #[test]
