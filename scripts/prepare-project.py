@@ -290,6 +290,11 @@ def prepare_linked_checkout(root, mapping, request, registry_path):
         check_linked_checkout(root, target)
     atomic_json(receipt, dict(identity=identity, ready=True), previous)
 
+def first_view_prepares_project(objects_only, local_key, selected, request):
+    """Vrai pour la première vue d'un projet sans mapping, vers une autre machine."""
+    return (objects_only and local_key not in selected.get("mappings", {})
+            and request["machine_id"] != request["origin_host"])
+
 def remote_inspect(request, registry_path):
     require(type(request.get("objects_only", False)) is bool,
             "project_preparation_operation")
@@ -560,6 +565,12 @@ def prepare(request):
         # Résoudre côté source avant de contacter la destination. Une ancienne
         # correspondance divergente ne peut pas créer un second projet.
         local_key, local_mapping = select_mapping(selected, request, registry)
+        if first_view_prepares_project(objects_only, local_key, selected, request):
+            # Première vue d'un projet neuf vers une autre machine : préparer le
+            # dépôt géré comme pour un worktree, dans les mêmes droits du parent.
+            # La vue se crée ensuite sur ce dépôt ; un projet connu reste en lecture.
+            objects_only = False
+            request["objects_only"] = False
         require(not objects_only or local_key in selected.get("mappings", {}),
                 "project_mapping_unknown")
         request.pop("linked_checkout", None)
