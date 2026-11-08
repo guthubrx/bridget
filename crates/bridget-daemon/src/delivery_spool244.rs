@@ -95,7 +95,17 @@ impl DeliverySpool {
             .optional()
             .map_err(|e| e.to_string())?;
         if let Some(previous) = previous {
-            return if previous == bytes {
+            // La date de tour et les libellés sont recalculés par le maître
+            // au raccordement. Garder la première trame : aucun report de
+            // délai, gain d'autorité ou second dépôt n'est permis ici.
+            let mut prior: DaemonToWrapper = serde_json::from_slice(&previous)
+                .map_err(|_| "spool_frame_corrupt".to_string())?;
+            if let DaemonToWrapper::DeliverIdempotent { message: old, .. } = &mut prior {
+                old.deadline_at = message.deadline_at;
+                old.from_display_name = message.from_display_name.clone();
+                old.thread_display_title = message.thread_display_title.clone();
+            }
+            return if serde_json::to_vec(&prior).map_err(|e|e.to_string())? == bytes {
                 Ok(())
             } else {
                 Err("spool_envelope_changed".into())
@@ -165,6 +175,28 @@ mod tests {
             execution: None,
             mid_turn_ok: None,
         }
+    }
+    #[test]
+    fn spec248_spool_reconnexion_garde_premiere_trame_et_refuse_contenu_change() {
+        let root = std::env::temp_dir().join(format!("spool248-{}",uuid::Uuid::new_v4()));
+        let path=root.join("queue.sqlite");
+        let original=frame("d");
+        let spool=DeliverySpool::open(&path,"instance").unwrap();
+        spool.defer(&original).unwrap();
+        let mut replay=frame("d");
+        if let DaemonToWrapper::DeliverIdempotent{message,..}=&mut replay {
+            message.deadline_at=Some(999);
+            message.from_display_name=Some("Nouveau libellé".into());
+            message.thread_display_title=Some("Titre".into());
+        }
+        spool.defer(&replay).unwrap();
+        if let DaemonToWrapper::DeliverIdempotent{message,..}=&mut replay {message.body="autre contenu".into();}
+        assert_eq!(spool.defer(&replay).unwrap_err(),"spool_envelope_changed");
+        drop(spool);
+        let mut spool=DeliverySpool::open(&path,"instance").unwrap();
+        assert_eq!(serde_json::to_value(spool.next().unwrap().unwrap()).unwrap(),serde_json::to_value(original).unwrap());
+        assert!(spool.next().unwrap().is_none());
+        drop(spool);std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn spec244_debordement_durable_ordre_doublon_et_identite() {

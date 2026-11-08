@@ -5253,7 +5253,10 @@ fn launch_session_with_status(
                         }
                     }
                     if let Err(error)=durable_inbox.as_ref().unwrap().defer(&frame) {
-                        error!("file native indisponible : {error} ; copie maître conservée");break;
+                        error!("remise différée refusée : {error} ; copie maître et tour fournisseur conservés");
+                        // Un conflit de remise ne ferme pas le fournisseur.
+                        // Aucun ACK ni injection : le maître conserve l'issue.
+                        continue;
                     }
                 }
                 Ok(DaemonToWrapper::DeliverIdempotent {
