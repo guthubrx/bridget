@@ -483,3 +483,9 @@ zombie (contrôle toutes les 15 s) ; à la fin du sleep, il a tout récolté et
 s'est terminé (~136 s), sans orphelin. Statut remote_execution_ended, résultat
 lu et accusé, worktree propre retiré avec sa branche. Le sudo 3584579
 préexistant, étranger à l'essai, n'a pas été touché.
+
+Rejeu réel du refus de ce matin (8 novembre 2026, ~07:04 UTC) : même forme que
+parix-ecarts-teleoperator-20261108-a (cwd 73.parix hors du parent, cartae,
+commit_view, discovery), clé 243-preuve-refus-cwd-parix-20261108-01. Réponse
+r5 : `cwd_outside_parent_project`, field cwd, conseil natif ; not_recorded,
+aucune tâche. Le message « enveloppe invalide » ne réapparaît plus.
