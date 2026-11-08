@@ -460,3 +460,19 @@ les crochets de ses réglages utilisateur. Seul opus2D a un profil gardé (sessi
 171, `~/.cache/bridget-core/permission-profiles171.json`). Créer un profil pour
 Parix est un chantier distinct, soumis à décision. Le message public dit
 « cause non observée » et renvoie au diagnostic worker, qui nomme ce code.
+
+Cause réelle du refus `permission_mapping_unavailable` (8 novembre 2026) : ce
+n'étaient pas les crochets. Chaque session T3 reçoit le dossier
+`/Users/moi/.t3/userdata/attachments` dans ses droits. Les anciens mappings
+manuels `cartae/bridget` et `cartae/roadie` ne déclaraient pas ce dossier en
+racine additionnelle ; la projection ne pouvait donc pas transposer ce droit.
+Les mappings créés automatiquement, et ceux de bridget sur SYS et KS, le
+déclaraient déjà. Correction de configuration, même forme que `cartae/opus2d` :
+racine distante `/home/moi/.local/share/bridget-attachments/<projet>` (0700),
+`access: inherit`, révision 1 → 2, sur les cinq registres (maître et worker
+Cartae ; origin-agents177, worker-monordinateur-agents et agents sur le Mac).
+Verrou natif `project-preparation.lock`, sauvegarde privée
+`*.avant-243-extra-*`, écriture atomique avec contrôle des octets. Les cinq
+copies sont identiques (empreinte 00bbf83c6c5996f7). Rejeu réel : le refus de
+droits a disparu ; la demande suivante a reçu un refus de capacité, légitime
+(Cartae à 100 % de charge pendant les calculs opus2D).
