@@ -489,3 +489,9 @@ parix-ecarts-teleoperator-20261108-a (cwd 73.parix hors du parent, cartae,
 commit_view, discovery), clé 243-preuve-refus-cwd-parix-20261108-01. Réponse
 r5 : `cwd_outside_parent_project`, field cwd, conseil natif ; not_recorded,
 aucune tâche. Le message « enveloppe invalide » ne réapparaît plus.
+
+Routage automatique (8 novembre 2026, ~07:08 UTC) : délégation sans machine
+imposée, commit_view/discovery, clé 243-preuve-routage-auto-20261108-01. Bridget
+a choisi SYS (claude-sysle2-haiku213) ; tâche 32eeb221 terminée « ROUTAGE OK »,
+résultat lu et accusé. Le refus de capacité observé plus tôt ne vise qu'une
+machine imposée ; sans machine imposée, l'admission choisit une cible disponible.
