@@ -18,6 +18,9 @@ struct Seen {
 pub(crate) struct ProviderLimits {
     by_agent_type: BTreeMap<String, BTreeMap<String, Seen>>,
     account_refusals244: BTreeMap<String, BTreeMap<String, Seen>>,
+    // Alias conservés aussi si le déplacement SQLite échoue : une réponse
+    // positive ultérieure doit solder le fait sous ses deux clés.
+    account_aliases245: BTreeMap<String, String>,
     // Au plus 4096 instances ; aucune capacité payante ne traverse cette clé.
     by_instance: BTreeMap<(String, String), ProviderLimits>,
     routing_bindings: BTreeMap<String, RoutingQuotaBinding>,
@@ -78,6 +81,7 @@ impl ProviderLimits {
     pub(crate) fn migrate_account_scope245(&mut self, db:&rusqlite::Connection, old:&str, new:&str)->rusqlite::Result<()> {
         if old==new {return Ok(());}
         let Some(previous)=self.account_refusals244.get(old).cloned() else {return Ok(());};
+        self.account_aliases245.insert(old.into(),new.into());
         let mut merged=self.account_refusals244.get(new).cloned().unwrap_or_default();
         for (window,seen) in previous {
             if merged.get(&window).is_none_or(|current|current.observed_at < seen.observed_at) {
@@ -119,10 +123,26 @@ impl ProviderLimits {
             }
             windows.insert(fact.window.clone(),seen);
         } else if fact.status == "allowed" || fact.status == "available" {
-            windows.remove(&fact.window);
-            let _ = db.execute("DELETE FROM provider_refusals244 WHERE scope=?1 AND window=?2",rusqlite::params![scope,fact.window]);
+            let aliases:Vec<_>=self.account_aliases245.iter().filter(|(_,canonical)|canonical.as_str()==scope).map(|(old,_)|old.clone()).collect();
+            let cleared=(||->rusqlite::Result<()> {
+                let tx=db.unchecked_transaction()?;
+                for key in std::iter::once(scope).chain(aliases.iter().map(String::as_str)) {
+                    tx.execute("DELETE FROM provider_refusals244 WHERE scope=?1 AND window=?2",rusqlite::params![key,fact.window])?;
+                }
+                tx.commit()
+            })();
+            if cleared.is_ok() {
+                windows.remove(&fact.window);
+                for alias in aliases {
+                    if let Some(old)=self.account_refusals244.get_mut(&alias) {old.remove(&fact.window);}
+                }
+            } else {
+                log::warn!("réponse fournisseur positive observée ; effacement durable du refus indisponible");
+            }
         }
-        windows.retain(|_,seen| Self::refusal_until244(seen) > now);
+        if let Some(windows)=self.account_refusals244.get_mut(scope) {
+            windows.retain(|_,seen| Self::refusal_until244(seen) > now);
+        }
         let _ = db.execute("DELETE FROM provider_refusals244 WHERE expires_at<=?1",[now]);
     }
 
@@ -508,6 +528,14 @@ mod tests {
         assert!(limits.account_quota244(None,Some(&canonical),200).unwrap().launch_blocked);
         assert!(ProviderLimits::restore_routing244(&db,200).account_quota244(None,Some(&old),200).unwrap().launch_blocked);
         assert_eq!(db.query_row("SELECT COUNT(*) FROM provider_refusals244 WHERE scope=?1",[canonical],|r|r.get::<_,i64>(0)).unwrap(),0);
+        db.execute_batch("DROP TRIGGER refuse245").unwrap();
+        let mut positive=fact;positive.status="allowed".into();
+        let canonical="c".repeat(64);
+        limits.record_account244(&db,&canonical,&positive,RateLimitSource::ClaudeStreamJson,210);
+        assert!(limits.account_quota244(None,Some(&canonical),220).is_none());
+        let mut restored=ProviderLimits::restore_routing244(&db,220);
+        restored.migrate_account_scope245(&db,&old,&canonical).unwrap();
+        assert!(restored.account_quota244(None,Some(&canonical),220).is_none(),"aucune résurrection après échec, réponse positive et redémarrage");
     }
 
     #[test]
