@@ -1,4 +1,4 @@
-- [ ] T001 Résolution de la filiation sur l’hôte du propriétaire et tests ciblés.
-- [ ] T002 Question quota, accord préalable, relève et guidage ; aucune mutation de mission.
-- [ ] T003 Contrôles utiles, contre-revue, preuve réelle et activation sans T3.
-- [ ] T004 Publication, avis, Git propre/poussé/aligné et nettoyage.
+- [x] T001 Résolution de la filiation sur l’hôte du propriétaire et tests ciblés.
+- [x] T002 Question quota, accord préalable, relève et guidage ; aucune mutation de mission.
+- [x] T003 Contrôles utiles, contre-revue, preuve réelle et activation sans T3.
+- [x] T004 Publication, avis, Git propre/poussé/aligné et nettoyage.

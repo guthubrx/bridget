@@ -109,6 +109,9 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session246 — questions de quota et filiation distante activées sur les services en0.8.12/246-quota-accord-r2. Source d03f94a4, retour lecteur28590079/tagcompat-246-reader-r1 ; sept composants/SHA et pointeurs atomiques quatre hôtes vérifiés, coupurecore1,84s. Huit contrôles daemon246 Mac/Linux et un contrôle transport distinct acquis ; revueR1 favorable bornée/ACK, deltaR2 anti-questions rétroactives auto-relu/testé. Question native avant bascule après quota, accord préalable déclaré par quota_fallback_authorized, aucune nouvelle exécution automatique. Défaut Lineage : résolution du chemin Mac sur Cartae corrigée via le worker du propriétaire. Même lecture Parix ok/cinq tâches ; capture François confirme les agents Cartae dans Previous agents. Clics non enregistrés, preuve partielle explicite. Release0.8.12/six actifs téléchargés anonymement/SHA, APK8012/lignée8011 vérifiés ; quatre rapports frais0.8.12. Sept payloads protégés et registreMac inchangés. T3 principal82837/serveur14674 conservés. NE PAS arrêter/redémarrer T3 sans assentiment explicite. Des façades MCP243/245/R1 restent ouvertes et n’exposent pas le nouveau champ ; aucune activation globale de ces façades affirmée. Nettoyage des propres copies/WT246 ; images encore utilisées et travaux étrangers préservés. Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/246-quota-accord/validation.md.
+
+
 
 Session245 — quota et contrat MCP corrigés en0.8.11/245-quota-r1.
 Sourcebc8b9d6d intégrée/poussée ; matrice de modèles retirée de la clé du même
