@@ -15,6 +15,7 @@ import uuid
 import base64
 import selectors
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 TOKEN = "SENTINELLE244OK"
@@ -52,7 +53,50 @@ def save(path, value):
         temporary.unlink(missing_ok=True)
 
 
-def captured(arguments, timeout=120, env=None, stdout_limit=16*1024*1024):
+def process_identity(pid):
+    # Champs système fixes, sans arguments ni environnement du processus.
+    result=subprocess.run(["ps","-p",str(pid),"-o","lstart=","-o","comm="],capture_output=True,text=True,timeout=3)
+    if result.returncode==0:return result.stdout.strip()
+    try:os.kill(pid,0)
+    except ProcessLookupError:return None
+    except PermissionError:pass
+    return "unobserved"
+
+
+def remember_survivor(process, arguments):
+    state=os.environ.get("BRIDGET_SENTINEL_STATE_DIR")
+    if not state:raise RuntimeError("sentinel_survivor_store_unavailable")
+    root=Path(state)/"sentinel-processes"
+    root.mkdir(mode=0o700,exist_ok=True)
+    meta=root.lstat()
+    if not stat.S_ISDIR(meta.st_mode) or meta.st_uid!=os.geteuid() or meta.st_mode&0o077:
+        raise ValueError("sentinel_private_directory_required")
+    identity=process_identity(process.pid)
+    if identity is None:return
+    name=hashlib.sha256(identity.encode()).hexdigest()[:16]
+    save(root/f"{process.pid}-{name}.json",dict(pid=process.pid,identity=identity,
+         program=Path(arguments[0]).name,observed_at=int(time.time()),state="surviving",
+         next_action="observer le même PID et sa date de départ avant toute action ; aucune nouvelle mission"))
+    # Récolter notre enfant s'il finit pendant ce passage. Le reçu privé permet
+    # de continuer le suivi après la fin du contrôleur, sans adopter un autre PID.
+    threading.Thread(target=process.wait,daemon=True).start()
+
+
+def observe_survivors(state):
+    live=[]
+    for path in (state/"sentinel-processes").glob("*.json"):
+        row=private(path)
+        if row["state"]!="surviving":continue
+        identity=process_identity(row["pid"])
+        if identity=="unobserved" or identity==row["identity"]:
+            live.append(row["pid"])
+        else:
+            row.update(state="ended",ended_at=int(time.time()))
+            save(path,row)
+    return live
+
+
+def captured(arguments, timeout=120, env=None, stdout_limit=16*1024*1024, termination_grace=3):
     """Drainer les deux tubes. La réponse garde la borne de trame native16Mio."""
     process=subprocess.Popen(arguments,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
     streams=selectors.DefaultSelector()
@@ -74,8 +118,8 @@ def captured(arguments, timeout=120, env=None, stdout_limit=16*1024*1024):
                     identity=subprocess.check_output(["ps","-p",str(process.pid),"-o","comm="],text=True,timeout=3).strip()
                     if "firefox" not in identity.lower():
                         process.terminate()
-                        try: process.wait(timeout=3)
-                        except subprocess.TimeoutExpired: pass
+                        try: process.wait(timeout=termination_grace)
+                        except subprocess.TimeoutExpired: remember_survivor(process,arguments)
                 break
             for key,_ in streams.select(min(.2,max(0,deadline-time.monotonic()))):
                 body=os.read(key.fileobj.fileno(),65536)
@@ -355,6 +399,7 @@ def run(binary, state, reason):
     config = private(state / "sentinel-config.json")
     if config.get("enabled") is not True:
         raise ValueError("sentinel_not_enabled")
+    if observe_survivors(state):raise RuntimeError("sentinel_command_surviving")
     repair_components(state,config)
     repo = Path(config["repository"])
     if not repo.is_absolute() or repo.resolve() != repo:
@@ -477,6 +522,7 @@ def main():
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--reason", choices=["manual","activation","tick"], default="manual")
     args = parser.parse_args()
+    os.environ["BRIDGET_SENTINEL_STATE_DIR"]=str(args.state)
     os.umask(0o077)
     with (args.state / "sentinel.lock").open("a+b") as lock:
         try:
@@ -489,7 +535,7 @@ def main():
         except Exception as error:
             # Le détail reste privé. Le statut public indique l'échec du
             # contrôleur, sans inventer une panne de machine ou de fournisseur.
-            report=dict(version=1,status="failed",scope="controller",code="sentinel_runner_failed",
+            report=dict(version=1,status="failed",scope="controller",code="sentinel_command_surviving" if str(error)=="sentinel_command_surviving" else "sentinel_runner_failed",
                         finished_at=int(time.time()),cases=[])
             save(args.state/"sentinel-error.json",dict(at=int(time.time()),kind=type(error).__name__,
                  code=str(error)[:512] if isinstance(error,(ValueError,RuntimeError)) else "unobserved"))

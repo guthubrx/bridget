@@ -37,3 +37,13 @@ configuration, déjà arrêtée en échec et sans PID. Aucun travail fournisseur
 n’est tué pour ce contrôle. Les permissions et les comptes ne sont jamais
 réparés par élargissement automatique. Le client reste ouvert pendant cette
 livraison, conformément à la demande de François.
+
+Une réponse reçue après expiration ou annulation reste un produit utile. Elle
+est conservée dans le ledger et dans son envoi idempotent, sans nouvelle
+injection et sans rouvrir la demande. L’ACK de dépôt reste possible, y compris
+après une première réponse de transport perdue.
+
+Un contrôle qui survit àSIGTERM est suivi par son PID et sa date de départ,
+dans un reçu privé. Sa survie suspend la campagne suivante, sans suspendre
+les autres travaux. La terminaison est observée ; aucun SIGKILL n’est ajouté
+pour transformer une issue inconnue en succès.

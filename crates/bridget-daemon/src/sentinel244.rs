@@ -26,6 +26,7 @@ fn public_code(value: &Value) -> Value {
         | "cwd_outside_parent_project"
         | "expected_base_commit_mismatch"
         | "program_check_unavailable"
+        | "sentinel_command_surviving"
         | "sentinel_communication_unconfirmed"
         | "sentinel_catalogue_empty"
         | "sentinel_controller_stop_unconfirmed"

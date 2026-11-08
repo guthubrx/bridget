@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
+import os
 import unittest
 from unittest.mock import patch
 
@@ -91,6 +93,17 @@ class Sentinel244(unittest.TestCase):
         result=sentinel.captured(["/usr/bin/python3","-c","import sys;sys.stderr.write('password=secret-value '+('e'*1048576))"])
         self.assertLessEqual(len(result.stderr),512)
         self.assertNotIn("secret-value",result.stderr)
+
+    def test_process_ignoring_term_remains_identified_until_observed_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ,{"BRIDGET_SENTINEL_STATE_DIR":directory}):
+                result=sentinel.captured(["/usr/bin/python3","-c","import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(.8)"],timeout=.2,termination_grace=.05)
+                self.assertEqual(result.returncode,124)
+                self.assertEqual(len(sentinel.observe_survivors(Path(directory))),1)
+                time.sleep(.9)
+                self.assertEqual(sentinel.observe_survivors(Path(directory)),[])
+                row=sentinel.private(next((Path(directory)/"sentinel-processes").glob("*.json")))
+                self.assertEqual(row["state"],"ended")
 
     def test_alert_unknown_resolves_same_envelope_without_new_notification(self):
         with tempfile.TemporaryDirectory() as directory:
