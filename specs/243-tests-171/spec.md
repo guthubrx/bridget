@@ -257,3 +257,15 @@ commit 12721b3c, bancs de charge revérifiés sur Linux ensuite). Binaire actif
   sans correctif, 40/40 avec ; banc Claude géré 10/10 (environ 1 échec sur 8
   avant) ; 407 tests transport PASS. Codex et ACP ne reprennent pas le tour à
   EOF : non concernés.
+
+Activation 243-tests-r4 (source b44c0e3b, 8 novembre 2026) : Linux SHA
+8989dcdfa69e8df9ea9324841b3357238b8afc1b2c1555f14d0ec777c0cc1913, Mac signé SHA
+5cf883f6c60a55abed3cf69b5c2a97d7525ec1a1743fb360e731ea266ce33133, 0 avertissement.
+Suites complètes avant build : Mac 3 608 PASS, Linux 3 627 PASS, 0 échec.
+Sept composants vérifiés (cœur 557726, mobile 557804, worker Cartae 557863,
+SYS 2679316, KS 4132146, worker Mac 68535, pont Mac 68832), coupure 1,77 s,
+retour 243-tests-r3 sur les quatre hôtes. Contrôle client Mac : glm-mac en
+probe_failed car le Mac était en dark wake (trousseau illisible) ; exception
+bornée et consignée au reçu, ce client vérifié deux heures plus tôt (r3) avec
+la même politique et le même claude 2.1.317, toute autre non-compatibilité
+restant bloquante. Préservation inchangée.
