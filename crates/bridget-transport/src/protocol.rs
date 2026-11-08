@@ -2242,6 +2242,8 @@ pub enum NativeDelegationRequest {
         fallback: Vec<FallbackTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume_on_limit: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+        quota_fallback_authorized: Option<bool>,
     },
     Respond {
         task_id: String,
@@ -2346,6 +2348,10 @@ pub enum AutoDelegateWorkload {
 #[serde(deny_unknown_fields)]
 pub struct AutoDelegateV2 {
     pub request_id: String,
+    /// Accord humain explicite déjà reçu pour cette mission seulement.
+    /// Aucun droit de fichier, compte nouveau ou budget supplémentaire.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_present_optional")]
+    pub quota_fallback_authorized: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -11372,6 +11378,7 @@ mod spec104_search_contract_tests {
             keep_alive_secs: None,
             brief: None,
             child_requests: None,
+            quota_fallback_authorized: None,
             resume_on_limit: None,
             fallback: Vec::new(),
         };
@@ -12192,6 +12199,26 @@ mod commit_view_reader221_tests {
             serde_json::json!({"strategy":"worktree","base_ref":"a".repeat(40)})] {
             let decoded=serde_json::from_value::<WorkspaceRequest>(value.clone()).unwrap();
             assert_eq!(serde_json::to_value(decoded).unwrap(),value);
+        }
+    }
+}
+
+#[cfg(test)]
+mod quota_authorization246_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn spec246_accord_quota_canonique_rejouable_et_absence_compatible() {
+        for operation in ["delegate","auto_delegate_v2"] {
+            let mut value=json!({"operation":operation,"request_id":"quota246","agent_type":"a","model":"m","task":"lecture","cwd":"/source"});
+            if operation=="auto_delegate_v2" {value.as_object_mut().unwrap().remove("agent_type");}
+            let baseline:NativeDelegationRequest=serde_json::from_value(value.clone()).unwrap();
+            assert!(serde_json::to_value(&baseline).unwrap().get("quota_fallback_authorized").is_none());
+            value["quota_fallback_authorized"]=json!(true);
+            let explicit:NativeDelegationRequest=serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(explicit).unwrap()["quota_fallback_authorized"],true);
+            value["quota_fallback_authorized"]=serde_json::Value::Null;
+            assert!(serde_json::from_value::<NativeDelegationRequest>(value).is_err());
         }
     }
 }

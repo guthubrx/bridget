@@ -3042,6 +3042,11 @@ fn parse_auto_delegate_args(args: &[String]) -> Result<serde_json::Value, String
                     .map_err(|_| "--keep-alive-secs attend un entier non négatif".to_string())?;
                 ("keep_alive_secs", serde_json::Value::from(value))
             }
+            "--quota-fallback-authorized" => {
+                let value=option_value(args,&mut index,option)?.parse::<bool>()
+                    .map_err(|_|"--quota-fallback-authorized attend true ou false ; true seulement après accord humain explicite pour cette mission".to_string())?;
+                ("quota_fallback_authorized",serde_json::Value::Bool(value))
+            }
             "--urgent" => {
                 let value = option_value(args, &mut index, option)?
                     .parse::<bool>()

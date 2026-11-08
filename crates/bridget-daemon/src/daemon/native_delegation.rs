@@ -1,4 +1,6 @@
 //! Effets de la saga native, sous les mêmes gardes que la flotte et les remises.
+#[path = "native_quota_questions246.rs"]
+mod quota_questions246;
 #[path = "native_workspace_repair.rs"]
 pub(super) mod workspace_repair;
 #[path = "native_start_recovery.rs"]
@@ -1956,6 +1958,7 @@ fn routing_delegate(
         brief: request.brief.clone(),
         child_requests: request.child_requests.clone(),
         fallback: Vec::new(),
+        quota_fallback_authorized: request.quota_fallback_authorized,
         resume_on_limit: None,
     }
 }
@@ -2586,7 +2589,13 @@ fn admit_auto_routing(
     prepare_routing_projects(conn, request, &mut plan, attested, thread, state)?;
     if let Err(code) = observe_routing_candidates(conn, request, &mut plan, attested, state) {
         return if code == "routing_candidate_unavailable" {
-            Ok(routing_probe_failure(&plan))
+            let mut view=routing_probe_failure(&plan);
+            let observed_quota=plan.connections.iter().any(|fact|serde_json::from_str::<Value>(&fact.summary).ok().is_some_and(|q|q["launch_blocked"]==true));
+            let st=state.lock().unwrap_or_else(|e|e.into_inner());
+            if let Err(code)=quota_questions246::pre_admission(&st,conn,&NativeDelegationRequest::AutoDelegateV2(request.clone()),observed_quota,&mut view) {
+                view["quota_question_error"]=json!(code);
+            }
+            Ok(view)
         } else {
             Err(code)
         };
@@ -2979,6 +2988,7 @@ fn delegate_from_auto(
         brief: request.brief.clone(),
         child_requests: request.child_requests.clone(),
         fallback: Vec::new(),
+        quota_fallback_authorized: None,
         resume_on_limit: None,
     })
 }
@@ -5432,6 +5442,7 @@ fn current_task_view(st: &DaemonState, task: &Task, full: bool) -> Result<Value,
     view["recent_requests"]=json!(rows.iter().filter(|row|row.state!="open").take(10).map(|row|
         json!({"request_id":row.request_id,"kind":row.kind,"outcome":row.outcome,"decision":row.decision,"decided_at":row.decided_at,"delivery_state":row.delivery_state,"delivery_error":row.void_reason.as_deref().map(|reason| match reason { "permission_source_unavailable" | "delivery_check_unavailable" | "provider_quota_exhausted" | "revoked" => reason, _ => "delivery_invalidated" })})).collect::<Vec<_>>());
     st.dispatch_diagnostics.attach(task, &mut view, full);
+    quota_questions246::attach(st, task, &mut view);
     if full && matches!(task.projected_error(),Some("stdout Codex fermé pendant le tour" | "api_error" | "terminal Codex: failed:cause=model_not_found" | "terminal Claude inconnu" | "error_during_execution")) {
         // Projection après autorisation : aucun contenu de stderr ni chemin privé.
         // Une commande manquante reste inconnue, jamais reconstruite depuis un ancien slot.
@@ -6025,6 +6036,28 @@ fn status_with_worker_observation(
 }
 
 fn handle_with_fact(
+    conn: &str,
+    request: NativeDelegationRequest,
+    fact: Option<bridget_transport::protocol::ProviderPermissions>,
+    thread: Option<&str>,
+    permission_proof: Option<&bridget_transport::protocol::NativePermissionProof>,
+    state: &Arc<Mutex<DaemonState>>,
+    peer: Option<&UnixStream>,
+) -> DaemonToWrapper {
+    let explicit=matches!(&request,NativeDelegationRequest::Delegate{..}).then(||request.clone());
+    let mut response=handle_with_fact_inner(conn,request,fact,thread,permission_proof,state,peer);
+    if let (Some(request),DaemonToWrapper::NativeDelegationResult{result})=(explicit,&mut response) {
+        let known=result["code"]=="provider_quota_exhausted" || (result["code"]=="fallback_exhausted"
+            && result["detail"]["tried"].as_array().is_some_and(|rows|!rows.is_empty() && rows.iter().all(|r|r["code"]=="provider_quota_exhausted")));
+        if known && result["task_id"].is_null() {
+            let st=state.lock().unwrap_or_else(|e|e.into_inner());
+            if let Err(code)=quota_questions246::pre_admission(&st,conn,&request,true,result) {result["quota_question_error"]=json!(code);}
+        }
+    }
+    response
+}
+
+fn handle_with_fact_inner(
     conn: &str,
     request: NativeDelegationRequest,
     fact: Option<bridget_transport::protocol::ProviderPermissions>,
@@ -12941,6 +12974,11 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 }
             }
             if task.state == "failed" {
+                if task.acknowledged_at.is_none() {
+                    if let Err(code)=quota_questions246::ensure(&st,&task) {
+                        warn!("question de reprise quota non déposée ({code}) ; tâche et refus conservés");
+                    }
+                }
                 if quota_enabled(&task) {
                     st.pending_replies
                         .retain(|pending| pending.msg_id != task.mission);
@@ -12965,12 +13003,13 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                         || error.to_string(),
                         |reset| format!("{error} (retour quota : {reset})"),
                     );
+                    let recovery = quota_questions246::notice(&st,&task);
                     let mut notice = bridget_core::BridgetMessage::new(
                         &task.owner,
                         &task.owner,
                         format!(
-                            "Délégation native {} échouée : {}",
-                            task.task_id, description
+                            "Délégation native {} échouée : {}{}",
+                            task.task_id, description, recovery
                         ),
                     );
                     notice.id = format!("native-failure-{}", task.task_id);
@@ -27363,6 +27402,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             machine_id: None,
             project_id: None,
             fallback: Vec::new(),
+            quota_fallback_authorized: None,
             resume_on_limit: None,
             request_id: key.into(),
             agent_type: "native-test".into(),
@@ -30347,6 +30387,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             machine_id: None,
             project_id: None,
             fallback: Vec::new(),
+            quota_fallback_authorized: None,
             resume_on_limit: None,
             request_id: "glm".into(),
             agent_type: "glm-fake".into(),

@@ -61,6 +61,7 @@ fn lineage_task(task_id: &str, owner: &str, state: &str) -> crate::delegation::T
         request: bridget_transport::protocol::NativeDelegationRequest::Delegate {
             machine_id: None,
             project_id: None,
+            quota_fallback_authorized: None,
             resume_on_limit: None,
             fallback: Vec::new(),
             request_id: format!("req-{task_id}"),

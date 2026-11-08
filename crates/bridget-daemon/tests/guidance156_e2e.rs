@@ -326,6 +326,7 @@ fn delegate(root: &Path, key: &str, task: &str) -> NativeDelegationRequest {
     NativeDelegationRequest::Delegate {
         machine_id: None,
         project_id: None,
+        quota_fallback_authorized: None,
         resume_on_limit: None,
         fallback: Vec::new(),
         request_id: key.into(),

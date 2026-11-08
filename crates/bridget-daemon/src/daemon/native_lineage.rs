@@ -93,7 +93,7 @@ fn validate(request: &Request) -> Result<(), E> {
 
 fn authorize(state: &Arc<Mutex<DaemonState>>, conn: &str, request: &Request) -> Result<Context, E> {
     validate(request)?;
-    let host = {
+    {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         human_client_guard(
             &st,
@@ -103,14 +103,8 @@ fn authorize(state: &Arc<Mutex<DaemonState>>, conn: &str, request: &Request) -> 
             request.request.capability(),
         )
         .map_err(from_guard)?;
-        st.host.clone()
-    };
-    let project = crate::communication::resolve_communication_project(
-        &request.project_root,
-        &host,
-        bridget_transport::protocol::CommunicationProjectSource::T3,
-        None,
-    );
+    }
+    let project = human_request_project(state, &request.t3_thread_id, &request.project_root);
     let st = state.lock().unwrap_or_else(|e| e.into_inner());
     human_client_guard(
         &st,

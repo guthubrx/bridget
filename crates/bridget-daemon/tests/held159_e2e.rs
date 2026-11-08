@@ -715,6 +715,7 @@ fn bootstrap159(
         NativeDelegationRequest::Delegate {
             machine_id: None,
             project_id: None,
+            quota_fallback_authorized: None,
             resume_on_limit: None,
             fallback: Vec::new(),
             request_id: "latence159-bootstrap".into(),

@@ -1,0 +1,7 @@
+#246 — Accord sur les bascules de quota et filiation distante
+
+Demande du8novembre2026 : poser une question avant de changer de moteur ou de compte après un blocage de quota, sauf accord humain explicite déjà reçu dans son périmètre. Le choix initial libre reste possible ; il ne donne pas un accord de bascule après un échec. Préserver tâches, fichiers, clés et permissions. Aucun nouveau compte, budget ou droit déduit. Ne pas redémarrer T3.
+
+Question native Bridget après un refus fournisseur constaté : attendre, autoriser un autre compte existant, autoriser un autre moteur existant. Accord pour cette mission ; son parent reçoit la décision et organise une reprise seulement après clôture physique attestée de l’ancienne exécution. Aucune reprise métier déclenchée par cette maintenance. L’accord préalable peut être déclaré dans l’admission avec quota_fallback_authorized:true ; cette déclaration de l’appelant ne fabrique aucune preuve humaine ni droit nouveau. Les anciennes missions closes ne produisent pas une campagne de questions rétroactive.
+
+Défaut constaté sur Parix : taskd76758c9 est working sur Cartae, mais la vue humaine est refusée binding_unavailable. native_lineage résout le chemin Mac surst.host Cartae, obtientNone, puis la garde refuse l’hôte distant. Réutiliser human_request_project déjà employé par la vue humaine historique. Afficher les tâches dans la filiation du parent sans déplacer les travaux ni changer leur propriétaire.

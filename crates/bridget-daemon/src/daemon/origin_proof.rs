@@ -705,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn mobile177_foreign_project_requires_worker_proof_and_matching_primary_host() {
+    fn spec246_mobile177_foreign_project_requires_worker_proof_and_matching_primary_host() {
         use std::io::BufRead;
         let (shared,root,_identity)=fixture();
         let thread="foreign-project177";
@@ -725,7 +725,7 @@ mod tests {
         let fake=std::thread::spawn(move||{
             peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
             let mut reader=std::io::BufReader::new(peer);
-            for _ in 0..2 {
+            for _ in 0..3 {
             let mut line=String::new();reader.read_line(&mut line).unwrap();
             let DaemonToWrapper::OriginProofRequest {request}=serde_json::from_str(&line).unwrap() else {panic!("origin request")};
             assert!(matches!(&request.request,OriginProofOperation::CommunicationProject {source:CommunicationProjectSource::T3,..}));
@@ -740,11 +740,18 @@ mod tests {
         let result=announce_communication_project(&shared,"primary177",root.to_str().unwrap(),
             CommunicationProjectSource::T3,"origin177",None);
         let human_project=human_request_project(&shared,thread,root.to_str().unwrap());
-        fake.join().unwrap();
         assert!(human_project.is_some());
         assert!(matches!(result,DaemonToWrapper::ProjectContextResult {project:Some(_),..}));
         assert!(handle_wrapper_message("primary177",WrapperToDaemon::T3ThreadBindingFact {
             version:HUMAN_THREAD_VIEW_VERSION,t3_thread_id:thread.into()},&shared).is_none());
+        {let mut st=shared.lock().unwrap();
+            st.connection_roles.insert("human246".into(),ConnectionRole::Client);
+            st.client_negotiations.insert("human246".into(),NegotiatedClient{version:1,issuer_scope:"fixture246".into(),capabilities:vec![ClientCapability::HumanLineageViewV1]});
+        }
+        let response=handle_wrapper_message("human246",WrapperToDaemon::HumanLineage{request:HumanLineageRequest{version:4,t3_thread_id:thread.into(),project_root:root.to_string_lossy().into_owned(),request:HumanLineageAction::List{limit:10,cursor:None}}},&shared).unwrap();
+        let value=serde_json::to_value(response).unwrap();
+        assert_eq!(value["result"]["status"],"ok","le chemin de l’hôte propriétaire doit être résolu par son worker : {value}");
+        fake.join().unwrap();
         {let mut st=shared.lock().unwrap();let project=agent_communication_project(&st,&owner);
             assert_eq!(human_authority_guard(&st,thread,&project),Ok(("primary177".into(),owner.clone())));
             let mut forged=project.clone().unwrap();forged.host="other177".into();
