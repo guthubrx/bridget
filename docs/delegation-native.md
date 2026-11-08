@@ -1374,3 +1374,13 @@ request_status; subsequent reuse requires a human decision, never a new key
 replacing work with an unknown outcome.
 
 MemoryVersions returns paged revisions using a numeric cursor. Forgetting clears that history view too; it does not rewrite old journals or admitted frozen mission contexts. The catalog exposes recent native requests and opens the existing conversation for mission controls.
+
+### Choix humain après un quota fournisseur (246)
+
+Un refus `usage_limit` constaté ouvre une question native Bridget. Le parent peut lire son `request_id` dans `quota_recovery`, puis attendre la décision avec `bridget_ask_user` (`action: "wait"`). Les choix sont : attendre le même compte, autoriser un autre compte existant, ou autoriser un autre moteur avec une connexion existante. Le choix porte sur la mission indiquée ; il ne donne aucun nouveau droit, compte ou budget.
+
+Un accord humain explicite déjà donné pour cette reprise peut être déclaré avec `quota_fallback_authorized: true` dans l’admission automatique ou explicite. La CLI automatique accepte `--quota-fallback-authorized true`. Cette déclaration appartient à l’appelant ; ce n’est pas une preuve fabriquée par Bridget. L’absence du champ et `false` restent distincts au rejeu ; `null` est refusé. Le choix initial libre parmi les candidats disponibles n’autorise pas une bascule après l’échec d’une mission.
+
+La question et sa réponse sont conservées dans le magasin natif des questions. Elles ne déclenchent aucun lancement. Avant de reprendre le travail restant, le parent vérifie l’arrêt physique et le dossier de l’exécution précédente. Il conserve l’ancienne tâche, sa clé et ses résultats. Un accord antérieur applicable dispense de redemander la décision ; une question devenue sans objet peut être fermée sans fabriquer une réponse humaine. Les anciens échecs déjà signalés ne créent pas de questions rétroactives.
+
+Une sonde peut aussi constater un quota avant l’admission. La question est alors liée à la même enveloppe et au propriétaire, sans tâche, réservation ou consommation de clé. Une erreur réseau, une saturation ou une erreur fournisseur générique n’est pas transformée en quota.
