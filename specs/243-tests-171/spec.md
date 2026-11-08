@@ -495,3 +495,24 @@ imposée, commit_view/discovery, clé 243-preuve-routage-auto-20261108-01. Bridg
 a choisi SYS (claude-sysle2-haiku213) ; tâche 32eeb221 terminée « ROUTAGE OK »,
 résultat lu et accusé. Le refus de capacité observé plus tôt ne vise qu'une
 machine imposée ; sans machine imposée, l'admission choisit une cible disponible.
+
+## Correctif r6 (8 novembre 2026) : première vue d'un projet neuf
+
+Constat par essai réel depuis une session Parix (projet T3 créé pour l'occasion) :
+`commit_view` vers une machine sans mapping Parix renvoyait
+`project_mapping_unknown`, étape project_preparation, sur les quatre machines.
+`prepare()` refusait toute préparation `objects_only` d'un projet sans mapping ;
+une vue de lecture ne pouvait donc jamais faire la première délégation d'un
+projet neuf. Correction (c22b9d03) : à la première vue d'un projet neuf vers une
+autre machine, le dépôt géré est préparé comme pour un worktree, dans les mêmes
+droits du parent ; un projet connu reste en lecture seule et la machine source
+garde son parcours. Fonction `first_view_prepares_project`, test
+`scripts/tests/test_prepare_project_view.py` (3 PASS).
+
+Preuves réelles : script corrigé exécuté depuis le worktree, Parix préparé sur
+Cartae (`auto-54c0347616de987c5493e28c7690a30a`, racine pièces jointes
+comprise) ; délégation Parix sans machine imposée admise, « PARIX OK » (tâche
+de6c863b). r6 construit sans avertissement (Linux 749c047c…, Mac signé
+949f90d4…), activé sur sept composants, coupure 3,08 s, retour r5 sur quatre
+hôtes, tâches protégées et T3 inchangés. Puis première vue de Parix sur SYS, où
+le projet n'existait pas : admise, « PARIX SYS OK » (tâche 9a157bf6).
