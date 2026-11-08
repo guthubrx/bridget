@@ -25,7 +25,7 @@ const WORKER_CAPACITY: &str = "worker.store.capacity.v2";
 const SPECIALIST_REQUESTS: &str = "specialists.requests.v1";
 // Les prepared222 ne peuvent être remis que par leur autorité épinglée.
 // Un ancien drain qui ignore cette garde ne constitue pas un lecteur compatible.
-const FORMATS: &[&str] = &["wrapper.delivery_spool.v1","wrapper.reply_outbox.v1","delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1","workspace.commit_view.notice.v2","worker.view.reservation.v2","workspace.commit_view.large.v2","worker.store.capacity.v3","agents.dormancy.v1",SPECIALIST_REQUESTS,WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
+const FORMATS: &[&str] = &["delegation.quota_fallback.v1","wrapper.delivery_spool.v1","wrapper.reply_outbox.v1","delegation.admission_authority.v1","workspace.commit_view.resource_bound.v3","worker.workload_tools.v1","workspace.commit_view.notice.v2","worker.view.reservation.v2","workspace.commit_view.large.v2","worker.store.capacity.v3","agents.dormancy.v1",SPECIALIST_REQUESTS,WORKER_CAPACITY,WORKTREE,COMMIT_VIEW,COMMIT_VIEW_ORIGIN_ROOT,MODEL_OPTIONS,PROVIDER_ACCOUNTS];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -283,6 +283,7 @@ fn execute_with_proof(
                 .map(|_| string("project_id"))
                 .transpose()?,
             // O(1) : au plus trois candidats, sans résolution ni gain de droits.
+            quota_fallback_authorized: None,
             resume_on_limit: match args.get("resume_on_limit") {
                 None => None,
                 Some(Value::Bool(value)) => Some(*value),
@@ -367,6 +368,7 @@ fn execute_with_proof(
             brief: args.get("brief").cloned(),
         },
         "bridget_auto_delegate" => NativeDelegationRequest::AutoDelegateV2(AutoDelegateV2 {
+            quota_fallback_authorized: None,
             service_tier: args.get("service_tier").map(|_|string("service_tier")).transpose()?,
             request_id: string("request_id")?,
             machine_id: args

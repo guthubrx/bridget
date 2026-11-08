@@ -1956,6 +1956,7 @@ fn routing_delegate(
         brief: request.brief.clone(),
         child_requests: request.child_requests.clone(),
         fallback: Vec::new(),
+        quota_fallback_authorized: request.quota_fallback_authorized,
         resume_on_limit: None,
     }
 }
@@ -2979,6 +2980,7 @@ fn delegate_from_auto(
         brief: request.brief.clone(),
         child_requests: request.child_requests.clone(),
         fallback: Vec::new(),
+        quota_fallback_authorized: None,
         resume_on_limit: None,
     })
 }
@@ -27363,7 +27365,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
             machine_id: None,
             project_id: None,
             fallback: Vec::new(),
-            resume_on_limit: None,
+            quota_fallback_authorized: None,
+        resume_on_limit: None,
             request_id: key.into(),
             agent_type: "native-test".into(),
             model: "custom/model".into(),
@@ -30347,7 +30350,8 @@ for frame in frames: print(json.dumps(frame),flush=True)
             machine_id: None,
             project_id: None,
             fallback: Vec::new(),
-            resume_on_limit: None,
+            quota_fallback_authorized: None,
+        resume_on_limit: None,
             request_id: "glm".into(),
             agent_type: "glm-fake".into(),
             model: "glm/custom-exact".into(),
