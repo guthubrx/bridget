@@ -4511,7 +4511,11 @@ fn failure(code: &str) -> Value {
             "detail":{"message":message,"recovery":recovery,"human_action":human_action}});
     }
     if let Some(message) = code.strip_prefix("brief_invalid:") {
-        return json!({"status":"refused","code":"brief_invalid","message":message});
+        // Les façades déjà ouvertes rendent detail, pas le message racine.
+        // Conserver le champ constaté sans demander un redémarrage client.
+        let recovery = "Corrigez le champ indiqué dans brief. Chaque référence kind=file exige label, host et un path absolu ; un dossier est accepté et aucune source n'est ouverte par cette validation. Ce refus intervient avant tout nouvel enregistrement ; il ne tranche pas une ancienne issue inconnue. Conservez la tâche existante et vérifiez ses rondes avec bridget_task_status. Après confirmation du refus et de l'absence de ronde admise pour cette request_id, une enveloppe corrigée utilise une nouvelle request_id de continuation sur la même tâche. Un rejeu strict conserve sa clé et tous ses paramètres. Les autres travaux autorisés suivent leur propre état.";
+        return json!({"status":"refused","code":"brief_invalid","message":message,
+            "detail":{"message":message,"recovery":recovery,"scope":"this_request"}});
     }
     if code == "workspace_preflight_technical" || code.starts_with("workspace_preflight_technical:") {
         let cause = code.split_once(':').map(|(_, detail)| detail.trim_start().split(':').next().unwrap_or(""));
@@ -21476,6 +21480,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             json!({"objective":"o","summary":"s","unknown":true}),
             json!({"objective":" ","summary":"s"}),
             json!({"summary":"s"}),
+            json!({"objective":"o","summary":"s","references":[{"kind":"file","label":"Copie","path":"/home/moi/candidat/"}]}),
         ] {
             let expected = crate::handoff::validate_and_render(&brief)
                 .unwrap_err()
@@ -21496,6 +21501,9 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 result["message"], expected,
                 "champ et raison du validateur existant"
             );
+            assert_eq!(result["detail"]["message"], expected,
+                "les façades existantes doivent rendre le champ et sa cause");
+            assert!(result["detail"]["recovery"].as_str().unwrap().contains("nouvelle request_id de continuation sur la même tâche"));
             assert!(
                 shared
                     .lock()
