@@ -187,3 +187,24 @@ et KS (actif r2, retour r1), conservée sur le Mac car encore ouverte par des
 façades MCP de T3 (T3 non redémarré). Caches de compilation : Mac 1,5 Gio, SYS
 3,7 Gio après retrait de 18 Gio de debug du 5 novembre et de cinq caches de
 sessions closes (SYS 25 Gio libres au lieu de 1,8 Gio), Cartae < 1 Gio.
+
+## Causes réelles de worker162 et remote162 (8 novembre 2026)
+
+- worker162 : sur macOS, SO_RCVTIMEO rend EINVAL quand le pair a déjà fermé
+  la socket (vérifié par sonde). Le canal de statut d'un bootstrap mort tôt
+  produisait donc Io(EINVAL) au lieu de « EOF avant BootstrapReady ». Le
+  réglage du délai tolère ce seul cas ; la lecture rend EOF aussitôt. Preuve :
+  banc rendu déterministe, Io(Os code 22) sans correctif, PASS avec, plus un
+  test unitaire du canal fermé.
+- remote162 (cas late-ready) : `refuse()` ne transmettait que
+  Invalid(ResultSlotExpired) ; un permis expiré refusé par le magasin
+  (Invalid(ReleaseExpired)), une connexion périmée, une enveloppe ou un
+  placement devenaient StoreUnavailable. Sous charge, le contrôle mémoire de
+  l'expiration passait juste et le magasin refusait : le maître voyait un
+  Release incertain. Les refus précis du magasin sont transmis ; les vraies
+  pannes restent StoreUnavailable ; test ajouté.
+- Banc spec147 membres : naissance lue sur un CLI court déjà sorti (ESRCH sous
+  charge) ; 0 retenu, aucun TERM possible, Drop constate la fin.
+
+Suites complètes : Linux (worktree Git Cartae) 3 626 PASS, 0 échec, 0
+avertissement ; Mac 3 606 PASS, 1 échec spec147 corrigé ensuite (72/72 trois fois).

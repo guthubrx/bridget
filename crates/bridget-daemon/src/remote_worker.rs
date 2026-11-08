@@ -3318,7 +3318,11 @@ fn refuse(error: WorkerStoreError) -> WorkerRefusal {
     match error {
         WorkerStoreError::Quota => WorkerRefusal::ResourceLimit,
         WorkerStoreError::Workspace(reason) => reason,
-        WorkerStoreError::Invalid(WorkerRefusal::ResultSlotExpired) => WorkerRefusal::ResultSlotExpired,
+        // Le magasin porte déjà un refus fermé et précis (permis ou créneau
+        // expiré, connexion périmée, enveloppe, placement) : le transmettre.
+        // Le masquer en StoreUnavailable faisait passer un permis expiré pour
+        // un Release incertain côté maître (vu sous charge, remote162).
+        WorkerStoreError::Invalid(reason) => reason,
         WorkerStoreError::Io(ref error)
             if matches!(error.raw_os_error(), Some(libc::ENOSPC | libc::EDQUOT)) =>
         {
@@ -3337,6 +3341,24 @@ fn refuse_fenced_workspace(error: WorkerStoreError) -> WorkerRefusal {
         WorkerStoreError::Conflict => WorkerRefusal::CommandMismatch,
         WorkerStoreError::Unknown => WorkerRefusal::UnknownExecution,
         error => refuse(error),
+    }
+}
+#[cfg(test)]
+mod refuse243_tests {
+    use super::*;
+    #[test]
+    fn spec243_refus_precis_du_magasin_transmis_sans_masque_store_unavailable() {
+        for reason in [WorkerRefusal::ReleaseExpired, WorkerRefusal::StaleConnection,
+            WorkerRefusal::ResultSlotExpired, WorkerRefusal::PlacementMismatch,
+            WorkerRefusal::InvalidEnvelope] {
+            assert_eq!(refuse(WorkerStoreError::Invalid(reason)), reason);
+            assert_eq!(refuse_fenced_workspace(WorkerStoreError::Invalid(reason)), reason);
+        }
+        // Les pannes réelles du magasin restent StoreUnavailable.
+        for error in [WorkerStoreError::Locked, WorkerStoreError::Quarantined,
+            WorkerStoreError::InvalidTransition] {
+            assert_eq!(refuse(error), WorkerRefusal::StoreUnavailable);
+        }
     }
 }
 fn marker_key(command: &WorkerCommandIdentity) -> String {

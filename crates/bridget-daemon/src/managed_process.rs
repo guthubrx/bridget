@@ -338,14 +338,26 @@ pub struct RunningManagedChild {
     status_failed: bool,
 }
 
+/// macOS rend EINVAL pour SO_RCVTIMEO quand le pair a déjà fermé la socket.
+/// La lecture suivante rend alors immédiatement les octets restants puis EOF :
+/// ce n'est pas une panne du canal, et le refus doit rester « EOF avant ready ».
+fn set_status_timeout(stream: &UnixStream, timeout: Duration) -> io::Result<()> {
+    match stream.set_read_timeout(Some(timeout)) {
+        Err(error) if cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        result => result,
+    }
+}
+
 impl ManagedChild {
     pub fn set_ready_timeout(&mut self, timeout: Duration) -> io::Result<()> {
-        self.inner
-            .status
-            .as_mut()
-            .expect("canal de statut présent avant le transfert")
-            .get_mut()
-            .set_read_timeout(Some(timeout))
+        set_status_timeout(
+            self.inner
+                .status
+                .as_mut()
+                .expect("canal de statut présent avant le transfert")
+                .get_mut(),
+            timeout,
+        )
     }
 
     /// Attend la preuve de création du groupe. Ce statut n'est jamais un succès.
@@ -426,12 +438,14 @@ impl ManagedChild {
         cancelled: impl Fn() -> bool,
         poll_interval: Duration,
     ) -> Result<Option<BootstrapReady>, ManagedProcessError> {
-        self.inner
-            .status
-            .as_mut()
-            .expect("canal de statut présent avant le transfert")
-            .get_mut()
-            .set_read_timeout(Some(poll_interval))?;
+        set_status_timeout(
+            self.inner
+                .status
+                .as_mut()
+                .expect("canal de statut présent avant le transfert")
+                .get_mut(),
+            poll_interval,
+        )?;
         loop {
             if cancelled() {
                 self.inner.release.take();
@@ -2082,12 +2096,26 @@ while True: time.sleep(.02)
     }
 
     #[test]
+    fn spec243_delai_sur_canal_ferme_reste_un_eof() {
+        let (reader, peer) = UnixStream::pair().unwrap();
+        drop(peer);
+        set_status_timeout(&reader, Duration::from_millis(10)).unwrap();
+        let mut line = String::new();
+        assert_eq!(BufReader::new(reader).read_line(&mut line).unwrap(), 0);
+    }
+
+    #[test]
     fn worker162_bootstrap_erreur_garde_handle_jusqua_arret() {
         for mode in ["eof", "failed"] {
             let mut command = helper_command("managed_process::tests::bootstrap_error_child");
             command.env("BRIDGET_TEST_BOOTSTRAP_ERROR162", mode);
             let bootstrap = spawn_bootstrap_command(command, Stdio::null()).unwrap();
             let pid = bootstrap.inner.child.id();
+            if mode == "eof" {
+                // Cas observé sous charge : le canal est déjà fermé quand le
+                // contrôleur règle son délai (EINVAL sur macOS). Le rendre sûr.
+                thread::sleep(Duration::from_millis(500));
+            }
             let (error, mut child) = match bootstrap
                 .wait_ready_or_cancel_retained(|| false, Duration::from_millis(10))
             {

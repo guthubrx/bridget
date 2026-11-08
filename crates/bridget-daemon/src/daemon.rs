@@ -17013,7 +17013,9 @@ mod spec145_human_view_tests {
                         input: None,
                         output,
                         mcp_pid: pid,
-                        mcp_birth: crate::managed_process::process_birth(pid).unwrap(),
+                        // Un CLI court peut déjà être sorti (ESRCH sous charge) :
+                        // Drop le constate par try_wait, et 0 n'autorise aucun TERM.
+                        mcp_birth: crate::managed_process::process_birth(pid).unwrap_or(0),
                         deadline: cli_deadline,
                     };
                     unsafe {
