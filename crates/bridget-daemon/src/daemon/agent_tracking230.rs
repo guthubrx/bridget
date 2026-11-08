@@ -22,31 +22,30 @@ pub(super) fn bind_live(st:&mut DaemonState,agent_id:&str,thread:&str)->Result<(
     crate::agent_tracking::bind(st.store.connection(),&snapshot,thread).map_err(|_|"tracking_storage_unavailable")
 }
 
-/// Une réponse à une demande déjà admise reste consultable sans réveiller
-/// son destinataire. Le corps et la clôture sont gravés dans la même transaction.
+/// Une réponse à une demande close ou à un destinataire dormant reste
+/// consultable sans réveil. Une clôture acquise ne change jamais d’état.
 pub(super) fn retain_classic_reply(st: &mut DaemonState, conn: &str, message: &bridget_core::BridgetMessage) -> Result<bool, String> {
     use rusqlite::{OptionalExtension, params};
     if !sender_is_authorized(st, conn, &message.from) { return Ok(false); }
     let Some(correlation) = message.in_reply_to.as_deref() else { return Ok(false); };
-    if !crate::agent_tracking::dormant(st.store.connection(), &message.to).map_err(|e|e.to_string())? { return Ok(false); }
+    let dormant=crate::agent_tracking::dormant(st.store.connection(), &message.to).map_err(|e|e.to_string())?;
     let tx = st.store.connection().unchecked_transaction().map_err(|e|e.to_string())?;
     let request: Option<(String, Option<String>)> = tx.query_row(
         "SELECT state,reply_summary FROM tracked_requests WHERE id=?1 AND sender=?2 AND target=?3",
         params![correlation,message.to,message.from], |r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
-    let Some((state, summary)) = request else { return Ok(false); };
+    let Some((state, _summary)) = request else { return Ok(false); };
+    if state=="open" && !dormant {return Ok(false);}
     let existing: Option<(String,String)> = tx.query_row("SELECT sender,body FROM ledger WHERE id=?1 AND target=?2",
         params![message.id,message.to],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
-    if state == "answered" {
-        let same = summary.and_then(|s|serde_json::from_str::<Value>(&s).ok()).is_some_and(|s|s["id"]==message.id)
-            && existing.as_ref().is_some_and(|(sender,body)|sender==&message.from && body==&message.body);
-        return Ok(same);
-    }
-    if state != "open" { return Ok(false); }
     if existing.as_ref().is_some_and(|(sender,body)|sender!=&message.from || body!=&message.body) {
         return Err("retained_reply_conflict: Identifiant déjà utilisé par une autre réponse. Conservez les deux enveloppes et relisez le journal ; aucune nouvelle sollicitation n'a été remise.".into());
     }
     if existing.is_none() {
         crate::store::record_message_in_transaction(&tx,message,&format!("{}|{}",message.from,message.to)).map_err(|e|e.to_string())?;
+    }
+    if state!="open" {
+        tx.commit().map_err(|e|e.to_string())?;
+        return Ok(true);
     }
     if !crate::store::mark_answered_in_transaction(&tx,correlation,&message.from,&message.to,Some(&crate::store::request_reply_summary(message))).map_err(|e|e.to_string())? { return Ok(false); }
     tx.commit().map_err(|e|e.to_string())?;

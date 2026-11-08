@@ -123,18 +123,7 @@ fn native_t3_codex_scope214(parent: &ProviderPermissions, definition: &AgentDefi
 /// Portée de fichiers explicite, pas le seul libellé « full-access ».
 /// Les profils Claude avec règles/sources privées gardent leurs racines déclarées.
 pub(crate) fn unrestricted_source_scope(parent:&ProviderPermissions)->bool {
-    if bridget_transport::protocol::validate_permissions(parent,parent.source=="provider_turn").is_err() {return false;}
-    if parent.driver=="codex_app_server" && parent.runtime_mode=="full-access"
-        && parent.provider_policy["sandbox_policy"]["type"]=="dangerFullAccess" {return true;}
-    let policy = &parent.provider_policy;
-    authenticated_t3_tool_scope171(parent)
-        && parent.runtime_mode == "full-access"
-        && policy["permission_mode"] == "bypassPermissions"
-        && policy["tools"] == json!({"type":"preset","preset":"claude_code"})
-        && policy["allowed_tools"] == json!(["mcp__t3-code__*"])
-        && policy.get("disallowed_tools").is_none_or(|v| v.as_array().is_some_and(Vec::is_empty))
-        && policy["settings_sources"] == "provider_default"
-        && policy.get("launch_context").is_none()
+    bridget_transport::protocol::provider_has_unrestricted_source_scope(parent)
 }
 
 fn require_isolated_claude_mount171(definition: &AgentDefinition) -> Result<(), String> {
@@ -447,13 +436,15 @@ pub(crate) fn project_remote_permissions_in_operation(
     let project_path = |origin: &str| mapped_existing_permission_directory171(mapping, Path::new(origin), protected, working_alias);
     let local_source=same_host && crate::lifecycle::source_root(parent,execution_cwd)
         .is_ok_and(|selected|selected==root && execution_cwd.starts_with(&selected));
-    if !local_source {mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;}
+    let selected_source=crate::lifecycle::source_root(parent,&mapping.source_root)
+        .is_ok_and(|selected|selected==mapping.source_root);
+    if !local_source && !selected_source {mapped_permission_suffix171(Path::new(&parent.cwd), &mapping.source_root)?;}
     if let Some(extra) = &mapping.additional_root {
         crate::registry::validate_additional_mapping171(mapping)?;
         verify_permission_directory171(&extra.remote_root, extra.remote_uid, extra.remote_mode, protected)?;
     }
     let cwd = crate::registry::validate_unprotected_local_path(execution_cwd, protected)?;
-    if (!local_source && !cwd.starts_with(project_path(&parent.cwd)?)) || !cwd.is_dir() {
+    if (!local_source && !cwd.starts_with(if selected_source {root.clone()}else{project_path(&parent.cwd)?})) || !cwd.is_dir() {
         return Err("permission_mapping_unavailable".into());
     }
     let mut translated = parent.clone();

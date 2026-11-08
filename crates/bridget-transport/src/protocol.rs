@@ -3143,7 +3143,7 @@ impl OriginProofRequest {
                     || matches!(source.workspace,Some(WorkspaceRequest::CommitView {})),"target_machine")?;
                 require(project_id.as_ref().is_none_or(|id|worker_atom(id,128)),"project_id")?;
                 require(worker_absolute_path(&source.cwd)
-                    && std::path::Path::new(&source.cwd).starts_with(&parent.cwd),"cwd")?;
+                    && provider_allows_source(parent,&source.cwd),"cwd")?;
                 require(worker_base_commit(source.expected_base_commit.as_deref()),"expected_base_commit")?;
                 worker_serialized_size(&source.workspace,4096).map_err(|reason|("workspace",reason))
             }
@@ -3151,7 +3151,7 @@ impl OriginProofRequest {
                 validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
                 if let Some(source)=source {
                     require(worker_absolute_path(&source.cwd)
-                        && std::path::Path::new(&source.cwd).starts_with(&parent.cwd),"cwd")?;
+                        && provider_allows_source(parent,&source.cwd),"cwd")?;
                     require(worker_base_commit(source.expected_base_commit.as_deref()),"expected_base_commit")?;
                     worker_serialized_size(&source.workspace,4096).map_err(|reason|("workspace",reason))?;
                 }
@@ -4204,7 +4204,7 @@ impl WorkerPrepare {
                     .all(|s| worker_absolute_path(s))
                 && worker_relative_path(&self.relative_cwd)
                 && worker_base_commit(self.base_commit.as_deref())
-                && (std::path::Path::new(&self.origin_cwd).starts_with(&self.parent.cwd)
+                && (provider_allows_source(&self.parent,&self.origin_cwd)
                     || (matches!(self.workspace,Some(WorkspaceRequest::CommitView {}))
                         && self.posture==Some(SpawnPosture::Discovery)
                         && self.base_commit.is_some()
@@ -4357,7 +4357,7 @@ impl WorkerRequest {
                 validate_permissions(parent, parent.source == "provider_turn")
                     .map_err(|_| WorkerRefusal::PermissionsChanged)?;
                 worker_require(worker_absolute_path(&source.cwd)
-                    && std::path::Path::new(&source.cwd).starts_with(&parent.cwd)
+                    && provider_allows_source(parent,&source.cwd)
                     && worker_base_commit(source.expected_base_commit.as_deref()))?;
                 worker_serialized_size(&source.workspace, 4096)
             }

@@ -16,6 +16,19 @@ mod native_permissions155_tests;
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[test]
+fn spec244_parix_source_globale_reste_autorisee_sur_une_autre_machine() {
+    let (_root,env,mapping,protected)=remote162_fixture("244-parix");
+    let parent=codex_fact("/origin162/opus2d",json!({"type":"dangerFullAccess"}),"never");
+    assert!(crate::lifecycle::source_root(&parent,&mapping.source_root).is_ok());
+    let (policy,posture)=project_remote_permissions(&parent,&codex_definition(),&mapping,&mapping.remote_root,
+        &env,Some(SpawnPosture::Discovery),&protected).unwrap();
+    assert_eq!(posture,SpawnPosture::Discovery);assert_eq!(policy["sandbox_policy"]["type"],"readOnly");
+    let mut restricted=parent.clone();restricted.provider_policy["sandbox_policy"]=json!({"type":"readOnly"});
+    assert!(project_remote_permissions(&restricted,&codex_definition(),&mapping,&mapping.remote_root,
+        &env,Some(SpawnPosture::Discovery),&protected).is_err());
+}
+
+#[test]
 fn spec241_same_host_preserves_attested_extra_directory_without_remote_mapping() {
     let (root,env,mut mapping,protected)=remote162_fixture("241-local-directory");
     mapping.source_root=mapping.remote_root.clone();

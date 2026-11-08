@@ -787,6 +787,28 @@ impl AgentRegistry {
         Some(format!("{:x}", Sha256::digest(bytes)))
     }
 
+    /// Identité du compte Claude sur un worker. Deux alias ne partagent un refus
+    /// que si tout le lanceur est identique, sauf le modèle explicite.
+    pub(crate) fn routing_account_scope244(&self, connection_id: &str) -> Option<String> {
+        let policy = self.routing_policy()?;
+        let connection = policy.connections.iter().find(|c| c.enabled && c.connection_id == connection_id)?;
+        if connection.engine != "claude" { return None; }
+        let mut definition = self.resolved_definition(&connection.agent_type).ok()?;
+        if definition.protocol != "claude_stream_json" { return None; }
+        let mut args = Vec::new();
+        let mut iter = definition.args.iter();
+        while let Some(arg) = iter.next() {
+            if arg == "--model" { iter.next()?; }
+            else if !arg.starts_with("--model=") { args.push(arg.clone()); }
+        }
+        definition.args = args;
+        definition.digest.clear();
+        let worker = self.machines.get(&connection.machine_id).map(|m|
+            (&m.worker_id, m.provisioning_revision, &m.credential_fingerprint));
+        let bytes = serde_json::to_vec(&(&connection.machine_id, definition, policy.revision, worker)).ok()?;
+        Some(format!("{:x}", Sha256::digest(bytes)))
+    }
+
     /// Matrice complète déclarée avant les filtres de demande. Les connexions
     /// désactivées restent comptées ici afin qu'un registre129 ne puisse pas
     /// devenir valide en masquant arbitrairement une partie du catalogue.
@@ -3005,6 +3027,25 @@ mod tests {
             AgentRegistry::from_json(&reference.to_string(), "/tmp/agents.json").unwrap_err(),
             "admission_profile_reference_unknown"
         );
+    }
+
+    #[test]
+    fn spec244_quota_alias_meme_lanceur_sans_confondre_comptes() {
+        let mut value = routing168_registry_value();
+        value["agents"]["claude-alias"] = value["agents"]["claude"].clone();
+        value["agents"]["claude"]["args"] = serde_json::json!(["--model","claude-opus-5-5"]);
+        value["agents"]["claude-alias"]["args"] = serde_json::json!(["--model=claude-haiku-5-5"]);
+        let connection = serde_json::json!({"connection_id":"claude-alias", "machine_id":"local", "engine":"claude", "agent_type":"claude-alias", "enabled":true});
+        value["routing_policy"]["connections"].as_array_mut().unwrap().push(connection);
+        value["routing_policy"]["model_catalog"]["claude-alias"] = value["routing_policy"]["model_catalog"]["claude-local"].clone();
+        let registry = AgentRegistry::from_json(&value.to_string(),"/tmp/agents.json").unwrap();
+        assert!(registry.routing_account_scope244("claude-local").is_some());
+        assert_eq!(registry.routing_account_scope244("claude-local"),registry.routing_account_scope244("claude-alias"));
+        assert_ne!(registry.routing_account_scope244("claude-local"),registry.routing_account_scope244("claude-cartae"));
+        assert!(registry.routing_account_scope244("codex-personal").is_none());
+        value["agents"]["claude-alias"]["claude_config_dir"] = serde_json::json!("/another/account");
+        let registry = AgentRegistry::from_json(&value.to_string(),"/tmp/agents.json").unwrap();
+        assert_ne!(registry.routing_account_scope244("claude-local"),registry.routing_account_scope244("claude-alias"));
     }
 
     fn routing168_registry_value() -> serde_json::Value {

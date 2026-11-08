@@ -58,7 +58,7 @@ fn cwd_outside_parent(operation:&OriginProofOperation)->bool {
     match operation {
         OriginProofOperation::PrepareProject {parent,source,..}
         | OriginProofOperation::Sources {parent,source:Some(source)} =>
-            !Path::new(&source.cwd).starts_with(&parent.cwd),
+            !bridget_transport::protocol::provider_allows_source(parent,&source.cwd),
         _=>false,
     }
 }
@@ -215,7 +215,7 @@ mod capacity221_tests {
             "provider_instance_id":"codex","revision":1,"driver":"codex_app_server","cwd":"/source/project",
             "runtime_mode":"full-access","interaction_mode":"default",
             "provider_policy":{"kind":"codex","approval_policy":"never",
-                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}
+                "approvals_reviewer":"user","sandbox_policy":{"type":"readOnly"}}
         })).unwrap();
         let source=|cwd:&str|bridget_transport::protocol::WorkerSourceBase {cwd:cwd.into(),
             expected_base_commit:None,workspace:None,
@@ -475,7 +475,7 @@ pub(super) fn prepare_project(
         "operation":"publish_prepared","registry":registry_path,"machine_id":target_machine,
         "authority":{"worker_id":expected.worker_id,"provisioning_revision":expected.provisioning_revision,
             "credential_fingerprint":expected.credential_fingerprint},
-        "origin_host":origin_host,"source_root":parent.cwd,"cwd":source.cwd,
+        "origin_host":origin_host,"source_root":crate::lifecycle::source_root(parent,Path::new(&source.cwd))?,"cwd":source.cwd,
         "project_id":project.project_id,"mapping":project.mapping
     }),deadline)
 }

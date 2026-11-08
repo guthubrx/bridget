@@ -37,6 +37,38 @@ pub struct NativePermissionProof {
     pub authorization: super::IdentityCredential,
 }
 
+/// Portée de fichiers explicite déjà attestée ; le libellé seul ne suffit pas.
+/// L'authentification et la relecture de ce fait restent obligatoires chez le consommateur.
+pub fn provider_has_unrestricted_source_scope(parent:&ProviderPermissions)->bool {
+    use serde_json::json;
+    if validate_permissions(parent,parent.source=="provider_turn").is_err(){return false;}
+    let policy=&parent.provider_policy;
+    if parent.driver=="codex_app_server" && parent.runtime_mode=="full-access"
+        && policy["sandbox_policy"]["type"]=="dangerFullAccess" {return true;}
+    parent.source=="provider_turn" && parent.driver=="claude_stream_json"
+        && !parent.run_id.is_empty() && !parent.provider_session_id.is_empty() && !parent.provider_instance_id.is_empty()
+        && policy["kind"]=="claude"
+        && policy["permission_callback"]==json!({"kind":"t3_runtime","tool_approval":"allow","plan_exit":"deny"})
+        && parent.runtime_mode=="full-access" && policy["permission_mode"]=="bypassPermissions"
+        && policy["tools"]==json!({"type":"preset","preset":"claude_code"})
+        && policy["allowed_tools"]==json!(["mcp__t3-code__*"])
+        && policy.get("disallowed_tools").is_none_or(|v|v.as_array().is_some_and(Vec::is_empty))
+        && policy["settings_sources"]=="provider_default" && policy.get("launch_context").is_none()
+}
+
+/// Même périmètre de source dans les enveloppes de transport et leur exécution.
+pub fn provider_allows_source(parent:&ProviderPermissions,cwd:&str)->bool {
+    use std::path::{Path,Component};
+    let valid=|p:&Path|p.is_absolute() && !p.components().any(|c|matches!(c,Component::ParentDir));
+    let path=Path::new(cwd);
+    if !valid(path) || validate_permissions(parent,parent.source=="provider_turn").is_err(){return false;}
+    if path.starts_with(&parent.cwd){return true;}
+    if [parent.provider_policy.get("additional_directories"),parent.provider_policy.pointer("/sandbox_policy/writableRoots")]
+        .into_iter().flatten().filter_map(Value::as_array).flatten().filter_map(Value::as_str)
+        .map(Path::new).any(|root|valid(root)&&path.starts_with(root)){return true;}
+    provider_has_unrestricted_source_scope(parent)
+}
+
 pub fn validate_permissions(fact: &ProviderPermissions, t3: bool) -> Result<(), String> {
     let fail = || "permission_attestation_unavailable".to_string();
     let atom = |s: &str, max: usize| {
@@ -1115,5 +1147,31 @@ mod executable_revision183_tests {
         std::fs::remove_file(&path).unwrap();
         assert_eq!(recheck_cli_revisions(&context, |p| permission_source_revision(p, 512)),
             Err("settings_revision_changed".into()));
+    }
+}
+
+#[cfg(test)] mod source_scope244_tests {
+    use super::*;
+    use crate::protocol::*;
+    use serde_json::json;
+    #[test] fn spec244_parix_enveloppes_acceptent_la_portee_native_deja_complete() {
+        let parent:ProviderPermissions=serde_json::from_value(json!({"version":1,"source":"provider_turn","run_id":"run244",
+            "provider_session_id":"session244","provider_instance_id":"codex","revision":1,"driver":"codex_app_server",
+            "cwd":"/source/opus2d","runtime_mode":"full-access","interaction_mode":"default",
+            "provider_policy":{"kind":"codex","approval_policy":"never","approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}}})).unwrap();
+        let source=WorkerSourceBase{cwd:"/source/parix".into(),expected_base_commit:Some("a".repeat(40)),
+            workspace:Some(WorkspaceRequest::CommitView{}),workload:AutoDelegateWorkload::General};
+        let mut request=OriginProofRequest{version:1,correlation_id:uuid::Uuid::new_v4().to_string(),connection_epoch:"epoch244".into(),
+            worker:WorkerIdentity{machine_id:"origin244".into(),worker_id:uuid::Uuid::new_v4().to_string(),provisioning_revision:1},
+            expires_at_ms:100000,request:OriginProofOperation::Sources{parent:parent.clone(),source:Some(source.clone())}};
+        request.validate_shape_detailed().unwrap();
+        request.request=OriginProofOperation::PrepareProject{parent:parent.clone(),source,target_machine:"sys244".into(),project_id:None,return_context:true};
+        request.validate_shape_detailed().unwrap();
+        let mut restricted=parent.clone();restricted.provider_policy["sandbox_policy"]=json!({"type":"readOnly"});
+        assert!(!provider_allows_source(&restricted,"/source/parix"));
+        restricted.provider_policy["sandbox_policy"]=json!({"type":"workspaceWrite","writableRoots":["/source/parix"]});
+        assert!(provider_allows_source(&restricted,"/source/parix"));
+        assert!(!provider_allows_source(&restricted,"/source/parix-voisin"));
+        assert!(!provider_allows_source(&parent,"/source/parix/../autre"));
     }
 }

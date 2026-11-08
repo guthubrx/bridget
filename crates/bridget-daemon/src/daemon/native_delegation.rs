@@ -1239,6 +1239,8 @@ fn observe_routing_candidates_for_project(
                             now,
                             ttl,
                         );
+                        let account = registry.routing_account_scope244(&candidate.connection_id);
+                        let quota = st.provider_limits.account_quota244(quota, account.as_deref(), now);
                         plan.connections.push(RoutingDecisionFact {
                             id: candidate.connection_id.clone(),
                             observed_at: quota.as_ref().map(|q| q.observed_at),
@@ -1485,6 +1487,8 @@ fn observe_routing_candidates_for_project(
                                 received_at,
                                 ttl,
                             );
+                            let account = st.registry.routing_account_scope244(connection);
+                            let quota = st.provider_limits.account_quota244(quota, account.as_deref(), received_at);
                             plan.connections.push(RoutingDecisionFact {
                                 id: connection.clone(),
                                 observed_at: quota.as_ref().map(|q| q.observed_at),

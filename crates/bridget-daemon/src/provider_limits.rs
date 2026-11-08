@@ -1,13 +1,13 @@
 //! Mémoire157 volatile par profil, avec faits de compte liés à leur instance.
 use bridget_transport::protocol::{RateLimitFact, RateLimitSource};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::collections::BTreeMap;
 
 // Sans retour attesté, réévaluation possible après cinq minutes. Ce délai
 // évite les relances immédiates et ne devient jamais une date de rétablissement.
 const CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS: i64 = 300;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Seen {
     fact: RateLimitFact,
     source: RateLimitSource,
@@ -17,6 +17,7 @@ struct Seen {
 #[derive(Debug, Default)]
 pub(crate) struct ProviderLimits {
     by_agent_type: BTreeMap<String, BTreeMap<String, Seen>>,
+    account_refusals244: BTreeMap<String, BTreeMap<String, Seen>>,
     // Au plus 4096 instances ; aucune capacité payante ne traverse cette clé.
     by_instance: BTreeMap<(String, String), ProviderLimits>,
     routing_bindings: BTreeMap<String, RoutingQuotaBinding>,
@@ -45,6 +46,76 @@ pub(crate) struct Quota {
 }
 
 impl ProviderLimits {
+    /// Cache de disponibilité uniquement : aucun droit ni crédit. Les refus
+    /// survivent au redémarrage ; un horaire inconnu reste inconnu.
+    pub(crate) fn restore_routing244(db: &rusqlite::Connection, now: i64) -> Self {
+        let mut limits = Self::default();
+        let result = (|| -> rusqlite::Result<()> {
+            db.execute_batch("CREATE TABLE IF NOT EXISTS provider_refusals244 (scope TEXT NOT NULL, window TEXT NOT NULL, fact TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(scope,window))")?;
+            db.execute("DELETE FROM provider_refusals244 WHERE expires_at <= ?1", [now])?;
+            let mut stmt = db.prepare("SELECT scope, fact FROM provider_refusals244 WHERE expires_at > ?1")?;
+            let rows = stmt.query_map([now], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?)))?;
+            for row in rows {
+                let (scope, body) = row?;
+                if scope.len() != 64 || body.len() > 4096 { continue; }
+                if let Ok(seen) = serde_json::from_str::<Seen>(&body)
+                    && Self::shared_claude_window244(&seen.fact.window)
+                    && seen.source == RateLimitSource::ClaudeStreamJson
+                    && seen.fact.status == "rejected" && seen.observed_at > 0 && seen.observed_at <= now
+                    && Self::refusal_until244(&seen) > now {
+                    limits.account_refusals244.entry(scope).or_default().insert(seen.fact.window.clone(),seen);
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() { log::warn!("cache des refus fournisseur indisponible ; disponibilité inconnue"); }
+        limits
+    }
+
+    fn shared_claude_window244(window: &str) -> bool {
+        // Les fenêtres spécifiques à Opus/Sonnet restent propres à la connexion.
+        matches!(window, "unknown" | "five_hour" | "seven_day")
+    }
+    fn refusal_until244(seen: &Seen) -> i64 {
+        seen.fact.resets_at.unwrap_or_else(|| seen.observed_at.saturating_add(CLAUDE_UNKNOWN_REFUSAL_RETRY_SECS))
+    }
+    pub(crate) fn record_account244(&mut self, db: &rusqlite::Connection, scope: &str,
+        fact: &RateLimitFact, source: RateLimitSource, now: i64) {
+        if source != RateLimitSource::ClaudeStreamJson || !Self::shared_claude_window244(&fact.window) { return; }
+        let windows = self.account_refusals244.entry(scope.into()).or_default();
+        if fact.status == "rejected" && fact.resets_at.is_none_or(|at| at > now) {
+            let seen = Seen { fact: fact.clone(), source, observed_at: now };
+            if let Ok(body) = serde_json::to_string(&seen) {
+                if db.execute("INSERT INTO provider_refusals244(scope,window,fact,expires_at) VALUES(?1,?2,?3,?4) ON CONFLICT(scope,window) DO UPDATE SET fact=excluded.fact, expires_at=excluded.expires_at",
+                    rusqlite::params![scope, fact.window, body, Self::refusal_until244(&seen)]).is_err() {
+                    log::warn!("refus fournisseur conservé en mémoire ; cache durable indisponible");
+                }
+            }
+            windows.insert(fact.window.clone(),seen);
+        } else if fact.status == "allowed" || fact.status == "available" {
+            windows.remove(&fact.window);
+            let _ = db.execute("DELETE FROM provider_refusals244 WHERE scope=?1 AND window=?2",rusqlite::params![scope,fact.window]);
+        }
+        windows.retain(|_,seen| Self::refusal_until244(seen) > now);
+        let _ = db.execute("DELETE FROM provider_refusals244 WHERE expires_at<=?1",[now]);
+    }
+
+    pub(crate) fn account_quota244(&self, quota: Option<Quota>, scope: Option<&str>, now: i64) -> Option<Quota> {
+        let seen = scope.and_then(|scope| self.account_refusals244.get(scope))
+            .into_iter().flat_map(|windows| windows.values())
+            .filter(|seen|seen.observed_at <= now && Self::refusal_until244(seen) > now).max_by_key(|seen|seen.observed_at);
+        let Some(seen) = seen else { return quota; };
+        let mut quota = quota.unwrap_or(Quota { windows: Vec::new(), exhausted:false,
+            launch_blocked:false, credits:None,limit_reached:false,resets_at:None,observed_at:seen.observed_at });
+        quota.launch_blocked = true;
+        quota.limit_reached = true;
+        quota.observed_at = quota.observed_at.max(seen.observed_at);
+        quota.resets_at = quota.resets_at.max(seen.fact.resets_at);
+        quota.windows.push(serde_json::json!({"window":seen.fact.window,"resets_at":seen.fact.resets_at,
+            "exhausted":true,"scope":"same_claude_account","retry_after":Self::refusal_until244(seen)}));
+        Some(quota)
+    }
+
     /// O(log p+B), p types du registre, B chaînes copiées ; au plus9 fenêtres
     /// parcourues : purge avant upsert, puis éviction du minimum (instant, clé).
     pub(crate) fn record(
@@ -362,6 +433,31 @@ impl ProviderLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spec244_quota_alias_reprise_compte_et_date_inconnue() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        let scope = "a".repeat(64);
+        let mut limits = ProviderLimits::restore_routing244(&db,100);
+        let mut fact = RateLimitFact { window:"unknown".into(),status:"rejected".into(),resets_at:None,used_percent:None,credits:None };
+        limits.record_account244(&db,&scope,&fact,RateLimitSource::ClaudeStreamJson,100);
+        let restored = ProviderLimits::restore_routing244(&db,200);
+        let quota = restored.account_quota244(None,Some(&scope),257).unwrap();
+        assert!(quota.launch_blocked);
+        assert_eq!(quota.resets_at,None,"la fin du délai de réévaluation n'est pas une date de retour du fournisseur");
+        assert!(restored.account_quota244(None,Some(&"b".repeat(64)),257).is_none());
+        assert!(restored.account_quota244(None,Some(&scope),400).is_none());
+        fact.window="seven_day".into(); fact.resets_at=Some(1000);
+        limits.record_account244(&db,&scope,&fact,RateLimitSource::ClaudeStreamJson,150);
+        assert!(ProviderLimits::restore_routing244(&db,500).account_quota244(None,Some(&scope),999).unwrap().launch_blocked);
+        assert!(ProviderLimits::restore_routing244(&db,1000).account_quota244(None,Some(&scope),1000).is_none());
+        fact.window="unknown".into(); fact.resets_at=None;fact.status="allowed".into();
+        limits.record_account244(&db,&scope,&fact,RateLimitSource::ClaudeStreamJson,160);
+        assert!(ProviderLimits::restore_routing244(&db,200).account_refusals244.get(&scope).is_none_or(|windows|!windows.contains_key("unknown")));
+        fact.status="rejected".into();fact.window="seven_day_opus".into();
+        limits.record_account244(&db,&scope,&fact,RateLimitSource::ClaudeStreamJson,200);
+        assert!(!limits.account_refusals244[&scope].contains_key("seven_day_opus"));
+    }
 
     #[test]
     fn spec172_unresolved_claude_rejection_survives_routing_delay_until_recovery() {

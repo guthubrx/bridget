@@ -5022,7 +5022,7 @@ impl DaemonState {
             update_gate: crate::updates::Gate::open(
                 config.db_path.parent().ok_or("update_root_missing")?,
             )?,
-            provider_limits: Default::default(),
+            provider_limits: crate::provider_limits::ProviderLimits::restore_routing244(store.connection(), unix_timestamp()),
             host_resources: Default::default(),
             held_ids,
             human_thread_watches: HashMap::new(),
@@ -9141,7 +9141,7 @@ fn handle_rate_limit(
     if let Some(instance) = instance {
         state
             .provider_limits
-            .record_scoped(&agent_type, &instance, fact, source, unix_timestamp());
+            .record_scoped(&agent_type, &instance, fact.clone(), source, unix_timestamp());
         // Le runtime doit réattester la définition exacte du lanceur. Une
         // observation sans cette preuve reste disponible au chemin legacy,
         // mais ne devient pas un fait de compte pour le routage168.
@@ -9186,6 +9186,9 @@ fn handle_rate_limit(
             Some((connection.connection_id.clone(), declared.digest))
         });
         if let Some((connection_id, digest)) = binding {
+            if let Some(account) = state.registry.routing_account_scope244(&connection_id) {
+                state.provider_limits.record_account244(state.store.connection(), &account, &fact, source, unix_timestamp());
+            }
             if let Some(scope) = state.registry.routing_connection_scope(&connection_id) {
                 state.provider_limits.bind_routing_instance(
                     &connection_id,
@@ -12249,23 +12252,6 @@ fn authorize_wrapper_reply(st:&DaemonState,conn:&str,message:&bridget_core::Brid
     Ok(())
 }
 
-/// Une réponse après clôture reste consultable, sans rouvrir l'attente ni
-/// injecter un nouveau prompt. La réservation idempotente précède ce dépôt.
-fn retain_closed_wrapper_reply(st:&mut DaemonState,message:&bridget_core::BridgetMessage)->Result<bool,String> {
-    use rusqlite::{OptionalExtension,params};
-    let correlation=message.in_reply_to.as_deref().ok_or("retained_reply_correlation_required")?;
-    let request=st.store.get_request(correlation).map_err(|_|"retained_reply_request_unavailable")?.ok_or("retained_reply_request_unavailable")?;
-    if request.state=="open" {return Ok(false);}
-    if request.sender!=message.to || request.target!=message.from {return Err("retained_reply_correlation_mismatch".into());}
-    let tx=st.store.connection().unchecked_transaction().map_err(|e|e.to_string())?;
-    let previous:Option<(String,String)>=tx.query_row("SELECT sender,body FROM ledger WHERE id=?1 AND target=?2",
-        params![message.id,message.to],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|e|e.to_string())?;
-    if previous.as_ref().is_some_and(|(sender,body)|sender!=&message.from || body!=&message.body){return Err("retained_reply_conflict".into());}
-    if previous.is_none(){crate::store::record_message_in_transaction(&tx,message,&format!("{}|{}",message.from,message.to)).map_err(|e|e.to_string())?;}
-    tx.commit().map_err(|e|e.to_string())?;
-    Ok(true)
-}
-
 fn retain_wrapper_reply(conn:&str,message:bridget_core::BridgetMessage,instance:&str,st:&mut DaemonState)->DaemonToWrapper {
     let id=message.id.clone();
     let scope=crate::communication::issuer_scope(&format!("wrapper-reply:{instance}"));
@@ -12444,8 +12430,6 @@ fn handle_idempotent_send_with_result_authority(
         if matches!(authority,Some(RetainedSendAuthority::Result(_))) {
             crate::agent_tracking::dormant(st.store.connection(),&message.to).map_err(|e|e.to_string())
         } else { Ok(false) }
-    } else if matches!(authority,Some(RetainedSendAuthority::WrapperReply(_))) {
-        retain_closed_wrapper_reply(st,&message).and_then(|retained|if retained {Ok(true)}else{native_delegation::capture_reply(st,conn_id,&message)})
     } else {
         native_delegation::capture_reply(st, conn_id, &message)
     };
@@ -14450,6 +14434,32 @@ mod spec099_classic_delivery_tests {
     const SENDER: &str = "99000000-0000-4000-8000-000000000001";
     const TARGET: &str = "99000000-0000-4000-8000-000000000002";
     const WITNESS: &str = "99000000-0000-4000-8000-000000000003";
+
+    #[test]
+    fn spec244_entree_publique_conserve_les_reponses_modernes_et_historiques_closes() {
+        for state_name in ["timed_out","cancelled","answered"] {
+            for modern in [false,true] {
+                let (state,root,_peers)=fixture();let _cleanup=FixtureRoot(root.clone());
+                let mut original=BridgetMessage::new(SENDER,TARGET,"question");original.id="closed244-public".into();
+                let mut reply=BridgetMessage::new(TARGET,SENDER,"réponse à conserver");reply.in_reply_to=Some(original.id.clone());
+                if modern {
+                    let outbox=crate::reply_outbox244::ReplyOutbox::open(&root,"spec099-target").unwrap();
+                    reply=outbox.retain(&original,reply,unix_now_secs()).unwrap();
+                    assert!(reply.id.starts_with("reply244-"),"identifiant construit par le producteur réel");
+                }
+                {let st=state.lock().unwrap();st.store.create_request(&original.id,SENDER,TARGET,120).unwrap();
+                 st.store.connection().execute("UPDATE tracked_requests SET state=?1 WHERE id=?2",rusqlite::params![state_name,original.id]).unwrap();}
+                for _ in 0..2 {
+                    let response=handle_wrapper_message("target",WrapperToDaemon::Send(reply.clone()),&state).unwrap();
+                    assert!(matches!(response,DaemonToWrapper::Ack{..}),"{response:?}");
+                }
+                let st=state.lock().unwrap();assert_eq!(st.store.get_request(&original.id).unwrap().unwrap().state,state_name);
+                let deliveries:i64=st.store.connection().query_row("SELECT count(*) FROM send_deliveries WHERE idempotency_key=?1",[&reply.id],|r|r.get(0)).unwrap();
+                let saved:i64=st.store.connection().query_row("SELECT count(*) FROM ledger WHERE id=?1 AND target=?2 AND body=?3",rusqlite::params![reply.id,SENDER,reply.body],|r|r.get(0)).unwrap();
+                assert_eq!(deliveries,0);assert_eq!(saved,1);
+            }
+        }
+    }
 
     #[test]
     fn spec244_reponse_tardive_conservee_sans_reveil_ni_reouverture() {
