@@ -148,6 +148,103 @@ fn proof_path(source: &SourceEnvironment, program: &str) -> Result<PathBuf, &'st
 fn private(m: &fs::Metadata) -> bool {
     m.uid() == unsafe { libc::geteuid() } && m.mode() & 0o077 == 0 && !m.file_type().is_symlink()
 }
+/// Au-delà de ce délai, un contrôle de compatibilité qui échoue à chaque
+/// essai n'est plus présenté comme en attente.
+const CHECK_FAILURE_GRACE_SECS: i64 = 600;
+const CHECK_FAILURE_EXCERPT_BYTES: usize = 512;
+
+fn failure_path(source: &SourceEnvironment, program: &str) -> Result<PathBuf, &'static str> {
+    Ok(root(source)?.join(format!("{:x}.failed.json", Sha256::digest(program.as_bytes()))))
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+/// Extrait borné et imprimable de la sortie d'erreur d'un contrôle.
+pub(crate) fn failure_excerpt(raw: &[u8]) -> String {
+    raw.iter()
+        .take(CHECK_FAILURE_EXCERPT_BYTES)
+        .map(|b| if b.is_ascii_graphic() || *b == b' ' { *b as char } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn read_failure(source: &SourceEnvironment, program: &str) -> Option<Value> {
+    let path = failure_path(source, program).ok()?;
+    let f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path).ok()?;
+    let m = f.metadata().ok()?;
+    if !m.is_file() || !private(&m) || m.len() > 16 * 1024 {
+        return None;
+    }
+    serde_json::from_reader(f.take(16 * 1024 + 1)).ok()
+}
+
+fn check_failure_persistent(source: &SourceEnvironment, program: &str, digest: &str) -> bool {
+    read_failure(source, program).is_some_and(|v| {
+        v["digest"] == digest
+            && v["first_failed_at"]
+                .as_i64()
+                .is_some_and(|first| now_secs().saturating_sub(first) >= CHECK_FAILURE_GRACE_SECS)
+    })
+}
+
+/// E3.1 (244) : un échec de qualification garde sa cause et un extrait de sa
+/// sortie d'erreur, au lieu d'un refus muet. Écriture privée et atomique.
+pub(crate) fn record_check_failure(
+    source: &SourceEnvironment,
+    program: &str,
+    digest: &str,
+    cause: &str,
+    stderr: &[u8],
+) {
+    let excerpt = failure_excerpt(stderr);
+    eprintln!("bridget_program_check_failed244 digest={digest} cause={cause} stderr={excerpt:?}");
+    let Ok(root) = root(source) else { return };
+    if fs::symlink_metadata(&root).is_err() {
+        use std::os::unix::fs::DirBuilderExt;
+        if root.parent().is_none_or(|p| !p.exists())
+            || fs::DirBuilder::new().mode(0o700).create(&root).is_err()
+        {
+            return;
+        }
+    }
+    if !fs::symlink_metadata(&root).is_ok_and(|m| m.is_dir() && private(&m)) {
+        return;
+    }
+    let now = now_secs();
+    let first = read_failure(source, program)
+        .filter(|v| v["digest"] == digest)
+        .and_then(|v| v["first_failed_at"].as_i64())
+        .unwrap_or(now);
+    let value = json!({"version":1,"program":program,"digest":digest,"cause":cause,
+        "first_failed_at":first,"last_failed_at":now,"stderr":excerpt});
+    let Ok(target) = failure_path(source, program) else { return };
+    let temp = root.join(format!(".{}.failed.tmp", uuid::Uuid::new_v4()));
+    let written = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&temp)
+        .and_then(|mut f| f.write_all(value.to_string().as_bytes()).and_then(|_| f.sync_all()));
+    if written.is_err() || fs::rename(&temp, &target).is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+}
+
+/// Une qualification réussie efface la fiche d'échec de ce programme.
+pub(crate) fn clear_check_failure(source: &SourceEnvironment, program: &str) {
+    if let Ok(path) = failure_path(source, program) {
+        let _ = fs::remove_file(path);
+    }
+}
+
 fn read_proof(
     source: &SourceEnvironment,
     program: &str,
@@ -171,7 +268,13 @@ fn read_proof(
         .open(p)
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                "program_upgrade_check_pending"
+                // E3.2 (244) : un contrôle qui échoue durablement n'est plus
+                // « en attente » ; il devient un échec nommé et réessayé.
+                if check_failure_persistent(source, program, digest) {
+                    "program_check_unavailable"
+                } else {
+                    "program_upgrade_check_pending"
+                }
             } else {
                 "program_check_unavailable"
             }
@@ -682,6 +785,35 @@ mod tests {
         );
         fs::remove_dir_all(home).unwrap();
     }
+    #[test]
+    fn spec244_echec_durable_de_qualification_devient_un_refus_nomme() {
+        let (home, source) = fixture();
+        let program = home.join("codex");
+        fs::write(&program, b"program-244").unwrap();
+        let name = program.to_str().unwrap();
+        let digest = program_digest(&program).unwrap();
+        // Échec récent : encore en attente, mais cause et extrait gardés.
+        record_check_failure(&source, name, &digest, "program_unavailable",
+            b"bridget socket trop longue\n\x1b[31m");
+        assert_eq!(validate_upgrade(name, &source, &digest), Err("program_upgrade_check_pending"));
+        let fiche = read_failure(&source, name).unwrap();
+        assert_eq!(fiche["cause"], "program_unavailable");
+        assert_eq!(fiche["stderr"], "bridget socket trop longue [31m");
+        // Échec durable : refus nommé, plus jamais « en attente » sans fin.
+        let path = failure_path(&source, name).unwrap();
+        let mut old = fiche.clone();
+        old["first_failed_at"] = json!(now_secs() - CHECK_FAILURE_GRACE_SECS - 1);
+        fs::write(&path, old.to_string()).unwrap();
+        assert_eq!(validate_upgrade(name, &source, &digest), Err("program_check_unavailable"));
+        // Un nouvel échec garde la première date ; une autre image repart de zéro.
+        record_check_failure(&source, name, &digest, "timed_out", b"");
+        assert_eq!(read_failure(&source, name).unwrap()["first_failed_at"], old["first_failed_at"]);
+        assert_eq!(validate_upgrade(name, &source, "autre"), Err("program_upgrade_check_pending"));
+        // Une qualification réussie efface la fiche.
+        clear_check_failure(&source, name);
+        assert!(read_failure(&source, name).is_none());
+    }
+
     #[test]
     fn spec221_program_compat_current_image_keeps_historical_operations() {
         let (home, source) = fixture();

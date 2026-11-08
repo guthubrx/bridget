@@ -8,7 +8,7 @@ use bridget_transport::provider_catalogue::*;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -595,6 +595,30 @@ fn check_program_schema(
     directory:&Path,markers:&ManagedMarkerStore,def:&crate::registry::AgentDefinition,
     source:&crate::lifecycle::SourceEnvironment,digest:&str,stopping:&AtomicBool,
 )->Result<crate::provider_program_compat::CheckedContract,(CatalogueCause,Option<RunningManagedChild>)> {
+    // E3 (244) : la sortie d'erreur du bootstrap est gardée, bornée, et
+    // rattachée à une fiche d'échec ; un succès efface cette fiche.
+    let stderr_path=directory.join(format!("compat-stderr-{}",uuid::Uuid::new_v4().simple()));
+    let stderr=std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW).open(&stderr_path).ok();
+    let result=check_program_schema_inner(directory,markers,def,source,digest,stopping,stderr);
+    let captured=std::fs::read(&stderr_path).unwrap_or_default();
+    let _=std::fs::remove_file(&stderr_path);
+    match &result {
+        Ok(_)=>crate::provider_program_compat::clear_check_failure(source,&def.command),
+        Err((cause,_))=>{
+            let cause=serde_json::to_value(cause).ok().and_then(|v|v.as_str().map(str::to_owned))
+                .unwrap_or_else(||"unknown".into());
+            crate::provider_program_compat::record_check_failure(source,&def.command,digest,&cause,&captured);
+        }
+    }
+    result
+}
+
+fn check_program_schema_inner(
+    directory:&Path,markers:&ManagedMarkerStore,def:&crate::registry::AgentDefinition,
+    source:&crate::lifecycle::SourceEnvironment,digest:&str,stopping:&AtomicBool,
+    stderr:Option<std::fs::File>,
+)->Result<crate::provider_program_compat::CheckedContract,(CatalogueCause,Option<RunningManagedChild>)> {
     let plain=|cause|(cause,None);
     let job=directory.join(format!("compat-{}",uuid::Uuid::new_v4().simple()));
     std::fs::create_dir(&job).and_then(|_|std::fs::set_permissions(&job,std::fs::Permissions::from_mode(0o700)))
@@ -609,9 +633,11 @@ fn check_program_schema(
         identity:ManagedIdentity{instance_id:uuid::Uuid::new_v4().to_string(),command_id:"catalogue220".into(),generation:1},
         wrapper_executable:def.command.clone().into(),wrapper_args:vec!["app-server".into(),"generate-json-schema".into(),"--experimental".into(),"--out".into(),output.to_string_lossy().into_owned()],cwd:job.clone(),env};
     #[cfg(not(test))]
-    let mut bootstrap=crate::managed_process::spawn_managed_bootstrap(&launch).map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
+    let mut bootstrap=crate::managed_process::spawn_managed_bootstrap_with_stderr(&launch,
+        stderr.map(std::process::Stdio::from).unwrap_or_else(std::process::Stdio::null))
+        .map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
     #[cfg(test)]
-    let mut bootstrap=crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch);
+    let mut bootstrap={drop(stderr);crate::managed_process::tests::spawn_catalogue_test_bootstrap(&launch)};
     bootstrap.set_ready_timeout(Duration::from_secs(2)).map_err(|_|plain(CatalogueCause::SourceUnavailable))?;
     let ready=bootstrap.wait_ready().map_err(|_|plain(CatalogueCause::ProgramUnavailable))?;
     let marked=ready.persist_marker(markers,"probe").map_err(|_|plain(CatalogueCause::SourceUnavailable))?;
