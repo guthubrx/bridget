@@ -404,3 +404,12 @@ la pause observée et les zombies conservés. Le défaut est corrigé depuis
 versions actives 243-tests-r4 et de retour r3 incluent ce correctif. Aucun
 nouveau code. Limite conservée par conception : tant qu'un descendant vivant ne
 peut pas être arrêté, le superviseur reste présent et le signale ; aucun SIGKILL.
+
+Vérification du correctif (8 novembre 2026) : 86a88e3f est ancêtre des sources
+r4 (21a16236) et de main. Le binaire chargé sur Cartae
+(`243-tests-r4/bin/bridget`) contient `native_drain_stop_unconfirmed` et
+`remote_drain_signal_uid_mismatch`. Recette root
+`spec221_drain_reaps_owned_foreign_uid_zombie_after_signal_refusal` exécutée sur
+Cartae depuis 947d1dc1 avec `scripts/build.py` : 1 passed, marqueur
+`SPEC221_FOREIGN_UID_REAP_OK`. Elle montre qu'un descendant d'un autre UID refuse
+le signal, puis est récolté sans zombie restant. Dossier temporaire retiré.
