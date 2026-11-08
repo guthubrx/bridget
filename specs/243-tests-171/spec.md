@@ -447,3 +447,16 @@ réglages Claude déclarent des crochets que Cartae ne reproduit pas ; seul
 opus2D dispose d'un profil gardé, figé le 17 octobre. Protection conservée,
 aucun droit élargi. L'essai réel de récolte root n'a donc pas pu être lancé
 depuis ce parent.
+
+Refus de ce matin identifié : « Bridget a refusé la mission » vient du fil
+« refonte monde » (opus2D), 06:17 UTC, clé parix-ecarts-teleoperator-20261108-a.
+C'est le refus de périmètre cwd corrigé en r5 ; l'agent a reçu la cause et la
+marche à suivre.
+
+Suite prévisible, signalée sans correctif : une session Claude du Mac dans un
+projet sans profil gardé (Parix, Bridget) est refusée pour une mission distante
+(`permission_mapping_unavailable`, site projection), car Cartae ne reproduit pas
+les crochets de ses réglages utilisateur. Seul opus2D a un profil gardé (session
+171, `~/.cache/bridget-core/permission-profiles171.json`). Créer un profil pour
+Parix est un chantier distinct, soumis à décision. Le message public dit
+« cause non observée » et renvoie au diagnostic worker, qui nomme ce code.
