@@ -12092,6 +12092,7 @@ mod guidance156_tests {
     // adaptée au testlib par current_exe (core_089_isolation_test).
     // Trois usages : cmd_send sort du processus, aucun parseur factice requis.
     fn guidance156_cli_run(test: &str, extra: &[&str]) -> (Output, Option<String>) {
+        use std::os::unix::fs::PermissionsExt;
         let root = std::env::temp_dir().join(format!(
             "g156-{}",
             &uuid::Uuid::new_v4().simple().to_string()[..8]
