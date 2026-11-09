@@ -11074,17 +11074,21 @@ fn announce_communication_project(
         let host_ok = bridget_core::host_is_attested(host)
             && (bare && host==st.host || st.conn_hosts.get(conn_id).is_some_and(|v| v == host))
             && (source == CommunicationProjectSource::Git || t3);
-        let native_command=if host_ok && host!=st.host && source==CommunicationProjectSource::Git
+        // Une tâche native ne devient jamais locale par simple égalité de hostname.
+        // Une erreur de lecture de sa relation interdit aussi le repli local.
+        let native_owner=source==CommunicationProjectSource::Git && owner.as_ref().is_some_and(|(agent,_)|
+            !matches!(st.delegation_store.for_child(agent),Ok(None)));
+        let native_command=if host_ok && source==CommunicationProjectSource::Git
             && worktree.is_none() {
             native_delegation::native_communication_project_worker(&st,conn_id,root)
         } else {None};
-        let foreign=host_ok && host!=st.host && owner.is_some()
-            && ((t3 && source==CommunicationProjectSource::T3)
+        let foreign=host_ok && owner.is_some()
+            && ((host!=st.host && t3 && source==CommunicationProjectSource::T3)
                 || native_command.is_some())
             && owner.as_ref().and_then(|(_,instance)|st.presences.get(instance)).is_some_and(|p|p.host==host);
         (
             owner,
-            host_ok && host==st.host,
+            host_ok && host==st.host && !native_owner,
             foreign,
             native_command.as_ref().map(|(_,command)|command.clone()),
             native_command.map_or_else(||host.to_owned(),|(host,_)|host),

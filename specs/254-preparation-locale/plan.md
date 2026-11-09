@@ -1,2 +1,4 @@
 # Plan254 — reusePASS
 Réutiliser le helper Python de dossierlocal241, OriginProofOperation existant et vérifications parent ; compléter la forme fermée dans WorkerSourceBase, pas de champ/capacité/protocole nouveau. Réutiliser communication_project_command253 via placement canonique ; nomOS garde sa valeur de présence et n’accorde aucun droit. Preuve worker/recontrôle avantaprès inchangés. Schéma conditionnel déjà présent : enrichir sa description, pas assouplir. Tests positifs/négatifs de forme locale et alias, helperréel privé sansdocumentsclients, MCPtoolslist nouveauprocessus. Aucune nouvellemission dequalification. Retour253R2, build.py/cachespartagés, activationnative et sources alignées.
+
+R2 : résoudre toute annonce Git native par le worker du placement, indépendamment de l’égalité du hostname ; absence de commande, relation terminale ou erreur SQL interdit le repli local. Test aliaségalmaître en plus debackup/cartae.

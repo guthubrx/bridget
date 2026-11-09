@@ -28527,6 +28527,11 @@ for frame in frames: print(json.dumps(frame),flush=True)
         native_foreign_git_project_fixture("backup");
     }
 
+    #[test]
+    fn spec254_native_hostname_equal_to_coordinator_never_reads_coordinator_path() {
+        native_foreign_git_project_fixture("coordinator253");
+    }
+
     fn native_foreign_git_project_fixture(reported_host:&str) {
         use bridget_transport::protocol::*;
         use std::io::BufRead;
