@@ -109,6 +109,31 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session256 — références des briefs clarifiées, services0.8.23/256-reference-schema-r1.
+Source exécutable8ed970a7f74dcb27e9a1894ad51c1b46f9e21319 intégrée/poussée.
+Six objets oneOf complets, champs requis/fermés, description kind/label et
+file host/path ; validateur natif, clés et tâches inchangés. Bornes artifact
+alignées sur2048octets natifs. Ancien schema imposait déjàkind/label mais la
+façade présentait Array<unknown> ; conversion interne non prétendue diagnostiquée.
+Trois contrôles distincts Mac/Linux PASS ; MCP réel quatre outils, six formes
+valides/35refus indépendants. Revue8dc3bc36 lue/ACK sansP1/P2, P3disposés ;
+AnalyzePASS/ConvergeCONVERGED. Rendu des types côtéclient encore nonmesuré.
+Sept composants/SHA4hôtes, retour255R1 compatible/pointeursatomiques,
+coupurecore1,60s ; un wrapperCartae/deuxSYS conservés. T3 onzePID/birth et
+septpayloads protégés inchangés. RegistreMac avant/après256 :
+2b4f409e464066f099a6541009332e567ae6a0fb772596421b6172c93f9d32c9.
+Ce repère remplace60acca pour la prochaine maintenance, variation antérieure.
+T3 reste ouvert ; anciennesfaçades gardent leur catalogue jusqu’au rechargement
+naturel, aucun rechargement global affirmé. Aucun rejeu métier ni modèle de test.
+Releasepublique0.8.23/sixactifs anonymesSHA, APK8023/certificat/lignée8022 vérifiés.
+Parix prévenu/informé, reçus conservés sanslectureinventée. Main propre/aligné4hôtes.
+PropreWT/brancheMac et treizecopies/307279259octetslogiques retirés ; WTSYS/Cartae
+propres intégrés conservés(5/39processusillisibles). Preuves/imagesutilisées conservées.
+CachesMac5,09Gio/SYS8,59Gio/Cartae4,46Gio.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/256-schema-references/validation.md.
+Reprise : /Users/moi/.cache/bridget256-schema-references/resume.md.
+
+
 Session255 — guidage de capacité livré en0.8.22/255-capacity-guidance-r1.
 Source exécutable0fc30045a675b21e53f14b5333bb522d2cd4cbba intégrée/poussée.
 resource_saturated ne présume plus un refus durable : le conseil de clé suit

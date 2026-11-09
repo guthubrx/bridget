@@ -1,1 +1,2 @@
-# Converge256 — en cours
+# Converge256 — CONVERGED
+FR001/002 : six formes explicites et descriptions, champs requis/fermés validés. FR003 : natif inchangé et régressions acquises. FR004 : revue disposée, MCP neuf et validation standard acquis, sept composants/quatre hôtes actifs, publication et diagnostics. Anciennes façades conservées selon la contrainteT3 ; rendu de leurs types non mesuré, aucune garantie inventée. Aucun manque confirmé du périmètre annoncé. Usages distants inconnus : conservation, aucun nettoyage forcé.
