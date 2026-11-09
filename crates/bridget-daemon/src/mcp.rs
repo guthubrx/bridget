@@ -2645,8 +2645,34 @@ pub(crate) fn tools() -> Vec<Value> {
     host["description"]=json!("Obligatoire pour kind=file : machine portant cette référence ; au plus256octetsUTF-8.");
     let mut path=text(crate::handoff::MAX_ITEM_BYTES);
     path["description"]=json!("Avec kind=file : chemin absolu d'un fichier ou dossier sur host ; au plus2048octetsUTF-8, aucune ouverture automatique.");
+    // Chaque variante est un objet complet : les façades peuvent exposer les
+    // champs sans devoir interpréter un if/then imbriqué dans allOf.
+    let reference_fields = json!({"host":host,"path":path,
+        "url":text(crate::handoff::MAX_ITEM_BYTES),"id":text(crate::handoff::MAX_ITEM_BYTES),
+        "target":text(crate::handoff::MAX_ITEM_BYTES),"agent":text(crate::handoff::MAX_LABEL_BYTES),
+        "thread_id":text(crate::handoff::MAX_LABEL_BYTES),"artifact_id":text(crate::handoff::MAX_ITEM_BYTES),
+        "version_id":text(crate::handoff::MAX_ITEM_BYTES),"from_seq":{"type":"integer","minimum":0},
+        "to_seq":{"type":"integer","minimum":0},"source_label":text(crate::handoff::MAX_LABEL_BYTES)});
+    let reference = |kind: &str, fields: &[&str]| {
+        let mut properties = serde_json::Map::new();
+        properties.insert("kind".into(), json!({"type":"string","enum":[kind]}));
+        properties.insert("label".into(), text(crate::handoff::MAX_LABEL_BYTES));
+        for field in fields { properties.insert((*field).into(), reference_fields[*field].clone()); }
+        if kind == "thread" {
+            for field in ["from_seq", "to_seq"] { properties.get_mut(field).unwrap()["minimum"] = json!(1); }
+        }
+        let required: Vec<_> = ["kind", "label"].into_iter().chain(fields.iter().copied()).collect();
+        json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
+    };
+    let reference_items = json!({"description":"Chaque référence exige kind et label. file exige aussi host et path absolu. Tous les champs de la variante choisie sont obligatoires ; limites en octets UTF-8, aucune source ouverte.",
+        "x-maxSerializedUtf8Bytes":crate::handoff::MAX_REFERENCE_BYTES,
+        "oneOf":[reference("file", &["host","path"]),reference("url", &["url"]),
+            reference("message", &["id","target","source_label"]),
+            reference("journal", &["agent","from_seq","to_seq","source_label"]),
+            reference("thread", &["thread_id","from_seq","to_seq","source_label"]),
+            reference("artifact", &["artifact_id","version_id","source_label"])]});
     let brief_schema = json!({"type":"object",
-        "description":"Dossier déclaré par le parent. Toutes les limites de texte sont en octets UTF-8 ; taille totale du rendu bornée, aucune troncature.",
+        "description":"Dossier déclaré par le parent. Chaque référence dans references exige kind et label ; kind=file exige aussi host et path absolu. Toutes les limites de texte sont en octets UTF-8 ; taille totale du rendu bornée, aucune troncature.",
         "x-maxRenderedUtf8Bytes":crate::handoff::MAX_BODY_BYTES,
         "properties":{
         "objective":text(crate::handoff::MAX_OBJECTIVE_BYTES),
@@ -2655,7 +2681,7 @@ pub(crate) fn tools() -> Vec<Value> {
         "decisions":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":text(crate::handoff::MAX_ITEM_BYTES)},
         "questions":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":text(crate::handoff::MAX_ITEM_BYTES)},
         "next_step":text(crate::handoff::MAX_ITEM_BYTES),
-        "references":{"type":"array","maxItems":crate::handoff::MAX_REFERENCES,"items":{"type":"object","x-maxSerializedUtf8Bytes":crate::handoff::MAX_REFERENCE_BYTES,"description":"La référence JSON sérialisée entière est limitée à2048octetsUTF-8, en plus des champs.","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":text(crate::handoff::MAX_LABEL_BYTES),"host":host,"path":path,"url":text(crate::handoff::MAX_ITEM_BYTES),"id":text(crate::handoff::MAX_ITEM_BYTES),"target":text(crate::handoff::MAX_ITEM_BYTES),"agent":text(crate::handoff::MAX_LABEL_BYTES),"thread_id":text(crate::handoff::MAX_LABEL_BYTES),"artifact_id":text(crate::handoff::MAX_ITEM_BYTES),"version_id":text(crate::handoff::MAX_ITEM_BYTES),"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":text(crate::handoff::MAX_LABEL_BYTES)},"required":["kind","label"],"allOf":[{"if":{"properties":{"kind":{"const":"file"}},"required":["kind"]},"then":{"required":["host","path"]}}],"additionalProperties":false}},
+        "references":{"type":"array","maxItems":crate::handoff::MAX_REFERENCES,"items":reference_items},
         "limitations":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":text(crate::handoff::MAX_ITEM_BYTES)}
     },"required":["objective","summary"],"additionalProperties":false});
     let mut catalogue = vec![
@@ -3573,13 +3599,52 @@ mod tests {
     }
 
     #[test]
+    fn spec256_reference_variants_expose_native_required_fields() {
+        let catalogue = discovery_tools();
+        let tool = catalogue.iter().find(|t| t["name"] == "bridget_task_continue").unwrap();
+        assert!(tool["description"].as_str().unwrap().contains("kind et label"));
+        let items = &tool["inputSchema"]["properties"]["brief"]["properties"]["references"]["items"];
+        assert!(items.get("allOf").is_none());
+        let variants = items["oneOf"].as_array().unwrap();
+        assert_eq!(variants.len(), 6);
+        let cases = [
+            json!({"kind":"file","label":"source","host":"cartae","path":"/data/review"}),
+            json!({"kind":"url","label":"source","url":"https://example.org/"}),
+            json!({"kind":"message","label":"source","id":"m1","target":"a1","source_label":"contexte"}),
+            json!({"kind":"journal","label":"source","agent":"10000000-0000-4000-8000-000000000001","from_seq":0,"to_seq":2,"source_label":"contexte"}),
+            json!({"kind":"thread","label":"source","thread_id":"10000000-0000-4000-8000-000000000001","from_seq":1,"to_seq":2,"source_label":"contexte"}),
+            json!({"kind":"artifact","label":"source","artifact_id":"artefact","version_id":"v1","source_label":"contexte"}),
+        ];
+        for value in cases {
+            let variant = variants.iter().find(|v| v["properties"]["kind"]["enum"][0] == value["kind"]).unwrap();
+            assert_eq!(variant["additionalProperties"], false);
+            assert_eq!(variant["properties"]["kind"]["type"], "string");
+            let draft = json!({"objective":"o","summary":"s","references":[value.clone()]});
+            assert!(crate::handoff::validate_and_render(&draft).is_ok(), "{value}");
+            let required = variant["required"].as_array().unwrap();
+            assert_eq!(required.len(), value.as_object().unwrap().len());
+            for key in required {
+                let key = key.as_str().unwrap();
+                assert!(value.get(key).is_some());
+                let mut missing = draft.clone();
+                missing["references"][0].as_object_mut().unwrap().remove(key);
+                let error = crate::handoff::validate_and_render(&missing).unwrap_err();
+                assert_eq!(error.field, format!("references[0].{key}"));
+            }
+            let mut extra = draft;
+            extra["references"][0]["unexpected"] = json!(true);
+            assert!(crate::handoff::validate_and_render(&extra).is_err());
+        }
+    }
+
+    #[test]
     fn spec252_brief_schema_exposes_native_utf8_limits() {
         let catalogue=tools();
         let schema=&catalogue.iter().find(|t|t["name"]=="bridget_handoff").unwrap()["inputSchema"]["properties"]["draft"];
         assert_eq!(schema["x-maxRenderedUtf8Bytes"],crate::handoff::MAX_BODY_BYTES);
         assert_eq!(schema["properties"]["results"]["items"]["properties"]["text"]["x-maxUtf8Bytes"],crate::handoff::MAX_ITEM_BYTES);
         assert_eq!(schema["properties"]["references"]["items"]["x-maxSerializedUtf8Bytes"],crate::handoff::MAX_REFERENCE_BYTES);
-        assert_eq!(schema["properties"]["references"]["items"]["properties"]["host"]["x-maxUtf8Bytes"],crate::handoff::MAX_LABEL_BYTES);
+        assert_eq!(schema["properties"]["references"]["items"]["oneOf"][0]["properties"]["host"]["x-maxUtf8Bytes"],crate::handoff::MAX_LABEL_BYTES);
         for name in ["bridget_delegate","bridget_auto_delegate","bridget_task_continue"] {
             assert_eq!(&catalogue.iter().find(|t|t["name"]==name).unwrap()["inputSchema"]["properties"]["brief"],schema);
         }

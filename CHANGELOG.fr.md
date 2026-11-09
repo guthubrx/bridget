@@ -1,5 +1,9 @@
 # Journal des changements
 
+## 0.8.23 — 2026-11-09
+
+- Exposer les six formes de références du brief avec leurs champs requis et rappeler kind/label/host/path dans le guidage de continuation. Validateur natif inchangé.
+
 ## 0.8.22 — 2026-11-09
 
 - Corriger le guidage des refus de capacité : la reprise suit le reçu d’admission réel, sans présumer un refus durable ni changer les seuils.

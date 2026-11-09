@@ -1,0 +1,2 @@
+# Plan256
+Remplacer le if/then imbriqué des références par six branches oneOf complètes, même représentation que workspace déjà exposée. Réutiliser les limites natives et conserver le validateur. Tester les exemples de chaque type, retraits des champs requis et champ supplémentaire. Réutiliser spec252 pour limites et partage du schema. Vérifier tools/list dans un MCP neuf ; aucune mission métier de qualification. Conserver les anciennes façades et T3 ; ne pas affirmer leur rechargement.

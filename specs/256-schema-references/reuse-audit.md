@@ -1,0 +1,2 @@
+# Réutilisation256
+Schema unique brief déjà partagé par handoff/delegate/auto/continue ; handoff::reference reste l’autorité. Chaque branche reprend les champs natifs, sans nouvel objet métier, table, service ou droit. Les limites artifact_id/version_id suivent MAX_ITEM_BYTES du validateur, jusque-là sous-décrites. La conversion Array<unknown> est constatée dans le contrat chargé ; sa cause interne n’est pas prétendue prouvée dans le client.
