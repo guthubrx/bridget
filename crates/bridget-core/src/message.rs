@@ -57,6 +57,8 @@ pub enum MessageIntent {
     SteerCurrent,
     InterruptAndStart,
     ControlOnly,
+    /// Dépôt durable uniquement : ne crée jamais de remise au fournisseur.
+    StoreOnly,
 }
 
 /// Provenance bornée d'un message émis par un sous-agent interne.

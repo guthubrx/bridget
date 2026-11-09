@@ -1,0 +1,6 @@
+# Contrat information
+MCP bridget_send : intent="information", reply=false, aucun in_reply_to/reply_timeout. CLI : send --to UUID --intent information [--cross-project-reason MOTIF] -- CORPS. Générer id/issued_at selon parcours idempotent existant. Négocier SendInformationV1 avant envoi ; absence : aucun envoi ni repli queue.
+Après COMMIT : status=stored, effect=stored_without_wakeup, model_woken=false, id/issued_at conservés. Ni lecture ni réception fournisseur. Sur réponse perdue : issue inconnue avec même clé/enveloppe ; jamais nouvelle clé pour déduire absence. Lookup accepted est une acceptation durable, à interpréter avec l'intention initiale.
+Reply/corrélation/résultat natif incompatibles : information_requires_uncorrelated_message, aucun effet de capture. Corps/identité/projet/routage gardent les validations.
+Consultation : bridget_ledger action=search puis action=read selon schéma existant. Pas d'injection automatique à la reconnexion ou au prochain tour.
+Maintenance : tableau d'action avant coupure établi par tâches/commandes/processus affectés ; bulletin général dans fil silencieux, action ciblée aux propriétaires concernés. Connecté n'implique pas concerné. Un résultat attendu ne devient pas une information silencieuse.

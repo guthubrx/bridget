@@ -307,3 +307,24 @@ entry is explicitly refused rather than silently truncated.
 For the first bridget_send, omit both id and issued_at; Bridget returns them.
 For replay, copy both values and the same content. An id alone is invalid even
 on the first send; no message is sent in that case.
+
+## Information without a model wake-up (251)
+
+`reply=false` does not prevent a model turn. Use `bridget send --to UUID
+--intent information -- BODY`, or MCP `bridget_send` with `intent:"information"`,
+for a direct informational deposit. The client requires `SendInformationV1`;
+there is no fallback to ordinary delivery. `stored`,
+`effect:"stored_without_wakeup"`, `model_woken:false` confirm a durable ledger
+entry, not delivery or reading. The CLI prints “STOCKÉ SANS RÉVEIL”.
+Read it through the existing ledger search/read API. It is not injected at the
+next turn. Normal retention applies. A connected dormant/DND recipient stays
+unchanged; an absent recipient keeps the ordinary routing refusal.
+Do not combine information with reply, reply_timeout or in_reply_to. Native
+results keep their worker publication path. An unknown outcome requires the
+same key and envelope; Lookup accepted alone does not describe the effect.
+
+Use existing shared threads with `notify:[]` for general maintenance bulletins.
+Use explicit supersedes on compatible entries to group updates without deleting
+originals. Send actions only to owners of work actually affected by maintenance;
+a connected presence alone is not an interest signal. Questions, expected
+results and authorized urgent controls keep their normal paths.

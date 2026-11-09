@@ -952,3 +952,15 @@ Les reçus datés des sessions précédentes restent dans specs/. Ils ne sont pa
 - Ne pas modifier directement `.agents/skills/speckit-*`, `.specify/templates/*`, `.specify/scripts/*` ou `.specify/workflows/*`.
 - Les commandes utilisateur canoniques vivent dans `~/.speckit/commands/` et sont publiees vers Codex/Claude/Gemini par `~/.speckit/scripts/sync-agent-adapters.py`.
 <!-- SPECKIT-USER END -->
+
+## Communications attentives — décision du 9 novembre 2026
+
+Ne pas envoyer un bulletin de maintenance général à toutes les présences.
+Conserver les informations sans action dans un fil existant avec `notify:[]`
+ou par `bridget_send intent="information"` (CLI `--intent information`) si le
+contrat chargé le permet. Aucun repli vers un envoi normal. `reply=false` et
+« pas d'accusé » n'empêchent pas l'inférence. Un reçu `stored` signifie conservé,
+pas lu. Avant/après une coupure, prévenir seulement les propriétaires des tâches,
+commandes ou processus réellement affectés. Conserver le parcours normal pour
+questions, résultats attendus et urgences autorisées ; ne pas endormir les agents
+pour pallier le bruit. Cette règle affine les avis de maintenance ci-dessus.

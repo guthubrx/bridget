@@ -10,6 +10,28 @@ use super::{
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl IdempotencyStore {
+    /// Dépôt251 : reçu et corps dans UN COMMIT, sans saga de remise.
+    /// O(B + log N). Une collision ledger échoue, jamais INSERT OR REPLACE.
+    pub(crate) fn store_information(
+        &mut self, key: &IdempotencyKey, message: &bridget_core::BridgetMessage, now: i64,
+    ) -> Result<(), IdempotencyError> {
+        if key.operation_kind != OperationKind::Send
+            || message.id != key.idempotency_key
+            || message.intent != Some(bridget_core::MessageIntent::StoreOnly)
+            || message.reply || message.in_reply_to.is_some() || message.reply_timeout.is_some()
+        { return Err(IdempotencyError::DispatchUnavailable); }
+        let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute("UPDATE idempotency_records SET state='terminal', public_result_kind='accepted'
+            WHERE issuer_scope=?1 AND operation_kind='send' AND idempotency_key=?2 AND state='prepared'",
+            params![key.issuer_scope,key.idempotency_key])? != 1
+        { return Err(IdempotencyError::DispatchUnavailable); }
+        tx.execute("INSERT INTO ledger(id,ts,sender,target,body,conversation_key)
+            VALUES(?1,?2,?3,?4,?5,?6)", params![message.id,now,message.from,
+            message.to,message.body,format!("{}|{}",message.from,message.to)])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// O(log E+log N+Bgroup+log R+B+C+L), E reçus, N remises, R demandes,
     /// Bgroup JSON inspecté, B message, C garde156, L dépôts clos ; mémoire O(B+I).
     /// State garde identité/tour/capacité jusqu'au COMMIT ; aucun writer ni autre connexion SQL.
@@ -618,6 +640,9 @@ impl IdempotencyStore {
         let emitted_message =
             serde_json::from_slice::<bridget_core::BridgetMessage>(&delivery.message_bytes)
                 .map_err(|_| IdempotencyError::CorruptRecord("enveloppe de remise illisible"))?;
+        if emitted_message.intent == Some(bridget_core::MessageIntent::StoreOnly) {
+            return Err(IdempotencyError::InvalidDelivery);
+        }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;

@@ -110,7 +110,7 @@ le registre : ne jamais déduire leur disponibilité d'un nom de fournisseur.
 ## Intentions et file (156)
 
 `bridget_send` conserve ses arguments et ajoute `intent` facultatif parmi
-`queue`, `steer`, `interrupt`. La CLI ajoute `--intent` aux mêmes valeurs.
+`queue`, `steer`, `interrupt`, `information`. information conserve au journal sans réveil (capacité SendInformationV1, aucune réponse/corrélation). La CLI ajoute `--intent` aux mêmes valeurs.
 Absent ou queue conserve les octets canoniques et la remise ordinaire.
 
 ```json

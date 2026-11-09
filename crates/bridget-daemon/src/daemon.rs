@@ -3083,7 +3083,8 @@ fn queue_observation_notifications_at(
             }
             let instance = st.conn_instances.get(&route.connection_id)?;
             let presence = st.presences.get(instance)?;
-            if presence.dnd_until.is_some_and(|until| clock < until) {
+            if crate::agent_tracking::dormant(st.store.connection(), &notice.owner).unwrap_or(true)
+                || presence.dnd_until.is_some_and(|until| clock < until) {
                 return None;
             }
             st.connections.get(&route.connection_id).cloned()
@@ -3171,6 +3172,7 @@ fn observer_return_tick(state: &Arc<Mutex<DaemonState>>, now: i64, clock: Instan
                     let presence = st.presences.get(instance)?;
                     Some(
                         presence.name == owner
+                            && !crate::agent_tracking::dormant(st.store.connection(), &owner).unwrap_or(true)
                             && matches!(presence.state.as_str(), "connected" | "busy")
                             && !presence.dnd_until.is_some_and(|until| clock < until),
                     )
@@ -6182,6 +6184,9 @@ fn defer_idempotent_delivery(
 ) -> Result<(), String> {
     let mut message: bridget_core::BridgetMessage = serde_json::from_slice(&delivery.message_bytes)
         .map_err(|error| format!("enveloppe de remise idempotente corrompue: {error}"))?;
+    if message.intent == Some(bridget_core::MessageIntent::StoreOnly) {
+        return Err("information_not_deliverable : dépôt silencieux, aucune remise fournisseur".into());
+    }
     // O(log E): le reçu de promotion est l’autorité durable, y compris après une panne.
     // Les octets et le canon de création restent intacts (contrat159).
     let promoted:bool=state.store.connection().query_row(
@@ -12021,7 +12026,7 @@ fn prepare_dispatch(
     let routing_from = routing_agent_id(&message.from).to_string();
     let routing_to = routing_agent_id(&message.to).to_string();
     match crate::agent_tracking::dormant(st.store.connection(),&routing_to) {
-        Ok(true) if !native_task_exchange=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
+        Ok(true) if !native_task_exchange && message.intent != Some(bridget_core::MessageIntent::StoreOnly)=>return Err(("agent_dormant",crate::agent_tracking::DORMANT_MESSAGE.into())),
         Ok(true)=>{},
         Err(_)=>return Err(("tracking_storage_unavailable","État de sommeil illisible. Conservez cette demande ; les lectures et les autres travaux autorisés peuvent continuer.".into())),
         Ok(false)=>{},
@@ -12113,7 +12118,8 @@ fn prepare_dispatch(
     if !message.decrement_hops() {
         return Err(("hops_exhausted", "budget de sauts épuisé".to_string()));
     }
-    if !valid_tracked_reply
+    if message.intent != Some(bridget_core::MessageIntent::StoreOnly)
+        && !valid_tracked_reply
         && let Some(presence) = presence_of_agent(st, &routing_to)
         && presence.is_dnd()
     {
@@ -12297,6 +12303,11 @@ fn handle_idempotent_send_with_result_authority(
     authority: Option<RetainedSendAuthority<'_>>,
     scoped_mobile_human: bool,
 ) -> DaemonToWrapper {
+    if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
+        && !st.client_negotiations.get(conn_id).is_some_and(|n| n.capabilities.contains(&ClientCapability::SendInformationV1))
+    {
+        return DaemonToWrapper::ClientRejected { reason: ClientRefusal::CapabilityNotNegotiated };
+    }
     if message.reply && message.intent == Some(bridget_core::MessageIntent::SteerCurrent) {
         return DaemonToWrapper::Nack {
             id: message_id,
@@ -12433,6 +12444,16 @@ fn handle_idempotent_send_with_result_authority(
             return issue_response(&key, IdempotencyIssue::IdempotencyExpired);
         }
     };
+    // Une information ne peut ni capturer ni masquer une réponse attendue.
+    // Refus durable AVANT capture_reply et avant tout effet fournisseur.
+    if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
+        && (message.reply || message.reply_timeout.is_some() || message.in_reply_to.is_some()
+            || authority.is_some() || st.delegation_store.for_mission(&message.id).map_or(true, |task| task.is_some()))
+    {
+        return reject_idempotent_send(st, &key, "information_requires_uncorrelated_message",
+            "Pour une demande ou un résultat attendu, gardez l'envoi normal et sa corrélation. information conserve seulement un avis sans action : reply=false, sans in_reply_to ni délai de réponse. Ce refus définitif concerne cet envoi ; aucun résultat n'a été capturé. Pour corriger, gardez la demande ou le résultat sur son parcours normal avec une nouvelle clé après ce refus attesté ; ne modifiez pas cette enveloppe sous sa clé close.")
+            .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason });
+    }
     // L'autorité de résultat a déjà été vérifiée ci-dessus. Sa notification
     // est une sortie du store canonique, jamais un nouvel ingress du wrapper.
     let capture = if matches!(authority,Some(RetainedSendAuthority::Result(_) | RetainedSendAuthority::Specialist(_))) {
@@ -12548,6 +12569,21 @@ fn handle_idempotent_send_with_result_authority(
             });
         }
     };
+    if message.intent == Some(bridget_core::MessageIntent::StoreOnly) {
+        return match st.idempotency.store_information(&key, &message, now) {
+            Ok(()) => DaemonToWrapper::IdempotencyResult {
+                project_warnings: prepared.project_warnings,
+                operation_kind: key.operation_kind.as_str().into(),
+                idempotency_key: key.idempotency_key.clone(),
+                issue: IdempotencyIssue::Accepted { expires_at },
+            },
+            Err(error) => {
+                warn!("information non persistée : {error}");
+                DaemonToWrapper::Nack { id: message.id.clone(), reason:
+                    "information_store_unavailable : dépôt non confirmé. Conservez la même clé et la même enveloppe pour relire ou reprendre ; aucun envoi au modèle n'a été effectué. Les autres travaux autorisés peuvent continuer.".into() }
+            }
+        };
+    }
     let guidance_admission = match guidance_action {
         Some(action) => {
             let facts = if scoped_mobile_human && action == crate::guidance::GuidanceAction::Steer {
@@ -22317,6 +22353,7 @@ fn handle_wrapper_message_with_peer(
                         ClientCapability::MobileAdministrationV1 | ClientCapability::MobileOperationsV1
                             | ClientCapability::UserInputV1
                             | ClientCapability::SendIdempotent
+                            | ClientCapability::SendInformationV1
                             | ClientCapability::QueueListV1
                             | ClientCapability::QueueEditV1
                             | ClientCapability::ThreadMembersV1
@@ -23777,6 +23814,10 @@ fn handle_wrapper_message_with_peer(
             None
         }
         WrapperToDaemon::Send(mut bridge_msg) => {
+            if bridge_msg.intent == Some(bridget_core::MessageIntent::StoreOnly) {
+                return Some(DaemonToWrapper::Nack { id: bridge_msg.id.clone(), reason:
+                    "information_requires_idempotent_send : utilisez send --intent information ou bridget_send intent=information avec négociation ; aucun envoi normal de remplacement.".into() });
+            }
             // Session 102 : aucune notice de fil ne vient d'un client.
             bridge_msg.thread_notice = None;
             bridge_msg.thread_display_title = None;
@@ -30418,6 +30459,29 @@ mod presence_tests {
             assert_eq!(final_count, count + i64::from(refusal == "aucun"));
             drop(state);
             let _ = std::fs::remove_file(&config.db_path);
+        }
+    }
+
+    #[test]
+    fn spec251_observation_dormant_conserve_fait_sans_job_et_actif_reste_notifie() {
+        use bridget_transport::protocol::{ObservationKind,ObservationRequest};
+        let (mut st,_config)=state_with_registered_agent("observation251");
+        let owner=st.presences["instance-1"].name.clone();
+        let (writer,_reader)=control_socket("observation251");st.connections.insert("conn-1".into(),writer);
+        let (tx,jobs)=mpsc::sync_channel(8);st.observation_tx=tx;
+        let at=unix_now_secs();let clock=Instant::now();
+        st.observations.set_source("source251","source251",vec![ObservationKind::PermissionRequired],clock);
+        for sleeping in [true,false] {
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a|a.agent.agent_id==owner).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),if sleeping {b"sleep"}else{b"awake"},&agent,sleeping,Some(false),None,at).unwrap();
+            let t=clock+Duration::from_secs(if sleeping {0}else{1});
+            let subscribed=st.observations.request(&owner,ObservationRequest::Sub{event:ObservationKind::PermissionRequired,agent:Some("source251".into()),file:None,once:true,ttl_secs:Some(3600)},t,at as u64);
+            assert_eq!(subscribed["status"],"subscribed");
+            observe_fact_at(&mut st,crate::observation::Fact{event:ObservationKind::PermissionRequired,agent:"source251".into(),host:"fixture".into(),file:None,other_agent:None},at,t);
+            if sleeping {
+                assert!(matches!(jobs.try_recv(),Err(mpsc::TryRecvError::Empty)),"aucun job fournisseur au dormant");
+                assert_eq!(st.store.connection().query_row("SELECT COUNT(*) FROM observation_missed WHERE owner=?1 AND phase='missed_before_write'",[&owner],|r|r.get::<_,i64>(0)).unwrap(),1);
+            } else {assert!(matches!(jobs.try_recv(),Ok(ObservationJob::Notice{..})),"attente active reste utile");}
         }
     }
 
@@ -41314,6 +41378,77 @@ mod presence_tests {
             canonical_send("012_scope_aaaaaaaaaaaa", "message-1", &controle, 123_000),
             "une intention ou une référence ne doit jamais rejouer un envoi passif"
         );
+    }
+
+    #[test]
+    fn spec251_information_dix_depots_sans_reveil_puis_vraie_demande() {
+        let (state, _config) = state_with_registered_agent("info251");
+        let shared = Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared,"info-client","012_scope_251aaaaaaaaa","89000000-0000-4000-8000-000000000200");
+        let now=unix_now_secs();
+        {
+            let mut st=shared.lock().unwrap();
+            st.client_negotiations.get_mut("info-client").unwrap().capabilities.push(ClientCapability::SendInformationV1);
+            st.presences.get_mut("instance-1").unwrap().dnd_until=Some(Instant::now()+Duration::from_secs(60));
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a| a.agent.agent_id.ends_with("102")).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep",&agent,true,Some(false),None,now).unwrap();
+        }
+        let order=|i:usize| {let mut message=idempotent_message(&format!("Avis sans action {i}"));
+            message.intent=Some(bridget_core::MessageIntent::StoreOnly);
+            WrapperToDaemon::SendIdempotent{message,message_id:format!("info251-{i}"),issued_at:now}};
+        for i in 0..10 {
+            let response=handle_wrapper_message("info-client",order(i),&shared);
+            assert!(matches!(response,Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Accepted{..},..})),"{response:?}");
+            assert_eq!(serde_json::to_value(&response).unwrap()["issue"],serde_json::to_value(handle_wrapper_message("info-client",order(i),&shared)).unwrap()["issue"]);
+        }
+        {
+            let st=shared.lock().unwrap();
+            assert_eq!(st.store.recent_messages(20).unwrap().len(),10);
+            for table in ["send_deliveries","tracked_requests","work_submissions","executions","execution_queue"] {
+                let count:i64=st.store.connection().query_row(&format!("SELECT COUNT(*) FROM {table}"),[],|r|r.get(0)).unwrap();
+                assert_eq!(count,0,"{table}");
+            }
+            assert!(st.pending_post_response_controls.values().all(Vec::is_empty));
+            let mut stored=idempotent_message("Interdit au dispatcher");stored.intent=Some(bridget_core::MessageIntent::StoreOnly);
+            let delivery=SendDelivery{delivery_id:"forbidden251".into(),recipient_instance_id:"instance-1".into(),delivery_generation:1,expires_at:now+60,message_bytes:serde_json::to_vec(&stored).unwrap()};
+            let mut controls=Vec::new();
+            assert!(defer_idempotent_delivery(&st,"conn-1",delivery,&mut controls,None,None).is_err());
+            assert!(controls.is_empty(),"aucun contrôle T3/ACP/Claude/Codex ne peut être produit");
+            assert!(st.pending_replies.is_empty());
+            assert!(crate::agent_tracking::dormant(st.store.connection(),"89000000-0000-4000-8000-000000000102").unwrap());
+        }
+        let mut changed=order(0);
+        if let WrapperToDaemon::SendIdempotent{message,..}=&mut changed {message.intent=None;}
+        assert!(matches!(handle_wrapper_message("info-client",changed,&shared),Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::EnvelopeMismatch,..})));
+        {
+            let mut st=shared.lock().unwrap();
+            st.presences.get_mut("instance-1").unwrap().dnd_until=None;
+            let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a| a.agent.agent_id.ends_with("102")).unwrap();
+            crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"wake",&agent,false,Some(false),None,now).unwrap();
+        }
+        let mut action=idempotent_message("Une vraie question");action.reply=true;
+        let response=handle_wrapper_message("info-client",WrapperToDaemon::SendIdempotent{message:action,message_id:"action251".into(),issued_at:now},&shared);
+        assert!(matches!(response,Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::OutcomeUnknown{delivery_id:Some(_),..},..})),"{response:?}");
+        assert_eq!(shared.lock().unwrap().store.get_request("action251").unwrap().unwrap().state,"open");
+    }
+
+    #[test]
+    fn spec251_information_refuse_correlation_et_capacite_absente_avant_capture() {
+        let (state,_config)=state_with_registered_agent("info251-refus");let shared=Arc::new(Mutex::new(state));
+        negotiate_idempotent_client(&shared,"info-client","012_scope_251bbbbbbbbb","89000000-0000-4000-8000-000000000200");
+        let mut message=idempotent_message("Un avis");message.intent=Some(bridget_core::MessageIntent::StoreOnly);
+        let now=unix_now_secs();let order=WrapperToDaemon::SendIdempotent{message:message.clone(),message_id:"no-cap251".into(),issued_at:now};
+        assert!(matches!(handle_wrapper_message("info-client",order,&shared),Some(DaemonToWrapper::ClientRejected{reason:ClientRefusal::CapabilityNotNegotiated})));
+        shared.lock().unwrap().client_negotiations.get_mut("info-client").unwrap().capabilities.push(ClientCapability::SendInformationV1);
+        for i in 0..3 {
+            let mut invalid=message.clone();match i {0=>invalid.reply=true,1=>invalid.in_reply_to=Some("result-native".into()),_=>invalid.reply_timeout=Some(60)};
+            let order=WrapperToDaemon::SendIdempotent{message:invalid,message_id:format!("bad-info251-{i}"),issued_at:now};
+            assert!(matches!(handle_wrapper_message("info-client",order.clone(),&shared),Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Rejected{category,..},..}) if category=="information_requires_uncorrelated_message"));
+            assert!(matches!(handle_wrapper_message("info-client",order,&shared),Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Rejected{..},..})));
+        }
+        assert!(matches!(handle_wrapper_message("conn-1",WrapperToDaemon::Send(message),&shared),Some(DaemonToWrapper::Nack{reason,..}) if reason.starts_with("information_requires_idempotent_send")));
+        let st=shared.lock().unwrap();assert!(st.store.recent_messages(10).unwrap().is_empty());
+        assert!(st.pending_replies.is_empty());
     }
 
     #[test]

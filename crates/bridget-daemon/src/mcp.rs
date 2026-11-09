@@ -1242,13 +1242,13 @@ fn execute_send(
     let reply = optional_bool(arguments, "reply")?.unwrap_or(false);
     let requested_intent = match arguments.get("intent") {
         None => None,
-        Some(Value::String(value)) if matches!(value.as_str(), "queue" | "steer" | "interrupt") => {
+        Some(Value::String(value)) if matches!(value.as_str(), "queue" | "steer" | "interrupt" | "information") => {
             Some(value.as_str())
         }
         _ => {
             return Err(ToolError::Technical {
                 code: "invalid_intent",
-                message: "intent attendu : queue, steer ou interrupt".into(),
+                message: "intent attendu : queue, steer, interrupt ou information".into(),
             });
         }
     };
@@ -1289,6 +1289,11 @@ fn execute_send(
             "reply_timeout est réservé à reply=true".to_string(),
         ));
     }
+    if requested_intent == Some("information")
+        && (reply || reply_timeout.is_some() || in_reply_to.is_some()) {
+        return Err(ToolError::Technical { code: "information_requires_uncorrelated_message",
+            message: "information conserve un avis sans réveil : reply=false, sans in_reply_to ni reply_timeout. Pour une demande ou un résultat, gardez l'envoi normal.".into() });
+    }
     let supplied_id = arguments.get("id");
     let supplied_issued_at = arguments.get("issued_at");
     if supplied_id.is_some() != supplied_issued_at.is_some() {
@@ -1320,6 +1325,7 @@ fn execute_send(
     message.delegated_origin = identity.delegated_origin.clone();
     message.cross_project_reason = cross_project_reason;
     message.intent = match requested_intent {
+        Some("information") => Some(bridget_core::MessageIntent::StoreOnly),
         Some("steer") => Some(bridget_core::MessageIntent::SteerCurrent),
         Some("interrupt") => Some(bridget_core::MessageIntent::InterruptAndStart),
         _ => None, // queue explicite et absence gardent les octets historiques.
@@ -1340,23 +1346,21 @@ fn execute_send(
         socket,
     )?;
     let issuer_scope = issuer_scope(instance_id);
+    let mut requested_capabilities = vec![ClientCapability::SendIdempotent];
+    if message.cross_project_reason.is_some() { requested_capabilities.push(ClientCapability::CommunicationProjectsV1); }
+    if requested_intent == Some("information") { requested_capabilities.push(ClientCapability::SendInformationV1); }
     match connection.exchange(&WrapperToDaemon::ClientHello {
         contract_version: CLIENT_CONTRACT_VERSION,
         issuer_scope,
-        capabilities: if message.cross_project_reason.is_some() {
-            vec![
-                ClientCapability::SendIdempotent,
-                ClientCapability::CommunicationProjectsV1,
-            ]
-        } else {
-            vec![ClientCapability::SendIdempotent]
-        },
+        capabilities: requested_capabilities,
     })? {
-        DaemonToWrapper::ClientWelcome {
-            capabilities,
-            build_id,
-            ..
-        } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+        DaemonToWrapper::ClientWelcome { capabilities, build_id, .. }
+            if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if requested_intent == Some("information") && !capabilities.contains(&ClientCapability::SendInformationV1) {
+                return Err(ToolError::Technical { code: "information_unsupported", message:
+                    "Le daemon ne prend pas en charge le dépôt silencieux ; aucun envoi effectué, aucun remplacement par un message normal. Chargez une version compatible pour cet avis.".into() });
+            }
+
             if message.cross_project_reason.is_some()
                 && !capabilities.contains(&ClientCapability::CommunicationProjectsV1)
             {
@@ -1411,6 +1415,11 @@ fn execute_send(
     if let Some(intent) = requested_intent {
         result["intent"] = json!(intent);
         result["effect"] = json!("unconfirmed");
+        if intent == "information" && result["status"] == "accepted" {
+            result["status"] = json!("stored");
+            result["effect"] = json!("stored_without_wakeup");
+            result["model_woken"] = json!(false);
+        }
     }
     Ok(result)
 }
@@ -2790,14 +2799,14 @@ pub(crate) fn tools() -> Vec<Value> {
         }),
         json!({
             "name": "bridget_send",
-            "description": "Envoyer un message direct Bridget à un équipier, pour une action autonome ou une demande suivie. Pour la coordination répétée, utiliser bridget_thread : preuves longues et comptes rendus kind=history avec notify:[], action/blocage/décision courts (≤2048 octets), supersedes_seq pour remplacer explicitement. Ne pas doubler le fil partagé par des rafales de messages directs récapitulatifs. reply=false signifie sans réponse attendue, pas sans action. Aucun ancien message libre n'est filtré automatiquement.",
+            "description": "Envoyer une action/demande directe, ou conserver un avis avec intent=information sans prompt ni réveil. reply=false seul peut encore lancer un tour. Pour un bulletin de maintenance général : information ou fil silencieux ; ne pas réveiller toutes les présences connectées. Pour la coordination répétée, utiliser bridget_thread : preuves longues et comptes rendus kind=history avec notify:[], action/blocage/décision courts (≤2048 octets), supersedes_seq pour remplacer explicitement. Ne pas doubler le fil partagé par des rafales de messages directs récapitulatifs. reply=false signifie sans réponse attendue, pas sans action. Aucun ancien message libre n'est filtré automatiquement.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "to": { "type": "string", "minLength": 1 },
                     "body": { "type": "string", "minLength": 1 },
                     "cross_project_reason": { "type": "string", "minLength": 1, "maxLength": 512, "description": "Motif volontaire d'un échange hors projet ; 1–512 octets UTF-8 sans contrôles. Ne pas déduire le motif depuis body. Le warning est rendu hors corps." },
-                    "intent": { "type": "string", "enum": ["queue", "steer", "interrupt"], "default": "queue", "description": "Intention demandée ; aucun effet confirmé. steer est incompatible avec reply=true." },
+                    "intent": { "type": "string", "enum": ["queue", "steer", "interrupt", "information"], "default": "queue", "description": "information : conserver au journal sans réveiller le modèle, sans reply ni in_reply_to. queue : remise normale, peut lancer un tour au repos. steer : guider le tour courant. interrupt : interrompre et lancer un tour, selon droits. Un résultat attendu garde son parcours normal." },
                     "reply": { "type": "boolean", "default": false },
                     "reply_timeout": { "type": "integer", "minimum": 1 },
                     "in_reply_to": { "type": "string", "minLength": 1, "description": "Identifiant de la demande Bridget à résoudre par cette réponse." },
@@ -3279,6 +3288,11 @@ mod tests {
 
     // Trois oracles wire partagent ce réemploi des helpers MCP existants.
     fn guidance156_capture_send(arguments: Value) -> Result<(String, Value), ToolError> {
+        guidance156_capture_send_with_information(arguments, true)
+    }
+
+    fn guidance156_capture_send_with_information(arguments: Value, supported: bool) -> Result<(String, Value), ToolError> {
+        let information=arguments.get("intent").and_then(Value::as_str)==Some("information");
         let socket = test_socket("g156");
         let listener = UnixListener::bind(&socket).unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -3320,7 +3334,8 @@ mod tests {
                 },
             );
             assert!(
-                matches!(read_command(&mut reader), WrapperToDaemon::ClientHello { capabilities, .. } if capabilities == vec![ClientCapability::SendIdempotent])
+                matches!(read_command(&mut reader), WrapperToDaemon::ClientHello { capabilities, .. }
+                    if capabilities == if information { vec![ClientCapability::SendIdempotent,ClientCapability::SendInformationV1] } else { vec![ClientCapability::SendIdempotent] })
             );
             write_command(
                 &mut writer,
@@ -3329,9 +3344,13 @@ mod tests {
                     build_id: "test-build".into(),
                     horizon_secs: 60,
                     issued_at_tolerance_secs: 5,
-                    capabilities: vec![ClientCapability::SendIdempotent],
+                    capabilities: if information && supported {vec![ClientCapability::SendIdempotent,ClientCapability::SendInformationV1]} else {vec![ClientCapability::SendIdempotent]},
                 },
             );
+            if information && !supported {
+                assert!(reader.read_line(&mut String::new()).unwrap()==0,"aucun Send après capacité absente");
+                return None;
+            }
             let sent = read_command(&mut reader);
             assert!(matches!(&sent, WrapperToDaemon::SendIdempotent { .. }));
             let bytes = encode(&sent).unwrap();
@@ -3366,7 +3385,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             send["inputSchema"]["properties"]["intent"]["enum"],
-            json!(["queue", "steer", "interrupt"])
+            json!(["queue", "steer", "interrupt", "information"])
         );
         assert_eq!(
             send["inputSchema"]["properties"]["intent"]["default"],
@@ -3524,6 +3543,22 @@ mod tests {
         );
         assert_eq!(result["intent"], "interrupt");
         assert_eq!(result["effect"], "unconfirmed");
+    }
+
+    #[test]
+    fn spec251_mcp_information_receipt_et_ancien_daemon_sans_repli() {
+        let args=json!({"to":"89000000-0000-4000-8000-000000000157","body":"avis sans action","intent":"information","id":"guidance156","issued_at":1700000000});
+        let (wire,result)=guidance156_capture_send(args.clone()).unwrap();
+        let WrapperToDaemon::SendIdempotent{message,..}=decode(&wire).unwrap() else {panic!("send")};
+        assert_eq!(message.intent,Some(bridget_core::MessageIntent::StoreOnly));
+        assert_eq!(result["status"],"stored");assert_eq!(result["effect"],"stored_without_wakeup");assert_eq!(result["model_woken"],false);
+        let error=guidance156_capture_send_with_information(args,false).unwrap_err();
+        assert!(matches!(error,ToolError::Technical{code:"information_unsupported",..}));
+        for invalid in [json!({"reply":true}),json!({"in_reply_to":"mission"}),json!({"reply_timeout":30})] {
+            let mut args=json!({"to":"89000000-0000-4000-8000-000000000157","body":"avis","intent":"information"});
+            args.as_object_mut().unwrap().extend(invalid.as_object().unwrap().clone());
+            assert!(guidance156_capture_send(args).is_err());
+        }
     }
 
     #[test]

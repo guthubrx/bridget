@@ -213,6 +213,8 @@ pub enum ClientCapability {
     HumanThreadViewRecentV1,
     CommunicationProjectsV1,
     SendIdempotent,
+    /// Dépôt silencieux251 ; doit être négocié avant toute émission.
+    SendInformationV1,
     Lookup,
     ExecutionControlV1,
     /// Lecture de file filtrée par les droits ; aucune mutation implicite.

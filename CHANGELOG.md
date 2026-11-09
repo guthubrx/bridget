@@ -6,6 +6,11 @@ Published versions are added to the repository history under `vX.Y.Z` tags.
 Versions follow semantic versioning and dates use YYYY-MM-DD. Validation
 figures below describe the named release's evidence, not the current checkout.
 
+## 0.8.17 — 2026-11-09
+
+- Store direct information without a model turn through `intent=information`, with durable receipts, existing ledger access and no ordinary-delivery fallback.
+- Target maintenance actions to affected work and preserve observation facts without waking dormant owners.
+
 ## 0.8.11 — 2026-11-08
 
 - Share observed Claude account quota refusals across model catalogues using the same launcher. Preserve their original observation and reset dates across the cache-key migration. Keep other accounts and machines separate.

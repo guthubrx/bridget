@@ -947,7 +947,7 @@ fn print_usage() {
            --from <nom>           Se nommer ; le nom doit être adressable en\n  \
            \x20                      retour, sinon l'envoi est refusé\n  \
            --in-reply-to <id>     Lie la réponse à une demande suivie\n  \
-           --intent <V>           queue (défaut), steer (guidage), interrupt (nouveau tour)\n  \
+           --intent <V>           queue (défaut), information (journal sans réveil), steer (guidage), interrupt (nouveau tour)\n  \
            --reply                Réponse attendue\n  \
            --timeout <S>          Délai avant échec (défaut: 60)\n  \
            --hops <N>             Sauts restants (défaut: 4)\n  \
@@ -4746,9 +4746,10 @@ fn cmd_send(args: &[String]) {
                     .unwrap_or_else(|error| send_usage_error(&error));
                 intent = match value.as_str() {
                     "queue" => None,
+                    "information" => Some(bridget_core::MessageIntent::StoreOnly),
                     "steer" => Some(bridget_core::MessageIntent::SteerCurrent),
                     "interrupt" => Some(bridget_core::MessageIntent::InterruptAndStart),
-                    _ => send_usage_error("invalid_intent : attendu queue, steer ou interrupt"),
+                    _ => send_usage_error("invalid_intent : attendu queue, steer, interrupt ou information"),
                 };
                 intent_seen = true;
             }
@@ -4795,6 +4796,10 @@ fn cmd_send(args: &[String]) {
 
     if reply && intent == Some(bridget_core::MessageIntent::SteerCurrent) {
         send_usage_error("invalid_intent : steer est incompatible avec --reply");
+    }
+    if intent == Some(bridget_core::MessageIntent::StoreOnly)
+        && (reply || timeout_secs.is_some() || in_reply_to.is_some()) {
+        send_usage_error("information_requires_uncorrelated_message : information conserve un avis sans réveil, sans --reply, --timeout ni --in-reply-to ; une demande ou un résultat garde son envoi normal");
     }
     let to = match to {
         Some(t) => t,
@@ -4871,7 +4876,8 @@ fn cmd_send(args: &[String]) {
     };
 
     let idempotent = idempotent.or_else(|| {
-        (msg.cross_project_reason.is_some() || project_root.is_some()).then(|| {
+        (msg.cross_project_reason.is_some() || project_root.is_some()
+            || msg.intent == Some(bridget_core::MessageIntent::StoreOnly)).then(|| {
             IdempotentSendOptions {
                 id: msg.id.clone(),
                 issued_at: unix_timestamp(),
@@ -5503,7 +5509,12 @@ fn send_idempotent_if_requested(
             ..
         }) => {
             emit_project_warnings(&project_warnings);
-            print_idempotency_issue(&issue, &options);
+            if message.intent == Some(bridget_core::MessageIntent::StoreOnly)
+                && matches!(issue, IdempotencyIssue::Accepted { .. }) {
+                println!("STOCKÉ SANS RÉVEIL: id={}, issued_at={}, issuer_scope={} ; consultable dans le ledger, aucune lecture ni remise au modèle attestée", options.id, options.issued_at, options.issuer_scope);
+            } else {
+                print_idempotency_issue(&issue, &options);
+            }
             if !send_deposited(&issue) {
                 crate::cli_table::exit(1);
             }
@@ -5604,26 +5615,23 @@ pub(crate) fn send_idempotent_to_daemon_at_with_project(
         .map_err(|error| error.to_string())?;
     }
 
+    let mut requested_capabilities = vec![ClientCapability::SendIdempotent];
+    if message.cross_project_reason.is_some() || project_root.is_some() { requested_capabilities.push(ClientCapability::CommunicationProjectsV1); }
+    if message.intent == Some(bridget_core::MessageIntent::StoreOnly) { requested_capabilities.push(ClientCapability::SendInformationV1); }
     match connection
         .exchange(&WrapperToDaemon::ClientHello {
             contract_version: CLIENT_CONTRACT_VERSION,
             issuer_scope: options.issuer_scope.clone(),
-            capabilities: if message.cross_project_reason.is_some() || project_root.is_some() {
-                vec![
-                    ClientCapability::SendIdempotent,
-                    ClientCapability::CommunicationProjectsV1,
-                ]
-            } else {
-                vec![ClientCapability::SendIdempotent]
-            },
+            capabilities: requested_capabilities,
         })
         .map_err(|error| error.to_string())?
     {
-        DaemonToWrapper::ClientWelcome {
-            capabilities,
-            build_id,
-            ..
-        } if capabilities.contains(&ClientCapability::SendIdempotent) => {
+        DaemonToWrapper::ClientWelcome { capabilities, build_id, .. }
+            if capabilities.contains(&ClientCapability::SendIdempotent) => {
+            if message.intent == Some(bridget_core::MessageIntent::StoreOnly) && !capabilities.contains(&ClientCapability::SendInformationV1) {
+                return Err("information_unsupported : aucun envoi effectué, aucun remplacement par un message normal ; chargez un daemon compatible pour cet avis".into());
+            }
+
             if (message.cross_project_reason.is_some() || project_root.is_some())
                 && !capabilities.contains(&ClientCapability::CommunicationProjectsV1)
             {
@@ -12101,6 +12109,7 @@ mod guidance156_tests {
             test,
             "guidance156_cli_queue_parse" | "control158_delegations_cli_parse"
         );
+        let information = extra.windows(2).any(|pair|pair==["--intent","information"]);
         let wake_cli = test == "wake158b_cli_g7_formes_fermees_et_identifiant_retry";
         let wake_id = extra
             .windows(2)
@@ -12172,7 +12181,7 @@ mod guidance156_tests {
             } else {
                 assert!(
                     matches!(hello, WrapperToDaemon::ClientHello { capabilities, .. }
-                    if capabilities == vec![ClientCapability::SendIdempotent])
+                    if capabilities == if information {vec![ClientCapability::SendIdempotent,ClientCapability::SendInformationV1]} else {vec![ClientCapability::SendIdempotent]})
                 );
             }
             writeln!(
@@ -12185,6 +12194,8 @@ mod guidance156_tests {
                     issued_at_tolerance_secs: 5,
                     capabilities: if wake_cli {
                         Vec::new()
+                    } else if information {
+                        vec![ClientCapability::SendIdempotent,ClientCapability::SendInformationV1]
                     } else {
                         vec![ClientCapability::SendIdempotent]
                     },
@@ -12351,6 +12362,7 @@ mod guidance156_tests {
         }
         for (intent, expected) in [
             ("queue", None),
+            ("information", Some(bridget_core::MessageIntent::StoreOnly)),
             ("steer", Some(bridget_core::MessageIntent::SteerCurrent)),
             (
                 "interrupt",
@@ -12369,6 +12381,7 @@ mod guidance156_tests {
                 panic!("SendIdempotent")
             };
             assert_eq!(message.intent, expected);
+            if intent=="information" {assert!(String::from_utf8_lossy(&output.stdout).contains("STOCKÉ SANS RÉVEIL"));}
         }
     }
 

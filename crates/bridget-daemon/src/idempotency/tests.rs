@@ -5817,3 +5817,34 @@ fn spec235_scoped_spawn_reads_preserve_identity_and_isolate_other_definitions() 
     assert!(store.spawn_commands_for_instance(&scope,"other235","instance235").unwrap().is_empty());
     assert!(store.spawn_command("supervisor_235_other_scope","selected235").unwrap().is_none());
 }
+
+#[test]
+fn spec251_information_commit_rollback_reouverture_et_collision() {
+    let path=TempDbGuard::new("information251");
+    let mut message=bridget_core::BridgetMessage::new("from251","to251","Information conservée");
+    message.id=key().idempotency_key.clone();message.intent=Some(bridget_core::MessageIntent::StoreOnly);
+    let canonical=crate::communication::canonical_send(&key().issuer_scope,&message.id,&message,NOW);
+    {
+        let mut store=IdempotencyStore::open(path.path()).unwrap();
+        assert!(matches!(reserve(&store,&canonical),Reservation::Prepared{..}));
+        store.conn.execute_batch("CREATE TRIGGER fail_info251 BEFORE INSERT ON ledger BEGIN SELECT RAISE(ABORT,'panne injectée'); END").unwrap();
+        assert!(store.store_information(&key(),&message,NOW).is_err());
+        assert!(matches!(store.lookup(&key(),NOW).unwrap(),LookupResult::OutcomeUnknown{..}));
+        assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM ledger",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        store.conn.execute_batch("DROP TRIGGER fail_info251").unwrap();
+        store.store_information(&key(),&message,NOW).unwrap();
+    }
+    let mut store=IdempotencyStore::open(path.path()).unwrap();
+    assert!(matches!(reserve(&store,&canonical),Reservation::Replayed(LookupResult::Accepted{..})));
+    assert!(store.send_delivery(&key()).unwrap().is_none());
+    assert_eq!(store.conn.query_row("SELECT body FROM ledger WHERE id='message-1'",[],|r|r.get::<_,String>(0)).unwrap(),message.body);
+    let other=IdempotencyKey::new("012_scope_251ccccccccc",OperationKind::Send,"message-1").unwrap();
+    store.reserve(&other,b"other-scope",NOW,HORIZON,NOW,30).unwrap();
+    assert!(store.store_information(&other,&message,NOW).is_err(),"collision doit échouer, sans remplacer le corps");
+    assert!(matches!(store.lookup(&other,NOW).unwrap(),LookupResult::OutcomeUnknown{..}));
+    assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM ledger",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    let delivery=SendDelivery{delivery_id:"bad-delivery251".into(),recipient_instance_id:"instance".into(),delivery_generation:1,
+        expires_at:NOW+HORIZON,message_bytes:serde_json::to_vec(&message).unwrap()};
+    assert!(matches!(store.begin_send_delivery(&other,&delivery),Err(IdempotencyError::InvalidDelivery)));
+    assert!(store.send_delivery(&other).unwrap().is_none(),"aucun transport ne peut créer cette saga");
+}

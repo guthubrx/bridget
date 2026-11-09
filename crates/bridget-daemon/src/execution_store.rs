@@ -365,6 +365,7 @@ impl ExecutionStore {
             bridget_core::MessageIntent::SteerCurrent => "steer_current",
             bridget_core::MessageIntent::InterruptAndStart => "interrupt_and_start",
             bridget_core::MessageIntent::ControlOnly => "control_only",
+            bridget_core::MessageIntent::StoreOnly => "store_only",
         });
         let tx = self.conn.unchecked_transaction()?;
         let inserted = tx.execute(
@@ -452,6 +453,7 @@ impl ExecutionStore {
             bridget_core::MessageIntent::SteerCurrent => "steer_current",
             bridget_core::MessageIntent::InterruptAndStart => "interrupt_and_start",
             bridget_core::MessageIntent::ControlOnly => "control_only",
+            bridget_core::MessageIntent::StoreOnly => "store_only",
         });
         let tx = self.conn.unchecked_transaction()?;
         let inserted = tx.execute(

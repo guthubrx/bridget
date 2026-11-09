@@ -173,6 +173,7 @@ fn canonical_message_control(bytes: &mut Vec<u8>, message: &bridget_core::Bridge
         Some(bridget_core::MessageIntent::SteerCurrent) => 3,
         Some(bridget_core::MessageIntent::InterruptAndStart) => 4,
         Some(bridget_core::MessageIntent::ControlOnly) => 5,
+        Some(bridget_core::MessageIntent::StoreOnly) => 6,
     });
     canonical_field(bytes, &(message.references.len() as u64).to_be_bytes());
     for reference in &message.references {
@@ -566,4 +567,15 @@ mod coordination247_tests {
         assert!(error.contains("nouvelle demande") && error.contains("même enveloppe"));
         assert!(project_scope(Some(&from),Some(&to),"dest",Some("coordination autorisée")).is_ok());
     }
+}
+
+#[cfg(test)]
+#[test]
+fn spec251_canon_information_distinct_sans_changer_ancien() {
+    let mut message=bridget_core::BridgetMessage::new("a","b","avis");
+    let old=canonical_send("scope","id",&message,123);
+    message.intent=Some(bridget_core::MessageIntent::StoreOnly);
+    assert_ne!(old,canonical_send("scope","id",&message,123));
+    let wire=serde_json::to_value(&message).unwrap();assert_eq!(wire["intent"],"store_only");
+    assert_eq!(serde_json::from_value::<bridget_core::BridgetMessage>(wire).unwrap(),message);
 }

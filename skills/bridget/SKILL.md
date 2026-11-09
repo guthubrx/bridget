@@ -14,6 +14,24 @@ Utiliser la connexion Bridget de la session courante. Ne pas démarrer de daemon
 changer de namespace, installer une skill globale ou relancer un fournisseur pour
 envoyer un message. Une panne de connexion n'autorise pas une autre route.
 
+## Informer sans consommer un tour (251)
+
+Pour un avis sans action, utiliser `bridget_send intent="information"` ou
+`bridget send --to UUID --intent information -- CORPS`. Vérifier le contrat
+chargé ; une ancienne façade peut utiliser le fil existant avec `notify:[]`.
+Ne jamais remplacer un dépôt silencieux refusé par un message ordinaire.
+Le reçu `stored` atteste le journal, sans prompt ni réveil, pas la lecture.
+Lire volontairement le journal si nécessaire ; aucune injection ultérieure.
+`reply=false` seul ne supprime pas le coût d'un tour. Réserver messages normaux
+aux demandes, résultats attendus et actions utiles. Une information n'a ni reply,
+ni in_reply_to, ni délai de réponse. Préserver les résultats natifs des missions.
+
+Maintenance : les présences connectées ne constituent pas une liste de diffusion.
+Bulletin général dans un fil silencieux existant ; avant/après coupure, prévenir
+seulement les propriétaires des tâches/commandes/processus réellement affectés.
+Ne pas réveiller les autres agents pour annoncer une version ou leur disponibilité.
+Regrouper les états avec les fils et supersedes_seq, sans effacer les preuves.
+
 ## Trouver puis envoyer
 
 ### Aider à préparer une machine ou une connexion

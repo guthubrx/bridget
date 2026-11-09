@@ -1158,3 +1158,43 @@ explicitement ; elle n'est pas silencieusement tronquée.
 Premier bridget_send : omettre id et issued_at. Bridget renvoie les deux.
 Pour un rejeu, recopier ensemble ces deux valeurs et le même contenu. Un id seul
 est une erreur de forme, même au premier envoi ; aucun message n'est alors envoyé.
+
+## Informations sans réveil (251)
+
+`reply=false` signifie sans réponse attendue. Un message normal peut encore
+lancer un tour, même si son texte demande de ne pas répondre. Pour conserver
+une information sans action :
+
+```sh
+bridget send --to '<UUID_DESTINATAIRE>' --intent information -- 'Information conservée, aucune action demandée.'
+```
+
+MCP : `bridget_send` avec `intent:"information"`. La capacité
+`SendInformationV1` est négociée avant envoi. Aucun repli vers un message normal.
+Le reçu `stored`, `effect:stored_without_wakeup`, `model_woken:false` signifie
+corps conservé au journal, sans remise au modèle. Il ne signifie pas lu. La CLI
+rend « STOCKÉ SANS RÉVEIL ». Même clé et même enveloppe pour relire après une
+réponse perdue. `Lookup accepted` signifie acceptation durable ; l'effet dépend
+de l'intention initiale, jamais de cette seule étiquette.
+
+L'information se consulte avec `bridget_ledger` (search/read) ou `bridget ledger`.
+Elle n'est pas injectée au prochain tour. La rétention habituelle s'applique.
+Un dormant connecté ou un agent DND peut recevoir ce dépôt sans changer d'état.
+Un destinataire absent conserve le refus de routage habituel.
+`reply`, `reply_timeout` et `in_reply_to` sont incompatibles avec information.
+Les résultats natifs restent publiés par leur worker et lus par leur task_id.
+
+| Besoin | Parcours | Réveil |
+|---|---|---|
+| Bulletin général, version disponible, preuve longue | Fil existant, `notify:[]`, ou information directe si destinataire précis | Aucun |
+| Question, action nécessaire, résultat attendu | Demande ou résultat natif habituel | Selon le parcours attendu |
+| Coordination utile pendant un travail | Message/guidage autorisé ; cibler le travail concerné | Selon intention et moteur |
+| Arrêt urgent nécessaire | Contrôle ou interruption explicitement autorisé | Selon droits ; jamais déduit du texte |
+
+La maintenance identifie les tâches, commandes ou processus réellement affectés
+avant de prévenir leurs propriétaires. Une présence connectée ne suffit pas.
+Un bulletin général ne déclenche aucun réveil de flotte. Pour regrouper : utiliser
+un fil partagé existant et ses pages ; `supersedes_seq` remplace logiquement une
+entrée de type compatible sans effacer l'original. `history` reste immuable.
+Ne pas créer un fil ni élargir ses membres automatiquement. Pas de diffusion du
+même résumé par message direct après son dépôt silencieux.

@@ -8,6 +8,11 @@ suivent le versionnage sémantique : le dernier chiffre pour les corrections et 
 deuxième pour les nouvelles capacités, le premier pour les ruptures de contrat. Les dates sont au
 format AAAA-MM-JJ.
 
+## 0.8.17 — 2026-11-09
+
+- Conserver un avis direct avec `intent=information`, sans réveil du modèle. Reçu durable, journal consultable et aucun repli vers une remise normale.
+- Réserver les avis de maintenance aux travaux affectés. Respecter la dormance des notices d’observation, en conservant leurs faits.
+
 ## 0.8.11 — 2026-11-08
 
 - Partager les refus de quota Claude constatés entre les catalogues de modèles du même compte. Conserver leurs dates originales après migration du cache. Garder les autres comptes et machines distincts.
