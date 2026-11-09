@@ -1,0 +1,2 @@
+# Plan257
+Réutiliser la validation et le verrou du handler ACK151. Remplacer le booléen any par une liste bornée de tâches non prêtes, construite après contrôle complet de propriété. Retourner le refus JSON natif ; la façade existante conserve detail dans le texte d’erreur. Aucun format durable ni autorité ajouté. Tester le lot mixte, les états, la propriété et l’atomicité, puis activer via le parcours de maintenance existant sans arrêt T3.

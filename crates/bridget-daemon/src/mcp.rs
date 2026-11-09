@@ -3875,7 +3875,9 @@ mod tests {
             ),
             (
                 vec!["active".to_string()],
-                json!({"status":"refused","code":"task_not_ready"}),
+                json!({"status":"refused","code":"task_not_ready",
+                    "detail":{"tasks":[{"task_id":"active","round":4,"state":"mission_pending"}],
+                        "acknowledged":[],"recovery":"Relisez les états de ces tâches."}}),
             ),
             (
                 (0..16)
@@ -4017,6 +4019,10 @@ mod tests {
                         .unwrap()
                         .contains("task_not_ready")
                 );
+                let text = ack["result"]["content"][0]["text"].as_str().unwrap();
+                for expected in ["active", "mission_pending", "round", "4", "Relisez les états"] {
+                    assert!(text.contains(expected), "contexte ACK conservé : {text}");
+                }
             } else {
                 assert_eq!(ack["result"]["structuredContent"], result);
             }

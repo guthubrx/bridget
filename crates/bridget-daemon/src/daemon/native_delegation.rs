@@ -9537,11 +9537,17 @@ fn handle_locked_with_remote_proof(
                 tasks.push(task);
             }
             // Toute la propriété est établie avant de révéler un état de préparation.
-            if tasks.iter().any(|task| {
+            let not_ready: Vec<_> = tasks.iter().filter(|task| {
                 !workspace_report_ready(task)
                     || !matches!(task.state.as_str(), "result_available" | "failed")
-            }) {
-                return Err("task_not_ready".into());
+            }).map(|task| json!({"task_id":task.task_id,"round":task.round_no(),
+                "state":task.state,"workspace_report_ready":workspace_report_ready(task)})).collect();
+            if !not_ready.is_empty() {
+                let recovery = "Relisez les états de ces tâches, puis accusez seulement les résultats ou échecs disponibles que vous avez lus. Une continuation peut avoir ouvert une nouvelle ronde entre la lecture et cet ACK. Aucun accusé de ce groupe n’a été enregistré ; les tâches et les autres travaux autorisés suivent leur propre état.";
+                return Ok(json!({"version":1,"status":"refused","code":"task_not_ready",
+                    "scope":"this_request","message":recovery,
+                    "detail":{"operation":"ack","tasks":not_ready,"acknowledged":[],
+                        "recovery":recovery}}));
             }
             let (acknowledged, already) = st
                 .delegation_store
@@ -27222,7 +27228,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
                 serde_json::from_value(json!({"operation":"ack","task_ids":[task.task_id]}))
                     .expect("opération ACK décodable");
             assert_eq!(
-                handle_locked("conn-1", request, &mut st).unwrap_err(),
+                handle_locked("conn-1", request, &mut st).unwrap()["code"],
                 "task_not_ready",
                 "{state}"
             );
@@ -27236,6 +27242,41 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!((after.generation, after.seq), (meta.generation, meta.seq));
             assert!(st.delegation_store.take_changes().is_empty());
         }
+        cleanup(&config);
+    }
+
+    #[test]
+    fn spec257_ack_lot_non_pret_identifie_ronde_sans_accuse_partiel() {
+        let (mut st, config, _rx, _reader) = fixture("ack-diagnostic257");
+        let mut active = tache_151(&mut st, "active");
+        active.state = "mission_pending".into();
+        active.round = 4;
+        st.delegation_store.save(&active).unwrap();
+        let result = semer_terminale_150(&st, &active, 25701, "result_available");
+        let failed = semer_terminale_150(&st, &active, 25702, "failed");
+        let before = serde_json::to_value(st.delegation_store.tasks().unwrap()).unwrap();
+        let epoch = st.delegation_store.wait_epoch();
+        let seen = epoch.get();
+        let meta = st.delegation_store.projection_meta().unwrap();
+        st.delegation_store.take_changes();
+        let request = serde_json::from_value(json!({"operation":"ack",
+            "task_ids":[result.task_id,active.task_id,failed.task_id]})).unwrap();
+        let refused = handle_locked("conn-1", request, &mut st).unwrap();
+        assert_eq!(refused["code"], "task_not_ready");
+        assert_eq!(refused["scope"], "this_request");
+        assert_eq!(refused["detail"]["tasks"], json!([{"task_id":active.task_id,
+            "round":4,"state":"mission_pending","workspace_report_ready":true}]));
+        assert_eq!(refused["detail"]["acknowledged"], json!([]));
+        assert!(refused["detail"]["recovery"].as_str().unwrap().contains("nouvelle ronde"));
+        assert_eq!(serde_json::to_value(st.delegation_store.tasks().unwrap()).unwrap(),before);
+        assert_eq!(epoch.get(),seen);
+        let after = st.delegation_store.projection_meta().unwrap();
+        assert_eq!((after.generation,after.seq),(meta.generation,meta.seq));
+        assert!(st.delegation_store.take_changes().is_empty());
+        let request = serde_json::from_value(json!({"operation":"ack",
+            "task_ids":[result.task_id,failed.task_id]})).unwrap();
+        assert_eq!(handle_locked("conn-1",request,&mut st).unwrap()["acknowledged"],
+            json!([result.task_id,failed.task_id]));
         cleanup(&config);
     }
 
