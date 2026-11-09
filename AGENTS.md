@@ -109,6 +109,25 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session255 — guidage de capacité livré en0.8.22/255-capacity-guidance-r1.
+Source exécutable0fc30045a675b21e53f14b5333bb522d2cd4cbba intégrée/poussée.
+resource_saturated ne présume plus un refus durable : le conseil de clé suit
+detail.admission.recovery. Seuils90/10/100, mesures et tâches inchangés.
+Cinq contrôles distincts Mac/Linux PASS ; revue76e84329 lue/ACK, P2 documentaire
+corrigé (cache préexistant), P3 disposés ; AnalyzePASS/ConvergeCONVERGED.
+Sept composants/SHA vérifiés quatre hôtes, retour254R3 compatible/pointeurs
+atomiques ; coupurecore1,85s. Un wrapperMac/deuxCartae/unSYS conservés.
+OnzePID/birthT3, registreMac60acca et septpayloads protégés inchangés.
+T3 nonarrêté ; anciennesfaçades/wrappers utilisés conservés. Aucunrejeumétier.
+Releasepublique0.8.22/sixactifs anonymesSHA, APK8022/certificat/lignée8021 vérifiés.
+Parix prévenu/informé, reçusin_flight sanslectureinventée. Mainpropre/aligné4hôtes.
+PropreWT/brancheMac retirés ; treizecopies/307154776octetslogiques retirés.
+WTSYS/Cartae propres intégrés conservés (5/40processusillisibles), preuves et
+imagesutilisées conservées. CachesMac2,97Gio/SYS6,22Gio/Cartae4,46Gio.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/255-guidage-capacite/validation.md.
+Reprise : /Users/moi/.cache/bridget255-guidage-capacite/resume.md.
+
+
 Session254 — préparation locale et projet natif livrés en0.8.21/254-local-preparation-r3.
 Source exécutable695921e76ed3a4611a2a4b4dfbf0411ae2f6b6ae intégrée/poussée.
 General/shared local horsGit sansSHA accepté sansSSH ; registre attesté duworker
