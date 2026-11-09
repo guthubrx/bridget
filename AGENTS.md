@@ -109,6 +109,24 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session252 — guidage documentaire livré sur services0.8.18/252-guidance-r1.
+Source377df975 ; refusproject_preparation_git_required explicite et fermé,
+contexteparmachine/étape conservé ; schémabrief limitesUTF8 sourcées des constantes,
+validation inchangée. Durée renouvelée parronde précisée, aucun timer modifié.
+9Mac/9Linux ciblésPASS, helperréel/MCPtoolslist/CLIpreview qualifiés sansmodèle.
+Revue930bcead lue/ACK, deuxobjections qualifiées sur preuves ; Converge1CONVERGED.
+Septcomposants/SHA4hôtes, retour251-r2 atomique, coupure1,73s. OnzePID/birthT3,
+registreMac60acca et septpayloadsprotégés inchangés, cinqwrappersMac préservés.
+Publicv0.8.18/sixactifs anonymes/SHA, APK8018/certificat/lignée8017 vérifiés.
+DiagnosticsSNCF/MailsACKtransport, réponseParix encoreenfile sansdoublon.
+Aucuneadmissionmétier rejouée, pas de transfert documentaire ajouté ni Git créé.
+Main poussé/aligné4hôtes ; Macmainseul, propresWT/branche retirés ; transferts retirés.
+WTSYS/Android252 et conservations251 gardés : cwd/FDpartiellement nonlisibles.
+T3 reste ouvert ; NE PAS arrêter/remplacer l'app sans accord ni reposer la question.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/252-guidage-documentaire/validation.md.
+Reprise privée : /Users/moi/.cache/bridget252-admission-documentaire/resume.md.
+
+
 Session251 — communications attentives activées en0.8.17/251-attention-r2.
 Source exécutable6334f58b, dépôt information CLI/MCP : ledger+reçu atomiques,
 sans prompt/remise/exécution ; reply=false seul garde son comportement normal.
