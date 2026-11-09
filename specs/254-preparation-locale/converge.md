@@ -1,0 +1,2 @@
+# Converge254 — 1CONVERGEDcode
+FR001/002 : forme locale définie une fois et test réel worker/helper sanslien ; sourcevérifiée avant toute publication. FR003 : canonicalworker de la commande admise pour toute annonceGitnative, sansreplilocal, recontrôleaprèsE/S ; troisvarianteshosttestées. FR004 : description etconditionréférencée duMCP réel vérifiées ; gardesinchangées. FR005 : revue/auditbornésconformes, livraisonruntimeenattente, aucunmannquedecodeconfirmé. Aucune tâche de livraison marquée finie avantactivation.

@@ -109,6 +109,19 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session254 — préparation locale et machine canonique activées en0.8.20/254-local-preparation-r2.
+Source exécutable271d536b ; retour253R2 compatible et pointeurs atomiques quatre hôtes.
+General/shared local horsGit sansSHA passe le relais d’origine sans exiger SSH ; helper/droits inchangés.
+Projet natif résolu par le worker du placement, même hostname différent ou égal au maître ; aucun repli local.
+Agent3846 réellementbusy/projetSYS attesté, même tâchef550/instancefe4/PID3016909 préservés.
+Neuf contrôles distincts Mac/Linux, deux revues lues/ACK, R2 sansP1/P2, Converge1CONVERGEDcode.
+Sept composants/SHA chargés ; coupurecore1,54s, onzePID/birthT3/registreMac60acca/7payloads inchangés.
+T3 non arrêté ; façades anciennes conservées. Aucun rejeu métier ni mission de qualification.
+DescriptionMCP commit_view/discovery clarifiée, condition déjà publiée via$defs/$ref ; refus local correct.
+Publication/Git/nettoyage en cours ; bilan /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/254-preparation-locale/validation.md.
+Reprise privée /Users/moi/.cache/bridget254-preparation-locale/resume.md.
+
+
 Session253 — projetsnatifs et remises corrigés, services0.8.19/253-native-project-r2chargés. Sourceexécutable1ce0c0d1, retour252compatible/pointeursatomiques4hôtes ; coupurescore1,53spuis1,62s. ProjetGitdesenfantsnatifsdistantstraitéviaworkeraveccommande/instance/cwd/révocationsavant/aprèsE/S, aucuneautoritéT3. FooterreplyfalsecommunrespecteWorkerResult, routeabsente distinctedeprésencehistorique. ContrôleruntimeadécouvertboucleParixspool_envelope_changed : comparaisonsmémoire/spoolunifiées, premièreséchéanceconservée, mid_turnseulementrestreint, corps/identité/exécutionstricts. ParentParixrevenubusy/projetattesté ; enfants3840/3841finisavantactivation(result_available), pasdefaussepreuvepositiveactive. DixcontrôlesR1Mac/Linuxpuis6daemonR2Mac/8coredaemonLinuxPASS(recouvrementnonadditionné), deuxrevueslues/ACK ; R2sansP1/P2confirmé. OnzePID/birthT3/registre60acca/7payloadsinchangés, wrapperspréservés, aucunrejeumétier. T3resteouvert, anciennesfaçades/wrappersconservés. Releasepublique0.8.19/sixactifsR2anonymesSHA/APK8019lignée8018vérifiés ; mainpoussé/aligné4hôtespropre. WT/branche253Macet18copiestransfertretirés ; WTSYS/Cartaeintégréspropresconservés(5/39processusillisibles), imagesutilisées/preuvesétrangèresconservées. CachesMac5,60Gio/SYS9,45Gio. Diagnosticsparentin_flight, pasdereceptionmétierinventée. Bilan /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/253-projet-enfants-natifs/validation.md. Repriseprivée /Users/moi/.cache/bridget253-projets-natifs/resume.md.
 
 
