@@ -1,0 +1,2 @@
+# 255 — Guidage de capacité cohérent
+Correction autorisée, ETA20–35min. FR001 : resource_saturated conserve code et mesures mais ne présume aucun état durable. FR002 : detail.admission.recovery décide de la clé selon not_recorded/pending/admitted/refused/unknown ; aucune modification de reçu, garde, seuil, tâche ou droits. FR003 : test des états observés et lecture pure, revue ciblée, activation0.8.22 sur sept composants/quatre hôtes ; T3 ouvert, aucun rejeu métier.

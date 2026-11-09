@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.22 — 2026-11-09
+
+- Corriger le guidage des refus de capacité : la reprise suit le reçu d’admission réel, sans présumer un refus durable ni changer les seuils.
+
 ## 0.8.21
 - Authenticated local preparation uses the origin worker registry even when a different profile registry exists on the account. No new permissions or content transfer.
 

@@ -4258,7 +4258,7 @@ fn failure(code: &str) -> Value {
         let capacity=crate::capacity_refusal::CapacityRefusal::decode(code)
             .map(|proof|proof.projection()).unwrap_or_else(||json!({"evidence_available":false,"scope":"historical_refusal","cause":"measurement_not_recorded_or_invalid"}));
         let message="Le contrôle de capacité a refusé la cible imposée à cet instant.";
-        let recovery="Consultez detail.capacity : seules les mesures jointes au refus établissent le seuil atteint à cet instant. Sans preuve jointe, la mesure exacte est inconnue ; un ancien snapshot ou la charge actuelle ne la reconstitue pas. Une admission refusée durablement sans tâche ne se rouvre pas au rejeu. Avant une nouvelle request_id, vérifiez le refus terminal sans tâche et la capacité fraîche de la même machine, en conservant vos contraintes. Ne lancez aucun remplacement si une tâche ou une admission reste en cours ou inconnue.";
+        let recovery="Appliquez detail.admission.recovery pour choisir la clé : resource_saturated ne prouve pas à lui seul un refus durable. Consultez detail.capacity pour le seuil constaté à cet instant, puis vérifiez une capacité fraîche sur la même machine sans changer vos contraintes. Sans mesure jointe, la valeur historique reste inconnue. Ne créez aucun remplacement si une tâche ou une admission reste en cours ou inconnue. Les autres travaux autorisés suivent leur propre état.";
         let human="Si la capacité ne peut pas être libérée dans votre périmètre, demandez à l’utilisateur de décider quels travaux peuvent attendre ou quelle capacité ajouter. Ne terminez pas les tâches d’autrui et ne changez pas de machine sans autorisation.";
         return json!({"status":"refused","code":"resource_saturated","message":message,
             "detail":{"message":message,"recovery":recovery,"human_action":human,"capacity":capacity}});
@@ -35341,9 +35341,48 @@ for frame in frames: print(json.dumps(frame),flush=True)
             assert_eq!(result["detail"]["capacity"]["evidence_available"],false);
             assert_eq!(result["detail"]["capacity"]["cause"],"measurement_not_recorded_or_invalid");
             assert!(!result.to_string().contains("private189"));
-            assert!(result["detail"]["recovery"].as_str().unwrap().contains("nouvelle request_id"));
+            assert!(result["detail"]["recovery"].as_str().unwrap().contains("detail.admission.recovery"));
             assert!(result["detail"]["human_action"].as_str().unwrap().contains("utilisateur"));
         }
+    }
+
+    #[test]
+    fn spec255_capacity_guidance_follows_observed_receipt_without_creating_work() {
+        let (state, config, rx, _reader, request, _root) = routing168_fixture(1);
+        let plan = routing168_plan(&state, &request);
+        let now = unix_timestamp();
+        let canonical = serde_json::to_vec(&NativeDelegationRequest::AutoDelegateV2(request.clone())).unwrap();
+        let receipt = routing_auto_receipt(OWNER.into(), &request, canonical, &plan, 1, now).unwrap();
+        let proof = crate::capacity_refusal::CapacityRefusal::new(now, now,
+            [Some(61), Some(46), Some(100)], [90, 10, 100]).unwrap();
+        let observe = || routing_failure_admission("conn-1", &request, None, failure(&proof.encoded()), &state);
+        for expected in ["not_recorded", "pending", "refused"] {
+            let before = state.lock().unwrap().delegation_store.auto_admission_receipt(OWNER, &request.request_id).unwrap();
+            let view = observe();
+            assert_eq!(view["code"], "resource_saturated");
+            assert_eq!(view["detail"]["admission"]["state"], expected);
+            assert!(view["detail"]["admission"]["task_id"].is_null());
+            let recovery = view["detail"]["recovery"].as_str().unwrap();
+            assert!(recovery.contains("detail.admission.recovery"));
+            assert!(!recovery.contains("nouvelle request_id"));
+            let scoped = view["detail"]["admission"]["recovery"].as_str().unwrap();
+            match expected {
+                "not_recorded" => assert!(scoped.contains("même request_id") && scoped.contains("concurrent")),
+                "pending" => assert!(scoped.contains("même request_id") && scoped.contains("Ne créez pas")),
+                "refused" => assert!(scoped.contains("nouvelle request_id") && scoped.contains("sans le rouvrir")),
+                _ => unreachable!(),
+            }
+            let st = state.lock().unwrap();
+            assert_eq!(st.delegation_store.auto_admission_receipt(OWNER, &request.request_id).unwrap(), before);
+            assert!(st.delegation_store.tasks().unwrap().is_empty());
+            assert!(rx.try_recv().is_err());
+            if expected == "not_recorded" {
+                assert!(st.delegation_store.reserve_auto_admission_receipt(&receipt, now).unwrap());
+            } else if expected == "pending" {
+                st.delegation_store.refuse_auto_admission(&receipt, &proof.encoded(), now).unwrap();
+            }
+        }
+        drop(state); cleanup(&config);
     }
 
     #[test]
