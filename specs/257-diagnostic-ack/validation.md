@@ -26,3 +26,41 @@ Dix fichiers/copies vérifiés retirés,354832958octets logiques, dont l’ancie
 Le worktree/branche257 Mac est retiré après intégration finale et vérification des usages/fichiers ignorés ; détail dans le reçu privé de clôture. Aucun changement visible d’interface : diaporama non requis.
 
 Preuves privées : /Users/moi/.cache/bridget257-ack-diagnostic/ .
+
+## Nettoyage complémentaire demandé le 9 novembre 2026
+
+La demande de commit, intégration à main, push et nettoyage reprend la livraison
+déjà intégrée en 44f3e51e. Aucun nouveau changement exécutable ni nouveau build.
+Les reçus du nettoyage ont été relus après l'interruption du fil.
+
+- Seize worktrees intégrés retirés : huit de compilation sur SYS et huit Android
+  sur Cartae. Leurs seize branches ont aussi été retirées. Les fichiers ignorés
+  étaient des sorties de génération identifiées ; les usages ont été vérifiés
+  avant suppression. Taille logique des worktrees : 2 931 961 150 octets.
+- Cinquante-neuf autres branches intégrées retirées de SYS après vérification des
+  références de tâches et admissions. Total : soixante-quinze branches locales
+  retirées. Le distant GitHub ne porte plus que main ; aucune référence distante
+  supplémentaire à supprimer au contrôle final.
+- Intermédiaires retirés : environ 7,22 Gio sur Mac, 655 557 731 octets sur SYS et
+  4 784 487 547 octets sur Cartae. Sorties anciennes à la racine des profils
+  retirées aussi ; reçus Mac et Cartae : 261 934 882 et 179 640 400 octets.
+  Le total documenté dépasse 15 Gio logiques, worktrees compris. Ce total ne
+  mesure pas directement l'espace physique récupéré.
+- Un seul checkout subsiste sur chacun des quatre hôtes. Mac et KS ne gardent
+  que main. SYS conserve trente-deux branches encore référencées par des tâches
+  non closes. Cartae conserve une branche d'archive contenant du travail non
+  intégré. Aucune clôture de tâche ni suppression de ce travail pour nettoyer.
+  Images actives, retour256, anciennes images utilisées et preuves conservés.
+
+Reprise : main propre au même commit sur les quatre hôtes et distant GitHub
+vérifié. Les sept composants chargent toujours les SHA257 attendus. Le binaire
+de retour et le champ rollback restent conformes sur chaque hôte ; aucun passage
+d'activation en attente. Aucune sortie obsolète sélectionnée ne reste dans les
+profils contrôlés. Les processus Mac ont changé depuis le reçu précédent ; leur
+image chargée a été vérifiée de nouveau, sans attribuer la cause de ce changement.
+Aucun arrêt ni redémarrage effectué pendant cette reprise.
+
+Cette clôture modifie seulement le bilan documentaire. Vérifications : reçus,
+état Git, fichiers présents et images chargées ; pas de répétition des tests
+applicatifs déjà acquis. Reçus détaillés conservés dans
+/Users/moi/.cache/bridget257-ack-diagnostic/cleanup-requested/ .
