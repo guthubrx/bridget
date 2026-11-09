@@ -2430,11 +2430,14 @@ impl LinkWorker {
 
     fn enqueue_delivery(&mut self, delivery: DaemonToWrapper) {
         if let DaemonToWrapper::DeliverIdempotent { delivery_id, .. } = &delivery {
-            if let Some((queued, _)) = self.queue.iter().find(|(frame,_)|
+            if let Some((queued, _)) = self.queue.iter_mut().find(|(frame,_)|
                 matches!(frame,DaemonToWrapper::DeliverIdempotent{delivery_id:id,..} if id==delivery_id)) {
-                if serde_json::to_vec(queued).ok() != serde_json::to_vec(&delivery).ok() {
-                    error!("remise {delivery_id} divergente : lien fermé, copie maître conservée");
-                    self.daemon_alive.store(false, Ordering::SeqCst);
+                match crate::delivery_spool244::reconcile_delivery_replay(queued,&delivery) {
+                    Ok(frozen)=>*queued=frozen,
+                    Err(_)=>{
+                        error!("remise {delivery_id} divergente : lien fermé, copie maître conservée");
+                        self.daemon_alive.store(false, Ordering::SeqCst);
+                    }
                 }
                 return;
             }
@@ -8428,6 +8431,32 @@ mod tests {
             worker.journal.stop();
             worker.relay.shutdown();
         }
+    }
+
+    #[test]
+    fn spec253_t3_queued_replay_keeps_link_and_first_deadline() {
+        let (mut worker,_peer)=worker099();
+        let mut message=plain114("replay253");message.deadline_at=Some(100);
+        let original=DaemonToWrapper::DeliverIdempotent {delivery_id:"delivery253".into(),
+            recipient_instance_id:stable_uuid("instance:test"),delivery_generation:1,
+            expires_at:999,message,execution:None,mid_turn_ok:Some(false)};
+        worker.enqueue_delivery(original.clone());
+        let mut replay=original.clone();
+        if let DaemonToWrapper::DeliverIdempotent {message,mid_turn_ok,..}=&mut replay {
+            message.deadline_at=Some(200);message.from_display_name=Some("titre".into());*mid_turn_ok=Some(true);
+        }
+        worker.enqueue_delivery(replay);assert!(worker.daemon_alive.load(Ordering::SeqCst));
+        assert_eq!(worker.queue.len(),1);
+        assert!(matches!(&worker.queue[0].0,DaemonToWrapper::DeliverIdempotent {message,mid_turn_ok:Some(false),..} if message.deadline_at==Some(100)));
+        worker.enqueue_delivery(DaemonToWrapper::Deliver {message:plain114("neighbor253"),mid_turn_ok:None});
+        assert_eq!(worker.queue.len(),2);
+        if let DaemonToWrapper::DeliverIdempotent {mut message,..}=original {
+            message.body="forged".into();worker.enqueue_delivery(DaemonToWrapper::DeliverIdempotent {
+                delivery_id:"delivery253".into(),recipient_instance_id:stable_uuid("instance:test"),
+                delivery_generation:1,expires_at:999,message,execution:None,mid_turn_ok:Some(false)});
+        }
+        assert!(!worker.daemon_alive.load(Ordering::SeqCst));
+        worker.journal.stop();worker.relay.shutdown();
     }
 
     #[test]

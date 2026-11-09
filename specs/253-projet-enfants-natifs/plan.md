@@ -4,3 +4,5 @@ NO_REPLY_NOTICEcommun corrige la portée ; lotT3 le réutilise. Aucun nouveaufor
 Qualification runtime : annuaire/callerprojects sur mêmesenfants existants, sans missionneuve ou mutation métier. Formatsretour252 identiques, qualificationstorageclientexistante réutilisée. Buildvia build.py/cachepartagé. Revue indépendantebornée, activationnativepréservantwrappersT3etpayloads, publication0.8.19/APK8019, main/pushalign/nettoyageprudent.
 
 Le guidage RouterError::AgentNotFound conserve son préfixe et nomme la route absente ; aucun changement du routeur ni du reçu.
+
+R2 : cause runtime supplémentaire confirmée, boucle du lienParix sur comparaisons brutes en mémoire et évolution de mid_turn_ok en spool. Réutiliser un seul réconciliateur strict des trames dans les deux files ; conserver corps/identité/exécution/échéance initiaux et appliquer le minimum des autorisations de remise en cours. Pas de nouveau magasin ni format.

@@ -5,3 +5,5 @@ FR001 : résoudre le projetGit annoncé par un enfant natif distant via le worke
 Nonobjectifs : pas de replay desmessages/missions, pas de changement des seuils de ressources(100%charge signalé distinct deCPU67%), aucunecause inventée pourles anciennescoupures déjà rétablies, aucuneaugmentation de rôle ou permission.
 
 FR006 : unknown_recipient distingue la route actuellement absente d’une présence historique encore visible. Le code de refus et les règles de rejeu restent inchangés.
+
+FR007 : les rediffusions d’une même remise conservent la première échéance et les libellés, et ne ferment pas le lien sur ces seules variations. Une autorisation mid_turn_ok recalculée ne peut que se restreindre, jamais s’élargir. Toute modification de contenu/identité/génération/exécution reste refusée.
