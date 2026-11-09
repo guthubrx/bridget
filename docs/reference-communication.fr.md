@@ -1202,3 +1202,6 @@ même résumé par message direct après son dépôt silencieux.
 Une lecture volontaire par un modèle ajoute les fragments lus à son contexte.
 Le dépôt silencieux évite leur injection et le réveil automatiques ; il ne promet
 pas une lecture ultérieure gratuite.
+
+
+Brief/handoff : les bornes de texte sont en octets UTF-8, pas en caractères. Le schéma MCP publie x-maxUtf8Bytes, x-maxRenderedUtf8Bytes et x-maxSerializedUtf8Bytes ; le validateur natif reste la référence, sans troncature.

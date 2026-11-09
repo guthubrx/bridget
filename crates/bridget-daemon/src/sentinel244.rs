@@ -27,6 +27,7 @@ fn public_code(value: &Value) -> Value {
         | "project_mapping_unknown"
         | "project_mapping_mismatch"
         | "project_preparation_link_unavailable"
+        | "project_preparation_git_required"
         | "cwd_outside_parent_project"
         | "expected_base_commit_mismatch"
         | "program_check_unavailable"
@@ -166,6 +167,8 @@ mod tests {
         record_admission_observation(&db,"parent","requete","not_recorded","project_mapping_unknown",100).unwrap();
         let row:(String,String)=db.query_row("SELECT admission,code FROM admission_observations244 WHERE owner='parent' AND request_id='requete'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
         assert_eq!(row,("not_recorded".into(),"project_mapping_unknown".into()));
+        record_admission_observation(&db,"parent","hors-git","not_recorded","project_preparation_git_required",100).unwrap();
+        assert_eq!(db.query_row("SELECT code FROM admission_observations244 WHERE request_id='hors-git'",[],|r|r.get::<_,String>(0)).unwrap(),"project_preparation_git_required");
         record_admission_observation(&db,"parent","requete","pending","provider_quota_exhausted",101).unwrap();
         assert_eq!(db.query_row("SELECT observed_at FROM admission_observations244",[],|r|r.get::<_,i64>(0)).unwrap(),100);
         record_admission_observation(&db,"autre","requete","refused","secret non autorisé",102).unwrap();

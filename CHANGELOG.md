@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.18
+
+- Diagnostic hors Git avec machines concernées, limites UTF-8 explicites du brief et durée renouvelée par ronde. Aucun changement de permissions ou de transport documentaire.
+
+
 [English](CHANGELOG.md) · [Français](CHANGELOG.fr.md)
 
 Published versions are added to the repository history under `vX.Y.Z` tags.

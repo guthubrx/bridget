@@ -332,3 +332,6 @@ results and authorized urgent controls keep their normal paths.
 A deliberate model read adds the retrieved fragments to its context. A silent
 deposit prevents automatic injection and wake-up; it does not make later model
 reads free.
+
+
+Brief/handoff text limits use UTF-8 bytes, not characters. MCP publishes x-maxUtf8Bytes, x-maxRenderedUtf8Bytes and x-maxSerializedUtf8Bytes. Native validation remains authoritative; content is never truncated.

@@ -221,6 +221,8 @@ Une mission automatique emploie bridget_auto_delegate ou bridget delegate MISSIO
 --machine-id, --engine, --connection-id, --model, --effort. --workload general|compilation
 est explicite, général par défaut. Modèle sans efforts : défaut natif null, aucun medium inventé.
 
+Hors Git, general/shared peut omettre ce SHA, mais exige un dossier local sur la source ou un dossier distant existant déjà mappé. Aucun transfert documentaire automatique n’est effectué ; ne pas créer Git pour contourner ce prérequis.
+
 Pour Shared Git, expected_base_commit est le HEAD du checkout source. Pour Worktree,
 c'est le commit de workspace.base_ref (HEAD si omis), pas obligatoirement le HEAD du
 checkout parent : fournir la branche à tester et son SHA exact. Le MCP les transmet
@@ -267,6 +269,7 @@ refusent les tâches d'un autre parent. Les résultats publiés restent stables 
 Le catalogue annonce le délai maximal de réponse à la mission. Le reçu donne
 `mission_deadline_at`, la date brute après remise. Un rejeu garde cette date.
 Le délai métier exclut les pauses ; son expiration produit `mission_reply_timeout`.
+Chaque nouvelle ronde admise renouvelle ce délai à sa remise effective ; un rejeu strict ne le renouvelle pas. Le budget n’est pas cumulé depuis la première ronde.
 Un timeout de transport ou d'attente n'annule rien.
 
 `reply_timeout` est facultatif (60 à 86 400 secondes, défaut 3600). Il fait partie

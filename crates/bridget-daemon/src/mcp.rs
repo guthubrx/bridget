@@ -2637,15 +2637,26 @@ fn discovery_tools() -> Vec<Value> {
 }
 
 pub(crate) fn tools() -> Vec<Value> {
-    let brief_schema = json!({"type":"object","properties":{
-        "objective":{"type":"string","minLength":1,"maxLength":1024},
-        "summary":{"type":"string","minLength":1,"maxLength":8192},
-        "results":{"type":"array","maxItems":12,"items":{"type":"object","properties":{"text":{"type":"string","minLength":1,"maxLength":2048},"evidence":{"type":"string","minLength":1,"maxLength":2048}},"required":["text"],"additionalProperties":false}},
-        "decisions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
-        "questions":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}},
-        "next_step":{"type":"string","minLength":1,"maxLength":2048},
-        "references":{"type":"array","maxItems":16,"items":{"type":"object","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":{"type":"string","minLength":1,"maxLength":256},"host":{"type":"string","minLength":1,"description":"Obligatoire pour kind=file : machine qui porte cette référence, par exemple cartae."},"path":{"type":"string","description":"Avec kind=file : chemin absolu d'un fichier ou dossier sur host ; aucune ouverture automatique."},"url":{"type":"string"},"id":{"type":"string"},"target":{"type":"string"},"agent":{"type":"string"},"thread_id":{"type":"string"},"artifact_id":{"type":"string"},"version_id":{"type":"string"},"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":{"type":"string","minLength":1,"maxLength":256}},"required":["kind","label"],"allOf":[{"if":{"properties":{"kind":{"const":"file"}},"required":["kind"]},"then":{"required":["host","path"]}}],"additionalProperties":false}},
-        "limitations":{"type":"array","maxItems":12,"items":{"type":"string","minLength":1,"maxLength":2048}}
+    // maxLength est en caractères JSON Schema ; le contrat natif compte les
+    // octets UTF-8. Publier aussi cette unité, sans changer le validateur.
+    let text = |limit| json!({"type":"string","minLength":1,"maxLength":limit,
+        "x-maxUtf8Bytes":limit,"description":"Longueur maximale en octets UTF-8, pas en caractères ; le validateur natif fait foi."});
+    let mut host=text(crate::handoff::MAX_LABEL_BYTES);
+    host["description"]=json!("Obligatoire pour kind=file : machine portant cette référence ; au plus256octetsUTF-8.");
+    let mut path=text(crate::handoff::MAX_ITEM_BYTES);
+    path["description"]=json!("Avec kind=file : chemin absolu d'un fichier ou dossier sur host ; au plus2048octetsUTF-8, aucune ouverture automatique.");
+    let brief_schema = json!({"type":"object",
+        "description":"Dossier déclaré par le parent. Toutes les limites de texte sont en octets UTF-8 ; taille totale du rendu bornée, aucune troncature.",
+        "x-maxRenderedUtf8Bytes":crate::handoff::MAX_BODY_BYTES,
+        "properties":{
+        "objective":text(crate::handoff::MAX_OBJECTIVE_BYTES),
+        "summary":text(crate::handoff::MAX_SUMMARY_BYTES),
+        "results":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":{"type":"object","properties":{"text":text(crate::handoff::MAX_ITEM_BYTES),"evidence":text(crate::handoff::MAX_ITEM_BYTES)},"required":["text"],"additionalProperties":false}},
+        "decisions":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":text(crate::handoff::MAX_ITEM_BYTES)},
+        "questions":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":text(crate::handoff::MAX_ITEM_BYTES)},
+        "next_step":text(crate::handoff::MAX_ITEM_BYTES),
+        "references":{"type":"array","maxItems":crate::handoff::MAX_REFERENCES,"items":{"type":"object","x-maxSerializedUtf8Bytes":crate::handoff::MAX_REFERENCE_BYTES,"description":"La référence JSON sérialisée entière est limitée à2048octetsUTF-8, en plus des champs.","properties":{"kind":{"enum":["file","url","message","journal","thread","artifact"]},"label":text(crate::handoff::MAX_LABEL_BYTES),"host":host,"path":path,"url":text(crate::handoff::MAX_ITEM_BYTES),"id":text(crate::handoff::MAX_ITEM_BYTES),"target":text(crate::handoff::MAX_ITEM_BYTES),"agent":text(crate::handoff::MAX_LABEL_BYTES),"thread_id":text(crate::handoff::MAX_LABEL_BYTES),"artifact_id":text(crate::handoff::MAX_ITEM_BYTES),"version_id":text(crate::handoff::MAX_ITEM_BYTES),"from_seq":{"type":"integer","minimum":0},"to_seq":{"type":"integer","minimum":0},"source_label":text(crate::handoff::MAX_LABEL_BYTES)},"required":["kind","label"],"allOf":[{"if":{"properties":{"kind":{"const":"file"}},"required":["kind"]},"then":{"required":["host","path"]}}],"additionalProperties":false}},
+        "limitations":{"type":"array","maxItems":crate::handoff::MAX_LIST_ITEMS,"items":text(crate::handoff::MAX_ITEM_BYTES)}
     },"required":["objective","summary"],"additionalProperties":false});
     let mut catalogue = vec![
         json!({"name":"bridget_ask_user","description":"Pose une question humaine native Bridget, utilisable en terminal et sur Android sans T3. Préserver le texte du modèle. Préparer request_id UUID et rejouer le même contenu après coupure. create attend la réponse (3600s par défaut), wait reprend l’attente sans republier. Texte libre et complément sont renvoyés sans interprétation. status lit, cancel ferme. acknowledge confirme la réception de la réponse submitted si le client ne la confirme pas automatiquement.","inputSchema":{"type":"object","properties":{"action":{"enum":["create","status","wait","cancel","acknowledge"],"default":"create"},"request_id":{"type":"string","format":"uuid"},"questions":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"object","properties":{"id":{"type":"string","minLength":1,"maxLength":4096},"header":{"type":"string","minLength":1,"maxLength":1024},"question":{"type":"string","minLength":1,"maxLength":16384},"options":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"label":{"type":"string","minLength":1,"maxLength":4096},"description":{"type":"string","maxLength":8192},"value":{"type":"string","minLength":1,"maxLength":4096}},"required":["label"],"additionalProperties":false}},"multiSelect":{"type":"boolean","default":false},"allowCustomAnswer":{"type":"boolean","default":true}},"required":["id","header","question","options"],"additionalProperties":false}},"wait_timeout":{"type":"integer","minimum":0,"maximum":3600,"default":3600},"command_id":{"type":"string","format":"uuid"}},"required":["request_id"],"additionalProperties":false},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":true}}),
@@ -3559,6 +3570,24 @@ mod tests {
             args.as_object_mut().unwrap().extend(invalid.as_object().unwrap().clone());
             assert!(guidance156_capture_send(args).is_err());
         }
+    }
+
+    #[test]
+    fn spec252_brief_schema_exposes_native_utf8_limits() {
+        let catalogue=tools();
+        let schema=&catalogue.iter().find(|t|t["name"]=="bridget_handoff").unwrap()["inputSchema"]["properties"]["draft"];
+        assert_eq!(schema["x-maxRenderedUtf8Bytes"],crate::handoff::MAX_BODY_BYTES);
+        assert_eq!(schema["properties"]["results"]["items"]["properties"]["text"]["x-maxUtf8Bytes"],crate::handoff::MAX_ITEM_BYTES);
+        assert_eq!(schema["properties"]["references"]["items"]["x-maxSerializedUtf8Bytes"],crate::handoff::MAX_REFERENCE_BYTES);
+        assert_eq!(schema["properties"]["references"]["items"]["properties"]["host"]["x-maxUtf8Bytes"],crate::handoff::MAX_LABEL_BYTES);
+        for name in ["bridget_delegate","bridget_auto_delegate","bridget_task_continue"] {
+            assert_eq!(&catalogue.iter().find(|t|t["name"]==name).unwrap()["inputSchema"]["properties"]["brief"],schema);
+        }
+        // Moins de2048caractères peut dépasser2048octets ; le diagnostic reste exact.
+        let draft=json!({"objective":"o","summary":"s","results":[{"text":"é".repeat(crate::handoff::MAX_ITEM_BYTES/2+1)}]});
+        let error=crate::handoff::validate_and_render(&draft).unwrap_err();
+        assert_eq!(error.field,"results[0].text");
+        assert!(error.reason.contains("octets"));
     }
 
     #[test]
