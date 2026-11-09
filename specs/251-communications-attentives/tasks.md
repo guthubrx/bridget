@@ -17,8 +17,8 @@
 - [x] T011 [US4] Ajouter intent=information à crates/bridget-daemon/src/mcp.rs et cli.rs, négociation avant envoi, statut stored seulement sur acceptation ; tests de capacité absente et reçu.
 - [x] T012 [US4] Vérifier les lectures du ledger existant et la compatibilité avec le lecteur de retour ; docs/decisions/251-communications-attentives.md et preuves sans appel modèle.
 ## Convergence, revue et livraison
-- [ ] T013 Exécuter les contrôles ciblés via scripts/build.py ; preuves et commandes dans specs/251-communications-attentives/validation.md.
-- [ ] T014 Contre-revue code autre fournisseur si joignable, Converge et audit après dernier changement ; aucun P1/P2 non traité dans specs/251-communications-attentives/validation.md.
+- [x] T013 Exécuter les contrôles ciblés via scripts/build.py ; preuves et commandes dans specs/251-communications-attentives/validation.md.
+- [x] T014 Contre-revue code autre fournisseur si joignable, Converge et audit après dernier changement ; aucun P1/P2 non traité dans specs/251-communications-attentives/validation.md.
 - [ ] T015 Publier/activer les sept composants et retours qualifiés sur quatre hôtes par procédure existante, T3 reste ouvert ; contrôler images/processus/lien et vrai dépôt silencieux.
 - [ ] T016 Mettre à jour bilan, intégrer sur main, pousser/vérifier alignement quatre hôtes, nettoyer ressources propres inutiles ; preuves dans specs/251-communications-attentives/validation.md.
 ## Dépendances et exécution

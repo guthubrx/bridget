@@ -328,3 +328,7 @@ Use explicit supersedes on compatible entries to group updates without deleting
 originals. Send actions only to owners of work actually affected by maintenance;
 a connected presence alone is not an interest signal. Questions, expected
 results and authorized urgent controls keep their normal paths.
+
+A deliberate model read adds the retrieved fragments to its context. A silent
+deposit prevents automatic injection and wake-up; it does not make later model
+reads free.

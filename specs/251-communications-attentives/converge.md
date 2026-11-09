@@ -1,0 +1,4 @@
+# Convergence251
+Passe1 préliminaireCONVERGED avant revuecodeR1, réouverte enpasse2 sur deux manques confirmés. T017/T018 ajoutées enappend puis réalisées avantpasse3. Aucun retrait d'exigence.
+Passe3 après source6334f58b : CONVERGED, zéro manque de code confirmé. Lecture FR001→010 : CLI/MCP/capacité ; transactionledger ; canon/replay/panne ; refus avantcapture ; identité/projet/routage ; lectureledger ; matrice/maintenanceciblée ; observationdormant ; lecteur250sansremise ; septservicesR2/T3préservé. Tests Mac10/Linux9 R2, R2statique sansP1/P2, dépôt réel67octets et zéroremise/suivi/exécution, ancienlecteur250 conservé. Aucune nouvelle tâche nécessaire. Publication/Git/nettoyage restent gatesT015/T016 et ne sont pas assimilés à un manque de code.
+Empreinte tasks.md gelée pendant cette analyse : 45aab3594aabac4f5f96c59739953c349af44759e634fe2503842b50f2acc8d7. Aucun code ni case modifié dans cette passe.

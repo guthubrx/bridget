@@ -1198,3 +1198,7 @@ un fil partagé existant et ses pages ; `supersedes_seq` remplace logiquement un
 entrée de type compatible sans effacer l'original. `history` reste immuable.
 Ne pas créer un fil ni élargir ses membres automatiquement. Pas de diffusion du
 même résumé par message direct après son dépôt silencieux.
+
+Une lecture volontaire par un modèle ajoute les fragments lus à son contexte.
+Le dépôt silencieux évite leur injection et le réveil automatiques ; il ne promet
+pas une lecture ultérieure gratuite.
