@@ -21,6 +21,10 @@ impl IdempotencyStore {
             || message.reply || message.in_reply_to.is_some() || message.reply_timeout.is_some()
         { return Err(IdempotencyError::DispatchUnavailable); }
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.query_row("SELECT EXISTS(SELECT 1 FROM ledger WHERE id=?1 AND target=?2)",
+            params![message.id,message.to],|row|row.get::<_,bool>(0))? {
+            return Err(IdempotencyError::InformationCollision);
+        }
         if tx.execute("UPDATE idempotency_records SET state='terminal', public_result_kind='accepted'
             WHERE issuer_scope=?1 AND operation_kind='send' AND idempotency_key=?2 AND state='prepared'",
             params![key.issuer_scope,key.idempotency_key])? != 1

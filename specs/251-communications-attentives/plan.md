@@ -15,3 +15,5 @@ Le dépôt est O(taille corps + log N), sans scan de flotte ni chargement d'hist
 La revue est statique sur paquet et diff, lecture seule, fournisseur distinct si joignable. Les tests comparent les effets réellement créés : ledger, remises, suivi et contrôle fournisseur. Une sortie vide n'est pas preuve de silence.
 
 Dispositions revue : capacité serveur obligatoire au puits, StoreOnly jamais native_task_exchange, refus structurel dans begin_send_delivery/defer_idempotent_delivery ; voir adversarial-review-plan.md.
+
+Disposition R2 de revue : StoreOnly conserve identité/projet/routage/corps mais ne consomme ni ne subit les gardes de boucles de remise (disjoncteur, contenu, quarantaine, sauts). Une collision ledger constatée dans la transaction produit un refus durable information_id_conflict ; panne SQL reste une issue non confirmée sans repli. Tests renforcés T017/T018, sans table ni dépendance nouvelle.

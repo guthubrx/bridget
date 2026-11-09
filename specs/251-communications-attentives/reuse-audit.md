@@ -26,3 +26,5 @@ CREER la variante StoreOnly et une opération sur IdempotencyStore : seule contr
 - [x] Plan et spec cohérents, statut PASS.
 
 Recherche de guide à l'implémentation : docs/reference-communication.md et .fr.md existent. REUTILISER ces deux fichiers, aucun nouveau guide parallèle. Skills versionnées skills/bridget/SKILL.md et references/commandes.md étendues ; pas de nouvelle skill. Garde anti-fuite aux puits begin_send_delivery et defer_idempotent_delivery existants, aucun wrapper de transport nouveau.
+
+R2 : recherche InformationCollision/id_conflict/collision dans idempotency.rs et send_delivery.rs. REUTILISER IdempotencyError (une variante métier fermée) et reject_idempotent_send, pas de nouvelle classe/endpoint. SELECT indexé sous Immediate distingue le fait de collision, sans parser de texte SQLite. Gardes de transport regroupées dans prepare_dispatch existant, sans helper parallèle.

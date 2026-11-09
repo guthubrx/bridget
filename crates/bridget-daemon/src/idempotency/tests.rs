@@ -5840,7 +5840,7 @@ fn spec251_information_commit_rollback_reouverture_et_collision() {
     assert_eq!(store.conn.query_row("SELECT body FROM ledger WHERE id='message-1'",[],|r|r.get::<_,String>(0)).unwrap(),message.body);
     let other=IdempotencyKey::new("012_scope_251ccccccccc",OperationKind::Send,"message-1").unwrap();
     store.reserve(&other,b"other-scope",NOW,HORIZON,NOW,30).unwrap();
-    assert!(store.store_information(&other,&message,NOW).is_err(),"collision doit échouer, sans remplacer le corps");
+    assert!(matches!(store.store_information(&other,&message,NOW),Err(IdempotencyError::InformationCollision)),"collision constatée, sans remplacer le corps");
     assert!(matches!(store.lookup(&other,NOW).unwrap(),LookupResult::OutcomeUnknown{..}));
     assert_eq!(store.conn.query_row("SELECT COUNT(*) FROM ledger",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     let delivery=SendDelivery{delivery_id:"bad-delivery251".into(),recipient_instance_id:"instance".into(),delivery_generation:1,

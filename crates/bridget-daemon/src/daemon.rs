@@ -12093,30 +12093,34 @@ fn prepare_dispatch(
     };
     message.cross_project_reason = scope_reason;
 
-    if !st.circuit_breaker.check(&logical_sender, &message.to) {
-        return Err((
-            "circuit_breaker",
-            format!(
-                "disjoncteur: limite {} échanges / {}s",
-                st.circuit_breaker.limit(),
-                st.circuit_breaker.window_secs()
-            ),
-        ));
-    }
-    if st.deduplicator.is_duplicate(&content_key, &message.to) {
-        return Err(("duplicate_content", "doublon de contenu".to_string()));
-    }
-    if st
-        .envelope_guard
-        .is_quarantined(&message_guard_id, &message.to)
-    {
-        return Err((
-            "quarantined",
-            "message déjà relayé (quarantaine)".to_string(),
-        ));
-    }
-    if !message.decrement_hops() {
-        return Err(("hops_exhausted", "budget de sauts épuisé".to_string()));
+    let store_only = message.intent == Some(bridget_core::MessageIntent::StoreOnly);
+    // Ces gardes évitent les boucles de remise ; un dépôt ne remet ni ne relaie.
+    if !store_only {
+        if !st.circuit_breaker.check(&logical_sender, &message.to) {
+            return Err((
+                "circuit_breaker",
+                format!(
+                    "disjoncteur: limite {} échanges / {}s",
+                    st.circuit_breaker.limit(),
+                    st.circuit_breaker.window_secs()
+                ),
+            ));
+        }
+        if st.deduplicator.is_duplicate(&content_key, &message.to) {
+            return Err(("duplicate_content", "doublon de contenu".to_string()));
+        }
+        if st
+            .envelope_guard
+            .is_quarantined(&message_guard_id, &message.to)
+        {
+            return Err((
+                "quarantined",
+                "message déjà relayé (quarantaine)".to_string(),
+            ));
+        }
+        if !message.decrement_hops() {
+            return Err(("hops_exhausted", "budget de sauts épuisé".to_string()));
+        }
     }
     if message.intent != Some(bridget_core::MessageIntent::StoreOnly)
         && !valid_tracked_reply
@@ -12132,7 +12136,7 @@ fn prepare_dispatch(
     }
     let target_conn = match st
         .router
-        .resolve(&routing_from, &routing_to, message.hops, conn_id)
+        .resolve(&routing_from, &routing_to, if store_only { 1 } else { message.hops }, conn_id)
     {
         RouterAction::Deliver { target_conn } => target_conn,
         RouterAction::Reject(error) => return Err(("routing", error.to_string())),
@@ -12577,6 +12581,11 @@ fn handle_idempotent_send_with_result_authority(
                 idempotency_key: key.idempotency_key.clone(),
                 issue: IdempotencyIssue::Accepted { expires_at },
             },
+            Err(crate::idempotency::IdempotencyError::InformationCollision) => {
+                reject_idempotent_send(st, &key, "information_id_conflict",
+                    "Cet identifiant est déjà utilisé dans le journal pour ce destinataire. Le contenu existant est conservé. Ce dépôt est refusé définitivement, sans remise au modèle. Pour publier cet avis distinct, utilisez un nouvel id et issued_at après ce refus attesté ; conservez la clé refusée pour la relire. Les autres travaux autorisés peuvent continuer.")
+                    .unwrap_or_else(|reason| DaemonToWrapper::Nack { id: message.id.clone(), reason })
+            }
             Err(error) => {
                 warn!("information non persistée : {error}");
                 DaemonToWrapper::Nack { id: message.id.clone(), reason:
@@ -41386,6 +41395,7 @@ mod presence_tests {
         let shared = Arc::new(Mutex::new(state));
         negotiate_idempotent_client(&shared,"info-client","012_scope_251aaaaaaaaa","89000000-0000-4000-8000-000000000200");
         let now=unix_now_secs();
+        let scope="012_scope_251aaaaaaaaa";
         {
             let mut st=shared.lock().unwrap();
             st.client_negotiations.get_mut("info-client").unwrap().capabilities.push(ClientCapability::SendInformationV1);
@@ -41394,8 +41404,17 @@ mod presence_tests {
             crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"sleep",&agent,true,Some(false),None,now).unwrap();
         }
         let order=|i:usize| {let mut message=idempotent_message(&format!("Avis sans action {i}"));
-            message.intent=Some(bridget_core::MessageIntent::StoreOnly);
+            message.intent=Some(bridget_core::MessageIntent::StoreOnly); message.hops=0;
             WrapperToDaemon::SendIdempotent{message,message_id:format!("info251-{i}"),issued_at:now}};
+        {
+            let mut st=shared.lock().unwrap();
+            for _ in 0..8 {st.circuit_breaker.record(&format!("client:{scope}"),"89000000-0000-4000-8000-000000000102");}
+            for i in 0..10 {
+                let WrapperToDaemon::SendIdempotent{message,message_id,..}=order(i) else {unreachable!()};
+                st.deduplicator.mark_sent(&format!("{scope}:{}",message.content_key()),&message.to);
+                st.envelope_guard.mark_relayed(&format!("{scope}:{message_id}"),&message.to);
+            }
+        }
         for i in 0..10 {
             let response=handle_wrapper_message("info-client",order(i),&shared);
             assert!(matches!(response,Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Accepted{..},..})),"{response:?}");
@@ -41426,6 +41445,9 @@ mod presence_tests {
             let agent=agent_tracking230::directory(&mut st).unwrap().into_iter().find(|a| a.agent.agent_id.ends_with("102")).unwrap();
             crate::agent_tracking::set(st.store.connection(),"human",&Uuid::new_v4().to_string(),b"wake",&agent,false,Some(false),None,now).unwrap();
         }
+        let limited=handle_wrapper_message("info-client",WrapperToDaemon::SendIdempotent{message:idempotent_message("Action sous saturation"),message_id:"normal-limited251".into(),issued_at:now},&shared);
+        assert!(matches!(limited,Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Rejected{category,..},..}) if category=="circuit_breaker"),"le mode normal conserve ses gardes");
+        shared.lock().unwrap().circuit_breaker=CircuitBreaker::new(180,8);
         let mut action=idempotent_message("Une vraie question");action.reply=true;
         let response=handle_wrapper_message("info-client",WrapperToDaemon::SendIdempotent{message:action,message_id:"action251".into(),issued_at:now},&shared);
         assert!(matches!(response,Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::OutcomeUnknown{delivery_id:Some(_),..},..})),"{response:?}");
@@ -41448,7 +41470,17 @@ mod presence_tests {
         }
         assert!(matches!(handle_wrapper_message("conn-1",WrapperToDaemon::Send(message),&shared),Some(DaemonToWrapper::Nack{reason,..}) if reason.starts_with("information_requires_idempotent_send")));
         let st=shared.lock().unwrap();assert!(st.store.recent_messages(10).unwrap().is_empty());
-        assert!(st.pending_replies.is_empty());
+        assert!(st.pending_replies.is_empty());drop(st);
+        let mut existing=idempotent_message("Travail préexistant conservé");existing.id="collision-info251".into();
+        shared.lock().unwrap().store.record_message(&existing,"fixture").unwrap();
+        let mut info=existing.clone();info.intent=Some(bridget_core::MessageIntent::StoreOnly);info.body="Un autre avis".into();
+        let order=WrapperToDaemon::SendIdempotent{message:info,message_id:existing.id.clone(),issued_at:now};
+        for _ in 0..2 {
+            let reply=handle_wrapper_message("info-client",order.clone(),&shared);
+            assert!(matches!(reply,Some(DaemonToWrapper::IdempotencyResult{issue:IdempotencyIssue::Rejected{category,..},..}) if category=="information_id_conflict"));
+        }
+        let st=shared.lock().unwrap();let messages=st.store.recent_messages(10).unwrap();
+        assert_eq!(messages.len(),1);assert_eq!(messages[0].body,existing.body);
     }
 
     #[test]

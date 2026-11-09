@@ -414,6 +414,8 @@ pub enum IdempotencyError {
     InvalidHorizon,
     InvalidTransition { from: RecordState, to: RecordState },
     InvalidDelivery,
+    /// Collision constatée sur (id, destinataire), distincte d’une panne SQL.
+    InformationCollision,
     HeldQueueFull,
     InvalidSpawnCommand,
     InvalidDelegatedRuntimeEvent,
@@ -442,6 +444,7 @@ impl std::fmt::Display for IdempotencyError {
                 write!(formatter, "transition interdite: {from:?} vers {to:?}")
             }
             Self::InvalidDelivery => write!(formatter, "remise idempotente invalide"),
+            Self::InformationCollision => write!(formatter, "identifiant d’information déjà présent pour ce destinataire"),
             Self::HeldQueueFull => write!(formatter, "file retenue pleine"),
             Self::InvalidSpawnCommand => write!(formatter, "commande spawn invalide"),
             Self::InvalidAgentLink => write!(formatter, "lien agent invalide"),

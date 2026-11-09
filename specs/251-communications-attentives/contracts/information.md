@@ -4,3 +4,5 @@ Après COMMIT : status=stored, effect=stored_without_wakeup, model_woken=false, 
 Reply/corrélation/résultat natif incompatibles : information_requires_uncorrelated_message, aucun effet de capture. Corps/identité/projet/routage gardent les validations.
 Consultation : bridget_ledger action=search puis action=read selon schéma existant. Pas d'injection automatique à la reconnexion ou au prochain tour.
 Maintenance : tableau d'action avant coupure établi par tâches/commandes/processus affectés ; bulletin général dans fil silencieux, action ciblée aux propriétaires concernés. Connecté n'implique pas concerné. Un résultat attendu ne devient pas une information silencieuse.
+
+Collision d'identifiant pour le même destinataire : information_id_conflict durable ; conserver le corps antérieur et la clé refusée. Un avis distinct demande un nouvel id/issued_at après ce refus. La saturation des remises ordinaires n'empêche pas ce dépôt, qui ne peut lancer de boucle fournisseur. Les limites réelles de stockage et de trame restent applicables.

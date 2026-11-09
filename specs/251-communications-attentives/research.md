@@ -15,3 +15,5 @@
 Les files159 et QueueOnly ne sont pas une boîte silencieuse : ne pas les utiliser. Les observations sont typées et ne doivent pas stocker de prose libre. Un fil est partagé par ses membres : ne pas créer un fil privé par avis ni élargir ses membres automatiquement. Aucun coût monétaire réel disponible dans les traces.
 ## Primitive SpecKit
 Scripts/templates du runtime absents (ls .specify/scripts .specify/templates : No such file). Protocoles des skills globales appliqués manuellement ; pas de réinstallation du runtime.
+
+Disposition R2 de revue : StoreOnly conserve identité/projet/routage/corps mais ne consomme ni ne subit les gardes de boucles de remise (disjoncteur, contenu, quarantaine, sauts). Une collision ledger constatée dans la transaction produit un refus durable information_id_conflict ; panne SQL reste une issue non confirmée sans repli. Tests renforcés T017/T018, sans table ni dépendance nouvelle.
