@@ -11054,7 +11054,7 @@ fn announce_communication_project(
     worktree: Option<&str>,
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::CommunicationProjectSource;
-    let (owner, local, foreign, native_command, generation) = {
+    let (owner, local, foreign, native_command, proof_host, generation) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let owner = live_connection_identity(&st, conn_id);
         let bare = owner.is_none()
@@ -11076,7 +11076,7 @@ fn announce_communication_project(
             && (source == CommunicationProjectSource::Git || t3);
         let native_command=if host_ok && host!=st.host && source==CommunicationProjectSource::Git
             && worktree.is_none() {
-            native_delegation::communication_project_command253(&st,conn_id,host,root)
+            native_delegation::native_communication_project_worker(&st,conn_id,root)
         } else {None};
         let foreign=host_ok && host!=st.host && owner.is_some()
             && ((t3 && source==CommunicationProjectSource::T3)
@@ -11086,14 +11086,15 @@ fn announce_communication_project(
             owner,
             host_ok && host==st.host,
             foreign,
-            native_command,
+            native_command.as_ref().map(|(_,command)|command.clone()),
+            native_command.map_or_else(||host.to_owned(),|(host,_)|host),
             st.instance_id.clone(),
         )
     };
     let (resolved, unavailable) = if local {
         (crate::communication::resolve_communication_project(root,host,source,worktree),false)
     } else if foreign {
-        match origin_proof::communication_project(state,host,root,source,worktree) {
+        match origin_proof::communication_project(state,&proof_host,root,source,worktree) {
             Ok(project)=>(project,false),Err(_)=>(None,true),
         }
     } else {(None,false)};
@@ -11102,7 +11103,8 @@ fn announce_communication_project(
     let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner
         && (local || st.conn_hosts.get(conn_id).is_some_and(|current|current==host))
         && native_command.as_ref().is_none_or(|command|
-            native_delegation::communication_project_command253(&st,conn_id,host,root).as_ref()==Some(command));
+            native_delegation::native_communication_project_worker(&st,conn_id,root)
+                .as_ref()==Some(&(proof_host.clone(),command.clone())));
     let previous = st
         .communication_projects
         .get(conn_id)
@@ -11111,7 +11113,7 @@ fn announce_communication_project(
     let conflicting =
         previous.2 || matches!((&previous.1, &resolved), (Some(a), Some(b)) if a != b);
     let project = if unchanged && !conflicting {
-        resolved.or_else(||previous.0.clone().filter(|p|unavailable && p.host==host))
+        resolved.or_else(||previous.0.clone().filter(|p|unavailable && p.host==proof_host))
     } else {
         None
     };

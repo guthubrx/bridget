@@ -10328,6 +10328,17 @@ pub(super) fn communication_project_command253(
     remote_command_identity(st,&task).ok()
 }
 
+/// Le nom système déclaré n'est pas forcément l'identifiant de placement.
+/// Seule la commande native admise permet de choisir le worker canonique.
+pub(super) fn native_communication_project_worker(
+    st:&DaemonState, conn:&str, root:&str,
+) -> Option<(String,bridget_transport::protocol::WorkerCommandIdentity)> {
+    let (agent,_)=live_connection_identity(st,conn)?;
+    let host=st.delegation_store.for_child(&agent).ok()??.remote_placement?.machine_id;
+    let command=communication_project_command253(st,conn,&host,root)?;
+    Some((host,command))
+}
+
 /// La relation admise et les deux instances fixent le projet logique d’une
 /// mission. La direction du guidage reste évaluée séparément par guidance.
 pub(super) fn admitted_task_communication248(
@@ -28508,6 +28519,15 @@ for frame in frames: print(json.dumps(frame),flush=True)
 
     #[test]
     fn spec253_native_foreign_git_project_requires_admitted_command_and_worker() {
+        native_foreign_git_project_fixture("cartae");
+    }
+
+    #[test]
+    fn spec254_native_project_uses_placement_worker_instead_of_system_hostname() {
+        native_foreign_git_project_fixture("backup");
+    }
+
+    fn native_foreign_git_project_fixture(reported_host:&str) {
         use bridget_transport::protocol::*;
         use std::io::BufRead;
         let (mut st,config,task,result)=remote162_capture_fixture();
@@ -28516,7 +28536,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let (primary,_primary_peer)=UnixStream::pair().unwrap();
         st.connections.insert("child253".into(),Arc::new(Mutex::new(BufWriter::new(primary))));
         assert!(matches!(handle_register_with_channel("child253",2,"native-test".into(),task.child.clone(),
-            Some("cartae".into()),Some("codex_app_server".into()),ChannelReport::Known("ssh-unix".into()),
+            Some(reported_host.into()),Some("codex_app_server".into()),ChannelReport::Known("ssh-unix".into()),
             Some(PresenceMode::Cli),None,Some("fixture".into()),task.child_instance.clone(),None,false,
             Some(false),&mut st,false),DaemonToWrapper::Registered {..}));
         assert!(communication_project_command253(&st,"child253","cartae","/tmp").is_some());
@@ -28528,7 +28548,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         let shared=Arc::new(Mutex::new(st));
         // Une commande admise ne remplace pas le worker absent.
         assert!(matches!(announce_communication_project(&shared,"child253","/tmp",
-            CommunicationProjectSource::Git,"cartae",None),DaemonToWrapper::ProjectContextResult {project:None,..}));
+            CommunicationProjectSource::Git,reported_host,None),DaemonToWrapper::ProjectContextResult {project:None,..}));
         let (writer,peer)=UnixStream::pair().unwrap();
         {let mut st=shared.lock().unwrap();
             st.registry=AgentRegistry::from_json(&json!({"machines":{"cartae":{
@@ -28561,7 +28581,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
             }
         });
         assert!(matches!(announce_communication_project(&shared,"child253","/tmp",
-            CommunicationProjectSource::Git,"cartae",None),DaemonToWrapper::ProjectContextResult {project:Some(_),..}));
+            CommunicationProjectSource::Git,reported_host,None),DaemonToWrapper::ProjectContextResult {project:Some(_),..}));
         let st=shared.lock().unwrap();
         assert_eq!(agent_communication_project(&st,&task.child).unwrap().host,"cartae");
         assert!(!st.t3_project_connections.contains("child253"));
@@ -28570,7 +28590,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         drop(st);
         // La tâche prend fin pendant l'échange : la preuve Git ne ressuscite pas son autorité.
         assert!(matches!(announce_communication_project(&shared,"child253","/tmp",
-            CommunicationProjectSource::Git,"cartae",None),DaemonToWrapper::ProjectContextResult {project:None,..}));
+            CommunicationProjectSource::Git,reported_host,None),DaemonToWrapper::ProjectContextResult {project:None,..}));
         worker.join().unwrap();
         assert!(communication_project_command253(&shared.lock().unwrap(),"child253","cartae","/tmp").is_none());
         drop(shared);cleanup(&config);

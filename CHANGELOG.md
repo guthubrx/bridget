@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.20
+- Allow existing local non-Git directories through the origin relay for general/shared tasks, without copying or a self-SSH tunnel.
+- Resolve native child projects through the admitted placement worker when the OS hostname differs from its fleet machine ID.
+- Make the commit_view/discovery/source-SHA requirement explicit in the MCP description.
+
 ## 0.8.19
 
 - Projet Git des enfants natifs distants vérifié par leur worker, sans confondre racine de droits et projet de communication.

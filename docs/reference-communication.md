@@ -338,3 +338,6 @@ Brief/handoff text limits use UTF-8 bytes, not characters. MCP publishes x-maxUt
 
 
 A reply=false notification does not disable the final result path of an active native mission. Return that result through the normal worker final response, not a manual Send replying to the steering message. Catalogue cwd_root is a permission root, not the directory's communication project. Remote native Git projects require the admitted command/instance/cwd and a verified worker read, checked again after I/O; no human client binding is granted.
+
+### Local preparation and OS hostnames (254)
+A non-Git general/shared directory can be mapped on its source machine without copying or self-SSH. Permission and directory checks remain in force. A native child's OS hostname can differ from its fleet machine ID: project resolution uses its admitted placement worker without changing its identity or permissions. commit_view requires discovery and expected_base_commit; development uses shared or worktree.

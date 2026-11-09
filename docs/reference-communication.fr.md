@@ -1209,3 +1209,6 @@ Brief/handoff : les bornes de texte sont en octets UTF-8, pas en caractères. Le
 
 Une notification reply=false n'ouvre pas un nouveau relais final, mais ne change pas celui d'une mission native active. Le résultat de mission se rend par la réponse finale normale du worker, jamais par un Send manuel en réponse au steering. Pour répondre séparément à l'auteur d'une notification, envoyer un message distinct seulement si utile.
 La racine cwd_root du catalogue décrit les droits d'accès, pas le projet de l'annuaire. Le projet Git d'un enfant natif distant est résolu par le worker de son hôte, pour la commande/instance et le cwd admis, avec recontrôle après lecture. Aucun domaine modifiable ne suffit, et cette preuve ne crée pas de liaison humaineT3.
+
+### Préparation locale et noms système (254)
+Un dossier hors Git en general/shared peut être rattaché sur la machine source sans copie ni tunnelSSH vers soi-même. Les vérifications de droits et du dossier restent actives. Le nom système d’un sous-agent peut différer du nom de sa machine dans la flotte : le projet est alors résolu auprès du worker de son placement admis, sans changer son identité ni ses droits. Une vue commit_view reste en discovery avec expected_base_commit ; écrire exige shared ou worktree en development.

@@ -3146,9 +3146,10 @@ impl OriginProofRequest {
                 validate_permissions(parent,parent.source=="provider_turn").map_err(|_|("parent",WorkerRefusal::PermissionsChanged))?;
                 require(worker_atom(target_machine,128),"target_machine")?;
                 // Le helper objects_only sait préparer une vue sur sa propre machine.
-                // Les autres stratégies conservent leur garde de destination distante.
+                // Le helper sait aussi rattacher un dossier partagé local hors Git.
                 require(target_machine!=&self.worker.machine_id
-                    || matches!(source.workspace,Some(WorkspaceRequest::CommitView {})),"target_machine")?;
+                    || matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))
+                    || source.is_local_shared_directory(&self.worker.machine_id,target_machine),"target_machine")?;
                 require(project_id.as_ref().is_none_or(|id|worker_atom(id,128)),"project_id")?;
                 require(worker_absolute_path(&source.cwd)
                     && provider_allows_source(parent,&source.cwd),"cwd")?;
@@ -3762,6 +3763,15 @@ pub struct WorkerSourceBase {
     pub expected_base_commit: Option<String>,
     pub workspace: Option<WorkspaceRequest>,
     pub workload: AutoDelegateWorkload,
+}
+
+impl WorkerSourceBase {
+    /// Forme déjà prise en charge par le helper local, sans copie ni dépôt créé.
+    pub fn is_local_shared_directory(&self, origin: &str, target: &str) -> bool {
+        origin==target && self.expected_base_commit.is_none()
+            && self.workload==AutoDelegateWorkload::General
+            && matches!(self.workspace,None|Some(WorkspaceRequest::Shared {}))
+    }
 }
 
 /// Réparation explicite185 : aucun identifiant d'enfant ou de fournisseur libre.

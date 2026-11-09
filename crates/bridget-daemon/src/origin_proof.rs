@@ -115,7 +115,8 @@ fn execute_with_context(
                         return Err("cwd_outside_parent_project".to_owned());
                     }
                     crate::lifecycle::validate_parent_source_base(parent,source).map_err(closed_source_error)?;
-                    if registry.parent().is_none_or(|root| !crate::project_preparation::has_link(root)) {
+                    if !source.is_local_shared_directory(&request.worker.machine_id,target_machine)
+                        && registry.parent().is_none_or(|root| !crate::project_preparation::has_link(root)) {
                         return Err("project_preparation_link_missing".into());
                     }
                     let budget=request.expires_at_ms.saturating_sub(now()).saturating_sub(2000);
@@ -273,6 +274,60 @@ mod tests {
         assert!(!format!("{:?}", r).contains("private-177"));
     }
     #[test]
+    fn spec254_local_directory_prepare_reaches_real_helper_without_git_or_ssh() {
+        use std::os::unix::fs::DirBuilderExt;
+        use std::path::PathBuf;
+        // Processus de test isolé : le helper ne doit jamais découvrir le
+        // registre réel du compte, ni changer HOME dans le processus des tests.
+        if std::env::var_os("BRIDGET_TEST_LOCAL254").is_none() {
+            let root=std::env::temp_dir().canonicalize().unwrap().join(format!("b254-{}",uuid::Uuid::new_v4()));
+            std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            let home=root.join("home");std::fs::create_dir(&home).unwrap();
+            let status=std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact","origin_proof::tests::spec254_local_directory_prepare_reaches_real_helper_without_git_or_ssh","--nocapture"])
+                .env("BRIDGET_TEST_LOCAL254",&root).env("HOME",&home).output().unwrap();
+            assert!(status.status.success(),"{}",String::from_utf8_lossy(&status.stdout));
+            std::fs::remove_dir_all(root).unwrap();return;
+        }
+        let root=PathBuf::from(std::env::var_os("BRIDGET_TEST_LOCAL254").unwrap());
+        let source=root.join("documents");std::fs::create_dir(&source).unwrap();
+        let namespace=root.join("registry");std::fs::DirBuilder::new().mode(0o700).create(&namespace).unwrap();
+        let path=namespace.join("agents.json");let mut envelope=request();
+        let config=serde_json::json!({"machines":{envelope.worker.machine_id.clone():{
+            "enabled":true,"worker_id":envelope.worker.worker_id,"provisioning_revision":1,
+            "credential_fingerprint":"a".repeat(64),"mappings":{}}}});
+        bridget_transport::fsutil::write_private_file_atomic(&path,&serde_json::to_vec(&config).unwrap()).unwrap();
+        let parent=ProviderPermissions {version:1,source:"provider_turn".into(),run_id:"run254".into(),
+            provider_session_id:"session254".into(),provider_instance_id:"instance254".into(),revision:1,
+            driver:"codex_app_server".into(),cwd:source.to_string_lossy().into_owned(),runtime_mode:"full-access".into(),
+            interaction_mode:"default".into(),provider_policy:serde_json::json!({"kind":"codex","approval_policy":"never",
+                "approvals_reviewer":"user","sandbox_policy":{"type":"dangerFullAccess"}})};
+        envelope.request=OriginProofOperation::PrepareProject {parent:parent.clone(),source:WorkerSourceBase {
+            cwd:parent.cwd.clone(),expected_base_commit:None,workspace:Some(WorkspaceRequest::Shared {}),
+            workload:AutoDelegateWorkload::General},target_machine:envelope.worker.machine_id.clone(),
+            project_id:None,return_context:true};
+        assert!(envelope.validate_shape().is_ok());
+        let before=std::fs::read(&path).unwrap();
+        for case in 0..4 {
+            let mut wrong=envelope.clone();
+            if let OriginProofOperation::PrepareProject {source,..}=&mut wrong.request {
+                match case {
+                    0=>source.expected_base_commit=Some("a".repeat(40)),
+                    1=>source.workspace=Some(WorkspaceRequest::Worktree {base_ref:None,branch:None}),
+                    2=>source.workload=AutoDelegateWorkload::Compilation,
+                    _=>source.cwd="relative".into(),
+                }
+            }
+            assert!(wrong.validate_shape().is_err());
+        }
+        assert_eq!(std::fs::read(&path).unwrap(),before);
+        let result=execute_with_context(&envelope,||10_000,|_|panic!("no provider"),Some(&path));
+        assert!(matches!(result,OriginProofResult::ProjectPrepared {preparation_error:None,project:Some(_),..}),"{result:?}");
+        assert!(!source.join(".git").exists());
+        assert_eq!(std::fs::read_dir(&source).unwrap().count(),0,"aucun contenu copié ou créé");
+    }
+
+    #[test]
     fn mobile177_origin_sources_read_real_git_and_reject_escape_without_launching(){
         use std::os::unix::fs::{DirBuilderExt,symlink};
         let root=std::env::temp_dir().canonicalize().unwrap().join(format!("bridget177-origin-git-{}",uuid::Uuid::new_v4()));
@@ -337,7 +392,7 @@ mod tests {
             let mut wrong=valid.clone();
             if let OriginProofOperation::PrepareProject {parent,source,target_machine,..}=&mut wrong.request {
                 match case {
-                    0=>source.cwd="/outside236".into(),
+                    0=>source.cwd="relative236".into(),
                     1=>source.expected_base_commit=Some("invalid236".into()),
                     2=>*target_machine=String::new(),
                     3=>parent.revision=0,

@@ -1,5 +1,10 @@
 # Journal des changements
 
+## 0.8.20
+- Rattachement local hors Git accepté par le relais d’origine en general/shared, sans copie ni tunnel vers soi-même.
+- Projet des enfants natifs résolu auprès du worker du placement quand le hostname système diffère de la machine admise.
+- Description MCP explicite : commit_view exige discovery et le SHA source.
+
 ## 0.8.19
 
 - Projet Git des enfants natifs distants vérifié par leur worker, sans confondre racine de droits et projet de communication.
