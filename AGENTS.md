@@ -109,6 +109,26 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session251 — communications attentives activées en0.8.17/251-attention-r2.
+Source exécutable6334f58b, dépôt information CLI/MCP : ledger+reçu atomiques,
+sans prompt/remise/exécution ; reply=false seul garde son comportement normal.
+Gardes de remise distinctes, collision durableinformation_id_conflict ; identité,
+projet, corps et contrats de résultat conservés. Observationsdormants sans réveil.
+Dixavis sous saturation acceptés sans modèle ; dépôt réelR2/rejeu/lectureMCP
+exacte67octets, zéroremise/suivi. Lecteur250 réel surDBécriteR2 qualifié.
+Tests ciblésMac/Linux, revuesR1/R2 lues/ACK, deuxP2 traités, Converge3CONVERGED,
+auditfinal13/13PASS avec notes/limites explicites. Septcomposants/SHA4hôtes,
+retour250 atomique, coupureR2 1,53s. T3 onzePID/birth, registreMac et septpayloads
+protégés inchangés ; aucune mission métier rejouée, aucun bulletin général.
+Publicv0.8.17/sixactifs anonymes/SHA, APK8017/certificat/lignée8016 vérifiés.
+Main intégré/poussé/aligné4hôtes ; Macmainseul, propreWT/branche retirés ;
+18copies/169156626octets logiques retirés. WTSYS/Android et images utilisées
+conservés faute d'observation complète des usages ; preuves/vues natives gardées.
+Anciennes façades ouvertes non remplacées. NE PAS arrêter/remplacer T3 sans accord.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/251-communications-attentives/validation.md.
+Reprise privée : /Users/moi/.cache/bridget251-attention/resume.md.
+
+
 Session250 — refus des résultats manuels livré en0.8.16/250-resultat-natif-r1.
 Source exécutable27b402eb, source finalea3dbea6b (delta test seulement), intégrée et poussée.
 remote_result_requires_worker renvoie un refus idempotent durable et corrélé,

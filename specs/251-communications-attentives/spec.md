@@ -1,5 +1,5 @@
 # 251 — Communications attentives
-Statut : In Progress. Date : 9 novembre 2026. Responsable : mainteneur Bridget.
+Statut : Implemented. Pipeline : Livré sur les services autorisés, application T3 conservée. Date : 9 novembre 2026. Responsable : mainteneur Bridget.
 ## Demande initiale et cadrage montré
 François veut rester joignable sans recevoir des avis sans action qui remplissent le contexte ou déclenchent des appels coûteux. Il demande une démarche ambitieuse, le code T3 et des sources concurrentes primaires. Exécution complète autorisée par my-specify-all ; T3 doit rester ouvert.
 Demande reformulée : conserver chaque information utile, séparer stockage, consultation et réveil du modèle. Seuls une demande, un résultat attendu ou une action nécessaire doivent solliciter l'agent. Un agent au repos n'a pas à dormir pour éviter le bruit.

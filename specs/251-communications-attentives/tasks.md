@@ -1,4 +1,4 @@
-# Tâches251 — In Progress
+# Tâches251 — Implemented
 ## Cadrage et contrat
 - [x] T001 Relever la mesure privée, les sources et les décisions dans specs/251-communications-attentives/research.md ; aucun contenu SNCF versionné.
 - [x] T002 Produire spec/plan/contrats et reuse-audit.md PASS ; absence des primitives constatée, protocole manuel.
@@ -19,8 +19,8 @@
 ## Convergence, revue et livraison
 - [x] T013 Exécuter les contrôles ciblés via scripts/build.py ; preuves et commandes dans specs/251-communications-attentives/validation.md.
 - [x] T014 Contre-revue code autre fournisseur si joignable, Converge et audit après dernier changement ; aucun P1/P2 non traité dans specs/251-communications-attentives/validation.md.
-- [ ] T015 Publier/activer les sept composants et retours qualifiés sur quatre hôtes par procédure existante, T3 reste ouvert ; contrôler images/processus/lien et vrai dépôt silencieux.
-- [ ] T016 Mettre à jour bilan, intégrer sur main, pousser/vérifier alignement quatre hôtes, nettoyer ressources propres inutiles ; preuves dans specs/251-communications-attentives/validation.md.
+- [x] T015 Publier/activer les sept composants et retours qualifiés sur quatre hôtes par procédure existante, T3 reste ouvert ; contrôler images/processus/lien et vrai dépôt silencieux.
+- [x] T016 Mettre à jour bilan, intégrer sur main, pousser/vérifier alignement quatre hôtes, nettoyer ressources propres inutiles ; preuves dans specs/251-communications-attentives/validation.md.
 ## Dépendances et exécution
 T001→T003→T004→T005→T006→T007→T008→T011→T009→T010→T012→T013→T014→T015→T016. Même responsable pour le code ; revue distincte seulement, aucun partage des mêmes fichiers. Pas de tranche MVP : les quatre stories et livraison sont requises.
 
