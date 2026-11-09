@@ -109,6 +109,27 @@ Ne pas décrire le produit par comparaison avec un client externe.
 
 <!-- SPECKIT START -->
 
+Session257 — diagnostic d’ACK groupé activé en0.8.24/257-ack-diagnostic-r1.
+Source8a3dc845 intégrée/poussée ; refus task_not_ready avec tâches non prêtes,
+ronde/état/rapport après propriété complète. Aucun ACK partiel ni format changé.
+Douze contrôles distincts Mac/Linux PASS ; revue lue/ACK, hypothèseP2 levée
+par verrou réel ACK/Continue, P3 disposés. AnalyzePASS/ConvergeCONVERGED.
+Sept composants/SHA sur quatre hôtes, retour256 compatible/pointeurs atomiques ;
+coupure maître1,65s. Deux wrappers Mac/deux Cartae/trois SYS conservés.
+Sept payloads protégés/registreMac2b4f409e inchangés. T3 reste ouvert ; onze PID/birth
+conservés, un renderer remplacé avant maintenance, cause non attribuée.
+SessionV2/annuaire rétablis après primary_absent transitoire ; quatre rapports frais.
+Public0.8.24/six actifs anonymesSHA/APK8024/lignée8023 vérifiés. Aucun rejeu métier.
+Parix informé sans réveil (information/stored), lecture non affirmée.
+Dix copies/image255 Mac inutilisée retirées,354832958octets logiques ; actif257/retour256
+et preuves gardés. WT SYS/Cartae intégrés propres conservés (5/45processus illisibles).
+Caches Mac7,22Gio/SYS0,61Gio/Cartae4,46Gio. Propre WT/branche Mac retiré après clôture.
+Anciennes façades ouvertes conservées ; ne pas arrêter/remplacer T3 sans assentiment.
+Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/257-diagnostic-ack/validation.md.
+Reprise : /Users/moi/.cache/bridget257-ack-diagnostic/resume.md.
+
+
+
 Session256 — références des briefs clarifiées, services0.8.23/256-reference-schema-r1.
 Source exécutable8ed970a7f74dcb27e9a1894ad51c1b46f9e21319 intégrée/poussée.
 Six objets oneOf complets, champs requis/fermés, description kind/label et
