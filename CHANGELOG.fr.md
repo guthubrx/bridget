@@ -1,5 +1,11 @@
 # Journal des changements
 
+## 0.8.19
+
+- Projet Git des enfants natifs distants vérifié par leur worker, sans confondre racine de droits et projet de communication.
+- Les notifications sans réponse attendue conservent les instructions de résultat final des missions natives.
+
+
 ## 0.8.18
 
 - Diagnostic hors Git avec machines concernées, limites UTF-8 explicites du brief et durée renouvelée par ronde. Aucun changement de permissions ou de transport documentaire.

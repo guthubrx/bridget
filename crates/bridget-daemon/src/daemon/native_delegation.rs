@@ -10305,6 +10305,29 @@ pub(super) fn authorize_retained_result(
     Ok(())
 }
 
+/// Autorise seulement la lecture du projet Git du cwd effectivement admis.
+/// Le worker résout encore Git ; le nom du domaine ou le projet du parent
+/// ne suffisent pas. O(log T + C), C commandes de cette seule instance.
+pub(super) fn communication_project_command253(
+    st: &DaemonState, conn: &str, host: &str, root: &str,
+) -> Option<bridget_transport::protocol::WorkerCommandIdentity> {
+    if st.auxiliary_connections.contains(conn) { return None; }
+    let (agent,instance)=live_connection_identity(st,conn)?;
+    let task=st.delegation_store.for_child(&agent).ok()??;
+    let placement=task.remote_placement.as_ref()?;
+    if task.child_instance.as_deref()!=Some(instance.as_str())
+        || task.terminal() || task.state=="cancelling" || task.cleanup_done || task.guard_released
+        || !task.remote_prepared || placement.machine_id!=host
+        || Path::new(&placement.execution_cwd)!=Path::new(root)
+    {return None;}
+    for value in [task.owner.as_str(),task.owner_instance.as_str(),task.origin_owner_instance.as_str(),
+        task.child.as_str(),instance.as_str(),task.root_owner()] {
+        if st.delegation_store.revoked(value).unwrap_or(true)
+            || st.delegation_store.revoked_agent(value).unwrap_or(true) {return None;}
+    }
+    remote_command_identity(st,&task).ok()
+}
+
 /// La relation admise et les deux instances fixent le projet logique d’une
 /// mission. La direction du guidage reste évaluée séparément par guidance.
 pub(super) fn admitted_task_communication248(
@@ -28481,6 +28504,76 @@ for frame in frames: print(json.dumps(frame),flush=True)
         };
         result.digest = result.canonical_digest().unwrap();
         (st, config, task, result)
+    }
+
+    #[test]
+    fn spec253_native_foreign_git_project_requires_admitted_command_and_worker() {
+        use bridget_transport::protocol::*;
+        use std::io::BufRead;
+        let (mut st,config,task,result)=remote162_capture_fixture();
+        st.host="coordinator253".into();
+        let before=serde_json::to_vec(&task).unwrap();
+        let (primary,_primary_peer)=UnixStream::pair().unwrap();
+        st.connections.insert("child253".into(),Arc::new(Mutex::new(BufWriter::new(primary))));
+        assert!(matches!(handle_register_with_channel("child253",2,"native-test".into(),task.child.clone(),
+            Some("cartae".into()),Some("codex_app_server".into()),ChannelReport::Known("ssh-unix".into()),
+            Some(PresenceMode::Cli),None,Some("fixture".into()),task.child_instance.clone(),None,false,
+            Some(false),&mut st,false),DaemonToWrapper::Registered {..}));
+        assert!(communication_project_command253(&st,"child253","cartae","/tmp").is_some());
+        assert!(communication_project_command253(&st,"child253","other-host","/tmp").is_none());
+        assert!(communication_project_command253(&st,"child253","cartae","/other-root").is_none());
+        st.auxiliary_connections.insert("child253".into());
+        assert!(communication_project_command253(&st,"child253","cartae","/tmp").is_none());
+        st.auxiliary_connections.remove("child253");
+        let shared=Arc::new(Mutex::new(st));
+        // Une commande admise ne remplace pas le worker absent.
+        assert!(matches!(announce_communication_project(&shared,"child253","/tmp",
+            CommunicationProjectSource::Git,"cartae",None),DaemonToWrapper::ProjectContextResult {project:None,..}));
+        let (writer,peer)=UnixStream::pair().unwrap();
+        {let mut st=shared.lock().unwrap();
+            st.registry=AgentRegistry::from_json(&json!({"machines":{"cartae":{
+                "enabled":true,"worker_id":"worker-cartae","provisioning_revision":1,
+                "credential_fingerprint":"a".repeat(64),"mappings":{}}}}).to_string(),"/tmp/registry253.json").unwrap();
+            st.connections.insert("worker253".into(),Arc::new(Mutex::new(BufWriter::new(writer))));
+            st.remote_workers.insert("cartae".into(),super::super::RemoteWorkerConnection {
+                identity:result.worker.clone(),conn_id:"worker253".into(),epoch:"epoch253".into(),
+                capabilities:vec![WorkerCapability::OriginProofV1],catalogues:HashMap::new(),
+                catalogue_refresh_id:"epoch253".into(),catalogue_refresh_at:None,
+                last_contact:Instant::now(),last_contact_at:unix_timestamp(),contact:WorkerContactState::Connected });
+        }
+        let other=shared.clone();
+        let task_id=task.task_id.clone();
+        let worker=std::thread::spawn(move||{
+            peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader=std::io::BufReader::new(peer);
+            for case in 0..2 {
+            let mut line=String::new();reader.read_line(&mut line).unwrap();
+            let DaemonToWrapper::OriginProofRequest {request}=serde_json::from_str(&line).unwrap() else {panic!("project proof")};
+            assert!(matches!(&request.request,OriginProofOperation::CommunicationProject {source:CommunicationProjectSource::Git,root,..} if root=="/tmp"));
+            let mut state=other.lock().unwrap();
+            if case==1 {
+                let mut ended=state.delegation_store.get(&task_id).unwrap().unwrap();
+                ended.state="cancelled".into();state.delegation_store.save(&ended).unwrap();
+            }
+            super::super::origin_proof::receive(&mut state,"worker253",OriginProofResponse {
+                version:1,correlation_id:request.correlation_id,connection_epoch:request.connection_epoch,worker:request.worker,
+                response:OriginProofResult::CommunicationProject {project:Some(CommunicationProject {host:"cartae".into(),root:"/tmp/.git".into()})} });
+            }
+        });
+        assert!(matches!(announce_communication_project(&shared,"child253","/tmp",
+            CommunicationProjectSource::Git,"cartae",None),DaemonToWrapper::ProjectContextResult {project:Some(_),..}));
+        let st=shared.lock().unwrap();
+        assert_eq!(agent_communication_project(&st,&task.child).unwrap().host,"cartae");
+        assert!(!st.t3_project_connections.contains("child253"));
+        assert!(!st.t3_thread_bindings.contains_key("child253"));
+        assert_eq!(serde_json::to_vec(&st.delegation_store.get(&task.task_id).unwrap().unwrap()).unwrap(),before);
+        drop(st);
+        // La tâche prend fin pendant l'échange : la preuve Git ne ressuscite pas son autorité.
+        assert!(matches!(announce_communication_project(&shared,"child253","/tmp",
+            CommunicationProjectSource::Git,"cartae",None),DaemonToWrapper::ProjectContextResult {project:None,..}));
+        worker.join().unwrap();
+        assert!(communication_project_command253(&shared.lock().unwrap(),"child253","cartae","/tmp").is_none());
+        drop(shared);cleanup(&config);
     }
 
     fn observation_fixture237() -> (Arc<Mutex<DaemonState>>, DaemonConfig, bridget_transport::protocol::WorkerResponse) {

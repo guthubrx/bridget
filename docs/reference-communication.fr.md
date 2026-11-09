@@ -1205,3 +1205,7 @@ pas une lecture ultérieure gratuite.
 
 
 Brief/handoff : les bornes de texte sont en octets UTF-8, pas en caractères. Le schéma MCP publie x-maxUtf8Bytes, x-maxRenderedUtf8Bytes et x-maxSerializedUtf8Bytes ; le validateur natif reste la référence, sans troncature.
+
+
+Une notification reply=false n'ouvre pas un nouveau relais final, mais ne change pas celui d'une mission native active. Le résultat de mission se rend par la réponse finale normale du worker, jamais par un Send manuel en réponse au steering. Pour répondre séparément à l'auteur d'une notification, envoyer un message distinct seulement si utile.
+La racine cwd_root du catalogue décrit les droits d'accès, pas le projet de l'annuaire. Le projet Git d'un enfant natif distant est résolu par le worker de son hôte, pour la commande/instance et le cwd admis, avec recontrôle après lecture. Aucun domaine modifiable ne suffit, et cette preuve ne crée pas de liaison humaineT3.

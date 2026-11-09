@@ -3974,9 +3974,8 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
             rendered.push_str(bridget_core::envelope::HUMAN_REPLY_NOTICE);
             rendered.push_str(" Les résultats destinés aux autres agents se transmettent à ces agents par Bridget.");
         } else {
-            rendered.push_str(
-                "\nPas d'accusé de réception pour ces messages : n'envoie aucun « bien reçu ». Ce n'est pas une absence de tâche : si un message demande une action, fais-la. Le pont ne relaie pas ta réponse finale pour ce tour ; pour transmettre un résultat à un expéditeur, fais un nouvel envoi Bridget.",
-            );
+            rendered.push('\n');
+            rendered.push_str(bridget_core::envelope::NO_REPLY_NOTICE);
         }
         return rendered;
     };
@@ -5010,6 +5009,13 @@ mod tests {
             assert!(rendered.contains(bridget_core::envelope::HUMAN_REPLY_NOTICE));
             assert!(!rendered.contains("Le pont ne relaie pas ta réponse finale"));
         }
+    }
+
+    #[test]
+    fn spec253_lot_sans_reponse_conserve_le_parcours_de_mission() {
+        let text=batch_envelope(&[plain114("une"),plain114("deux")]);
+        assert!(text.contains(bridget_core::envelope::NO_REPLY_NOTICE));
+        assert!(!text.contains("Le pont ne relaie pas ta réponse finale pour ce tour"));
     }
 
     #[test]

@@ -335,3 +335,6 @@ reads free.
 
 
 Brief/handoff text limits use UTF-8 bytes, not characters. MCP publishes x-maxUtf8Bytes, x-maxRenderedUtf8Bytes and x-maxSerializedUtf8Bytes. Native validation remains authoritative; content is never truncated.
+
+
+A reply=false notification does not disable the final result path of an active native mission. Return that result through the normal worker final response, not a manual Send replying to the steering message. Catalogue cwd_root is a permission root, not the directory's communication project. Remote native Git projects require the admitted command/instance/cwd and a verified worker read, checked again after I/O; no human client binding is granted.

@@ -50,7 +50,7 @@ pub fn wrap_envelope(msg: &BridgetMessage) -> String {
 /// les pilotes. Session 127 : l'ancienne formule « Aucune réponse inter-agent
 /// attendue » a été lue comme « rien à faire », et un défaut signalé est resté
 /// sans traitement. Elle sépare désormais l'accusé de réception de l'action.
-pub const NO_REPLY_NOTICE: &str = "Pas d'accusé de réception : n'envoie aucun « bien reçu », même pour annoncer ton silence. Ce n'est pas une absence de tâche : si ce message demande une action, fais-la. Ta réponse finale ne sera pas relayée ; pour transmettre un résultat à l'expéditeur, fais un nouvel envoi Bridget.";
+pub const NO_REPLY_NOTICE: &str = "Pas d'accusé de réception : n'envoie aucun « bien reçu ». Si ce message demande une action, fais-la. reply=no concerne cette notification : il ne désactive pas la remise finale automatique d'une mission native en cours. Pour cette mission, rends ta réponse finale normalement ; ne la renvoie pas avec bridget_send. Une réponse distincte à l'auteur de la notification nécessite un nouvel envoi Bridget.";
 
 /// Gardien de quarantaine pour les IDs de messages déjà relayés.
 /// Empêche un message d'être retransmis (misroute, doublon réseau, etc.).
@@ -134,6 +134,16 @@ mod tests {
         assert!(env.contains("Pas d'accusé de réception"));
         assert!(env.contains("accusé"));
         assert!(!env.contains("Tu DOIS répondre"));
+    }
+
+    #[test]
+    fn spec253_notification_ne_detourne_pas_le_resultat_natif() {
+        let msg=BridgetMessage::new("parent","enfant","Complément de travail");
+        let env=wrap_envelope(&msg);
+        assert!(env.contains("reply=no concerne cette notification"));
+        assert!(env.contains("ne désactive pas la remise finale automatique"));
+        assert!(env.contains("ne la renvoie pas avec bridget_send"));
+        assert!(!env.contains("Ta réponse finale ne sera pas relayée"));
     }
 
     #[test]

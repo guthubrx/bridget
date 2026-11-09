@@ -63,7 +63,8 @@ pub enum RouterError {
 impl std::fmt::Display for RouterError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AgentNotFound(agent_id) => write!(formatter, "agent introuvable: {agent_id}"),
+            Self::AgentNotFound(agent_id) => write!(formatter,
+                "agent introuvable: {agent_id} — aucune route active à cet instant. Une présence historique peut rester visible dans l'annuaire. Vérifiez un état connecté ou occupé et le retour de son lien ; ce refus ne prouve pas la disparition de l'agent."),
             Self::AgentAmbiguous(agent_id, connections) => {
                 write!(
                     formatter,
@@ -216,6 +217,14 @@ mod tests {
             action,
             RouterAction::Reject(RouterError::AgentNotFound(target)) if target == "codex-1"
         ));
+    }
+
+    #[test]
+    fn spec253_unknown_recipient_distinguishes_route_from_presence() {
+        let text=RouterError::AgentNotFound(A.into()).to_string();
+        assert!(text.starts_with(&format!("agent introuvable: {A}")));
+        assert!(text.contains("aucune route active"));
+        assert!(text.contains("présence historique"));
     }
 
     #[test]

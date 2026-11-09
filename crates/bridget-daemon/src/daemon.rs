@@ -11054,7 +11054,7 @@ fn announce_communication_project(
     worktree: Option<&str>,
 ) -> DaemonToWrapper {
     use bridget_transport::protocol::CommunicationProjectSource;
-    let (owner, local, foreign, generation) = {
+    let (owner, local, foreign, native_command, generation) = {
         let st = state.lock().unwrap_or_else(|e| e.into_inner());
         let owner = live_connection_identity(&st, conn_id);
         let bare = owner.is_none()
@@ -11074,13 +11074,19 @@ fn announce_communication_project(
         let host_ok = bridget_core::host_is_attested(host)
             && (bare && host==st.host || st.conn_hosts.get(conn_id).is_some_and(|v| v == host))
             && (source == CommunicationProjectSource::Git || t3);
-        let foreign=host_ok && host!=st.host && owner.is_some() && t3
-            && source==CommunicationProjectSource::T3
+        let native_command=if host_ok && host!=st.host && source==CommunicationProjectSource::Git
+            && worktree.is_none() {
+            native_delegation::communication_project_command253(&st,conn_id,host,root)
+        } else {None};
+        let foreign=host_ok && host!=st.host && owner.is_some()
+            && ((t3 && source==CommunicationProjectSource::T3)
+                || native_command.is_some())
             && owner.as_ref().and_then(|(_,instance)|st.presences.get(instance)).is_some_and(|p|p.host==host);
         (
             owner,
             host_ok && host==st.host,
             foreign,
+            native_command,
             st.instance_id.clone(),
         )
     };
@@ -11094,7 +11100,9 @@ fn announce_communication_project(
     let verified=resolved.is_some();
     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
     let unchanged = generation == st.instance_id && live_connection_identity(&st, conn_id) == owner
-        && (local || st.conn_hosts.get(conn_id).is_some_and(|current|current==host));
+        && (local || st.conn_hosts.get(conn_id).is_some_and(|current|current==host))
+        && native_command.as_ref().is_none_or(|command|
+            native_delegation::communication_project_command253(&st,conn_id,host,root).as_ref()==Some(command));
     let previous = st
         .communication_projects
         .get(conn_id)
