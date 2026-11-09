@@ -9,3 +9,7 @@ Tâche9fd512a5-ed84-413f-9886-5ae7991745d8, Claude Haiku5.5 SYS, source303acb81.
 | Recontrôle nouveau limité au chemin native_command | Intentionnel : correction de l’enfantGitdistant ; brancheT3 existante inchangée, test246 négatif acquis. | Pas d’élargissement. |
 
 Minimalisme : aucun format/table/service/dépendance ajouté. Le helper rassemble des contrôles existants. Le message route absente conserve le code et le préfixe. La constante commune remplace un texte dupliqué. Aucun changement de code après revue.
+
+## R2
+Tâche4f18d17a-6677-44d8-a3ed-4ffba0953004, ClaudeSonnetKS, source1ce0c0d1. Terminée/lue/ACK. Verdictacceptable, aucunP1/P2confirmé ; ni build ni test indépendants. Vérification de la monotonie de mid_turn_ok, stricteégalitéhorschampsdeprésentation, UPDATEatomique, aucunsecondINSERT ni déplacement de l’Instant.
+P3 : premièreéchéance déjàexpirée resteexpirée, jamaisprolongée ; flagfalse jamaisrelevé, comportementsvoulus. Le relecteur dit nepasavoirvu de testmémoire : spec253_t3_queued_replay_keeps_link_and_first_deadline est bien présentdanslecandidat1ce0c0d1 et acquisMac/Linux ; limite de lecture sansnouveaudéfaut. Aucun changement de code après revue.
