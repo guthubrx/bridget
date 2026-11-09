@@ -5,4 +5,5 @@
 - [x] T004 Clarifier la descriptionMCP et vérifier le schéma chargé.
 - [x] T005 Contre-revue, Analyze/Converge/audit et tests ciblésMac/Linux.
 - [x] T006 Distribuer/activer7composants4hôtes, vérifier route/projet et préserverT3.
-- [ ] T007 Diagnosticsciblés, publication0.8.20, Git/pushalign et nettoyage.
+- [ ] T007 Diagnosticsciblés, publication0.8.21, Git/pushalign et nettoyage.
+- [ ] T008 Corriger la priorité du registre local, tester un profil concurrent et livrer0.8.21/R3.

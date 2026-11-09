@@ -127,6 +127,7 @@ fn execute_with_context(
                     let payload=serde_json::json!({"registry":registry,"machine_id":target_machine,
                         "origin_host":request.worker.machine_id,"source_root":selected,
                         "cwd":source.cwd,"commit":source.expected_base_commit,"project_id":project_id,
+                        "origin_worker_registry":source.is_local_shared_directory(&request.worker.machine_id,target_machine),
                         "objects_only":matches!(source.workspace,Some(WorkspaceRequest::CommitView {}))});
                     let prepared=crate::project_preparation::prepare_receipt_until(&payload,
                         std::time::Instant::now()+std::time::Duration::from_millis(budget as u64))?;
@@ -297,6 +298,14 @@ mod tests {
             "enabled":true,"worker_id":envelope.worker.worker_id,"provisioning_revision":1,
             "credential_fingerprint":"a".repeat(64),"mappings":{}}}});
         bridget_transport::fsutil::write_private_file_atomic(&path,&serde_json::to_vec(&config).unwrap()).unwrap();
+        // Le Mac réel possède aussi un registre de profil, distinct du worker.
+        // Il ne doit être ni choisi ni modifié par ce parcours attesté local.
+        let generic=std::path::PathBuf::from(std::env::var_os("HOME").unwrap()).join(".config/bridget/agents.json");
+        std::fs::create_dir_all(generic.parent().unwrap()).unwrap();
+        let mut profile=config.clone();
+        profile["machines"][&envelope.worker.machine_id]["worker_id"]=serde_json::json!("other-profile254");
+        let generic_before=serde_json::to_vec(&profile).unwrap();
+        bridget_transport::fsutil::write_private_file_atomic(&generic,&generic_before).unwrap();
         let parent=ProviderPermissions {version:1,source:"provider_turn".into(),run_id:"run254".into(),
             provider_session_id:"session254".into(),provider_instance_id:"instance254".into(),revision:1,
             driver:"codex_app_server".into(),cwd:source.to_string_lossy().into_owned(),runtime_mode:"full-access".into(),
@@ -325,6 +334,7 @@ mod tests {
         assert!(matches!(result,OriginProofResult::ProjectPrepared {preparation_error:None,project:Some(_),..}),"{result:?}");
         assert!(!source.join(".git").exists());
         assert_eq!(std::fs::read_dir(&source).unwrap().count(),0,"aucun contenu copié ou créé");
+        assert_eq!(std::fs::read(&generic).unwrap(),generic_before,"registre de profil inchangé");
     }
 
     #[test]

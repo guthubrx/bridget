@@ -730,6 +730,17 @@ def prepare(request):
 
 def remote_registry(request):
     expected = absolute(request["registry"])
+    # Ce fait est ajouté par le worker d'origine à partir de son propre
+    # registre, jamais par les paramètres publics de l'admission.
+    require(type(request.get("origin_worker_registry", False)) is bool,
+            "project_preparation_operation")
+    if request.get("origin_worker_registry", False):
+        require(request.get("commit") is None
+                and request["machine_id"] == request["origin_host"],
+                "project_preparation_operation")
+        _, config = registry_read(expected)
+        machine(config, request)
+        return expected
     # Le namespace du tunnel et le registre du worker peuvent être distincts.
     # Lire le lancement du worker local, sans identité fournie par un agent.
     found = set()

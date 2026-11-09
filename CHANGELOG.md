@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.8.21
+- Authenticated local preparation uses the origin worker registry even when a different profile registry exists on the account. No new permissions or content transfer.
+
 ## 0.8.20
 - Allow existing local non-Git directories through the origin relay for general/shared tasks, without copying or a self-SSH tunnel.
 - Resolve native child projects through the admitted placement worker when the OS hostname differs from its fleet machine ID.

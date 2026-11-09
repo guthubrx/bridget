@@ -1,5 +1,8 @@
 # Journal des changements
 
+## 0.8.21
+- Le rattachement local attesté utilise le registre du worker d’origine, même si un registre de profil différent existe sur le compte. Aucun nouveau droit ni transfert de contenu.
+
 ## 0.8.20
 - Rattachement local hors Git accepté par le relais d’origine en general/shared, sans copie ni tunnel vers soi-même.
 - Projet des enfants natifs résolu auprès du worker du placement quand le hostname système diffère de la machine admise.
