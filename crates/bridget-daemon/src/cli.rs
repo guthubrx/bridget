@@ -12124,6 +12124,8 @@ mod guidance156_tests {
         let queue_parse_only = queue_parse_only || real_wake_cli;
         let receipt = root.join("real-cli-receipt.json");
         let listener = UnixListener::bind(&socket).unwrap();
+        // Le harness ne passe pas par initialize_process : socket privée sur Linux aussi.
+        std::fs::set_permissions(&socket,std::fs::Permissions::from_mode(0o600)).unwrap();
         listener.set_nonblocking(true).unwrap();
         if queue_parse_only {
             std::fs::remove_file(&socket).unwrap();
