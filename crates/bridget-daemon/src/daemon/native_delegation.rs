@@ -5844,7 +5844,7 @@ fn commit_file_context(st:&DaemonState,conn:&str,task_id:Option<&str>,thread:Opt
     let current=st.execution_store.latest_in_chain(&format!("execution-{}",task.mission))
         .map_err(|_|"commit_file_execution_unavailable")?.ok_or("commit_file_execution_unavailable")?;
     let slots=task.remote_result_slots.iter().filter(|slot|slot.identity.command==command
-        && slot.identity.mission_id==task.mission && slot.identity.round==u32::from(task.round)
+        && slot.identity.mission_id==task.mission && slot.identity.round==task.round
         && slot.identity.execution_id==current.execution_id && slot.identity.execution_generation==current.generation)
         .collect::<Vec<_>>();
     if slots.len()!=1 {return Err("commit_file_execution_unavailable");}
@@ -7283,7 +7283,7 @@ fn reserve_remote_result_slot(
         let identity = WorkerResultIdentity {
             command: command.clone(),
             mission_id: task.mission.clone(),
-            round: u32::from(task.round),
+            round: task.round,
             execution_id,
             execution_generation: snapshot.generation,
         };
@@ -13240,7 +13240,7 @@ pub(super) fn tick(state: &Arc<Mutex<DaemonState>>) {
                 if task.remote_placement.is_some()
                     && !task.remote_result_slots.iter().any(|slot| {
                         slot.identity.mission_id == task.mission
-                            && slot.identity.round == u32::from(task.round)
+                            && slot.identity.round == task.round
                             && Some(slot.identity.command.instance_id.as_str())
                                 == task.child_instance.as_deref()
                     })

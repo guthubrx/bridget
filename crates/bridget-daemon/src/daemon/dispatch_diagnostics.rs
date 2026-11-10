@@ -53,7 +53,7 @@ impl Identity {
             owner_instance: task.owner_instance.clone(),
             child_instance: task.child_instance.clone()?,
             mission: task.mission.clone(),
-            round: u32::from(task.round),
+            round: task.round,
             placement_digest: format!("{:x}", Sha256::digest(bytes)),
         })
     }

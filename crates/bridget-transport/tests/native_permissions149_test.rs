@@ -415,19 +415,19 @@ fn native149_contexte_lancement_compose_digests_sources_et_overrides() {
         (json!({"permissions":{"allow":["Bash(ls:*)"]}}), Ok(())),
         (
             json!({"autre":1}),
-            Err("permission_source_unavailable".into()),
+            Err("permission_source_unavailable"),
         ),
         (
             json!({"permissions":{"defaultMode":"superMode"}}),
-            Err("permission_source_unavailable".into()),
+            Err("permission_source_unavailable"),
         ),
         (
             json!({"permissions":{"disableBypassPermissionsMode":"off"}}),
-            Err("permission_source_unavailable".into()),
+            Err("permission_source_unavailable"),
         ),
         (
             json!({"permissions":{"allow":[42]}}),
-            Err("permission_source_unavailable".into()),
+            Err("permission_source_unavailable"),
         ),
     ] {
         let mut essai = context.clone();
