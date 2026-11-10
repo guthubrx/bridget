@@ -8,6 +8,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
+/// Identifiant d'utilisateur effectif du processus courant.
+pub fn effective_uid() -> u32 {
+    // SAFETY: geteuid n'a aucun argument, ne déréférence aucun pointeur et ne peut pas échouer.
+    unsafe { libc::geteuid() }
+}
+
 /// Frontières observables d'un remplacement atomique.
 ///
 /// L'observateur sert aux tests de crash par processus réel ; l'écriture de
@@ -97,6 +103,16 @@ pub fn write_private_file_atomic_observed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn effective_uid_est_le_proprietaire_d_un_fichier_cree_par_ce_processus() {
+        use std::os::unix::fs::MetadataExt;
+        let chemin = std::env::temp_dir().join(format!("bridget-euid-{}", std::process::id()));
+        std::fs::write(&chemin, b"x").unwrap();
+        let uid = std::fs::metadata(&chemin).unwrap().uid();
+        std::fs::remove_file(&chemin).unwrap();
+        assert_eq!(effective_uid(), uid);
+    }
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
     use std::thread;
