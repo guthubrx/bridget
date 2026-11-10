@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 69 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 12, 14, 13 (T137 partiel), 15 traités.
+Statut : In Progress. 73 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 12, 14, 13 (T137 partiel), 15, 17 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -215,10 +215,10 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 17 - Code mort (guide : `guides/lot-17-code-mort.md`)
 
-- [ ] T151 [L17] Constat des 9 `allow(dead_code)`.
-- [ ] T152 [L17] Traiter les attributs hors `attach.rs` (retrait, `cfg(test)` ou `expect` avec raison).
-- [ ] T153 [L17] [D12] `attach.rs` : `expect` avec la raison « boucle T806b » ; rien n'est supprimé.
-- [ ] T154 [L17] Porte : plus d'`allow(dead_code)` ; `C-CLIPPY`, `C-TESTS`, `C-ECHECS`, `C-NOMS` ; bilan ; fin de lot.
+- [x] T151 [L17] Constat des 9 `allow(dead_code)`.
+- [x] T152 [L17] Traiter les attributs hors `attach.rs` (retrait, `cfg(test)` ou `expect` avec raison).
+- [x] T153 [L17] [D12] `attach.rs` : `expect` avec la raison « boucle T806b » ; rien n'est supprimé.
+- [x] T154 [L17] Porte : plus d'`allow(dead_code)` ; `C-CLIPPY`, `C-TESTS`, `C-ECHECS`, `C-NOMS` ; bilan ; fin de lot.
 
 ## Clôture (guide : `quickstart.md`)
 

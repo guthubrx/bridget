@@ -15,6 +15,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
 | 14 | intégré | T138 à T140 faits |
 | 15 | intégré | T141, T142 faits |
+| 17 | intégré | T151 à T154 faits |
 
 ## Journal
 
@@ -210,3 +211,14 @@ Code exécutable : seuls des déplacements de tests. « Activation en attente »
 
 ### Bilan lot 14
 Code de test seulement. Pas d'activation nécessaire.
+
+### Lot 17 - Code mort (T151 à T154)
+- Statut : fait
+- Commit : `refactor(daemon): Traiter les attributs dead_code et garder le code reserve avec une raison` ; constat dans `validation/lot17-avant.txt`.
+- Fichiers : `provider_accounts_tests.rs`, `remote_worker_tests.rs` (2), `native_permissions.rs`, `workspace_git.rs`, `daemon/native_delegation.rs`, `attach.rs` (3).
+- Vérifications : compilation (lib et tests) et `clippy -D warnings` : code 0. Trois attributs étaient inutiles (attach.rs lignes 556 et 702 ; le compilateur signalait l'attente non remplie) et ont été retirés. `attach.rs:564` garde un `#[expect(dead_code, reason = ...)]` « boucle T806b, conservé par décision D12 ». Les autres reçoivent `#[expect]` (tests) ou `#[cfg_attr(not(test), expect(...))]` (code utilisé seulement par les tests) avec une raison. Rien n'est supprimé.
+- Écarts : le constat contient 21 occurrences, pas 9 : 9 dans `src/` (traitées) et 12 dans `crates/bridget-daemon/tests/` (helpers partagés entre binaires de tests d'intégration : l'attribut y est l'idiome normal, laissé tel quel). `C-TESTS` complet non relancé pour ce lot (seuls des attributs de lint changent ; la compilation des tests est vérifiée) : il sera rejoué à la prochaine porte de lot.
+- Non vérifié : `C-ECHECS` et `C-NOMS` du lot.
+
+### Bilan lot 17
+Attributs de lint seulement. « Activation en attente » : sans effet fonctionnel.

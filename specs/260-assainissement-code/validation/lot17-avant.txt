@@ -1,0 +1,21 @@
+crates/bridget-daemon/src/provider_accounts_tests.rs:159:        #[allow(dead_code)]
+crates/bridget-daemon/src/workspace_git.rs:92:    #[cfg_attr(not(test), allow(dead_code))]
+crates/bridget-daemon/src/remote_worker_tests.rs:6153:    #[allow(dead_code)]
+crates/bridget-daemon/src/remote_worker_tests.rs:6170:    #[allow(dead_code)]
+crates/bridget-daemon/src/native_permissions.rs:2363:#[allow(dead_code)]
+crates/bridget-daemon/src/daemon/native_delegation.rs:3897:    #[cfg_attr(not(test), allow(dead_code))]
+crates/bridget-daemon/src/attach.rs:556:#[allow(dead_code)] // La boucle de saisie T806b en devient le propriétaire.
+crates/bridget-daemon/src/attach.rs:564:#[allow(dead_code)] // API utilisée par la boucle T806b et les pseudo-TTY de T806a.
+crates/bridget-daemon/src/attach.rs:702:#[allow(dead_code)] // Le mode dégradé sera appelé par la boucle T806b.
+crates/bridget-daemon/tests/native_delegation_real_glm.rs:17:#[allow(dead_code)]
+crates/bridget-daemon/tests/core_089_crash_test.rs:15:#[allow(dead_code)]
+crates/bridget-daemon/tests/support/idempotent.rs:732:#[allow(dead_code)]
+crates/bridget-daemon/tests/lineage_cli_test.rs:3:#[allow(dead_code)]
+crates/bridget-daemon/tests/search_104_test.rs:8:#![allow(dead_code)]
+crates/bridget-daemon/tests/spec138_project_test.rs:2:#![allow(dead_code)]
+crates/bridget-daemon/tests/edit159_e2e.rs:3:#[allow(dead_code)]
+crates/bridget-daemon/tests/spec102_threads_test.rs:9:#![allow(dead_code)]
+crates/bridget-daemon/tests/guidance156_e2e.rs:3:#[allow(dead_code)]
+crates/bridget-daemon/tests/held159_e2e.rs:3:#[allow(dead_code)]
+crates/bridget-daemon/tests/handoff_103_test.rs:5:#![allow(dead_code)]
+crates/bridget-daemon/tests/native_delegation_e2e.rs:5:#[allow(dead_code)]
