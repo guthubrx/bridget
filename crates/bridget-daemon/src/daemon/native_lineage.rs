@@ -1656,7 +1656,7 @@ fn journal_follow(
         let result = result.and_then(|()| {
             // Une frontière caught_up n'est pas une fin d'abonnement. Les seules
             // reprises ici sont les invalidations de garde, sans relire le corps.
-            while receiver.recv().is_ok() {
+            if receiver.recv().is_ok() {
                 let state = weak.upgrade().ok_or(E::BindingUnavailable)?;
                 let st = state.lock().unwrap_or_else(|e| e.into_inner());
                 if !st.lineage_journals.contains_key(&conn) {
