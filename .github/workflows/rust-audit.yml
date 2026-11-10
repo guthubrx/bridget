@@ -1,0 +1,23 @@
+name: Rust audit
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # premier passage : les alertes sont lues, pas bloquantes
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --version 0.23.0 --locked
+      - run: cargo audit
