@@ -127,3 +127,7 @@ Non convergé (non implémenté) : FR01 à FR05, FR10 à FR21, FR24, FR26, FR27,
 
 ### Bloc : disque
 Le disque libre oscille entre 10 et 14 Gio (11 Gio à la dernière mesure). La règle R4 impose un arrêt complet sous 12 Gio. Le dossier `target` de ce dépôt ne fait que 4,8 Mio : la première compilation du workspace écrirait plusieurs Gio. Tous les lots qui compilent sont donc arrêtés avant T003. Première tâche à reprendre : **T002** (contrôle du disque), puis **T003**.
+
+### T002 / T003 - reprise après libération du disque (10 novembre 2026)
+- Constat : François a libéré de l'espace (23 Gio libres) et répondu D1, D9, D10 (voir `decisions.md`). Un premier essai de T003 a fait passer le disque de 22 à 7 Gio en 2 minutes (cache de dépendances de 6,8 Gio) ; le worktree a ensuite été retiré (fusion de la branche par une autre session) et le cache purgé par l'entretien de `scripts/build.py` avant la fin.
+- Mesures de prudence pour la reprise : cache de build hors du dépôt (`$HOME/.cache/bridget-build-260`), variables `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0` et `CARGO_INCREMENTAL=0` (moins d'octets écrits ; le comportement des tests ne change pas). Le disque est relevé pendant le build.
