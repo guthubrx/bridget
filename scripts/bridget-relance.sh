@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Pas de set -e : chaque étape est vérifiée par son effet et son code de retour est traité explicitement (programme 260, lot 13).
 # Relance propre du service Bridget, du relais d'interface et du référent.
 #
 #   bridget-relance.sh            relance complète

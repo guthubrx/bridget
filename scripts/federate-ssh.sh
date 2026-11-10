@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Pas de set -e à ce niveau : ce fichier est sourcé ; federation_main() active set -euo pipefail (programme 260, lot 13).
 # Fédération 089/095 : transfert Unix et service utilisateur autonome explicite.
 # Gardes communes à deploy-remote.sh ; sourcer ce fichier n'a aucun effet.
 

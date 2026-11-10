@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -u -o pipefail
+# Pas de set -e : les échecs sont comptés (passed/failed) et rapportés en fin de script (programme 260, lot 13).
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 gate="${root_dir}/scripts/check-review-witness-selection.sh"

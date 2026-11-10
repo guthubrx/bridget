@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -u -o pipefail
+# Pas de set -e : les échecs sont comptés (passed/failed) et rapportés en fin de script (programme 260, lot 13).
 
 test_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 test_script="${test_script_dir}/${BASH_SOURCE[0]##*/}"
