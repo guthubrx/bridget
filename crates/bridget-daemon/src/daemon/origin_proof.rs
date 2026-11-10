@@ -291,9 +291,7 @@ pub(super) fn receive(
     {
         return invalid();
     }
-    let Some(pending) = st.pending_origin_proofs.get(&response.correlation_id) else {
-        return None;
-    };
+    let pending = st.pending_origin_proofs.get(&response.correlation_id)?;
     if pending.conn_id != connection
         || pending.epoch != response.connection_epoch
         || pending.worker != response.worker
@@ -774,7 +772,7 @@ mod tests {
         {let st=shared.lock().unwrap();let known=agent_communication_project(&st,&owner).unwrap();
             let other=CommunicationProject {host:known.host.clone(),root:"/other-project177".into()};
             assert!(crate::communication::project_scope(Some(&known),Some(&other),"recipient177",None).is_err());
-            assert!(st.t3_thread_bindings.get("primary177").is_none());
+            assert!(!st.t3_thread_bindings.contains_key("primary177"));
             assert!(human_authority_guard(&st,thread,&Some(known)).is_err());
         }
         drop(shared);std::fs::remove_dir_all(root).unwrap();

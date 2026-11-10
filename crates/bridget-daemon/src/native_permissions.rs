@@ -500,9 +500,9 @@ pub(crate) fn recheck_remote_child_permissions(
     origin_parent: Option<&ProviderPermissions>,
 ) -> Result<(), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = recheck_remote_child_permissions_in_operation(policy, definition, cwd, source, protected, mapping, origin_parent, &mut operation)?;
+    recheck_remote_child_permissions_in_operation(policy, definition, cwd, source, protected, mapping, origin_parent, &mut operation)?;
     operation.finish()?;
-    Ok(result)
+    Ok(())
 }
 
 pub(crate) fn recheck_remote_child_permissions_in_operation(
@@ -1154,7 +1154,7 @@ fn merge_native_target_arguments(policy: &mut Value, definition: &AgentDefinitio
             while index < definition.args.len() && !definition.args[index].starts_with('-') {
                 values.push(definition.args[index].clone()); index += 1;
             }
-            if index > 0 { index -= 1; }
+            index = index.saturating_sub(1);
         }
         if values.is_empty() { return Err("permission_mapping_unavailable".into()); }
         if flag == "--add-dir" {
@@ -1588,9 +1588,9 @@ pub(crate) fn recheck_context(
     source: &SourceEnvironment,
 ) -> Result<(), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = recheck_context_in_operation(context, definition, cwd, source, &mut operation)?;
+    recheck_context_in_operation(context, definition, cwd, source, &mut operation)?;
     operation.finish()?;
-    Ok(result)
+    Ok(())
 }
 
 pub(crate) fn recheck_context_in_operation(
@@ -1611,9 +1611,9 @@ pub(crate) fn recheck_context_with_env(
     environment: &SourceEnvironment,
 ) -> Result<(), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = recheck_context_with_env_in_operation(context, definition, cwd, environment, &mut operation)?;
+    recheck_context_with_env_in_operation(context, definition, cwd, environment, &mut operation)?;
     operation.finish()?;
-    Ok(result)
+    Ok(())
 }
 
 pub(crate) fn recheck_context_with_env_in_operation(
@@ -2057,9 +2057,9 @@ pub(crate) fn apply_child_arguments(
     args: &mut Vec<String>,
 ) -> Result<(), String> {
     let mut operation = PermissionReadOperation::default();
-    let result = apply_child_arguments_in_operation(protocol, policy, args, &mut operation)?;
+    apply_child_arguments_in_operation(protocol, policy, args, &mut operation)?;
     operation.finish()?;
-    Ok(result)
+    Ok(())
 }
 
 pub(crate) fn apply_child_arguments_in_operation(
@@ -3096,7 +3096,7 @@ fn capture_guarded_context(
         .or_else(|| environment.get("HOME").map(|p| PathBuf::from(p).join(".claude")))
         .ok_or_else(unavailable)?;
     if std::fs::canonicalize(&config).map_err(|_| unavailable())?
-        != PathBuf::from(profile["target_controls"]["config_dir"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G073))?) {
+        != std::path::Path::new(profile["target_controls"]["config_dir"].as_str().ok_or_else(|| equivalence_fail_at(ProjectionGuard::G073))?) {
         return Err(equivalence_fail_at(ProjectionGuard::G074));
     }
     let scoped = guarded_profile_definition(definition, profile, context)?;

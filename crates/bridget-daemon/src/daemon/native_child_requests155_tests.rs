@@ -926,7 +926,7 @@ fn remote162_arret_atteste_avant_connected_cloture_demarrage_apres_reprise() {
         }
         let result = wait_tasks(
             "conn-1",
-            &[fixture.task.task_id.clone()],
+            std::slice::from_ref(&fixture.task.task_id),
             Some(1),
             None,
             &fixture.state,

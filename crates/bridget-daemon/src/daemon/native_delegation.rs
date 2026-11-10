@@ -1038,16 +1038,13 @@ fn workload_command_writes(name: &str, args: &[String]) -> bool {
             let next = args.get(i + 1).map(String::as_str).unwrap_or("");
             if any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output=")) { return true; }
             if matches!(op, "branch" | "tag") && any(&["-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy", "-a", "--annotate", "-s", "--sign", "-f", "--force"]) { return true; }
-            !read(&["status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "rev-list",
-                "describe", "grep", "for-each-ref", "version", "help", "--version", "-v"], op)
-                && !matches!((op, next), ("stash", "list" | "show") | ("worktree", "list")
-                    | ("remote", "-v" | "--verbose" | "get-url"))
-                && !(matches!(op, "branch" | "tag") && any(&["--list", "-l", "--show-current"]))
+            !(read(&["status", "log", "diff", "show", "rev-parse", "ls-files", "ls-tree", "rev-list",
+                "describe", "grep", "for-each-ref", "version", "help", "--version", "-v"], op) || matches!((op, next), ("stash", "list" | "show") | ("worktree", "list")
+                    | ("remote", "-v" | "--verbose" | "get-url")) || matches!(op, "branch" | "tag") && any(&["--list", "-l", "--show-current"]))
         }
         "cargo" => {
             let op = args.iter().find(|a| !a.starts_with('+')).map(String::as_str).unwrap_or("");
-            !read(&["--version", "-V", "version", "help", "--help", "-h", "locate-project", "read-manifest"], op)
-                && !(op == "fmt" && any(&["--check"]))
+            !(read(&["--version", "-V", "version", "help", "--help", "-h", "locate-project", "read-manifest"], op) || op == "fmt" && any(&["--check"]))
                 && !(op == "metadata" && any(&["--locked", "--frozen"]))
         }
         "npm" | "pnpm" => !read(&["--version", "-v", "version", "help", "--help", "-h"], first)
@@ -1056,7 +1053,7 @@ fn workload_command_writes(name: &str, args: &[String]) -> bool {
         "docker" => {
             let op = if first == "compose" { args.get(1).map(String::as_str).unwrap_or("") } else { first };
             !read(&["--version", "-v", "version", "help", "--help", "ps", "info", "inspect", "logs", "images", "top"], op)
-                && !(first == "compose" && op == "config" && !any(&["--output", "-o"]) && !args.iter().any(|a| a.starts_with("--output=")))
+                && first != "compose" || op != "config" || any(&["--output", "-o"]) || args.iter().any(|a| a.starts_with("--output="))
         }
         _ => false,
     }
@@ -5094,7 +5091,7 @@ fn task_view(task: &Task, phase: Option<&str>, full: bool) -> Value {
                 "cause":"not_recorded", "next_action":"verify_start_receipt_and_execution"
             });
         }
-    } else if let Some(message) = task.projected_error().as_deref().and_then(remote_start_error_message) {
+    } else if let Some(message) = task.projected_error().and_then(remote_start_error_message) {
         view["error_message"] = json!(message);
         if result_reservation_failed {
             if remote_result_slot_error_reason(task.error.as_deref().unwrap_or(""))==Some("ResourceLimit") {
@@ -6719,7 +6716,7 @@ fn delegate_remote_with_routing(
             .delegation_store
             .by_agent_request(&owner, request_id, &canonical)?
         {
-            recover_owner(&mut st, &mut saved, &owner, &instance)?;
+            recover_owner(&st, &mut saved, &owner, &instance)?;
             // Un rejeu ne relance jamais un bootstrap dont l'issue est inconnue.
             return current_task_view(&st, &saved, true);
         }
@@ -7101,7 +7098,7 @@ pub(super) fn remote_dispatch_proof(
         .map(|p| &p.placement.permission_digest)
         .unwrap_or(&placement.permission_digest);
     let fact = WorkerFact {
-        phase: observation.phase.clone(),
+        phase: observation.phase,
         native_ready: observation.native_ready,
         permission_digest_present: observation.permission_digest.is_some(),
         permission_digest_matches: observation
@@ -8275,7 +8272,7 @@ pub(crate) fn catalogue_entries177(registry:&AgentRegistry,source:&crate::lifecy
     fact:Option<&bridget_transport::protocol::ProviderPermissions>,verdict_cwd:Option<&Path>,blocked:&[String])
     ->Result<Vec<Value>,String>{
             let catalogue_read = std::cell::RefCell::new(crate::native_permissions::CataloguePermissionRead171::new(
-                fact, verdict_cwd.as_deref()));
+                fact, verdict_cwd));
             let entries: Vec<Value> = registry.resolved_definitions()?.into_iter()
                 .filter(|(name,_)| !name.starts_with("__"))
                 .map(|(name,definition)| {

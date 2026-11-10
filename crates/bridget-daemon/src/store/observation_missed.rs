@@ -732,7 +732,7 @@ mod tests {
         );
         let late = notice("owner", "late");
         store
-            .save_observation_batch(None, &[late.clone()], 100)
+            .save_observation_batch(None, std::slice::from_ref(&late), 100)
             .unwrap();
         store.maintain_observation_missed(105, false).unwrap();
         assert!(
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(page["facts"][1]["phase"], "write_unknown");
         let written = notice("owner", "written");
         store
-            .save_observation_batch(None, &[written.clone()], 107)
+            .save_observation_batch(None, std::slice::from_ref(&written), 107)
             .unwrap();
         assert!(
             store
@@ -908,7 +908,7 @@ mod tests {
         let mut store = fixture();
         let first = notice("owner", "sub");
         store
-            .save_observation_batch(None, &[first.clone()], 100)
+            .save_observation_batch(None, std::slice::from_ref(&first), 100)
             .unwrap();
         assert!(
             !store
@@ -947,7 +947,7 @@ mod tests {
         );
         let second = notice("owner", "sub");
         store
-            .save_observation_batch(None, &[second.clone()], 105)
+            .save_observation_batch(None, std::slice::from_ref(&second), 105)
             .unwrap();
         store
             .finish_observation_write(
@@ -1106,12 +1106,11 @@ mod tests {
         store
             .finish_observation_write(
                 "owner",
-                &store
+                store
                     .observation_missed_page("owner", None, None, 800)
                     .unwrap()["facts"][0]["fact_id"]
                     .as_str()
-                    .unwrap()
-                    .to_string(),
+                    .unwrap(),
                 ObservationWriteOutcome::FailedBeforeWrite,
                 800,
             )

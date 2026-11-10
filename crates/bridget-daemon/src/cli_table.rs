@@ -827,7 +827,7 @@ fn sections(family: &str, value: &Value, width: usize, color: bool) -> String {
     };
     // Les fiches spécialisées conservent leur contexte et leurs blocs longs.
     if object.contains_key("specialist") && family == "specialists" {
-        let mut out = render_rows("specialists", &[value.clone()], width, color);
+        let mut out = render_rows("specialists", std::slice::from_ref(value), width, color);
         let details = object
             .iter()
             .filter(|(key, _)| {
@@ -852,7 +852,7 @@ fn sections(family: &str, value: &Value, width: usize, color: bool) -> String {
         || object.contains_key("connection_id")
         || object.contains_key("agent")
     {
-        let mut out = render_rows(family, &[value.clone()], width, color);
+        let mut out = render_rows(family, std::slice::from_ref(value), width, color);
         out.push_str(&table(
             &["DÉTAIL".into(), "VALEUR".into()],
             &object

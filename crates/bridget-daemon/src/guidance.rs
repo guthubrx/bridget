@@ -145,7 +145,7 @@ pub(crate) fn authorize(facts: &GuidanceFacts) -> Result<(), GuidanceRefusal> {
             })
         };
     }
-    if !facts.actor_is_parent && !(facts.action == MidTurnDelivery && facts.actor_is_child) {
+    if !(facts.actor_is_parent || facts.action == MidTurnDelivery && facts.actor_is_child) {
         return Err(IntentNotPermitted {
             reason: "not_parent",
         });

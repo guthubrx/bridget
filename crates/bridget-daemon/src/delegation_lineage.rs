@@ -835,7 +835,7 @@ impl DelegationStore {
         version: u16,
         mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
     ) -> Result<Value, E> {
-        if !matches!(version, 1 | 2 | 3 | 4) {
+        if !matches!(version, 1..=4) {
             return Err(E::UnsupportedVersion);
         }
         if !(1..=100).contains(&limit) {
@@ -953,7 +953,7 @@ impl DelegationStore {
         version: u16,
         mut facts: impl FnMut(&Task) -> (bool, Option<LineagePlacementV2>),
     ) -> Result<Value, E> {
-        if !matches!(version, 1 | 2 | 3 | 4) {
+        if !matches!(version, 1..=4) {
             return Err(E::UnsupportedVersion);
         }
         if !(1..=16384).contains(&limit) {

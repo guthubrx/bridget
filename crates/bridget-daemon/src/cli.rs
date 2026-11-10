@@ -748,7 +748,7 @@ fn cmd_identity(args: &[String]) {
 
 fn parse_worker_diagnostic_args(args: &[String]) -> Result<(crate::remote_worker::WorkerRuntimeConfig, bridget_transport::protocol::WorkerCommandIdentity), String> {
     let identity_flags = ["--command-id", "--task-id", "--instance-id", "--generation"];
-    if args.len() % 2 != 0 { return Err("diagnostic: options par paires requises".into()); }
+    if !args.len().is_multiple_of(2) { return Err("diagnostic: options par paires requises".into()); }
     let mut identity = std::collections::BTreeMap::new();
     let mut worker = Vec::new();
     for pair in args.chunks_exact(2) {
@@ -5820,7 +5820,7 @@ fn parse_queue_args(args: &[String]) -> Result<WrapperToDaemon, String> {
     let mut request_id = None;
     let mut before_message_id = None;
     let pairs = &args[1..];
-    if pairs.len() % 2 != 0 {
+    if !pairs.len().is_multiple_of(2) {
         return Err(usage.into());
     }
     for pair in pairs.chunks_exact(2) {
@@ -12151,9 +12151,7 @@ mod guidance156_tests {
                     Err(error) => panic!("socket privée : {error}"),
                 }
             };
-            let Some(stream) = stream else {
-                return None;
-            };
+            let stream = stream?;
             stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))

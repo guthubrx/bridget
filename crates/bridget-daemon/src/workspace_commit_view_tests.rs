@@ -1875,7 +1875,8 @@ fn spec221_c19_real_corpus_native_export() {
     fs::create_dir(&root).unwrap();
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let private = root.join("proofs");
-    for path in [&private] {
+    {
+        let path = &private;
         fs::create_dir(path).unwrap();
         fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
     }

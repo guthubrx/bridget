@@ -2089,7 +2089,7 @@ fn validate_admission_config(
                 .effort
                 .as_deref()
                 .is_some_and(|effort| !profile_value(effort))
-            || profile.description.as_bytes().len() > MAX_PROFILE_DESCRIPTION_BYTES
+            || profile.description.len() > MAX_PROFILE_DESCRIPTION_BYTES
             || profile.description.chars().any(char::is_control)
             || !profile_ids.insert(&profile.id)
         {

@@ -541,7 +541,7 @@ impl Directory {
                 continue;
             }
             Self::name(name)?;
-            if names.len() >= MAX_ENTRIES + 1 {
+            if names.len() > MAX_ENTRIES {
                 return Err(limit_refusal(bridget_transport::protocol::CommitViewLimitKind::Entries, (names.len() + 1) as u64, (MAX_ENTRIES + 1) as u64));
             }
             names.push(name.to_owned());

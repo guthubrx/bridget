@@ -3971,7 +3971,7 @@ pub(crate) fn batch_envelope(messages: &[bridget_core::BridgetMessage]) -> Strin
             ));
         }
         if messages.iter().any(bridget_core::envelope::is_human_instruction) {
-            rendered.push_str("\n");
+            rendered.push('\n');
             rendered.push_str(bridget_core::envelope::HUMAN_REPLY_NOTICE);
             rendered.push_str(" Les résultats destinés aux autres agents se transmettent à ces agents par Bridget.");
         } else {

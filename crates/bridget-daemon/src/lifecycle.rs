@@ -557,7 +557,7 @@ pub(crate) fn source_base_commit(cwd: &Path) -> Result<Option<String>, String> {
                 Err(error) => return Err(format!("workspace_base_preflight_failed: {error}")),
             }
         }
-        outside &= !present[0] && !(present[1] && present[2]);
+        outside &= !(present[0] || present[1] && present[2]);
     }
     if outside {
         return Ok(None);

@@ -557,7 +557,7 @@ fn spec258_reglage_distant_cible_worker_frais_puis_perte_sans_repli() {
     assert_eq!(refused["code"], "target_unavailable");
     assert_eq!(refused["capabilities"]["send"], false);
     let st = state.lock().unwrap();
-    assert!(st.pending_post_response_controls.get("human").is_none());
+    assert!(!st.pending_post_response_controls.contains_key("human"));
     let current = st.delegation_store.get(task_id).unwrap().unwrap();
     assert_eq!(current.mission, task.mission);
     assert_eq!(current.remote_placement, task.remote_placement);
@@ -845,12 +845,10 @@ fn spec258_revoque_libere_ou_deconnecte_ne_remet_aucune_commande() {
         assert_eq!(response["capabilities"]["send"], false);
         assert_eq!(call(&state, &root, request), response);
         assert!(
-            state
+            !state
                 .lock()
                 .unwrap()
-                .pending_post_response_controls
-                .get("human")
-                .is_none()
+                .pending_post_response_controls.contains_key("human")
         );
     }
 }

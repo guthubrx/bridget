@@ -38860,12 +38860,13 @@ mod presence_tests {
         // Fixtures gravées par la transaction de remise existante, sans sélection SQL copiée.
         {
             let mut st = shared.lock().unwrap();
-            for (id, held, sender, body) in [(
+            {
+                let (id, held, sender, body) = (
                 "released159",
                 false,
                 "89000000-0000-4000-8000-000000000200",
                 "déjà remis au porteur",
-            )] {
+            );
                 let key = IdempotencyKey::new(scope, OperationKind::Send, id).unwrap();
                 let mut message = idempotent_message(body);
                 message.id = id.into();

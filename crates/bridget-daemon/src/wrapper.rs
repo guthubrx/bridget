@@ -5333,7 +5333,7 @@ fn launch_session_with_status(
                             delivery_id,
                         } => {
                             let message_id = message.id.clone();
-                            let ordinary=execution_bindings.get(&message_id).is_none() && ordinary_queue_message(&message);
+                            let ordinary=!execution_bindings.contains_key(&message_id) && ordinary_queue_message(&message);
                             if ordinary {idempotent_deliveries.admit_ordinary(&message);}
                             // Seen est durable ; aucun PromptDispatched/ACK d’injection encore.
                             #[cfg(feature = "test-support")]

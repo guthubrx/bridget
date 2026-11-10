@@ -21,7 +21,7 @@ use std::{
 use tokio::sync::Semaphore;
 
 const BODY_LIMIT: usize = 64 * 1024;
-const UPLOAD_LIMIT: usize = (8 * 1024 * 1024 + 2) / 3 * 4 + 16 * 1024;
+const UPLOAD_LIMIT: usize = (8usize * 1024 * 1024).div_ceil(3) * 4 + 16 * 1024;
 const REQUEST_BUDGET: Duration = Duration::from_secs(20);
 const CONNECTION_BUDGET: Duration = Duration::from_secs(30);
 const MAX_CONNECTIONS: usize = 32;

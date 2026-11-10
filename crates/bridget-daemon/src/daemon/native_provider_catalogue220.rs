@@ -61,12 +61,10 @@ pub(super) fn ingest(
             .iter()
             .any(|c| c.machine_id == worker.identity.machine_id && c.connection_id == *id)
     });
-    let Some(connection) = policy.connections.iter().find(|c| {
+    let connection = policy.connections.iter().find(|c| {
         c.machine_id == worker.identity.machine_id
             && c.connection_id == update.catalogue.connection_id
-    }) else {
-        return None;
-    };
+    })?;
     if registry
         .resolved_definition(&connection.agent_type)
         .map_or(true, |d| d.digest != update.catalogue.definition_digest)

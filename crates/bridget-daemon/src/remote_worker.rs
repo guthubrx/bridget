@@ -1214,13 +1214,12 @@ impl WorkerStore {
         if matches!(
             receipt.phase,
             WorkerCommandPhase::Terminal | WorkerCommandPhase::Refused
-        ) || !matches!(
+        ) || !(matches!(
             phase,
             WorkerCommandPhase::Terminal
                 | WorkerCommandPhase::Refused
                 | WorkerCommandPhase::Unknown
-        ) && !(receipt.phase == WorkerCommandPhase::ReleaseAuthorized
-            && phase == WorkerCommandPhase::Released)
+        ) || receipt.phase == WorkerCommandPhase::ReleaseAuthorized && phase == WorkerCommandPhase::Released)
         {
             return Err(WorkerStoreError::InvalidTransition);
         }
@@ -1737,7 +1736,7 @@ impl WorkerStore {
                 .disposition
                 .as_ref()
                 .is_some_and(|d| d.disposition.is_final());
-            if !final_disposition && !(slot.closed.is_some() && slot.producer_terminal) {
+            if !(final_disposition || slot.closed.is_some() && slot.producer_terminal) {
                 used = used.saturating_add(
                     (MAX_WORKER_RESULT_ENVELOPE_BYTES as u64).saturating_sub(payload_bytes),
                 );
@@ -4512,7 +4511,6 @@ impl WorkerRuntime {
 
     /// Le runtime possède la matérialisation ; aucun acteur ni chemin de preuve
     /// n'est accepté depuis le lecteur.
-
     fn begin_view_file(&mut self,execution:&WorkerResultIdentity,path:&str)
         ->Result<ViewFileRead,ViewFileError> {
         let plain=view_file_error;
@@ -4944,7 +4942,6 @@ impl WorkerRuntime {
 
     /// O(h), h<=256 ancêtres ; une erreur ou un marqueur ambigu reste un refus.
     /// Aucun stderr/code Git ne sert à déduire l'absence de dépôt.
-
     fn check_routing_connection(
         &self,
         registry: &AgentRegistry,
@@ -4983,15 +4980,9 @@ impl WorkerRuntime {
     /// Partie strictement lecture de `Prepare`. Elle vérifie le binaire, le
     /// couple modèle/effort et les droits projetés, mais ne crée ni worktree,
     /// ni token Prepared, ni slot ou processus fournisseur.
-
-
-
-
     /// Convertit un tuple opaque de probe en la même demande de lecture que
     /// `Prepare`. Les champs de machine restent attestés par l'identité active,
     /// jamais proposés par le décideur.
-
-
     /// Préconditions d'un worktree futur : Git reste strictement en lecture.
     /// La création et le cwd réel restent réservés à `prepare_workspace` du
     /// seul élu après admission.
@@ -5000,8 +4991,6 @@ impl WorkerRuntime {
     /// changer de fichiers sous ses pieds, même si son état est incertain.
     /// La correspondance identifie le depot ; les mutations Shared visent
     /// son checkout reel, comme refreshCheckedOutBranch(cwd) dans T3.
-
-
     fn remap_prepared_worktree(&self, mapping: &mut ProjectMapping, cwd: &Path,
         record: &crate::delegation::WorkspaceRecord) -> Result<PathBuf, WorkerRefusal> {
         self.read_view().remap_prepared_worktree(mapping, cwd, record)
@@ -5086,12 +5075,8 @@ impl WorkerRuntime {
 
     /// Sonde groupée corrélée à une seule admission. Elle ne touche jamais le
     /// store, `prepared`, `held`, un worktree, un slot ou un fournisseur.
-
-
     /// Probe168 : le registre local est l'autorité de la connexion opaque.
     /// Le contrôle est lecture seule et précède toute conversion en Prepare.
-
-
     fn prepare(
         &mut self,
         command: &WorkerCommandIdentity,

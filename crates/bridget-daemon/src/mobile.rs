@@ -271,8 +271,7 @@ pub(crate) fn run(args: &[String]) {
             return http::serve(&ns.root, &ns.socket);
         }
         let request = parse_admin(args)?;
-        if !matches!(request, AdminRequest::Status)
-            && !(std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
+        if !(matches!(request, AdminRequest::Status) || std::io::stdin().is_terminal() && std::io::stdout().is_terminal())
         {
             return Err("human_terminal_required");
         }

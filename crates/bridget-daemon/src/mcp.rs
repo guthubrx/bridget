@@ -3361,9 +3361,7 @@ mod tests {
                     Err(error) => panic!("socket privée : {error}"),
                 }
             };
-            let Some(stream) = stream else {
-                return None;
-            };
+            let stream = stream?;
             stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))

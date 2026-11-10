@@ -1188,7 +1188,7 @@ while hold and not os.path.exists(os.path.join(os.environ['HOME'],'allow-exit'))
             &[8; 32],
             &AtomicBool::new(false),
         );
-        let (cause, child) = result.err().expect("retained probe expected");
+        let (cause, child) = result.expect_err("retained probe expected");
         assert_eq!(cause, CatalogueCause::StopUnconfirmed);
         let mut child = child.expect("owned child retained");
         assert!(child.try_wait().unwrap().is_none());
