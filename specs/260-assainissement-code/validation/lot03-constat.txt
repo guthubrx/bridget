@@ -1,0 +1,11 @@
+    1111  126112 AGENTS.md
+112:Session259 — guidage préalable activé en 0.8.26/259-preflight-guidance-r1.
+     103
+1087:Les reçus datés des sessions précédentes restent dans specs/. Ils ne sont pas des instructions de conception ni une preuve du runtime courant.
+1:## Avancement : développement par lots, vérification utile
+10:## Incidents : corriger et livrer le guidage
+34:## Builds : entretien automatique obligatoire
+49:## Livraison : distribuer et activer sans attente de fin des sessions
+79:## Fin de livraison : Git et nettoyage obligatoires
+101:## Autorité produit et adaptateurs
+1101:## Communications attentives — décision du 9 novembre 2026

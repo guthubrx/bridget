@@ -8,6 +8,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 |-----|------|----------|
 | 0 | partiel | T001, T002, T006 faits ; T003 à T005 en attente (Cargo, voir T002) |
 | 2 | intégré | T025 à T030 faits |
+| 3 | intégré | T031 à T035 faits |
 
 ## Journal
 
@@ -50,3 +51,14 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 
 ### Bilan lot 2
 Pas d'activation : aucun fichier exécutable modifié.
+
+### Lot 3 - Consignes allégées (T031 à T035)
+- Statut : fait
+- Commits : copie du bloc (`289c9327`), remontée des consignes (`7cc2326b`), retrait du bloc (`d87deac6`) sur la branche du lot.
+- Fichiers : `AGENTS.md` (126 112 -> 10 144 octets), `specs/recus-de-session.md` (nouveau, 117 229 octets), `validation/lot03-constat.txt`.
+- Vérifications : bornes du bloc D=112 et F=1087 relevées ; bloc copié octet pour octet (`diff` vide, 975 lignes) ; retrait par motif : 975 lignes retirées, 0 ajoutée par le motif ; taille 10 144 octets (moins de 20 480, SC04). `check-docs.py` : PASS. `gitleaks` ciblé : aucune fuite.
+- Écarts : les huit consignes vivantes ont été écrites avec leur source. Le repère du registre Mac est `2b4f409e...f9d32c9` (lu dans le reçu 256, copié depuis le fichier, pas de mémoire). Pour le Python 3.9.6, le reçu 224 est cité.
+- Non vérifié : si d'autres consignes vivantes existent dans les reçus au-delà des huit demandées par le guide (le guide n'en demandait pas davantage).
+
+### Bilan lot 3
+Pas d'activation : documentation seulement.

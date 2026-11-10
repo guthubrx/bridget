@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 8 tâches cochées sur 157 (T001, T006, T025 à T030). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
+Statut : In Progress. 13 tâches cochées sur 157 (T001, T006, T025 à T035). L'implémentation est hors de ce tour (demande de François, 10 novembre 2026).
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -53,11 +53,11 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 3 - Consignes allégées (guide : `guides/lot-03-consignes-allegees.md`)
 
-- [ ] T031 [L3] Constat sur `AGENTS.md` (taille, bornes du bloc des reçus) ; `validation/lot03-constat.txt`.
-- [ ] T032 [L3] Copier le bloc octet pour octet dans `specs/recus-de-session.md` ; `diff` identique.
-- [ ] T033 [L3] Remonter 8 consignes vivantes en règles permanentes dans `AGENTS.md`.
-- [ ] T034 [L3] Retirer le bloc d'`AGENTS.md` par motif ; moins de 20 Ko.
-- [ ] T035 [L3] Porte : taille, sections, `check-docs.py`, `check-secrets.sh` ; bilan ; fin de lot.
+- [x] T031 [L3] Constat sur `AGENTS.md` (taille, bornes du bloc des reçus) ; `validation/lot03-constat.txt`.
+- [x] T032 [L3] Copier le bloc octet pour octet dans `specs/recus-de-session.md` ; `diff` identique.
+- [x] T033 [L3] Remonter 8 consignes vivantes en règles permanentes dans `AGENTS.md`.
+- [x] T034 [L3] Retirer le bloc d'`AGENTS.md` par motif ; moins de 20 Ko.
+- [x] T035 [L3] Porte : taille, sections, `check-docs.py`, `check-secrets.sh` ; bilan ; fin de lot.
 
 ## Lot 4 - Tests hors des fichiers de production (guide : `guides/lot-04-tests-externalises.md`)
 
