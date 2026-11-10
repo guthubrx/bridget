@@ -1,0 +1,26 @@
+{
+  "sys-259-construction.patch.gz": {
+    "bytes": 15588,
+    "sha256": "e7bbeef44fbea7676b6d0d47cda46d1364bf6d6d8796f50ddef97b09433627cd",
+    "base": "065f54f05d26224b0e31198a4db48ca208232da7",
+    "uncompressed_name": "sys-259-construction.patch",
+    "compressed_sha256": "bec45a1ab76f55da8dd99f50722f0a54c5299bd7c1dd7fc69c3cb1d921293fcb",
+    "compressed_bytes": 5292
+  },
+  "sys-258-composer-partiel.patch.gz": {
+    "bytes": 18074,
+    "sha256": "45318363eacc2ed3f9e76ad061820dc027da44c89df26942c38833d4757e4f1a",
+    "base": "e41b75fe6371085c34e73da36c6ff1a1b4d05a45",
+    "uncompressed_name": "sys-258-composer-partiel.patch",
+    "compressed_sha256": "0517f4f29883a2cc2395dbbd5ea6c97498b356c9e34a31f16aa5b287a6b8314f",
+    "compressed_bytes": 4703
+  },
+  "sys-258-construction.patch.gz": {
+    "bytes": 171425,
+    "sha256": "dc3b9857697441b87ccdd91c1e53502e8cb49f97b3b1d31994fe562228c7d63e",
+    "base": "e41b75fe6371085c34e73da36c6ff1a1b4d05a45",
+    "uncompressed_name": "sys-258-construction.patch",
+    "compressed_sha256": "63d681ddbcf25097520fe8e85b0a4999ee1ce7913da00278194d834667a2f817",
+    "compressed_bytes": 37725
+  }
+}
