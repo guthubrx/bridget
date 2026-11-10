@@ -2187,7 +2187,7 @@ fn reserve_remote_lineage_fixture(
     };
     task.child_instance = Some(lease.instance_id);
     st.delegation_store
-        .insert(&task, label, b"remote-journal162")
+        .insert(task, label, b"remote-journal162")
         .unwrap();
     native_delegation::remote_command_identity(st, task).unwrap();
     let peer = spec094_live_test_connection(st, "worker162-journal");

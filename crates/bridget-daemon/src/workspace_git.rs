@@ -594,7 +594,7 @@ pub(crate) fn resolve_source_commit(
     let base = format!("{base}^{{commit}}");
     // Code 1 : référence absente. Code 128 : dépôt invalide ou Git en échec.
     let base_output = run_git(
-        &cwd,
+        cwd,
         &["rev-parse", "--verify", "--quiet", "--end-of-options", &base],
         READ_TIMEOUT,
     )
@@ -1164,7 +1164,7 @@ pub(crate) fn report(workspace: &WorkspaceRecord) -> Result<WorkspaceRecord, Str
 }
 
 fn report_at(workspace: &WorkspaceRecord, git_dir: &Path, path: &Path) -> Result<WorkspaceRecord, String> {
-    let read = |args: &[&str]| capture(&path, args, READ_TIMEOUT, Some((&git_dir, &path)));
+    let read = |args: &[&str]| capture(path, args, READ_TIMEOUT, Some((git_dir, path)));
     let configuration = read(&[
         "config",
         "--no-includes",

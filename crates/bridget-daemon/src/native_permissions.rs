@@ -467,7 +467,7 @@ pub(crate) fn project_remote_permissions_in_operation(
     let (mut policy, effective) =
         child_policy_reader_with_capture(&translated, definition, &cwd, source, true, prepared)(posture)?;
     if definition.protocol == "claude_stream_json" {
-        merge_native_target_arguments(&mut policy, definition, &protected)?;
+        merge_native_target_arguments(&mut policy, definition, protected)?;
     }
     if definition.protocol == "claude_stream_json" && effective == SpawnPosture::Development {
         // The destination's configured mode is authoritative. A full-access

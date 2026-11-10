@@ -169,7 +169,7 @@ impl WorkerReadView<'_> {
             .ok_or(WorkerRefusal::Unauthorized)?;
         if provision.worker_id != self.identity.worker_id
             || provision.provisioning_revision != self.identity.provisioning_revision
-            || !provision.matches_credential(&self.credential)
+            || !provision.matches_credential(self.credential)
         {
             return Err(WorkerRefusal::Unauthorized);
         }
@@ -599,7 +599,7 @@ impl WorkerReadView<'_> {
             return Err(WorkerRefusal::DefinitionChanged);
         }
         trace.at("launch_preflight");
-        crate::lifecycle::launch_preflight(&scoped, &prepared.request.agent_type, &self.source)
+        crate::lifecycle::launch_preflight(&scoped, &prepared.request.agent_type, self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         trace.at("child_permissions");
         crate::native_permissions::recheck_remote_child_permissions_in_operation(
@@ -608,7 +608,7 @@ impl WorkerReadView<'_> {
                 .get(&prepared.request.agent_type)
                 .map_err(|_| WorkerRefusal::DefinitionChanged)?,
             &cwd,
-            &self.source,
+            self.source,
             &self.protected(),
             Some(&mapping),
             Some(&prepared.request.parent),
@@ -1225,7 +1225,7 @@ impl WorkerReadView<'_> {
             .and_then(|registry|registry.pin_delegation_service_tier(
                 &request.agent_type,&request.model,request.service_tier.as_deref()))
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
-        crate::lifecycle::launch_preflight(&pinned, &request.agent_type, &self.source)
+        crate::lifecycle::launch_preflight(&pinned, &request.agent_type, self.source)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
         let projection_definition = pinned.get(&request.agent_type)
             .map_err(|_| WorkerRefusal::DefinitionChanged)?;
@@ -1235,7 +1235,7 @@ impl WorkerReadView<'_> {
                 projection_definition,
                 mapping,
                 cwd,
-                &self.source,
+                self.source,
                 request.posture,
                 &self.protected(), operation,
                 matches!(request.workspace,Some(bridget_transport::protocol::WorkspaceRequest::CommitView {})),
@@ -1259,14 +1259,14 @@ impl WorkerReadView<'_> {
         // de droits. La capture reste une lecture de configuration locale.
         if definition.protocol == "claude_stream_json" {
             crate::native_permissions::refresh_remote_permissions_context_in_operation(
-                &mut policy, definition, cwd, &self.source, mapping, operation,
+                &mut policy, definition, cwd, self.source, mapping, operation,
             ).map_err(|code| observe_probe_permission_failure(&code, diagnostics, ProbePermissionSite::Refresh))?;
         }
         crate::native_permissions::recheck_remote_child_permissions_in_operation(
             &policy,
             definition,
             cwd,
-            &self.source,
+            self.source,
             &self.protected(),
             Some(mapping),
             Some(&request.parent), operation,

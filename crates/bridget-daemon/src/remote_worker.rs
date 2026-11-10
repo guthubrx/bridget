@@ -2410,7 +2410,7 @@ impl WorkerStore {
         // Une preuve antérieure d'intégrité ne devient pas un succès de processus ;
         // il s'agit seulement de la disponibilité constatée du fichier.
         operation.available=available;operation.failure=failure;
-        self.persist(&self.workspace_path(&prepare),&receipt)?;
+        self.persist(&self.workspace_path(prepare),&receipt)?;
         Ok(true)
     }
 

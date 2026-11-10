@@ -922,7 +922,7 @@ pub(super) fn export(source: &Path, manifest: &Manifest, destination: &Path) -> 
     sync_written_files(&mut pending_sync, objects.deadline)?;
     // Aucun lien ne participe à la création d'un fichier ou dossier.
     for (path, target) in &links {
-        let (parent, name) = root.parent(&path, true, &mut created)?;
+        let (parent, name) = root.parent(path, true, &mut created)?;
         parent.link(&name, target)?;
     }
     observed_links(&root, manifest, objects.deadline)?;

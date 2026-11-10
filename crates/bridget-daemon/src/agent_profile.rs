@@ -1844,7 +1844,7 @@ where I:IntoIterator,I::Item:AsRef<str> {
             }
 
             if existing_profile != Some(true) {
-                let display_name = available_display_name(&connection, "Agent")?;
+                let display_name = available_display_name(connection, "Agent")?;
                 let normalized = normalize_display_name(&display_name)?;
                 connection.execute(
                     "INSERT INTO agent_profiles(agent_id, display_name, display_name_normalized, avatar_shape, avatar_color, instructions, instructions_revision, revision, updated_at) VALUES (?1, ?2, ?3, 'round', 'blue', '', 1, 1, ?4)",

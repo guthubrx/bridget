@@ -1886,7 +1886,7 @@ fn real_master_parent(
         panic!("parent réel162 non enregistré");
     };
     assert_eq!(agent_id, PARENT);
-    support::save_fixture_credential(&socket, PARENT, INSTANCE, credential);
+    support::save_fixture_credential(socket, PARENT, INSTANCE, credential);
     let observation = uuid::Uuid::new_v4().to_string();
     parent.send(WrapperToDaemon::NativePermissionFact {
         fact: Some(ProviderPermissions { version: 1, source: "native_wrapper".into(), run_id: "parent-turn162".into(),

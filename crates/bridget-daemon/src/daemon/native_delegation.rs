@@ -5332,7 +5332,7 @@ fn continuation_child_live(st: &DaemonState, saved: &Task) -> Result<bool,String
                             entry.lifecycle_state == DesiredLifecycleState::Running
                         })
                     {
-                        match restart_identity(st, &saved) {
+                        match restart_identity(st, saved) {
                             Ok(identity) => {
                                 identity.instance_id == *child_instance
                                     && st.managed_by_instance.get(child_instance)
@@ -8288,7 +8288,7 @@ pub(crate) fn catalogue_entries177(registry:&AgentRegistry,source:&crate::lifecy
                         Ok(cwd)
                     })();
                     let mut resolver = cwd.as_ref().ok().zip(model).map(|(cwd,model)|
-                        target_resolver_in_catalogue171(registry,source,limits,&owner,&instance,
+                        target_resolver_in_catalogue171(registry,source,limits,owner,instance,
                             fact,&name,model,None,cwd,None,None,Some(&catalogue_read)));
                     let mut verdict = |posture| -> Result<_,String> {
                         cwd.as_ref().map_err(|code| code.clone())?;
@@ -8301,7 +8301,7 @@ pub(crate) fn catalogue_entries177(registry:&AgentRegistry,source:&crate::lifecy
                     let inherited = verdict(None);
                     let development = verdict(Some(SpawnPosture::Development));
                     let can_run = discovery.is_ok() || inherited.is_ok() || development.is_ok();
-                    let quota = limits.scoped_quota(&name, &instance, unix_timestamp())
+                    let quota = limits.scoped_quota(&name, instance, unix_timestamp())
                         .or_else(|| limits.quota(&name, unix_timestamp()));
                     let constraints: Vec<Value> = if can_run {
                         if quota.as_ref().is_some_and(|quota| quota.limit_reached && !quota.exhausted) {
