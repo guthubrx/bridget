@@ -27,7 +27,7 @@ fn lineage149_actions_snake_case_roundtrip_et_fermeture() {
         json!({"action":"cancel","task_id":"14900000-0000-4000-8000-000000000001","request_id":"49000000-0000-4000-8000-000000000002"}),
     ];
     for demande in demandes {
-        let action: HumanLineageAction = serde_json::from_value(demande.clone()).expect(&demande.to_string());
+        let action: HumanLineageAction = serde_json::from_value(demande.clone()).unwrap_or_else(|_| panic!("{}", demande.to_string()));
         // Round-trip sémantique : le fil ne peut pas dériver du contrat.
         let line = encode(&action).unwrap();
         assert_eq!(
@@ -253,7 +253,7 @@ fn lineage149_evenements_watch_fermes() {
         json!({"status":"error","version":1,"code":"binding_unavailable"}),
     ];
     for evenement in evenements {
-        let event: HumanLineageWatchEvent = serde_json::from_value(evenement.clone()).expect(&evenement.to_string());
+        let event: HumanLineageWatchEvent = serde_json::from_value(evenement.clone()).unwrap_or_else(|_| panic!("{}", evenement.to_string()));
         let line = encode(&event).unwrap();
         assert_eq!(
             serde_json::to_value(decode::<HumanLineageWatchEvent>(&line).unwrap()).unwrap(),
@@ -314,7 +314,7 @@ fn lineage149_enveloppes_wire_humaines() {
         "request":{"version":1,"t3_thread_id":"fil-149","project_root":"/projet",
             "request":{"action":"list","limit":50,"cursor":null}}
     });
-    let demande = decode::<WrapperToDaemon>(&requete.to_string()).expect(&requete.to_string());
+    let demande = decode::<WrapperToDaemon>(&requete.to_string()).unwrap_or_else(|_| panic!("{}", requete.to_string()));
     let line = encode(&demande).unwrap();
     assert_eq!(
         serde_json::to_value(decode::<WrapperToDaemon>(&line).unwrap()).unwrap(),
