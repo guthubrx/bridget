@@ -44,3 +44,7 @@ crates/bridget-daemon/assets/ui/node_modules/
 /gitleaks-report.*
 /privacy-report.*
 **/node_modules/
+
+# Résidus de travail de la racine (programme 260, lot 2)
+/.wip-*
+/watch_*
