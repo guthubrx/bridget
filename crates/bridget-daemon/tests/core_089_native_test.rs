@@ -48,15 +48,18 @@ fn stop_session(mut daemon: ChildGuard, mut wrapper: ChildGuard) {
     fixture::wait_child(&mut wrapper.0, Duration::from_secs(10));
     let deadline = Instant::now() + Duration::from_secs(3);
     for child in children {
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         while unsafe { libc::kill(child, 0) } == 0 && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5)); // récolte, pas synchronisation métier
         }
         assert_eq!(
+            // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
             unsafe { libc::kill(child, 0) },
             -1,
             "fournisseur orphelin après arrêt du wrapper"
         );
         assert_eq!(
+            // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
             unsafe { libc::kill(-child, 0) },
             -1,
             "groupe fournisseur orphelin"

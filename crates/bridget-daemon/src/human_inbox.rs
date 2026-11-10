@@ -600,7 +600,9 @@ pub fn push_to_channel(
         let input = child.stdin.take().ok_or("stdin canal indisponible")?;
         let mut stderr = child.stderr.take().ok_or("stderr canal indisponible")?;
         for fd in [input.as_raw_fd(), stderr.as_raw_fd()] {
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
             {
                 return Err(format!(
@@ -690,6 +692,7 @@ pub fn push_to_channel(
             {
                 return Ok(());
             }
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
                 let error = std::io::Error::last_os_error();
                 if error.raw_os_error() != Some(libc::ESRCH) {

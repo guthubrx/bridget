@@ -531,6 +531,7 @@ impl PolicyRefreshLock {
         {
             return Err(PolicyRefreshError::LockPathNotUnique);
         }
+        // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return Err(PolicyRefreshError::Io(
                 io::Error::last_os_error().to_string(),
@@ -547,6 +548,7 @@ impl Drop for PolicyRefreshLock {
 }
 
 fn unlock(fd: RawFd) -> io::Result<()> {
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     if unsafe { libc::flock(fd, libc::LOCK_UN) } == 0 {
         Ok(())
     } else {

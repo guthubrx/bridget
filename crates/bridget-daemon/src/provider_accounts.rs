@@ -424,6 +424,7 @@ fn apply(
     // un instant du descripteur ne doit pas refuser l'opération. Au-delà, le
     // refus reste explicite. O(5 s / 20 ms) tentatives au plus.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     while unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK)
             || std::time::Instant::now() >= deadline

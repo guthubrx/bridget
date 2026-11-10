@@ -459,12 +459,15 @@
         let mut st = {
             let guard = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let previous = std::env::var_os("HOME");
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", &registry_home) };
             let (tx, _rx) = mpsc::channel();
             let result = DaemonState::new(&config, tx);
             if let Some(home) = previous {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { std::env::set_var("HOME", home) };
             } else {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { std::env::remove_var("HOME") };
             }
             drop(guard);
@@ -1526,12 +1529,15 @@
         let reopened = {
             let guard = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
             let previous = std::env::var_os("HOME");
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", &registry_home) };
             let (tx, _rx) = mpsc::channel();
             let result = DaemonState::new(&config, tx);
             if let Some(home) = previous {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { std::env::set_var("HOME", home) };
             } else {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { std::env::remove_var("HOME") };
             }
             drop(guard);
@@ -2654,11 +2660,14 @@
         let previous_home = std::env::var_os("HOME");
         // DaemonState::new charge le registre via HOME ; la fixture doit lui
         // fournir une racine locale avant toute construction d'état.
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe { std::env::set_var("HOME", &registry_home) };
         let state_result = DaemonState::new(&config, managed_tx);
         if let Some(home) = previous_home {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", home) };
         } else {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::remove_var("HOME") };
         }
         let mut state = state_result.unwrap();
@@ -5469,6 +5478,7 @@
             if matches!(self.0.try_wait(), Ok(None)) {
                 // Exclusivement l'enfant créé ci-dessous, jamais le daemon
                 // de travail. Le crash de l'oracle reste explicite dans le test.
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 unsafe {
                     libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM);
                 }
@@ -6181,6 +6191,7 @@
         let gate_ready = root.join("bootstrap-gate.ready");
         let gate_once = root.join("bootstrap-gate.once");
         let gate_c = CString::new(gate.as_os_str().as_bytes()).unwrap();
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         assert_eq!(unsafe { libc::mkfifo(gate_c.as_ptr(), 0o600) }, 0);
         let shim = root.join("managed-shim.sh");
         std::fs::write(
@@ -6474,6 +6485,7 @@
 
         assert_ne!(first_daemon.id(), 0);
         assert_eq!(
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::kill(first_daemon.id() as libc::pid_t, libc::SIGKILL) },
             0
         );
@@ -6597,6 +6609,7 @@
             }
         ));
         assert_eq!(
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::kill(restarted.id() as libc::pid_t, libc::SIGTERM) },
             0
         );
@@ -16778,6 +16791,7 @@
         st.registry = crate::registry::AgentRegistry::from_json(&registry_json, source).unwrap();
         let previous_root = std::env::var_os("BRIDGET_HOME");
         let previous_socket = std::env::var_os("BRIDGET_SOCKET");
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe {
             std::env::set_var("BRIDGET_HOME", &home);
             std::env::set_var("BRIDGET_SOCKET", home.join("bridget.sock"));
@@ -16799,6 +16813,7 @@
             "silence de90s ne dépasse pas trois périodes"
         );
         st.release_stale_busy_turns_at(start + Duration::from_secs(121));
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe {
             if let Some(value) = previous_root {
                 std::env::set_var("BRIDGET_HOME", value);
@@ -19481,15 +19496,18 @@
             let home_lock = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
             let previous_home = std::env::var_os("HOME");
             let (managed_tx, _managed_rx) = mpsc::channel();
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {
                 std::env::set_var("HOME", &registry_home);
             }
             let reopened = DaemonState::new(&config, managed_tx);
             if let Some(home) = previous_home {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe {
                     std::env::set_var("HOME", home);
                 }
             } else {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe {
                     std::env::remove_var("HOME");
                 }
@@ -19600,15 +19618,18 @@
             let home_lock = HOME_REGISTRY_LOCK.lock().unwrap_or_else(|p| p.into_inner());
             let previous_home = std::env::var_os("HOME");
             let (managed_tx, _managed_rx) = mpsc::channel();
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {
                 std::env::set_var("HOME", &registry_home);
             }
             let reopened = DaemonState::new(&config, managed_tx);
             if let Some(home) = previous_home {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe {
                     std::env::set_var("HOME", home);
                 }
             } else {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe {
                     std::env::remove_var("HOME");
                 }
@@ -19948,12 +19969,15 @@
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let previous_home = std::env::var_os("HOME");
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", home) };
             let (managed_tx, _managed_rx) = mpsc::channel();
             let result = DaemonState::new(config, managed_tx);
             if let Some(previous_home) = previous_home {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { std::env::set_var("HOME", previous_home) };
             } else {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { std::env::remove_var("HOME") };
             }
             result.unwrap()
@@ -20964,11 +20988,14 @@
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (managed_tx, _managed_rx) = mpsc::channel();
         let previous_home = std::env::var_os("HOME");
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe { std::env::set_var("HOME", &registry_home) };
         let state_result = DaemonState::new(&config, managed_tx);
         if let Some(home) = previous_home {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::set_var("HOME", home) };
         } else {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { std::env::remove_var("HOME") };
         }
         let mut state = state_result.unwrap();
@@ -22726,6 +22753,7 @@
             }
             if Instant::now() >= stop_deadline {
                 let pgid = marker.pgid as libc::pid_t;
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 let _ = unsafe { libc::kill(-pgid, libc::SIGTERM) };
                 let cleanup_deadline = Instant::now() + Duration::from_millis(500);
                 while crate::managed_process::group_exists(marker.pgid).unwrap_or(false)
@@ -22734,6 +22762,7 @@
                     thread::sleep(Duration::from_millis(20));
                 }
                 if crate::managed_process::group_exists(marker.pgid).unwrap_or(false) {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     let _ = unsafe { libc::kill(-pgid, libc::SIGKILL) };
                 }
                 panic!(
@@ -22780,6 +22809,7 @@
         let owned_pid = child.ready().pid;
         let owned_pgid = child.ready().pgid;
         assert_eq!(owned_pid, owned_pgid);
+        // SAFETY: getpgrp ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_ne!(owned_pgid, unsafe { libc::getpgrp() } as u32);
         state
             .marker_store

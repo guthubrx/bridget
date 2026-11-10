@@ -47,6 +47,7 @@ impl DaemonProcess {
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
             let _ = self.0.wait();
         }

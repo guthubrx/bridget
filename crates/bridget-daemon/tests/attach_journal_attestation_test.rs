@@ -48,6 +48,7 @@ impl DaemonProcess {
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
             let _ = self.0.wait();
         }
@@ -80,6 +81,7 @@ impl InteractiveWrapper {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // SAFETY: setpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             command.pre_exec(|| {
                 if libc::setpgid(0, 0) == -1 {
@@ -106,6 +108,7 @@ impl InteractiveWrapper {
         if self.child.try_wait().ok().flatten().is_some() {
             return;
         }
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let _ = unsafe { libc::kill(-self.process_group_id, libc::SIGTERM) };
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {

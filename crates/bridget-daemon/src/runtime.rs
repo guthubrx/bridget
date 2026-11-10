@@ -291,6 +291,7 @@ pub(crate) fn open_session_files(
         // Ce PID est notre enfant lsof non récolté, jamais un PID fournisseur.
         // Pas de SIGKILL ni de signal à un groupe ; wait séparé garde le pont borné.
         if matches!(child.try_wait(), Ok(None)) {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
             }
@@ -319,6 +320,7 @@ fn only_vanished(requested: &[u32], listed: &std::collections::HashSet<u32>) -> 
 
 /// `kill(pid, 0)` : ESRCH prouve l'absence, EPERM prouve l'existence.
 fn process_gone(pid: u32) -> bool {
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
     result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }

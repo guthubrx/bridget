@@ -7,6 +7,7 @@ pub(crate) fn ensure_open_file_limit() -> Result<(), String> {
             rlim_cur: 0,
             rlim_max: 0,
         };
+        // SAFETY: les pointeurs passés à getrlimit désignent des variables locales valides pendant l'appel.
         if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) } != 0 {
             return Err(format!(
                 "getrlimit(RLIMIT_NOFILE): {}",
@@ -20,6 +21,7 @@ pub(crate) fn ensure_open_file_limit() -> Result<(), String> {
     let target = limits.rlim_cur.max(BUDGET.min(hard));
     if limits.rlim_cur < target {
         limits.rlim_cur = target;
+        // SAFETY: les pointeurs passés à setrlimit désignent des variables locales valides pendant l'appel.
         if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limits) } != 0 {
             return Err(format!(
                 "setrlimit(RLIMIT_NOFILE, soft={target}, hard={hard}): {}",

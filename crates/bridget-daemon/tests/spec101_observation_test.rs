@@ -86,6 +86,7 @@ impl PrivateDaemon {
             return Err(format!("PID {pid} non attesté, aucun signal envoyé"));
         }
         // PID unique, enfant direct vérifié ; jamais de groupe ni SIGKILL.
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }

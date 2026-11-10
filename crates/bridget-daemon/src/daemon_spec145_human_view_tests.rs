@@ -660,6 +660,7 @@
             revents: 0,
         };
         assert_eq!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 150) },
             0,
             "renommage identique et replay de clôture muets"
@@ -812,6 +813,7 @@
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         let ready = unsafe { libc::poll(&mut fd, 1, 300) };
         if ready > 0 {
             assert_eq!(watch_event(&mut reader)["status"], "changed");
@@ -987,6 +989,7 @@
                         && crate::mcp_identity::process_parent(pid).ok() == Some(std::process::id())
                 };
                 if owned && !command.to_ascii_lowercase().contains("firefox") {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     unsafe {
                         libc::kill(pid as libc::pid_t, libc::SIGTERM);
                     }
@@ -1189,6 +1192,7 @@
                 assert!(Instant::now() < deadline, "enfant MCP OS absent");
                 thread::sleep(Duration::from_millis(10));
             };
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             unsafe {
                 let flags = libc::fcntl(process.output.as_raw_fd(), libc::F_GETFL);
                 assert!(flags >= 0);
@@ -1277,6 +1281,7 @@
                         mcp_birth: crate::managed_process::process_birth(pid).unwrap_or(0),
                         deadline: cli_deadline,
                     };
+                    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                     unsafe {
                         let flags = libc::fcntl(owned.output.as_raw_fd(), libc::F_GETFL);
                         assert!(flags >= 0);
@@ -1681,6 +1686,7 @@
             revents: 0,
         };
         assert!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 6000) } > 0,
             "CLI prêt sous6s"
         );

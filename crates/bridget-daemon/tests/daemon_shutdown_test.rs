@@ -75,6 +75,7 @@ fn demarrer_daemon(home: &Path) -> Child {
             panic!("daemon arrêté avant disponibilité : {status}");
         }
         if Instant::now() >= echeance {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(enfant.id() as i32, libc::SIGTERM);
             }
@@ -114,6 +115,7 @@ fn un_daemon_nu_meurt_sur_sigterm_sans_signal_non_capturable() {
     let home = racine.join("home");
     let mut daemon = demarrer_daemon(&home);
 
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let envoye = unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) };
     assert_eq!(envoye, 0, "SIGTERM doit être délivré au daemon réel");
 
@@ -170,6 +172,7 @@ fn l_arret_reste_propre_et_ne_laisse_ni_socket_ni_fichier_pid() {
         "fichier PID absent avant l'arrêt: {fichier_pid:?}"
     );
 
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     assert_eq!(unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) }, 0);
     let delai = attendre_la_fin(&mut daemon, BUDGET_ARRET);
     if delai.is_none() {

@@ -3112,6 +3112,7 @@ impl AsRawFd for WorkerFileLock {
 }
 impl Drop for WorkerFileLock {
     fn drop(&mut self) {
+        // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
         while unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) } != 0 {
             if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted { break; }
         }
@@ -3132,6 +3133,7 @@ fn lock_file(path: &Path, create: bool) -> Result<WorkerFileLock, WorkerStoreErr
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)?;
     check_private(path, false)?;
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         let error = io::Error::last_os_error();
         if matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN)
@@ -6687,6 +6689,7 @@ fn send_catalogue_frame(writer:&Mutex<UnixStream>,message:&WrapperToDaemon)->Res
             if Instant::now()>=deadline {
                 return Err("worker_connection_lost".into());
             }
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let count=unsafe {libc::send(writer.as_raw_fd(),bytes[offset..].as_ptr().cast(),bytes.len()-offset,libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
             if count>0 {offset+=count as usize;continue;}
             let error=std::io::Error::last_os_error();
@@ -7355,6 +7358,7 @@ mod catalogue220_tests {
         writer.lock().unwrap().set_nonblocking(true).unwrap();
         let bytes=vec![0;65536];
         for _ in 0..1024 {
+            // SAFETY: le tampon `bytes` est valide pour sa longueur pendant l'appel send.
             let n=unsafe{libc::send(writer.lock().unwrap().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
             if n<0 {break;}
         }
@@ -7364,12 +7368,15 @@ mod catalogue220_tests {
         let start=Instant::now();assert!(!send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());assert!(start.elapsed()<Duration::from_millis(100));
         assert_eq!(writer.lock().unwrap().write_timeout().unwrap(),original_timeout);
         let (a,_peer)=UnixStream::pair().unwrap();let size:libc::c_int=4096;
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         assert_eq!(unsafe{libc::setsockopt(a.as_raw_fd(),libc::SOL_SOCKET,libc::SO_SNDBUF,(&size as *const libc::c_int).cast(),std::mem::size_of_val(&size) as libc::socklen_t)},0);
         let writer=Mutex::new(a);let large=WrapperToDaemon::NativeDelegation {request:bridget_transport::protocol::NativeDelegationRequest::ProviderCatalogueV1 {refresh:false,machine_id:Some("x".repeat(128*1024))}};
         let reader=writer.lock().unwrap().try_clone().unwrap();
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         assert_eq!(unsafe{libc::fcntl(reader.as_raw_fd(),libc::F_GETFL)}&libc::O_NONBLOCK,0);
         let start=Instant::now();assert!(send_catalogue_frame(&writer,&large).is_err());assert!(start.elapsed()<Duration::from_secs(1));
         assert_eq!(writer.lock().unwrap().write_timeout().unwrap(),None);
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         assert_eq!(unsafe{libc::fcntl(reader.as_raw_fd(),libc::F_GETFL)}&libc::O_NONBLOCK,0);
         let (a,mut peer)=UnixStream::pair().unwrap();let writer=Mutex::new(a);
         assert!(send_catalogue_frame(&writer,&WrapperToDaemon::DaemonIdentityRequest).unwrap());

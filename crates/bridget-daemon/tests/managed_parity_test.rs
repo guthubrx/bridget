@@ -290,6 +290,7 @@ impl DaemonProcess {
 
     fn kill(mut self) {
         if let Some(mut child) = self.child.take() {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let _ = unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
             let _ = child.wait();
         }
@@ -312,6 +313,7 @@ fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
         Ok(None) => {}
         Err(_) => {}
     }
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
@@ -1280,6 +1282,7 @@ fn matrice_fr008_compare_le_meme_corpus_et_les_frames_attach() {
             None,
         );
         let terminal_observables = run_corpus(&daemon.socket, &terminal_name, run * 2, &proxy);
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             libc::kill(terminal.id() as i32, libc::SIGTERM);
         }
@@ -1652,6 +1655,7 @@ fn kill_provider_sigterm(pgid: u32) -> u32 {
         let providers = provider_pids_in_group(pgid);
         if let Some(pid) = providers.into_iter().next() {
             assert_eq!(
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 unsafe { libc::kill(pid as i32, libc::SIGTERM) },
                 0,
                 "SIGTERM fournisseur {pid}"
@@ -1738,6 +1742,7 @@ fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
     // Le wrapper doit survivre (propriété nommée par le service compagnon).
     let survive_deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < survive_deadline {
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         if unsafe { libc::kill(wrapper_before as i32, 0) } != 0 {
             panic!("wrapper {wrapper_before} mort avec le fournisseur {killed}");
         }
@@ -1752,6 +1757,7 @@ fn TEMOIN_persistant_tue_redevient_joignable_sans_redemarrer_le_daemon() {
         "joignable après kill sans redémarrage daemon"
     );
     assert_eq!(
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         unsafe { libc::kill(wrapper_before as i32, 0) },
         0,
         "même wrapper encore vivant après reprise"

@@ -15,6 +15,7 @@
             let previous = std::env::var_os("MINREQ_TIMEOUT");
             // Les tests vérifient le refus local sans jamais laisser cette
             // variable globale contaminer une autre exécution concurrente.
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {
                 match value {
                     Some(value) => std::env::set_var("MINREQ_TIMEOUT", value),
@@ -27,6 +28,7 @@
 
     impl Drop for MinreqTimeoutRestore {
         fn drop(&mut self) {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {
                 match self.0.take() {
                     Some(value) => std::env::set_var("MINREQ_TIMEOUT", value),
@@ -774,6 +776,7 @@ else:
             .unwrap()
             .parse()
             .unwrap();
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         assert!(unsafe { libc::kill(-leader, 0) } < 0);
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),

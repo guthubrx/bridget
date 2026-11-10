@@ -353,6 +353,7 @@ fn acquire_instance_lock(
     let lock = open_private_file(&lock_path)?;
     // Une instance de session est servie par un seul handle. Le verrou est au
     // niveau parent afin que supprimer le répertoire de reçus ne l'efface pas.
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     let result = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if result != 0 {
         let error = io::Error::last_os_error();

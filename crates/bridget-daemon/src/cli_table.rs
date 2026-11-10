@@ -334,7 +334,9 @@ pub(crate) fn prepare(args: Vec<String>) -> Result<(Vec<String>, Guard), String>
     Ok((parsed.args, Guard(previous)))
 }
 fn terminal_width() -> usize {
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let mut winsize: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: les pointeurs passés à ioctl désignent des variables locales valides pendant l'appel.
     let width = if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut winsize) } == 0
         && winsize.ws_col > 0
     {

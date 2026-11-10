@@ -4472,6 +4472,7 @@ for line in sys.stdin:
         );
         let adapter_pid = transport.process_id() as i32;
 
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::kill(adapter_pid, libc::SIGTERM) }, 0);
         let deadline = Instant::now() + Duration::from_secs(1);
         while Instant::now() < deadline {
@@ -4497,6 +4498,7 @@ for line in sys.stdin:
         );
 
         transport.stop();
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         assert_eq!(unsafe { libc::kill(adapter_pid, 0) }, -1);
         let _ = fs::remove_dir_all(root);
     }
@@ -4540,10 +4542,12 @@ for line in sys.stdin:
             "stop attend encore l'échéance du tour"
         );
         let reaped_deadline = Instant::now() + Duration::from_secs(1);
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         while Instant::now() < reaped_deadline && unsafe { libc::kill(child_pid, 0) } == 0 {
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(
+            // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
             unsafe { libc::kill(child_pid, 0) },
             -1,
             "le groupe enfant Codex survit au shutdown"
@@ -5373,6 +5377,7 @@ for line in sys.stdin:
         let identity = repair185_settled(&mut transport, Duration::from_secs(2)).unwrap();
         assert_eq!(identity.provider_thread_id.as_deref(), Some("thread-native"));
         assert!(transport.child.lock().unwrap().try_wait().unwrap().is_some());
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         assert!(unsafe { libc::kill(-(pid as i32), 0) } < 0);
         assert!(transport.queue.0.lock().unwrap().closed);
         assert!(!transport.alive.load(Ordering::SeqCst));

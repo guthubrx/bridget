@@ -28,7 +28,7 @@ fn ensure_claude_on_path() {
         paths.extend(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         ));
-        // SAFETY : appelé une seule fois, avant tout Observer::start du module.
+        // SAFETY: appelé une seule fois, avant tout Observer::start du module.
         unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
     });
 }

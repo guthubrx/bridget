@@ -63,6 +63,7 @@ fn run(arguments: &[&Path]) -> std::process::Output {
         }
         if Instant::now() >= deadline {
             let pid = child.id();
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
             let output = child.wait_with_output().unwrap();
             panic!(
@@ -77,6 +78,7 @@ fn run(arguments: &[&Path]) -> std::process::Output {
 
 fn make_fifo(path: &Path) {
     let raw = CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     assert_eq!(unsafe { libc::mkfifo(raw.as_ptr(), 0o600) }, 0);
 }
 

@@ -181,6 +181,7 @@ impl Relay {
                         connections.push(thread::spawn(move || {
                             let started = Instant::now();
                             let mut stage = "accept";
+                            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                             eprintln!("relais162 fd client flags={}", unsafe {
                                 libc::fcntl(client.as_raw_fd(), libc::F_GETFL)
                             });
@@ -190,6 +191,7 @@ impl Relay {
                                 // O_NONBLOCK du listener. Ce lecteur de fixture
                                 // utilise des lectures bloquantes sous timeout.
                                 client.set_nonblocking(false)?;
+                                // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                                 eprintln!("relais162 fd client blocking flags={}", unsafe {
                                     libc::fcntl(client.as_raw_fd(), libc::F_GETFL)
                                 });
@@ -197,6 +199,7 @@ impl Relay {
                                 let mut reader = BufReader::new(client);
                                 stage = "connect backend";
                                 let mut backend = UnixStream::connect(daemon)?;
+                                // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                                 eprintln!("relais162 fd backend flags={}", unsafe {
                                     libc::fcntl(backend.as_raw_fd(), libc::F_GETFL)
                                 });

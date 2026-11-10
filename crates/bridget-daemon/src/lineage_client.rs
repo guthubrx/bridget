@@ -141,6 +141,7 @@ pub(crate) fn human_lineage(
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let ready = unsafe { libc::poll(&mut fd, 1, 100) };
             if ready > 0 {
                 break;

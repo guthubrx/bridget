@@ -3223,6 +3223,7 @@ mod capacity189_mcp_tests {
             let backend=thread::spawn(move || {
                 reply_caller_scope(&listener,refused);
                 let mut pollfd=libc::pollfd {fd:listener.as_raw_fd(),events:libc::POLLIN,revents:0};
+                // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
                 unsafe {libc::poll(&mut pollfd,1,150)}
             });
             let args=json!({"task_id":"task189"});

@@ -163,7 +163,9 @@ pub(crate) fn validate_schedule(schedule: &WakeSchedule) -> Result<(), &'static 
 fn local(epoch: i64) -> Result<libc::tm, &'static str> {
     #[allow(clippy::useless_conversion)] // time_t varie selon la plateforme
     let raw: libc::time_t = epoch.try_into().map_err(|_| "calendar_unavailable")?;
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let mut civil: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: les pointeurs passés à localtime_r désignent des variables locales valides pendant l'appel.
     if unsafe { libc::localtime_r(&raw, &mut civil) }.is_null() {
         return Err("calendar_unavailable");
     }
@@ -178,6 +180,7 @@ pub(crate) fn timezone_fingerprint(now: i64) -> Result<String, &'static str> {
     if civil.tm_zone.is_null() {
         return Err("calendar_unavailable");
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let zone = unsafe { CStr::from_ptr(civil.tm_zone) }
         .to_str()
         .map_err(|_| "calendar_unavailable")?;
@@ -227,6 +230,7 @@ fn first_civil_epoch(day: &libc::tm, hour: i32, minute: i32) -> Result<Option<i6
     utc.tm_min = minute;
     utc.tm_sec = 0;
     utc.tm_isdst = 0;
+    // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.
     let center = (unsafe { libc::timegm(&mut utc) }) as i64;
     for step in -1440i64..=1440 {
         let epoch = center
@@ -284,6 +288,7 @@ pub(crate) fn calculate_cadence(
             midnight.tm_hour = 0;
             midnight.tm_min = 0;
             midnight.tm_sec = 0;
+            // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.
             let base = (unsafe { libc::timegm(&mut midnight) }) as i64;
             let mut due = None;
             let mut due_date = None;
@@ -303,7 +308,9 @@ pub(crate) fn calculate_cadence(
                     .ok_or("calendar_unavailable")?;
                 #[allow(clippy::useless_conversion)] // time_t varie selon la plateforme
                 let raw: libc::time_t = epoch.try_into().map_err(|_| "calendar_unavailable")?;
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 let mut day: libc::tm = unsafe { std::mem::zeroed() };
+                // SAFETY: les pointeurs passés à gmtime_r désignent des variables locales valides pendant l'appel.
                 if unsafe { libc::gmtime_r(&raw, &mut day) }.is_null() {
                     return Err("calendar_unavailable");
                 }

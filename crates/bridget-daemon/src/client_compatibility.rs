@@ -102,8 +102,10 @@ fn probe(program: &str, engine: &str, deadline: Instant) -> (String, Option<Stri
     };
     let mut pipe = child.stdout.take().unwrap();
     let fd = pipe.as_raw_fd();
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     let nonblocking =
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         flags >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == 0;
     let stop = deadline.min(Instant::now() + Duration::from_secs(2));
     let mut raw = Vec::new();
@@ -156,6 +158,7 @@ fn probe(program: &str, engine: &str, deadline: Instant) -> (String, Option<Stri
         return (format!("probe_stop_unconfirmed:{}", child.id()), None);
     }
     if child.try_wait().ok().flatten().is_none() {
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             libc::kill(-(child.id() as i32), libc::SIGTERM);
         }

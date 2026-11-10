@@ -90,6 +90,7 @@ impl Drop for ChildGuard {
         if child.try_wait().ok().flatten().is_some() {
             return;
         }
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
         let deadline = Instant::now() + CHILD_STOP_DEADLINE;
         while Instant::now() < deadline {
@@ -228,6 +229,7 @@ fn pair_accepte_et_muet_rend_l_identite_indisponible_sans_seconde_connexion() {
 
     if !completed {
         let child = client.child_mut();
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
         let stop_deadline = Instant::now() + CHILD_STOP_DEADLINE;
         while Instant::now() < stop_deadline && child.try_wait().ok().flatten().is_none() {

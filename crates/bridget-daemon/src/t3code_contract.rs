@@ -206,6 +206,7 @@ pub fn read_runtime(base: &Path) -> Result<ServerRuntime, ContractError> {
     let path = runtime_file(base);
     let text =
         std::fs::read_to_string(&path).map_err(|_| ContractError::NotRunning(path.clone()))?;
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     parse_runtime(&text, |pid| unsafe { libc::kill(pid as i32, 0) == 0 })
 }
 

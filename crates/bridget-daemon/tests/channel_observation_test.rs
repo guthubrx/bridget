@@ -33,6 +33,7 @@ fn owned_daemon(pid: u32) -> bool {
         == Some(std::process::id())
         && command.contains(env!("CARGO_BIN_EXE_bridget"))
         && !command.to_ascii_lowercase().contains("firefox")
+        // SAFETY: getpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
         && unsafe { libc::getpgid(pid as i32) } == pid as i32
 }
 
@@ -40,6 +41,7 @@ fn stop_owned_daemon(pid: u32) {
     // Jamais de PID lu dans un état de flotte : uniquement notre Child direct,
     // vérifié par parent, exécutable et groupe dédié avant chaque signal.
     if owned_daemon(pid) {
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             libc::kill(pid as i32, libc::SIGTERM);
         }
@@ -78,6 +80,7 @@ impl DaemonProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr);
+        // SAFETY: setpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             command.pre_exec(|| {
                 if libc::setpgid(0, 0) == -1 {

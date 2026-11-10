@@ -93,6 +93,7 @@ struct DaemonProcess(Child);
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
         if self.0.try_wait().ok().flatten().is_none() {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(self.0.id() as i32, libc::SIGTERM);
             }
@@ -132,6 +133,7 @@ fn demarrer_daemon(home: &Path) -> DaemonProcess {
 }
 
 fn arreter(mut daemon: DaemonProcess) {
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let _ = unsafe { libc::kill(daemon.0.id() as i32, libc::SIGTERM) };
     let echeance = Instant::now() + Duration::from_secs(15);
     while Instant::now() < echeance {

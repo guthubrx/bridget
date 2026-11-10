@@ -27,6 +27,7 @@ fn output(mcp: &mut McpProcess) -> Value {
             revents: 0,
         };
         assert!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 5000) } > 0,
             "réponse MCP absente"
         );

@@ -331,6 +331,7 @@ impl Transport for TmuxTransport {
         // Vérifier que le process de l'agent CLI tourne toujours
         // kill(pid, 0) retourne 0 si le process existe
         // Utilisation sûre via libc crate
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         unsafe { libc::kill(self.agent_pid as i32, 0) == 0 }
     }
 

@@ -584,6 +584,7 @@ impl RawTerminal {
         keyboard_fd: RawFd,
         keyboard_protocol: bool,
     ) -> Result<Option<Self>, String> {
+        // SAFETY: isatty ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let is_tty = unsafe { libc::isatty(fd) };
         if is_tty == 0 {
             return Ok(None);
@@ -596,12 +597,14 @@ impl RawTerminal {
         }
 
         let mut original = MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: les pointeurs passés à tcgetattr désignent des variables locales valides pendant l'appel.
         if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
             return Err(format!(
                 "lecture termios impossible: {}",
                 std::io::Error::last_os_error()
             ));
         }
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let original = unsafe { original.assume_init() };
         let mut raw = original;
         let disabled = (libc::ICANON | libc::ECHO | libc::ISIG) as libc::tcflag_t;
@@ -612,6 +615,7 @@ impl RawTerminal {
         }
         raw.c_cc[libc::VMIN] = 1;
         raw.c_cc[libc::VTIME] = 0;
+        // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
             return Err(format!(
                 "activation du mode raw impossible: {}",
@@ -622,6 +626,7 @@ impl RawTerminal {
             && let Err(error) = write_terminal_control(keyboard_fd, KEYBOARD_PROTOCOL_PUSH)
         {
             let _ = write_terminal_control(keyboard_fd, KEYBOARD_PROTOCOL_POP);
+            // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
             if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &original) } != 0 {
                 return Err(format!(
                     "activation du protocole clavier impossible: {error}; restauration termios impossible: {}",
@@ -651,6 +656,7 @@ impl RawTerminal {
             Ok(())
         };
         let terminal_result =
+            // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
             if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) } != 0 {
                 Err(format!(
                     "restauration termios impossible: {}",
@@ -667,6 +673,7 @@ impl RawTerminal {
 fn write_terminal_control(fd: RawFd, bytes: &[u8]) -> Result<(), std::io::Error> {
     let mut written = 0;
     while written < bytes.len() {
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let count = unsafe {
             libc::write(
                 fd,
@@ -1236,6 +1243,7 @@ pub fn run(agent: &str, initial_window: AttachWindow, socket_path: &Path) -> Res
 }
 
 fn is_terminal(fd: RawFd) -> bool {
+    // SAFETY: isatty ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe { libc::isatty(fd) == 1 }
 }
 
@@ -3052,9 +3060,11 @@ fn write_visual_lines(output: &mut impl Write, lines: &[String]) {
 
 pub(crate) fn terminal_geometry(fd: RawFd) -> Option<(usize, usize)> {
     let mut size = MaybeUninit::<libc::winsize>::zeroed();
+    // SAFETY: les pointeurs passés à ioctl désignent des variables locales valides pendant l'appel.
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, size.as_mut_ptr()) } != 0 {
         return None;
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let size = unsafe { size.assume_init() };
     let columns = usize::from(size.ws_col);
     let rows = usize::from(size.ws_row);
@@ -3213,6 +3223,7 @@ fn drive_interactive(
             events: libc::POLLIN,
             revents: 0,
         };
+        // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         let poll_result = unsafe { libc::poll(&mut pollfd, 1, INPUT_POLL_TIMEOUT_MILLIS) };
         if poll_result < 0 {
             let error = std::io::Error::last_os_error();
@@ -3232,6 +3243,7 @@ fn drive_interactive(
             // perdre le dernier Send d'une saisie terminée par fermeture.
             loop {
                 let mut byte = 0_u8;
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 let read = unsafe {
                     libc::read(input_fd, (&mut byte as *mut u8).cast::<libc::c_void>(), 1)
                 };
@@ -3260,6 +3272,7 @@ fn drive_interactive(
                     events: libc::POLLIN,
                     revents: 0,
                 };
+                // SAFETY: `more` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
                 if unsafe { libc::poll(&mut more, 1, 0) } <= 0 || more.revents & libc::POLLIN == 0 {
                     break;
                 }
@@ -4060,6 +4073,7 @@ fn turn_end_summary(payload: &serde_json::Value) -> String {
 fn short_timestamp(timestamp: Option<&str>) -> String {
     timestamp
         .and_then(parse_utc_timestamp)
+        // SAFETY: les pointeurs passés à localtime_r désignent des variables locales valides pendant l'appel.
         .and_then(|seconds| unsafe {
             let mut local = std::mem::zeroed::<libc::tm>();
             (!libc::localtime_r(&seconds, &mut local).is_null())
@@ -4097,8 +4111,10 @@ fn parse_utc_timestamp(timestamp: &str) -> Option<libc::time_t> {
         tm_mon: number(5..7)? - 1,
         tm_year: number(0..4)? - 1900,
         tm_isdst: 0,
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         ..unsafe { std::mem::zeroed() }
     };
+    // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.
     let seconds = unsafe { libc::timegm(&mut utc) };
     (seconds != -1).then_some(seconds)
 }

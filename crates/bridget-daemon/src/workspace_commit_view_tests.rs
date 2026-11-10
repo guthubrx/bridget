@@ -182,6 +182,7 @@ fn spec221_c19_sync_batch_keeps_errors_and_expiry_without_publication() {
     // fsync sur une socket doit échouer. Tous les autres jobs sont joints
     // avant le retour, même quand l'un d'eux refuse la barrière.
     let (socket,mut peer)=std::os::unix::net::UnixStream::pair().unwrap();
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let socket_file=unsafe {fs::File::from_raw_fd(socket.into_raw_fd())};
     let mut files=vec![fs::File::open(&path).unwrap(),socket_file];
     assert!(sync_written_files(&mut files,Instant::now()+DEADLINE).is_err());
@@ -1032,6 +1033,7 @@ fn c19_export_child() {
         let mut reporter = crate::managed_process::ManagedStatusReporter::from_environment()
             .unwrap()
             .unwrap();
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe {
             libc::signal(libc::SIGTERM, libc::SIG_IGN);
         }

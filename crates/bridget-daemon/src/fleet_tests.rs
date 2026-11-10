@@ -793,6 +793,7 @@
                 == Some(std::process::id())
                 && command.contains(executable.to_string_lossy().as_ref())
                 && !command.to_ascii_lowercase().contains("firefox")
+                // SAFETY: getpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 && unsafe { libc::getpgid(pid as i32) } == pid as i32;
             if matches!(self.0.try_wait(), Ok(Some(_))) {
                 return;
@@ -801,6 +802,7 @@
                 owned,
                 "le crash doit cibler notre enfant de test et son groupe dédié"
             );
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGKILL) }, 0);
             let deadline = std::time::Instant::now() + Duration::from_secs(3);
             loop {
@@ -859,6 +861,7 @@
             .env(CRASH_CHILD_ENV, "1")
             .env(CRASH_ROOT_ENV, root)
             .env(CRASH_STAGE_ENV, stage);
+        // SAFETY: setpgid ne déréférence aucun pointeur ; ses arguments sont des entiers; fcntl sans argument ne déréférence aucun pointeur; dup2 ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             command.pre_exec(move || {
                 if libc::setpgid(0, 0) != 0 {
@@ -893,6 +896,7 @@
     fn signal_and_park() {
         let byte = b'B';
         assert_eq!(
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { libc::write(CRASH_BARRIER_FD, (&byte as *const u8).cast(), 1) },
             1
         );

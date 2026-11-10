@@ -73,14 +73,17 @@
     fn wake158B_groupe2_calendrier_trou_fold_tz_et_date() {
         if let Ok(case) = std::env::var("BRIDGET_WAKE_CALENDAR158B_CASE") {
             if case == "zone_identity" {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 let mut winter: libc::tm = unsafe { std::mem::zeroed() };
                 winter.tm_year = 126;
                 winter.tm_mon = 0;
                 winter.tm_mday = 1;
+                // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.
                 let epoch = (unsafe { libc::timegm(&mut winter) }) as i64;
                 println!("WAKE158B_FP={}", timezone_fingerprint(epoch).unwrap());
                 return;
             }
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let mut day: libc::tm = unsafe { std::mem::zeroed() };
             let (year, month, day_number, hour, minute, expected) = match case.as_str() {
                 "utc" => (2026, 10, 12, 9, 0, Some((2026, 10, 12, 9, 0))),
@@ -96,12 +99,14 @@
             let actual = first_civil_epoch(&day, hour, minute).unwrap();
             eprintln!("calendrier158B {case}: {:?}", before.elapsed());
             let expected = expected.map(|(y, m, d, h, min)| {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 let mut utc: libc::tm = unsafe { std::mem::zeroed() };
                 utc.tm_year = y - 1900;
                 utc.tm_mon = m - 1;
                 utc.tm_mday = d;
                 utc.tm_hour = h;
                 utc.tm_min = min;
+                // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.
                 (unsafe { libc::timegm(&mut utc) }) as i64
             });
             assert_eq!(actual, expected);
@@ -134,12 +139,14 @@
                 assert!(first.next_at > now);
                 s.previous_calendar_date = Some(day);
                 assert_eq!(calculate_cadence(&s, now).unwrap().due_at, None);
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 let mut midnight: libc::tm = unsafe { std::mem::zeroed() };
                 midnight.tm_year = 126;
                 midnight.tm_mon = 9;
                 midnight.tm_mday = 13;
                 midnight.tm_hour = 0;
                 midnight.tm_min = 1;
+                // SAFETY: les pointeurs passés à timegm désignent des variables locales valides pendant l'appel.
                 let after_midnight = (unsafe { libc::timegm(&mut midnight) }) as i64;
                 s.cadence = WakeCadence::At {
                     time: "23:59".into(),

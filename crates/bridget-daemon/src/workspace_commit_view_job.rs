@@ -548,6 +548,7 @@ impl ViewJob {
                 if child.try_wait().map_err(compact::io_failure)?.is_some() {
                     return Ok(true);
                 }
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0
                     && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
                 {

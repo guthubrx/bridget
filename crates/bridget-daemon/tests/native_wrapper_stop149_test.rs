@@ -67,6 +67,7 @@ fn racine(label: &str) -> Racine {
 }
 
 fn processus_vivant(pid: i32) -> bool {
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
@@ -312,7 +313,9 @@ fn lancer(label: &str, natif: bool, persistant: bool, fin: FinDaemon) -> Scenari
         "précondition : fournisseur vivant"
     );
     // Précondition O4 : le fournisseur n'est PAS dans le groupe du wrapper.
+    // SAFETY: getpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let pgid_fournisseur = unsafe { libc::getpgid(pid_fournisseur) };
+    // SAFETY: getpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let pgid_wrapper = unsafe { libc::getpgid(wrapper.child_mut().id() as i32) };
     assert_ne!(
         pgid_fournisseur, pgid_wrapper,
@@ -344,6 +347,7 @@ fn arreter_pid_de_fixture(pid: i32) {
         "PID {pid} n'est pas le fournisseur de fixture: {commande}"
     );
     assert!(!commande.to_lowercase().contains("firefox"));
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe { libc::kill(pid, libc::SIGTERM) };
     attendre(
         "fournisseur de fixture arrêté",
@@ -358,6 +362,7 @@ impl Drop for Scenario {
         let wrapper = self.wrapper.child_mut().id() as i32;
         if self.wrapper.child_mut().try_wait().ok().flatten().is_none() && processus_vivant(wrapper)
         {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::kill(wrapper, libc::SIGTERM) };
             let fin = Instant::now() + Duration::from_secs(5);
             while self.wrapper.child_mut().try_wait().ok().flatten().is_none()
@@ -372,6 +377,7 @@ impl Drop for Scenario {
                 .output()
                 .unwrap();
             if String::from_utf8_lossy(&commande.stdout).contains("faux-acp-native-149") {
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 unsafe { libc::kill(self.pid_fournisseur, libc::SIGTERM) };
             }
         }
@@ -415,6 +421,7 @@ fn native149_sigterm_du_wrapper_natif_arrete_le_fournisseur_sans_reconnexion() {
     // wrapper ne sortirait pas dans la fenêtre d'observation.
     let wrapper = scenario.wrapper.child_mut().id() as i32;
     let depart = Instant::now();
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     assert_eq!(unsafe { libc::kill(wrapper, libc::SIGTERM) }, 0);
 
     let statut = attendre_sortie(&mut scenario, Duration::from_secs(15));
@@ -501,6 +508,7 @@ fn native149_temoin_ordinaire_sigterm_garde_la_disposition_par_defaut() {
     let _serie = SERIE.lock().unwrap_or_else(|poison| poison.into_inner());
     let mut scenario = lancer("sigterm-ordinaire", false, true, FinDaemon::Silence);
     let wrapper = scenario.wrapper.child_mut().id() as i32;
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     assert_eq!(unsafe { libc::kill(wrapper, libc::SIGTERM) }, 0);
 
     let statut = attendre_sortie(&mut scenario, Duration::from_secs(15));

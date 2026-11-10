@@ -78,6 +78,7 @@ fn negotiated_lineage162(action: &str, reply: Value) -> (Option<i32>, Value) {
             revents: 0,
         };
         assert!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 6_000) } > 0,
             "connexion CLI lineage absente"
         );
@@ -190,6 +191,7 @@ fn negotiated_lineage163(
                     revents: 0,
                 };
                 assert!(
+                    // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
                     unsafe { libc::poll(&mut fd, 1, 6_000) } > 0,
                     "connexion CLI Lineage v3 absente"
                 );
@@ -1134,6 +1136,7 @@ fn lineage_cli_149_watch_ready_puis_fermeture_propre() {
         revents: 0,
     };
     assert!(
+        // SAFETY: `poll_fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         unsafe { libc::poll(&mut poll_fd, 1, 15_000) } > 0,
         "ready watch absent"
     );

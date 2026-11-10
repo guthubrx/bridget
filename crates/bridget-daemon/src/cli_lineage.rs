@@ -188,6 +188,7 @@ pub(super) fn run(args: &[String]) {
                 events: libc::POLLOUT,
                 revents: 0,
             };
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe {
                 libc::poll(&mut fd, 1, 0);
             }

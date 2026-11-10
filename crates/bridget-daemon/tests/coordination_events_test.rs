@@ -82,6 +82,7 @@ impl TestDaemon {
                 "PID enfant inattendu : {command}"
             )));
         }
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         if unsafe { libc::kill(self.0.id() as libc::pid_t, signal) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -336,6 +337,7 @@ fn make_fifo(path: &Path) {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
     let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
 }
 

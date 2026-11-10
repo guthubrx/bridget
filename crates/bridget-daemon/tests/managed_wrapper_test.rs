@@ -97,6 +97,7 @@ fn run_wrapper(root: &Path, agent_type: &str, agent_id: &str) -> Result<(), Stri
             };
         }
         if Instant::now() >= deadline {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(child.id() as i32, libc::SIGTERM);
             }

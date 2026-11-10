@@ -95,6 +95,7 @@
                 .unwrap();
                 let id = args.windows(2).find(|w| w[0] == "--id").unwrap()[1].clone();
                 args[0] = thread_id.to_owned();
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe {
                     std::env::set_var("BRIDGET_HOME", daemon_root);
                     std::env::set_var("BRIDGET_SOCKET", &socket);

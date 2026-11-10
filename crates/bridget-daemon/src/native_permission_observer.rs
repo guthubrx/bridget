@@ -123,6 +123,7 @@ fn peer_is_provider_descendant(stream:&UnixStream,owner:(u32,u64))->bool{
     #[cfg(target_os="macos")]
     let peer={
         let mut pid:libc::pid_t=0;let mut length=std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        // SAFETY: les pointeurs passés à getsockopt désignent des variables locales valides pendant l'appel.
         let result=unsafe{libc::getsockopt(stream.as_raw_fd(),libc::SOL_LOCAL,libc::LOCAL_PEERPID,(&mut pid as *mut libc::pid_t).cast(),&mut length)};
         if result!=0||length as usize!=std::mem::size_of::<libc::pid_t>()||pid<=0{return false}pid as u32
     };

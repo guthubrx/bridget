@@ -102,6 +102,7 @@ pub fn is_owned_running_process(pid: i32) -> bool {
                         || command.contains("--exact sc005_worker"))
             }))
         && !command.to_ascii_lowercase().contains("firefox")
+        // SAFETY: getpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
         && unsafe { libc::getpgid(pid) } == pid
 }
 pub fn cleanup_child(child: &mut Child) {
@@ -111,6 +112,7 @@ pub fn cleanup_child(child: &mut Child) {
     }
     let pid = child.id() as i32;
     if is_owned_running_process(pid) {
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             libc::kill(-pid, libc::SIGKILL);
         }
@@ -147,6 +149,7 @@ pub fn signal_test_group(child: &mut Child, signal: i32) {
         owned,
         "PID {pid} non identifié comme enfant Bridget du test"
     );
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let rc = unsafe { libc::kill(-pid, signal) };
     assert!(rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH));
 }
@@ -201,6 +204,7 @@ pub fn isolated_command(root: &Path) -> Command {
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .env("HOSTNAME", "idempotency-isolated")
         .stdin(Stdio::null());
+    // SAFETY: setpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -423,6 +427,7 @@ impl McpProcess {
             revents: 0,
         };
         assert!(
+            // SAFETY: `ready` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut ready, 1, 15_000) } > 0,
             "réponse MCP absente avant la borne"
         );
@@ -500,6 +505,7 @@ pub fn test_root(_label: &str) -> PathBuf {
                 .clone();
             for pid in pids {
                 if is_owned_running_process(pid) {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     unsafe {
                         libc::kill(-pid, libc::SIGKILL);
                     }
@@ -516,6 +522,7 @@ pub fn test_root(_label: &str) -> PathBuf {
     for relative in ["", "provider", "state", "tmp"] {
         private_dir(&root.join(relative)).unwrap();
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     ROOTS_CLEANUP.call_once(|| unsafe {
         libc::atexit(remove_created_roots);
     });
@@ -532,6 +539,7 @@ pub fn socket(root: &Path) -> PathBuf {
 
 pub fn make_fifo(path: &Path) {
     let path = CString::new(path.as_os_str().as_bytes()).expect("chemin FIFO sans NUL");
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let result = unsafe { libc::mkfifo(path.as_ptr(), 0o600) };
     assert!(
         result == 0,
@@ -622,6 +630,7 @@ fn performance_daemon_worker() {
 }
 
 fn spawn_daemon_command(mut command: Command) -> DaemonProcess {
+    // SAFETY: setpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe {
         command.pre_exec(|| {
             if libc::setpgid(0, 0) == -1 {
@@ -675,12 +684,14 @@ fn spawn_daemon_command(mut command: Command) -> DaemonProcess {
 ))]
 pub fn watch_marker(directory: &Path, marker: &Path) {
     let directory = CString::new(directory.as_os_str().as_bytes()).expect("répertoire sans NUL");
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let directory_fd = unsafe { libc::open(directory.as_ptr(), libc::O_RDONLY) };
     assert!(
         directory_fd >= 0,
         "ouverture jalon: {}",
         std::io::Error::last_os_error()
     );
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let queue = unsafe { libc::kqueue() };
     assert!(queue >= 0, "kqueue: {}", std::io::Error::last_os_error());
     let change = libc::kevent {
@@ -692,6 +703,7 @@ pub fn watch_marker(directory: &Path, marker: &Path) {
         udata: std::ptr::null_mut(),
     };
     let registered =
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe { libc::kevent(queue, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
     assert_eq!(registered, 0, "inscription kqueue");
 
@@ -704,10 +716,13 @@ pub fn watch_marker(directory: &Path, marker: &Path) {
             tv_sec: remaining.as_secs() as libc::time_t,
             tv_nsec: remaining.subsec_nanos() as libc::c_long,
         };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let observed = unsafe { libc::kevent(queue, std::ptr::null(), 0, &mut event, 1, &timeout) };
         assert!(observed > 0, "jalon absent dans la borne");
     }
+    // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe {
         libc::close(queue);
         libc::close(directory_fd);

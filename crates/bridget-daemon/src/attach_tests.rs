@@ -1567,6 +1567,7 @@
             let mut master = -1;
             let mut slave = -1;
             assert_eq!(
+                // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
                 unsafe {
                     libc::openpty(
                         &mut master,
@@ -1586,11 +1587,13 @@
         fn attrs(&self) -> libc::termios {
             let mut attributes = MaybeUninit::<libc::termios>::uninit();
             assert_eq!(
+                // SAFETY: les pointeurs passés à tcgetattr désignent des variables locales valides pendant l'appel.
                 unsafe { libc::tcgetattr(self.slave, attributes.as_mut_ptr()) },
                 0,
                 "tcgetattr: {}",
                 std::io::Error::last_os_error()
             );
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { attributes.assume_init() }
         }
 
@@ -1602,6 +1605,7 @@
                 ws_ypixel: 0,
             };
             assert_eq!(
+                // SAFETY: les pointeurs passés à ioctl désignent des variables locales valides pendant l'appel.
                 unsafe { libc::ioctl(self.slave, libc::TIOCSWINSZ, &size) },
                 0,
                 "TIOCSWINSZ: {}",
@@ -1610,36 +1614,45 @@
         }
 
         fn slave_writer(&self) -> File {
+            // SAFETY: dup ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let fd = unsafe { libc::dup(self.slave) };
             assert!(fd >= 0, "dup slave: {}", std::io::Error::last_os_error());
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { File::from_raw_fd(fd) }
         }
 
         fn slave_reader(&self) -> File {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let path = unsafe { libc::ttyname(self.slave) };
             assert!(
                 !path.is_null(),
                 "ttyname: {}",
                 std::io::Error::last_os_error()
             );
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let fd = unsafe { libc::open(path, libc::O_RDONLY | libc::O_NOCTTY) };
             assert!(
                 fd >= 0,
                 "ouverture en lecture seule du slave: {}",
                 std::io::Error::last_os_error()
             );
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { File::from_raw_fd(fd) }
         }
 
         fn read_available(&self) -> Vec<u8> {
+            // SAFETY: dup ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let fd = unsafe { libc::dup(self.master) };
             assert!(fd >= 0, "dup master: {}", std::io::Error::last_os_error());
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             assert!(flags >= 0);
             assert_eq!(
+                // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                 unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
                 0
             );
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let mut file = unsafe { File::from_raw_fd(fd) };
             let mut output = Vec::new();
             loop {
@@ -1659,6 +1672,7 @@
         fn drop(&mut self) {
             for fd in [self.master, self.slave] {
                 if fd >= 0 {
+                    // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     unsafe { libc::close(fd) };
                 }
             }
@@ -4866,13 +4880,16 @@
         assert!(dumb_tty.read_available().is_empty());
 
         let mut pipe = [-1; 2];
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
         assert!(
             RawTerminal::enable_for_fd_with_keyboard(pipe[0], true)
                 .unwrap()
                 .is_none()
         );
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(pipe[1]) }, 0);
     }
 
@@ -4881,6 +4898,7 @@
         let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
         let mut output_pipe = [-1; 2];
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(output_pipe.as_mut_ptr()) }, 0);
 
         let mut raw = RawTerminal::enable_for_fds(pseudo_tty.slave, output_pipe[1])
@@ -4890,14 +4908,17 @@
         raw.restore().unwrap();
         assert!(pseudo_tty.read_available().is_empty());
         assert_terminal_restored(&before, &pseudo_tty.attrs());
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let flags = unsafe { libc::fcntl(output_pipe[0], libc::F_GETFL) };
         assert!(flags >= 0);
         assert_eq!(
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             unsafe { libc::fcntl(output_pipe[0], libc::F_SETFL, flags | libc::O_NONBLOCK) },
             0
         );
         let mut byte = 0_u8;
         assert_eq!(
+            // SAFETY: `byte` est un octet local valide ; la longueur passée à read vaut 1.
             unsafe { libc::read(output_pipe[0], (&mut byte as *mut u8).cast(), 1) },
             -1
         );
@@ -4907,7 +4928,9 @@
             "stdout redirigé ne reçoit aucun contrôle clavier"
         );
 
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(output_pipe[0]) }, 0);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(output_pipe[1]) }, 0);
     }
 
@@ -4918,6 +4941,7 @@
         let conversions = (libc::ICRNL | libc::INLCR | libc::IGNCR) as libc::tcflag_t;
         configured.c_iflag |= conversions;
         assert_eq!(
+            // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
             unsafe { libc::tcsetattr(pseudo_tty.slave, libc::TCSANOW, &configured) },
             0,
             "préparation termios: {}",
@@ -4934,6 +4958,7 @@
             "la garde double-TTY doit neutraliser les trois conversions CR/LF"
         );
         assert_eq!(
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { libc::write(pseudo_tty.master, b"\n\r".as_ptr().cast(), 2) },
             2
         );
@@ -4973,10 +4998,12 @@
         let mut redirected_configured = redirected.attrs();
         redirected_configured.c_iflag |= conversions;
         assert_eq!(
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { libc::tcsetattr(redirected.slave, libc::TCSANOW, &redirected_configured,) },
             0
         );
         let mut output_pipe = [-1; 2];
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(output_pipe.as_mut_ptr()) }, 0);
         let mut redirected_raw = RawTerminal::enable_for_fds(redirected.slave, output_pipe[1])
             .unwrap()
@@ -4984,7 +5011,9 @@
         assert_eq!(redirected.attrs().c_iflag & conversions, conversions);
         redirected_raw.restore().unwrap();
         assert_eq!(redirected.attrs().c_iflag, redirected_configured.c_iflag);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(output_pipe[0]) }, 0);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(output_pipe[1]) }, 0);
     }
 
@@ -4993,6 +5022,7 @@
         let pseudo_tty = PseudoTerminal::open();
         let before = pseudo_tty.attrs();
         let input = pseudo_tty.slave_reader();
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let input_flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
         assert!(input_flags >= 0);
         assert_eq!(input_flags & libc::O_ACCMODE, libc::O_RDONLY);
@@ -5007,6 +5037,7 @@
         assert_terminal_restored(&before, &pseudo_tty.attrs());
 
         let mut invalid_output = [-1; 2];
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(invalid_output.as_mut_ptr()) }, 0);
         let error =
             RawTerminal::enable_for_fds_with_keyboard(pseudo_tty.slave, invalid_output[0], true)
@@ -5014,7 +5045,9 @@
                 .expect("le fd de lecture refuse l'écriture du push clavier");
         assert!(error.contains("activation du protocole clavier impossible"));
         assert_terminal_restored(&before, &pseudo_tty.attrs());
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(invalid_output[0]) }, 0);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(invalid_output[1]) }, 0);
     }
 
@@ -5034,11 +5067,13 @@
         for injected in b"premiere\x1b[13;2useconde\r" {
             let injected = [*injected];
             assert_eq!(
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { libc::write(pseudo_tty.master, injected.as_ptr().cast(), 1) },
                 1
             );
             let mut observed = 0_u8;
             assert_eq!(
+                // SAFETY: `observed` est un octet local valide ; la longueur passée à read vaut 1.
                 unsafe { libc::read(pseudo_tty.slave, (&mut observed as *mut u8).cast(), 1) },
                 1
             );
@@ -5067,11 +5102,13 @@
         assert_eq!(active.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG), 0);
 
         assert_eq!(
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe { libc::write(pseudo_tty.master, [0x03_u8].as_ptr().cast(), 1) },
             1
         );
         let mut byte = 0_u8;
         assert_eq!(
+            // SAFETY: `byte` est un octet local valide ; la longueur passée à read vaut 1.
             unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) },
             1
         );
@@ -5100,11 +5137,13 @@
                 .unwrap()
                 .expect("pseudo-TTY détecté");
             assert_eq!(
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { libc::write(pseudo_tty.master, [0x04_u8].as_ptr().cast(), 1) },
                 1
             );
             let mut byte = 0_u8;
             assert_eq!(
+                // SAFETY: `byte` est un octet local valide ; la longueur passée à read vaut 1.
                 unsafe { libc::read(pseudo_tty.slave, (&mut byte as *mut u8).cast(), 1) },
                 1
             );
@@ -5137,13 +5176,16 @@
         );
 
         let mut pipe = [-1; 2];
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
         let result = with_raw_terminal(pipe[0], pipe[1], |interactive| {
             assert!(!interactive, "un pipe ne passe jamais en raw mode");
             Ok::<_, String>(())
         });
         assert!(result.is_ok());
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(pipe[0]) }, 0);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::close(pipe[1]) }, 0);
     }
 

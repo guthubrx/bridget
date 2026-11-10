@@ -740,6 +740,7 @@ mod service {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             std::fs::write(&path, plist).map_err(|e| format!("{} : {e}", path.display()))?;
+            // SAFETY: getuid ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let domain = format!("gui/{}", unsafe { libc::getuid() });
             let _ = run("launchctl", &["bootout", &format!("{domain}/{LABEL}")]);
             run(
@@ -775,6 +776,7 @@ ExecStart={} t3 serve\nRestart=always\nRestartSec=5\n{env}\n[Install]\nWantedBy=
 
     pub(super) fn uninstall(path: &Path) -> Result<(), String> {
         if cfg!(target_os = "macos") {
+            // SAFETY: getuid ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let domain = format!("gui/{}", unsafe { libc::getuid() });
             let _ = run("launchctl", &["bootout", &format!("{domain}/{LABEL}")]);
         } else {
@@ -1110,6 +1112,7 @@ fn restore_declaration(base: &Path, declaration: &str, ours_alive: impl FnOnce()
 }
 
 fn server_alive(ours: &ServerRuntime) -> bool {
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     let alive = unsafe { libc::kill(ours.pid as i32, 0) == 0 };
     alive
         && std::net::TcpStream::connect_timeout(
@@ -1125,6 +1128,7 @@ fn server_alive(ours: &ServerRuntime) -> bool {
 fn app_bundle(pid: u32) -> Option<String> {
     let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
     let length =
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe { libc::proc_pidpath(pid as i32, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
     if length <= 0 {
         return None;

@@ -501,6 +501,7 @@ impl ReadyManagedChild {
             && self.ready.command_id == expected.command_id
             && self.ready.generation == expected.generation
             && process_birth(pid).ok() == Some(self.ready.birth)
+            // SAFETY: getpgid ne déréférence aucun pointeur ; ses arguments sont des entiers.
             && unsafe { libc::getpgid(pid as i32) } == pid as i32
     }
     pub fn ready(&self) -> &BootstrapReady {
@@ -756,6 +757,7 @@ fn terminate_bootstrap(child: &mut Child, poll_interval: Duration) -> io::Result
         return Ok(());
     }
     let pid = child.id() as libc::pid_t;
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let result = unsafe { libc::kill(pid, libc::SIGTERM) };
     if result != 0 {
         let error = io::Error::last_os_error();
@@ -780,6 +782,7 @@ pub fn group_exists(pgid: u32) -> io::Result<bool> {
     if pgid == 0 || pgid > libc::pid_t::MAX as u32 {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "pgid invalide"));
     }
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     let result = unsafe { libc::kill(-(pgid as libc::pid_t), 0) };
     if result == 0 {
         return Ok(true);
@@ -796,6 +799,7 @@ pub fn signal_group(pgid: u32, signal: libc::c_int) -> io::Result<()> {
     if !group_exists(pgid)? {
         return Ok(());
     }
+    // SAFETY: killpg ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let result = unsafe { libc::killpg(pgid as libc::pid_t, signal) };
     if result == 0 {
         return Ok(());
@@ -824,6 +828,7 @@ pub fn wait_group_gone(pgid: u32, timeout: Duration, poll_interval: Duration) ->
 #[cfg(target_os = "macos")]
 fn group_member_count(pgid: u32) -> io::Result<usize> {
     const PROC_PGRP_ONLY: u32 = 2;
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let required = unsafe { libc::proc_listpids(PROC_PGRP_ONLY, pgid, std::ptr::null_mut(), 0) };
     if required < 0 {
         return Err(io::Error::last_os_error());
@@ -832,6 +837,7 @@ fn group_member_count(pgid: u32) -> io::Result<usize> {
         .div_ceil(std::mem::size_of::<libc::pid_t>())
         .saturating_add(8);
     let mut pids = vec![0 as libc::pid_t; capacity];
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let written = unsafe {
         libc::proc_listpids(
             PROC_PGRP_ONLY,
@@ -1012,6 +1018,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
     set_fd_cloexec(RELEASE_FD, true)?;
     set_fd_cloexec(STATUS_FD, false)?;
 
+    // SAFETY: setsid ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let pgid = unsafe { libc::setsid() };
     if pgid < 0 {
         return Err(io::Error::last_os_error().into());
@@ -1029,6 +1036,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
     let mut release = [0_u8; 1];
     let read = read_one(RELEASE_FD, &mut release)?;
     if read == 0 {
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe { libc::_exit(ABANDONED_EXIT_CODE) };
     }
     if release[0] != RELEASE_BYTE {
@@ -1053,6 +1061,7 @@ fn run_bootstrap(request: BootstrapRequest) -> Result<(), ManagedProcessError> {
 fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     let expected = std::mem::size_of::<libc::proc_bsdinfo>();
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let written = unsafe {
         libc::proc_pidinfo(
             pid as libc::c_int,
@@ -1065,6 +1074,7 @@ fn process_snapshot(pid: u32) -> io::Result<(u64, bool)> {
     if written != expected as libc::c_int {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let info = unsafe { info.assume_init() };
     Ok((info.pbi_start_tvsec.saturating_mul(1_000_000)
         .saturating_add(info.pbi_start_tvusec),
@@ -1119,6 +1129,7 @@ fn write_status_to_fd(fd: RawFd, status: &ManagedStatus) -> Result<(), ManagedPr
 
 fn read_one(fd: RawFd, buffer: &mut [u8; 1]) -> io::Result<usize> {
     loop {
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let read = unsafe { libc::read(fd, buffer.as_mut_ptr().cast(), 1) };
         if read >= 0 {
             return Ok(read as usize);
@@ -1132,6 +1143,7 @@ fn read_one(fd: RawFd, buffer: &mut [u8; 1]) -> io::Result<usize> {
 
 fn write_all_fd(fd: RawFd, mut bytes: &[u8]) -> io::Result<()> {
     while !bytes.is_empty() {
+        // SAFETY: le tampon `bytes` est valide pour sa longueur pendant l'appel write.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
         if written > 0 {
             bytes = &bytes[written as usize..];
@@ -1146,6 +1158,7 @@ fn write_all_fd(fd: RawFd, mut bytes: &[u8]) -> io::Result<()> {
 }
 
 fn set_fd_cloexec(fd: RawFd, enabled: bool) -> io::Result<()> {
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if flags < 0 {
         return Err(io::Error::last_os_error());
@@ -1155,6 +1168,7 @@ fn set_fd_cloexec(fd: RawFd, enabled: bool) -> io::Result<()> {
     } else {
         flags & !libc::FD_CLOEXEC
     };
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     if unsafe { libc::fcntl(fd, libc::F_SETFD, next) } < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -1174,6 +1188,7 @@ fn spawn_bootstrap_command(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(stderr);
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur; close ne déréférence aucun pointeur ; ses arguments sont des entiers; dup2 ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe {
         command.pre_exec(move || {
             let release_copy =
@@ -1233,6 +1248,7 @@ impl ManagedStatusReporter {
             .ok_or_else(|| {
                 ManagedProcessError::InvalidArgument("FD managed-status invalide".to_string())
             })?;
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         if unsafe { libc::fcntl(fd, libc::F_GETFD) } < 0 {
             return Err(io::Error::last_os_error().into());
         }
@@ -1287,6 +1303,7 @@ impl ManagedStatusReporter {
             generation: self.identity.generation,
         };
         let result = write_status_to_fd(fd, &status);
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             libc::close(fd);
         }
@@ -1297,6 +1314,7 @@ impl ManagedStatusReporter {
     /// fermeture du FD signifie « aucun StartupFailed », jamais « Connected ».
     pub fn startup_succeeded(&mut self) {
         if let Some(fd) = self.fd.take() {
+            // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::close(fd);
             }

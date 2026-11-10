@@ -648,6 +648,7 @@
             assert_eq!(reader.read_line(&mut String::new()).unwrap(), 0);
             drop(writer);
             let mut fd = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             assert_eq!(unsafe { libc::poll(&mut fd, 1, 100) }, 0, "aucune nouvelle connexion");
         });
         let args = json!({"task_ids":["task259"]});
@@ -766,6 +767,7 @@
                 revents: 0,
             };
             let mut frames = Vec::<Value>::new();
+            // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             if unsafe { libc::poll(&mut pollfd, 1, 2000) } <= 0 {
                 return frames;
             }
@@ -782,6 +784,7 @@
             if reader.read_line(&mut line).unwrap() > 0 {
                 frames.push(serde_json::from_str(&line).unwrap());
             }
+            // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             if unsafe { libc::poll(&mut pollfd, 1, 100) } > 0 {
                 let (stream, _) = listener.accept().unwrap();
                 stream
@@ -858,6 +861,7 @@
                         events: libc::POLLIN,
                         revents: 0,
                     };
+                    // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
                     if unsafe { libc::poll(&mut pollfd, 1, 2000) } <= 0 {
                         return frames;
                     }
@@ -3235,6 +3239,7 @@
             revents: 0,
         };
         assert!(
+            // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0,
             "requête de plafond attendue dans le budget de fixture"
         );
@@ -3294,6 +3299,7 @@
             revents: 0,
         };
         assert!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 3000) } > 0,
             "connexion attendue"
         );
@@ -3800,8 +3806,10 @@
         let server = thread::spawn(move || {
             use std::os::fd::AsRawFd;
             let mut ready = libc::pollfd { fd: listener.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+            // SAFETY: `ready` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             assert!(unsafe { libc::poll(&mut ready, 1, 3000) } > 0);
             reply_caller_scope(&listener, json!({"version":1,"caller_read_only":false}));
+            // SAFETY: `ready` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             assert!(unsafe { libc::poll(&mut ready, 1, 3000) } > 0);
             let (mut stream, _) = listener.accept().unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
@@ -3994,6 +4002,7 @@
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `wait` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             if unsafe { libc::poll(&mut wait, 1, 3000) } == 0 {
                 return false;
             }

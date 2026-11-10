@@ -774,8 +774,10 @@ pub fn run_isolated_claude_decision(
                 .take()
                 .ok_or(ClaudeIsolatedDecisionError::Unavailable)?;
             for fd in [stdin.as_ref().unwrap().as_raw_fd(), stdout.as_raw_fd()] {
+                // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                 let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
                 if flags < 0
+                    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                     || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
                 {
                     return Err(ClaudeIsolatedDecisionError::Unavailable);
@@ -1194,6 +1196,7 @@ fn spawn_claude_command(
 fn terminate_group(child: &mut Child) {
     // `spawn_with_environment` crée ce groupe avec l'identifiant du fils :
     // le signal ne peut donc toucher ni le wrapper ni un autre équipier.
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
     let _ = child.wait();
 }

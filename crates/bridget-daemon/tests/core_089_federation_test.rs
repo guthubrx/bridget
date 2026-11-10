@@ -63,6 +63,7 @@ impl SshChild {
                 && observed.contains(self.marker.to_str().unwrap())
                 && !observed.to_lowercase().contains("firefox")
             {
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 unsafe {
                     libc::kill(pid as i32, libc::SIGTERM);
                 }
@@ -369,6 +370,7 @@ fn clock_offset(remote: &Remote, root: &Path, phase: &str) -> (i128, i128) {
             revents: 0,
         };
         assert!(
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut fd, 1, 10_000) } > 0,
             "sonde horloge muette"
         );

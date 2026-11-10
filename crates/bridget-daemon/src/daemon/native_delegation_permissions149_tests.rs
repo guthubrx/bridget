@@ -3984,6 +3984,7 @@ impl Drop for GroupeReel {
             && crate::managed_process::process_birth(self.pgid).is_ok_and(|b| b == self.naissance)
         {
             let _ = fs::write(self.dossier.join("release"), b"x");
+            // SAFETY: killpg ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::killpg(self.pgid as libc::pid_t, libc::SIGTERM) };
             let fin = Horloge::now() + Duration::from_secs(10);
             while self.vivant() && Horloge::now() < fin {
@@ -4195,6 +4196,7 @@ fn native149_o4_naissance_differente_ou_groupe_disparu_ne_recoit_aucun_signal() 
     // Groupe déjà disparu : son marqueur est seulement retiré.
     let mort = GroupeReel::lancer(&racine, "natif-mort", PRET, &[]);
     let m_mort = mort.marqueur("inst", "mort", 1);
+    // SAFETY: killpg ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe { libc::killpg(mort.pgid as libc::pid_t, libc::SIGTERM) };
     mort.statut();
     poser_marqueur(&racine, &mort.nom, &m_mort);

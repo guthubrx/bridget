@@ -80,6 +80,7 @@ impl OwnedChild {
             command.contains(env!("CARGO_BIN_EXE_bridget"))
                 && !command.to_lowercase().contains("firefox")
         );
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
         self.wait(Duration::from_secs(10));
     }
@@ -242,6 +243,7 @@ impl Fixture {
     fn human_grant(&self) {
         let (mut master, mut slave) = (-1, -1);
         assert_eq!(
+            // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
             unsafe {
                 libc::openpty(
                     &mut master,
@@ -253,7 +255,9 @@ impl Fixture {
             },
             0
         );
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let _master = unsafe { fs::File::from_raw_fd(master) };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let slave = unsafe { fs::File::from_raw_fd(slave) };
         let log = self.root.join("grant.log");
         support::private_write(&log, []).unwrap();

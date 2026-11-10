@@ -39,6 +39,7 @@ fn current_limits() -> libc::rlimit {
         rlim_max: 0,
     };
     assert_eq!(
+        // SAFETY: les pointeurs passés à getrlimit désignent des variables locales valides pendant l'appel.
         unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limits) },
         0,
         "getrlimit du test"
@@ -48,6 +49,7 @@ fn current_limits() -> libc::rlimit {
 
 /// Impose soft (et hard si donné) dans l'enfant seulement, après le fork.
 fn impose_limits(command: &mut Command, soft: libc::rlim_t, hard: Option<libc::rlim_t>) {
+    // SAFETY: les pointeurs passés à getrlimit désignent des variables locales valides pendant l'appel; les pointeurs passés à setrlimit désignent des variables locales valides pendant l'appel.
     unsafe {
         command.pre_exec(move || {
             let mut limits = libc::rlimit {
@@ -182,6 +184,7 @@ impl Drop for Daemon {
             return;
         }
         if is_owned_running_process(pid) {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(-pid, libc::SIGTERM);
             }

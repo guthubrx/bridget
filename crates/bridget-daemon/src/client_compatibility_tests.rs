@@ -184,6 +184,7 @@
                 .contains("Ne pas répéter automatiquement")
         );
         // Cette fixture termine naturellement après2s ; récolter notre seul enfant connu.
+        // SAFETY: les pointeurs passés à waitpid désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) }, pid);
         std::fs::remove_file(file).unwrap();
         std::fs::remove_dir(dir).unwrap();

@@ -193,6 +193,7 @@ while True: time.sleep(.02)
         ready.ready = original.clone();
         ready.ready.pid = std::process::id(); assert!(!ready.belongs_to(&expected));
         ready.ready = original.clone();
+        // SAFETY: getpgrp ne déréférence aucun pointeur ; ses arguments sont des entiers.
         ready.ready.pgid = unsafe {libc::getpgrp()} as u32; assert!(!ready.belongs_to(&expected));
         ready.ready = original.clone();
         ready.ready.birth += 1; assert!(!ready.belongs_to(&expected));
@@ -286,6 +287,7 @@ while True: time.sleep(.02)
         if std::env::var_os("B221_VIEW_TEST_NO_READY").is_some() {
             use std::os::unix::fs::OpenOptionsExt;
             let root=PathBuf::from(std::env::var_os("B221_VIEW_PROOFS").unwrap());
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {libc::signal(libc::SIGTERM,libc::SIG_IGN);}
             std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
                 .open(root.join("unready-started")).unwrap();
@@ -320,7 +322,9 @@ while True: time.sleep(.02)
         if std::env::var(FD_PROBE_ENV).ok().as_deref() != Some("1") {
             return;
         }
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let status_open = unsafe { libc::fcntl(STATUS_FD, libc::F_GETFD) } >= 0;
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let release_open = unsafe { libc::fcntl(RELEASE_FD, libc::F_GETFD) } >= 0;
         write_all_fd(
             STATUS_FD,
@@ -362,6 +366,7 @@ while True: time.sleep(.02)
             .unwrap();
         } else {
             assert_eq!(mode, "eof");
+            // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::close(STATUS_FD);
             }
@@ -563,6 +568,7 @@ while True: time.sleep(.02)
         let child = spawn_test_bootstrap().wait_ready().unwrap();
         let mut ready = child.ready().clone();
         assert_eq!(ready.pid, ready.pgid);
+        // SAFETY: getpgrp ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_ne!(ready.pgid, unsafe { libc::getpgrp() } as u32);
         ready.birth = ready.birth.saturating_add(1);
         store.persist("codex-1", &ready).unwrap();
@@ -834,6 +840,7 @@ while True: time.sleep(.02)
     fn wait_pid_gone(pid: u32) {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
+            // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
             let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
             if result < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
                 return;
@@ -850,6 +857,7 @@ while True: time.sleep(.02)
         // Ce PID est celui du processus de test créé juste au-dessus ; son
         // exécutable a été vérifié différent de Firefox avant le spawn.
         assert_eq!(
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
             0
         );

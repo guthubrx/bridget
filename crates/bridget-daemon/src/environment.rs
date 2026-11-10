@@ -128,10 +128,12 @@ pub fn initialize_process() -> Result<(), String> {
     namespace.prepare()?;
     for (key, value) in namespace.child_environment() {
         // Le CLI n'a pas encore démarré de thread ni de fournisseur.
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe { std::env::set_var(key, value) };
     }
     // SQLite, fichiers d'état et sockets naissent privés ; aucun chmod
     // a posteriori ne rattrape une fenêtre d'exposition.
+    // SAFETY: umask ne déréférence aucun pointeur ; ses arguments sont des entiers.
     unsafe { libc::umask(0o077) };
     Ok(())
 }

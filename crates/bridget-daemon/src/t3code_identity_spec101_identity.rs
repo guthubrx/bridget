@@ -365,6 +365,7 @@
                 if command.contains(&self.session)
                     && !command.to_ascii_lowercase().contains("firefox")
                 {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     unsafe {
                         libc::kill(pid as libc::pid_t, libc::SIGTERM);
                     }

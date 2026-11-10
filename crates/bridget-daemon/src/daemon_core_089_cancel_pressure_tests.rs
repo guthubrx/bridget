@@ -69,6 +69,7 @@
             let bytes = [b'x'; 4096];
             let mut sent = 0usize;
             loop {
+                // SAFETY: le tampon `bytes` est valide pour sa longueur pendant l'appel send.
                 let n = unsafe {
                     libc::send(
                         locked.get_ref().as_raw_fd(),

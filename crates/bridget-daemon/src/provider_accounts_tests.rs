@@ -42,6 +42,7 @@
         let hold = |duration: Duration| {
             let lock = OpenOptions::new().read(true).write(true).create(true).truncate(false)
                 .mode(0o600).open(f.0.join("project-preparation.lock")).unwrap();
+            // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
             assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
             thread::spawn(move || { thread::sleep(duration); drop(lock); })
         };

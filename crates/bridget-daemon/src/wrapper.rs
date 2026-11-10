@@ -236,6 +236,7 @@ mod core_089_runtime_refusal_tests {
                             .starts_with(&executable.display().to_string())
                     );
                     // Enfant isolé identifié, jamais de groupe ni fournisseur.
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
                     let cleanup_deadline = Instant::now() + Duration::from_secs(3);
                     while matches!(child.try_wait(), Ok(None)) && Instant::now() < cleanup_deadline
@@ -244,6 +245,7 @@ mod core_089_runtime_refusal_tests {
                     }
                     if matches!(child.try_wait(), Ok(None)) {
                         // Autorisation explicite, toujours le même fils non récolté.
+                        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                         let _ = unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
                         let _ = child.wait();
                     }
@@ -1598,6 +1600,7 @@ fn persistent_name_path(hash: &str) -> std::path::PathBuf {
 fn set_cloexec(stream: &UnixStream) {
     use std::os::unix::io::AsRawFd;
     let fd = stream.as_raw_fd();
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFD);
         if flags >= 0 {

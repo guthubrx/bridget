@@ -21571,6 +21571,7 @@ for frame in frames: print(json.dumps(frame),flush=True)
         {
             let locked=writer.lock().unwrap();locked.get_ref().set_nonblocking(true).unwrap();let bytes=[b'x';4096];let mut sent=0;
             loop {
+                // SAFETY: le tampon `bytes` est valide pour sa longueur pendant l'appel send.
                 let n=unsafe {libc::send(locked.get_ref().as_raw_fd(),bytes.as_ptr().cast(),bytes.len(),
                     libc::MSG_DONTWAIT|libc::MSG_NOSIGNAL)};
                 if n<0 {assert_eq!(std::io::Error::last_os_error().kind(),std::io::ErrorKind::WouldBlock);break;}

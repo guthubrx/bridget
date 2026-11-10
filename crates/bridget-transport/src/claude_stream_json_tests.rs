@@ -1988,6 +1988,7 @@ sys.stdout.write((root/'trace.jsonl').read_text())"#,
             .unwrap();
         assert_eq!(result, Err(ClaudeIsolatedDecisionError::Timeout));
         assert!(Instant::now() >= options.deadline && elapsed < Duration::from_secs(4));
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         assert!(unsafe { libc::kill(pid, 0) } < 0);
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),
@@ -2010,6 +2011,7 @@ sys.stdout.write((root/'trace.jsonl').read_text())"#,
             .unwrap();
         assert_eq!(result, Err(ClaudeIsolatedDecisionError::OutputTooLarge));
         assert!(started.elapsed() < Duration::from_secs(2));
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         assert!(unsafe { libc::kill(pid, 0) } < 0);
         assert_eq!(
             std::io::Error::last_os_error().raw_os_error(),
@@ -2056,6 +2058,7 @@ else:
             "INT"
         );
         assert!(
+            // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
             unsafe { libc::kill(-leader, 0) } < 0,
             "groupe détenu entièrement drainé"
         );

@@ -267,6 +267,7 @@ pub(crate) fn stop_git(child: &mut Child) -> Result<(), String> {
     {
         return Ok(());
     }
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     if unsafe { libc::kill(child.id() as i32, libc::SIGTERM) } != 0 {
         let error = io::Error::last_os_error();
         if error.raw_os_error() != Some(libc::ESRCH) {
@@ -420,7 +421,9 @@ fn capture_with_objects(cwd: &Path, args: &[&str], timeout: Duration,
     let mut stdout = child.stdout.take().ok_or("stdout Git indisponible")?;
     let mut stderr = child.stderr.take().ok_or("stderr Git indisponible")?;
     for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
             let cause = io::Error::last_os_error();
             let stopped = stop_git(&mut child);
@@ -864,7 +867,9 @@ fn worktree_failure_code(stderr: &str) -> &'static str {
 pub(super) fn available_space(directory: &fs::File) -> io::Result<(u128,u128)> {
     use std::os::fd::AsRawFd;
     let mut stat=std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: les pointeurs passés à fstatvfs désignent des variables locales valides pendant l'appel.
     if unsafe {libc::fstatvfs(directory.as_raw_fd(),stat.as_mut_ptr())}!=0 {return Err(io::Error::last_os_error());}
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let stat=unsafe{stat.assume_init()};
     let block=if stat.f_frsize>0 {stat.f_frsize as u128} else {stat.f_bsize as u128};
     if block==0 {return Err(io::Error::other("taille de bloc inconnue"));}

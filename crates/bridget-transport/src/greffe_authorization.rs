@@ -763,6 +763,7 @@ fn append_audit(path: &Path, event: GreffeAuditEvent<'_>) -> std::io::Result<()>
         .open(path)?;
     verify_private_regular_file(&file)?;
     let fd = file.as_raw_fd();
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     if unsafe { libc::flock(fd, libc::LOCK_EX) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -771,6 +772,7 @@ fn append_audit(path: &Path, event: GreffeAuditEvent<'_>) -> std::io::Result<()>
         file.write_all(b"\n")?;
         file.sync_data()
     })();
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     let unlock = unsafe { libc::flock(fd, libc::LOCK_UN) };
     result?;
     if unlock != 0 {

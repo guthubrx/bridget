@@ -140,6 +140,7 @@ impl OwnedChild {
             return Err("child_executable_unproved".into());
         }
         // Ce Child n'a pas été récolté : son PID ne peut pas être réutilisé.
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
         if rc != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
             return Err("child_signal_failed".into());
@@ -216,6 +217,7 @@ impl Mcp {
             revents: 0,
         };
         assert!(
+            // SAFETY: `ready` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe { libc::poll(&mut ready, 1, 20_000) } > 0,
             "MCP sans réponse dans la borne"
         );
@@ -263,6 +265,7 @@ impl Drop for Fixture {
 fn grant(root: &Path) {
     let (mut master, mut slave) = (-1, -1);
     assert_eq!(
+        // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
         unsafe {
             libc::openpty(
                 &mut master,
@@ -274,7 +277,9 @@ fn grant(root: &Path) {
         },
         0
     );
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let _master = unsafe { fs::File::from_raw_fd(master) };
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let slave = unsafe { fs::File::from_raw_fd(slave) };
     let mut child = OwnedChild(
         support::isolated_command(root)
@@ -760,6 +765,7 @@ fn native148_real_fixture_mcp_cleanup_after_eof() {
     mcp.close().expect("MCP EOF : nettoyage attesté");
     assert!(mcp.child.0.try_wait().unwrap().is_some());
     drop(mcp);
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
     fs::remove_dir_all(root).unwrap();
 }
@@ -776,6 +782,7 @@ fn native148_real_fixture_mcp_cleanup_during_unwind() {
     assert!(result.is_err());
     assert_ne!(pid.get(), 0);
     assert_eq!(
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         unsafe { libc::kill(pid.get() as i32, 0) },
         -1,
         "MCP récolté pendant unwind"

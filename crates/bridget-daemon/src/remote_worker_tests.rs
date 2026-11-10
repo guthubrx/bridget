@@ -240,6 +240,7 @@
     fn spec188_registry_fifo_and_oversize_are_bounded_without_writer() {
         let fixture=Fixture::new();let p=fixture.0.join("registry-fifo");
         let c=std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         assert_eq!(unsafe {libc::mkfifo(c.as_ptr(),0o600)},0);
         let (tx,rx)=std::sync::mpsc::channel();let fifo=p.clone();
         let reader=std::thread::spawn(move||tx.send(AgentRegistry::load_from_path(fifo).is_err()).unwrap());
@@ -289,6 +290,7 @@
         assert_eq!(diagnose_local(&runtime.config,&command()).unwrap_err(),"diagnostic_file_type_invalid");
         fs::remove_file(&p).unwrap();
         let name=std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         assert_eq!(unsafe {libc::mkfifo(name.as_ptr(),0o600)},0);
         assert_eq!(diagnose_local(&runtime.config,&command()).unwrap_err(),"diagnostic_file_type_invalid");
         assert!(moved.is_file());
@@ -3928,8 +3930,10 @@ while not stop.exists(): time.sleep(.01)
         // Même description de fichier qu’un descripteur hérité entre fork et exec.
         // CLOEXEC ne libère pas le verrou avant exec ; le propriétaire doit le faire.
         use std::os::fd::{FromRawFd, OwnedFd};
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let inherited_fd=unsafe { libc::fcntl(store._lock.as_raw_fd(),libc::F_DUPFD_CLOEXEC,0) };
         assert!(inherited_fd>=0);
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let inherited=unsafe { OwnedFd::from_raw_fd(inherited_fd) };
         drop(store);
         let store = fixture.open();
@@ -6573,6 +6577,7 @@ while not stop.exists(): time.sleep(.01)
         let root=runtime.store.root.clone();let worker=runtime.identity.clone();let enrolled=runtime.store.enrollment.clone();
         private_dir(&root.join("markers")).unwrap();
         let marker=root.join("markers/live-orphan.json");
+        // SAFETY: getpgrp ne déréférence aucun pointeur ; ses arguments sont des entiers.
         write_json(&marker,&ManagedMarker{pgid:unsafe{libc::getpgrp()} as u32,birth:1,
             instance_id:command.task_id.clone(),command_id:command.command_id.clone(),generation:1}).unwrap();
         runtime.store.quarantine().unwrap();let before=fs::read(&enrolled).unwrap();drop(runtime);

@@ -102,6 +102,7 @@ impl Drop for Process {
                     && !command.to_ascii_lowercase().contains("firefox"),
                 "PID inattendu : {command}"
             );
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
             let deadline = Instant::now() + Duration::from_secs(5);
             while self.0.try_wait().unwrap().is_none() {

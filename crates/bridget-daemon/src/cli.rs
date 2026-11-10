@@ -1624,6 +1624,7 @@ fn cmd_thread_watch(args: &[String]) {
                 events: libc::POLLOUT,
                 revents: 0,
             };
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             unsafe {
                 libc::poll(&mut fd, 1, 0);
             }
@@ -7611,7 +7612,9 @@ fn shorten_raw_window(name: &str) -> String {
 /// Heure locale ; date incluse si la réinitialisation est à plus d'un jour.
 fn format_local_reset(timestamp: i64) -> Option<String> {
     let seconds: libc::time_t = timestamp;
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: les pointeurs passés à localtime_r désignent des variables locales valides pendant l'appel.
     if unsafe { libc::localtime_r(&seconds, &mut local) }.is_null() {
         return None;
     }

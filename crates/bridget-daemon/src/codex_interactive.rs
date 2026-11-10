@@ -274,6 +274,7 @@ fn select_thread_in_terminal(
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let result = unsafe { libc::poll(&mut fd, 1, 100) };
             if result > 0 {
                 break;
@@ -329,7 +330,9 @@ impl NativeTui {
         environment: &[(OsString, OsString)],
         alive: Arc<AtomicBool>,
     ) -> io::Result<Self> {
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let mut termios = unsafe { std::mem::zeroed() };
+        // SAFETY: les pointeurs passés à tcgetattr désignent des variables locales valides pendant l'appel.
         if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut termios) } != 0 {
             return Err(io::Error::last_os_error());
         }
@@ -432,6 +435,7 @@ impl NativeTui {
             false,
             Duration::from_secs(2),
         );
+        // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
         unsafe {
             libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.termios);
         }

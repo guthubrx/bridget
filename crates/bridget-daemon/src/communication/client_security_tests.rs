@@ -1069,6 +1069,7 @@
         let path = std::path::PathBuf::from("/tmp")
             .join(format!("b89-connect-{}", uuid::Uuid::new_v4().simple()));
         let listener = UnixListener::bind(&path).unwrap();
+        // SAFETY: listen ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
         // Une connexion dans la file, personne n'appelle accept pendant la sonde.
         let mut fillers = Vec::new();
@@ -1102,6 +1103,7 @@
             "connect a ignoré la deadline : {elapsed:?}"
         );
         assert_eq!(
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             unsafe { libc::fcntl(fillers[0].as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
             libc::FD_CLOEXEC
         );

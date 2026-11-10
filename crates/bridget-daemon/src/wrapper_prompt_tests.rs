@@ -399,6 +399,7 @@
                         .starts_with(&executable.display().to_string()),
                     "le watchdog doit identifier son seul fils de test"
                 );
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
                 let stop_deadline = Instant::now() + Duration::from_secs(3);
                 while matches!(child.try_wait(), Ok(None)) && Instant::now() < stop_deadline {

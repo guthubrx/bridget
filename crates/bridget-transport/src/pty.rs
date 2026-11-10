@@ -44,6 +44,7 @@ impl PtyTransport {
     pub fn from_master(master: RawFd, agent_pid: u32) -> Result<Self, TransportError> {
         // Copie fermée à l'exec : le fournisseur ne doit jamais hériter du
         // maître de son propre terminal (audit 097, SEC-005).
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let duplicate = unsafe { libc::fcntl(master, libc::F_DUPFD_CLOEXEC, 0) };
         if duplicate < 0 {
             return Err(TransportError::Io(format!(
@@ -51,13 +52,16 @@ impl PtyTransport {
                 std::io::Error::last_os_error()
             )));
         }
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let owned = unsafe { OwnedFd::from_raw_fd(duplicate) };
         // Non bloquant : `poll` peut annoncer un maître accueillant alors que
         // la file du terminal se remplit en cours d'écriture ; sans ce drapeau
         // l'écriture bloquerait le wrapper malgré l'échéance. Le drapeau est
         // partagé avec la description ouverte du relais, qui le tolère.
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let flags = unsafe { libc::fcntl(duplicate, libc::F_GETFL) };
         if flags < 0
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             || unsafe { libc::fcntl(duplicate, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
         {
             return Err(TransportError::Io(format!(
@@ -89,6 +93,7 @@ impl PtyTransport {
                 revents: 0,
             };
             let timeout = remaining.as_millis().min(i32::MAX as u128) as i32;
+            // SAFETY: `poll` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let ready = unsafe { libc::poll(&mut poll, 1, timeout) };
             if ready < 0 {
                 let error = std::io::Error::last_os_error();
@@ -106,6 +111,7 @@ impl PtyTransport {
             let end = (offset + WRITE_CHUNK).min(bytes.len());
             let chunk = &bytes[offset..end];
             let written =
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { libc::write(fd, chunk.as_ptr() as *const libc::c_void, chunk.len()) };
             if written < 0 {
                 let error = std::io::Error::last_os_error();
@@ -148,6 +154,7 @@ impl Transport for PtyTransport {
     }
 
     fn is_alive(&self) -> bool {
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         unsafe { libc::kill(self.agent_pid as i32, 0) == 0 }
     }
 
@@ -168,6 +175,7 @@ mod tests {
 
     fn open_pty() -> Pty {
         let (mut master, mut slave) = (-1, -1);
+        // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
         let rc = unsafe {
             libc::openpty(
                 &mut master,
@@ -182,12 +190,17 @@ mod tests {
         // octet, sans écho ni traduction de ligne.
         let mut attributes = std::mem::MaybeUninit::<libc::termios>::uninit();
         assert_eq!(
+            // SAFETY: les pointeurs passés à tcgetattr désignent des variables locales valides pendant l'appel.
             unsafe { libc::tcgetattr(slave, attributes.as_mut_ptr()) },
             0
         );
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let mut raw = unsafe { attributes.assume_init() };
+        // SAFETY: les pointeurs passés à cfmakeraw désignent des variables locales valides pendant l'appel.
         unsafe { libc::cfmakeraw(&mut raw) };
+        // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::tcsetattr(slave, libc::TCSANOW, &raw) }, 0);
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe {
             Pty {
                 master: OwnedFd::from_raw_fd(master),
@@ -206,11 +219,13 @@ mod tests {
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `poll` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let ready = unsafe { libc::poll(&mut poll, 1, remaining.as_millis() as i32) };
             if ready <= 0 {
                 break;
             }
             let mut buffer = [0u8; 1024];
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let mut file = unsafe { std::fs::File::from_raw_fd(libc::dup(fd)) };
             match file.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
@@ -330,6 +345,7 @@ mod tests {
         let transport =
             PtyTransport::from_master(pty.master.as_raw_fd(), std::process::id()).unwrap();
         let fd = transport.master.lock().unwrap().as_raw_fd();
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         assert!(
             flags >= 0 && flags & libc::FD_CLOEXEC != 0,

@@ -28,11 +28,13 @@ pub fn stop_owned_child(
         let exited = child.try_wait()?.is_some();
         if exited
             && (!process_group
+                // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
                 || unsafe { libc::kill(target, 0) } < 0
                     && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
         {
             return Ok(());
         }
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         if unsafe { libc::kill(target, signal) } < 0
             && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
         {
@@ -43,6 +45,7 @@ pub fn stop_owned_child(
             let exited = child.try_wait()?.is_some();
             if exited
                 && (!process_group
+                    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
                     || unsafe { libc::kill(target, 0) } < 0
                         && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
             {
@@ -491,6 +494,7 @@ mod tests {
         assert!(child.try_wait().unwrap().is_some());
         // Mutation : TERM seul laisserait ce véritable enfant vivant ;
         // wait() sans borne immobiliserait ce test au lieu de confirmer INT.
+        // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
         assert!(unsafe { libc::kill(-(child.id() as i32), 0) } < 0);
     }
 

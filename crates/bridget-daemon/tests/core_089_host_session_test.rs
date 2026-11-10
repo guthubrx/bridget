@@ -146,6 +146,7 @@ impl Fixture {
         let mut master_fd = -1;
         let mut slave_fd = -1;
         assert_eq!(
+            // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
             unsafe {
                 libc::openpty(
                     &mut master_fd,
@@ -157,7 +158,9 @@ impl Fixture {
             },
             0
         );
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let _master = unsafe { fs::File::from_raw_fd(master_fd) };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
         let error = private_file(&self.root.join("control.log"), &[]);
         let command_path = std::env::join_paths(std::iter::once(self.root.join("bin")).chain(
@@ -241,6 +244,7 @@ impl Drop for Fixture {
                     let name = String::from_utf8_lossy(&p.stdout);
                     name.contains("bridget") && !name.to_ascii_lowercase().contains("firefox")
                 }) {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     unsafe {
                         libc::kill(child.id() as i32, libc::SIGTERM);
                     }

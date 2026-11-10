@@ -191,6 +191,7 @@ impl Drop for Daemon {
         let Some(enfant) = self.enfant.as_mut() else {
             return;
         };
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let _ = unsafe { libc::kill(enfant.id() as i32, libc::SIGTERM) };
         let limite = Instant::now() + Duration::from_secs(5);
         while Instant::now() < limite {
@@ -324,6 +325,7 @@ fn tuer_le_fournisseur(label: &str, natif: bool) -> (Vec<u32>, bool, u32) {
         .unwrap()
         .pgid;
     assert_eq!(
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe { libc::kill(premier as i32, libc::SIGTERM) },
         0,
         "SIGTERM fournisseur {premier}"

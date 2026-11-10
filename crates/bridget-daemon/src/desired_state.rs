@@ -649,9 +649,11 @@ mod tests {
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `poll` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             assert_eq!(unsafe { libc::poll(&mut poll, 1, 5_000) }, 1);
             let mut byte = 0_u8;
             assert_eq!(
+                // SAFETY: `byte` est un octet local valide ; la longueur passée à read vaut 1.
                 unsafe { libc::read(self.ready, (&mut byte as *mut u8).cast(), 1) },
                 1
             );
@@ -664,6 +666,7 @@ mod tests {
 
         fn release_barrier(&self) {
             assert_eq!(
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe { libc::write(self.release, [b'R'].as_ptr().cast(), 1) },
                 1
             );
@@ -672,6 +675,7 @@ mod tests {
 
     impl Drop for BarrierChild {
         fn drop(&mut self) {
+            // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::close(self.ready);
                 libc::close(self.release);
@@ -687,7 +691,9 @@ mod tests {
         );
         let mut ready_pipe = [-1; 2];
         let mut release_pipe = [-1; 2];
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(ready_pipe.as_mut_ptr()) }, 0);
+        // SAFETY: les pointeurs passés à pipe désignent des variables locales valides pendant l'appel.
         assert_eq!(unsafe { libc::pipe(release_pipe.as_mut_ptr()) }, 0);
 
         let mut command = Command::new(current_exe);
@@ -702,6 +708,7 @@ mod tests {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe {
             command.pre_exec(move || {
                 // Copier d'abord au-dessus des numéros cibles : une extrémité
@@ -725,6 +732,7 @@ mod tests {
             });
         }
         let child = command.spawn().unwrap();
+        // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
         unsafe {
             libc::close(ready_pipe[1]);
             libc::close(release_pipe[0]);
@@ -740,6 +748,7 @@ mod tests {
         // Le PID vient du processus de test enfant créé par spawn_crash_writer :
         // ce signal ne peut viser ni Firefox ni un processus étranger.
         assert!(process.child.try_wait().unwrap().is_none());
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let signal_result = unsafe { libc::kill(process.child.id() as libc::pid_t, libc::SIGTERM) };
         assert_eq!(signal_result, 0);
         assert!(!process.child.wait().unwrap().success());
@@ -1136,9 +1145,11 @@ mod tests {
     fn spec243_barriere_resiste_aux_numeros_cibles() {
         let mut fillers = Vec::new();
         loop {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
             assert!(fd >= 0);
             if fd >= 108 {
+                // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 unsafe { libc::close(fd) };
                 break;
             }
@@ -1146,6 +1157,7 @@ mod tests {
         }
         crash_after_rename_exposes_the_new_fleet_on_reopen();
         for fd in fillers {
+            // SAFETY: close ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::close(fd) };
         }
     }
@@ -1168,10 +1180,12 @@ mod tests {
                     AtomicWritePhase::BeforeRename => b'B',
                     AtomicWritePhase::AfterRename => b'A',
                 };
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 if unsafe { libc::write(BARRIER_READY_FD, (&signal as *const u8).cast(), 1) } != 1 {
                     return Err(io::Error::last_os_error());
                 }
                 let mut release = 0_u8;
+                // SAFETY: `release` est un octet local valide ; la longueur passée à read vaut 1.
                 if unsafe { libc::read(BARRIER_RELEASE_FD, (&mut release as *mut u8).cast(), 1) }
                     != 1
                 {

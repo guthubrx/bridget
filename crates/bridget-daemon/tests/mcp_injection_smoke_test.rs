@@ -295,6 +295,7 @@ fn voie_acp_lance_la_session_wrapper_avec_probe_ephemere() {
             break status;
         }
         if std::time::Instant::now() >= deadline {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe {
                 libc::kill(wrapper.id() as i32, libc::SIGTERM);
             }

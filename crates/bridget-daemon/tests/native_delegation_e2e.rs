@@ -67,6 +67,7 @@ impl OwnedChild {
         assert!(fixture_binary201(&command));
         assert!(!command.to_lowercase().contains("firefox"));
         // SIGABRT interrompt le daemon sans son arrêt propre, sans SIGKILL.
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGABRT) }, 0);
         assert!(!self.wait(Duration::from_secs(10)).success());
     }
@@ -123,6 +124,7 @@ impl OwnedChild {
             fixture_binary201(&command)
                 && !command.to_lowercase().contains("firefox")
         );
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
         self.wait(Duration::from_secs(10));
     }
@@ -348,6 +350,7 @@ impl Fixture {
     fn human_grant(&self) {
         let (mut master, mut slave) = (-1, -1);
         assert_eq!(
+            // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
             unsafe {
                 libc::openpty(
                     &mut master,
@@ -359,7 +362,9 @@ impl Fixture {
             },
             0
         );
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let _master = unsafe { fs::File::from_raw_fd(master) };
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let slave = unsafe { fs::File::from_raw_fd(slave) };
         let log = self.root.join("grant.log");
         support::private_write(&log, []).unwrap();
@@ -1986,6 +1991,7 @@ fn native151_e2e_boite_echec_pending_claimed_delivered() {
         revents: 0,
     };
     assert!(
+        // SAFETY: `ready_fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         unsafe { libc::poll(&mut ready_fd, 1, 8000) } > 0,
         "initialize publié absent"
     );
@@ -2010,6 +2016,7 @@ fn native151_e2e_boite_echec_pending_claimed_delivered() {
     .unwrap();
     input.flush().unwrap();
     assert!(
+        // SAFETY: `ready_fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         unsafe { libc::poll(&mut ready_fd, 1, 8000) } > 0,
         "TaskWait publié absent"
     );
@@ -2158,6 +2165,7 @@ fn native151_e2e_boite_echec_pending_claimed_delivered() {
     .unwrap();
     input.flush().unwrap();
     assert!(
+        // SAFETY: `ready_fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         unsafe { libc::poll(&mut ready_fd, 1, 8000) } > 0,
         "Ack publié absent"
     );
@@ -2243,6 +2251,7 @@ fn native151_e2e_mcp_eof_ferme_quatre_attentes_sans_perdre_le_resultat() {
         revents: 0,
     };
     assert!(
+        // SAFETY: `ready_fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
         unsafe { libc::poll(&mut ready_fd, 1, 5000) } > 0,
         "capacité MCP non rendue"
     );

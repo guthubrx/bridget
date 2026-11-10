@@ -232,12 +232,14 @@ fn wait_client_gone(peer: Option<&UnixStream>) -> bool {
         revents: 0,
     };
     // HUP couvre aussi une fermeture qui laisse une trame suivante dans le socket.
+    // SAFETY: `pfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
     if unsafe { libc::poll(&mut pfd, 1, 0) } > 0
         && pfd.revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0
     {
         return true;
     }
     let mut byte = 0u8;
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let read = unsafe {
         libc::recv(
             fd,
@@ -379,7 +381,9 @@ mod native151_sql_trace_tests {
                 }
                 // Aucun unwind ne traverse la frontière C. SQLite garantit la chaîne SQL.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                     let context = unsafe { &*context.cast::<TraceContext>() };
+                    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                     let sql = unsafe { std::ffi::CStr::from_ptr(sql.cast()) }.to_bytes();
                     if sql.starts_with(context.prefix) {
                         context
@@ -392,6 +396,7 @@ mod native151_sql_trace_tests {
                 rusqlite::ffi::SQLITE_OK
             }
             let mut trace = Self {
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 connection: unsafe { connection.handle() },
                 context: Box::new(TraceContext {
                     start: Instant::now(),
@@ -401,6 +406,7 @@ mod native151_sql_trace_tests {
             };
             // Le Box garde la même adresse jusqu'à la désinstallation dans Drop.
             assert_eq!(
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 unsafe {
                     rusqlite::ffi::sqlite3_trace_v2(
                         trace.connection,
@@ -433,6 +439,7 @@ mod native151_sql_trace_tests {
     impl Drop for SelectTrace {
         fn drop(&mut self) {
             // Les tests gardent l'état propriétaire vivant au-delà de ce garde.
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             unsafe {
                 rusqlite::ffi::sqlite3_trace_v2(self.connection, 0, None, std::ptr::null_mut());
             }
@@ -624,6 +631,7 @@ mod arret_tests {
             }
             if Instant::now() >= deadline {
                 let pid = child.id() as libc::pid_t;
+                // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                 let sent = unsafe { libc::kill(pid, libc::SIGTERM) };
                 let cleanup_deadline = Instant::now() + Duration::from_secs(2);
                 while child
@@ -720,6 +728,7 @@ fn install_daemon_signal_handlers() {
     // Seul SIGTERM déclenche le shutdown propre (c'est ce que launchd/systemd envoie).
     // SIGINT (Ctrl+C) est ignoré en mode daemon — l'utilisateur doit utiliser
     // launchctl stop ou kill -TERM pour arrêter le daemon.
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     unsafe {
         let _ = signal_hook::low_level::register(signal_hook::consts::SIGTERM, || {
             eprintln!(
@@ -6628,6 +6637,7 @@ pub fn run(config: DaemonConfig) -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Impossible de créer PID file {}: {}", pid_file.display(), e))?;
 
     // Tenter d'obtenir un verrou exclusif (non-bloquant)
+    // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
     unsafe {
         if libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 {
             // Le verrou échoue = un autre daemon tourne
@@ -7509,6 +7519,7 @@ pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
 pub(crate) fn unix_peer_uid(stream: &UnixStream) -> std::io::Result<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
     if result != 0 {
         return Err(std::io::Error::last_os_error());
@@ -21281,6 +21292,7 @@ mod signal_disposition_tests {
             "{label}: déjà mort avant TERM — projection vide"
         );
         assert_eq!(
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             unsafe { libc::kill(child.id() as i32, libc::SIGTERM) },
             0,
             "{label}: kill(SIGTERM) a échoué"

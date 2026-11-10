@@ -175,6 +175,7 @@ fn attendre(description: &str, limite: Duration, mut condition: impl FnMut() -> 
 }
 
 fn vivant(pid: i32) -> bool {
+    // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 

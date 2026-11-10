@@ -162,6 +162,7 @@ fn stop_daemon_child_best_effort(child: Option<&mut Child>) -> bool {
     if !is_owned_daemon(child) {
         return false;
     }
+    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
     let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {

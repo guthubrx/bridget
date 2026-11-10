@@ -2009,6 +2009,7 @@ fn isolated154(case: &str, test: &str, check: impl FnOnce(&Path)) {
                     .trim()
                     .starts_with(&executable.display().to_string())
             );
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
             let end = Instant::now() + Duration::from_secs(3);
             while matches!(child.try_wait(), Ok(None)) && Instant::now() < end {
@@ -2340,6 +2341,7 @@ fn native154_creation_delai_git_refus_borne_sans_tache() {
                 .parse::<i32>()
                 .unwrap();
             assert_eq!(
+                // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
                 unsafe { libc::kill(pid, 0) },
                 -1,
                 "Git lancé a été terminé et récolté"

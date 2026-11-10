@@ -177,6 +177,7 @@ pub fn recheck_guarded_hook_profile(context: &Value) -> Result<Value, String> {
         .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|_| fail())?;
     if let Some(mut input) = child.stdin.take()
         && input.write_all(&serde_json::to_vec(context).map_err(|_| fail())?).is_err() {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }; let _ = child.wait(); return Err(fail());
         }
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -188,7 +189,9 @@ pub fn recheck_guarded_hook_profile(context: &Value) -> Result<Value, String> {
                 if let Some(stderr) = child.stderr.take() { let _ = stderr.take(4097).read_to_end(&mut raw); }
                 return Err(guarded_hook_refusal(&raw));
             },
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             Err(_) => { let _=unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }; let _=child.wait(); return Err(fail()); }
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             _ if Instant::now() >= deadline => { let _=unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }; let _=child.wait(); return Err("permission_hook_profile_timeout".into()); }
             _ => std::thread::sleep(Duration::from_millis(10)),
         }

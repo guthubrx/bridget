@@ -126,6 +126,7 @@ fn poll(fd: RawFd, events: i16, deadline: Instant) -> io::Result<()> {
         events,
         revents: 0,
     };
+    // SAFETY: `descriptor` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
     if unsafe { libc::poll(&mut descriptor, 1, millis) } < 0 {
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {

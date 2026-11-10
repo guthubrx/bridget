@@ -274,6 +274,7 @@
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             assert!(unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0);
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -432,6 +433,7 @@
                     events: libc::POLLIN,
                     revents: 0,
                 };
+                // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
                 if unsafe { libc::poll(&mut pollfd, 1, 3000) } <= 0 {
                     return None;
                 }
@@ -852,6 +854,7 @@
                     revents: 0,
                 };
                 assert!(
+                    // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
                     unsafe { libc::poll(&mut pollfd, 1, 3000) } > 0,
                     "connexion MCP attendue"
                 );

@@ -354,6 +354,7 @@ pub(crate) fn human_thread_watch(
             revents: 0,
         };
         if connection.reader.buffer().is_empty() {
+            // SAFETY: `poll` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let ready = unsafe { libc::poll(&mut poll, 1, 100) };
             if ready == 0 {
                 continue;
@@ -672,6 +673,7 @@ fn acquire_domain_lock_until(
         }
     })?;
     loop {
+        // SAFETY: les pointeurs passés à flock désignent des variables locales valides pendant l'appel.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
             return Ok(DomainLock {
                 _file: file,

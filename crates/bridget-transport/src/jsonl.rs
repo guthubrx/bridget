@@ -13,6 +13,7 @@ pub const MAX_DAEMON_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn validate_unix_socket_path(socket: &Path) -> io::Result<()> {
     let path = socket.as_os_str().as_bytes();
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     if path.is_empty() || path.contains(&0) || path.len() >= address.sun_path.len() {
         return Err(io::Error::new(
@@ -44,12 +45,14 @@ pub fn connect_nonblocking_with(
     }
     let path = socket.as_os_str().as_bytes();
     validate_unix_socket_path(socket)?;
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
     address.sun_family = libc::AF_UNIX as libc::sa_family_t;
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
         address.sun_len = (std::mem::size_of::<libc::sa_family_t>() + path.len() + 1) as u8;
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     unsafe {
         std::ptr::copy_nonoverlapping(
             path.as_ptr().cast(),
@@ -57,24 +60,30 @@ pub fn connect_nonblocking_with(
             path.len(),
         );
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     // Propriétaire dès l'ouverture : toute sortie par ? ferme le descripteur,
     // y compris l'expiration entre connect et poll (ancien chemin de fuite).
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let stream = UnixStream::from(unsafe { OwnedFd::from_raw_fd(fd) });
     let fd = stream.as_raw_fd();
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
         return Err(io::Error::last_os_error());
     }
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err(io::Error::last_os_error());
     }
     if let Some(checkpoint) = checkpoint.as_mut() {
         checkpoint(&stream)?;
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     let result = unsafe {
         libc::connect(
             fd,
@@ -108,6 +117,7 @@ pub fn connect_nonblocking_with(
                 remaining
             };
             let timeout = poll_budget.as_millis().max(1).min(i32::MAX as u128) as libc::c_int;
+            // SAFETY: `pollfd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let ready = unsafe { libc::poll(&mut pollfd, 1, timeout) };
             if ready > 0 {
                 break;
@@ -129,6 +139,7 @@ pub fn connect_nonblocking_with(
         }
         let mut so_error: libc::c_int = 0;
         let mut length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+        // SAFETY: les pointeurs passés à getsockopt désignent des variables locales valides pendant l'appel.
         if unsafe {
             libc::getsockopt(
                 fd,
@@ -204,6 +215,7 @@ pub fn read_unix_line(
                 events: libc::POLLIN,
                 revents: 0,
             };
+            // SAFETY: `fd` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
             let ready = unsafe { libc::poll(&mut fd, 1, millis) };
             if ready == 0 {
                 return Err(io::Error::new(
@@ -286,6 +298,7 @@ mod tests {
         use std::os::unix::net::UnixListener;
         let path = std::env::temp_dir().join(format!("c151-{}", std::process::id()));
         let listener = UnixListener::bind(&path).unwrap();
+        // SAFETY: listen ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
         let mut fillers = Vec::new();
         let refusal = loop {
@@ -300,6 +313,7 @@ mod tests {
             observed += 1;
             assert!(stream.as_raw_fd() >= 0);
             assert_eq!(
+                // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
                 unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
                 libc::FD_CLOEXEC
             );

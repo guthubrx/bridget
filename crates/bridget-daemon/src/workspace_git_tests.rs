@@ -95,6 +95,7 @@ exec '{}' "$@""#, real_git.display()),
                     .trim()
                     .starts_with(&executable.display().to_string())
             );
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGTERM) }, 0);
             let stop = Instant::now() + Duration::from_secs(3);
             while matches!(child.try_wait(), Ok(None)) && Instant::now() < stop {
@@ -260,6 +261,7 @@ fn native154_git_delai_termine_son_enfant() {
                 .parse::<i32>()
                 .unwrap();
             assert_eq!(
+                // SAFETY: kill(pid, 0) est l'idiome POSIX de sonde d'existence ; aucun signal n'est envoyé.
                 unsafe { libc::kill(pid, 0) },
                 -1,
                 "le seul enfant Git lancé doit être terminé/récolté"
@@ -1017,6 +1019,7 @@ fn spec185_repair_fifo_is_refused_without_blocking_worker() {
         let (record,target,head,_)=moved185(repo);
         fs::remove_file(target.join(".git")).unwrap();
         let fifo=std::ffi::CString::new(target.join(".git").as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         assert_eq!(unsafe {libc::mkfifo(fifo.as_ptr(),0o600)},0);
         let started=Instant::now();
         assert!(inspect_repair(&record,&target,&head).is_err());

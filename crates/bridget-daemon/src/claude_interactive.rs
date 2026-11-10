@@ -52,12 +52,16 @@ struct RawTerminal {
 impl RawTerminal {
     fn enable(fd: RawFd) -> Result<Self, String> {
         let mut original = MaybeUninit::<libc::termios>::uninit();
+        // SAFETY: les pointeurs passés à tcgetattr désignent des variables locales valides pendant l'appel.
         if unsafe { libc::tcgetattr(fd, original.as_mut_ptr()) } != 0 {
             return Err(os_error("lecture termios du terminal"));
         }
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         let original = unsafe { original.assume_init() };
         let mut raw = original;
+        // SAFETY: les pointeurs passés à cfmakeraw désignent des variables locales valides pendant l'appel.
         unsafe { libc::cfmakeraw(&mut raw) };
+        // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
         if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
             return Err(os_error("mode brut du terminal"));
         }
@@ -73,6 +77,7 @@ impl RawTerminal {
             return;
         }
         self.restored = true;
+        // SAFETY: les pointeurs passés à tcsetattr désignent des variables locales valides pendant l'appel.
         unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &self.original) };
     }
 }
@@ -90,11 +95,13 @@ fn set_window_size(fd: RawFd, rows: u16, cols: u16) {
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+    // SAFETY: les pointeurs passés à ioctl désignent des variables locales valides pendant l'appel.
     unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &size) };
 }
 
 fn open_pty() -> Result<(OwnedFd, OwnedFd), String> {
     let (mut master, mut slave) = (-1, -1);
+    // SAFETY: les pointeurs passés à openpty désignent des variables locales valides pendant l'appel.
     let rc = unsafe {
         libc::openpty(
             &mut master,
@@ -110,10 +117,12 @@ fn open_pty() -> Result<(OwnedFd, OwnedFd), String> {
     // Ni le maître ni l'esclave d'origine ne traversent l'exec : l'enfant ne
     // reçoit que les copies posées sur son stdio (audit 097, SEC-005).
     for fd in [master, slave] {
+        // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
         if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
             return Err(os_error("FD_CLOEXEC sur le pseudo-terminal"));
         }
     }
+    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
     Ok(unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) })
 }
 
@@ -126,6 +135,7 @@ fn wait_ready(fd: RawFd, events: libc::c_short) {
         events,
         revents: 0,
     };
+    // SAFETY: `poll` est une structure pollfd locale valide ; le nombre d'éléments passé vaut 1.
     unsafe { libc::poll(&mut poll, 1, SIGNAL_TICK.as_millis() as libc::c_int) };
 }
 
@@ -133,6 +143,7 @@ fn relay(from: RawFd, to: RawFd, stopping: Arc<AtomicBool>) {
     let mut buffer = vec![0u8; RELAY_CHUNK];
     loop {
         let read =
+            // SAFETY: le tampon `buffer` est valide pour sa longueur pendant l'appel read.
             unsafe { libc::read(from, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len()) };
         if read < 0 {
             let error = io::Error::last_os_error();
@@ -153,6 +164,7 @@ fn relay(from: RawFd, to: RawFd, stopping: Arc<AtomicBool>) {
         }
         let mut offset = 0usize;
         while offset < read as usize {
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             let written = unsafe {
                 libc::write(
                     to,
@@ -210,16 +222,19 @@ impl PtySession {
         }
         let slave_fd = slave.as_raw_fd();
         let stdio = |fd: RawFd| -> Result<Stdio, String> {
+            // SAFETY: dup ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let duplicate = unsafe { libc::dup(fd) };
             if duplicate < 0 {
                 return Err(os_error("dup de l'esclave PTY"));
             }
+            // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
             Ok(unsafe { Stdio::from_raw_fd(duplicate) })
         };
         command
             .stdin(stdio(slave_fd)?)
             .stdout(stdio(slave_fd)?)
             .stderr(stdio(slave_fd)?);
+        // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() < 0 {
@@ -248,6 +263,7 @@ impl PtySession {
                 // Le terminal de l'humain s'est fermé : le fournisseur reçoit
                 // le même signal qu'avec une fenêtre refermée.
                 if !input_stop.load(Ordering::SeqCst) {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     unsafe { libc::kill(child_pid, libc::SIGHUP) };
                 }
             })
@@ -283,9 +299,11 @@ impl PtySession {
                         set_window_size(master_fd, rows as u16, columns as u16);
                     }
                     if terminate.swap(false, Ordering::SeqCst) {
+                        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                         unsafe { libc::kill(child_pid, libc::SIGTERM) };
                     }
                     if hangup.swap(false, Ordering::SeqCst) {
+                        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                         unsafe { libc::kill(child_pid, libc::SIGHUP) };
                     }
                     thread::sleep(SIGNAL_TICK);
@@ -360,6 +378,7 @@ mod tests {
     fn le_pty_ouvert_ne_traverse_pas_l_exec() {
         let (master, slave) = open_pty().unwrap();
         for fd in [master.as_raw_fd(), slave.as_raw_fd()] {
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
             assert!(
                 flags >= 0 && flags & libc::FD_CLOEXEC != 0,

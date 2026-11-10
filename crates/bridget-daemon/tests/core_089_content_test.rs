@@ -295,6 +295,7 @@ impl Drop for Fixture {
                             == format!("{} daemon", env!("CARGO_BIN_EXE_bridget"))
                 });
                 if owned {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
                     let deadline = Instant::now() + Duration::from_secs(8);
                     while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -347,6 +348,7 @@ impl Drop for BinaryChild {
             eprintln!("identité du fils invérifiable : {}", child.id());
             return;
         }
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         let _ = unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
         let deadline = Instant::now() + Duration::from_secs(3);
         while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -354,6 +356,7 @@ impl Drop for BinaryChild {
         }
         if matches!(child.try_wait(), Ok(None)) {
             // Autorisation utilisateur limitée aux enfants isolés de ces tests.
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let _ = unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
             let _ = child.wait();
         }

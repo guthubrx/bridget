@@ -472,7 +472,9 @@ impl CodexAppServerTransport {
             // Même convention que le SocketWriter Codex : le noyau ne doit
             // jamais retenir write_value sur un fournisseur vivant mais muet.
             let fd = stdin.as_raw_fd();
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+            // SAFETY: fcntl avec une commande à argument entier ne déréférence aucun pointeur.
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
             {
                 let error = std::io::Error::last_os_error();
@@ -912,6 +914,7 @@ impl CodexAppServerTransport {
                 });
             }
         } else {
+            // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
             let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGTERM) };
             let _ = child.wait();
         }
@@ -3455,6 +3458,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
                     .saturating_duration_since(Instant::now())
                     .as_millis()
                     .clamp(1, 25) as i32;
+                // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                 if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {
                     let error = std::io::Error::last_os_error();
                     if error.kind() != std::io::ErrorKind::Interrupted {
@@ -3490,6 +3494,7 @@ fn write_value(writer: &Writer, value: Value) -> Result<(), TransportError> {
                         .saturating_duration_since(Instant::now())
                         .as_millis()
                         .clamp(1, 25) as i32;
+                    // SAFETY: invariant non établi par lecture locale ; revue demandée (programme 260).
                     if unsafe { libc::poll(std::ptr::null_mut(), 0, millis) } < 0 {
                         let error = std::io::Error::last_os_error();
                         if error.kind() != std::io::ErrorKind::Interrupted {

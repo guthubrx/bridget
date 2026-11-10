@@ -106,6 +106,7 @@ impl OwnedChild {
         );
         assert_eq!(process_birth(self.0.id()).ok(), Some(birth));
         assert!(!command.to_lowercase().contains("firefox"));
+        // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
         assert_eq!(unsafe { libc::kill(self.0.id() as i32, libc::SIGTERM) }, 0);
         thread::sleep(Duration::from_secs(3));
         self.wait(Duration::from_secs(10));
@@ -326,6 +327,7 @@ impl Fixture {
                         && !command.to_lowercase().contains("firefox")
                 );
                 if process_birth(marker.pgid).ok() == Some(marker.birth) {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     assert_eq!(unsafe { libc::kill(marker.pgid as i32, libc::SIGTERM) }, 0);
                     thread::sleep(Duration::from_secs(3));
                     assert_ne!(
@@ -348,6 +350,7 @@ impl Fixture {
                         && !command.to_lowercase().contains("firefox")
                 );
                 if process_birth(pid).ok() == Some(birth) {
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     assert_eq!(unsafe { libc::kill(pid as i32, libc::SIGTERM) }, 0);
                     thread::sleep(Duration::from_secs(3));
                     assert_ne!(
@@ -412,6 +415,7 @@ impl Drop for Fixture {
                             && !command.to_lowercase().contains("firefox")
                     );
                     // PID leader attesté seulement, jamais signal à un groupe.
+                    // SAFETY: kill ne déréférence aucun pointeur ; ses arguments sont des entiers.
                     assert_eq!(unsafe { libc::kill(marker.pgid as i32, libc::SIGTERM) }, 0);
                 }
                 thread::sleep(Duration::from_secs(3));
