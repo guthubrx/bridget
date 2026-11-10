@@ -505,7 +505,7 @@ class WorktreePruneTests(unittest.TestCase):
                 worktree = self.worktree(f"incomplete-lsof-{returncode}", self.old)
                 def incomplete(command, *args, **kwargs):
                     if any("lsof" in part for part in command):
-                        return subprocess.CompletedProcess(command, returncode, b"p42\nn/tmp\n", stderr)
+                        return subprocess.CompletedProcess(command, returncode, b"p42\nn/tmp\n", stderr)  # noqa: B023  appelée dans le tour où elle est définie (patch.object)
                     return real_run(command, *args, **kwargs)
                 with patch.object(build, "observed_run", side_effect=incomplete):
                     self.assertEqual(build.prune_merged_worktrees(self.repo), [])

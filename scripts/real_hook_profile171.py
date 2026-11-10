@@ -236,7 +236,7 @@ def verify_target_controls(profile):
     known = current.get(str(Path(config)/'plugins/known_marketplaces.json'))
     if not isinstance(settings,dict) or not isinstance(installed,dict) or not isinstance(known,dict):
         refuse('permission_hook_target_controls_unavailable')
-    for path,value in current.items():
+    for _path,value in current.items():
         if not isinstance(value,dict):
             refuse('permission_hook_target_controls_unavailable')
         if any(k in value for k in ('policyHelper','policyHelpers','processWrapper')):
@@ -384,7 +384,7 @@ def validate(profile):
         if f['role'] in ('hook_source', 'plugin_module', 'plugin_manifest') and f['variants']['origin']['revision'] != f['variants']['target']['revision']:
             refuse('permission_hook_control_changed')
     fields(profile['hosts'], ('origin', 'target'))
-    for side, host in profile['hosts'].items():
+    for _side, host in profile['hosts'].items():
         fields(host, ('platform', 'home', 'project', 'python', 'path', 'programs', 'versions',
                       'sdk_files', 'python_files', 'state_root', 'guards', 'environment'))
         for key in ('home', 'project', 'python', 'state_root'):
