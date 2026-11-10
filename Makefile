@@ -1,4 +1,4 @@
-.PHONY: build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup
+.PHONY: lint-scripts build release test daemon install install-k1 test-install-k1-preflight install-ronde test-ronde uninstall clean clean-builds test-build-cleanup
 
 BINARY = bridget
 INSTALL_DIR = $(HOME)/.local/bin
@@ -15,6 +15,10 @@ release:
 
 test:
 	python3 scripts/build.py cargo test
+
+lint-scripts:
+	ruff check scripts
+	for f in scripts/*.sh; do bash -n "$$f" || exit 1; done
 
 daemon: release
 	RUST_LOG=info "$(RELEASE_BIN)" daemon
