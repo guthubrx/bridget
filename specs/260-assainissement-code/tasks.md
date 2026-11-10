@@ -1,6 +1,6 @@
 # Tâches 260 - Assainissement du code et du dépôt
 
-Statut : In Progress. 66 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 12, 13 (T137 partiel), 15 traités.
+Statut : In Progress. 69 tâches cochées sur 157 (voir `implementation.md` pour le détail et les lots bloqués). La mise en oeuvre est en cours : lots 0, 1 (sauf T024), 2, 3, 4, 12, 14, 13 (T137 partiel), 15 traités.
 Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implementeur.md`. Portes : `decisions.md`. Démarrage et clôture : `quickstart.md`.
 
 ## Comment lire ce fichier
@@ -193,9 +193,9 @@ Spécification : `spec.md`. Plan : `plan.md`. Règles : `contracts/regles-implem
 
 ## Lot 14 - Tests ignorés expliqués (guide : `guides/lot-14-tests-ignores.md`)
 
-- [ ] T138 [L14] [D14] Inventaire des `#[ignore]` sans motif (8 attendus).
-- [ ] T139 [L14] Écrire un motif sur chacun, sans exécuter les tests.
-- [ ] T140 [L14] Lint `ignore_without_reason` ; contre-épreuve ; porte ; bilan ; fin de lot.
+- [x] T138 [L14] [D14] Inventaire des `#[ignore]` sans motif (8 attendus).
+- [x] T139 [L14] Écrire un motif sur chacun, sans exécuter les tests.
+- [x] T140 [L14] Lint `ignore_without_reason` ; contre-épreuve ; porte ; bilan ; fin de lot.
 
 ## Lot 15 - Proposition de signature (guide : `guides/lot-15-signature.md`)
 

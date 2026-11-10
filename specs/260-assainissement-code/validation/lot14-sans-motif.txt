@@ -1,0 +1,9 @@
+crates/bridget-daemon/src/managed_process_tests.rs:281:    #[ignore]
+crates/bridget-daemon/src/managed_process_tests.rs:318:    #[ignore]
+crates/bridget-daemon/src/managed_process_tests.rs:349:    #[ignore]
+crates/bridget-daemon/src/managed_process_tests.rs:763:    #[ignore]
+crates/bridget-daemon/src/workspace_commit_view_tests.rs:1024:#[ignore]
+crates/bridget-daemon/src/daemon_presence_tests.rs:5542:    #[ignore]
+crates/bridget-daemon/src/daemon.rs:649:    #[ignore]
+crates/bridget-daemon/src/daemon.rs:21264:    #[ignore]
+crates/bridget-daemon/tests/support/idempotent.rs:736:         #[ignore] sous Linux via cfg_attr(target_os = \"linux\", ignore = \

@@ -13,6 +13,7 @@ Statut du programme : In Progress. Règles : `contracts/regles-implementeur.md`.
 | 4 | intégré | T036 à T053 faits (desired_state.rs arrêté) |
 | 12 | intégré | T125 à T127 faits |
 | 13 | intégré | T128 à T136 faits ; T137 partiel (job CI différé) |
+| 14 | intégré | T138 à T140 faits |
 | 15 | intégré | T141, T142 faits |
 
 ## Journal
@@ -198,3 +199,14 @@ Activation : D1 = sources seules. Code exécutable modifié (dont `native_lineag
 
 ### Bilan lot 4
 Code exécutable : seuls des déplacements de tests. « Activation en attente » : sans effet fonctionnel.
+
+### Lot 14 - Tests ignorés expliqués (T138 à T140)
+- Statut : fait
+- Commit : `docs(tests): Ajouter le motif des tests ignores et exiger un motif` ; `Cargo.toml` : lint `ignore_without_reason = "warn"` (bloquant par `-D warnings`).
+- Fichiers : `managed_process_tests.rs` (4), `workspace_commit_view_tests.rs`, `daemon_presence_tests.rs`, `daemon.rs` (2) ; `validation/lot14-sans-motif.txt`.
+- Vérifications : 8 `#[ignore]` sans motif trouvés (D14 : motif seulement, aucun test exécuté) ; chaque test est un enfant lancé par un autre test et gardé par une variable d'environnement (nom indiqué dans le motif). Contre-épreuve : un `#[ignore]` nu fait échouer l'analyse (`#[ignore] without reason`). Analyse `-D warnings` : code 0 après remise en état.
+- Écarts : aucun. Le total de tests ignorés reste 66 (aucun test réactivé).
+- Non vérifié : `C-NOMS` non relancé (un attribut de texte ne change pas les noms ; la compilation et l'analyse des tests sont passées).
+
+### Bilan lot 14
+Code de test seulement. Pas d'activation nécessaire.
