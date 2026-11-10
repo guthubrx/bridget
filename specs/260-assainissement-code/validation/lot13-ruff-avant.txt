@@ -1,0 +1,17 @@
+54	S603	[ ] subprocess-without-shell-equals-true
+22	S607	[ ] start-process-with-partial-path
+18	S101	[ ] assert
+11	B904	[ ] raise-without-from-inside-except
+10	S108	[ ] hardcoded-temp-file
+ 4	F401	[*] unused-import
+ 4	S110	[ ] try-except-pass
+ 3	B905	[ ] zip-without-explicit-strict
+ 2	B007	[ ] unused-loop-control-variable
+ 2	B023	[ ] function-uses-loop-variable
+ 2	S105	[ ] hardcoded-password-string
+ 2	S606	[ ] start-process-with-no-shell
+ 1	S102	[ ] exec-builtin
+ 1	S310	[ ] suspicious-url-open-usage
+ 1	S324	[ ] hashlib-insecure-hash-function
+Found 137 errors.
+[*] 4 fixable with the `--fix` option (5 hidden fixes can be enabled with the `--unsafe-fixes` option).

@@ -1,0 +1,11 @@
+# Contrôle des scripts (programme 260, lot 13). Les règles ignorées sont justifiées une à une.
+target-version = "py39"          # le Python système de l'outil de mise à jour Mac est le 3.9.6
+include = ["scripts/**/*.py"]
+
+[lint]
+select = ["E9", "F", "B", "S"]
+ignore = [
+  "S101",  # assert : utilisé par les scripts de test
+  "S603",  # subprocess avec liste d'arguments, sans shell : voulu pour des outils internes
+  "S607",  # chemin partiel d'exécutable (git, ssh) : résolu par le PATH de l'opérateur
+]
