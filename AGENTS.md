@@ -122,7 +122,8 @@ façades MCP déjà ouvertes encore anciennes, aucun rechargement global affirm�
 Public 0.8.26/six fichiers anonymes/SHA et APK8026/lignée8025 vérifiés.
 Worktree/branches Mac et distante retirés ; trois transferts et image257 Mac
 inutilisée retirés (171932488 octets). SYS/Android conservés : 5/61 processus
-inobservables ; session260 et travaux étrangers intacts. Caches Mac3,48/SYS5,54 Gio.
+inobservables ; session260 et travaux étrangers intacts. Caches après installed :
+Mac0,10/SYS5,54 Gio (intermédiaires du staging Mac purgés).
 Bilan : /Users/moi/Nextcloud/10.Scripts/64.bridget/specs/259-guidage-preflight/validation.md.
 Reprise : /Users/moi/.cache/bridget259-guidage-preflight/resume.md.
 
