@@ -37579,7 +37579,7 @@ mod presence_tests {
                 )
                 .unwrap()
                 .0,
-            before + 0
+            before
         );
         drop(shared);
         let _ = std::fs::remove_file(config.db_path);
@@ -37663,7 +37663,7 @@ mod presence_tests {
                 )
                 .unwrap()
                 .0,
-            before + 0
+            before
         );
         drop(shared);
         let _ = std::fs::remove_file(config.db_path);
@@ -37881,7 +37881,7 @@ mod presence_tests {
                 )
                 .unwrap()
                 .0,
-            before + 0
+            before
         );
         drop(shared);
         let _ = std::fs::remove_file(config.db_path);
@@ -38003,7 +38003,7 @@ mod presence_tests {
                 )
                 .unwrap()
                 .0,
-            before + 0
+            before
         );
         drop(shared);
         let _ = std::fs::remove_file(config.db_path);
