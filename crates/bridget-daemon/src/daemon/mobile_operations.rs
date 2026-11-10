@@ -1925,6 +1925,7 @@ mod tests {
                 writeln!(stream,"{}",serde_json::to_string(&response).unwrap()).unwrap();
             }
             let mut responses=Vec::new();
+            #[allow(clippy::reversed_empty_ranges)] // plage vide voulue : le cas 1 n'envoie aucun fragment
             let range=match case {0=>1..=1,1=>1..=0,2=>300..=300,_=>251..=300};
             for seq in range { responses.push(DaemonToWrapper::JournalFragment {subscription_id:"remote177".into(),seq,offset:0,final_fragment:true,
                 bytes:serde_json::to_vec(&serde_json::json!({"seq":seq,"text":"Foreign journal event"})).unwrap()}); }
