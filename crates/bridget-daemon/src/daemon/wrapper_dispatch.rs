@@ -840,3 +840,89 @@ pub(super) fn on_register(identity_version: u8, agent_type: String, agent_id: St
             }
             Some(response)
         }
+
+pub(super) fn on_coordination_subscribe(version: u16, after_cursor: Option<u64>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if version != COORDINATION_STREAM_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::UnsupportedVersion {
+                        supported_versions: vec![COORDINATION_STREAM_VERSION],
+                    },
+                });
+            }
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            let replay = match st.store.guichet_coordination_events_after(after_cursor) {
+                Ok(replay) => replay,
+                Err(error) => {
+                    error!("relève de coordination indisponible: {error}");
+                    st.coordination_subscriptions.insert(
+                        conn_id.to_string(),
+                        CoordinationSubscription {
+                            fresh: false,
+                            next_cursor: after_cursor.unwrap_or(0).saturating_add(1),
+                        },
+                    );
+                    if let Some(writer) = st.connections.get(conn_id).cloned() {
+                        st.pending_post_response_controls
+                            .entry(conn_id.to_string())
+                            .or_default()
+                            .push(DeferredControl {
+                                writer,
+                                message: DaemonToWrapper::CoordinationUnavailable {
+                                    version,
+                                    reason: "source_unavailable".to_string(),
+                                },
+                            });
+                    }
+                    return None;
+                }
+            };
+            let mut controls = Vec::new();
+            let next_cursor = replay
+                .through_cursor
+                .or(after_cursor)
+                .unwrap_or(0)
+                .saturating_add(1);
+            let fresh = replay.gap.is_none();
+            if let Some((from_cursor, to_cursor)) = replay.gap {
+                defer_control(
+                    &st,
+                    conn_id,
+                    DaemonToWrapper::CoordinationGap {
+                        version,
+                        from_cursor,
+                        to_cursor,
+                        reason: "cursor_gap".to_string(),
+                    },
+                    &mut controls,
+                );
+            } else {
+                for event in replay.events {
+                    defer_control(
+                        &st,
+                        conn_id,
+                        guichet_coordination_response(event, version),
+                        &mut controls,
+                    );
+                }
+                defer_control(
+                    &st,
+                    conn_id,
+                    DaemonToWrapper::CoordinationSnapshotCaughtUp {
+                        version,
+                        through_cursor: replay.through_cursor,
+                    },
+                    &mut controls,
+                );
+            }
+            st.coordination_subscriptions.insert(
+                conn_id.to_string(),
+                CoordinationSubscription { fresh, next_cursor },
+            );
+            if !controls.is_empty() {
+                st.pending_post_response_controls
+                    .entry(conn_id.to_string())
+                    .or_default()
+                    .extend(controls);
+            }
+            None
+        }
