@@ -433,3 +433,123 @@ pub(super) fn on_cancel_request(id: String, sender: String, reason: Option<Strin
                 }
             }
         }
+
+pub(super) fn on_service_hello(version: u16, service: String, issuer_scope: String, capabilities: Vec<ServiceCapability>, conn_id: &str, state: &Arc<Mutex<DaemonState>>) -> Option<DaemonToWrapper> {
+            if version != SERVICE_CONTRACT_VERSION {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::UnsupportedVersion {
+                        supported_versions: vec![SERVICE_CONTRACT_VERSION],
+                    },
+                });
+            }
+            if service != "guichet" {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::ReservedServiceRequired,
+                });
+            }
+            if crate::idempotency::validate_issuer_scope(&issuer_scope).is_err() {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidIssuerScope,
+                });
+            }
+            let canonical_capabilities = matches!(
+                capabilities.as_slice(),
+                [] | [ServiceCapability::GuichetV1]
+                    | [ServiceCapability::HumanInboxV1]
+                    | [ServiceCapability::ProjectRegistryV1]
+                    | [
+                        ServiceCapability::ProjectRegistryV1,
+                        ServiceCapability::ProjectProfilesV1
+                    ]
+                    | [ServiceCapability::ProjectProfilesV1]
+                    | [
+                        ServiceCapability::GuichetV1,
+                        ServiceCapability::ProjectRegistryV1,
+                    ]
+                    | [
+                        ServiceCapability::GuichetV1,
+                        ServiceCapability::CoordinationEventsV1,
+                    ]
+                    | [
+                        ServiceCapability::GuichetV1,
+                        ServiceCapability::CoordinationEventsV1,
+                        ServiceCapability::ProjectRegistryV1,
+                    ]
+                    | [
+                        ServiceCapability::GuichetV1,
+                        ServiceCapability::CoordinationEventsV2,
+                    ]
+                    | [
+                        ServiceCapability::GuichetV1,
+                        ServiceCapability::CoordinationEventsV2,
+                        ServiceCapability::ProjectRegistryV1,
+                    ]
+            );
+            if !canonical_capabilities {
+                return Some(DaemonToWrapper::ServiceRejected {
+                    reason: ServiceRefusal::InvalidEnvelope,
+                });
+            }
+            let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
+            st.service_negotiations.insert(
+                conn_id.to_string(),
+                NegotiatedService {
+                    version: SERVICE_CONTRACT_VERSION,
+                    capabilities: capabilities.clone(),
+                },
+            );
+            if capabilities.contains(&ServiceCapability::GuichetV1) {
+                match st.store.guichet_lifecycle_events() {
+                    Ok(events) => {
+                        let controls = events
+                            .into_iter()
+                            .filter_map(|event| {
+                                st.connections.get(conn_id).map(|writer| DeferredControl {
+                                    writer: writer.clone(),
+                                    message: guichet_lifecycle_response(event),
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        if !controls.is_empty() {
+                            st.pending_post_response_controls
+                                .insert(conn_id.to_string(), controls);
+                        }
+                    }
+                    Err(error) => error!("lecture des événements guichet: {error}"),
+                }
+            }
+            // La v1 conserve son rejeu initial historique. La v2 ne pousse
+            // rien avant `coordination_subscribe`, sinon un fait live pourrait
+            // être confondu avec une observation fraîche avant le snapshot.
+            if capabilities.contains(&ServiceCapability::CoordinationEventsV1) {
+                match st.store.guichet_coordination_events() {
+                    Ok(events) => {
+                        let controls = events
+                            .into_iter()
+                            .filter_map(|event| {
+                                st.connections.get(conn_id).map(|writer| DeferredControl {
+                                    writer: writer.clone(),
+                                    message: guichet_coordination_response(
+                                        event,
+                                        COORDINATION_EVENTS_VERSION,
+                                    ),
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        if !controls.is_empty() {
+                            st.pending_post_response_controls
+                                .entry(conn_id.to_string())
+                                .or_default()
+                                .extend(controls);
+                        }
+                    }
+                    Err(error) => error!("lecture des événements de coordination: {error}"),
+                }
+            }
+            Some(DaemonToWrapper::ServiceWelcome {
+                version: SERVICE_CONTRACT_VERSION,
+                horizon_secs: CLIENT_IDEMPOTENCY_HORIZON_SECS,
+                issued_at_tolerance_secs: CLIENT_ISSUED_AT_TOLERANCE_SECS,
+                capabilities,
+            })
+        }
