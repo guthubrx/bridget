@@ -37,7 +37,7 @@ Règle : l'implémenteur ne tranche jamais une porte. Il applique l'action par d
 
 ## Porte de lot
 
-Dernière tâche d'un lot. Elle lance `C-TESTS`, `C-ECHECS`, et `C-NOMS` pour les lots 4, 5, 9, 10, 11. Elle écrit le bilan du lot dans `implementation.md`.
+Dernière tâche d'un lot. Elle lance `C-TESTS`, `C-ECHECS`, et `C-NOMS` pour les lots 4, 5, 9, 10, 11. Les lots 6 et 7 ajoutent des tests : leur `C-NOMS` attend exactement les lignes ajoutées (guide du lot). Le lot 11 compare à des lignes de base transformées (les noms de tests contiennent le chemin du module). Elle écrit le bilan du lot dans `implementation.md`.
 
 ## Ligne de base
 
