@@ -23,7 +23,7 @@ fmt-check:
 	cargo fmt --all -- --check
 
 clippy:
-	python3 scripts/build.py cargo clippy --workspace --all-targets --locked --features bridget-daemon/test-support
+	python3 scripts/build.py cargo clippy --workspace --all-targets --locked --features bridget-daemon/test-support -- -D warnings
 
 lint: clippy fmt-check
 

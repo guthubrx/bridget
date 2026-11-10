@@ -7,7 +7,6 @@ permissions:
 jobs:
   clippy:
     runs-on: ubuntu-latest
-    continue-on-error: true   # retirer à la fin du lot 1 (T019)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
