@@ -1,0 +1,37 @@
+name: Rust
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # retirer à la fin du lot 1 (T019)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - run: cargo clippy --workspace --all-targets --locked --features bridget-daemon/test-support -- -D warnings
+  format:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # bloquant après le lot 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - run: cargo fmt --all -- --check
+  tests:
+    runs-on: ubuntu-latest
+    continue-on-error: true   # bloquant après la décision D16 (T024)
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - run: |
+          umask 077
+          export TMPDIR="$(mktemp -d /tmp/b.XXXX)"
+          cargo test --workspace --locked --features bridget-daemon/test-support --no-fail-fast -- --test-threads=4
